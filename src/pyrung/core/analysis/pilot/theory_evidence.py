@@ -976,7 +976,7 @@ def _theory_bootstrap_transition(
     return _TheoryTransitionEvidence(
         claim=claim,
         source=source,
-        execution_ref=receipt.execution_epoch.reference,
+        execution_ref=receipt.execution.epoch_ref,
         occurrence_evidence=("bootstrap-scan", receipt.scan_after, effects),
         act_identity=("executed-program-scan", receipt.scan_before, receipt.scan_after),
         act_pairs=(),

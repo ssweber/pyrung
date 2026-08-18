@@ -368,8 +368,7 @@ def adjacent_continuation_source(
         and prefix_proof.kind == "target_prefix"
         and prefix_proof.scan_id == tip.scan_id
         and prefix_proof.world_key == tip.world_key
-        and prefix_proof.execution_epoch is tip.execution_epoch
-        and prefix_proof.execution_owner is tip.execution_owner
+        and prefix_proof.execution_ref == tip.execution_ref
         and prefix_proof.landing_occurrence is not None
     )
     pulse_epoch_owner = execution_epoch_owner(pulse.fork, pulse.scan_before)
@@ -379,8 +378,7 @@ def adjacent_continuation_source(
         or tip.scan_id != pulse.scan_before
         or tip.world_key != current_key
         or pulse_epoch_owner is None
-        or pulse_epoch_owner[0] is not tip.execution_epoch
-        or pulse_epoch_owner[1] is not tip.execution_owner
+        or pulse_epoch_owner[0].reference != tip.execution_ref
         or pulse.kernel_scan_ids != exact_scan_ids
         or any(pulse.projection_at(scan_id) is None for scan_id in exact_scan_ids)
     ):
@@ -439,8 +437,7 @@ def recovery_anchor_program_step(
     owned = execution_epoch_owner(state.work, state.work.state.scan_id)
     if (
         owned is None
-        or owned[0] is not continuation.tip.execution_epoch
-        or owned[1] is not continuation.tip.execution_owner
+        or owned[0].reference != continuation.tip.execution_ref
     ):
         return None
     expectation = _selected_terminal_target_expectation(frame, target, ctx)
@@ -634,8 +631,7 @@ def advance_recovery_continuation(
                 scan_id=state.work.state.scan_id,
                 world_key=key,
                 kind="unchanged_coast",
-                execution_epoch=epoch_owner[0],
-                execution_owner=epoch_owner[1],
+                execution_ref=epoch_owner[0].reference,
                 landing_occurrence=landing_occurrence,
             ),
         ),

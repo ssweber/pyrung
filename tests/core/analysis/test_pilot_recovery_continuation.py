@@ -31,6 +31,7 @@ from pyrung.core.analysis.pilot.types import (
     _PulseState,
     _RecoveryContinuation,
 )
+from pyrung.core.runner import EpochRef
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,8 @@ def test_multi_scan_recovery_coast_adds_one_checkpoint_at_exact_last_landing(
         plc.step()
     assert all(plc._replay_rung_write_projection_at(scan_id) is not None for scan_id in (1, 2, 3))
 
-    epoch = object()
+    epoch_ref = EpochRef(10_001)
+    epoch = SimpleNamespace(reference=epoch_ref)
     owner = object()
     source_key = ("repaired-source",)
     continuation = _RecoveryContinuation(
@@ -71,8 +73,7 @@ def test_multi_scan_recovery_coast_adds_one_checkpoint_at_exact_last_landing(
                 scan_id=0,
                 world_key=source_key,
                 kind="local_repair",
-                execution_epoch=epoch,
-                execution_owner=owner,
+                execution_ref=epoch_ref,
             ),
         ),
     )
@@ -144,7 +145,8 @@ def test_multi_scan_recovery_coast_adds_one_checkpoint_at_exact_last_landing(
 
 
 def test_multi_scan_recovery_window_retains_exact_causal_source(monkeypatch) -> None:
-    epoch = object()
+    epoch_ref = EpochRef(10_002)
+    epoch = SimpleNamespace(reference=epoch_ref)
     owner = object()
     checkpoint_owner = object()
     source_checkpoint = object()
@@ -157,8 +159,7 @@ def test_multi_scan_recovery_window_retains_exact_causal_source(monkeypatch) -> 
                 scan_id=0,
                 world_key=source_key,
                 kind="unchanged_coast",
-                execution_epoch=epoch,
-                execution_owner=owner,
+                execution_ref=epoch_ref,
             ),
         ),
     )

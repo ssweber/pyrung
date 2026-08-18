@@ -280,13 +280,15 @@ def test_bootstrap_event_consumer_cannot_mutate_or_advance_internal_receipt(
     before = internal.diagnostic_snapshot()
     assert internal.checkpoint.world.work.state.scan_id == 0
     assert internal.projection.scan_id == 1
-    assert internal.execution_owner.epoch is internal.execution_epoch
+    execution_owner = internal.execution.owner_at(internal.scan_after)
+    assert execution_owner is not None
+    assert execution_owner.epoch.reference == internal.execution.epoch_ref
     assert (
-        internal.execution_epoch.first_scan
+        execution_owner.epoch.first_scan
         <= internal.scan_after
-        <= internal.execution_epoch.last_scan
+        <= execution_owner.epoch.last_scan
     )
-    assert internal.execution_owner._live_plc is None
+    assert execution_owner._live_plc is None
 
     # Restore and advance the source world through the production state owner.
     # The descendant runner is replaceable; the original scan-1 epoch/query is
@@ -299,12 +301,12 @@ def test_bootstrap_event_consumer_cannot_mutate_or_advance_internal_receipt(
     assert internal.checkpoint.world.work.state.scan_id == 0
     assert internal.diagnostic_snapshot() == before
 
-    retained_state = internal.execution_owner.state_at(1)
-    retained_capture = internal.execution_owner.replay_capture_at(1)
+    retained_state = execution_owner.state_at(1)
+    retained_capture = execution_owner.replay_capture_at(1)
     assert retained_state.tags[first_scan.ProcessStep.name] == first_scan.ABORTED
     assert retained_capture is not None
     assert retained_capture.runs
-    retained_projection = internal.execution_owner._runner()._replay_rung_write_projection_at(1)
+    retained_projection = execution_owner._runner()._replay_rung_write_projection_at(1)
     assert retained_projection is not None
     assert _ordered_accesses(retained_projection) == _ordered_accesses(internal.projection)
 

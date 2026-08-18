@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     )
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
     from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
-    from pyrung.core.runner import PLC, Epoch, EpochQuery
+    from pyrung.core.runner import PLC, EpochRef
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -437,35 +437,42 @@ class _BootstrapExecution:
 
     This is execution evidence plus factual bootstrap observation; it records
     no operator action, expectation, progress judgment, or correction.
-    ``projection`` is the executor-owned ordered access journal for
-    ``scan_before -> scan_after``; ``landing`` is copied from that projection's
-    exit boundary.
-    ``execution_epoch`` and its detached ``execution_owner`` retain the runner's
-    existing causal identity and replay surface even after the live world
-    restores the source checkpoint.
+    ``projection`` is the executor-owned ordered access journal for the
+    receipt's one exact scan. Source, landing, and physical ownership all come
+    from that receipt rather than being copied into a second representation.
+    ``execution`` retains the runner's existing causal identity and replay
+    surface even after the live world restores the source checkpoint.
     """
 
     checkpoint: _CausalCheckpoint
-    scan_before: int
-    scan_after: int
     projection: ScanRungWriteProjection = field(compare=False, repr=False)
-    landing: Mapping[str, Any]
     designations: tuple[BootstrapDesignation, ...]
     appeared_effects: tuple[BootstrapEffect, ...]
-    execution_epoch: Epoch = field(compare=False, repr=False)
-    execution_owner: EpochQuery = field(compare=False, repr=False)
+    execution: ExecutionReceipt = field(compare=False, repr=False)
     route_bound: bool = False
 
     def __post_init__(self) -> None:
+        if self.execution.source_scan is None:
+            raise ValueError("bootstrap execution receipt has no source scan")
         if self.scan_after != self.scan_before + 1:
             raise ValueError("bootstrap execution must contain exactly one scan")
         if self.projection.scan_id != self.scan_after:
             raise ValueError("bootstrap projection does not match its landing scan")
-        if self.execution_owner.epoch is not self.execution_epoch:
-            raise ValueError("bootstrap execution owner does not match its epoch")
-        if not self.execution_epoch.first_scan <= self.scan_after <= self.execution_epoch.last_scan:
-            raise ValueError("bootstrap execution epoch does not own its landing scan")
-        object.__setattr__(self, "landing", MappingProxyType(dict(self.landing)))
+        if self.execution.kernel_scan_ids != (self.scan_after,):
+            raise ValueError("bootstrap execution receipt must own its landing scan")
+
+    @property
+    def scan_before(self) -> int:
+        assert self.execution.source_scan is not None
+        return self.execution.source_scan
+
+    @property
+    def scan_after(self) -> int:
+        return self.execution.kernel_scan_ids[0]
+
+    @property
+    def landing(self) -> Mapping[str, Any]:
+        return self.execution.after_snap
 
     def diagnostic_snapshot(self) -> BootstrapExecutionSnapshot:
         """Return a detached immutable event view of this causal evidence."""
@@ -807,8 +814,7 @@ class _ContinuationCheckpoint:
     scan_id: int
     world_key: _StateKey
     kind: Literal["local_repair", "unchanged_coast", "program_input_handoff", "target_prefix"]
-    execution_epoch: Any
-    execution_owner: Any
+    execution_ref: EpochRef
     landing_occurrence: EffectOccurrenceSnapshot | None = None
 
     @property

@@ -196,6 +196,9 @@ def _derive_bootstrap_requirements(
 ) -> None:
     """Interpret exact appeared bootstrap violations without repairing them."""
 
+    execution_owner = receipt.execution.owner_at(receipt.scan_after)
+    if execution_owner is None:
+        raise RuntimeError("bootstrap execution receipt lost its landing scan owner")
     index = build_advance_index(
         ctx.program,
         getattr(receipt.checkpoint.world.work, "_harness", None),
@@ -212,8 +215,8 @@ def _derive_bootstrap_requirements(
             receipt.projection,
             effect.observation,
             operand_authorities=authorities,
-            execution_epoch=receipt.execution_epoch,
-            execution_owner=receipt.execution_owner,
+            execution_epoch=execution_owner.epoch,
+            execution_owner=execution_owner,
             selected_writer=effect.designation.producer,
             source_world_key=receipt.checkpoint.key,
             source_checkpoint=receipt.checkpoint,
@@ -224,8 +227,8 @@ def _derive_bootstrap_requirements(
                 derive_overwriter_guard_requirement_from_effect(
                     effect.observation,
                     receipt.projection,
-                    execution_epoch=receipt.execution_epoch,
-                    execution_owner=receipt.execution_owner,
+                    execution_epoch=execution_owner.epoch,
+                    execution_owner=execution_owner,
                     selected_writer=effect.designation.producer,
                     source_world_key=receipt.checkpoint.key,
                     source_checkpoint=receipt.checkpoint,

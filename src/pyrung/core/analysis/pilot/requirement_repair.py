@@ -133,9 +133,9 @@ def _program_guard_rebase_surfaces(
     bootstrap = state.bootstrap_execution
     if bootstrap is not None:
         checkpoints.append(bootstrap.checkpoint)
-        surfaces.append(
-            (bootstrap.checkpoint, bootstrap.execution_epoch, bootstrap.execution_owner)
-        )
+        owner = bootstrap.execution.owner_at(bootstrap.scan_after)
+        if owner is not None:
+            surfaces.append((bootstrap.checkpoint, owner.epoch, owner))
     for receipt in (*state.expectation_receipts, *state.failed_effect_receipts):
         checkpoints.append(receipt.source_checkpoint)
         surfaces.append(

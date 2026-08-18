@@ -58,6 +58,9 @@ from pyrung.core.analysis.pilot.effects import (
     terminal_target_replay_scan_ids,
 )
 from pyrung.core.analysis.pilot.execution import (
+    ChannelMotion,
+    ExecutionReceipt,
+    capture_execution_spans,
     execution_epoch_owner,
 )
 from pyrung.core.analysis.pilot.intrascan import (
@@ -208,44 +211,36 @@ if TYPE_CHECKING:
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
-
-
-
-
-def _execution_owner_at(work: Any, scan_id: int) -> tuple[Any, Any] | None:
-    return next(
-        (
-            (epoch, owner)
-            for epoch, owner in work._causal_lineage.seal_through(scan_id)
-            if epoch.first_scan <= scan_id <= epoch.last_scan
-        ),
-        None,
-    )
-
-
 def _entry_execution_receipt(
     checkpoint: _CausalCheckpoint,
     execution: Any,
     scan_after: int,
+    *,
+    existing: ExecutionReceipt | None = None,
 ) -> _BootstrapExecution:
     """Retain one adjacent program scan without interpreting its route yet."""
 
     projection = execution._replay_rung_write_projection_at(scan_after)
     if projection is None:
         raise RuntimeError("entry observation has no exact execution projection")
-    owner = _execution_owner_at(execution, scan_after)
-    if owner is None:
-        raise RuntimeError("entry observation has no retained execution epoch")
+    scan_before = scan_after - 1
+    execution_receipt = existing or ExecutionReceipt(
+        before_snap=projection.entry_tags,
+        after_snap=projection.exit_tags,
+        channel_motion=ChannelMotion(),
+        coast_receipt=None,
+        timeline=(),
+        spans=capture_execution_spans(execution, (scan_after,)),
+        source_scan=scan_before,
+        source_world=checkpoint.key,
+        decision_identity=("executed-program-scan", scan_before, scan_after),
+    )
     return _BootstrapExecution(
         checkpoint=checkpoint,
-        scan_before=scan_after - 1,
-        scan_after=scan_after,
         projection=projection,
-        landing=projection.exit_tags,
         designations=(),
         appeared_effects=(),
-        execution_epoch=owner[0],
-        execution_owner=owner[1],
+        execution=execution_receipt,
         route_bound=False,
     )
 
@@ -305,8 +300,16 @@ def _retain_entry_bearing_execution(
 ) -> None:
     """Retain the exact scan produced by an accepted ObserveScan bearing."""
 
+    execution = executed.execution
+    if execution is None:
+        raise RuntimeError("entry observation lost its immutable execution receipt")
     scan_after = executed.pulse.fork.state.scan_id
-    receipt = _entry_execution_receipt(checkpoint, executed.pulse.fork, scan_after)
+    receipt = _entry_execution_receipt(
+        checkpoint,
+        executed.pulse.fork,
+        scan_after,
+        existing=execution,
+    )
     state.invocation_checkpoint = checkpoint
     state.bootstrap_execution = receipt
     state.search_start_scan = checkpoint.world.work.state.scan_id
@@ -1356,8 +1359,7 @@ def _certify_current_target_prefix(
         scan_id=adoption_scan,
         world_key=boundary_key,
         kind="target_prefix",
-        execution_epoch=epoch_owner[0],
-        execution_owner=epoch_owner[1],
+        execution_ref=epoch_owner[0].reference,
         landing_occurrence=occurrence_snapshot(historical),
     )
 
