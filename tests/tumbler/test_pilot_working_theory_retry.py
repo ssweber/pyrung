@@ -10,6 +10,7 @@ import pytest
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot as pilot_module
 from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot import theory_drive as theory_drive_module
 from pyrung.core.runner import _compile_avoid
 
 pytestmark = pytest.mark.tumbler
@@ -23,7 +24,7 @@ def test_mode_request_reads_exact_atomic_operation_before_separate_clear(
 
     facts: list[Any] = []
     transitions = 0
-    original_record = pilot_module._record_controlling_theory_fact
+    original_record = theory_drive_module._record_controlling_theory_fact
     original_transition = pilot_module._transition_once
 
     def record_fact(state: Any, fact: Any) -> None:
@@ -35,7 +36,7 @@ def test_mode_request_reads_exact_atomic_operation_before_separate_clear(
         transitions += 1
         return original_transition(*args, **kwargs)
 
-    monkeypatch.setattr(pilot_module, "_record_controlling_theory_fact", record_fact)
+    monkeypatch.setattr(theory_drive_module, "_record_controlling_theory_fact", record_fact)
     monkeypatch.setattr(pilot_module, "_transition_once", transition_once)
 
     plc = PLC(tumbler_logic, dt=0.010)

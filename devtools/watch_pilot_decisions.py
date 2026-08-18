@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot as pilot_module
 from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot import theory_drive as theory_drive_module
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.intrascan import IntrascanResult
 from pyrung.core.analysis.pilot.navigation_contracts import Bearing
@@ -567,7 +568,7 @@ def _drive_worker(
         original_orient = Compass.orient
         original_interpret = pilot_module._theory_transition_from_attempt
         original_after_monitor = pilot_module._theory_transition_after_monitor
-        original_record = pilot_module._record_working_theory_transition
+        original_record = theory_drive_module._record_working_theory_transition
         projection_receipts: dict[tuple[Any, ...], tuple[int, tuple[int, ...], bool]] = {}
 
         def observe_orientation(
@@ -663,9 +664,7 @@ def _drive_worker(
                 consumer_boundary = getattr(policy, "consumer_boundary", None)
                 investigation_scope = view.investigation_scope if view is not None else None
                 consumer_stop = (
-                    investigation_scope.consumer_stop
-                    if investigation_scope is not None
-                    else None
+                    investigation_scope.consumer_stop if investigation_scope is not None else None
                 )
                 candidate_read = getattr(
                     getattr(result, "orientation", None),
@@ -729,9 +728,7 @@ def _drive_worker(
                             for requirement in world.state.active_requirements[-8:]
                         ),
                         "progress_attempt": progress_attempt,
-                        "pending_overlays": tuple(
-                            sorted(view.pending_overlay_identities, key=repr)
-                        )
+                        "pending_overlays": tuple(sorted(view.pending_overlay_identities, key=repr))
                         if view is not None
                         else (),
                         "pending_configurations": tuple(
@@ -765,9 +762,7 @@ def _drive_worker(
                             (
                                 investigation_scope.execution_source.scan_id,
                                 consumer_stop.scan_id,
-                                _consumer_boundary_summary(
-                                    investigation_scope.consumer_boundary
-                                ),
+                                _consumer_boundary_summary(investigation_scope.consumer_boundary),
                             )
                             if investigation_scope is not None and consumer_stop is not None
                             else None
@@ -956,13 +951,9 @@ def _drive_worker(
                     "elapsed": time.monotonic() - started,
                     "scan": state.work.state.scan_id,
                     "incoming": (
-                        observation.interpretation.kind.value
-                        if observation is not None
-                        else None
+                        observation.interpretation.kind.value if observation is not None else None
                     ),
-                    "outgoing": (
-                        result.interpretation.kind.value if result is not None else None
-                    ),
+                    "outgoing": (result.interpretation.kind.value if result is not None else None),
                     "requirements": (
                         tuple(
                             (
@@ -987,7 +978,9 @@ def _drive_worker(
         Compass.orient = observe_orientation
         vars(pilot_module)["_theory_transition_from_attempt"] = observe_interpretation
         vars(pilot_module)["_theory_transition_after_monitor"] = observe_after_monitor
-        vars(pilot_module)["_record_working_theory_transition"] = observe_recorded_interpretation
+        vars(theory_drive_module)["_record_working_theory_transition"] = (
+            observe_recorded_interpretation
+        )
         messages.put(
             {
                 "type": "started",
