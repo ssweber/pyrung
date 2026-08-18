@@ -73,6 +73,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryPhaseReceipt,
     TheoryRequirementSnapshot,
     TheoryState,
+    TheoryStatus,
     TheoryTemporalIntent,
     TheoryTermination,
     active_theory_configurations,
@@ -253,7 +254,6 @@ def test_open_creates_one_active_theory_and_initial_version() -> None:
     assert len(state.ledger.theories) == 1
     assert not state.ledger.attempts
     assert not state.ledger.receipts
-    assert not state.ledger.tombstones
 
 
 def test_research_finding_records_exact_evidence_without_advancing_the_world() -> None:
@@ -2568,7 +2568,6 @@ def test_prove_closes_theory_with_detached_receipt() -> None:
     assert state.active_theory_id is None
     assert len(state.ledger.receipts) == 1
     assert next(iter(state.ledger.receipts.values())).theory_id == theory_id
-    assert not state.ledger.tombstones
 
 
 def test_abandon_closes_only_the_exact_version() -> None:
@@ -2583,10 +2582,8 @@ def test_abandon_closes_only_the_exact_version() -> None:
     state = reduce_theory(state, fact)
 
     assert state.active_theory_id is None
-    assert len(state.ledger.tombstones) == 1
-    tombstone = next(iter(state.ledger.tombstones.values()))
-    assert tombstone.theory_id == theory_id
-    assert tombstone.version_id == version_id
+    assert state.ledger.theories[theory_id].status is TheoryStatus.ABANDONED
+    assert state.ledger.applied_facts[("abandon", fact.abandonment_identity)] == fact
     assert not state.ledger.receipts
 
 
@@ -2614,8 +2611,7 @@ def test_successor_opens_only_from_a_proved_receipt() -> None:
 
     assert state.active_theory_id is not None
     assert state.active_theory_id != theory_id
-    assert len(state.ledger.successors) == 1
-    assert next(iter(state.ledger.successors.values())).parent_receipt_id == receipt.receipt_id
+    assert state.ledger.applied_facts[("successor", successor.link_identity)] == successor
 
 
 def test_successor_rejects_missing_or_abandoned_parent() -> None:
@@ -2641,12 +2637,12 @@ def test_successor_rejects_missing_or_abandoned_parent() -> None:
             abandonment_identity=("abandon",),
         ),
     )
-    tombstone = next(iter(abandoned.ledger.tombstones.values()))
+    assert not abandoned.ledger.receipts
     with pytest.raises(TheoryInvariantError):
         reduce_theory(
             abandoned,
             OpenSuccessor(
-                parent_receipt_id=tombstone.tombstone_id,
+                parent_receipt_id=("receipt", theory_id, ("abandoned",)),
                 claim=_claim(),
                 opening_identity=("abandoned-parent",),
                 link_identity=("abandoned-link",),

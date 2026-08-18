@@ -37,10 +37,8 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryRequirementSnapshot,
     TheoryState,
     TheoryStatus,
-    TheorySuccessor,
     TheoryTemporalIntent,
     TheoryTermination,
-    TheoryTombstone,
     TheoryVersion,
     TheoryVersionId,
     UnattributedTheoryEvidence,
@@ -339,7 +337,6 @@ def _open(
     remaining_budget: int,
     *,
     parent_receipt_id: TheoryReceiptId | None = None,
-    link_identity: tuple[Any, ...] | None = None,
 ) -> TheoryState:
     if remaining_budget < 0:
         raise TheoryInvariantError("remaining theory budget cannot be negative")
@@ -384,12 +381,6 @@ def _open(
     if parent_receipt_id is not None:
         if parent_receipt_id not in ledger.receipts:
             raise TheoryInvariantError("successor parent receipt is missing")
-        assert link_identity is not None
-        successor = TheorySuccessor(parent_receipt_id, theory_id, link_identity)
-        ledger = replace(
-            ledger,
-            successors=_put_unique(ledger.successors, link_identity, successor, "successor"),
-        )
     return TheoryState(ledger, theory_id)
 
 
@@ -453,21 +444,9 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             fact.opening_identity,
             fact.remaining_budget,
             parent_receipt_id=fact.parent_receipt_id,
-            link_identity=fact.link_identity,
         )
     if isinstance(fact, RecordUnattributedEvidence):
-        observation = fact.observation
-        updated = _put_unique(
-            state.ledger.unattributed,
-            observation.observation_id,
-            observation,
-            "unattributed observation",
-        )
-        return (
-            state
-            if updated is state.ledger.unattributed
-            else replace(state, ledger=replace(state.ledger, unattributed=updated))
-        )
+        return state
     if isinstance(fact, RecordTheoryAttempt):
         theory = _active(state, fact.theory_id)
         if fact.version_id != theory.current_version_id:
@@ -1256,25 +1235,10 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         theory = _active(state, fact.theory_id)
         if fact.version_id != theory.current_version_id:
             raise TheoryInvariantError("abandonment addresses a stale theory version")
-        attempted = tuple(
-            attempt_id
-            for attempt_id in theory.attempt_ids
-            if state.ledger.attempts[attempt_id].version_id == fact.version_id
-        )
-        tombstone_id = ("tombstone", fact.theory_id, fact.abandonment_identity)
-        tombstone = TheoryTombstone(
-            fact.theory_id,
-            fact.version_id,
-            attempted,
-            fact.termination,
-            tombstone_id,
-        )
-        tombstones = _put_unique(state.ledger.tombstones, tombstone_id, tombstone, "tombstone")
         updated = replace(theory, status=TheoryStatus.ABANDONED)
         return TheoryState(
             replace(
                 state.ledger,
-                tombstones=tombstones,
                 theories=state.ledger.theories.set(fact.theory_id, updated),
             ),
             None,

@@ -810,22 +810,6 @@ class TheoryReceipt:
 
 
 @dataclass(frozen=True)
-class TheoryTombstone:
-    theory_id: TheoryId
-    version_id: TheoryVersionId
-    attempted_artifacts: tuple[tuple[Any, ...], ...]
-    termination: TheoryTermination
-    tombstone_id: tuple[Any, ...]
-
-
-@dataclass(frozen=True)
-class TheorySuccessor:
-    parent_receipt_id: TheoryReceiptId
-    successor_theory_id: TheoryId
-    link_identity: tuple[Any, ...]
-
-
-@dataclass(frozen=True)
 class UnattributedTheoryEvidence:
     observation_id: tuple[Any, ...]
     boundary: TheoryBoundaryIdentity
@@ -858,9 +842,6 @@ class TheoryLedger:
     )
     traceback_frontiers: PMap[Any, IntrascanTracebackFrontier] = pmap()
     receipts: PMap[Any, TheoryReceipt] = pmap()
-    tombstones: PMap[Any, TheoryTombstone] = pmap()
-    successors: PMap[Any, TheorySuccessor] = pmap()
-    unattributed: PMap[Any, UnattributedTheoryEvidence] = pmap()
     applied_facts: PMap[Any, object] = pmap()
 
 
