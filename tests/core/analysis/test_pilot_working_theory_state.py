@@ -29,8 +29,7 @@ def _boundary(label: str, scan: int = 0) -> TheoryBoundaryIdentity:
     return TheoryBoundaryIdentity(
         world_key=("world", label),
         scan_id=scan,
-        checkpoint_token=("checkpoint", label),
-        execution_ref=_execution_ref(label),
+        owner_ref=_execution_ref(label),
         occurrence_identity=("occurrence", label),
     )
 

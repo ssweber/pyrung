@@ -18,6 +18,7 @@ from pyrsistent import field as _precord_field
 
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
+from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.working_theory import (
     ScanEntryConfiguration,
     TheoryState,
@@ -338,6 +339,8 @@ class _World(PRecord):
 @dataclass(frozen=True, eq=False)
 class _CheckpointOwner:
     """Stable identity for one rollback receipt as its executable world changes."""
+
+    reference: CheckpointRef = field(default_factory=CheckpointRef)
 
 
 @dataclass(frozen=True)

@@ -21,6 +21,7 @@ from pyrung.core.analysis.pilot.effects import (
     EffectOccurrenceSelector,
     EffectOccurrenceSnapshot,
 )
+from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.intrascan import (
     IntrascanBoundaryRealization,
     IntrascanProducerGoal,
@@ -94,8 +95,7 @@ def _boundary(label: str, scan: int) -> TheoryBoundaryIdentity:
     return TheoryBoundaryIdentity(
         world_key=("world", label),
         scan_id=scan,
-        checkpoint_token=("checkpoint", label),
-        execution_ref=_execution_ref(label),
+        owner_ref=_execution_ref(label),
         occurrence_identity=("occurrence", label),
     )
 
@@ -132,7 +132,6 @@ def _requirement(label: str) -> TheoryRequirementSnapshot:
         operand_authority="producer",
         source_world_key=("world", "source"),
         source_scan=0,
-        checkpoint_token=("checkpoint", "source"),
         execution_ref=_execution_ref("source"),
         phase="assertion",
         status="active",
@@ -754,8 +753,7 @@ def test_world_rebase_retains_only_theory_owned_overlay_at_same_physical_boundar
     source = TheoryBoundaryIdentity(
         world_key=(("physical", "source"), ()),
         scan_id=0,
-        checkpoint_token=("checkpoint", "source"),
-        execution_ref=_execution_ref("source"),
+        owner_ref=_execution_ref("source"),
         occurrence_identity=("occurrence", "source"),
     )
     claim = replace(_claim(), source=source, selected_boundary=source)
@@ -783,8 +781,7 @@ def test_world_rebase_retains_only_theory_owned_overlay_at_same_physical_boundar
     execution_boundary = replace(
         source,
         scan_id=1,
-        checkpoint_token=("checkpoint", "executed"),
-        execution_ref=_execution_ref("executed"),
+        owner_ref=_execution_ref("executed"),
         occurrence_identity=("occurrence", "executed"),
     )
     state = reduce_theory(
@@ -2191,8 +2188,7 @@ def test_refinement_can_authorize_an_exact_earlier_temporal_source() -> None:
         rejected.source,
         world_key=("world", "earlier"),
         scan_id=0,
-        checkpoint_token=("checkpoint", "earlier"),
-        execution_ref=None,
+        owner_ref=CheckpointRef(1_000_001),
     )
     requirement = replace(
         _requirement("prior"),
@@ -2464,8 +2460,7 @@ def test_refine_retains_changed_boundary_in_the_row_behind_a_compact_version_id(
         source,
         world_key=("world", "requirements-changed"),
         scan_id=1,
-        checkpoint_token=("checkpoint", "requirements-changed"),
-        execution_ref=_execution_ref("requirements-changed"),
+        owner_ref=_execution_ref("requirements-changed"),
         occurrence_identity=("requirements", "producer"),
     )
 
@@ -2490,17 +2485,17 @@ def test_refine_retains_changed_boundary_in_the_row_behind_a_compact_version_id(
     assert len(refined_version_id[1]) == 64
 
 
-@pytest.mark.parametrize("changed", ["backward_scan", "owner_after_scan", "checkpoint"])
+@pytest.mark.parametrize("changed", ["backward_scan", "owner_after_scan"])
 def test_refine_fails_closed_on_inexact_refined_boundary(changed: str) -> None:
     state, theory_id, version_id = _opened()
     source = _boundary("source", 0)
     refined_source = replace(source, world_key=("world", "requirements-changed"))
     if changed == "backward_scan":
         refined_source = replace(refined_source, scan_id=-1)
-    elif changed == "owner_after_scan":
-        refined_source = replace(refined_source, scan_id=1, execution_ref=None)
     else:
-        refined_source = replace(refined_source, checkpoint_token=())
+        with pytest.raises(TheoryInvariantError):
+            replace(refined_source, scan_id=1, owner_ref=CheckpointRef(1_000_002))
+        return
 
     with pytest.raises(TheoryInvariantError):
         reduce_theory(

@@ -22,6 +22,7 @@ from pyrung.core.analysis.pilot.effects import (
     EffectObservationSnapshot,
     EffectOccurrenceSnapshot,
 )
+from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.runner import EpochRef
 
@@ -135,9 +136,20 @@ class TheoryBoundaryIdentity:
 
     world_key: tuple[Any, ...]
     scan_id: int
-    checkpoint_token: tuple[Any, ...]
-    execution_ref: EpochRef | None = None
+    owner_ref: CheckpointRef | EpochRef
     occurrence_identity: tuple[Any, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.owner_ref, CheckpointRef | EpochRef):
+            raise TheoryInvariantError("boundary owner must be a CheckpointRef or EpochRef")
+        if self.scan_id > 0 and not isinstance(self.owner_ref, EpochRef):
+            raise TheoryInvariantError("an executed boundary must be owned by an EpochRef")
+
+    @property
+    def execution_ref(self) -> EpochRef | None:
+        """Return physical execution ownership when this is an executed boundary."""
+
+        return self.owner_ref if isinstance(self.owner_ref, EpochRef) else None
 
 
 @dataclass(frozen=True)
@@ -178,7 +190,6 @@ class TheoryRequirementSnapshot:
     operand_authority: str
     source_world_key: tuple[Any, ...]
     source_scan: int | None
-    checkpoint_token: tuple[Any, ...]
     execution_ref: EpochRef
     phase: str
     status: str
@@ -1008,12 +1019,7 @@ def theory_boundary_from_checkpoint(checkpoint: Any) -> TheoryBoundaryIdentity:
     return TheoryBoundaryIdentity(
         world_key=world_key,
         scan_id=scan_id,
-        checkpoint_token=(
-            ("execution-boundary", world_key, scan_id, execution_ref)
-            if execution_ref is not None
-            else ("checkpoint-owner", id(owner), world_key, scan_id)
-        ),
-        execution_ref=execution_ref,
+        owner_ref=(execution_ref if execution_ref is not None else owner.reference),
     )
 
 
@@ -1277,7 +1283,7 @@ def theory_claim_from_intrascan_witness(
         selected_boundary=replace(
             source,
             scan_id=assertion_scan,
-            execution_ref=execution_ref,
+            owner_ref=execution_ref,
             occurrence_identity=(
                 "intrascan-witness",
                 tuple(selected),
@@ -2257,7 +2263,6 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             raise TheoryInvariantError("attempt occurrence evidence is missing")
         if fact.execution_source is not None and (
             fact.execution_source.scan_id != fact.source.scan_id
-            or not fact.execution_source.checkpoint_token
             or (
                 fact.execution_source.scan_id > 0
                 and fact.execution_source.execution_ref is None
@@ -2568,7 +2573,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
                 raise TheoryInvariantError(
                     "advance execution source is not the source scan boundary"
                 )
-            if not fact.execution_source.checkpoint_token or (
+            if (
                 fact.execution_source.scan_id > 0
                 and fact.execution_source.execution_ref is None
             ):
@@ -2765,9 +2770,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             raise TheoryInvariantError("no-scan composition advanced the physical scan")
         if fact.composed_source != fact.source:
             raise TheoryInvariantError("scan-entry composition changed the physical World")
-        if not fact.composed_source.checkpoint_token or (
-            fact.composed_source.scan_id > 0 and fact.composed_source.execution_ref is None
-        ):
+        if fact.composed_source.scan_id > 0 and fact.composed_source.execution_ref is None:
             raise TheoryInvariantError("composition boundary evidence is incomplete")
         prior_configurations = {
             configuration.identity
@@ -2841,9 +2844,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         if fact.parent_version_id != theory.current_version_id:
             raise TheoryInvariantError("refinement addresses a stale theory version")
         _require_allowed_source(state, theory, fact.source)
-        if not fact.refined_source.checkpoint_token or (
-            fact.refined_source.scan_id > 0 and fact.refined_source.execution_ref is None
-        ):
+        if fact.refined_source.scan_id > 0 and fact.refined_source.execution_ref is None:
             raise TheoryInvariantError("refined source exact boundary evidence is missing")
         parent = state.ledger.versions[fact.parent_version_id]
         if fact.refined_source.scan_id < fact.source.scan_id and not (

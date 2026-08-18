@@ -2712,11 +2712,7 @@ def _theory_boundary_from_checkpoint(checkpoint: _CausalCheckpoint) -> TheoryBou
         return TheoryBoundaryIdentity(
             world_key=("unavailable-world-key", scan_id),
             scan_id=scan_id,
-            checkpoint_token=(
-                "checkpoint-owner",
-                id(checkpoint.owner),
-                "world-key-unavailable",
-            ),
+            owner_ref=checkpoint.owner.reference,
         )
     scan_id = checkpoint.world.work.state.scan_id
     epoch_owner = _execution_epoch_owner(checkpoint.world.work, scan_id)
@@ -2733,14 +2729,13 @@ def _theory_boundary_from_checkpoint(checkpoint: _CausalCheckpoint) -> TheoryBou
         return TheoryBoundaryIdentity(
             world_key=world_key,
             scan_id=scan_id,
-            checkpoint_token=("checkpoint-owner", id(checkpoint.owner), world_key, scan_id),
+            owner_ref=checkpoint.owner.reference,
         )
     execution_ref = epoch_owner[0].reference
     return TheoryBoundaryIdentity(
         world_key=world_key,
         scan_id=scan_id,
-        checkpoint_token=("execution-boundary", world_key, scan_id, execution_ref),
-        execution_ref=execution_ref,
+        owner_ref=execution_ref,
     )
 
 
@@ -2766,13 +2761,7 @@ def _theory_live_boundary(state: _PilotState) -> TheoryBoundaryIdentity:
     return TheoryBoundaryIdentity(
         world_key=world_key,
         scan_id=scan_id,
-        checkpoint_token=(
-            "execution-boundary",
-            world_key,
-            scan_id,
-            execution_ref,
-        ),
-        execution_ref=execution_ref,
+        owner_ref=execution_ref,
     )
 
 
@@ -2861,7 +2850,6 @@ def _theory_requirement_snapshot(requirement: ActiveRequirement) -> TheoryRequir
         operand_authority=diagnostic.operand_authority.value,
         source_world_key=source_world_identity,
         source_scan=diagnostic.source_scan,
-        checkpoint_token=("checkpoint-owner", diagnostic.causal_identity[2]),
         execution_ref=requirement.execution_epoch.reference,
         phase=diagnostic.phase.value,
         status=diagnostic.status.value,

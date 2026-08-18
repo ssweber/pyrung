@@ -36,6 +36,7 @@ from pyrung.core.analysis.pilot.effects import (
     occurrence_snapshot,
     resolve_occurrence_selector,
 )
+from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.intrascan import (
     IntrascanAttempt,
     IntrascanClosureQuestion,
@@ -503,7 +504,7 @@ def test_cross_scan_boundary_claim_requires_and_retains_exact_live_owner() -> No
     with pytest.raises(TheoryInvariantError, match="owner is unavailable"):
         theory_boundary_claim(
             BearingObjective(TargetSpec(TwoStepper.name, 1)),
-            replace(boundary, execution_ref=None),
+            replace(boundary, scan_id=0, owner_ref=CheckpointRef(1_000_003)),
             ChannelHeading(TwoStepper.name, 1),
         )
 
