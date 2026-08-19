@@ -138,9 +138,9 @@ fork. All modes converge on `verify.py`:
    earned-work, or local-conductivity movement, verification records which
    scan was productive and whether the retained landing still owns that tip.
 5. A suspicious excursion is the exceptional branch.
-   `pilot.py::_resolve_excursion` invokes `investigate.py` at most once and
-   passes the exact replay to `verify.verify_excursion_replay`, which continues
-   the remaining gates.
+   `attempt_verification.py::resolve_excursion` invokes `investigate.py` at
+   most once and passes the exact replay to `verify.verify_excursion_replay`,
+   which continues the remaining gates.
 6. A rejected act records its observations and exact world-scoped nogood, then
    returns to orientation. PILOT never advances to a sibling from a retained
    candidate list.
@@ -200,7 +200,8 @@ silent churn.
 
 ## Actual control flow
 
-1. `pilot.py` snapshots the runtime world and calls `Compass.orient`.
+1. `pilot.py` owns the repeated event loop: it snapshots the runtime world and
+   calls `Compass.orient`.
 2. Compass reads trace, static catalogs, awaited-action evidence, constraints,
    and knowledge. `OrientationResult` permits one executable `Bearing`, one
    typed request (`ComposeCorrection`, conductivity/intrascan research, or
@@ -209,13 +210,16 @@ silent churn.
    prerequisites, and executes exactly one act through `verify.verify_gates`.
    A spin-shaped excursion is returned with its exact execution rather than
    investigated inside the gate.
-4. `pilot.py::_resolve_excursion` owns at most one investigation and passes its
-   replay to `verify.verify_excursion_replay`, which continues the remaining
-   gates after spin.
-   `_record_attempt` then applies all observations, including rejected
-   attempts, exactly once before any further orientation.
-5. An accepted fork is committed. A receipt-owned selected-producer or
-   frontier landing becomes the next checkpoint directly; otherwise
+4. `attempt_transition.py::transition_once` coordinates exactly one Bearing.
+   Receipt-driven refinements live in `attempt_verification.py`; its
+   `resolve_excursion` owns at most one investigation and returns the exact
+   replay to verification. `attempt_transition.record_attempt` then applies
+   all observations, including rejected attempts, exactly once before any
+   further orientation.
+5. `trial_commit.py::adopt_trial` atomically commits an accepted fork together
+   with its `StepContext`, `CommittedAct`, and replay steps. A receipt-owned
+   selected-producer or frontier landing becomes the next checkpoint directly;
+   otherwise
    `progress.py` decides retention, pending continuation, investigation, or
    revert. Trend monitoring hands a detected channel departure to its terminal
    `_handle_channel_departure` generator without reconstructing the departure
@@ -381,16 +385,16 @@ Do not reproduce a decision in a second module for convenience. Shared callers
 consume the first owner's result. The owner's docstring states its contract;
 this table only locates the owner.
 
-- User trace route: `pilot.py::_prepare_route`
+- User trace route: `target_route.py::prepare_target_route`
 - Trace-tree traversal and unresolved interior identity:
-  `trace.py::TraceNode.iter_nodes` / `is_interior_frontier`
-- Writer eligibility and order: `trace.py::_rank_writers`
+  `trace_tree.py::TraceNode.iter_nodes` / `is_interior_frontier`
+- Writer eligibility and order: `writer_selection.py::_rank_writers`
 - Unlocked local trace alternatives: `trace.py::_select_trace_alternative`;
   complete-route ranking is separately owned by `rank_trace_choices`
 - Permanent guard rejection: `tide_tables.py::guard_verdict`; trace supplies
   writer fire pins and consumes the complete-domain verdict
-- Unsupported construct reporting: `trace.py::UnsupportedConstruct`, rendered
-  by `recording.py`
+- Unsupported construct reporting: `trace_read.py::UnsupportedConstruct`,
+  rendered by `recording.py`
 - Instruction-owned channel lookup: `advance.py::AdvanceIndex`
 - One exact producer's counterfactual proof: `program_step.py::read_program_step`
 - Current-world navigation result and continuation evidence:
@@ -425,8 +429,9 @@ this table only locates the owner.
   remains the compatibility facade and owns active-requirement admission.
 - Controlling theory knowledge: `working_theory.py` owns detached immutable
   claims, versions, attempt/progress receipts, temporal intent, consumer stops,
-  normalized program-transaction identities, lifecycle
-  facts, and the pure reducer. The live outer loop alone applies facts to
+  normalized program-transaction identities, and lifecycle facts;
+  `theory_reducer.py` owns lifecycle commands, validation, and the pure
+  reducer. The live outer loop alone applies facts to
   `_PilotState.theory_state`; Compass consumes a detached `TheoryView` and
   resolves it through the same current-world `CandidateRead` as ordinary
   orientation. The ledger survives rollback but owns no executable future.
@@ -444,10 +449,14 @@ this table only locates the owner.
 - Exact scan-level progress proof: verification mints
   `types.py::ScanProgressReceipt`; post-commit handling consumes it without
   retraversing the trace to re-prove its selected producer/frontier.
-- Verification-time excursion orchestration: `pilot.py::_resolve_excursion`;
-  verify reports the exact executed attempt, PILOT invokes
+- Verification-time excursion orchestration:
+  `attempt_verification.py::resolve_excursion`; verify reports the exact
+  executed attempt, the refinement invokes
   `investigate.py::investigate_excursion` once, and verify judges that replay
-- Committed operation context: `pilot.py::_step_context`
+- One-Bearing execution/verification/recording coordinator:
+  `attempt_transition.py::transition_once`
+- Committed operation context and atomic World adoption:
+  `trial_commit.py::_build_step_context` / `adopt_trial`
 - Physical planning versus proof: orientation's
   `TraceReadConstraints.from_context` may propose a coupling driver;
   `verify.py::_gate_dead_end` deliberately omits that model
@@ -553,8 +562,23 @@ identities is missing or ambiguous.
 
 Orchestration:
 
-- `pilot.py` — drive loop, verification-time excursion orchestration, world
-  commit, public entry points
+- `api.py` — public target parsing, `pilot_events` / `pilot_how`, and public
+  `Plan` assembly
+- `drive_setup.py` — shared static/runtime preparation and target-context
+  construction for one drive
+- `target_route.py` — target-route selection, public route reporting, and
+  linked-feedback obstruction diagnosis
+- `pilot.py` — repeated event loop, terminal narration, and post-commit
+  monitoring; it does not parse requests, execute an act, verify a trial, or
+  adopt a World
+- `attempt_transition.py` — execute, verify, record, and optionally adopt one
+  Compass Bearing; no repetition or event-stream ownership
+- `attempt_verification.py` — receipt-driven excursion replay, target-prefix
+  certification, and transient-target promotion
+- `trial_commit.py` — atomic accepted-World adoption, `StepContext`,
+  `CommittedAct`, and replay-step recording
+- `entry_execution.py` — import and route-bind the execution adjacent to Pilot
+  invocation
 - `recording.py` — event/plan rendering; no drive decisions
 - `types.py` — cross-module records and protocols
 - `__init__.py` — package exports
@@ -563,7 +587,14 @@ Orchestration:
 
 Static reading and orientation:
 
-- `trace.py` — backward requirement tree, writer ranking
+- `trace.py` — backward-recursion engine for one constrained trace read
+- `trace_read.py` — immutable trace requests, route choices, and unsupported
+  construct contract
+- `trace_tree.py` — trace result records and structural/frontier views
+- `trace_routes.py` — complete route enumeration and ranking policy
+- `writer_selection.py` — program-writer resolution, classification, and rank
+- `program_facts.py` — static reference, edge, resting-value, and transient-rest
+  facts used during drive setup
 - `availability.py` — current-state writer availability
 - `evidence.py` — pipeline roles, transition-route expansion
 - `tide_tables.py` — finite table/calc preimages, guard verdicts
@@ -572,6 +603,9 @@ Static reading and orientation:
 - `compass.py` — navigation facade, durable knowledge
 - `orientation.py` — current-world read, result synthesis
 - `options.py` — option/wait materialization and ranking
+- `candidate_read.py` — immutable completed candidate, wait, prerequisite, and
+  route readings consumed by orientation policy
+- `theory_orientation.py` — WorkingTheory-specific lowering into one next act
 - `constrained_reachability.py` — constrained reachability evidence
 - `awaited_actions.py` — program-awaited actions and producer families
 - `advance.py` — instruction-owned channels and boundaries
@@ -595,9 +629,11 @@ Static reading and orientation:
 - `requirement_recovery.py` — production compatibility facade for intrascan
   schedules plus current-world active-requirement admission and preservation
 - `working_theory.py` — controlling detached facts, typed temporal intent,
-  consumer stops, normalized program transactions, and pure
-  lifecycle reducer; it never stores navigation reads, acts, checkpoints,
+  consumer stops, and normalized program transactions; it never stores
+  navigation reads, acts, checkpoints,
   worlds, forks, PilotRungs, routes, or callables
+- `theory_reducer.py` — typed WorkingTheory lifecycle commands, validation,
+  and pure state reduction
 - `navigation_contracts.py` — immutable navigation contracts
 
 Execution and observation:
