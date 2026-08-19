@@ -15,6 +15,9 @@ from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.intrascan_schedule import iter_guard_alternatives
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
+from pyrung.core.analysis.pilot.requirement_derivation import (
+    derive_overwriter_guard_requirement_from_write,
+)
 from pyrung.core.analysis.pilot.requirement_evidence import (
     _bind_guard_derivation_authority,
     _configured_input_names,
@@ -27,7 +30,6 @@ from pyrung.core.analysis.pilot.requirements import (
     GuardRequirementExpr,
     OperandAuthority,
     RequirementStatus,
-    derive_overwriter_guard_requirement_from_write,
 )
 from pyrung.core.analysis.pilot.types import _CausalCheckpoint, _PilotContext, _PilotState
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _semantic_key

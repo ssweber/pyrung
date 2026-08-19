@@ -24,6 +24,11 @@ from pyrung.core.analysis.pilot.effects import (
 )
 from pyrung.core.analysis.pilot.intrascan import IntrascanFinding
 from pyrung.core.analysis.pilot.intrascan_schedule import iter_guard_alternatives
+from pyrung.core.analysis.pilot.requirement_derivation import (
+    _refine_preserved_tag_deadlines,
+    derive_occurrence_source_requirement,
+    derive_overwriter_guard_requirement_from_effect,
+)
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
     GuardRequirementAtom,
@@ -32,8 +37,6 @@ from pyrung.core.analysis.pilot.requirements import (
     OperandAuthority,
     RequirementSourceWalk,
     RequirementSourceWalkStatus,
-    derive_occurrence_source_requirement,
-    derive_overwriter_guard_requirement_from_effect,
 )
 from pyrung.core.crossing import Cmp
 from pyrung.core.executor import WriteOccurrence
@@ -625,8 +628,6 @@ def test_source_walk_contract_is_report_only_and_retains_no_future() -> None:
 
 
 def test_existing_one_hop_facade_matches_the_typed_walk() -> None:
-    from pyrung.core.analysis.pilot.requirements import _refine_preserved_tag_deadlines
-
     projection, atom, _deadline, _source = _one_hop_projection()
     typed = derive_occurrence_source_requirement(atom, projection)
 

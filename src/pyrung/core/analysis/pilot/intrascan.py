@@ -37,6 +37,13 @@ from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     fork_with_pilot_rungs,
 )
+from pyrung.core.analysis.pilot.requirement_derivation import (
+    bind_guard_condition_operand_authorities,
+    bind_guard_operand_authorities,
+    derive_advance_requirement_from_effect,
+    derive_guard_requirement_from_effect,
+    derive_overwriter_guard_requirement_from_effect,
+)
 from pyrung.core.analysis.pilot.requirements import (
     ActiveCondition,
     ActiveRequirement,
@@ -49,11 +56,6 @@ from pyrung.core.analysis.pilot.requirements import (
     RequirementDerivation,
     RequirementSourceWalk,
     RequirementSourceWalkStatus,
-    bind_guard_condition_operand_authorities,
-    bind_guard_operand_authorities,
-    derive_advance_requirement_from_effect,
-    derive_guard_requirement_from_effect,
-    derive_overwriter_guard_requirement_from_effect,
 )
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.analysis.sp_values import _values_match

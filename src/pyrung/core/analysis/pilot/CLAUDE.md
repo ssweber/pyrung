@@ -437,7 +437,9 @@ this table only locates the owner.
   orientation. The ledger survives rollback but owns no executable future.
 - Navigation act policy: `orientation.py::_orient_read` materializes one
   `navigation_contracts.ActPolicy`; `steer.execute` applies it
-- Exact expectation receipt creation and matching: `requirements.py`;
+- Requirement and expectation receipt contracts plus exact receipt matching:
+  `requirements.py`; failed-effect, guard, overwrite, and occurrence-source
+  derivation: `requirement_derivation.py`;
   `progress.py::_regression_expectation_source` selects one exact causal link,
   restores its source checkpoint, and owns the handoff to local repair
 - Option materialization and ranking: `options.py::_build_candidates`;
@@ -623,9 +625,10 @@ Static reading and orientation:
   occurrence boundaries; never an executable PILOT correction
 - `temporal_need.py` — lazy current-world `AND`/`OR` requirement branches
 - `intrascan_schedule.py` — pure authority-aware scalar schedule compilation
-- `requirements.py` — failed-effect explanations, active requirements, exact
-  expectation receipts, and strictly decreasing same-scan occurrence-source
-  walks
+- `requirements.py` — inert failed-effect explanations, active-requirement and
+  occurrence-source contracts, exact expectation receipts, and receipt matching
+- `requirement_derivation.py` — exact guard, advance, overwrite, and strictly
+  decreasing same-scan occurrence-source derivation over execution evidence
 - `requirement_recovery.py` — production compatibility facade for intrascan
   schedules plus current-world active-requirement admission and preservation
 - `working_theory.py` — controlling detached facts, typed temporal intent,

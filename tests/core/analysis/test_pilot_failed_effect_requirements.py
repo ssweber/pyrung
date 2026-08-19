@@ -24,18 +24,20 @@ from pyrung.core.analysis.pilot.effects import (
     EffectObligation,
     observe_execution_window,
 )
+from pyrung.core.analysis.pilot.requirement_derivation import (
+    _residualize_guard_requirement,
+    derive_advance_operand_requirement,
+    derive_advance_requirement_from_effect,
+    derive_guard_requirement_from_effect,
+    explain_selected_absence,
+)
 from pyrung.core.analysis.pilot.requirements import (
     FailureExplanationKind,
     GuardLogic,
     GuardRequirementAtom,
     GuardRequirementExpr,
     OperandAuthority,
-    _residualize_guard_requirement,
     classify_bound_operand_authority,
-    derive_advance_operand_requirement,
-    derive_advance_requirement_from_effect,
-    derive_guard_requirement_from_effect,
-    explain_selected_absence,
 )
 from pyrung.core.context import RungId
 from pyrung.core.crossing import Cmp

@@ -14,12 +14,14 @@ from pyrung.core.analysis.pilot.effects import (
     occurrence_snapshot,
     promote_terminal_target_observation,
 )
+from pyrung.core.analysis.pilot.requirement_derivation import (
+    _refine_preserved_tag_deadlines,
+    derive_overwriter_guard_requirement_from_effect,
+)
 from pyrung.core.analysis.pilot.requirements import (
     GuardLogic,
     GuardRequirementAtom,
     GuardRequirementExpr,
-    _refine_preserved_tag_deadlines,
-    derive_overwriter_guard_requirement_from_effect,
 )
 from pyrung.core.crossing import Cmp
 

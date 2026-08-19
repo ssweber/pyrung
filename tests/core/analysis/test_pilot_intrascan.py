@@ -27,12 +27,14 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     TargetSpec,
     act_identity,
 )
-from pyrung.core.analysis.pilot.requirement_evidence import _derive_attempt_requirements
-from pyrung.core.analysis.pilot.requirements import (
-    GuardRequirementAtom,
+from pyrung.core.analysis.pilot.requirement_derivation import (
     bind_guard_operand_authorities,
     derive_guard_requirement_from_effect,
     derive_overwriter_guard_requirement_from_effect,
+)
+from pyrung.core.analysis.pilot.requirement_evidence import _derive_attempt_requirements
+from pyrung.core.analysis.pilot.requirements import (
+    GuardRequirementAtom,
 )
 from pyrung.core.analysis.pilot.types import _AttemptResult, _ExecutedAttempt, _PulseState
 from pyrung.core.analysis.pilot.working_theory import TheoryState

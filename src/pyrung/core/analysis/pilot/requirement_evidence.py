@@ -36,17 +36,19 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     act_identity,
 )
 from pyrung.core.analysis.pilot.pipeline_graph import target_reachable_values
+from pyrung.core.analysis.pilot.requirement_derivation import (
+    bind_guard_operand_authorities,
+    derive_advance_requirement_from_effect,
+    derive_overwriter_guard_requirement_from_effect,
+    derive_overwriter_guard_requirement_from_write,
+)
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
     EffectReceiptRole,
     ExpectationReceipt,
     FailedEffectReceipt,
     OperandAuthority,
-    bind_guard_operand_authorities,
     classify_bound_operand_authority,
-    derive_advance_requirement_from_effect,
-    derive_overwriter_guard_requirement_from_effect,
-    derive_overwriter_guard_requirement_from_write,
 )
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
