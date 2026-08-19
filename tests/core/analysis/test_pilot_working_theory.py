@@ -2554,11 +2554,7 @@ def test_prove_closes_theory_and_retains_detached_fact() -> None:
     fact = ProveTheory(
         theory_id=theory_id,
         version_id=version_id,
-        promoted_landing=_boundary("landing", 1),
         proof_identity=("prove",),
-        fulfilled_obligations=(("consumer", True),),
-        requirement_observations=(("producer", True),),
-        retained_pilot_rung_identities=(("guard", 1),),
     )
 
     state = reduce_theory(state, fact)
@@ -2609,7 +2605,6 @@ def test_identical_fact_streams_produce_identical_ledgers_and_ids() -> None:
             ProveTheory(
                 theory_id=theory_id,
                 version_id=version_id,
-                promoted_landing=_boundary("landing", 1),
                 proof_identity=("prove",),
             ),
         )
@@ -2712,9 +2707,7 @@ def test_populated_closed_ledger_retains_no_navigation_or_executable_future() ->
         ProveTheory(
             theory_id=theory_id,
             version_id=final_version,
-            promoted_landing=_boundary("landing", 2),
             proof_identity=("prove",),
-            retained_pilot_rung_identities=(("producer-guard", 1),),
         ),
     )
 

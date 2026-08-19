@@ -1282,25 +1282,13 @@ def _complete_controlled_setup(
             requirement,
             status=RequirementStatus.DISCHARGED,
         )
-    observations = tuple(
-        (
-            "requirement-discharged",
-            _theory_requirement_snapshot(requirement).semantic_identity,
-            controlled.attempt_id,
-        )
-        for requirement in discharged
-    )
     if not successor_need and reached:
         _record_controlling_theory_fact(
             state,
             ProveTheory(
                 theory_id=request.theory_id,
                 version_id=request.version_id,
-                promoted_landing=boundary,
                 proof_identity=("working-theory-setup-proved", controlled.attempt_id, boundary),
-                fulfilled_obligations=controlled.occurrence_evidence,
-                requirement_observations=observations,
-                retained_pilot_rung_identities=controlled.pilot_rung_identities,
                 accepted_attempt_id=controlled.attempt_id,
             ),
         )
@@ -1514,19 +1502,12 @@ def _record_optional_theory_proved(state: _PilotState) -> None:
     )
     if not attempts:
         return
-    fulfilled = attempts[-1].occurrence_evidence
     _record_optional_theory_fact(
         state,
         ProveTheory(
             theory_id=theory.theory_id,
             version_id=theory.current_version_id,
-            promoted_landing=boundary,
             proof_identity=("theory-proved", theory.theory_id, boundary),
-            fulfilled_obligations=fulfilled,
-            requirement_observations=(),
-            retained_pilot_rung_identities=tuple(
-                _rung_identity(rung) for rung in state.pilot_rungs
-            ),
         ),
     )
 

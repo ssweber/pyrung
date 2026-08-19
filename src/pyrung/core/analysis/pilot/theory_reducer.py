@@ -171,11 +171,7 @@ class RefineTheory:
 class ProveTheory:
     theory_id: TheoryId
     version_id: TheoryVersionId
-    promoted_landing: TheoryBoundaryIdentity
     proof_identity: tuple[Any, ...]
-    fulfilled_obligations: tuple[Any, ...] = ()
-    requirement_observations: tuple[Any, ...] = ()
-    retained_pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
     accepted_attempt_id: tuple[Any, ...] | None = None
 
 
