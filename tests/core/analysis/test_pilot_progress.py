@@ -76,12 +76,14 @@ from pyrung.core.analysis.pilot.progress import (
     _apply_departure_decision,
     _assess_pending_departure,
     _channel_recovery_origin,
-    _delayed_overwriter_fallback_allowed,
     _departure_event_outcome,
     _handle_channel_departure,
     _investigate_and_revert,
     _monitor_trend,
     _open_pending_departure,
+)
+from pyrung.core.analysis.pilot.regression_requirements import (
+    _delayed_overwriter_fallback_allowed,
 )
 from pyrung.core.analysis.pilot.trial_commit import commit_trial
 from pyrung.core.analysis.pilot.types import (

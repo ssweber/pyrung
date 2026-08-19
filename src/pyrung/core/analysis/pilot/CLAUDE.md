@@ -103,9 +103,10 @@ The following modules extend that read:
    still passes the ordinary live-trial gates.
 5. `requirements.py` retains an accepted expectation's exact producer and
    consumer occurrences with its source checkpoint. On a later regression,
-   `progress.py` may match one causal occurrence to that receipt, derive an
-   occurrence-scoped requirement, restore the exact checkpoint, and retry only
-   the local act. The outer loop then performs a fresh current-world read.
+   `regression_requirements.py` matches one causal occurrence to that receipt
+   and derives an occurrence-scoped requirement. `progress.py` restores the
+   exact checkpoint and retries only the local act. The outer loop then
+   performs a fresh current-world read.
 6. Only a genuinely unresolved `NeedProbe` reaches `skiff.py`. Skiff pins
    unrelated state, probes a finite action domain on isolated forks, and
    returns observations without committing or choosing an action. Probe rounds
@@ -440,8 +441,9 @@ this table only locates the owner.
 - Requirement and expectation receipt contracts plus exact receipt matching:
   `requirements.py`; failed-effect, guard, overwrite, and occurrence-source
   derivation: `requirement_derivation.py`;
-  `progress.py::_regression_expectation_source` selects one exact causal link,
-  restores its source checkpoint, and owns the handoff to local repair
+  `regression_requirements.py` selects one exact later causal link and adapts it
+  into those same requirement contracts; `progress.py` owns checkpoint restore
+  and the handoff to local repair
 - Candidate-read orchestration and wait-source choice:
   `options.py::_build_candidates` / `_select_wait`; pure action/hold admission:
   `candidate_policy.py`; trace/wait admission, exact operation batching, and
@@ -664,6 +666,8 @@ Judgment and recovery:
 - `verify.py` — trial gates, excursion detection, and replay judgment
 - `outcome.py` — evidence classification
 - `progress.py` — retention, recovery, corrections, reverts
+- `regression_requirements.py` — exact accepted-expectation matching and
+  delayed regression-to-requirement adaptation
 - `departure.py` — departure observation and classification
 - `earned_work.py` — target-relative earned-work marks
 - `causal.py` — recorded cause-chain queries

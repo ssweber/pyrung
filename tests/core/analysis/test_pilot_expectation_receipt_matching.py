@@ -34,7 +34,9 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     TargetSpec,
     act_identity,
 )
-from pyrung.core.analysis.pilot.progress import _match_regression_expectation_receipt
+from pyrung.core.analysis.pilot.regression_requirements import (
+    _match_regression_expectation_receipt,
+)
 from pyrung.core.analysis.pilot.requirements import ExpectationReceipt
 from pyrung.core.context import RungId
 from pyrung.core.executor import WriteOccurrence
