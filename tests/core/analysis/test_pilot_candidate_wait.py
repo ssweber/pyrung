@@ -58,10 +58,7 @@ from pyrung.core.analysis.pilot.options import (
     _assemble_candidate_read,
     _build_candidates,
     _candidate_applied,
-    _compass_route_actions,
-    _compass_route_plan,
     _effect_operation_batches,
-    _general_chart_completion_plan,
     _prescribe_wait,
     _read_learned_fallback,
     _read_route_and_wait,
@@ -82,6 +79,11 @@ from pyrung.core.analysis.pilot.program_step import (
     ProgramInputHandoff,
     ProgramStep,
     ProgramStepStatus,
+)
+from pyrung.core.analysis.pilot.route_options import (
+    _compass_route_actions,
+    _compass_route_plan,
+    _general_chart_completion_plan,
 )
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.pilot.trace_tree import (

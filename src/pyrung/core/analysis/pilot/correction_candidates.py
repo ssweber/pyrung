@@ -12,6 +12,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Protocol
 
+from pyrung.core.analysis.pilot.candidate_policy import _holds_defeat_needed
 from pyrung.core.analysis.pilot.causal import chase_chain_tags
 from pyrung.core.analysis.pilot.constrained_reachability import (
     FrontierStatus,
@@ -22,7 +23,6 @@ from pyrung.core.analysis.pilot.corrections import (
     CorrectionHypothesis,
     producer_envelope_correction_holds,
 )
-from pyrung.core.analysis.pilot.options import _holds_defeat_needed
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     _pilot_rung_execution_receipt,

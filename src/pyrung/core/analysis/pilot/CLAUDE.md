@@ -425,8 +425,8 @@ this table only locates the owner.
   branch is yielded as one logical requirement set and `OR` alternatives are
   visited depth-first.
 - Pure scalar/guard lowering: `intrascan_schedule.py`; it compiles only
-  authority-approved current-world assignments. `requirement_recovery.py`
-  remains the compatibility facade and owns active-requirement admission.
+  authority-approved current-world assignments. `requirement_evidence.py`
+  owns active-requirement admission from exact execution evidence.
 - Controlling theory knowledge: `working_theory.py` owns detached immutable
   claims, versions, attempt/progress receipts, temporal intent, consumer stops,
   normalized program-transaction identities, and lifecycle facts;
@@ -442,8 +442,10 @@ this table only locates the owner.
   derivation: `requirement_derivation.py`;
   `progress.py::_regression_expectation_source` selects one exact causal link,
   restores its source checkpoint, and owns the handoff to local repair
-- Option materialization and ranking: `options.py::_build_candidates`;
-  `_select_wait` owns wait-source choice
+- Candidate-read orchestration and wait-source choice:
+  `options.py::_build_candidates` / `_select_wait`; pure action/hold admission:
+  `candidate_policy.py`; static route and chart materialization:
+  `route_options.py`
 - Static chart-edge admission:
   `constrained_reachability.py::NavigationEvidence.static_edge_admission`
 - Local trial gates and accepted execution evidence:
@@ -604,7 +606,10 @@ Static reading and orientation:
 - `static_expressions.py` — static-expression helpers
 - `compass.py` — navigation facade, durable knowledge
 - `orientation.py` — current-world read, result synthesis
-- `options.py` — option/wait materialization and ranking
+- `options.py` — candidate-read orchestration, wait admission, and ranking
+- `candidate_policy.py` — pure action admission and static hold-conflict proof
+- `route_options.py` — static route/chart selection and route-owned overlay
+  materialization
 - `candidate_read.py` — immutable completed candidate, wait, prerequisite, and
   route readings consumed by orientation policy
 - `theory_orientation.py` — WorkingTheory-specific lowering into one next act
@@ -629,8 +634,6 @@ Static reading and orientation:
   occurrence-source contracts, exact expectation receipts, and receipt matching
 - `requirement_derivation.py` — exact guard, advance, overwrite, and strictly
   decreasing same-scan occurrence-source derivation over execution evidence
-- `requirement_recovery.py` — production compatibility facade for intrascan
-  schedules plus current-world active-requirement admission and preservation
 - `working_theory.py` — controlling detached facts, typed temporal intent,
   consumer stops, and normalized program transactions; it never stores
   navigation reads, acts, checkpoints,

@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from itertools import product
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
@@ -29,13 +28,15 @@ import pyrung.core.analysis.pilot.candidate_read as _candidate_read
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction
+from pyrung.core.analysis.pilot.candidate_policy import (
+    _action_allowed,
+    hold_defeats_needed,
+)
 from pyrung.core.analysis.pilot.compass import (
-    EvidenceScope,
     is_action,
     is_composite_action,
     unique_legal_awaited_action,
 )
-from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     expectation_from_selected_path,
@@ -51,33 +52,33 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
-    _atom_condition,
-    _pilot_rung_execution_receipt,
-    _target_unresolved_condition,
     _until_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM, target_reachable_values
+from pyrung.core.analysis.pilot.route_options import (
+    _compass_route_actions,
+    _compass_route_plan,
+    _edge_grounded,
+    _fmt_from,
+    _general_chart_completion_plan,
+    _learned_edge_allowed,
+    _live_chart_completion_edge,
+    _managed_boolean_rungs,
+    _oscillating_rungs,
+)
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints
 from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import _ActionPair
-from pyrung.core.analysis.pilot.world_key import wait_edge_nogood
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.instruction.advance import constraint_holds
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.pipeline_graph import StaticPath
     from pyrung.core.analysis.pilot.trace_tree import TraceAction
 
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
-
-
-def _action_allowed(ctx: Any, pair: _ActionPair) -> bool:
-    """Whether the current orientation constraints admit this exact action."""
-
-    return pair not in ctx.blocked_actions
 
 
 def _effect_operation_batches(
@@ -183,124 +184,6 @@ def _effect_operation_batches(
     return tuple(reads)
 
 
-def _hold_values(hold_value: Any) -> tuple[Any, ...]:
-    """Steady values a scalar or oscillating hold can pin its tag to."""
-
-    rules = getattr(hold_value, "rules", None)
-    if rules is not None:
-        return tuple(rule.value for rule in rules)
-    return (hold_value,)
-
-
-def hold_defeats_needed(
-    tag: str,
-    hold_value: Any,
-    needed: Sequence[tuple[str, Any]],
-    pdg: Any,
-    program: Any,
-) -> bool:
-    """Whether an option hold provably pins a checkpoint need.
-
-    ``needed`` is ordered target-most first, so the first value for a tag is its
-    requirement and deeper values are en-route stopovers. Direct contradictions
-    and held guards that force a contradicting literal write are self-defeating.
-    """
-
-    return _holds_defeat_needed(((tag, hold_value),), needed, pdg, program)
-
-
-def _holds_defeat_needed(
-    holds: Sequence[tuple[str, Any]],
-    needed: Sequence[tuple[str, Any]],
-    pdg: Any,
-    program: Any,
-) -> bool:
-    """Static proof that one hold assignment defeats a checkpoint need.
-
-    A hold can defeat progress in either direction: it can enable a literal
-    write of the wrong value, or force every writer of a required value
-    non-conductive.  The latter matters for retained occurrence repairs: a
-    master-enable cut may prevent the historical fault while also disabling
-    the only sibling writer that earns later progress.
-    """
-
-    from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.analysis.simplified import Atom, _conditions_list_to_expr, _expr_forced_true
-    from pyrung.core.analysis.steerable import _literal_write
-
-    needed_first: dict[str, Any] = {}
-    for needed_tag, needed_value in needed:
-        if isinstance(needed_value, Atom):
-            continue
-        needed_first.setdefault(needed_tag, needed_value)
-    if not needed_first:
-        return False
-
-    held_values = {tag: _hold_values(value) for tag, value in holds}
-    if not held_values:
-        return False
-    if any(
-        tag in needed_first and any(not _values_match(value, needed_first[tag]) for value in values)
-        for tag, values in held_values.items()
-    ):
-        return True
-
-    for node in pdg.rung_nodes:
-        read_tags = tuple(tag for tag in node.condition_reads if tag in held_values)
-        if not read_tags:
-            continue
-        rung = resolve_rung(program, node)
-        if rung is None:
-            continue
-        expr = _conditions_list_to_expr(getattr(rung, "_conditions", []))
-        assignments = (
-            dict(zip(read_tags, values, strict=True))
-            for values in product(*(held_values[tag] for tag in read_tags))
-        )
-        if not any(_expr_forced_true(expr, assignment) is True for assignment in assignments):
-            continue
-        for needed_tag, needed_value in needed_first.items():
-            written = _literal_write(rung, needed_tag)
-            if written is not None and not _values_match(written, needed_value):
-                return True
-
-    # Negative-write proof. For each required value, collect every literal
-    # writer capable of producing it. The hold defeats that need only when it
-    # structurally forces *all* such writer guards false; an unreadable or
-    # unaffected alternative keeps the result conservative.
-    for needed_tag, needed_value in needed_first.items():
-        matching_writers: list[Any] = []
-        for node_index in pdg.writers_of.get(needed_tag, frozenset()):
-            node = pdg.rung_nodes[node_index]
-            rung = resolve_rung(program, node)
-            if rung is None:
-                matching_writers = []
-                break
-            written = _literal_write(rung, needed_tag)
-            if written is not None and _values_match(written, needed_value):
-                matching_writers.append((node, rung))
-        if not matching_writers:
-            continue
-
-        all_blocked = True
-        for node, rung in matching_writers:
-            read_tags = tuple(tag for tag in node.condition_reads if tag in held_values)
-            if not read_tags:
-                all_blocked = False
-                break
-            expr = _conditions_list_to_expr(getattr(rung, "_conditions", []))
-            assignments = (
-                dict(zip(read_tags, values, strict=True))
-                for values in product(*(held_values[tag] for tag in read_tags))
-            )
-            if not all(_expr_forced_true(expr, assignment) is False for assignment in assignments):
-                all_blocked = False
-                break
-        if all_blocked:
-            return True
-    return False
-
-
 # ---------------------------------------------------------------------------
 # Stuck taxonomy
 # ---------------------------------------------------------------------------
@@ -364,560 +247,6 @@ def _diagnose_stuck_reason(
             return _STUCK_TRACE_OPAQUE
 
     return _STUCK_TRACE_EMPTY
-
-
-# ---------------------------------------------------------------------------
-# Compass routing
-# ---------------------------------------------------------------------------
-
-
-def _learned_edge_allowed(
-    tag: str,
-    source: Any,
-    cause: Any,
-    destination: Any,
-    frame: Any,
-    ctx: Any,
-    key_nogoods: set[_ActionPair],
-) -> bool:
-    """Apply every live constraint before a learned edge enters any path query."""
-
-    if is_action(cause):
-        members = cast(tuple[_ActionPair, ...], cause) if is_composite_action(cause) else (cause,)
-        return all(
-            pair not in key_nogoods
-            and _action_allowed(ctx, pair)
-            and not _avoid_forces(ctx, (pair,), frame.snap)
-            for pair in members
-        )
-    return wait_edge_nogood(tag, source, destination) not in key_nogoods
-
-
-def _compass_route_plan(
-    frame: Any,
-    ctx: Any,
-    key_nogoods: set[_ActionPair] | None = None,
-    unavailable_producer_edges: frozenset[tuple[Any, ...]] = frozenset(),
-    *,
-    state: Any = None,
-) -> StaticPath | None:
-    graphs = ctx.compass.graphs
-    if not graphs:
-        return None
-
-    from pyrung.core.analysis.pilot.pipeline_graph import _best_static_path
-
-    nogoods = key_nogoods if key_nogoods is not None else set()
-    world_key = getattr(frame, "key", None)
-    evidence_scope = EvidenceScope.capture(world_key, frame.snap.items())
-    overlay = _pilot_rung_execution_receipt(
-        getattr(state, "pilot_rungs", ()),
-        frame.snap,
-    )
-
-    def _edge_open(edge: Any) -> bool:
-        if edge.identity in unavailable_producer_edges:
-            return False
-        admission = NavigationEvidence.static_edge_admission(
-            edge,
-            world_key=world_key,
-            snapshot=frame.snap,
-            knowledge=ctx.compass.knowledge,
-            blocked_actions=ctx.blocked_actions,
-            context=ctx,
-            evidence_scope=evidence_scope,
-            pair_nogoods=nogoods,
-        )
-        return admission.allowed
-
-    def _first_edge_open(edge: Any) -> bool:
-        if not _edge_open(edge):
-            return False
-        # Only the first edge executes in this world. A later edge may
-        # legitimately require the opposite of a temporary rearm overlay after
-        # that overlay has yielded at its declared boundary.
-        if not all(
-            (owner := overlay.owner(tag)) is None or _values_match(owner.value, value)
-            for tag, value in (*edge.source_constraints, *edge.enablers)
-        ):
-            return False
-        commanded = () if edge.action is None else (edge.action, *edge.co_actions)
-        already_effective = bool(commanded) and all(
-            ((owner := overlay.owner(tag)) is not None and _values_match(owner.value, value))
-            or _values_match(frame.snap.get(tag), value)
-            for tag, value in commanded
-        )
-        # An already-effective command is not another candidate.  It admits
-        # precisely one chart coast only when the selected writer's complete
-        # live guard proves that the program can consume it in this world.
-        return (
-            not already_effective
-            or _live_chart_completion_edge(
-                edge,
-                frame,
-                state,
-                ctx,
-            )
-            is not None
-        )
-
-    plans: list[StaticPath] = []
-    for n in frame.tree.iter_nodes():
-        if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
-            continue
-        if not n.children and n.tag not in ctx.opaque_loop:
-            continue
-        if _values_match(frame.snap.get(n.tag), n.value):
-            continue
-        plan = _best_static_path(
-            n.tag,
-            n.value,
-            frame.snap,
-            graphs,
-            edge_allowed=_edge_open,
-            first_edge_allowed=_first_edge_open,
-        )
-        if plan is not None:
-            plans.append(plan)
-
-    if not plans:
-        return None
-    return min(
-        plans,
-        key=lambda p: (_plan_off_target(p, ctx), _plan_ungrounded(p), _route_plan_score(p)),
-    )
-
-
-def _chart_edge_writer_trace(edge: Any, frame: Any, state: Any, ctx: Any) -> Any | None:
-    """Read a chart's exact first-edge writer through ordinary Trace.
-
-    The target-wide trace has already committed to one writer alternative and
-    may legitimately omit the route charted through the current channel value.
-    A chart can propose that alternative, but it cannot declare it executable:
-    writer locking sends the exact effect back through Trace's normal guard,
-    caller, availability, tide-table, avoid, and instruction readers.
-    """
-
-    effect_tag, effect_value = edge.route.writer_effect
-    program = getattr(ctx, "program", None)
-    pdg = getattr(ctx, "pdg", None)
-    if effect_value is None or program is None or pdg is None:
-        return None
-    tree = trace_back(
-        effect_tag,
-        effect_value,
-        frame.snap,
-        pdg,
-        program,
-        getattr(ctx, "steerable", frozenset()),
-        clear_only=getattr(ctx, "clear_only", frozenset()),
-        opaque_loop=getattr(ctx, "opaque_loop", frozenset()),
-        pipeline_internal_tags=getattr(ctx, "pipeline_internal_tags", frozenset()),
-        prior=getattr(ctx, "domain_prior", None),
-        avoid_pred=getattr(ctx, "avoid_pred", None),
-        harness=getattr(getattr(state, "work", None), "_harness", None),
-        execution_memory=getattr(
-            getattr(getattr(state, "work", None), "state", None),
-            "memory",
-            None,
-        ),
-        writer_locks={(effect_tag, effect_value): edge.route.writer_node},
-    )
-    return tree if tree.writer_rung == edge.route.writer_node else None
-
-
-def _live_general_chart_completion_edge(
-    edge: Any,
-    frame: Any,
-    state: Any,
-    ctx: Any,
-    *,
-    allow_conservative_nomination: bool = False,
-) -> Any | None:
-    """Bind read-only chart geometry to an already-live Trace operation.
-
-    Generalized charts never mint actions. Trace identifies the exact writer;
-    ProgramStep and ordinary candidate admission then decide whether that
-    writer owns current work. A conservative ``UNAVAILABLE_FROM_HERE`` trace
-    verdict may be refined by an exact ProgramStep handoff receipt. Without
-    that positive receipt the edge is declined before it becomes a bearing.
-    """
-
-    selected = _chart_edge_writer_trace(edge, frame, state, ctx)
-    if selected is None or (
-        not allow_conservative_nomination
-        and selected.writer_availability > _WriterAvailability.AFTER_PREREQ
-    ):
-        return None
-
-    effect_tag, effect_value = edge.route.writer_effect
-    if effect_value is None:
-        return None
-    from pyrung.core.analysis.pilot.awaited_actions import Producer
-
-    writer = ctx.pdg.rung_nodes[edge.route.writer_node]
-    producer = Producer(
-        rung_index=edge.route.writer_node,
-        kind="program",
-        guard_tags=frozenset(writer.condition_reads | writer.guard_reads),
-        co_writes=frozenset(writer.writes - {effect_tag}),
-        command_tag=effect_tag,
-        command_value=effect_value,
-    )
-    # Trace owns relevance and ProgramStep owns present-tense readiness. The
-    # chart contributes only the next coordinate; an already-effective route
-    # command remains context for this read, never another prescribed action.
-    return replace(
-        edge,
-        from_value=frame.snap.get(edge.role.channel_tag),
-        action=None,
-        co_actions=(),
-        program_producers=(producer,),
-    )
-
-
-def _general_chart_completion_plan(
-    frame: Any,
-    ctx: Any,
-    key_nogoods: set[_ActionPair] | None = None,
-    *,
-    state: Any,
-    allow_conservative_nomination: bool = False,
-) -> StaticPath | None:
-    """Read one bounded chart heading for work Trace already owns.
-
-    Unlike the opaque pipeline route reader, this reader cannot prescribe an
-    action.  It only enriches an exact current-world producer with a channel
-    boundary after all ordinary admission and availability evidence agrees.
-    """
-
-    graphs = ctx.compass.chart_graphs
-    if not graphs:
-        return None
-
-    from pyrung.core.analysis.pilot.pipeline_graph import _best_static_path
-
-    nogoods = key_nogoods if key_nogoods is not None else set()
-    world_key = getattr(frame, "key", None)
-    evidence_scope = EvidenceScope.capture(world_key, frame.snap.items())
-    live_edges: dict[tuple[Any, ...], Any] = {}
-    rejected_edges: set[tuple[Any, ...]] = set()
-
-    def _edge_open(edge: Any) -> bool:
-        return NavigationEvidence.static_edge_admission(
-            edge,
-            world_key=world_key,
-            snapshot=frame.snap,
-            knowledge=ctx.compass.knowledge,
-            blocked_actions=ctx.blocked_actions,
-            context=ctx,
-            evidence_scope=evidence_scope,
-            pair_nogoods=nogoods,
-        ).allowed
-
-    def _first_edge_live(edge: Any) -> bool:
-        if not _edge_open(edge):
-            return False
-        if edge.identity in live_edges:
-            return True
-        if edge.identity in rejected_edges:
-            return False
-        live = _live_general_chart_completion_edge(
-            edge,
-            frame,
-            state,
-            ctx,
-            allow_conservative_nomination=allow_conservative_nomination,
-        )
-        if live is None:
-            rejected_edges.add(edge.identity)
-            return False
-        live_edges[edge.identity] = live
-        return True
-
-    def _first_edge_live_and_grounded(edge: Any) -> bool:
-        return _edge_grounded(edge) and _first_edge_live(edge)
-
-    plans: list[StaticPath] = []
-    chart_channels = frozenset(graph.role.channel_tag for graph in graphs)
-    for node in frame.tree.iter_nodes():
-        if (
-            node.satisfied
-            or node.is_steerable
-            or getattr(node, "pipeline_internal", False)
-            or node.tag not in chart_channels
-            or _values_match(frame.snap.get(node.tag), node.value)
-        ):
-            continue
-        # A source-bound edge records the program's ordinary transition from
-        # this exact channel value.  Search that topology first; otherwise a
-        # shorter wildcard exception/reset writer can beat it inside one BFS
-        # before the plan-level groundedness score ever sees the alternative.
-        # Wildcards remain a fallback when no live grounded continuation can
-        # reach the requested value.
-        plan = _best_static_path(
-            node.tag,
-            node.value,
-            frame.snap,
-            graphs,
-            edge_allowed=_edge_open,
-            first_edge_allowed=_first_edge_live_and_grounded,
-        )
-        if plan is None:
-            plan = _best_static_path(
-                node.tag,
-                node.value,
-                frame.snap,
-                graphs,
-                edge_allowed=_edge_open,
-                first_edge_allowed=_first_edge_live,
-            )
-        if plan is not None:
-            plans.append(plan)
-
-    if not plans:
-        return None
-    selected = min(
-        plans,
-        key=lambda plan: (
-            _plan_off_target(plan, ctx),
-            _plan_ungrounded(plan),
-            _route_plan_score(plan),
-        ),
-    )
-    live = live_edges.get(selected.first_edge.identity)
-    if live is None:
-        return None
-    return replace(selected, edges=(live, *selected.edges[1:]))
-
-
-def _live_chart_completion_edge(
-    edge: Any,
-    frame: Any,
-    state: Any,
-    ctx: Any,
-) -> Any | None:
-    """Ground an already-asserted action edge in the exact current world.
-
-    A route action may have been installed by an earlier setup phase while a
-    late program rung prepared its derived control value. Once the selected
-    writer's complete guard is true, reasserting that action is not a new
-    steer: the next ordinary bearing is one observed program scan. Wildcard
-    chart evidence alone is insufficient; the unique writer/caller guard is
-    the grounding receipt.
-    """
-
-    if edge.action is None:
-        return None
-    overlay = _pilot_rung_execution_receipt(
-        getattr(state, "pilot_rungs", ()),
-        frame.snap,
-    )
-    for tag, value in (edge.action, *edge.co_actions):
-        owner = overlay.owner(tag)
-        if not (
-            (owner is not None and _values_match(owner.value, value))
-            or _values_match(frame.snap.get(tag), value)
-        ):
-            return None
-
-    from pyrung.core.analysis.pilot.evidence import selected_chart_producer_guard_rungs
-    from pyrung.core.analysis.sp_values import _SnapshotView
-
-    guards = selected_chart_producer_guard_rungs(edge, ctx.pdg, ctx.program)
-    if not guards:
-        return None
-    view = _SnapshotView(frame.snap, {})
-    try:
-        if not all(guard._evaluate_conditions(view) for guard in guards):
-            return None
-    except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
-        return None
-    return replace(
-        edge,
-        from_value=frame.snap.get(edge.role.channel_tag),
-        action=None,
-        co_actions=(),
-    )
-
-
-def _edge_grounded(edge: Any) -> bool:
-    """Whether *edge* carries a concrete from-value (not the ``ANY_FROM`` sentinel).
-
-    Only a grounded edge is a coastable (WAIT-prescribable) claim: a wildcard edge
-    says nothing about the state the register advances *from*, so "hold and wait"
-    on it has no dwell semantics.
-    """
-    from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM
-
-    return edge.from_value is not ANY_FROM
-
-
-def _fmt_from(value: Any) -> str:
-    """Format an edge from-value for reason strings — the ``ANY_FROM`` sentinel
-    renders as ``'*'``, never as a raw ``<object object at 0x...>``."""
-    from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM
-
-    return "*" if value is ANY_FROM else repr(value)
-
-
-def _plan_ungrounded(plan: StaticPath) -> int:
-    """1 when *plan*'s first edge rides a wildcard (``ANY_FROM``) from-value.
-
-    A wildcard edge is a *stateless* claim — the writer's condition never named
-    the channel register, so the graph learned no from-state for it.  A derived
-    mask register (``statemask = table[StateRequested]``) produces exactly this
-    shape: every edge wildcard, every plan one edge "long".  Ranking purely by
-    edge count lets such a plan hijack the route: the 1-edge wildcard
-    ``ANY --C_Start--> mask`` beats the real 3-edge Clear->Reset->Start chain on
-    the state register, pressing Start from ABORTED where it is a no-op.  A plan
-    grounded in a concrete from-value carries real distance information, so it
-    outranks any wildcard-first plan.  Ordering only — a wildcard plan is still
-    tried when nothing grounded exists.
-    """
-    return 0 if _edge_grounded(plan.first_edge) else 1
-
-
-def _plan_off_target(plan: StaticPath, ctx: Any) -> int:
-    """0 when *plan* drives the overall target, 1 otherwise.
-
-    The trace can surface other requirements on the same channel register as
-    the target — e.g. reaching ``S_StateCurrent==11`` (Held) trails
-    ``==10`` (Holding, a real predecessor) and ``==1`` (Clearing, an off-path
-    artifact of tracing the completion bool through a counterfactual writer).
-    Ranking purely by edge count lets the shortest of these hijack the route: at
-    Stopped the 3-edge ``C_Abort`` plan toward ``==1`` beats the 6-edge
-    ``C_Reset`` plan toward the real target and drives the wrong way.  The
-    target's own ``find_path`` already includes its required intermediate
-    values, so anchor to it and let off-target requirement plans lose ties.
-    """
-    on_target = plan.needed_tag == ctx.target.tag and _values_match(
-        plan.needed_value, ctx.target.value
-    )
-    return 0 if on_target else 1
-
-
-def _route_plan_score(plan: StaticPath) -> tuple[int, int, str]:
-    direct = 0 if plan.needed_tag == plan.role.channel_tag else 1
-    return (len(plan.edges), direct, plan.role.channel_tag)
-
-
-def _compass_route_actions(
-    plan: StaticPath | None,
-    frame: Any,
-    ctx: Any,
-    key_nogoods: set[_ActionPair],
-) -> tuple[_ActionPair, ...]:
-    if plan is None:
-        return ()
-
-    edge = plan.first_edge
-    if edge.action is not None:
-        if edge.action not in key_nogoods and _action_allowed(ctx, edge.action):
-            return (edge.action,)
-        return ()
-
-    direct: list[_ActionPair] = []
-    for tag, value in edge.enablers:
-        if _values_match(frame.snap.get(tag), value):
-            continue
-        pair = (tag, value)
-        if tag in ctx.steerable and pair not in key_nogoods and _action_allowed(ctx, pair):
-            direct.append(pair)
-
-    return tuple(direct)
-
-
-def _oscillating_rungs(tag: str, ctx: Any, scope: Any, plc: Any) -> tuple[PilotRung, ...]:
-    """A two-rule toggle for an edge-gated accumulator driver.
-
-    Drives *tag* to each polarity while it sits at the other, so it alternates
-    every scan — the rising/falling edge train the counter's pulse contract
-    explicitly requests. This is option lowering of an owner-declared pulse,
-    not a corrective behavior-category hypothesis.
-    """
-    from pyrung.core.condition import AllCondition, CompareNe
-
-    resting = bool(ctx.resting.get(tag, False))
-    other = not resting
-    source = plc._known_tags_by_name[tag]
-    return (
-        PilotRung(tag, other, AllCondition(scope, CompareNe(source, other))),
-        PilotRung(tag, resting, AllCondition(scope, CompareNe(source, resting))),
-    )
-
-
-def _managed_boolean_rungs(
-    details: tuple[TraceAction, ...],
-    frame: Any,
-    state: Any,
-    ctx: Any,
-) -> tuple[tuple[PilotRung, ...], frozenset[_ActionPair]]:
-    """Assert a rung-managed Boolean again under the new writer context.
-
-    When an earlier guard expires, Boolean input-image lowering returns the input
-    to False. If trace later needs that input again, it is already owned by
-    PilotRungs, so a plain patch would lose to the overlay: append another rung
-    guarded by the newly selected writer context. For ``rise(Input)`` only, add
-    the input-polarity guard so the rung is a one-scan pulse; the False scan
-    already happened naturally while no rung was active. A level prerequisite
-    must remain asserted every scan while its context holds.
-    """
-    from pyrung.core.condition import AllCondition, CompareNe
-
-    managed = {rung.dest for rung in state.pilot_rungs}
-    overlay = _pilot_rung_execution_receipt(state.pilot_rungs, frame.snap)
-    proposed: list[PilotRung] = []
-    lowered: set[_ActionPair] = set()
-    for detail in details:
-        tag, value = detail.pair
-        if (
-            tag not in managed
-            or type(value) is not bool
-            or ((tag in ctx.edge_tags or detail.pulse) and value is not True)
-        ):
-            continue
-        source = state.work._known_tags_by_name.get(tag)
-        if source is None:
-            continue
-        active_owner = overlay.owner(tag)
-        if active_owner is not None:
-            # The exact overlay receipt, not Boolean polarity, decides whether
-            # this input is available to a fresh route.  In particular a
-            # trace-requested False cannot release an effective True owner by
-            # repeatedly issuing a patch that the overlay will overwrite.
-            lowered.add(detail.pair)
-            continue
-        if value is False:
-            # The shared overlay will lower this input, but that lowering is
-            # still the live trace action. Keep it visible so PILOT gives the
-            # program one scan to observe the release before considering a
-            # command that closes the operation.
-            continue
-        if detail.guard_atoms:
-            try:
-                context = tuple(_atom_condition(state.work, atom) for atom in detail.guard_atoms)
-            except (KeyError, ValueError):
-                continue
-        elif detail.until is not None:
-            context = (_until_unresolved_condition(state.work, detail.until),)
-        else:
-            context = (
-                _target_unresolved_condition(
-                    state.work,
-                    ctx.target.tag,
-                    ctx.target.value,
-                    ctx.target.predicate,
-                ),
-            )
-        guard = (
-            AllCondition(*context, CompareNe(source, value))
-            if tag in ctx.edge_tags or detail.pulse
-            else AllCondition(*context)
-        )
-        proposed.append(PilotRung(tag, value, guard))
-        lowered.add(detail.pair)
-    return tuple(proposed), frozenset(lowered)
 
 
 # ---------------------------------------------------------------------------
@@ -2128,7 +1457,9 @@ def _read_learned_fallback(
         if is_composite_action(first_step):
             members = cast("tuple[_ActionPair, ...]", tuple(first_step))
             if all(pair not in key_nogoods and _action_allowed(ctx, pair) for pair in members):
-                return _candidate_read._LearnedBatch(_candidate_read.LearnedBatchRead(members, learned_expectation))
+                return _candidate_read._LearnedBatch(
+                    _candidate_read.LearnedBatchRead(members, learned_expectation)
+                )
             continue
         if first_step not in key_nogoods and _action_allowed(ctx, first_step):
             return _candidate_read._LearnedAction(first_step, learned_expectation)
@@ -2707,7 +2038,9 @@ def _assemble_candidate_read(
         prerequisites=separated.prerequisites,
         learned_batch=learned_batch,
         crossing_batches=crossing_batches,
-        diagnosis=_candidate_read.CandidateDiagnosis(stuck_reason) if stuck_reason is not None else None,
+        diagnosis=_candidate_read.CandidateDiagnosis(stuck_reason)
+        if stuck_reason is not None
+        else None,
         widening_expectations=tuple(widening_expectations),
     )
 

@@ -27,6 +27,7 @@ from pyrung import PLC, Bool, Int, Or, Program, copy, fill, latch, out, rise, ru
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.attempt_transition import record_attempt
 from pyrung.core.analysis.pilot.attempt_verification import resolve_excursion
+from pyrung.core.analysis.pilot.candidate_policy import hold_defeats_needed
 from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis, _precise_causes
 from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,
@@ -51,7 +52,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     BearingObjective,
     TargetSpec,
 )
-from pyrung.core.analysis.pilot.options import hold_defeats_needed
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
