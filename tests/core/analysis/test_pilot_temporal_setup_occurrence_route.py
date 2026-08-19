@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 from pyrung import PLC
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.attempt_observation import _observe_temporal_setup_occurrences
 from pyrung.core.analysis.pilot.effects import occurrence_snapshot
 from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.requirements import ActiveRequirement, OperandAuthority
-from pyrung.core.analysis.pilot.verify import _observe_temporal_setup_occurrences
 from pyrung.core.crossing import Cmp
 from tests.fixtures import pilot_temporal_setup_occurrence_route as fixture
 

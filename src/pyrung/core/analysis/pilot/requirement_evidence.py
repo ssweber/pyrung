@@ -11,6 +11,7 @@ from typing import Any
 
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.advance import build_advance_index
+from pyrung.core.analysis.pilot.attempt_observation import _route_blocker_crossings
 from pyrung.core.analysis.pilot.bootstrap import _BootstrapExecution
 from pyrung.core.analysis.pilot.conductivity import charted_front_extends_current
 from pyrung.core.analysis.pilot.effect_observation import (
@@ -63,7 +64,6 @@ from pyrung.core.analysis.pilot.types import (
     _PilotContext,
     _PilotState,
 )
-from pyrung.core.analysis.pilot.verify import _route_blocker_crossings
 from pyrung.core.analysis.pilot.working_theory import (
     temporal_setup_rung_identities,
     theory_view,

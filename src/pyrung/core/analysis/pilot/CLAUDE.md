@@ -124,7 +124,8 @@ the current world.
 ### 2. Did the attempted action produce a trustworthy result?
 
 `steer.py` executes exactly one `Pulse`, `BatchPulse`, `Coast`, or `Dwell` on a
-fork. All modes converge on `verify.py`:
+fork. `attempt_observation.py` reads exact occurrence facts from the immutable
+execution, and all modes converge on `verify.py` for judgment:
 
 1. Avoid and banked-work gates run before target acceptance.
 2. `effect_observation.py` observes an act's selected producer-to-consumer
@@ -697,6 +698,8 @@ Execution and observation:
 
 Judgment and recovery:
 
+- `attempt_observation.py` — projection-to-occurrence receipts from immutable
+  executed attempts; it owns no gate or world mutation
 - `verify.py` — trial gates, excursion detection, and replay judgment
 - `outcome.py` — evidence classification
 - `progress.py` — post-commit retention, departure/recovery policy, and event

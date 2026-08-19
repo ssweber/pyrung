@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 from pyrung import PLC, Bool, Int, Or, Program, Rung, branch, call, copy, out, subroutine
+from pyrung.core.analysis.pilot.attempt_observation import _observe_intrascan_act_occurrence
 from pyrung.core.analysis.pilot.effects import occurrence_snapshot
 from pyrung.core.analysis.pilot.intrascan import (
     IntrascanCausalRelation,
@@ -13,7 +14,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     IntrascanTracebackRequest,
     ProgramScan,
 )
-from pyrung.core.analysis.pilot.verify import _observe_intrascan_act_occurrence
 from pyrung.core.context import RungId
 from pyrung.core.crossing import Cmp
 from pyrung.core.executor import ConditionViewCapture
