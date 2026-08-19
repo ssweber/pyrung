@@ -42,7 +42,6 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.effects import (
         EffectExpectation,
         EffectObservation,
-        EffectOccurrenceSnapshot,
     )
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -61,7 +60,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.trace_read import DomainPrior, TraceChoice
     from pyrung.core.analysis.pilot.trace_tree import TraceAction
     from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
-    from pyrung.core.runner import PLC, EpochRef
+    from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -351,39 +350,6 @@ class _HoldLogEntry:
         return tuple((rung.dest, rung.value) for rung in self.pilot_rungs)
 
 
-@dataclass(frozen=True)
-class _ContinuationCheckpoint:
-    """One already-executed fresh-read boundary in a recovery continuation."""
-
-    scan_id: int
-    world_key: _StateKey
-    kind: Literal["local_repair", "unchanged_coast", "program_input_handoff", "target_prefix"]
-    execution_ref: EpochRef
-    landing_occurrence: EffectOccurrenceSnapshot | None = None
-
-    @property
-    def program_step_certified(self) -> bool:
-        return self.kind != "local_repair"
-
-
-@dataclass(frozen=True)
-class _RecoveryContinuation:
-    """PLC-free authority carried from one locally repaired causal source.
-
-    Checkpoints describe only worlds which ordinary Orientation has already
-    reread and committed.  No future action, ordinal, projection, or predicted
-    snapshot belongs to this receipt.
-    """
-
-    checkpoint_owner: Any
-    source_world_key: _StateKey
-    checkpoints: tuple[_ContinuationCheckpoint, ...]
-
-    @property
-    def tip(self) -> _ContinuationCheckpoint:
-        return self.checkpoints[-1]
-
-
 @dataclass
 class _PilotState:
     # ── The world (reverts) ──
@@ -421,9 +387,6 @@ class _PilotState:
     # Some exact temporal facts now guide Compass, while optional lifecycle
     # recording remains isolated at its explicit adapter boundary.
     theory_state: TheoryState = field(default_factory=TheoryState)
-    # A locally repaired source may continue through fresh, exact current-world
-    # reads.  This receipt is knowledge, not retained executable work.
-    recovery_continuation: _RecoveryContinuation | None = None
     # Exact current-world acts rejected by obligation/requirement proof. These
     # are admissibility receipts, not empirical impossibility/nogood claims.
     # Their EvidenceScope includes the complete pre-action input context, so a

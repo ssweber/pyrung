@@ -602,8 +602,8 @@ Orchestration:
   adopt a World
 - `attempt_transition.py` — execute, verify, record, and optionally adopt one
   Compass Bearing; no repetition or event-stream ownership
-- `attempt_verification.py` — receipt-driven excursion replay, target-prefix
-  certification, and transient-target promotion
+- `attempt_verification.py` — receipt-driven excursion replay and
+  transient-target promotion
 - `trial_commit.py` — atomic accepted-World adoption, `StepContext`,
   `CommittedAct`, and replay-step recording
 - `entry_execution.py` — import and route-bind the execution adjacent to Pilot
@@ -699,6 +699,8 @@ Judgment and recovery:
   streaming
 - `recovery_investigation.py` — bounded causal/replay recovery transaction,
   exact-origin restoration, and correction handoff
+- `recovery_continuation.py` — exact repaired-handoff, target-suffix, and local
+  repair-window evidence; it retains no cross-attempt continuation state
 - `departure_state.py` — pending-departure contracts, exact checkpoint and
   settlement bookkeeping, and pure earned-work assessment
 - `correction_lifecycle.py` — confirmed-correction installation, promotion,

@@ -8,7 +8,6 @@ from typing import Any
 
 import pyrung.core.analysis.pilot.attempt_verification as _attempt_verification
 import pyrung.core.analysis.pilot.entry_execution as _entry_execution
-import pyrung.core.analysis.pilot.recovery_continuation as _recovery_continuation
 import pyrung.core.analysis.pilot.theory_drive as _theory_drive
 import pyrung.core.analysis.pilot.trial_commit as _trial_commit
 from pyrung.core.analysis.pilot.compass import (
@@ -73,7 +72,6 @@ class AttemptTransition:
     frame: _IterationFrame
     attempt: _AttemptResult | None = None
     trial: _AcceptedTrial | None = None
-    continuation_hop: bool = False
     theory_transition: _TheoryTransitionEvidence | None = None
     adoption_checkpoint: _CausalCheckpoint | None = None
 
@@ -193,15 +191,6 @@ def transition_once(
     )
     frame = orientation_world.frame
     prepare_oriented_result(state, result, orientation_world, frame)
-    result, recovery_program_step = (
-        _recovery_continuation.preempt_recovery_action_with_program_coast(
-            result,
-            frame,
-            state,
-            ctx,
-            target,
-        )
-    )
     if not isinstance(result, Bearing):
         return AttemptTransition(result=result, frame=frame)
 
@@ -230,16 +219,6 @@ def transition_once(
     attempt = execute(result, orientation_world)
     if resolve_excursion and attempt.excursion_attempt is not None:
         attempt = _attempt_verification.resolve_excursion(attempt, frame, state, ctx)
-    prefix_proof = None
-    prefix_execution = attempt.executed_attempt
-    if terminal_target_expectation is not None and prefix_execution is not None:
-        prefix_proof = _attempt_verification.certify_current_target_prefix(
-            attempt,
-            prefix_execution.pulse.scan_before,
-            terminal_target_expectation,
-            state,
-            ctx,
-        )
     if terminal_target_expectation is not None:
         result, attempt = _attempt_verification.promote_transient_target_failure(
             result,
@@ -248,18 +227,10 @@ def transition_once(
             frame,
             state,
             ctx,
-            prefix_proof,
             local_repair_checkpoint=derivation_checkpoint,
         )
         act = result.act
-    continuation_checkpoint = None
     executed_for_derivation = attempt.executed_attempt
-    if terminal_target_expectation is not None and executed_for_derivation is not None:
-        continuation_checkpoint = _recovery_continuation.adjacent_continuation_source(
-            state,
-            executed_for_derivation.pulse,
-            prefix_proof,
-        )
     landing_checkpoint = (
         attempt_source_checkpoint
         if executed_for_derivation is not None
@@ -275,7 +246,7 @@ def transition_once(
     )
     receipt_checkpoint = derivation_checkpoint or expectation_checkpoint or landing_checkpoint
     intrascan_report = None
-    causal_checkpoint = continuation_checkpoint or receipt_checkpoint
+    causal_checkpoint = receipt_checkpoint
     crossing = getattr(act, "crossing", None)
     verification_hypothesis = bool(crossing is not None and crossing.verify_required)
     # A verification-required crossing is itself the causal hypothesis.  Its
@@ -382,13 +353,6 @@ def transition_once(
             expectation_checkpoint,
             executed,
         )
-    continuation_hop = _recovery_continuation.advance_recovery_continuation(
-        trial,
-        frame,
-        state,
-        ctx,
-        recovery_program_step,
-    )
     _retain_expectation_receipt(
         trial,
         act,
@@ -408,7 +372,6 @@ def transition_once(
         frame=frame,
         attempt=attempt,
         trial=trial,
-        continuation_hop=continuation_hop,
         theory_transition=theory_transition,
         adoption_checkpoint=receipt_checkpoint,
     )

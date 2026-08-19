@@ -18,7 +18,6 @@ from pyrsistent import pvector
 
 import pyrung.core.analysis.pilot.attempt_transition as _attempt_transition
 import pyrung.core.analysis.pilot.entry_execution as _entry_execution
-import pyrung.core.analysis.pilot.recovery_continuation as _recovery_continuation
 import pyrung.core.analysis.pilot.requirement_repair as _requirement_repair
 import pyrung.core.analysis.pilot.target_route as _target_route
 import pyrung.core.analysis.pilot.theory_drive as _theory_drive
@@ -260,8 +259,6 @@ def _monitor_committed_trial(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    *,
-    continuation_hop: bool = False,
 ) -> Iterator[PilotEvent]:
     """Emit one adopted trial and apply outer-loop progress policy."""
 
@@ -322,8 +319,7 @@ def _monitor_committed_trial(
                 state.best_trend = progress.distance_after
             _promote_probationary_corrections(state)
         return
-    if not continuation_hop:
-        yield from _monitor_trend(trial, frame, state, ctx)
+    yield from _monitor_trend(trial, frame, state, ctx)
 
 
 def _finished_event(
@@ -668,15 +664,6 @@ def _pilot_loop_events(
             # this read. SETUP_FIRST restoration and all later work therefore
             # begin with a fresh Compass orientation.
             continue
-        result, _recovery_program_step = (
-            _recovery_continuation.preempt_recovery_action_with_program_coast(
-                result,
-                frame,
-                state,
-                ctx,
-                target,
-            )
-        )
         controlling_setup_request = _theory_drive._setup_request_for_result(
             temporal_request, result
         )
@@ -1259,7 +1246,6 @@ def _pilot_loop_events(
                         frame,
                         state,
                         ctx,
-                        continuation_hop=(transition.continuation_hop),
                     )
                 # An exact zero-net target occurrence is stronger than the
                 # outer trend monitor's later macro-state reading.  Its failed

@@ -984,7 +984,6 @@ def _disposable_requirement_state(
         failed_effect_receipts=list(state.failed_effect_receipts),
         temporal_checkpoints=list(state.temporal_checkpoints),
         theory_state=state.theory_state,
-        recovery_continuation=state.recovery_continuation,
         proof_rejected_acts=set(state.proof_rejected_acts),
         search_start_scan=state.search_start_scan,
         earned_work=state.earned_work,

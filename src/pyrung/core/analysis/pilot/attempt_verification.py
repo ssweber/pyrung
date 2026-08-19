@@ -3,31 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
 
 import pyrung.core.analysis.pilot.recovery_continuation as _recovery_continuation
-from pyrung.core.analysis.pdg import resolve_rung
-from pyrung.core.analysis.pilot.awaited_actions import sibling_producer_family
 from pyrung.core.analysis.pilot.effect_observation import (
     observe_execution_window,
     terminal_target_replay_scan_ids,
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
-    occurrence_snapshot,
     promote_certified_prefix_target_observation,
     promote_terminal_target_observation,
 )
-from pyrung.core.analysis.pilot.execution import execution_owner
 from pyrung.core.analysis.pilot.investigation_replay import investigate_excursion
-from pyrung.core.analysis.pilot.navigation_contracts import Bearing, Coast
-from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
-from pyrung.core.analysis.pilot.program_step import read_program_step
+from pyrung.core.analysis.pilot.navigation_contracts import Bearing
 from pyrung.core.analysis.pilot.theory_evidence import _theory_live_boundary
-from pyrung.core.analysis.pilot.trace_read import WorldView
 from pyrung.core.analysis.pilot.types import (
     _AttemptResult,
-    _ContinuationCheckpoint,
     _IterationFrame,
     _PilotContext,
     _PilotState,
@@ -35,7 +26,6 @@ from pyrung.core.analysis.pilot.types import (
 from pyrung.core.analysis.pilot.verify import verify_excursion_replay, verify_gates
 from pyrung.core.analysis.pilot.working_theory import active_theory
 from pyrung.core.analysis.pilot.world import _CausalCheckpoint
-from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 from pyrung.core.analysis.sp_values import _values_match
 
 
@@ -82,149 +72,6 @@ def resolve_excursion(
         pulse.release_projections()
 
 
-def certify_current_target_prefix(
-    attempt: _AttemptResult,
-    adoption_scan: int,
-    target_expectation: EffectExpectation | None,
-    state: _PilotState,
-    ctx: _PilotContext,
-) -> _ContinuationCheckpoint | None:
-    """Ephemerally join a fresh ProgramStep to this Pulse's target occurrence."""
-
-    executed = attempt.executed_attempt
-    if (
-        executed is None
-        or target_expectation is None
-        or not isinstance(executed.bearing.act, Coast)
-    ):
-        return None
-    pulse = executed.pulse
-    if pulse.kernel_scan_ids != tuple(range(pulse.scan_before + 1, pulse.fork.state.scan_id + 1)):
-        return None
-    observations = observe_execution_window(
-        target_expectation,
-        pulse.fork,
-        scan_before=adoption_scan,
-        action_scan=None,
-        coast_receipt=pulse.coast_receipt,
-        kernel_scan_ids=tuple(
-            scan_id for scan_id in pulse.kernel_scan_ids if scan_id > adoption_scan
-        ),
-        projection_at=pulse.projection_at,
-    )
-    appeared = tuple(
-        observation
-        for observation in observations
-        if observation.appeared is not None and observation.obligation.terminal_target
-    )
-    if len(appeared) != 1:
-        return None
-    historical = appeared[0].appeared
-    assert historical is not None
-    if historical.scan_id != adoption_scan + 1:
-        return None
-    try:
-        boundary_work = fork_with_pilot_rungs(
-            pulse.fork,
-            state.pilot_rungs,
-            scan_id=adoption_scan,
-        )
-    except KeyError:
-        return None
-    boundary_snap = dict(boundary_work.state.tags)
-    world = WorldView(
-        snapshot=boundary_snap,
-        pdg=ctx.pdg,
-        program=ctx.program,
-        steerable=ctx.steerable,
-        opaque_loop=ctx.opaque_loop,
-        prior=ctx.domain_prior,
-        clear_only=ctx.clear_only,
-        pipeline_internal_tags=ctx.pipeline_internal_tags,
-        pipeline_roles=ctx.pipeline_roles,
-        avoid_pred=ctx.avoid_pred,
-        harness=getattr(boundary_work, "_harness", None),
-    )
-    terminal = target_expectation.obligations[0]
-    family = sibling_producer_family(world, terminal.tag, terminal.value)
-
-    def producer_address(producer: Any) -> tuple[Any, ...]:
-        node = ctx.pdg.rung_nodes[producer.rung_index]
-        return (node.subroutine, node.rung_index, node.branch_path)
-
-    producers = (
-        tuple(
-            producer
-            for producer in family.program_owned
-            if producer_address(producer) == terminal.producer
-        )
-        if family is not None
-        else ()
-    )
-    if len(producers) != 1:
-        return None
-    step = read_program_step(
-        world,
-        producers[0],
-        boundary_work,
-        state.pilot_rungs,
-        resting=ctx.resting,
-        projection_scans=1,
-    )
-    if not step.producer_observed:
-        return None
-    selected_rung = resolve_rung(ctx.program, ctx.pdg.rung_nodes[producers[0].rung_index])
-    if selected_rung is None:
-        return None
-    projected = fork_with_pilot_rungs(boundary_work, state.pilot_rungs)
-    projected.step()
-    projection = projected._replay_rung_write_projection_at(projected.state.scan_id)
-    if projection is None:
-        return None
-    projected_occurrences = tuple(
-        write
-        for write in projection.writes
-        if write.run.rung is selected_rung
-        and write.run.enabled
-        and write.transition.tag_name == terminal.tag
-        and _values_match(write.transition.to_value, terminal.value)
-    )
-    if len(projected_occurrences) != 1:
-        return None
-
-    def address(write: Any) -> tuple[Any, ...]:
-        return (
-            write.scan_id,
-            write.ordinal,
-            write.run_order,
-            write.call_invocation,
-            write.rung_id,
-            write.run.kind,
-            write.run.caller_rung,
-            write.run.call_stack,
-        )
-
-    if address(projected_occurrences[0]) != address(historical):
-        return None
-    owner = execution_owner(pulse.fork, adoption_scan)
-    if owner is None:
-        return None
-    assert state.key_config is not None
-    boundary_key = _pilot_world_key(
-        boundary_snap,
-        state.key_config,
-        state.pilot_rungs,
-        state.active_requirements,
-    )
-    return _ContinuationCheckpoint(
-        scan_id=adoption_scan,
-        world_key=boundary_key,
-        kind="target_prefix",
-        execution_ref=owner.epoch.reference,
-        landing_occurrence=occurrence_snapshot(historical),
-    )
-
-
 def promote_transient_target_failure(
     result: Bearing,
     attempt: _AttemptResult,
@@ -232,7 +79,6 @@ def promote_transient_target_failure(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    prefix_proof: _ContinuationCheckpoint | None = None,
     *,
     local_repair_checkpoint: _CausalCheckpoint | None = None,
 ) -> tuple[Bearing, _AttemptResult]:
@@ -319,19 +165,6 @@ def promote_transient_target_failure(
                 target_observations,
                 final_landing_value=pulse.fork.state.tags.get(terminal_obligation.tag),
             )
-    if (
-        promoted is None
-        and _recovery_continuation.adjacent_continuation_source(
-            state,
-            pulse,
-            prefix_proof,
-        )
-        is not None
-    ):
-        promoted = promote_certified_prefix_target_observation(
-            target_observations,
-            final_landing_value=pulse.fork.state.tags.get(terminal_obligation.tag),
-        )
     if promoted is None:
         return result, attempt
 
