@@ -25,6 +25,7 @@ from pyrsistent import pvector
 
 from pyrung import PLC, Bool, Int, Or, Program, copy, fill, latch, out, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.attempt_transition import record_attempt
 from pyrung.core.analysis.pilot.attempt_verification import resolve_excursion
 from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis, _precise_causes
 from pyrung.core.analysis.pilot.execution import (
@@ -58,7 +59,6 @@ from pyrung.core.analysis.pilot.outcome import (
     TrialAssessment,
 )
 from pyrung.core.analysis.pilot.overlay import OperationReceipt, PilotRung
-from pyrung.core.analysis.pilot.pilot import _record_attempt
 from pyrung.core.analysis.pilot.progress import (
     _causally_harmful_corrections,
     _checkpoint_recovery_origin,
@@ -767,7 +767,7 @@ def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
     )
     frame.tree = SimpleNamespace(children=(), satisfied=True, is_steerable=False)
 
-    _record_attempt(attempt, frame, state, ctx, trial.attempt.bearing.objective)
+    record_attempt(attempt, frame, state, ctx, trial.attempt.bearing.objective)
 
     assert tuple(state.pilot_rungs) == (replayed,)
     assert state.correction_receipts[0].correction is correction

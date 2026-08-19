@@ -32,12 +32,14 @@ import psutil
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pyrung import PLC
+from pyrung.core.analysis.pilot import attempt_transition as attempt_transition_module
 from pyrung.core.analysis.pilot import pilot as pilot_module
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot import theory_drive as theory_drive_module
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.intrascan import IntrascanResult
 from pyrung.core.analysis.pilot.navigation_contracts import Bearing
+from pyrung.core.analysis.pilot.theory_evidence import _TheoryTransitionEvidence
 from pyrung.core.analysis.pilot.trace import trace_relational
 from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints
 from pyrung.core.analysis.pilot.types import (
@@ -567,7 +569,7 @@ def _drive_worker(
         avoid_pred = _compile_avoid(avoid_conditions) if avoid_conditions else None
         formatter = _PilotProgressFormatter()
         original_orient = Compass.orient
-        original_interpret = pilot_module._theory_transition_from_attempt
+        original_interpret = attempt_transition_module._theory_transition_from_attempt
         original_after_monitor = pilot_module._theory_transition_after_monitor
         original_record = theory_drive_module._record_working_theory_transition
         projection_receipts: dict[tuple[Any, ...], tuple[int, tuple[int, ...], bool]] = {}
@@ -809,7 +811,7 @@ def _drive_worker(
             return result
 
         def observation_key(
-            observation: pilot_module._TheoryTransitionEvidence,
+            observation: _TheoryTransitionEvidence,
         ) -> tuple[Any, ...]:
             return (
                 observation.claim.identity,
@@ -826,7 +828,7 @@ def _drive_worker(
             *,
             prior_requirement_identities: frozenset[tuple[Any, ...]],
             intrascan_report: IntrascanResult | None = None,
-        ) -> pilot_module._TheoryTransitionEvidence | None:
+        ) -> _TheoryTransitionEvidence | None:
             observation = original_interpret(
                 state,
                 attempt,
@@ -851,7 +853,7 @@ def _drive_worker(
 
         def observe_recorded_interpretation(
             state: _PilotState,
-            observation: pilot_module._TheoryTransitionEvidence | None,
+            observation: _TheoryTransitionEvidence | None,
             *,
             remaining_budget: int,
         ) -> None:
@@ -928,14 +930,14 @@ def _drive_worker(
 
         def observe_after_monitor(
             state: _PilotState,
-            observation: pilot_module._TheoryTransitionEvidence | None,
+            observation: _TheoryTransitionEvidence | None,
             *,
             prior_requirement_identities: frozenset[tuple[Any, ...]],
             assertion_scan: int,
             trial: Any = None,
             source_checkpoint: _CausalCheckpoint | None = None,
         ) -> tuple[
-            pilot_module._TheoryTransitionEvidence | None,
+            _TheoryTransitionEvidence | None,
             frozenset[tuple[Any, ...]],
         ]:
             result, absorbed = original_after_monitor(
@@ -977,7 +979,9 @@ def _drive_worker(
             return result, absorbed
 
         Compass.orient = observe_orientation
-        vars(pilot_module)["_theory_transition_from_attempt"] = observe_interpretation
+        vars(attempt_transition_module)["_theory_transition_from_attempt"] = (
+            observe_interpretation
+        )
         vars(pilot_module)["_theory_transition_after_monitor"] = observe_after_monitor
         vars(theory_drive_module)["_record_working_theory_transition"] = (
             observe_recorded_interpretation

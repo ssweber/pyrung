@@ -1263,7 +1263,7 @@ class _AttemptResult:
     nogood_pairs: frozenset[_ActionPair] = frozenset()
     confirmed_correction: _ConfirmedCorrection | None = None
     # Compass observations gathered during the Act — applied only at the loop's
-    # drive-loop application point (``_record_attempt``), never by the instrument itself.
+    # transition application point (``record_attempt``), never by the instrument itself.
     observations: tuple[CompassObservation, ...] = ()
     # Names of the ``avoid=`` conditions this trial tripped (action gate before
     # the pulse, or scan gate on a settled/transient snapshot).  Folded into

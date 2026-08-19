@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from pyrung import PLC, Int, Program, copy, rung
-from pyrung.core.analysis.pilot import pilot as pilot_module
+from pyrung.core.analysis.pilot import attempt_transition as attempt_transition_module
 from pyrung.core.analysis.pilot import recovery_continuation
 from pyrung.core.analysis.pilot.effects import EffectExpectation
 from pyrung.core.analysis.pilot.execution import MotionKind
@@ -36,7 +36,7 @@ from pyrung.core.runner import EpochRef
 
 @dataclass(frozen=True)
 class _ContextStub:
-    """Minimal immutable context honoring ``_transition_once``'s route seam."""
+    """Minimal immutable context honoring ``transition_once``'s route seam."""
 
     configured_inputs: frozenset[str] = frozenset()
     route: object | None = None
@@ -249,22 +249,26 @@ def test_recovery_program_coast_keeps_the_full_execution_window(monkeypatch) -> 
     context = _ContextStub()
     program_step = object()
 
-    monkeypatch.setattr(pilot_module, "assert_recovery_disposable_state", lambda *args: None)
-    monkeypatch.setattr(pilot_module, "_prepare_oriented_result", lambda *args: None)
+    monkeypatch.setattr(
+        attempt_transition_module,
+        "assert_recovery_disposable_state",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(attempt_transition_module, "prepare_oriented_result", lambda *args: None)
     monkeypatch.setattr(
         recovery_continuation,
         "preempt_recovery_action_with_program_coast",
         lambda *args: (bearing, program_step),
     )
     monkeypatch.setattr(
-        pilot_module,
+        attempt_transition_module,
         "_selected_terminal_target_expectation",
         lambda *args: None,
     )
-    monkeypatch.setattr(pilot_module, "execute", lambda *args, **kwargs: attempt)
-    monkeypatch.setattr(pilot_module, "_record_attempt", lambda *args: None)
+    monkeypatch.setattr(attempt_transition_module, "execute", lambda *args, **kwargs: attempt)
+    monkeypatch.setattr(attempt_transition_module, "record_attempt", lambda *args: None)
 
-    transition = pilot_module._transition_once(
+    transition = attempt_transition_module.transition_once(
         state,
         context,
         target,

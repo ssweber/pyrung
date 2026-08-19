@@ -130,7 +130,7 @@ def adopt_trial(
     """Adopt one gate-approved trial without applying post-commit policy.
 
     Verification already ran inside the steering wrapper and
-    ``_record_attempt`` already committed its knowledge.  This is the shared
+    ``record_attempt`` already committed its knowledge.  This is the shared
     local commit used by the live loop and disposable composition; only the
     live caller may subsequently invoke ``_monitor_trend``.
     """

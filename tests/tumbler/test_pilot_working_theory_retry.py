@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from pyrung import PLC
-from pyrung.core.analysis.pilot import pilot as pilot_module
+from pyrung.core.analysis.pilot import attempt_transition as attempt_transition_module
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot import theory_drive as theory_drive_module
 from pyrung.core.runner import _compile_avoid
@@ -25,7 +25,7 @@ def test_mode_request_reads_exact_atomic_operation_before_separate_clear(
     facts: list[Any] = []
     transitions = 0
     original_record = theory_drive_module._record_controlling_theory_fact
-    original_transition = pilot_module._transition_once
+    original_transition = attempt_transition_module.transition_once
 
     def record_fact(state: Any, fact: Any) -> None:
         facts.append(fact)
@@ -37,7 +37,7 @@ def test_mode_request_reads_exact_atomic_operation_before_separate_clear(
         return original_transition(*args, **kwargs)
 
     monkeypatch.setattr(theory_drive_module, "_record_controlling_theory_fact", record_fact)
-    monkeypatch.setattr(pilot_module, "_transition_once", transition_once)
+    monkeypatch.setattr(attempt_transition_module, "transition_once", transition_once)
 
     plc = PLC(tumbler_logic, dt=0.010)
     plc.step()

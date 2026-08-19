@@ -184,7 +184,7 @@ def test_recovery_transaction_cannot_compose_recursively() -> None:
 
 
 def test_recovery_rejects_outer_transition_before_state_mutation() -> None:
-    from pyrung.core.analysis.pilot.pilot import _transition_once
+    from pyrung.core.analysis.pilot.attempt_transition import transition_once
 
     outer_state = object()
 
@@ -193,7 +193,7 @@ def test_recovery_rejects_outer_transition_before_state_mutation() -> None:
             RecoveryInvariantViolation,
             match="execute a transition on the outer PILOT world",
         ):
-            _transition_once(outer_state, None, None, None)
+            transition_once(outer_state, None, None, None)
         return Stop(candidate)
 
     compose_corrections(

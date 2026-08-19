@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from pyrung import PLC, Bool, Int, Program, copy, latch, rung, system
-from pyrung.core.analysis.pilot import pilot as pilot_module
+from pyrung.core.analysis.pilot import attempt_transition as attempt_transition_module
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot import theory_drive as theory_drive_module
 from pyrung.core.analysis.pilot.attempt_interpretation import AttemptInterpretationKind
@@ -280,7 +280,7 @@ def test_theory_attempt_adapter_adds_no_projection_replay(monkeypatch: Any) -> N
 
     projection_calls.clear()
     monkeypatch.setattr(
-        pilot_module,
+        attempt_transition_module,
         "_theory_transition_from_attempt",
         lambda *_args, **_kwargs: None,
     )
