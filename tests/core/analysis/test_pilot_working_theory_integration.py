@@ -12,7 +12,7 @@ import pytest
 from pyrung import PLC, Bool, Int, Program, copy, latch, rung, system
 from pyrung.core.analysis.pilot import attempt_transition as attempt_transition_module
 from pyrung.core.analysis.pilot import pilot_events
-from pyrung.core.analysis.pilot import theory_drive as theory_drive_module
+from pyrung.core.analysis.pilot import theory_recording as theory_recording_module
 from pyrung.core.analysis.pilot.attempt_interpretation import AttemptInterpretationKind
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.conductivity import (
@@ -136,18 +136,18 @@ def test_noncontrolling_interpretation_stays_out_of_working_theory(
     logic, consumer = _direct_producer_program()
     recorded_facts: list[Any] = []
     recorded_events: list[Any] = []
-    original = theory_drive_module._record_optional_theory_fact
+    original = theory_recording_module._record_optional_theory_fact
 
     def record(state: Any, fact: Any) -> None:
         recorded_facts.append(fact)
         original(state, fact)
 
-    monkeypatch.setattr(theory_drive_module, "_record_optional_theory_fact", record)
+    monkeypatch.setattr(theory_recording_module, "_record_optional_theory_fact", record)
     with_recording = PLC(logic).how(consumer, max_scans=30, on_event=recorded_events.append)
 
     no_recording_events: list[Any] = []
     monkeypatch.setattr(
-        theory_drive_module,
+        theory_recording_module,
         "_run_optional_theory_hook",
         lambda *_args, **_kwargs: None,
     )
@@ -174,13 +174,13 @@ def test_bootstrap_overwrite_retry_records_controlling_theory_evidence(
             copy(9, stepper, oneshot=True)
 
     facts: list[Any] = []
-    original = theory_drive_module._record_controlling_theory_fact
+    original = theory_recording_module._record_controlling_theory_fact
 
     def record(state: Any, fact: Any) -> None:
         facts.append(fact)
         original(state, fact)
 
-    monkeypatch.setattr(theory_drive_module, "_record_controlling_theory_fact", record)
+    monkeypatch.setattr(theory_recording_module, "_record_controlling_theory_fact", record)
     events: list[Any] = []
     result = PLC(logic).how(stepper == 1, max_scans=20, on_event=events.append)
 
@@ -236,7 +236,7 @@ def test_optional_reducer_failure_cannot_change_production_result(monkeypatch: A
     def fail(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("optional recorder failure")
 
-    monkeypatch.setattr(theory_drive_module, "reduce_theory", fail)
+    monkeypatch.setattr(theory_recording_module, "reduce_theory", fail)
     observed = PLC(logic).how(consumer, max_scans=30)
 
     assert observed.status is baseline.status
@@ -281,20 +281,20 @@ def test_theory_attempt_adapter_adds_no_projection_replay(monkeypatch: Any) -> N
 
 def _capture_theory_transitions(monkeypatch: Any) -> list[Any]:
     captured: list[Any] = []
-    original = theory_drive_module._record_working_theory_transition
+    original = theory_recording_module._record_working_theory_transition
 
     def record(state: Any, observation: Any, **kwargs: Any) -> None:
         if observation is not None:
             captured.append(observation)
         original(state, observation, **kwargs)
 
-    monkeypatch.setattr(theory_drive_module, "_record_working_theory_transition", record)
+    monkeypatch.setattr(theory_recording_module, "_record_working_theory_transition", record)
     return captured
 
 
 def _capture_conductivity_fronts(monkeypatch: Any) -> list[Any]:
     captured: list[Any] = []
-    original = theory_drive_module._record_working_theory_transition
+    original = theory_recording_module._record_working_theory_transition
 
     def record(state: Any, transition: Any, **kwargs: Any) -> None:
         original(state, transition, **kwargs)
@@ -303,7 +303,7 @@ def _capture_conductivity_fronts(monkeypatch: Any) -> list[Any]:
         if front is not None:
             captured.append(front)
 
-    monkeypatch.setattr(theory_drive_module, "_record_working_theory_transition", record)
+    monkeypatch.setattr(theory_recording_module, "_record_working_theory_transition", record)
     return captured
 
 
@@ -439,7 +439,7 @@ def test_advanced_reconnect_front_yields_to_watchdog_research_and_replacement(
 ) -> None:
     captured: list[Any] = []
     compositions: list[Any] = []
-    original = theory_drive_module._record_controlling_theory_fact
+    original = theory_recording_module._record_controlling_theory_fact
 
     def record(state: Any, fact: Any) -> None:
         before = (
@@ -463,7 +463,7 @@ def test_advanced_reconnect_front_yields_to_watchdog_research_and_replacement(
         if isinstance(fact, ComposeTheoryCorrection):
             compositions.append((fact, active_theory_configurations(state.theory_state)))
 
-    monkeypatch.setattr(theory_drive_module, "_record_controlling_theory_fact", record)
+    monkeypatch.setattr(theory_recording_module, "_record_controlling_theory_fact", record)
 
     events: list[Any] = []
     research_seen = False
@@ -546,14 +546,14 @@ def test_neutral_route_steers_again_before_researching_third_intrascan_correctio
     monkeypatch: Any,
 ) -> None:
     compositions: list[tuple[Any, tuple[Any, ...]]] = []
-    original = theory_drive_module._record_controlling_theory_fact
+    original = theory_recording_module._record_controlling_theory_fact
 
     def record(state: Any, fact: Any) -> None:
         original(state, fact)
         if isinstance(fact, ComposeTheoryCorrection):
             compositions.append((fact, active_theory_configurations(state.theory_state)))
 
-    monkeypatch.setattr(theory_drive_module, "_record_controlling_theory_fact", record)
+    monkeypatch.setattr(theory_recording_module, "_record_controlling_theory_fact", record)
 
     events: list[Any] = []
     stream = pilot_events(
@@ -656,7 +656,7 @@ def test_prestepped_watchdog_retains_composed_world_for_followup_research(
         pass
 
     transition_count = 0
-    original = theory_drive_module._record_working_theory_transition
+    original = theory_recording_module._record_working_theory_transition
 
     def record(state: Any, transition: Any, **kwargs: Any) -> None:
         nonlocal transition_count
@@ -668,7 +668,7 @@ def test_prestepped_watchdog_retains_composed_world_for_followup_research(
         if transition_count >= 7:
             raise ResearchMissing("bounded run never retained the comparable attempt")
 
-    monkeypatch.setattr(theory_drive_module, "_record_working_theory_transition", record)
+    monkeypatch.setattr(theory_recording_module, "_record_working_theory_transition", record)
     plc = PLC(sequence_route.logic, dt=0.010)
     plc.step()
 

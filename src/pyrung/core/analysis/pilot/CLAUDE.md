@@ -452,10 +452,13 @@ this table only locates the owner.
   claims, versions, attempt/progress receipts, temporal intent, consumer stops,
   normalized program-transaction identities, and lifecycle facts;
   `theory_reducer.py` owns lifecycle commands, validation, and the pure
-  reducer. The live outer loop alone applies facts to
-  `_PilotState.theory_state`; Compass consumes a detached `TheoryView` and
-  resolves it through the same current-world `CandidateRead` as ordinary
-  orientation. The ledger survives rollback but owns no executable future.
+  reducer; `theory_recording.py` is the sole mutable application seam for
+  accepted optional and controlling lifecycle facts; and `theory_drive.py`
+  resolves temporal needs, restores or rebases their exact source, composes
+  the requested correction, and completes controlled setup. Compass consumes
+  a detached `TheoryView` and resolves it through the same current-world
+  `CandidateRead` as ordinary orientation. The ledger survives rollback but
+  owns no executable future.
 - Navigation act policy: `orientation.py::_orient_read` materializes one
   `navigation_contracts.ActPolicy`; `steer.execute` applies it
 - Requirement and expectation receipt contracts plus exact receipt matching:
@@ -693,6 +696,10 @@ Static reading and orientation:
   worlds, forks, PilotRungs, routes, or callables
 - `theory_reducer.py` — typed WorkingTheory lifecycle commands, validation,
   and pure state reduction
+- `theory_recording.py` — the sole mutable application seam for accepted
+  optional and controlling WorkingTheory lifecycle facts
+- `theory_drive.py` — temporal-need resolution, exact-source restoration and
+  rebasing, correction composition, and controlled-setup completion
 - `navigation_contracts.py` — immutable navigation contracts and the plain
   action-pair value shared by their consumers
 

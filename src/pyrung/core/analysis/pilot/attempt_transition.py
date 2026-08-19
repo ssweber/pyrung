@@ -8,7 +8,7 @@ from typing import Any
 
 import pyrung.core.analysis.pilot.attempt_verification as _attempt_verification
 import pyrung.core.analysis.pilot.entry_execution as _entry_execution
-import pyrung.core.analysis.pilot.theory_drive as _theory_drive
+import pyrung.core.analysis.pilot.theory_recording as _theory_recording
 import pyrung.core.analysis.pilot.trial_commit as _trial_commit
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
@@ -214,7 +214,7 @@ def transition_once(
         )
         else None
     )
-    requirements_before_theory_recording = _theory_drive._requirement_identities(state)
+    requirements_before_theory_recording = _theory_recording._requirement_identities(state)
     attempt = execute(result, orientation_world)
     if resolve_excursion and attempt.excursion_attempt is not None:
         attempt = _attempt_verification.resolve_excursion(attempt, frame, state, ctx)
@@ -301,7 +301,7 @@ def transition_once(
             )
         elif not record_rejection:
             pass
-        elif _theory_drive._records_controlling_need(theory_transition):
+        elif _theory_recording._records_controlling_need(theory_transition):
             # The act exposed a missing temporal condition. That is exact
             # refinement evidence, not proof that the act is impossible in
             # this world once the condition is composed into the scan.

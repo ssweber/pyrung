@@ -21,6 +21,7 @@ import pyrung.core.analysis.pilot.entry_execution as _entry_execution
 import pyrung.core.analysis.pilot.requirement_repair as _requirement_repair
 import pyrung.core.analysis.pilot.target_route as _target_route
 import pyrung.core.analysis.pilot.theory_drive as _theory_drive
+import pyrung.core.analysis.pilot.theory_recording as _theory_recording
 from pyrung.core.analysis.graph import (
     PlanStep,
 )
@@ -531,13 +532,13 @@ def _pilot_loop_events(
         rebased_requirements = _requirement_repair.derive_program_guard_rebases(state, ctx)
         if rebased_requirements:
             if active_theory(state.theory_state) is None:
-                _theory_drive._open_theory_from_program_guard_rebases(
+                _theory_recording._open_theory_from_program_guard_rebases(
                     state,
                     rebased_requirements,
                     remaining_budget=state.remaining_search_scans(ctx.max_scans),
                 )
             else:
-                _theory_drive._refine_active_theory_from_program_guard_rebases(
+                _theory_recording._refine_active_theory_from_program_guard_rebases(
                     state,
                     rebased_requirements,
                 )
@@ -596,8 +597,8 @@ def _pilot_loop_events(
         if (entry_execution is None or entry_execution.route_bound) and target_reached(
             snap, ctx.target.tag, ctx.target.value, ctx.target.predicate
         ):
-            _theory_drive._run_optional_theory_hook(
-                _theory_drive._record_optional_theory_proved, state
+            _theory_recording._run_optional_theory_hook(
+                _theory_recording._record_optional_theory_proved, state
             )
             _promote_probationary_corrections(state)
             if state.steps:
@@ -747,7 +748,7 @@ def _pilot_loop_events(
                     drift.identity for drift in request.comparison.requirement_drifts
                 ),
             )
-            _theory_drive._record_controlling_theory_fact(
+            _theory_recording._record_controlling_theory_fact(
                 state,
                 RecordConductivityResearch(finding),
             )
@@ -804,7 +805,7 @@ def _pilot_loop_events(
                     parent_producer_goal_id=result.producer_goal.identity,
                     parent_attempt_id=result.producer_attempt_id,
                 )
-                _theory_drive._record_controlling_theory_fact(
+                _theory_recording._record_controlling_theory_fact(
                     state,
                     RecordIntrascanTraceback(finding),
                 )
@@ -879,7 +880,7 @@ def _pilot_loop_events(
                     parent_producer_goal_id=result.request.parent_producer_goal_id,
                     parent_attempt_id=result.request.parent_attempt_id,
                 )
-                _theory_drive._record_controlling_theory_fact(
+                _theory_recording._record_controlling_theory_fact(
                     state,
                     RecordIntrascanTraceback(finding),
                 )
@@ -906,7 +907,7 @@ def _pilot_loop_events(
                     parent_producer_goal_id=result.request.parent_producer_goal_id,
                     parent_attempt_id=result.request.parent_attempt_id,
                 )
-                _theory_drive._record_controlling_theory_fact(
+                _theory_recording._record_controlling_theory_fact(
                     state,
                     RecordIntrascanTraceback(finding),
                 )
@@ -928,7 +929,7 @@ def _pilot_loop_events(
                     parent_producer_goal_id=result.request.parent_producer_goal_id,
                     parent_attempt_id=result.request.parent_attempt_id,
                 )
-                _theory_drive._record_controlling_theory_fact(
+                _theory_recording._record_controlling_theory_fact(
                     state,
                     RecordIntrascanTracebackFrontier(traceback_frontier),
                 )
@@ -1030,8 +1031,8 @@ def _pilot_loop_events(
                 )
                 + _frontier_clause(frontier, frame.snap)
             )
-            _theory_drive._run_optional_theory_hook(
-                _theory_drive._record_optional_theory_abandoned, state, TheoryTermination.STUCK
+            _theory_recording._run_optional_theory_hook(
+                _theory_recording._record_optional_theory_abandoned, state, TheoryTermination.STUCK
             )
             yield from _stopped_events(
                 state,
@@ -1085,7 +1086,7 @@ def _pilot_loop_events(
         controlled_setup_attempt = None
         if controlling_setup_request is not None:
             assert theory_source_checkpoint is not None
-            controlled_setup_attempt = _theory_drive._record_controlled_setup_attempt(
+            controlled_setup_attempt = _theory_recording._record_controlled_setup_attempt(
                 state,
                 controlling_setup_request,
                 result,
@@ -1096,9 +1097,9 @@ def _pilot_loop_events(
             transition = _attempt_transition.adopt_deferred_transition(transition, state, ctx)
         if attempt.trial is None:
             if controlled_setup_attempt is not None:
-                if _theory_drive._records_controlling_need(transition.theory_transition):
+                if _theory_recording._records_controlling_need(transition.theory_transition):
                     assert transition.theory_transition is not None
-                    _theory_drive._record_working_theory_transition(
+                    _theory_recording._record_working_theory_transition(
                         state,
                         transition.theory_transition,
                         remaining_budget=state.remaining_search_scans(ctx.max_scans),
@@ -1108,7 +1109,7 @@ def _pilot_loop_events(
                     if theory is None:
                         raise ValueError("rejected temporal attempt lost its theory")
                     rejected_attempt_id = controlled_setup_attempt.attempt_id
-                    _theory_drive._record_controlling_theory_fact(
+                    _theory_recording._record_controlling_theory_fact(
                         state,
                         AbandonTheory(
                             theory_id=theory.theory_id,
@@ -1120,15 +1121,15 @@ def _pilot_loop_events(
                             ),
                         ),
                     )
-            elif _theory_drive._records_controlling_need(transition.theory_transition):
-                _theory_drive._record_working_theory_transition(
+            elif _theory_recording._records_controlling_need(transition.theory_transition):
+                _theory_recording._record_working_theory_transition(
                     state,
                     transition.theory_transition,
                     remaining_budget=state.remaining_search_scans(ctx.max_scans),
                 )
             else:
-                _theory_drive._run_optional_theory_hook(
-                    _theory_drive._record_working_theory_transition,
+                _theory_recording._run_optional_theory_hook(
+                    _theory_recording._record_working_theory_transition,
                     state,
                     transition.theory_transition,
                     remaining_budget=state.remaining_search_scans(ctx.max_scans),
@@ -1198,7 +1199,7 @@ def _pilot_loop_events(
             if controlled_setup_attempt is not None:
                 assert controlling_source_world is not None
                 state.load_world(controlling_source_world)
-                if _theory_drive._records_controlling_need(transition.theory_transition):
+                if _theory_recording._records_controlling_need(transition.theory_transition):
                     state.pending_departure = None
                     continue
                 yield from _stopped_events(
@@ -1229,7 +1230,7 @@ def _pilot_loop_events(
         assert accepted_event is not None
         try:
             yield accepted_event
-            requirements_before_monitor = _theory_drive._requirement_identities(state)
+            requirements_before_monitor = _theory_recording._requirement_identities(state)
             if controlled_setup_attempt is None:
                 settled_target_failure = _derive_settled_target_requirements(
                     trial,
@@ -1256,7 +1257,7 @@ def _pilot_loop_events(
                             requirement.deadline.scan_id,
                             {"requirement": requirement.diagnostic_snapshot()},
                         )
-            _theory_drive._advance_retained_productive_tip(
+            _theory_recording._advance_retained_productive_tip(
                 state,
                 ctx,
                 trial,
@@ -1271,7 +1272,7 @@ def _pilot_loop_events(
                 trial=trial,
                 source_checkpoint=transition.adoption_checkpoint,
             )
-            successor_need = _theory_drive._records_controlling_need(theory_transition)
+            successor_need = _theory_recording._records_controlling_need(theory_transition)
             if successor_need:
                 # Keep the monitor's exact rollback world. The next fresh
                 # Compass read re-executes this scan with the newly learned
@@ -1319,7 +1320,7 @@ def _pilot_loop_events(
                 )
                 if successor_need:
                     assert theory_transition is not None
-                    _theory_drive._record_working_theory_transition(
+                    _theory_recording._record_working_theory_transition(
                         state,
                         theory_transition,
                         remaining_budget=state.remaining_search_scans(ctx.max_scans),
@@ -1327,40 +1328,40 @@ def _pilot_loop_events(
             else:
                 if successor_need:
                     assert theory_transition is not None
-                    _theory_drive._record_working_theory_transition(
+                    _theory_recording._record_working_theory_transition(
                         state,
                         theory_transition,
                         remaining_budget=state.remaining_search_scans(ctx.max_scans),
                     )
                 else:
                     if active_theory(state.theory_state) is not None:
-                        _theory_drive._record_theory_transition(
+                        _theory_recording._record_theory_transition(
                             state,
                             theory_transition,
                             remaining_budget=state.remaining_search_scans(ctx.max_scans),
-                            record_fact=_theory_drive._record_controlling_theory_fact,
+                            record_fact=_theory_recording._record_controlling_theory_fact,
                         )
-                        _theory_drive._record_theory_execution_advance(
+                        _theory_recording._record_theory_execution_advance(
                             state,
                             ctx,
                             trial,
                             theory_transition,
                         )
-                        _theory_drive._complete_intrascan_consumer(
+                        _theory_recording._complete_intrascan_consumer(
                             state,
                             temporal_request,
                             trial,
                             theory_transition,
                         )
                     else:
-                        _theory_drive._run_optional_theory_hook(
-                            _theory_drive._record_working_theory_transition,
+                        _theory_recording._run_optional_theory_hook(
+                            _theory_recording._record_working_theory_transition,
                             state,
                             theory_transition,
                             remaining_budget=state.remaining_search_scans(ctx.max_scans),
                         )
-                _theory_drive._run_optional_theory_hook(
-                    _theory_drive._record_optional_requirement_delta,
+                _theory_recording._run_optional_theory_hook(
+                    _theory_recording._record_optional_requirement_delta,
                     state,
                     requirements_before_monitor | absorbed_requirement_ids,
                     identity=(
@@ -1393,8 +1394,8 @@ def _pilot_loop_events(
             ctx,
             frame,
         ) + _frontier_clause(last_frontier, frame.snap if frame is not None else None)
-        _theory_drive._run_optional_theory_hook(
-            _theory_drive._record_optional_theory_abandoned, state, TheoryTermination.BUDGET
+        _theory_recording._run_optional_theory_hook(
+            _theory_recording._record_optional_theory_abandoned, state, TheoryTermination.BUDGET
         )
         yield from _stopped_events(
             state,
@@ -1406,7 +1407,9 @@ def _pilot_loop_events(
             candidate_count=0,
         )
         return
-    _theory_drive._run_optional_theory_hook(_theory_drive._record_optional_theory_proved, state)
+    _theory_recording._run_optional_theory_hook(
+        _theory_recording._record_optional_theory_proved, state
+    )
     yield _finished_event(
         state,
         ctx,

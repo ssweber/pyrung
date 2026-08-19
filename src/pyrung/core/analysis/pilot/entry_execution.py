@@ -13,7 +13,7 @@ from typing import Any
 
 from pyrsistent import pvector
 
-import pyrung.core.analysis.pilot.theory_drive as _theory_drive
+import pyrung.core.analysis.pilot.theory_recording as _theory_recording
 from pyrung.core.analysis.pilot.bootstrap import (
     _BootstrapExecution,
     bind_observed_route_designations,
@@ -211,7 +211,7 @@ def bind_entry_execution_to_route(
     state.invocation_checkpoint = checkpoint
     state.bootstrap_execution = bound
     _derive_bootstrap_requirements(state, ctx, bound)
-    _theory_drive._record_bootstrap_theory_transition(
+    _theory_recording._record_bootstrap_theory_transition(
         state,
         ctx,
         bound,
