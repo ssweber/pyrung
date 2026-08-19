@@ -16,9 +16,9 @@ from pyrung.core.analysis.pilot.effects import (
 )
 from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.requirement_derivation import (
-    _refine_preserved_tag_deadlines,
     derive_overwriter_guard_requirement_from_effect,
 )
+from pyrung.core.analysis.pilot.requirement_sources import _refine_preserved_tag_deadlines
 from pyrung.core.analysis.pilot.requirements import (
     GuardLogic,
     GuardRequirementAtom,

@@ -458,8 +458,9 @@ this table only locates the owner.
 - Navigation act policy: `orientation.py::_orient_read` materializes one
   `navigation_contracts.ActPolicy`; `steer.execute` applies it
 - Requirement and expectation receipt contracts plus exact receipt matching:
-  `requirements.py`; failed-effect, guard, overwrite, and occurrence-source
-  derivation: `requirement_derivation.py`;
+  `requirements.py`; failed-effect, guard, overwrite, and advance selection:
+  `requirement_derivation.py`; strictly decreasing exact same-scan source walks:
+  `requirement_sources.py`;
   `regression_requirements.py` selects one exact later causal link and adapts it
   into those same requirement contracts; `progress.py` owns checkpoint restore
   and the handoff to local repair
@@ -680,8 +681,10 @@ Static reading and orientation:
   occurrence-source contracts, exact expectation receipts, and receipt matching
 - `guard_evaluation.py` — exact dynamic guard truth and scalar complements from
   execution projections
-- `requirement_derivation.py` — guard, advance, overwrite, and strictly decreasing
-  same-scan requirement derivation over exact execution evidence
+- `requirement_derivation.py` — guard, advance, and overwrite requirement
+  selection over exact execution evidence
+- `requirement_sources.py` — strictly decreasing same-scan occurrence-source
+  walking and detached transitive requirement evidence
 - `working_theory.py` — controlling detached facts, typed temporal intent,
   consumer stops, and normalized program transactions; it never stores
   navigation reads, acts, checkpoints,

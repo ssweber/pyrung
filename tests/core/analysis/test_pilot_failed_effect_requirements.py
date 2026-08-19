@@ -26,12 +26,12 @@ from pyrung.core.analysis.pilot.effects import (
 )
 from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.requirement_derivation import (
-    _residualize_guard_requirement,
     derive_advance_operand_requirement,
     derive_advance_requirement_from_effect,
     derive_guard_requirement_from_effect,
     explain_selected_absence,
 )
+from pyrung.core.analysis.pilot.requirement_sources import _residualize_guard_requirement
 from pyrung.core.analysis.pilot.requirements import (
     FailureExplanationKind,
     GuardLogic,

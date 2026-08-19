@@ -27,9 +27,11 @@ from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.intrascan import IntrascanFinding
 from pyrung.core.analysis.pilot.intrascan_schedule import iter_guard_alternatives
 from pyrung.core.analysis.pilot.requirement_derivation import (
+    derive_overwriter_guard_requirement_from_effect,
+)
+from pyrung.core.analysis.pilot.requirement_sources import (
     _refine_preserved_tag_deadlines,
     derive_occurrence_source_requirement,
-    derive_overwriter_guard_requirement_from_effect,
 )
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
