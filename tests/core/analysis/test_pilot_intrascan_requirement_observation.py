@@ -63,7 +63,6 @@ def _guard_evidence(
         deadline=atoms[0].deadline,
         selected_writer=(None, 0, ()),
         operand_authority=OperandAuthority.UNKNOWN,
-        execution_epoch=epoch,
         execution_owner=SimpleNamespace(epoch=epoch),
         source_world_key=checkpoint.key,
         checkpoint_owner=checkpoint.owner,

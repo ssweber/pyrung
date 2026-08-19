@@ -349,7 +349,7 @@ class ActiveRequirementSnapshot:
 class ActiveRequirement:
     """An inert condition that must hold by an exact execution occurrence.
 
-    Live epoch/query/checkpoint objects are retained only as internal proof
+    Live EpochQuery/checkpoint objects are retained only as internal proof
     handles. ``identity`` deliberately uses their stable owner identities plus
     immutable semantic fields; public recording consumes detached occurrences.
     """
@@ -359,8 +359,7 @@ class ActiveRequirement:
     deadline: EffectOccurrenceSnapshot
     selected_writer: Any
     operand_authority: OperandAuthority
-    execution_epoch: Any = field(compare=False, repr=False)
-    execution_owner: Any = field(compare=False, repr=False)
+    execution_owner: EpochQuery = field(compare=False, repr=False)
     source_world_key: Any
     checkpoint_owner: Any
     source_checkpoint: Any = field(compare=False, repr=False)
@@ -371,6 +370,16 @@ class ActiveRequirement:
     # Exact harmful write whose guard this requirement prevents. Keeping this
     # typed avoids rediscovering the physical obstruction from ``scope``.
     obstruction_occurrence: EffectOccurrenceSnapshot | None = None
+
+    def __post_init__(self) -> None:
+        if getattr(self.execution_owner, "epoch", None) is None:
+            raise ValueError("active requirement owner must expose one Epoch")
+
+    @property
+    def execution_epoch(self) -> Epoch:
+        """Derive the physical Epoch from the requirement's sole owner."""
+
+        return self.execution_owner.epoch
 
     @property
     def permits_assignment(self) -> bool:

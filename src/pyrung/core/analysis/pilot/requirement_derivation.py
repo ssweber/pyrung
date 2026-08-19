@@ -133,6 +133,7 @@ def bind_guard_condition_operand_authorities(
     )
     return replace(condition, operand_authority=authority)
 
+
 def _unknown(detail: str) -> RequirementDerivation:
     return RequirementDerivation(FailureExplanation(FailureExplanationKind.UNKNOWN, detail=detail))
 
@@ -1067,7 +1068,6 @@ def derive_guard_requirement_from_effect(
             deadline=demanding,
             selected_writer=selected_writer,
             operand_authority=OperandAuthority.UNKNOWN,
-            execution_epoch=execution_epoch,
             execution_owner=execution_owner,
             source_world_key=source_world_key,
             checkpoint_owner=source_checkpoint.owner,
@@ -1205,7 +1205,6 @@ def derive_overwriter_guard_requirement_from_write(
             deadline=demanding,
             selected_writer=selected_writer,
             operand_authority=OperandAuthority.UNKNOWN,
-            execution_epoch=execution_epoch,
             execution_owner=execution_owner,
             source_world_key=source_world_key,
             checkpoint_owner=source_checkpoint.owner,
@@ -1809,7 +1808,6 @@ def derive_advance_operand_requirement(
             deadline=operand_snapshot,
             selected_writer=selected_writer,
             operand_authority=operand_authority,
-            execution_epoch=execution_epoch,
             execution_owner=execution_owner,
             source_world_key=source_world_key,
             checkpoint_owner=source_checkpoint.owner,

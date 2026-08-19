@@ -655,7 +655,6 @@ def test_existing_one_hop_facade_matches_the_typed_walk() -> None:
         deadline=atom.deadline,
         selected_writer=(None, 0, ()),
         operand_authority=OperandAuthority.UNKNOWN,
-        execution_epoch=epoch,
         execution_owner=SimpleNamespace(epoch=epoch),
         source_world_key=("stage1-navigation",),
         checkpoint_owner=object(),

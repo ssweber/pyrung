@@ -57,7 +57,6 @@ def test_gate_restoration_is_proved_at_its_exact_short_circuit_read() -> None:
         deadline=occurrence_snapshot(gate_read),
         selected_writer=(None, 3, ()),
         operand_authority=OperandAuthority.ADJUSTABLE,
-        execution_epoch=owner.epoch,
         execution_owner=owner,
         source_world_key=("occurrence-route-source",),
         checkpoint_owner=object(),
