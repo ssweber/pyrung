@@ -1,10 +1,10 @@
 """Minimal reproducer for a consumed but incomplete intrascan action."""
 
 from pyrung import PLC, Bool, Int, Program, call, copy, reset, rung, subroutine
+from pyrung.core.analysis.pilot.effect_observation import observe_expectation
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligation,
-    observe_expectation,
 )
 from pyrung.core.analysis.pilot.pulse import _apply_pulse
 

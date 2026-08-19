@@ -11,11 +11,13 @@ from pyrung.core.analysis.pilot.attempt_interpretation import (
     AttemptInterpretationKind,
     interpret_attempt,
 )
+from pyrung.core.analysis.pilot.effect_observation import (
+    observe_execution_window,
+    observe_expectation,
+)
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligation,
-    observe_execution_window,
-    observe_expectation,
 )
 from pyrung.core.analysis.pilot.intrascan import IntrascanQuestion, inspect_assertion_scan
 from pyrung.core.analysis.pilot.navigation_contracts import (

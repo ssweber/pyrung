@@ -25,11 +25,11 @@ from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkReading,
     EarnedWorkReceipt,
 )
+from pyrung.core.analysis.pilot.effect_observation import observe_execution_window
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligation,
     EffectObservation,
-    observe_execution_window,
 )
 from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,

@@ -23,13 +23,13 @@ from typing import Any
 
 from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
 from pyrung.core.analysis.pilot.advance import AdvanceIndex
+from pyrung.core.analysis.pilot.effect_observation import observe_execution_window
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObservation,
     EffectObservationSnapshot,
     EffectOccurrenceSelector,
     _instruction_path,
-    observe_execution_window,
     occurrence_selector,
     occurrence_snapshot,
 )

@@ -30,11 +30,13 @@ from pyrung.core.analysis.pilot.departure_state import (
     _checkpoint_index,
     _open_pending_departure,
 )
+from pyrung.core.analysis.pilot.effect_observation import (
+    fulfilled_expectation_observations,
+)
 from pyrung.core.analysis.pilot.effects import (
     EffectObservation,
     exact_first_departure_write,
     exact_last_landing_write,
-    fulfilled_expectation_observations,
     occurrence_snapshot,
 )
 from pyrung.core.analysis.pilot.execution import MotionKind

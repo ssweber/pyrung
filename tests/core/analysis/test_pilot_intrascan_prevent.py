@@ -8,11 +8,11 @@ from typing import Any
 import pytest
 
 from pyrung import PLC, Bool, Int, Program, call, copy, rung, subroutine
+from pyrung.core.analysis.pilot.effect_observation import observe_intrascan_expectation
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligation,
     EffectPolarity,
-    observe_intrascan_expectation,
     occurrence_selector,
 )
 from pyrung.core.analysis.pilot.intrascan import IntrascanQuestion, inspect_assertion_scan

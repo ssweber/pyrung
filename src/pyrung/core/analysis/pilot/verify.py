@@ -31,10 +31,12 @@ from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkReceipt,
     earned_work_is_useful_motion,
 )
-from pyrung.core.analysis.pilot.effects import (
+from pyrung.core.analysis.pilot.effect_observation import (
     effect_reached_consumer,
     fulfilled_expectation_observations,
     observe_execution_window,
+)
+from pyrung.core.analysis.pilot.effects import (
     promote_route_landing_observations,
 )
 from pyrung.core.analysis.pilot.execution import (
@@ -1544,10 +1546,7 @@ def _verify_gates(
 
     if (
         policy.pulse_horizon is PulseHorizon.CONSUMER_BOUNDARY
-        and (
-            trial.stop_receipt is None
-            or trial.stop_receipt.consumer_boundary_reached is not True
-        )
+        and (trial.stop_receipt is None or trial.stop_receipt.consumer_boundary_reached is not True)
         and not target_reached(
             trial.snap,
             ctx.target.tag,
@@ -1763,12 +1762,16 @@ def _verify_gates(
     configured_temporal_edge = bool(
         policy.local_progress is LocalProgressKind.TEMPORAL_EDGE and configured_actions
     )
-    if policy.local_progress in {
-        LocalProgressKind.TRACE_SETUP,
-        LocalProgressKind.REARM,
-        LocalProgressKind.TEMPORAL_SETUP,
-        LocalProgressKind.THEORY_CORRECTIVE,
-    } or configured_temporal_edge:
+    if (
+        policy.local_progress
+        in {
+            LocalProgressKind.TRACE_SETUP,
+            LocalProgressKind.REARM,
+            LocalProgressKind.TEMPORAL_SETUP,
+            LocalProgressKind.THEORY_CORRECTIVE,
+        }
+        or configured_temporal_edge
+    ):
         orientation = bearing.orientation
         trace_details = (
             orientation.candidates.trace.detail_by_pair if orientation is not None else {}
@@ -1837,8 +1840,7 @@ def _verify_gates(
         requirement_tags = frozenset(
             tag
             for requirement in progress_requirements
-            if (tag := getattr(getattr(requirement, "condition", None), "tag", None))
-            is not None
+            if (tag := getattr(getattr(requirement, "condition", None), "tag", None)) is not None
         )
         temporal_setup_consumed: tuple[_ActionPair, ...] = ()
         temporal_setup_requirements_observed = False
@@ -1849,10 +1851,7 @@ def _verify_gates(
             else tuple(applied_actions)
         )
         if (
-            (
-                policy.local_progress is LocalProgressKind.TEMPORAL_SETUP
-                or configured_temporal_edge
-            )
+            (policy.local_progress is LocalProgressKind.TEMPORAL_SETUP or configured_temporal_edge)
             and temporal_setup_actions
             and progress_requirements
         ):

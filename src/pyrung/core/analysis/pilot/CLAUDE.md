@@ -127,10 +127,10 @@ the current world.
 fork. All modes converge on `verify.py`:
 
 1. Avoid and banked-work gates run before target acceptance.
-2. `effects.py` observes an act's selected producer-to-consumer obligation over
-   the exact execution window. Proved effect violations are recorded before
-   generic spin/dead-end judgment; Phase 3 alone neither rejects them nor
-   creates action nogoods.
+2. `effect_observation.py` observes an act's selected producer-to-consumer
+   obligation over the exact execution window. Proved effect violations are
+   recorded before generic spin/dead-end judgment; Phase 3 alone neither
+   rejects them nor creates action nogoods.
 3. Spin, cycle, and dead-end gates reject locally provable failures.
 4. `outcome.py` classifies agency, bearing effect, target-relative progress,
    and frontier change. Passing makes the fork eligible for commit; it does not
@@ -406,10 +406,11 @@ this table only locates the owner.
 - Cold-start selected-path designation: `bootstrap.py::bootstrap_designations`;
   per-appeared-occurrence source, transaction, and consumer classification
   remains owned by `ScanRungWriteProjection.observe_appeared_handoff`
-- Selected steer obligation and window adapter: `effects.py`; `trace.py`
-  retains the exact selected path, `options.py` mints one immutable
-  `EffectExpectation`, and `ActPolicy` carries it unchanged. Required-shape
-  policy stays in `effects.py`; factual `observed_shape` and appeared-write
+- Selected steer obligation: `effects.py`; `trace.py` retains the exact
+  selected path, `options.py` mints one immutable `EffectExpectation`, and
+  `ActPolicy` carries it unchanged. Required-shape policy stays in `effects.py`.
+- Exact intrascan and execution-window effect interpretation:
+  `effect_observation.py`; factual `observed_shape` and appeared-write
   classification stay on `ScanRungWriteProjection`.
 - Exact assertion-scan observation and bounded diagnostic closure:
   `intrascan.py`. Its projection is the semantic oracle; diagnostic closure
@@ -632,8 +633,10 @@ Static reading and orientation:
 - `program_step.py` — one-producer counterfactual proof
 - `bootstrap.py` — conservative cold-start designation and factual projection
   observation adapter
-- `effects.py` — act-owned effect obligations, required-shape policy, exact
-  execution-window observation, and detached recording snapshots
+- `effects.py` — act-owned effect contracts, occurrence selection,
+  required-shape policy, observation promotion, and detached snapshots
+- `effect_observation.py` — exact intrascan and execution-window effect
+  observation, consumer crossing, and execution-owner binding
 - `conductivity.py` — Compass-owned read model of immutable occurrence-ordered
   effect history and progress between attempts
 - `intrascan.py` — exact assertion-scan observation, backward occurrence

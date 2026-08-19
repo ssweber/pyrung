@@ -19,10 +19,10 @@ from pyrung.core.analysis.pilot.advance import (
     build_advance_index,
 )
 from pyrung.core.analysis.pilot.api import pilot_events
+from pyrung.core.analysis.pilot.effect_observation import observe_execution_window
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligation,
-    observe_execution_window,
 )
 from pyrung.core.analysis.pilot.requirement_derivation import (
     _residualize_guard_requirement,

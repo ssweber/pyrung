@@ -12,11 +12,13 @@ from typing import Any
 
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.awaited_actions import sibling_producer_family
+from pyrung.core.analysis.pilot.effect_observation import (
+    fulfilled_expectation_observations,
+    observe_execution_window,
+)
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     exact_last_landing_write,
-    fulfilled_expectation_observations,
-    observe_execution_window,
     occurrence_snapshot,
     promote_terminal_target_observation,
 )
@@ -435,10 +437,7 @@ def recovery_anchor_program_step(
     if continuation.tip.world_key != frame.key:
         return None
     owner = execution_owner(state.work, state.work.state.scan_id)
-    if (
-        owner is None
-        or owner.epoch.reference != continuation.tip.execution_ref
-    ):
+    if owner is None or owner.epoch.reference != continuation.tip.execution_ref:
         return None
     expectation = _selected_terminal_target_expectation(frame, target, ctx)
     if expectation is None:

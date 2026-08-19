@@ -15,12 +15,12 @@ from pyrung.core.analysis.pilot.attempt_interpretation import (
     interpret_attempt,
     interpret_failed_requirements,
 )
+from pyrung.core.analysis.pilot.effect_observation import effect_reached_consumer
 from pyrung.core.analysis.pilot.effects import (
     ConsumerBoundary,
     EffectExpectation,
     EffectObservationSnapshot,
     displacement_consumer_read,
-    effect_reached_consumer,
     occurrence_selector,
     occurrence_snapshot,
 )
@@ -124,6 +124,7 @@ class _TheoryTransitionEvidence:
             tuple(configuration.identity for configuration in self.configurations),
         )
 
+
 def _theory_occurrence_identity(occurrence: Any) -> tuple[Any, ...]:
     return (
         occurrence.kind,
@@ -133,6 +134,7 @@ def _theory_occurrence_identity(occurrence: Any) -> tuple[Any, ...]:
         _semantic_key(occurrence.values),
         occurrence.enabled,
     )
+
 
 def _theory_boundary_from_checkpoint(checkpoint: _CausalCheckpoint) -> TheoryBoundaryIdentity:
     if checkpoint.key is None:
@@ -166,6 +168,7 @@ def _theory_boundary_from_checkpoint(checkpoint: _CausalCheckpoint) -> TheoryBou
         owner_ref=execution_ref,
     )
 
+
 def _theory_live_boundary(state: _PilotState) -> TheoryBoundaryIdentity:
     snapshot = dict(state.work.state.tags)
     key = (
@@ -191,6 +194,7 @@ def _theory_live_boundary(state: _PilotState) -> TheoryBoundaryIdentity:
         owner_ref=execution_ref,
     )
 
+
 def _theory_objective_snapshot(objective: BearingObjective) -> TheoryObjectiveSnapshot:
     target = objective.target
     predicate = _semantic_key(target.predicate) if target.predicate is not None else None
@@ -202,6 +206,7 @@ def _theory_objective_snapshot(objective: BearingObjective) -> TheoryObjectiveSn
         else None,
         frontier=tuple((tag, _semantic_key(value)) for tag, value in objective.frontier),
     )
+
 
 def _theory_obligation_snapshot(obligation: Any) -> TheoryObligationSnapshot:
     selector = _semantic_key(getattr(obligation, "occurrence_selector", None))
@@ -224,6 +229,7 @@ def _theory_obligation_snapshot(obligation: Any) -> TheoryObligationSnapshot:
         if getattr(obligation, "occurrence_selector", None) is not None
         else None,
     )
+
 
 def _theory_requirement_snapshot(requirement: ActiveRequirement) -> TheoryRequirementSnapshot:
     diagnostic = requirement.diagnostic_snapshot()
@@ -282,6 +288,7 @@ def _theory_requirement_snapshot(requirement: ActiveRequirement) -> TheoryRequir
         obstruction_occurrence=obstruction_identity,
     )
 
+
 def _theory_claim(
     expectation: EffectExpectation,
     objective: BearingObjective,
@@ -312,6 +319,7 @@ def _theory_claim(
         ),
     )
 
+
 def _theory_execution_evidence(
     execution: Any,
 ) -> tuple[
@@ -332,6 +340,7 @@ def _theory_execution_evidence(
         occurrence_evidence,
         snapshots,
     )
+
 
 def _execution_consumer_boundary(execution: _ExecutedAttempt) -> ConsumerBoundary | None:
     """Pass one unambiguous consumed occurrence into its transaction receipt."""
@@ -374,6 +383,7 @@ def _execution_consumer_boundary(execution: _ExecutedAttempt) -> ConsumerBoundar
             boundaries.append(boundary)
     return boundaries[0] if len(boundaries) == 1 else None
 
+
 def _merge_conductivity_observations(
     *groups: tuple[EffectObservationSnapshot, ...],
 ) -> tuple[EffectObservationSnapshot, ...]:
@@ -385,6 +395,7 @@ def _merge_conductivity_observations(
             if observation not in merged:
                 merged.append(observation)
     return tuple(merged)
+
 
 def _program_transaction_receipt(
     bearing: Bearing,
@@ -406,6 +417,7 @@ def _program_transaction_receipt(
         if observed is not None:
             return observed
     return None
+
 
 def _theory_transition_from_attempt(
     state: _PilotState,
@@ -630,6 +642,7 @@ def _theory_transition_from_attempt(
         producer_goal_id=(selected_goal_id),
     )
 
+
 def _theory_transition_after_monitor(
     state: _PilotState,
     observation: _TheoryTransitionEvidence | None,
@@ -790,6 +803,7 @@ def _theory_transition_after_monitor(
         frozenset(requirement.identity for requirement, _failed in exact_pairs),
     )
 
+
 def _frontier_within_consumer_stop(scope: Any) -> bool:
     """Whether the current frontier remains before its receipt-owned stop."""
 
@@ -801,6 +815,7 @@ def _frontier_within_consumer_stop(scope: Any) -> bool:
         and getattr(scope, "consumer_boundary", None) is not None
         and scope.frontier.scan_id <= stop.scan_id
     )
+
 
 def _failed_source_is_active_transaction(
     state: _PilotState,
@@ -826,6 +841,7 @@ def _failed_source_is_active_transaction(
         and failed.act_identity == scope.transaction_act_identity
         and _theory_boundary_from_checkpoint(failed.source_checkpoint) == scope.execution_source
     )
+
 
 def _retained_later_deadline_source(
     state: _PilotState,
@@ -857,6 +873,7 @@ def _retained_later_deadline_source(
     ):
         return boundaries[0]
     return observation.source
+
 
 def _retain_investigation_transaction_source(
     state: _PilotState,
@@ -897,6 +914,7 @@ def _retain_investigation_transaction_source(
             ),
         ),
     )
+
 
 def _theory_bootstrap_transition(
     state: _PilotState,

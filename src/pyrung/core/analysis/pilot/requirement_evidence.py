@@ -12,16 +12,18 @@ from typing import Any
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.advance import build_advance_index
 from pyrung.core.analysis.pilot.conductivity import charted_front_extends_current
+from pyrung.core.analysis.pilot.effect_observation import (
+    effect_reached_consumer,
+    fulfilled_expectation_observations,
+    observe_execution_window,
+    terminal_target_replay_scan_ids,
+)
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
-    effect_reached_consumer,
     expectation_from_writer,
-    fulfilled_expectation_observations,
     obligation_snapshot,
-    observe_execution_window,
     occurrence_snapshot,
     promote_terminal_target_observation,
-    terminal_target_replay_scan_ids,
 )
 from pyrung.core.analysis.pilot.execution import ExecutionReceipt, execution_owner
 from pyrung.core.analysis.pilot.intrascan import (
@@ -112,6 +114,7 @@ def _configured_input_names(plc: Any) -> frozenset[str]:
         return frozenset()
     return frozenset((*overrides.forces, *overrides.pending_patches))
 
+
 def _checkpoint_configured_inputs(checkpoint: Any) -> frozenset[str]:
     """Read checkpoint provenance, falling back for lightweight test stubs."""
 
@@ -120,6 +123,7 @@ def _checkpoint_configured_inputs(checkpoint: Any) -> frozenset[str]:
         return frozenset(configured)
     source_work = checkpoint.world.work
     return _configured_input_names(source_work)
+
 
 def _bound_operand_authorities(
     projection: Any,
@@ -160,6 +164,7 @@ def _bound_operand_authorities(
         )
     return result
 
+
 def _bind_guard_derivation_authority(
     derivation: Any,
     checkpoint: _CausalCheckpoint,
@@ -175,6 +180,7 @@ def _bind_guard_derivation_authority(
     )
     return replace(derivation, requirement=requirement)
 
+
 def _retain_active_requirement(
     state: _PilotState,
     requirement: ActiveRequirement | None,
@@ -188,6 +194,7 @@ def _retain_active_requirement(
         return False
     state.active_requirements.append(requirement)
     return True
+
 
 def _derive_bootstrap_requirements(
     state: _PilotState,
@@ -241,11 +248,13 @@ def _derive_bootstrap_requirements(
             )
         _retain_active_requirement(state, derivation.requirement)
 
+
 def _release_attempt_projections(attempt: _AttemptResult | None) -> None:
     """Release selected-scan replay evidence after its last consumer."""
 
     if attempt is not None:
         attempt.release_projections()
+
 
 def _attempt_productive_scan(executed: _ExecutedAttempt) -> int:
     """Return S1, the first physical scan owned by this ordinary bearing."""
@@ -264,6 +273,7 @@ def _attempt_productive_scan(executed: _ExecutedAttempt) -> int:
     if first_scan is not None:
         return first_scan
     return executed.assertion_scan
+
 
 def _derive_route_landing_requirements(
     attempt: _AttemptResult,
@@ -358,6 +368,7 @@ def _derive_route_landing_requirements(
         ):
             derived.append(derivation.requirement)
     return tuple(derived)
+
 
 def _derive_charted_intrascan_front(
     executed: _ExecutedAttempt,
@@ -504,6 +515,7 @@ def _derive_charted_intrascan_front(
         fallback_scan=projection.scan_id,
     )
 
+
 def _derive_attempt_requirements(
     attempt: _AttemptResult,
     state: _PilotState,
@@ -610,6 +622,7 @@ def _derive_attempt_requirements(
     )
     return report
 
+
 def _retain_intrascan_findings(
     report: IntrascanResult,
     state: _PilotState,
@@ -673,6 +686,7 @@ def _retain_intrascan_findings(
         if not any(current.identity == failed.identity for current in state.failed_effect_receipts):
             state.failed_effect_receipts.append(failed)
         _retain_active_requirement(state, derivation.requirement)
+
 
 def _derive_settled_target_requirements(
     trial: _AcceptedTrial,
@@ -792,6 +806,7 @@ def _derive_settled_target_requirements(
     )
     return report
 
+
 def _verified_progress_landing(
     trial: _AcceptedTrial,
 ) -> tuple[EffectExpectation, tuple[Any, ...]] | None:
@@ -865,6 +880,7 @@ def _verified_progress_landing(
     )
     fulfilled = fulfilled_expectation_observations(expectation, observations)
     return (expectation, fulfilled) if len(fulfilled) == len(expectation.obligations) else None
+
 
 def _retain_expectation_receipt(
     trial: _AcceptedTrial,
@@ -947,6 +963,7 @@ def _retain_expectation_receipt(
         if not any(current.identity == receipt.identity for current in state.expectation_receipts):
             state.expectation_receipts.append(receipt)
 
+
 def _disposable_requirement_state(
     state: _PilotState,
     checkpoint: _CausalCheckpoint,
@@ -973,6 +990,7 @@ def _disposable_requirement_state(
     )
     clone.load_world(checkpoint.world)
     return clone
+
 
 def _selected_terminal_target_expectation(
     frame: _IterationFrame,

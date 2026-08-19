@@ -46,7 +46,7 @@ from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkMovement,
     earned_work_is_useful_motion,
 )
-from pyrung.core.analysis.pilot.effects import (
+from pyrung.core.analysis.pilot.effect_observation import (
     fulfilled_expectation_observations,
 )
 from pyrung.core.analysis.pilot.outcome import (

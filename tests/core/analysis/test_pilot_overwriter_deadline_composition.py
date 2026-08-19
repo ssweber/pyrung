@@ -7,10 +7,10 @@ from types import SimpleNamespace
 from typing import cast
 
 from pyrung import PLC, Bool, Int, Program, copy, rung
+from pyrung.core.analysis.pilot.effect_observation import observe_execution_window
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligation,
-    observe_execution_window,
     occurrence_snapshot,
     promote_terminal_target_observation,
 )
