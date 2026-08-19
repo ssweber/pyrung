@@ -224,7 +224,6 @@ def _live_general_chart_completion_edge(
     producer = Producer(
         rung_index=edge.route.writer_node,
         kind="program",
-        guard_tags=frozenset(writer.condition_reads | writer.guard_reads),
         co_writes=frozenset(writer.writes - {effect_tag}),
         command_tag=effect_tag,
         command_value=effect_value,

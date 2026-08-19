@@ -327,7 +327,6 @@ class Producer:
 
     rung_index: int
     kind: str  # "operator" | "program" | "environmental" | "ambiguous"
-    guard_tags: frozenset[str]
     co_writes: frozenset[str]  # other command/request registers this rung writes
     command_tag: str
     command_value: Any
@@ -350,7 +349,7 @@ class ProducerFamily:
         return tuple(p for p in self.producers if p.kind == "program")
 
 
-def _classify_producer_guard(ctx: WalkContext, rung_idx: int) -> tuple[str, frozenset[str]]:
+def _classify_producer_guard(ctx: WalkContext, rung_idx: int) -> str:
     """Classify a producer rung's guard as operator / program / environmental.
 
     * a **steerable** guard tag (an operator button) ⇒ ``"operator"``;
@@ -362,12 +361,12 @@ def _classify_producer_guard(ctx: WalkContext, rung_idx: int) -> tuple[str, froz
     rn = ctx.pdg.rung_nodes[rung_idx]
     reads = frozenset(rn.condition_reads)
     if not reads:
-        return "ambiguous", reads
+        return "ambiguous"
     if reads & ctx.steerable:
-        return "operator", reads
+        return "operator"
     if any(ctx.pdg.tag_roles.get(t) == TagRole.INPUT for t in reads):
-        return "environmental", reads
-    return "program", reads
+        return "environmental"
+    return "program"
 
 
 def sibling_producer_family(
@@ -393,7 +392,7 @@ def sibling_producer_family(
             continue
         if not _values_match(producer_value(ctx, ro, command_tag), value):
             continue
-        kind, guard_tags = _classify_producer_guard(ctx, ri)
+        kind = _classify_producer_guard(ctx, ri)
         co_writes = frozenset(
             w
             for w in rn.writes
@@ -403,7 +402,6 @@ def sibling_producer_family(
             Producer(
                 rung_index=ri,
                 kind=kind,
-                guard_tags=guard_tags,
                 co_writes=co_writes,
                 command_tag=command_tag,
                 command_value=value,

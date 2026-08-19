@@ -719,7 +719,7 @@ def test_general_chart_only_competes_with_a_distinct_first_transition(
         static_edge,
         to_value=general_destination,
         action=None,
-        program_producers=(Producer(0, "program", frozenset(), frozenset(), "Effect", 1),),
+        program_producers=(Producer(0, "program", frozenset(), "Effect", 1),),
     )
     static = StaticPath("State", 9, role, 9, (static_edge,))
     general = StaticPath("State", 9, role, 9, (general_edge,))
@@ -1379,7 +1379,6 @@ def test_program_owned_sibling_preserves_an_automatic_edge() -> None:
     producer = Producer(
         rung_index=7,
         kind="program",
-        guard_tags=frozenset({"FinishDone"}),
         co_writes=frozenset(),
         command_tag="Complete",
         command_value=True,
@@ -1411,7 +1410,6 @@ def test_completion_edge_records_its_bearing_action_edge_does_not() -> None:
     producer = Producer(
         rung_index=7,
         kind="program",
-        guard_tags=frozenset({"Tmr_Done"}),
         co_writes=frozenset(),
         command_tag="Complete",
         command_value=True,
@@ -1927,7 +1925,6 @@ def test_current_program_input_precedes_unavailable_outer_trace_leaf() -> None:
     producer = Producer(
         0,
         "program",
-        frozenset({current.name}),
         frozenset(),
         first_effect.name,
         1,
@@ -2212,7 +2209,7 @@ def test_program_owned_coasts_promise_command_producer_only_when_observed(monkey
         with rung(last_guard == 2, command == 7, first_guard == 1, command == 7):
             copy(17, state_tag)
     pdg = build_program_graph(program)
-    producer = Producer(0, "program", frozenset({automatic.name}), frozenset(), command.name, 7)
+    producer = Producer(0, "program", frozenset(), command.name, 7)
     role = PipelineRoles(state_tag.name)
     route = TransitionRoute(
         destination_tag=state_tag.name,
@@ -2334,7 +2331,6 @@ def test_observed_route_writer_keeps_its_direct_expectation(monkeypatch) -> None
     producer = Producer(
         0,
         "program",
-        frozenset({state_tag.name, ready.name}),
         frozenset(),
         state_tag.name,
         60,

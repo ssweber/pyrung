@@ -177,7 +177,6 @@ def test_program_step_keeps_only_the_current_alternative_to_its_exact_producer()
     producer = Producer(
         rung_index=next(iter(world.pdg.writers_of[command.name])),
         kind="program",
-        guard_tags=frozenset((state.name, phase.name)),
         co_writes=frozenset(),
         command_tag=command.name,
         command_value=10,
@@ -209,7 +208,6 @@ def test_spent_oneshot_clobber_is_not_reported_as_a_live_program_input() -> None
             if world.pdg.rung_nodes[index].condition_reads == frozenset((start.name,))
         ),
         kind="program",
-        guard_tags=frozenset((start.name,)),
         co_writes=frozenset(),
         command_tag=state.name,
         command_value=1,
@@ -296,7 +294,6 @@ def test_structural_channel_motion_after_the_exact_producer_is_observed_once() -
     producer = Producer(
         rung_index=min(world.pdg.writers_of[state.name]),
         kind="program",
-        guard_tags=frozenset((state.name,)),
         co_writes=frozenset(),
         command_tag=state.name,
         command_value=80,
@@ -326,7 +323,6 @@ def test_selected_chart_channel_is_structural_without_opaque_role_discovery() ->
     producer = Producer(
         rung_index=min(world.pdg.writers_of[state.name]),
         kind="program",
-        guard_tags=frozenset((state.name,)),
         co_writes=frozenset(),
         command_tag=state.name,
         command_value=60,
@@ -361,7 +357,6 @@ def test_structural_hazard_does_not_replace_an_unmet_selected_input() -> None:
     producer = Producer(
         rung_index=min(world.pdg.writers_of[state.name]),
         kind="program",
-        guard_tags=frozenset((state.name, input_ready.name)),
         co_writes=frozenset(),
         command_tag=state.name,
         command_value=41,
@@ -400,7 +395,6 @@ def test_projection_traces_the_exact_producer_occurrence_view() -> None:
     producer = Producer(
         rung_index=rung_index,
         kind="program",
-        guard_tags=frozenset((gate.name,)),
         co_writes=frozenset(),
         command_tag=command.name,
         command_value=1,
@@ -434,7 +428,6 @@ def test_repeated_producer_occurrences_decline_instead_of_using_the_last_view() 
     producer = Producer(
         rung_index=rung_index,
         kind="program",
-        guard_tags=frozenset(),
         co_writes=frozenset(),
         command_tag=command.name,
         command_value=1,
@@ -472,7 +465,6 @@ def test_unrelated_channel_motion_does_not_accept_a_bypassed_producer_input() ->
     producer = Producer(
         rung_index=rung_index,
         kind="program",
-        guard_tags=frozenset((state.name, supply.name)),
         co_writes=frozenset(),
         command_tag=command.name,
         command_value=10,
@@ -513,7 +505,6 @@ def test_pipeline_motion_interrupts_an_owned_boundary_without_external_input() -
     producer = Producer(
         rung_index=next(iter(world.pdg.writers_of[command.name])),
         kind="program",
-        guard_tags=frozenset((timer.Done.name,)),
         co_writes=frozenset(),
         command_tag=command.name,
         command_value=10,
@@ -566,7 +557,6 @@ def _sequencer_producer(world, command):
     return Producer(
         rung_index=next(iter(world.pdg.writers_of[command.name])),
         kind="program",
-        guard_tags=frozenset(("SeqGate",)),
         co_writes=frozenset(),
         command_tag=command.name,
         command_value=10,
@@ -632,7 +622,6 @@ def test_input_must_reach_the_exact_producer_not_merely_move_its_channel() -> No
     producer = Producer(
         rung_index=next(iter(world.pdg.writers_of[command.name])),
         kind="program",
-        guard_tags=frozenset((state.name, supply.name)),
         co_writes=frozenset(),
         command_tag=command.name,
         command_value=10,
