@@ -797,10 +797,10 @@ def test_route_conflict_set_alias_intersection_semantics():
 
     ``HiLo=True`` implies ``Mode in {3, 5}``.  Beside a sibling pin on ``Mode``:
     ``Mode=1`` is disjoint from ``{3, 5}`` → conflict; ``Mode=3`` intersects it →
-    no conflict. This is the set-intersection test :func:`_route_conflicts`
+    no conflict. This is the set-intersection test :func:`route_conflicts`
     performs: empty intersection means contradiction."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import _route_conflicts
+    from pyrung.core.analysis.pilot.route_judgment import route_conflicts
     from pyrung.core.analysis.pilot.trace_tree import TraceNode
 
     Mode = Int("Mode")
@@ -812,11 +812,11 @@ def test_route_conflict_set_alias_intersection_semantics():
 
     # Needed value (Mode=1) falls outside the flag's implied set {3, 5}.
     clashing = TraceNode("Target", True, children=[TraceNode("HiLo", True), TraceNode("Mode", 1)])
-    assert {conflict.tag for conflict in _route_conflicts(clashing, pdg, prog)} == {"Mode"}
+    assert {conflict.tag for conflict in route_conflicts(clashing, pdg, prog)} == {"Mode"}
 
     # Needed value (Mode=3) is inside the set — the flag is satisfiable alongside it.
     compatible = TraceNode("Target", True, children=[TraceNode("HiLo", True), TraceNode("Mode", 3)])
-    assert not _route_conflicts(compatible, pdg, prog)
+    assert not route_conflicts(compatible, pdg, prog)
 
 
 def test_route_conflicts_distinguish_value_pairs_on_the_same_tag():
@@ -829,7 +829,7 @@ def test_route_conflicts_distinguish_value_pairs_on_the_same_tag():
     witnesses subtract only the genuinely identical ``0 ↔ 1`` pair.
     """
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import _route_conflicts
+    from pyrung.core.analysis.pilot.route_judgment import route_conflicts
     from pyrung.core.analysis.pilot.trace_tree import TraceNode
 
     Mode = Int("WitnessMode")
@@ -847,8 +847,8 @@ def test_route_conflicts_distinguish_value_pairs_on_the_same_tag():
         children=[*common, TraceNode("WitnessManualMode", True)],
     )
 
-    production_conflicts = _route_conflicts(production, pdg, prog)
-    manual_conflicts = _route_conflicts(manual, pdg, prog)
+    production_conflicts = route_conflicts(production, pdg, prog)
+    manual_conflicts = route_conflicts(manual, pdg, prog)
     shared = production_conflicts & manual_conflicts
     manual_only = manual_conflicts - shared
 

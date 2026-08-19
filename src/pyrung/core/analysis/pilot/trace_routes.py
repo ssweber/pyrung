@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+import pyrung.core.analysis.pilot.route_judgment as _route_judgment
 import pyrung.core.analysis.pilot.trace as _trace
 import pyrung.core.analysis.pilot.trace_read as _trace_read
 from pyrung.core.analysis.pdg import resolve_rung
@@ -342,7 +343,9 @@ def rank_trace_choices(
             steerable,
             constraints=replace(read, route=choice, avoid_pred=None),
         )
-        if read.avoid_pred is not None and _trace._route_forces([tree], snapshot, read.avoid_pred):
+        if read.avoid_pred is not None and _route_judgment.route_forces(
+            [tree], snapshot, read.avoid_pred
+        ):
             continue
         traced.append((choice, tree))
     if not traced:
@@ -356,7 +359,10 @@ def rank_trace_choices(
     # never be satisfied — yet an already-held gate makes such a route look cheap
     # to the trace scorer. Witnesses must not collapse to tag names: common
     # ``Mode 0 ↔ 1`` sequencing must not hide Manual's distinct ``Mode 3 ↔ 1``.
-    route_conflicts = [frozenset(_trace._route_conflicts(tree, pdg, program)) for _choice, tree in traced]
+    route_conflicts = [
+        frozenset(_route_judgment.route_conflicts(tree, pdg, program))
+        for _choice, tree in traced
+    ]
     shared_conflicts = frozenset.intersection(*route_conflicts) if route_conflicts else frozenset()
 
     def rank(index: int) -> tuple[Any, ...]:
@@ -368,7 +374,7 @@ def rank_trace_choices(
         return (
             unique_conflicts,
             0 if eligible else 1,
-            _trace._trace_score([tree], pdg),
+            _route_judgment.trace_score([tree], pdg),
             route_rung_order(choice),
         )
 

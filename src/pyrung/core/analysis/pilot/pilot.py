@@ -79,6 +79,7 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
     _derive_settled_target_requirements,
     _release_attempt_projections,
 )
+from pyrung.core.analysis.pilot.route_judgment import route_forced_names
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.theory_evidence import (
     _theory_boundary_from_checkpoint,
@@ -91,11 +92,7 @@ from pyrung.core.analysis.pilot.theory_reducer import (
     RecordIntrascanTraceback,
     RecordIntrascanTracebackFrontier,
 )
-from pyrung.core.analysis.pilot.trace import (
-    _route_forced_names,
-    target_reached,
-    trace_back,
-)
+from pyrung.core.analysis.pilot.trace import target_reached, trace_back
 from pyrung.core.analysis.pilot.trace_read import (
     TraceChoice,
     TraceReadConstraints,
@@ -240,7 +237,7 @@ def _avoid_route_names(frame: _IterationFrame, ctx: _PilotContext) -> tuple[str,
             ctx.steerable,
             constraints=replace(read, route=ch),
         )
-        forced = _route_forced_names([tree], snap, avoid)
+        forced = route_forced_names([tree], snap, avoid)
         if forced:
             names.update(forced)
             forced_any = True

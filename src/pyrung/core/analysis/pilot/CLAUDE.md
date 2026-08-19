@@ -627,6 +627,8 @@ Static reading and orientation:
   choices, and unsupported-construct contract
 - `trace_tree.py` — trace result records and structural/frontier views
 - `trace_routes.py` — complete route enumeration and ranking policy
+- `route_judgment.py` — completed-route dead-end, avoidance, scoring, and
+  conflicting-demand judgment
 - `writer_selection.py` — program-writer resolution, classification, and rank
 - `program_facts.py` — static reference, edge, resting-value, and transient-rest
   facts used during drive setup

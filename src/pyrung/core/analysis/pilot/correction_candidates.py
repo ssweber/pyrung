@@ -30,10 +30,8 @@ from pyrung.core.analysis.pilot.overlay import (
     _target_unresolved_condition,
     _union_conditions,
 )
-from pyrung.core.analysis.pilot.trace import (
-    _route_has_no_dead_end,
-    trace_back,
-)
+from pyrung.core.analysis.pilot.route_judgment import route_has_no_dead_end
+from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.pilot.trace_read import UnsupportedConstruct
 from pyrung.core.analysis.pilot.trace_routes import enumerate_trace_choices
 from pyrung.core.analysis.pilot.world_key import _rung_identity, _semantic_key
@@ -640,7 +638,7 @@ def _continuation_with_active_correction(
                 )
             except UnsupportedConstruct:
                 return Unknown("target trace contains an unsupported construct")
-            if not _route_has_no_dead_end([tree]):
+            if not route_has_no_dead_end([tree]):
                 frontier = tuple(
                     (leaf.tag, leaf.value) for leaf in tree.leaves() if not leaf.satisfied
                 )

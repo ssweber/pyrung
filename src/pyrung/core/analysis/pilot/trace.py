@@ -31,6 +31,7 @@ from itertools import product
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import pyrung.core.analysis.pilot.availability as _availability
+import pyrung.core.analysis.pilot.route_judgment as _route_judgment
 import pyrung.core.analysis.pilot.trace_read as _trace_read
 from pyrung.core.analysis.pdg import TagRole, resolve_rung
 from pyrung.core.analysis.pilot.advance import demand_holds
@@ -728,7 +729,7 @@ def _trace_crossing_branches(
         selections = product(*choices_by_constraint) if choices_by_constraint else ((),)
         for selection in selections:
             nodes = tuple(node for choice in selection for node in choice)
-            if not nodes or not _route_has_no_dead_end(list(nodes)):
+            if not nodes or not _route_judgment.route_has_no_dead_end(list(nodes)):
                 continue
             details: list[TraceAction] = []
             by_tag: dict[str, Any] = {}
@@ -944,14 +945,14 @@ def _select_call_gate(
     alternatives: list[_TraceAlternative[_CallGateTrace]] = []
     for call_gate in call_gates:
         nodes = list(call_gate.nodes)
-        has_no_dead_end = _route_has_no_dead_end(nodes)
+        has_no_dead_end = _route_judgment.route_has_no_dead_end(nodes)
         alternatives.append(
             _trace_alternative(
                 choice=call_gate,
                 nodes=nodes,
                 rank=(
                     0 if has_no_dead_end else 1,
-                    *_trace_score(nodes, env.pdg),
+                    *_route_judgment.trace_score(nodes, env.pdg),
                 ),
                 env=env,
             )
@@ -1142,7 +1143,11 @@ def _advance_frontier(
             for node in establish_nodes
             for leaf in node.leaves()
         )
-        if scalar_coast and not requires_action and _route_has_no_dead_end(establish_nodes):
+        if (
+            scalar_coast
+            and not requires_action
+            and _route_judgment.route_has_no_dead_end(establish_nodes)
+        ):
             # The instruction is not active yet, but its owned program stage
             # will establish itself without an external act. Keep the future
             # scalar boundary: scanning/coasting is the only useful operation.
@@ -1253,37 +1258,6 @@ def _scope_ref(rung_index: int, rung_node: Any) -> str:
     return f"{scope}:R{rung_index}"
 
 
-def _is_dead_end_leaf(leaf: TraceNode) -> bool:
-    """A terminal the backward walk could not resolve to any action.
-
-    Not satisfied (does not hold now), not steerable (PILOT can't set it), not
-    self-advancing (no timer/counter to coast), not pipeline-internal, not a
-    relational frontier — and childless (no further writer to chase).  The
-    canonical case is ``InitDone == False`` once init has latched it True: no
-    writer produces ``False``, so a route that needs it is dead.
-    """
-    return (
-        not leaf.children
-        and not leaf.satisfied
-        and not leaf.is_steerable
-        and leaf.advance is None
-        and not leaf.pipeline_internal
-        and not leaf.relational
-    )
-
-
-def _route_has_no_dead_end(nodes: list[TraceNode]) -> bool:
-    """Whether a route has no unresolved leaf that PILOT cannot act on.
-
-    A route is an AND of prerequisites; one dead-end leaf (see
-    :func:`_is_dead_end_leaf`) means the route has a dead end. This is the
-    filter to apply *before* :func:`_trace_score`, which only ranks: a dead route
-    has no steerable leaves and therefore the cheapest (zero) downstream
-    reach, so scoring alone would always prefer it over a live one.
-    """
-    return not any(_is_dead_end_leaf(leaf) for node in nodes for leaf in node.leaves())
-
-
 def _route_actions_rejected(nodes: list[TraceNode], env: _TraceEnv) -> bool:
     """Whether this alternative is the exact disproved singleton artifact.
 
@@ -1299,16 +1273,6 @@ def _route_actions_rejected(nodes: list[TraceNode], env: _TraceEnv) -> bool:
     # Multiple leaves describe a different, still-untested joint artifact.
     # Independent singleton failures cannot be composed into its rejection.
     return len(actions) == 1 and actions[0] in env.rejected_actions
-
-
-def _trace_score(nodes: list[TraceNode], pdg: ProgramGraph) -> tuple[int, int, int]:
-    """Rank alternative trace routes: low downstream reach, few pivots, few leaves."""
-    steerable = [leaf for node in nodes for leaf in node.leaves() if leaf.is_steerable]
-    downstream_reach = sum(
-        len(pdg.downstream_slice(leaf.tag, follow_calls=True)) for leaf in steerable
-    )
-    pivots = sum(node.unsatisfied_count() for node in nodes)
-    return downstream_reach, pivots, len(steerable)
 
 
 @dataclass(frozen=True)
@@ -1414,9 +1378,9 @@ def _trace_alternative(
         violates_avoid=(
             env.avoid_pred is not None
             and bool(nodes)
-            and _route_forces(nodes, env.snapshot, env.avoid_pred)
+            and _route_judgment.route_forces(nodes, env.snapshot, env.avoid_pred)
         ),
-        has_no_dead_end=_route_has_no_dead_end(nodes),
+        has_no_dead_end=_route_judgment.route_has_no_dead_end(nodes),
         exact_action_rejected=_route_actions_rejected(nodes, env),
     )
 
@@ -1467,168 +1431,6 @@ def _select_trace_alternative(
         chosen=None,
         blocked_alternative=baseline,
     )
-
-
-def _route_forces(nodes: list[TraceNode], snapshot: dict[str, Any], pred: Any) -> bool:
-    """Whether the concrete demands across *nodes* satisfy *pred*.
-
-    Overlays each node's ``(tag, value)`` (skipping relational representatives
-    and valueless nodes) onto the snapshot and evaluates the predicate.  Shared
-    by the OR-arm avoid skip (an arm whose assignment forces the avoided
-    condition is dropped from selection) and route avoid-pruning (a choice whose
-    route forces it is pruned before the ambiguity check) — ``Or(Manual, Auto)``
-    with ``avoid=Manual`` picks the ``Auto``/``Start`` route instead of only
-    vetoing ``Manual`` at verify time.  Caller guards ``pred is not None``.
-    """
-    overlay = dict(snapshot)
-    for root in nodes:
-        for n in root.iter_nodes():
-            if n.relational or n.value is None:
-                continue
-            overlay[n.tag] = n.value
-    try:
-        return bool(pred(overlay))
-    except Exception:
-        return False
-
-
-def _route_forced_names(
-    nodes: list[TraceNode], snapshot: dict[str, Any], avoid: Any
-) -> tuple[str, ...]:
-    """The avoid-condition names *nodes*' concrete demands satisfy.
-
-    Same overlay as :func:`_route_forces`, but returns the violated member names
-    (via ``avoid.violated``) so a route-pruned decline can name what excluded it.
-    A bare callable avoid yields a generic name.
-    """
-    overlay = dict(snapshot)
-    for root in nodes:
-        for n in root.iter_nodes():
-            if n.relational or n.value is None:
-                continue
-            overlay[n.tag] = n.value
-    violated = getattr(avoid, "violated", None)
-    if violated is not None:
-        try:
-            return tuple(violated(overlay))
-        except Exception:
-            return ()
-    try:
-        return ("avoided condition",) if bool(avoid(overlay)) else ()
-    except Exception:
-        return ()
-
-
-def _value_sets_intersect(a: Any, b: Any) -> bool:
-    """Whether any value in *a* loosely matches any value in *b* (``_values_match``).
-
-    Small operands (channel-value sets, singleton pins), so the pairwise sweep
-    is cheap and preserves ``1 == True`` semantics that a raw set intersection
-    would only get by luck of Python hashing.
-    """
-    return any(_values_match(x, y) for x in a for y in b)
-
-
-@dataclass(frozen=True, order=True)
-class _RouteConflictPin:
-    """One stable side of a route-conflict witness.
-
-    Trace nodes are rebuilt independently for every route, so object identity
-    cannot say whether two routes carry the same conflict.  Values and source
-    metadata can: the normalized value keys preserve type plus representation,
-    while ``source`` identifies the original trace demand rather than the
-    channel alias it was reduced to.
-    """
-
-    values: tuple[str, ...]
-    source: tuple[str, int, tuple[str, ...]]
-
-
-@dataclass(frozen=True, order=True)
-class _RouteConflict:
-    """A concrete pair of incompatible demands on one channel tag."""
-
-    tag: str
-    left: _RouteConflictPin
-    right: _RouteConflictPin
-
-
-def _route_conflict_pin(values: Any, node: TraceNode) -> _RouteConflictPin:
-    """Canonical, hashable identity for one conflict demand."""
-    value_keys = tuple(
-        sorted(f"{type(value).__module__}.{type(value).__qualname__}:{value!r}" for value in values)
-    )
-    return _RouteConflictPin(
-        values=value_keys,
-        source=(
-            node.tag,
-            node.writer_rung if node.writer_rung is not None else -1,
-            node.provenance,
-        ),
-    )
-
-
-def _route_conflicts(tree: TraceNode, pdg: ProgramGraph, program: Any) -> frozenset[_RouteConflict]:
-    """Incompatible demand pairs in *tree* that must hold together.
-
-    Every node in a resolved trace tree is a required condition (Or-arms are
-    already chosen), so two nodes pinning the same tag to disjoint value sets
-    clash **unless** one is an ancestor of the other — that is temporal
-    sequencing (reach ``v1`` first, then ``v2``), not a
-    simultaneous contradiction.  A plain node pins its scalar value (a singleton
-    set); a mode flag is normalized through :func:`_equality_gated_coil` into the
-    channel-register value *set* it implies, so a manual-mode caller gate
-    (``S_ManualMode=True`` → ``S_UnitModeCurrent ∈ {3}``) clashes with a body that
-    needs ``S_UnitModeCurrent=1``, while a set-valued alias (``Reg ∈ {3, 5}``)
-    only clashes when the needed value falls *outside* the set.
-
-    This is a *relative* signal, not an absolute feasibility verdict: sibling
-    flags can also encode an SFC that legitimately sequences one register
-    (``S_StateCurrent`` 3→6 appears here as ``S_Starting`` beside ``S_Execute``).
-    The ranker discounts an identical conflict *witness* shared by **every**
-    route as inherent to the goal and penalizes only route-unique witnesses.
-    Witness identity includes both incompatible value sets and their trace
-    sources.  Comparing only the tag name loses the distinction between common
-    sequencing noise (``Mode 0 ↔ 1``) and a route's own contradiction
-    (``ManualMode`` implying ``Mode 3`` beside a body needing ``Mode 1``).
-    """
-    entries: list[tuple[str, Any, TraceNode, int, frozenset[int]]] = []
-
-    def walk(node: TraceNode, anc: frozenset[int]) -> None:
-        if not (node.relational or node.value is None):
-            alias = _availability._equality_gated_coil(node.tag, node.value, pdg, program)
-            if alias is not None:
-                demand_tag, demand_vals = alias
-            else:
-                demand_tag, demand_vals = node.tag, (node.value,)
-            entries.append((demand_tag, demand_vals, node, id(node), anc))
-        child_anc = anc | {id(node)}
-        for child in node.children:
-            walk(child, child_anc)
-
-    walk(tree, frozenset())
-
-    by_tag: dict[str, list[tuple[Any, TraceNode, int, frozenset[int]]]] = {}
-    for tag, vals, node, nid, anc in entries:
-        by_tag.setdefault(tag, []).append((vals, node, nid, anc))
-
-    conflicts: set[_RouteConflict] = set()
-    for tag, pins in by_tag.items():
-        if len(pins) < 2:
-            continue  # single pin — no clash possible
-        for i in range(len(pins)):
-            vi, node_i, ni, ai = pins[i]
-            for j in range(i + 1, len(pins)):
-                vj, node_j, nj, aj = pins[j]
-                if _value_sets_intersect(vi, vj):
-                    continue  # a shared value satisfies both pins — compatible
-                if nj in ai or ni in aj:
-                    continue  # ancestor/descendant → temporal, not a clash
-                left, right = sorted(
-                    (_route_conflict_pin(vi, node_i), _route_conflict_pin(vj, node_j))
-                )
-                conflicts.add(_RouteConflict(tag=tag, left=left, right=right))
-    return frozenset(conflicts)
 
 
 def _trace_expression(
@@ -2343,7 +2145,9 @@ def _trace_back(
         # decide this writer's guard (a genuinely-live word / undecidable term)
         # and the backward walk ended at a dead end. Skiff may probe the marked
         # frontier; options keeps it open as unreadable work.
-        attempt_node.live_guard = guard_punted and not _route_has_no_dead_end([attempt_node])
+        attempt_node.live_guard = guard_punted and not _route_judgment.route_has_no_dead_end(
+            [attempt_node]
+        )
 
         attempt = writer_build.complete()
         alternative = _trace_alternative(
@@ -2745,14 +2549,14 @@ def _select_table_enablement_value(
     alternatives: list[_TraceAlternative[TraceNode]] = []
     for arm in arms:
         nodes = [arm]
-        has_no_dead_end = _route_has_no_dead_end(nodes)
+        has_no_dead_end = _route_judgment.route_has_no_dead_end(nodes)
         alternatives.append(
             _trace_alternative(
                 choice=arm,
                 nodes=nodes,
                 rank=(
                     0 if has_no_dead_end else 1,
-                    *_trace_score(nodes, env.pdg),
+                    *_route_judgment.trace_score(nodes, env.pdg),
                 ),
                 env=env,
             )

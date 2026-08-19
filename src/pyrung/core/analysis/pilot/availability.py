@@ -163,7 +163,7 @@ def _equality_gated_coil(
     register, more than one register, or nothing invertible (an inequality- or
     live-word-only gate — :func:`_channel_constraint` returns ``None``) makes
     the whole flag un-aliasable: return ``None`` and never fabricate a channel
-    constraint.  Lets :func:`_route_conflicts` catch a caller-gate mode that
+    constraint. Lets :func:`route_judgment.route_conflicts` catch a caller-gate mode that
     contradicts the mode the body requires, even across differently named tags.
     """
     from pyrung.core.analysis.pilot.static_expressions import _channel_constraint
