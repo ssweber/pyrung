@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pyrung.core.analysis.pdg import TagRole, resolve_rung
-from pyrung.core.analysis.pilot.types import WalkContext
+from pyrung.core.analysis.pilot.trace_read import WalkContext
 from pyrung.core.analysis.simplified import _sp_to_expr
 from pyrung.core.analysis.sp_values import (
     _extract_condition_values,

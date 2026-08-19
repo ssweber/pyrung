@@ -612,8 +612,8 @@ Orchestration:
 - `world.py` — persistent executable World plus trend, causal, and recovery
   rollback checkpoints
 - `recording.py` — event/plan rendering; no drive decisions
-- `types.py` — mutable drive state plus remaining cross-module records and
-  protocols; execution-owned findings do not live here
+- `types.py` — mutable drive state plus the remaining drive-owned records;
+  execution, world, trace-read, and navigation contracts do not live here
 - `__init__.py` — package exports
 - `physical.py` — harness install, feedback-tag exclusion
 - `multitarget.py` — multi-target incompatibility proof, ordering
@@ -621,8 +621,8 @@ Orchestration:
 Static reading and orientation:
 
 - `trace.py` — backward-recursion engine for one constrained trace read
-- `trace_read.py` — immutable trace requests, route choices, and unsupported
-  construct contract
+- `trace_read.py` — immutable trace requests, read-only World views, route
+  choices, and unsupported-construct contract
 - `trace_tree.py` — trace result records and structural/frontier views
 - `trace_routes.py` — complete route enumeration and ranking policy
 - `writer_selection.py` — program-writer resolution, classification, and rank
@@ -675,7 +675,8 @@ Static reading and orientation:
   worlds, forks, PilotRungs, routes, or callables
 - `theory_reducer.py` — typed WorkingTheory lifecycle commands, validation,
   and pure state reduction
-- `navigation_contracts.py` — immutable navigation contracts
+- `navigation_contracts.py` — immutable navigation contracts and the plain
+  action-pair value shared by their consumers
 
 Execution and observation:
 

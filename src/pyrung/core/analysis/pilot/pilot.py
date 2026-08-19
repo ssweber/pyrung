@@ -58,6 +58,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationWorld,
     ProgramScan,
     Stuck,
+    _ActionPair,
 )
 from pyrung.core.analysis.pilot.progress import (
     _monitor_trend,
@@ -105,7 +106,6 @@ from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     _AcceptedTrial,
-    _ActionPair,
     _IterationFrame,
     _PilotContext,
     _PilotState,

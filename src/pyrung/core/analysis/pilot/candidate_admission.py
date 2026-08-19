@@ -23,6 +23,7 @@ from pyrung.core.analysis.pilot.effects import expectation_from_selected_path
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ChannelHeading,
     CrossingFidelity,
+    _ActionPair,
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
@@ -33,7 +34,6 @@ from pyrung.core.analysis.pilot.route_options import (
     _oscillating_rungs,
 )
 from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
-from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.pilot.wait_options import _boundary_heading
 from pyrung.core.analysis.sp_values import _values_match
 

@@ -35,6 +35,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     BearingObjective,
     IntrascanPulse,
     ProgramScan,
+    _ActionPair,
     act_identity,
 )
 from pyrung.core.analysis.pilot.program_step import _program_step_from_bearing
@@ -50,7 +51,6 @@ from pyrung.core.analysis.pilot.requirements import (
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     _AcceptedTrial,
-    _ActionPair,
     _AttemptResult,
     _ExecutedAttempt,
     _PilotContext,

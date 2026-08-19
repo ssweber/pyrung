@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal
 
 from pyrsistent import PVector, pvector
 
@@ -46,6 +46,7 @@ if TYPE_CHECKING:
         ActPolicy,
         Bearing,
         TargetSpec,
+        _ActionPair,
     )
     from pyrung.core.analysis.pilot.outcome import TrialAssessment
     from pyrung.core.analysis.pilot.overlay import PilotRung
@@ -63,9 +64,6 @@ if TYPE_CHECKING:
 # Type aliases
 # ---------------------------------------------------------------------------
 
-_ActionPair = tuple[str, Any]
-
-
 @dataclass(frozen=True)
 class RevisitCredential:
     """Consumable identity of one policy-admissible revisit transition.
@@ -79,72 +77,6 @@ class RevisitCredential:
     source_world: _StateKey
     act: tuple[Any, ...]
     transition: tuple[Any, ...]
-
-
-# ---------------------------------------------------------------------------
-# WalkContext — the read-side seam of a backward trace
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
-class WalkContext(Protocol):
-    """What a read-side capability may consume from one backward trace.
-
-    ``trace.py``'s ``_TraceEnv`` contains all constants threaded through one
-    trace. A separate static reader consumes only the world-describing subset,
-    not route or recursion controls such as writer locks, ``avoid_pred``,
-    ``guard_memo``, ``max_depth``, ``harness``, or ``clear_only``.
-    This protocol defines that subset:
-
-    - ``snapshot`` — the live register frame guards are evaluated against;
-    - ``pdg`` — the :class:`ProgramGraph` (``writers_of`` / ``rung_nodes`` / ``tags``);
-    - ``program`` — the Program (``resolve_rung``, instruction bodies);
-    - ``steerable`` — the free input tags a reader may treat as available levers;
-    - ``opaque_loop`` — the pinned pipeline registers a reader folds into its own
-      ``current_tags`` (``{target} | opaque_loop``);
-    - ``prior`` — the prover-derived ``DomainPrior`` (``nd_domains`` / ``func_deps``)
-      an *enumerating* reader needs for complete-domain soundness.
-
-    ``_TraceEnv`` satisfies this protocol structurally, so callers pass it
-    without an adapter. Keeping the protocol outside ``trace.py`` lets static
-    read capabilities depend on a narrow interface without importing the trace
-    recursion engine.
-    """
-
-    @property
-    def snapshot(self) -> Mapping[str, Any]: ...
-
-    @property
-    def pdg(self) -> ProgramGraph: ...
-
-    @property
-    def program(self) -> Any: ...
-
-    @property
-    def steerable(self) -> frozenset[str]: ...
-
-    @property
-    def opaque_loop(self) -> frozenset[str]: ...
-
-    @property
-    def prior(self) -> DomainPrior | None: ...
-
-
-@dataclass(frozen=True)
-class WorldView:
-    """Minimal :class:`WalkContext` assembled from one live frame."""
-
-    snapshot: Mapping[str, Any]
-    pdg: Any
-    program: Any
-    steerable: frozenset[str]
-    opaque_loop: frozenset[str]
-    prior: Any = None
-    clear_only: frozenset[str] = frozenset()
-    pipeline_internal_tags: frozenset[str] = frozenset()
-    pipeline_roles: tuple[Any, ...] = ()
-    avoid_pred: Any = None
-    harness: Any = None
 
 
 # ---------------------------------------------------------------------------

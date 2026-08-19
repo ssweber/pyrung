@@ -64,6 +64,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationWorld,
     ProgramScan,
     TargetSpec,
+    _ActionPair,
     act_identity,
 )
 from pyrung.core.analysis.pilot.outcome import (
@@ -87,7 +88,6 @@ from pyrung.core.analysis.pilot.types import (
     RevisitCredential,
     TargetReached,
     _AcceptedTrial,
-    _ActionPair,
     _AttemptResult,
     _ExecutedAttempt,
     _PulseState,

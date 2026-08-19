@@ -2266,7 +2266,7 @@ def test_trace_env_satisfies_walk_context_seam():
     module, and takes this env straight in.  Locks the six world-describing fields;
     a bundle missing one is not a ``WalkContext``.
     """
-    from pyrung.core.analysis.pilot.types import WalkContext
+    from pyrung.core.analysis.pilot.trace_read import WalkContext
 
     Sel = Int("Sel", choices={0: "IDLE", 1: "WARM", 3: "GO"})
     logic = _int_advance_counter(Sel)

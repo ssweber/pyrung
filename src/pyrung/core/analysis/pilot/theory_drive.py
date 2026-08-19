@@ -35,6 +35,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     IntrascanPulse,
     LocalProgressKind,
     OrientationResult,
+    _ActionPair,
     act_identity,
 )
 from pyrung.core.analysis.pilot.overlay import (
@@ -74,7 +75,6 @@ from pyrung.core.analysis.pilot.theory_reducer import (
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     _AcceptedTrial,
-    _ActionPair,
     _AttemptResult,
     _HoldLogEntry,
     _PilotContext,

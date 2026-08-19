@@ -272,7 +272,7 @@ def test_awaited_action_recognizes_ack_while_held() -> None:
     at HELD — ``InterlockAck`` — a legal, non-avoided, state-moving push."""
     from pyrung.core.analysis.pilot.awaited_actions import awaited_actions
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-    from pyrung.core.analysis.pilot.types import WorldView
+    from pyrung.core.analysis.pilot.trace_read import WorldView
 
     logic, tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)
@@ -346,7 +346,7 @@ def test_awaited_action_reader_returns_structural_execute_readings() -> None:
     """The reader reports structure without deciding whether PILOT should wait."""
     from pyrung.core.analysis.pilot.awaited_actions import awaited_actions
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-    from pyrung.core.analysis.pilot.types import WorldView
+    from pyrung.core.analysis.pilot.trace_read import WorldView
 
     logic, tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)
@@ -370,7 +370,7 @@ def test_awaited_action_reader_does_not_apply_avoid_policy() -> None:
     """Avoid filtering belongs to Compass, not the structural reader."""
     from pyrung.core.analysis.pilot.awaited_actions import awaited_actions
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-    from pyrung.core.analysis.pilot.types import WorldView
+    from pyrung.core.analysis.pilot.trace_read import WorldView
 
     logic, tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)

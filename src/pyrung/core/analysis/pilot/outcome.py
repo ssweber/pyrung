@@ -23,7 +23,7 @@ from pyrung.core.analysis.pilot.earned_work import (
     earned_work_is_useful_motion,
 )
 from pyrung.core.analysis.pilot.execution import ChannelMotion
-from pyrung.core.analysis.pilot.types import _ActionPair
+from pyrung.core.analysis.pilot.navigation_contracts import _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
 

@@ -20,11 +20,11 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     CrossingFidelity,
     LandingReceiptAuthority,
     RouteEdgeContext,
+    _ActionPair,
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
 )
-from pyrung.core.analysis.pilot.types import _ActionPair
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.pipeline_graph import StaticPath

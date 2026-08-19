@@ -19,6 +19,7 @@ from pyrung.core.analysis.pilot.compass import (
     is_composite_action,
 )
 from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence
+from pyrung.core.analysis.pilot.navigation_contracts import _ActionPair
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     _atom_condition,
@@ -27,7 +28,6 @@ from pyrung.core.analysis.pilot.overlay import (
     _until_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.trace import trace_back
-from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.pilot.world_key import wait_edge_nogood
 from pyrung.core.analysis.sp_values import _values_match
 

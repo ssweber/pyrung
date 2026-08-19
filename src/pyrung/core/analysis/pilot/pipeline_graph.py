@@ -305,7 +305,7 @@ def build_static_transition_graphs(
             evidence,
         )
         from pyrung.core.analysis.pilot.awaited_actions import sibling_producer_family
-        from pyrung.core.analysis.pilot.types import WorldView
+        from pyrung.core.analysis.pilot.trace_read import WorldView
 
         world = WorldView(
             snapshot={name: getattr(tag, "default", None) for name, tag in pdg.tags.items()},

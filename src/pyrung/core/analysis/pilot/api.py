@@ -13,8 +13,9 @@ import pyrung.core.analysis.pilot.drive_setup as _drive_setup
 import pyrung.core.analysis.pilot.pilot as _engine
 import pyrung.core.analysis.pilot.target_route as _target_route
 from pyrung.core.analysis.graph import Plan, PlanStatus, RouteTaken
+from pyrung.core.analysis.pilot.navigation_contracts import _ActionPair
 from pyrung.core.analysis.pilot.trace import target_reached
-from pyrung.core.analysis.pilot.types import PilotEvent, _ActionPair
+from pyrung.core.analysis.pilot.types import PilotEvent
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC

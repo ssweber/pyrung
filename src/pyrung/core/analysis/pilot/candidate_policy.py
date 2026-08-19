@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from itertools import product
 from typing import Any
 
-from pyrung.core.analysis.pilot.types import _ActionPair
+from pyrung.core.analysis.pilot.navigation_contracts import _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
 

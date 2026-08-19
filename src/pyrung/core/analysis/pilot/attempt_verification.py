@@ -24,8 +24,8 @@ from pyrung.core.analysis.pilot.navigation_contracts import Bearing, Coast
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.program_step import read_program_step
 from pyrung.core.analysis.pilot.theory_evidence import _theory_live_boundary
+from pyrung.core.analysis.pilot.trace_read import WorldView
 from pyrung.core.analysis.pilot.types import (
-    WorldView,
     _AttemptResult,
     _ContinuationCheckpoint,
     _IterationFrame,

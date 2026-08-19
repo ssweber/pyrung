@@ -20,13 +20,13 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ChannelHeading,
     LandingReceiptAuthority,
     RouteEdgeContext,
+    _ActionPair,
 )
 from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM, target_reachable_values
 from pyrung.core.analysis.pilot.route_options import _edge_grounded, _fmt_from
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints
 from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
-from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -428,7 +428,7 @@ def _prescribe_wait(
             ProgramStepStatus,
             read_program_step,
         )
-        from pyrung.core.analysis.pilot.types import WorldView
+        from pyrung.core.analysis.pilot.trace_read import WorldView
 
         producers = tuple(
             {producer.rung_index: producer for producer in edge.program_producers}.values()

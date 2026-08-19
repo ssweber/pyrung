@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from pyrung.core.analysis.pdg import ProgramGraph
 
 
 class UnsupportedConstruct(Exception):
@@ -51,6 +54,46 @@ class DomainPrior:
     nd_domains: dict[str, tuple[Any, ...]] | None = None
     stateful_domains: dict[str, tuple[Any, ...]] | None = None
     func_deps: dict[str, tuple[str, int, Any]] | None = None
+
+
+@runtime_checkable
+class WalkContext(Protocol):
+    """Read-only program/world capabilities available to backward tracing."""
+
+    @property
+    def snapshot(self) -> Mapping[str, Any]: ...
+
+    @property
+    def pdg(self) -> ProgramGraph: ...
+
+    @property
+    def program(self) -> Any: ...
+
+    @property
+    def steerable(self) -> frozenset[str]: ...
+
+    @property
+    def opaque_loop(self) -> frozenset[str]: ...
+
+    @property
+    def prior(self) -> DomainPrior | None: ...
+
+
+@dataclass(frozen=True)
+class WorldView:
+    """Minimal :class:`WalkContext` assembled from one live frame."""
+
+    snapshot: Mapping[str, Any]
+    pdg: Any
+    program: Any
+    steerable: frozenset[str]
+    opaque_loop: frozenset[str]
+    prior: Any = None
+    clear_only: frozenset[str] = frozenset()
+    pipeline_internal_tags: frozenset[str] = frozenset()
+    pipeline_roles: tuple[Any, ...] = ()
+    avoid_pred: Any = None
+    harness: Any = None
 
 
 def _compact_route(route: tuple[str, ...], *, max_items: int = 8) -> tuple[str, ...]:

@@ -32,8 +32,8 @@ from pyrung.core.analysis.pilot.program_step import (
     _first_advance,
     read_program_step,
 )
+from pyrung.core.analysis.pilot.trace_read import WorldView
 from pyrung.core.analysis.pilot.trace_tree import TraceNode
-from pyrung.core.analysis.pilot.types import WorldView
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.crossing import Cmp, Eq
 from pyrung.core.instruction.advance import AdvanceStep

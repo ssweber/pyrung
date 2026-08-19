@@ -47,7 +47,7 @@ def _walkctx(logic, plc):
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.pipeline_graph import detect_opaque_loop
     from pyrung.core.analysis.pilot.program_facts import compute_reference_constants
-    from pyrung.core.analysis.pilot.types import WorldView
+    from pyrung.core.analysis.pilot.trace_read import WorldView
     from pyrung.core.analysis.steerable import compute_steerable
 
     pdg = build_program_graph(logic)

@@ -50,6 +50,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     ChannelHeading,
     RouteEdgeContext,
+    _ActionPair,
 )
 from pyrung.core.analysis.pilot.route_options import (
     _compass_route_actions,
@@ -58,7 +59,6 @@ from pyrung.core.analysis.pilot.route_options import (
     _learned_edge_allowed,
     _live_chart_completion_edge,
 )
-from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.pilot.wait_options import (
     _boundary_heading,
     _charted_program_edge,
@@ -158,7 +158,7 @@ def _awaited_action_bearing(frame: Any, ctx: Any) -> AwaitedAction | None:
     channel = ctx.target.tag
     if channel not in ctx.opaque_loop:
         return None
-    from pyrung.core.analysis.pilot.types import WorldView
+    from pyrung.core.analysis.pilot.trace_read import WorldView
 
     world = WorldView(
         snapshot=frame.snap,

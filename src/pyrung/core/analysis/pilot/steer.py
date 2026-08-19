@@ -68,6 +68,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationWorld,
     ProgramScan,
     Pulse,
+    _ActionPair,
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
@@ -81,7 +82,6 @@ from pyrung.core.analysis.pilot.program_facts import scan_transient_rest
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     PilotGateEvent,
-    _ActionPair,
     _AttemptResult,
     _ExecutedAttempt,
     _HoldLogEntry,

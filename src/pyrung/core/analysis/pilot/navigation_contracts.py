@@ -17,9 +17,10 @@ from pyrung.core.analysis.pilot.execution import (
     ScanEntryConfiguration,
     StopCondition,
 )
-from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.pilot.world_key import _semantic_key, _StateKey
 from pyrung.core.analysis.sp_values import _values_match
+
+_ActionPair = tuple[str, Any]
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.candidate_read import CandidateRead

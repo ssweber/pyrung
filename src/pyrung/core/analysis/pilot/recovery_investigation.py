@@ -53,7 +53,7 @@ from pyrung.core.analysis.pilot.investigate import (
     incident_regression_witness,
     investigate_deviation,
 )
-from pyrung.core.analysis.pilot.navigation_contracts import act_identity
+from pyrung.core.analysis.pilot.navigation_contracts import _ActionPair, act_identity
 from pyrung.core.analysis.pilot.overlay import (
     fork_with_pilot_rungs,
 )
@@ -73,7 +73,6 @@ from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
     PilotEvent,
     _AcceptedTrial,
-    _ActionPair,
     _ConfirmedCorrection,
     _CorrectionReceipt,
     _IterationFrame,

@@ -713,7 +713,7 @@ def observe_departure(
     # A unique, non-avoided operator push that the program is waiting for is
     # affirmative continuation evidence too. This covers machines whose useful
     # progress is structural (state + command handshake) and exposes no earned work.
-    from pyrung.core.analysis.pilot.types import WorldView
+    from pyrung.core.analysis.pilot.trace_read import WorldView
 
     awaited_action_context = ("pdg", "program", "steerable", "opaque_loop", "pipeline_roles")
     if not all(hasattr(ctx, name) for name in awaited_action_context):

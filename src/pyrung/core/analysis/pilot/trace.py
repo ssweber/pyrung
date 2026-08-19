@@ -108,7 +108,7 @@ class _TraceEnv:
 
     The world-describing subset — ``snapshot`` / ``pdg`` / ``program`` /
     ``steerable`` / ``opaque_loop`` / ``prior`` — is the **read-side seam**: this
-    env structurally satisfies :class:`~pyrung.core.analysis.pilot.types.WalkContext`,
+    env structurally satisfies :class:`~pyrung.core.analysis.pilot.trace_read.WalkContext`,
     so a read-side capability consuming a ``WalkContext`` takes this ``env``
     directly without depending on the recursion controls.
     """
