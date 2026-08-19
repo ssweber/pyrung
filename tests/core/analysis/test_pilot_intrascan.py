@@ -20,7 +20,10 @@ from pyrung.core.analysis.pilot.effects import (
     EffectObligation,
 )
 from pyrung.core.analysis.pilot.execution import CheckpointRef
-from pyrung.core.analysis.pilot.intrascan import IntrascanQuestion, inspect_assertion_scan
+from pyrung.core.analysis.pilot.intrascan import (
+    IntrascanQuestion,
+    derive_recorded_observations,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -104,9 +107,7 @@ def _execute(program: Program) -> tuple[PLC, Any, Any]:
 
 def _question(
     program: Program,
-    plc: PLC,
     source: Any,
-    expectation: EffectExpectation,
     *,
     steerable: frozenset[str] = frozenset(),
     projection_at: Any = None,
@@ -118,8 +119,6 @@ def _question(
         world=SimpleNamespace(work=source),
     )
     return IntrascanQuestion(
-        expectation=expectation,
-        execution=plc,
         assertion_scan=1,
         source_checkpoint=checkpoint,
         advance_index=build_advance_index(program),
@@ -131,13 +130,21 @@ def _question(
 
 
 def _direct_window(expectation: EffectExpectation, plc: PLC, *, projection_at: Any = None):
+    project = projection_at or plc._replay_rung_write_projection_at
+
+    def exact_projection_at(scan_id: int):
+        projection = project(scan_id)
+        if projection is None or projection.scan_id != scan_id:
+            return None
+        return projection
+
     return observe_execution_window(
         expectation,
         plc,
         scan_before=0,
         kernel_scan_ids=(1,),
         action_scan=1,
-        projection_at=projection_at,
+        projection_at=exact_projection_at,
     )
 
 
@@ -180,13 +187,11 @@ def test_report_matches_exact_overwrite_and_existing_requirement_derivation() ->
     expectation = EffectExpectation((_obligation(program, effect, 1, consumer=2),))
     question = _question(
         program,
-        plc,
         source,
-        expectation,
         steerable=frozenset((overwrite_enabled.name,)),
     )
     direct = _direct_window(expectation, plc)
-    result = inspect_assertion_scan(question)
+    result = derive_recorded_observations(question, direct)
 
     assert _snapshots(result.observations) == _snapshots(direct)
     assert [observation.disposition for observation in result.observations] == ["OVERWRITTEN"]
@@ -249,7 +254,7 @@ def test_report_matches_displaced_consumer_shape() -> None:
         )
     )
     direct = _direct_window(expectation, plc)
-    result = inspect_assertion_scan(_question(program, plc, source, expectation))
+    result = derive_recorded_observations(_question(program, source), direct)
 
     assert _snapshots(result.observations) == _snapshots(direct)
     assert [observation.disposition for observation in result.observations] == ["DISPLACED"]
@@ -273,13 +278,11 @@ def test_absent_producer_keeps_earlier_guard_writer_and_matches_derivation() -> 
     expectation = EffectExpectation((_obligation(program, effect, 1, producer=1),))
     question = _question(
         program,
-        plc,
         source,
-        expectation,
         steerable=frozenset((producer_enabled.name,)),
     )
     direct = _direct_window(expectation, plc)
-    result = inspect_assertion_scan(question)
+    result = derive_recorded_observations(question, direct)
 
     assert _snapshots(result.observations) == _snapshots(direct)
     assert [observation.disposition for observation in result.observations] == ["ABSENT"]
@@ -311,13 +314,11 @@ def test_false_consumer_guard_matches_existing_requirement_derivation() -> None:
     expectation = EffectExpectation((_obligation(program, effect, 1, consumer=1),))
     question = _question(
         program,
-        plc,
         source,
-        expectation,
         steerable=frozenset((consumer_enabled.name,)),
     )
     direct = _direct_window(expectation, plc)
-    result = inspect_assertion_scan(question)
+    result = derive_recorded_observations(question, direct)
 
     assert _snapshots(result.observations) == _snapshots(direct)
     assert [observation.disposition for observation in result.observations] == ["STRANDED"]
@@ -355,10 +356,11 @@ def test_repeated_calls_keep_dynamic_identity_and_suppress_a_surviving_obligatio
     )
     expectation = EffectExpectation((obligation,))
     direct_ordered = observe_expectation(expectation, (projection,))
-    result = inspect_assertion_scan(_question(program, plc, source, expectation))
+    direct = _direct_window(expectation, plc)
+    result = derive_recorded_observations(_question(program, source), direct)
 
     service_snapshots = _snapshots(result.observations)
-    assert service_snapshots == _snapshots(_direct_window(expectation, plc))
+    assert service_snapshots == _snapshots(direct)
     assert service_snapshots == _snapshots(direct_ordered)
     assert [observation.disposition for observation in result.observations] == [
         "OVERWRITTEN",
@@ -382,8 +384,9 @@ def test_unavailable_assertion_projection_fails_closed() -> None:
     expectation = EffectExpectation((_obligation(program, effect, 1),))
     unavailable = lambda _scan_id: None
     direct = _direct_window(expectation, plc, projection_at=unavailable)
-    result = inspect_assertion_scan(
-        _question(program, plc, source, expectation, projection_at=unavailable)
+    result = derive_recorded_observations(
+        _question(program, source, projection_at=unavailable),
+        direct,
     )
 
     assert _snapshots(result.observations) == _snapshots(direct)
@@ -404,14 +407,15 @@ def test_wrong_assertion_projection_fails_closed() -> None:
     wrong_projection = plc._replay_rung_write_projection_at(2)
     assert wrong_projection is not None
     expectation = EffectExpectation((_obligation(program, effect, 1),))
-    result = inspect_assertion_scan(
+    wrong_projection_at = lambda _scan_id: wrong_projection
+    observations = _direct_window(expectation, plc, projection_at=wrong_projection_at)
+    result = derive_recorded_observations(
         _question(
             program,
-            plc,
             source,
-            expectation,
-            projection_at=lambda _scan_id: wrong_projection,
-        )
+            projection_at=wrong_projection_at,
+        ),
+        observations,
     )
 
     assert [observation.disposition for observation in result.observations] == ["UNKNOWN"]
@@ -435,8 +439,9 @@ def test_pilot_adapter_reuses_the_steer_projection_for_overwrite_evidence() -> N
     plc, source, _projection = _execute(program)
     expectation = EffectExpectation((_obligation(program, effect, 1, consumer=2),))
     steerable = frozenset((overwrite_enabled.name,))
-    question = _question(program, plc, source, expectation, steerable=steerable)
-    report = inspect_assertion_scan(question)
+    question = _question(program, source, steerable=steerable)
+    observations = _direct_window(expectation, plc)
+    report = derive_recorded_observations(question, observations)
     assert len(report.findings) == 1
     expected = report.diagnostic_snapshot()[0]
 
@@ -556,9 +561,9 @@ def test_pilot_adapter_matches_service_snapshots_order_and_dedupe() -> None:
         )
     )
     steerable = frozenset((first_consumer_enabled.name, second_consumer_enabled.name))
-    question = _question(program, plc, source, expectation, steerable=steerable)
+    question = _question(program, source, steerable=steerable)
     observations = _direct_window(expectation, plc)
-    report = inspect_assertion_scan(question)
+    report = derive_recorded_observations(question, observations)
     report_snapshots = report.diagnostic_snapshot()
     assert [snapshot.observation.obligation.tag for snapshot in report_snapshots] == [
         first_effect.name,

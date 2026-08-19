@@ -664,9 +664,9 @@ Static reading and orientation:
   observation, consumer crossing, and execution-owner binding
 - `conductivity.py` — Compass-owned read model of immutable occurrence-ordered
   effect history and progress between attempts
-- `intrascan.py` — exact assertion-scan observation, backward occurrence
-  research, inert failed-effect derivation, and bounded diagnostic one-scan
-  closure over disposable forks
+- `intrascan.py` — interpretation of execution-owned assertion-scan
+  observations, backward occurrence research, inert failed-effect derivation,
+  and occurrence-local traceback evidence
 - `core/intrascan_counterfactual.py` — analysis-only patches at exact dynamic
   occurrence boundaries; never an executable PILOT correction
 - `temporal_need.py` — lazy current-world `AND`/`OR` requirement branches

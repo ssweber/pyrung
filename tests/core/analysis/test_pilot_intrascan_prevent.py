@@ -8,14 +8,20 @@ from typing import Any
 import pytest
 
 from pyrung import PLC, Bool, Int, Program, call, copy, rung, subroutine
-from pyrung.core.analysis.pilot.effect_observation import observe_intrascan_expectation
+from pyrung.core.analysis.pilot.effect_observation import (
+    observe_execution_window,
+    observe_intrascan_expectation,
+)
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligation,
     EffectPolarity,
     occurrence_selector,
 )
-from pyrung.core.analysis.pilot.intrascan import IntrascanQuestion, inspect_assertion_scan
+from pyrung.core.analysis.pilot.intrascan import (
+    IntrascanQuestion,
+    derive_recorded_observations,
+)
 
 RepeatedPermit = Bool("IntrascanRepeatedPermit", external=True, default=True)
 RepeatedValue = Int("IntrascanRepeatedValue")
@@ -118,19 +124,32 @@ def test_prevent_observation_is_unknown_when_exact_projection_is_unavailable(
         if projection_case == "unavailable"
         else (lambda _scan_id: wrong_projection)
     )
+
+    def exact_projection_at(scan_id: int):
+        projection = project(scan_id)
+        if projection is None or projection.scan_id != scan_id:
+            return None
+        return projection
+
     question = IntrascanQuestion(
-        expectation=expectation,
-        execution=executed,
         assertion_scan=1,
         source_checkpoint=checkpoint,
         advance_index=None,
         operand_authorities={},
         steerable=frozenset({RepeatedPermit.name}),
         program_written=frozenset({RepeatedValue.name}),
-        projection_at=project,
+        projection_at=exact_projection_at,
     )
 
-    result = inspect_assertion_scan(question)
+    observations = observe_execution_window(
+        expectation,
+        executed,
+        scan_before=0,
+        kernel_scan_ids=(1,),
+        action_scan=1,
+        projection_at=exact_projection_at,
+    )
+    result = derive_recorded_observations(question, observations)
 
     assert len(result.observations) == 1
     assert result.observations[0].disposition == "UNKNOWN"

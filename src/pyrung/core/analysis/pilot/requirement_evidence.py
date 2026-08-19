@@ -487,8 +487,6 @@ def _derive_charted_intrascan_front(
     ):
         return None
     question = IntrascanQuestion(
-        expectation=expectation,
-        execution=executed.pulse.fork,
         assertion_scan=projection.scan_id,
         source_checkpoint=checkpoint,
         advance_index=None,
@@ -577,8 +575,6 @@ def _derive_attempt_requirements(
         return None
     fallback_scan = _attempt_productive_scan(executed)
     question = IntrascanQuestion(
-        expectation=executed.bearing.expectation,
-        execution=executed.pulse.fork,
         assertion_scan=fallback_scan,
         source_checkpoint=checkpoint,
         advance_index=None,
@@ -772,8 +768,6 @@ def _derive_settled_target_requirements(
         candidate_scans[0],
     )
     question = IntrascanQuestion(
-        expectation=expectation,
-        execution=state.work,
         assertion_scan=fallback_scan,
         source_checkpoint=checkpoint,
         advance_index=None,

@@ -7,9 +7,9 @@ Transitive same-scan source walks remain typed evidence; they are never action
 choices.  The module does not install a correction, mutate PILOT state, restore
 or commit a live world, or retain navigation state.
 
-``derive_recorded_observations`` is the compatibility seam for observations
-already captured by steering.  Its filtering, projection selection, and
-derivation order intentionally match the former inline implementation in
+``derive_recorded_observations`` interprets observations already captured by
+the execution owner.  Its filtering, projection selection, and derivation
+order intentionally match the former inline implementation in
 ``pilot.py::_derive_attempt_requirements``.
 """
 
@@ -23,9 +23,7 @@ from typing import Any
 
 from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
 from pyrung.core.analysis.pilot.advance import AdvanceIndex
-from pyrung.core.analysis.pilot.effect_observation import observe_execution_window
 from pyrung.core.analysis.pilot.effects import (
-    EffectExpectation,
     EffectObservation,
     EffectObservationSnapshot,
     EffectOccurrenceSelector,
@@ -71,8 +69,6 @@ from pyrung.core.runner import EpochRef
 class IntrascanQuestion:
     """Evidence and authority needed to inspect one exact assertion scan."""
 
-    expectation: EffectExpectation | None
-    execution: Any = field(compare=False, repr=False)
     assertion_scan: int
     source_checkpoint: Any = field(compare=False, repr=False)
     advance_index: AdvanceIndex | None = field(compare=False, repr=False)
@@ -1523,34 +1519,6 @@ def research_intrascan_traceback(
         )
         + (f"; {traceback_miss}" if traceback_miss else ""),
     )
-
-
-def inspect_assertion_scan(question: IntrascanQuestion) -> IntrascanResult:
-    """Inspect exactly the assertion scan named by ``question``.
-
-    ``observe_execution_window`` owns scan selection and delegates the actual
-    producer/consumer interpretation to ``observe_expectation``.  Missing or
-    ambiguous projection evidence therefore remains ``UNKNOWN`` and produces
-    no derived finding.
-    """
-
-    project = question.projection_at or question.execution._replay_rung_write_projection_at
-
-    def exact_projection_at(scan_id: int) -> ScanRungWriteProjection | None:
-        projection = project(scan_id)
-        if projection is None or projection.scan_id != scan_id:
-            return None
-        return projection
-
-    observations = observe_execution_window(
-        question.expectation,
-        question.execution,
-        scan_before=question.assertion_scan - 1,
-        kernel_scan_ids=(question.assertion_scan,),
-        action_scan=question.assertion_scan,
-        projection_at=exact_projection_at,
-    )
-    return derive_recorded_observations(question, observations)
 
 
 def derive_recorded_observations(
