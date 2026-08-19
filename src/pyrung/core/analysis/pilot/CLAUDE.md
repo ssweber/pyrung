@@ -504,8 +504,9 @@ this table only locates the owner.
   `recovery_investigation.py`
 - Confirmed-correction installation, promotion, contradiction/revocation, and
   symmetric checkpoint overlay rebasing: `correction_lifecycle.py`
-- Corrective hypothesis production:
-  `corrections.py::derive_correction_hypotheses`
+- Finite-domain guard forcing and structural driver resolution:
+  `guard_forcing.py`
+- Corrective hypothesis production: `corrections.py::derive_correction_hypotheses`
 - Corrective hypothesis identity, ranking, composition, executable scoping,
   and self-defeat classification: `correction_candidates.py`
 - Corrective incidents, replay, neutralization-versus-masking, and excursion
@@ -728,6 +729,8 @@ Judgment and recovery:
   executable scoping, and self-defeat checks
 - `refinement.py` — bounded relational refinement and pinned suppression evidence
 - `recovery.py` — bounded corrective-composition transaction
+- `guard_forcing.py` — policy-free finite-domain guard forcing and structural
+  driver resolution shared by correction generation and replay
 - `corrections.py` — corrective-hold hypothesis production
 
 Module docstrings define the current local contracts. If a change moves a
@@ -817,7 +820,7 @@ naming code abstractions.
 
 The following compact views are intentional contracts:
 
-- `corrections.py::_best_forcing_holds` owns pair-shaped forcing holds because
+- `guard_forcing.py::_best_forcing_holds` owns pair-shaped forcing holds because
   correction consumers use that exact pair contract.
 - `coast.py::CoastReceipt` owns structured stop evidence with stable string
   `stop_reason` values; `cycle_fold_until` returns the compact Boolean terminal

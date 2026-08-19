@@ -36,9 +36,9 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
     Unknown,
 )
 from pyrung.core.analysis.pilot.correction_records import _ConfirmedCorrection
-from pyrung.core.analysis.pilot.corrections import break_guard_holds
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement
 from pyrung.core.analysis.pilot.execution import ExecutionReceipt, MotionKind
+from pyrung.core.analysis.pilot.guard_forcing import break_guard_holds
 from pyrung.core.analysis.pilot.incidents import BearingDeparture, DeviationIncident
 from pyrung.core.analysis.pilot.navigation_contracts import _ActionPair
 from pyrung.core.analysis.pilot.overlay import (
