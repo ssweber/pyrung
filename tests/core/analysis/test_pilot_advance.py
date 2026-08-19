@@ -29,7 +29,7 @@ from pyrung import (
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.advance import build_advance_index
 from pyrung.core.analysis.pilot.corrections import correct_enablers
-from pyrung.core.analysis.pilot.investigate import DeviationIncident
+from pyrung.core.analysis.pilot.types import DeviationIncident
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.runner import PLC
 

@@ -1,8 +1,7 @@
 """Compose and confirm bounded corrective hypotheses.
 
 ``investigation_replay.py`` owns incident construction, replay evidence,
-causal regression comparison, and excursion replay. This module keeps thin
-compatibility facades for that established import and monkeypatch surface.
+causal regression comparison, and excursion replay.
 ``corrections.py`` derives the hypothesis families; investigation ranks,
 composes, and confirms them with the replay engine.
 ``refinement.py`` owns bounded relational counterexample refinement and pinned
@@ -20,9 +19,8 @@ evidence-derived lifetime from
 ``_scoped_correction_rungs`` and must survive a guarded replay before the first
 confirmed composite is returned.
 
-Neither departure investigation nor the excursion compatibility facade
-installs a correction; installation belongs to the orchestration/recovery
-owner.
+Departure investigation does not install a correction; installation belongs
+to the orchestration/recovery owner.
 """
 
 from __future__ import annotations
@@ -63,7 +61,6 @@ from pyrung.core.analysis.pilot.recovery import (
     Succeed,
     compose_corrections,
 )
-from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.types import (
     DeviationIncident,
     _ConfirmedCorrection,
@@ -77,7 +74,6 @@ from pyrung.core.analysis.sp_values import (
 )
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.types import _PilotContext
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
@@ -97,18 +93,6 @@ _hypothesis_identity = _candidates._hypothesis_identity
 correction_identity = _candidates.correction_identity
 
 
-ReplayFn = _replay.ReplayFn
-ReplayStep = _replay.ReplayStep
-_replay_step = _replay._replay_step
-_deviation_bearing = _replay._deviation_bearing
-CausalOccurrence = _replay.CausalOccurrence
-RegressionWitness = _replay.RegressionWitness
-ReplacementEvidence = _replay.ReplacementEvidence
-ReplayIncident = _replay.ReplayIncident
-ReplayJustification = _replay.ReplayJustification
-ReplayOutcome = _replay.ReplayOutcome
-
-
 def _continuation_ground(status: FrontierStatus) -> str:
     """Compatibility facade for refinement's continuation-ground renderer."""
 
@@ -117,7 +101,7 @@ def _continuation_ground(status: FrontierStatus) -> str:
 
 def _refine_unknown_continuation(
     candidate: CorrectionHypothesis,
-    replay_outcome: ReplayOutcome,
+    replay_outcome: _replay.ReplayOutcome,
     ctx: Any,
     receipt: _RelationalRefinementReceipt,
 ) -> tuple[CorrectionHypothesis | None, str]:
@@ -146,7 +130,7 @@ class InvestigationRejection:
 class _ReplayAccepted:
     """A replay attempt accepted without exposing another causal cut."""
 
-    outcome: ReplayOutcome
+    outcome: _replay.ReplayOutcome
 
 
 @dataclass(frozen=True)
@@ -198,10 +182,10 @@ def _resolve_replay_attempt(
     *,
     phase: Literal["exploratory", "guarded"],
     current: CorrectionHypothesis,
-    outcome: ReplayOutcome,
+    outcome: _replay.ReplayOutcome,
     seen_replacements: set[tuple[Any, ...]],
     extend: Callable[
-        [CorrectionHypothesis, ReplacementEvidence],
+        [CorrectionHypothesis, _replay.ReplacementEvidence],
         CorrectionHypothesis | None,
     ],
 ) -> _ReplayResolution:
@@ -248,7 +232,7 @@ def _resolve_replay_attempt(
     return _CandidateComposed(extended)
 
 
-def _replacement_identity(replacement: ReplacementEvidence) -> tuple[Any, ...]:
+def _replacement_identity(replacement: _replay.ReplacementEvidence) -> tuple[Any, ...]:
     """Exact identity of one replacement cause inside a composition chain."""
 
     return tuple(
@@ -260,7 +244,7 @@ def _scoped_correction_rungs(
     plc: PLC,
     proposals: tuple[Any, ...],
     incident: DeviationIncident,
-    outcome: ReplayOutcome,
+    outcome: _replay.ReplayOutcome,
     ctx: Any,
     progress_mark: tuple[tuple[str, Any], ...] = (),
     producer_envelope: bool = False,
@@ -275,7 +259,7 @@ def _scoped_correction_rungs(
         ctx,
         progress_mark,
         producer_envelope,
-        neutralized=outcome.justification is ReplayJustification.NEUTRALIZED,
+        neutralized=outcome.justification is _replay.ReplayJustification.NEUTRALIZED,
     )
 
 
@@ -323,202 +307,6 @@ def _exploratory_correction_rungs(
         incident,
         progress_mark,
         ctx,
-    )
-
-
-def incident_regression_witness(
-    plc: PLC,
-    incident: DeviationIncident,
-) -> RegressionWitness | None:
-    """Compatibility facade for recorded regression witness recovery."""
-    return _replay.incident_regression_witness(plc, incident)
-
-
-def _regression_cause_replayed(
-    plc: PLC,
-    witness: RegressionWitness,
-    *,
-    start_scan: int,
-    end_scan: int,
-) -> bool:
-    """Compatibility facade for exact causal replay matching."""
-    return _replay._regression_cause_replayed(
-        plc,
-        witness,
-        start_scan=start_scan,
-        end_scan=end_scan,
-    )
-
-
-_RegressionOwnership = _replay._RegressionOwnership
-_replacement_departure_scan = _replay._replacement_departure_scan
-_same_occurrence = _replay._same_occurrence
-_same_bounded_channel_outcome = _replay._same_bounded_channel_outcome
-_same_bounded_channel_departure = _replay._same_bounded_channel_departure
-_shared_causal_suffix = _replay._shared_causal_suffix
-
-
-def _regression_ownership(
-    plc: PLC,
-    witness: RegressionWitness,
-    events: Sequence[Any],
-    proposal_tags: set[str],
-    *,
-    start_scan: int,
-    end_scan: int,
-    replacement_witness: RegressionWitness | None = None,
-) -> _RegressionOwnership:
-    """Compatibility facade preserving patched replay-cause matching."""
-    return _replay._regression_ownership(
-        plc,
-        witness,
-        events,
-        proposal_tags,
-        start_scan=start_scan,
-        end_scan=end_scan,
-        replacement_witness=replacement_witness,
-        cause_replayed=_regression_cause_replayed,
-    )
-
-
-def _replay_hooks() -> _replay.ReplayHooks:
-    """Bind replay callbacks through this module's compatibility surface."""
-    return _replay.ReplayHooks(
-        regression_cause_replayed=_regression_cause_replayed,
-        incident_regression_witness=incident_regression_witness,
-        build_deviation_incident=build_deviation_incident,
-        implicated_writers=_implicated_writers,
-        suppression_nominations=_skiff_suppression_nominations,
-    )
-
-
-def build_replay_fn(
-    cp_fork: PLC,
-    cp_trend: int,
-    pilot_rungs: Sequence[Any],
-    steps: Sequence[ReplayStep],
-    *,
-    ctx: _PilotContext,
-    incident: ReplayIncident | None = None,
-) -> ReplayFn:
-    """Compatibility facade for bounded exploratory replay."""
-    return _replay.build_replay_fn(
-        cp_fork,
-        cp_trend,
-        pilot_rungs,
-        steps,
-        ctx=ctx,
-        incident=incident,
-        hooks=_replay_hooks(),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Excursion investigation — verify detected a revert, investigate diagnoses
-# ---------------------------------------------------------------------------
-
-
-ExcursionResult = _replay.ExcursionResult
-
-
-def investigate_excursion(
-    work: PLC,
-    fork: PLC,
-    pre_snap: dict[str, Any],
-    post_pulse_snap: dict[str, Any],
-    pre_key: tuple[Any, ...],
-    applied_actions: Sequence[ActionPair],
-    *,
-    cfg: Any,
-    steerable: frozenset[str],
-    pilot_rungs: Sequence[Any],
-    resting: dict[str, Any],
-    edge_tags: set[str],
-    scan_budget: int,
-    pdg: Any = None,
-    program: Any = None,
-    ctx: Any = None,
-) -> ExcursionResult:
-    """Compatibility facade for replay-backed excursion diagnosis."""
-    return _replay.investigate_excursion(
-        work,
-        fork,
-        pre_snap,
-        post_pulse_snap,
-        pre_key,
-        applied_actions,
-        cfg=cfg,
-        steerable=steerable,
-        pilot_rungs=pilot_rungs,
-        resting=resting,
-        edge_tags=edge_tags,
-        scan_budget=scan_budget,
-        pdg=pdg,
-        program=program,
-        ctx=ctx,
-        hooks=_replay_hooks(),
-    )
-
-
-def _implicated_writers(plc: PLC, tag: str, pdg: Any) -> list[int]:
-    """Compatibility facade for causally implicated writer discovery."""
-    return _replay._implicated_writers(plc, tag, pdg)
-
-
-def _skiff_suppression_nominations(
-    work: PLC,
-    tag: str,
-    desired: Any,
-    node: Any,
-    applied_actions: Sequence[ActionPair],
-    pdg: Any,
-    steerable: frozenset[str],
-    pilot_rungs: Sequence[PilotRung],
-) -> list[ActionPair]:
-    """Compatibility facade for bounded pinned suppression nominations."""
-    return _replay._skiff_suppression_nominations(
-        work,
-        tag,
-        desired,
-        node,
-        applied_actions,
-        pdg,
-        steerable,
-        pilot_rungs,
-        run_pinned=run_pinned_scan,
-    )
-
-
-def _first_timeline_departure(
-    timeline: Sequence[Any],
-    tag: str,
-    value: Any,
-) -> int | None:
-    """Compatibility facade for recorded departure lookup."""
-    return _replay._first_timeline_departure(timeline, tag, value)
-
-
-def build_deviation_incident(
-    *,
-    anchor_scan: int,
-    end_scan: int,
-    action: tuple[ActionPair, ...],
-    bearing: tuple[ActionPair, ...],
-    before_snap: Mapping[str, Any],
-    after_snap: Mapping[str, Any],
-    timeline: Sequence[Any] = (),
-    channel_tag: str | None = None,
-) -> DeviationIncident:
-    """Compatibility facade for bounded incident construction."""
-    return _replay.build_deviation_incident(
-        anchor_scan=anchor_scan,
-        end_scan=end_scan,
-        action=action,
-        bearing=bearing,
-        before_snap=before_snap,
-        after_snap=after_snap,
-        timeline=timeline,
-        channel_tag=channel_tag,
     )
 
 
@@ -589,7 +377,7 @@ def investigate_deviation(
     plc: PLC,
     incident: DeviationIncident,
     ctx: Any,
-    replay: ReplayFn,
+    replay: _replay.ReplayFn,
     *,
     needed: Sequence[tuple[str, Any]] = (),
     installed_pilot_rungs: Sequence[Any] = (),
@@ -597,7 +385,7 @@ def investigate_deviation(
     correction_progress_mark: tuple[tuple[str, Any], ...] = (),
     occurrence_requirements: tuple[tuple[str, Any], ...] = (),
     excluded_corrections: frozenset[CorrectionIdentity] = frozenset(),
-    regression_witness: RegressionWitness | None = None,
+    regression_witness: _replay.RegressionWitness | None = None,
 ) -> InvestigationResult:
     """Investigate an incident with precise hypothesis generation.
 
@@ -721,7 +509,7 @@ def investigate_deviation(
 
     def _compose_replacement_candidate(
         current: CorrectionHypothesis,
-        evidence: ReplacementEvidence,
+        evidence: _replay.ReplacementEvidence,
     ) -> CorrectionHypothesis | None:
         """Derive the next cut from the retained fork and add it to *current*."""
         nested_raw, nested_absence = derive_correction_hypotheses(
@@ -761,7 +549,7 @@ def investigate_deviation(
     def _replay_candidate(
         hypothesis: CorrectionHypothesis,
         holds: tuple[Any, ...],
-    ) -> ReplayOutcome:
+    ) -> _replay.ReplayOutcome:
         """Use the staged continuation probe only when refinement consumes it."""
         with_continuation = getattr(replay, "with_continuation", None)
         if hypothesis.constraint is not None and with_continuation is not None:
@@ -861,7 +649,7 @@ def investigate_deviation(
 
             def _replacement_decision(
                 phase: Literal["exploratory", "guarded"],
-                outcome: ReplayOutcome,
+                outcome: _replay.ReplayOutcome,
             ):
                 if not outcome.accepted:
                     return Reject(

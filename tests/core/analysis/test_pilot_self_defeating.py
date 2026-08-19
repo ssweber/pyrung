@@ -43,14 +43,15 @@ from pyrung.core.analysis.pilot.execution import (
     MotionKind,
 )
 from pyrung.core.analysis.pilot.investigate import (
-    CausalOccurrence,
-    DeviationIncident,
     InvestigationResult,
-    RegressionWitness,
-    ReplayOutcome,
     _active_pilot_rungs_defeat_needed,
     correction_identity,
     investigate_deviation,
+)
+from pyrung.core.analysis.pilot.investigation_replay import (
+    CausalOccurrence,
+    RegressionWitness,
+    ReplayOutcome,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
@@ -76,6 +77,7 @@ from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     BearingDeparture,
     CorrectionStatus,
+    DeviationIncident,
     RevisitCredential,
     _AcceptedTrial,
     _AttemptResult,

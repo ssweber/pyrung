@@ -41,9 +41,12 @@ from pyrung.core.analysis.pilot.effects import (
 )
 from pyrung.core.analysis.pilot.execution import ExecutionPoint, MotionKind
 from pyrung.core.analysis.pilot.investigate import (
-    CausalOccurrence,
     InvestigationRejection,
     InvestigationResult,
+    investigate_deviation,
+)
+from pyrung.core.analysis.pilot.investigation_replay import (
+    CausalOccurrence,
     RegressionWitness,
     ReplayIncident,
     _deviation_bearing,
@@ -51,7 +54,6 @@ from pyrung.core.analysis.pilot.investigate import (
     build_deviation_incident,
     build_replay_fn,
     incident_regression_witness,
-    investigate_deviation,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import _ActionPair, act_identity
 from pyrung.core.analysis.pilot.overlay import (

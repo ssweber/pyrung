@@ -103,32 +103,3 @@ def test_pinned_suppression_nominations_are_bounded_evidence() -> None:
             "scans": refinement._SKIFF_SCANS,
         }
     ]
-
-
-def test_investigate_pinned_facade_preserves_patchable_scan(monkeypatch) -> None:
-    """Legacy pinned-scan patches remain effective through investigate's facade."""
-
-    node = SimpleNamespace(condition_reads=("Gate",))
-    pdg = SimpleNamespace(
-        rung_nodes=(node,),
-        upstream_slice=lambda _tag, **_kwargs: frozenset({"Gate"}),
-    )
-    work = SimpleNamespace(state=SimpleNamespace(tags={"Gate": True, "Output": False}))
-    monkeypatch.setattr(
-        investigate,
-        "run_pinned_scan",
-        lambda *_args, **_kwargs: SimpleNamespace(after={"Output": True}),
-    )
-
-    nominations = investigate._skiff_suppression_nominations(
-        work,
-        "Output",
-        True,
-        node,
-        (),
-        pdg,
-        frozenset({"Gate"}),
-        (),
-    )
-
-    assert nominations == [("Gate", False)]

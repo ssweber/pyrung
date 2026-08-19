@@ -8,8 +8,8 @@ from typing import Any
 from pyrung import Bool, Int, Or, Program, Rung, latch, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.corrections import correct_enablers
-from pyrung.core.analysis.pilot.investigate import DeviationIncident
 from pyrung.core.analysis.pilot.overlay import PilotRung
+from pyrung.core.analysis.pilot.types import DeviationIncident
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.condition import CompareEq
 from pyrung.core.runner import PLC

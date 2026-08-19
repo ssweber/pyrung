@@ -19,7 +19,7 @@ from pyrung.core.analysis.pilot.effects import (
     promote_terminal_target_observation,
 )
 from pyrung.core.analysis.pilot.execution import execution_owner
-from pyrung.core.analysis.pilot.investigate import investigate_excursion
+from pyrung.core.analysis.pilot.investigation_replay import investigate_excursion
 from pyrung.core.analysis.pilot.navigation_contracts import Bearing, Coast
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.program_step import read_program_step

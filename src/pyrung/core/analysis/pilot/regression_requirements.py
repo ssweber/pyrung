@@ -11,7 +11,7 @@ from typing import Any
 
 from pyrung.core.analysis.pilot.advance import build_advance_index
 from pyrung.core.analysis.pilot.effects import EffectObservation, occurrence_snapshot
-from pyrung.core.analysis.pilot.investigate import RegressionWitness
+from pyrung.core.analysis.pilot.investigation_replay import RegressionWitness
 from pyrung.core.analysis.pilot.requirement_derivation import (
     derive_advance_requirement_from_effect,
     derive_overwriter_guard_requirement_from_effect,

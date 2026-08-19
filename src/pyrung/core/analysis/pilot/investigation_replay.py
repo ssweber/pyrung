@@ -684,27 +684,6 @@ def _regression_ownership(
     )
 
 
-@dataclass(frozen=True)
-class ReplayHooks:
-    """Facade callbacks whose current bindings must survive monkeypatching."""
-
-    regression_cause_replayed: Callable[..., bool]
-    incident_regression_witness: Callable[[Any, DeviationIncident], RegressionWitness | None]
-    build_deviation_incident: Callable[..., DeviationIncident]
-    implicated_writers: Callable[[Any, str, Any], list[int]]
-    suppression_nominations: Callable[..., list[ActionPair]]
-
-
-def _default_replay_hooks() -> ReplayHooks:
-    return ReplayHooks(
-        regression_cause_replayed=_regression_cause_replayed,
-        incident_regression_witness=incident_regression_witness,
-        build_deviation_incident=build_deviation_incident,
-        implicated_writers=_implicated_writers,
-        suppression_nominations=_skiff_suppression_nominations,
-    )
-
-
 def build_replay_fn(
     cp_fork: PLC,
     cp_trend: int,
@@ -713,11 +692,9 @@ def build_replay_fn(
     *,
     ctx: _PilotContext,
     incident: ReplayIncident | None = None,
-    hooks: ReplayHooks | None = None,
 ) -> ReplayFn:
     """Build the bounded correction replay callback for an investigation."""
 
-    hooks = hooks or _default_replay_hooks()
     incident = incident or ReplayIncident()
     resting = ctx.resting
     edge_tags = ctx.edge_tags
@@ -830,7 +807,7 @@ def build_replay_fn(
                 session.events,
             )
             if replacement_scan is not None:
-                replacement_incident = hooks.build_deviation_incident(
+                replacement_incident = build_deviation_incident(
                     anchor_scan=cp_fork.state.scan_id,
                     end_scan=incident_replay_end,
                     action=(),
@@ -840,7 +817,7 @@ def build_replay_fn(
                     timeline=session.events,
                     channel_tag=regression_witness.channel_tag,
                 )
-                replacement_witness = hooks.incident_regression_witness(
+                replacement_witness = incident_regression_witness(
                     probe,
                     replacement_incident,
                 )
@@ -853,7 +830,7 @@ def build_replay_fn(
                 start_scan=cp_fork.state.scan_id,
                 end_scan=incident_replay_end,
                 replacement_witness=replacement_witness,
-                cause_replayed=hooks.regression_cause_replayed,
+                cause_replayed=_regression_cause_replayed,
             )
             if regression_witness is not None
             else None
@@ -1152,12 +1129,10 @@ def investigate_excursion(
     pdg: Any = None,
     program: Any = None,
     ctx: Any = None,
-    hooks: ReplayHooks | None = None,
 ) -> ExcursionResult:
     """Diagnose an excursion and replay-validate candidate holds."""
     from pyrung.core.analysis.pdg import resolve_rung
 
-    hooks = hooks or _default_replay_hooks()
     reverted: list[str] = []
     for i, name in enumerate(cfg.stateful_names):
         if i in cfg.acc_indices:
@@ -1182,7 +1157,7 @@ def investigate_excursion(
         )
         for tag in reverted:
             desired = post_pulse_snap.get(tag)
-            for ni in hooks.implicated_writers(fork, tag, pdg):
+            for ni in _implicated_writers(fork, tag, pdg):
                 node = pdg.rung_nodes[ni]
                 ro = resolve_rung(program, node)
                 if ro is None:
@@ -1191,7 +1166,7 @@ def investigate_excursion(
                     continue
                 holds = break_guard_holds(ro, settled_snap, mini_ctx)
                 if holds is None:
-                    holds = hooks.suppression_nominations(
+                    holds = _skiff_suppression_nominations(
                         work,
                         tag,
                         desired,

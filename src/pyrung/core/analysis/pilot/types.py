@@ -162,7 +162,7 @@ class _Step:
 
 
 # ---------------------------------------------------------------------------
-# Investigation incident — shared by investigate.py (builds it) and
+# Investigation incident — shared by investigation_replay.py (builds it) and
 # corrections.py (consumes it); lives here so neither module imports the other.
 # ---------------------------------------------------------------------------
 

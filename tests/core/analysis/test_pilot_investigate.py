@@ -44,34 +44,35 @@ from pyrung.core.analysis.pilot.corrections import (
 )
 from pyrung.core.analysis.pilot.investigate import (
     _MAX_CANDIDATE_COMPOSITIONS,
-    CausalOccurrence,
-    DeviationIncident,
     InvestigationRejection,
+    _CandidateComposed,
+    _compose_hypotheses,
+    _continuation_with_active_correction,
+    _hold_allowed,
+    _hold_is_noop,
+    _RelationalRefinementReceipt,
+    _ReplayAccepted,
+    _ReplayRejected,
+    _reprove_composite_producer_envelope,
+    _resolve_replay_attempt,
+    correction_identity,
+    investigate_deviation,
+)
+from pyrung.core.analysis.pilot.investigation_replay import (
+    CausalOccurrence,
     RegressionWitness,
     ReplacementEvidence,
     ReplayIncident,
     ReplayJustification,
     ReplayOutcome,
     ReplayStep,
-    _CandidateComposed,
-    _compose_hypotheses,
-    _continuation_with_active_correction,
     _first_timeline_departure,
-    _hold_allowed,
-    _hold_is_noop,
     _regression_cause_replayed,
     _regression_ownership,
-    _RelationalRefinementReceipt,
-    _ReplayAccepted,
-    _ReplayRejected,
-    _reprove_composite_producer_envelope,
-    _resolve_replay_attempt,
     _shared_causal_suffix,
     build_deviation_incident,
     build_replay_fn,
-    correction_identity,
     incident_regression_witness,
-    investigate_deviation,
     investigate_excursion,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
@@ -81,7 +82,7 @@ from pyrung.core.analysis.pilot.overlay import (
     _set_pilot_rungs,
     fork_with_pilot_rungs,
 )
-from pyrung.core.analysis.pilot.types import BearingDeparture
+from pyrung.core.analysis.pilot.types import BearingDeparture, DeviationIncident
 from pyrung.core.analysis.pilot.world_key import _pilot_state_key, _StateKeyConfig
 from pyrung.core.analysis.sp_values import _SnapshotView
 from pyrung.core.analysis.steerable import compute_steerable
@@ -1312,9 +1313,7 @@ def test_shared_pipeline_does_not_group_a_different_bounded_landing():
     assert _shared_causal_suffix(recorded, healthy_detour) == ()
 
 
-def test_proposal_owned_different_landing_neutralizes_only_the_recorded_incident(
-    monkeypatch,
-):
+def test_proposal_owned_different_landing_neutralizes_only_the_recorded_incident():
     """Exact ancestry may prove that the correction caused a healthy detour."""
     recorded = RegressionWitness(
         channel_tag="State",
@@ -1335,11 +1334,6 @@ def test_proposal_owned_different_landing_neutralizes_only_the_recorded_incident
         causal_spine=recorded.causal_spine,
     )
     replay = SimpleNamespace(state=SimpleNamespace(tags={"State": 6}))
-    monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._regression_cause_replayed",
-        lambda *_args, **_kwargs: True,
-    )
-
     ownership = _regression_ownership(
         replay,
         recorded,
@@ -1348,6 +1342,7 @@ def test_proposal_owned_different_landing_neutralizes_only_the_recorded_incident
         start_scan=3,
         end_scan=5,
         replacement_witness=healthy_detour,
+        cause_replayed=lambda *_args, **_kwargs: True,
     )
 
     assert ownership.replacement_owned is True

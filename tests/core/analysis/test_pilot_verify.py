@@ -38,7 +38,8 @@ from pyrung.core.analysis.pilot.execution import (
     MotionKind,
     capture_execution_spans,
 )
-from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
+from pyrung.core.analysis.pilot.investigate import correction_identity
+from pyrung.core.analysis.pilot.investigation_replay import ExcursionResult
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,

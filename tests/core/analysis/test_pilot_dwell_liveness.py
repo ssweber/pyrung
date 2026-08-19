@@ -10,7 +10,7 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.api import pilot_events
 from pyrung.core.analysis.pilot.coast import _coast_holding_state
 from pyrung.core.analysis.pilot.corrections import correct_enablers
-from pyrung.core.analysis.pilot.investigate import build_deviation_incident
+from pyrung.core.analysis.pilot.investigation_replay import build_deviation_incident
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.steerable import compute_steerable
 

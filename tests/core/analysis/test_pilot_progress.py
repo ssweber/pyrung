@@ -64,7 +64,7 @@ from pyrung.core.analysis.pilot.execution import (
     MotionKind,
     capture_execution_spans,
 )
-from pyrung.core.analysis.pilot.investigate import _deviation_bearing
+from pyrung.core.analysis.pilot.investigation_replay import _deviation_bearing
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,

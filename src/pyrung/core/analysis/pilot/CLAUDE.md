@@ -139,8 +139,9 @@ fork. All modes converge on `verify.py`:
    earned-work, or local-conductivity movement, verification records which
    scan was productive and whether the retained landing still owns that tip.
 5. A suspicious excursion is the exceptional branch.
-   `attempt_verification.py::resolve_excursion` invokes `investigate.py` at
-   most once and passes the exact replay to `verify.verify_excursion_replay`,
+   `attempt_verification.py::resolve_excursion` invokes
+   `investigation_replay.py` at most once and passes the exact replay to
+   `verify.verify_excursion_replay`,
    which continues the remaining gates.
 6. A rejected act records its observations and exact world-scoped nogood, then
    returns to orientation. PILOT never advances to a sibling from a retained
@@ -475,7 +476,7 @@ this table only locates the owner.
 - Verification-time excursion orchestration:
   `attempt_verification.py::resolve_excursion`; verify reports the exact
   executed attempt, the refinement invokes
-  `investigate.py::investigate_excursion` once, and verify judges that replay
+  `investigation_replay.py::investigate_excursion` once, and verify judges that replay
 - One-Bearing execution/verification/recording coordinator:
   `attempt_transition.py::transition_once`
 - Committed operation context and atomic World adoption:
@@ -708,8 +709,8 @@ Judgment and recovery:
 - `causal.py` — recorded cause-chain queries
 - `investigation_replay.py` — bounded replay evidence, incident construction,
   regression comparison, and excursion diagnosis
-- `investigate.py` — corrective candidate composition and confirmation, plus
-  compatibility facades for replay imports; no drive-loop ownership
+- `investigate.py` — corrective candidate composition and confirmation; no
+  replay or drive-loop ownership
 - `correction_candidates.py` — correction identity, ordering, composition,
   executable scoping, and self-defeat checks
 - `refinement.py` — bounded relational refinement and pinned suppression evidence

@@ -29,13 +29,13 @@ from pyrung import Bool, Int, Program, Real, Rung, Timer, calc, copy, latch, on_
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import CoastTriggerEvent
 from pyrung.core.analysis.pilot.corrections import _absence_root_correctives
-from pyrung.core.analysis.pilot.investigate import (
+from pyrung.core.analysis.pilot.investigate import investigate_deviation
+from pyrung.core.analysis.pilot.investigation_replay import (
     ReplayIncident,
     ReplayStep,
     build_deviation_incident,
     build_replay_fn,
     incident_regression_witness,
-    investigate_deviation,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
 from pyrung.core.analysis.steerable import compute_steerable

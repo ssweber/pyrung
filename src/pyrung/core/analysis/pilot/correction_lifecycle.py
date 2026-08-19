@@ -15,9 +15,9 @@ from pyrsistent import pvector
 
 from pyrung.core.analysis.pilot.investigate import (
     InvestigationResult,
-    RegressionWitness,
     correction_identity,
 )
+from pyrung.core.analysis.pilot.investigation_replay import RegressionWitness
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     _merged_pilot_rungs,

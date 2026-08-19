@@ -102,7 +102,7 @@ from pyrung.core.instruction.advance import constraint_holds
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.investigate import ExcursionResult
+    from pyrung.core.analysis.pilot.investigation_replay import ExcursionResult
 
 
 @dataclass(frozen=True)
