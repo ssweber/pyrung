@@ -59,7 +59,6 @@ from pyrung.core.analysis.pilot.options import (
     _build_candidates,
     _candidate_applied,
     _effect_operation_batches,
-    _prescribe_wait,
     _read_learned_fallback,
     _read_route_and_wait,
     _select_wait,
@@ -91,6 +90,7 @@ from pyrung.core.analysis.pilot.trace_tree import (
     TraceCrossingBranch,
     TraceNode,
 )
+from pyrung.core.analysis.pilot.wait_options import _prescribe_wait
 from pyrung.core.crossing import Eq
 
 

@@ -445,7 +445,8 @@ this table only locates the owner.
 - Candidate-read orchestration and wait-source choice:
   `options.py::_build_candidates` / `_select_wait`; pure action/hold admission:
   `candidate_policy.py`; static route and chart materialization:
-  `route_options.py`
+  `route_options.py`; completion and program-evidence wait materialization:
+  `wait_options.py`
 - Static chart-edge admission:
   `constrained_reachability.py::NavigationEvidence.static_edge_admission`
 - Local trial gates and accepted execution evidence:
@@ -606,10 +607,12 @@ Static reading and orientation:
 - `static_expressions.py` — static-expression helpers
 - `compass.py` — navigation facade, durable knowledge
 - `orientation.py` — current-world read, result synthesis
-- `options.py` — candidate-read orchestration, wait admission, and ranking
+- `options.py` — candidate-read orchestration, admission, and ranking
 - `candidate_policy.py` — pure action admission and static hold-conflict proof
 - `route_options.py` — static route/chart selection and route-owned overlay
   materialization
+- `wait_options.py` — instruction-boundary, completion, and program-evidence
+  wait prescription materialization
 - `candidate_read.py` — immutable completed candidate, wait, prerequisite, and
   route readings consumed by orientation policy
 - `theory_orientation.py` — WorkingTheory-specific lowering into one next act
