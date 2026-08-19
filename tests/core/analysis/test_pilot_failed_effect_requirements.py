@@ -793,8 +793,8 @@ def test_failed_alarm_effect_derives_exact_preset_requirement() -> None:
         kernel_scan_ids=(1,),
         action_scan=1,
     )[0]
-    assert observation.execution_epoch is not None
     assert observation.execution_owner is not None
+    assert observation.execution_epoch is observation.execution_owner.epoch
 
     result = derive_advance_requirement_from_effect(
         build_advance_index(alarmed_at_start.logic),

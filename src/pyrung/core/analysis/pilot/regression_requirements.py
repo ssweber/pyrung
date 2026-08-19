@@ -121,7 +121,6 @@ def _delayed_requirement_from_regression(
         displacement=harmful_link.exact_write,
         observed_reads=projection.enabling_reads_observed_by_write(harmful_link.exact_write),
         detail="accepted effect participated in a later exact regression cause",
-        execution_epoch=harmful_link.execution_epoch,
         execution_owner=harmful_link.execution_owner,
         execution_projection=projection,
     )

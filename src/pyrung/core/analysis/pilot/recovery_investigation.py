@@ -286,7 +286,6 @@ def _investigate_and_revert(
                         displacement=None,
                         observed_reads=(),
                         detail="accepted occurrence group established this channel tenure",
-                        execution_epoch=receipt.execution_epoch,
                         execution_owner=receipt.execution_owner,
                         execution_projection=projection,
                     )

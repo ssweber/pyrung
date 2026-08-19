@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     )
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.context import ConditionView
+    from pyrung.core.runner import Epoch, EpochQuery
 
 StaticRungAddress = tuple[str | None, int, tuple[int, ...]]
 EffectDisposition = Literal[
@@ -248,8 +249,7 @@ class EffectObservation:
         repr=False,
     )
     detail: str = ""
-    execution_epoch: Any = field(default=None, compare=False, repr=False)
-    execution_owner: Any = field(default=None, compare=False, repr=False)
+    execution_owner: EpochQuery | None = field(default=None, compare=False, repr=False)
     # Internal live proof surface.  A later replay query may reconstruct equal
     # occurrences as different objects; Phase-4/5 exact inversion must consume
     # the very projection which produced these observation members.
@@ -262,6 +262,11 @@ class EffectObservation:
     def __post_init__(self) -> None:
         """Freeze the exact displacement ancestry while its projection is owned."""
 
+        if (
+            self.execution_owner is not None
+            and getattr(self.execution_owner, "epoch", None) is None
+        ):
+            raise ValueError("effect observation owner must expose one Epoch")
         if self.displacement is None:
             if self.displacement_enabling_reads:
                 raise ValueError("displacement ancestry requires a displacement write")
@@ -282,6 +287,14 @@ class EffectObservation:
                 "displacement_enabling_reads",
                 exact,
             )
+
+    @property
+    def execution_epoch(self) -> Epoch | None:
+        """Derive the physical Epoch from the observation's sole owner."""
+
+        if self.execution_owner is None:
+            return None
+        return self.execution_owner.epoch
 
     def diagnostic_snapshot(self) -> EffectObservationSnapshot:
         return EffectObservationSnapshot(

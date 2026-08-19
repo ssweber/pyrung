@@ -903,7 +903,7 @@ def observe_execution_window(
             scan_id for scan_id in kernel_scan_ids if action_scan <= scan_id <= fork.state.scan_id
         }
         if action_scan not in exact_scan_ids:
-            return _bind_execution_epoch(
+            return _bind_execution_owner(
                 _unknown_observations(
                     expectation,
                     "assertion scan is absent from the exact kernel scan stream",
@@ -919,7 +919,7 @@ def observe_execution_window(
         )
         projections_by_scan = tuple((scan_id, project(scan_id)) for scan_id in selected_scan_ids)
         if any(projection is None for _scan_id, projection in projections_by_scan):
-            return _bind_execution_epoch(
+            return _bind_execution_owner(
                 _unknown_observations(
                     expectation,
                     "exact kernel scan projection is unavailable",
@@ -931,12 +931,12 @@ def observe_execution_window(
             projection for _scan_id, projection in projections_by_scan if projection is not None
         )
         if projections:
-            return _bind_execution_epoch(
+            return _bind_execution_owner(
                 observe_expectation(expectation, projections),
                 fork,
                 fallback_scan=projections[-1].scan_id,
             )
-        return _bind_execution_epoch(
+        return _bind_execution_owner(
             _unknown_observations(expectation, "assertion scan projection is unavailable"),
             fork,
             fallback_scan=action_scan,
@@ -957,7 +957,7 @@ def observe_execution_window(
     )
     projections_by_scan = tuple((scan_id, project(scan_id)) for scan_id in selected_scan_ids)
     if any(projection is None for _scan_id, projection in projections_by_scan):
-        return _bind_execution_epoch(
+        return _bind_execution_owner(
             _unknown_observations(
                 expectation,
                 "exact kernel scan projection is unavailable",
@@ -976,13 +976,13 @@ def observe_execution_window(
         and projections[0].scan_id == landing_scan
     )
     if complete_single_scan:
-        return _bind_execution_epoch(
+        return _bind_execution_owner(
             observe_expectation(expectation, projections),
             fork,
             fallback_scan=landing_scan,
         )
     if not projections:
-        return _bind_execution_epoch(
+        return _bind_execution_owner(
             _unknown_observations(
                 expectation,
                 "coast has no exact recorded effect scan",
@@ -1020,10 +1020,10 @@ def observe_execution_window(
                         detail="coast corridor contains unobserved or folded scans",
                     )
                 )
-    return _bind_execution_epoch(tuple(results), fork, fallback_scan=landing_scan)
+    return _bind_execution_owner(tuple(results), fork, fallback_scan=landing_scan)
 
 
-def _bind_execution_epoch(
+def _bind_execution_owner(
     observations: tuple[EffectObservation, ...],
     fork: Any,
     *,
@@ -1032,8 +1032,9 @@ def _bind_execution_epoch(
     """Attach the immutable Epoch owner of each exact observation.
 
     A scan number is not an execution identity after forks and replay.  Sealing
-    through the observation gives receipts a stable epoch/query pair rather
-    than the lineage's mutable live-query adapter.
+    through the observation gives receipts one stable detached EpochQuery
+    rather than the lineage's mutable live-query adapter. The physical Epoch
+    is derived from that owner and is never stored separately.
     """
 
     observation_scans = tuple(
@@ -1077,11 +1078,10 @@ def _bind_execution_epoch(
                 )
             )
             continue
-        epoch, owner = owned
+        _epoch, owner = owned
         result.append(
             replace(
                 observation,
-                execution_epoch=epoch,
                 execution_owner=owner,
             )
         )
