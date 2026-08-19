@@ -67,10 +67,8 @@ from pyrung.core.analysis.pilot.outcome import (
     TrialAssessment,
 )
 from pyrung.core.analysis.pilot.overlay import OperationReceipt, PilotRung
-from pyrung.core.analysis.pilot.progress import (
-    _investigate_and_revert,
-    _monitor_trend,
-)
+from pyrung.core.analysis.pilot.progress import _monitor_trend
+from pyrung.core.analysis.pilot.recovery_investigation import _investigate_and_revert
 from pyrung.core.analysis.pilot.steer import _install_prerequisites
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
@@ -722,7 +720,7 @@ def test_letrun_regression_keeps_benign_hold(monkeypatch):
     state, trial, frame, ctx = _saboteur_scenario()
     scope = CompareEq(state.work._known_tags_by_name["State"], 6)
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.progress.investigate_deviation",
+        "pyrung.core.analysis.pilot.recovery_investigation.investigate_deviation",
         _stub_investigation([PilotRung("Go", True, scope)]),
     )
 
@@ -948,11 +946,11 @@ def test_reconfirmed_correction_reverts_instead_of_opening_unresolved_departure(
         source="investigation",
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.progress.investigate_deviation",
+        "pyrung.core.analysis.pilot.recovery_investigation.investigate_deviation",
         _stub_investigation([rung]),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.progress._causally_harmful_corrections",
+        "pyrung.core.analysis.pilot.recovery_investigation._causally_harmful_corrections",
         lambda *_args, **_kwargs: (),
     )
 
@@ -1058,7 +1056,7 @@ def test_later_incident_revokes_harmful_probationary_correction(monkeypatch):
     scope = CompareEq(state.work._known_tags_by_name["State"], 6)
     harmful = PilotRung("Go", True, scope)
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.progress.investigate_deviation",
+        "pyrung.core.analysis.pilot.recovery_investigation.investigate_deviation",
         _stub_investigation([harmful]),
     )
 
@@ -1090,7 +1088,7 @@ def test_later_incident_revokes_harmful_probationary_correction(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.progress.investigate_deviation",
+        "pyrung.core.analysis.pilot.recovery_investigation.investigate_deviation",
         _opposite_investigation,
     )
     events = _investigate_and_revert(
@@ -1154,7 +1152,7 @@ def test_later_causal_incident_revokes_promoted_correction_without_remedy(
         owner_snapshot={**frame.snap, "Step": 2},
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.progress.incident_regression_witness",
+        "pyrung.core.analysis.pilot.recovery_investigation.incident_regression_witness",
         lambda _plc, _incident: witness,
     )
     excluded = []
@@ -1164,7 +1162,7 @@ def test_later_causal_incident_revokes_promoted_correction_without_remedy(
         return InvestigationResult()
 
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.progress.investigate_deviation",
+        "pyrung.core.analysis.pilot.recovery_investigation.investigate_deviation",
         _no_replacement,
     )
 
@@ -1282,7 +1280,7 @@ def test_opposite_owner_operations_compose_as_temporal_phases(monkeypatch):
         OperationReceipt(high_boundary),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.progress.investigate_deviation",
+        "pyrung.core.analysis.pilot.recovery_investigation.investigate_deviation",
         _stub_investigation([high]),
     )
     tuple(_monitor_trend(trial, frame, state, ctx))
@@ -1313,7 +1311,7 @@ def test_opposite_owner_operations_compose_as_temporal_phases(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.progress.investigate_deviation",
+        "pyrung.core.analysis.pilot.recovery_investigation.investigate_deviation",
         _phase_investigation,
     )
     events = _investigate_and_revert(

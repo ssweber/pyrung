@@ -483,6 +483,8 @@ this table only locates the owner.
 - Post-commit retention, recovery decisions, and checkpoint restore:
   `progress.py`; `_handle_channel_departure` is the terminal event-streaming
   owner after `_monitor_trend` detects a channel departure
+- Bounded causal/replay recovery transaction and exact-origin restoration:
+  `recovery_investigation.py`
 - Confirmed-correction installation, promotion, contradiction/revocation, and
   symmetric checkpoint overlay rebasing: `correction_lifecycle.py`
 - Corrective hypothesis production:
@@ -668,7 +670,10 @@ Judgment and recovery:
 
 - `verify.py` — trial gates, excursion detection, and replay judgment
 - `outcome.py` — evidence classification
-- `progress.py` — retention, departure/recovery policy, investigation, reverts
+- `progress.py` — post-commit retention, departure/recovery policy, and event
+  streaming
+- `recovery_investigation.py` — bounded causal/replay recovery transaction,
+  exact-origin restoration, and correction handoff
 - `departure_state.py` — pending-departure contracts, exact checkpoint and
   settlement bookkeeping, and pure earned-work assessment
 - `correction_lifecycle.py` — confirmed-correction installation, promotion,

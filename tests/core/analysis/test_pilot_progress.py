@@ -81,9 +81,9 @@ from pyrung.core.analysis.pilot.outcome import (
 from pyrung.core.analysis.pilot.progress import (
     _apply_departure_decision,
     _handle_channel_departure,
-    _investigate_and_revert,
     _monitor_trend,
 )
+from pyrung.core.analysis.pilot.recovery_investigation import _investigate_and_revert
 from pyrung.core.analysis.pilot.regression_requirements import (
     _delayed_overwriter_fallback_allowed,
 )
@@ -1341,7 +1341,7 @@ class TestRegression:
             return InvestigationResult()
 
         monkeypatch.setattr(
-            "pyrung.core.analysis.pilot.progress.investigate_deviation",
+            "pyrung.core.analysis.pilot.recovery_investigation.investigate_deviation",
             _stub,
         )
 
@@ -1707,7 +1707,10 @@ def test_investigation_event_rejected_detail_carries_slug(monkeypatch):
             unresolved=("GroundA",),
         )
 
-    monkeypatch.setattr("pyrung.core.analysis.pilot.progress.investigate_deviation", _stub)
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.recovery_investigation.investigate_deviation",
+        _stub,
+    )
 
     state, trial, frame, ctx = _seal_in_regression_inputs()
     events = tuple(_monitor_trend(trial, frame, state, ctx))
