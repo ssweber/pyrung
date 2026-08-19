@@ -34,11 +34,13 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
     NoRoute,
     Reachable,
 )
+from pyrung.core.analysis.pilot.correction_records import _ConfirmedCorrection
 from pyrung.core.analysis.pilot.corrections import (
     CorrectionHypothesis,
     derive_correction_hypotheses,
     refine_relational_hypothesis,
 )
+from pyrung.core.analysis.pilot.incidents import DeviationIncident
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     _pilot_rung_execution_receipt,
@@ -55,10 +57,6 @@ from pyrung.core.analysis.pilot.recovery import (
     Retry,
     Succeed,
     compose_corrections,
-)
-from pyrung.core.analysis.pilot.types import (
-    DeviationIncident,
-    _ConfirmedCorrection,
 )
 from pyrung.core.analysis.pilot.world_key import (
     _rung_identity,

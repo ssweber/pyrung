@@ -9,13 +9,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pyrsistent import pvector
 
 from pyrung.core.analysis.pilot.correction_candidates import correction_identity
-from pyrung.core.analysis.pilot.investigate import InvestigationResult
-from pyrung.core.analysis.pilot.investigation_replay import RegressionWitness
+from pyrung.core.analysis.pilot.correction_records import (
+    CorrectionStatus,
+    _ConfirmedCorrection,
+    _CorrectionReceipt,
+)
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     _merged_pilot_rungs,
@@ -23,13 +26,7 @@ from pyrung.core.analysis.pilot.overlay import (
     fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.recovery import assert_recovery_disposable_state
-from pyrung.core.analysis.pilot.types import (
-    CorrectionStatus,
-    _ConfirmedCorrection,
-    _CorrectionReceipt,
-    _HoldLogEntry,
-    _PilotState,
-)
+from pyrung.core.analysis.pilot.types import _HoldLogEntry, _PilotState
 from pyrung.core.analysis.pilot.world import _Checkpoint
 from pyrung.core.analysis.pilot.world_key import (
     _pilot_world_key,
@@ -37,6 +34,10 @@ from pyrung.core.analysis.pilot.world_key import (
     _semantic_key,
 )
 from pyrung.core.analysis.sp_values import _values_match
+
+if TYPE_CHECKING:
+    from pyrung.core.analysis.pilot.investigate import InvestigationResult
+    from pyrung.core.analysis.pilot.investigation_replay import RegressionWitness
 
 
 def _install_confirmed_correction(

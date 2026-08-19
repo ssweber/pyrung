@@ -49,6 +49,7 @@ from pyrung.core.analysis.pilot.corrections import (
     correct_enablers,
     derive_correction_hypotheses,
 )
+from pyrung.core.analysis.pilot.incidents import BearingDeparture, DeviationIncident
 from pyrung.core.analysis.pilot.investigate import (
     _MAX_CANDIDATE_COMPOSITIONS,
     InvestigationRejection,
@@ -84,7 +85,6 @@ from pyrung.core.analysis.pilot.overlay import (
     fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.refinement import _RelationalRefinementReceipt
-from pyrung.core.analysis.pilot.types import BearingDeparture, DeviationIncident
 from pyrung.core.analysis.pilot.world_key import _pilot_state_key, _StateKeyConfig
 from pyrung.core.analysis.sp_values import _SnapshotView
 from pyrung.core.analysis.steerable import compute_steerable

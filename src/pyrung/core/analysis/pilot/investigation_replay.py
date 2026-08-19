@@ -35,9 +35,11 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
     Reachable,
     Unknown,
 )
+from pyrung.core.analysis.pilot.correction_records import _ConfirmedCorrection
 from pyrung.core.analysis.pilot.corrections import break_guard_holds
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement
 from pyrung.core.analysis.pilot.execution import ExecutionReceipt, MotionKind
+from pyrung.core.analysis.pilot.incidents import BearingDeparture, DeviationIncident
 from pyrung.core.analysis.pilot.navigation_contracts import _ActionPair
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
@@ -49,14 +51,7 @@ from pyrung.core.analysis.pilot.overlay import (
 from pyrung.core.analysis.pilot.pulse import _apply_pulse
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import target_reached, trace_back
-from pyrung.core.analysis.pilot.types import (
-    BearingDeparture,
-    DeviationIncident,
-    _ConfirmedCorrection,
-    _IterationFrame,
-    _Step,
-    _StepContext,
-)
+from pyrung.core.analysis.pilot.types import _IterationFrame, _Step, _StepContext
 from pyrung.core.analysis.pilot.world_key import _pilot_state_key
 from pyrung.core.analysis.pilot.writer_selection import _can_produce
 from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag

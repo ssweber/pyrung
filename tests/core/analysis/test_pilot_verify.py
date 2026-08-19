@@ -20,6 +20,7 @@ from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
 from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence, Unknown
 from pyrung.core.analysis.pilot.correction_candidates import correction_identity
+from pyrung.core.analysis.pilot.correction_records import _ConfirmedCorrection
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWork,
     EarnedWorkComponent,
@@ -71,7 +72,6 @@ from pyrung.core.analysis.pilot.types import (
     RevisitCredential,
     TargetReached,
     _AttemptResult,
-    _ConfirmedCorrection,
     _ExecutedAttempt,
     _IterationFrame,
     _PulseState,

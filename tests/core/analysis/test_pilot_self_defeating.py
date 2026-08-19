@@ -39,6 +39,11 @@ from pyrung.core.analysis.pilot.correction_lifecycle import (
     _promote_probationary_corrections,
     _revoke_corrections,
 )
+from pyrung.core.analysis.pilot.correction_records import (
+    CorrectionStatus,
+    _ConfirmedCorrection,
+    _CorrectionReceipt,
+)
 from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis, _precise_causes
 from pyrung.core.analysis.pilot.departure_state import _checkpoint_recovery_origin
 from pyrung.core.analysis.pilot.execution import (
@@ -46,6 +51,7 @@ from pyrung.core.analysis.pilot.execution import (
     ExecutionReceipt,
     MotionKind,
 )
+from pyrung.core.analysis.pilot.incidents import BearingDeparture, DeviationIncident
 from pyrung.core.analysis.pilot.investigate import (
     InvestigationResult,
     investigate_deviation,
@@ -77,14 +83,9 @@ from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
-    BearingDeparture,
-    CorrectionStatus,
-    DeviationIncident,
     RevisitCredential,
     _AcceptedTrial,
     _AttemptResult,
-    _ConfirmedCorrection,
-    _CorrectionReceipt,
     _ExecutedAttempt,
     _PilotState,
     _PulseState,

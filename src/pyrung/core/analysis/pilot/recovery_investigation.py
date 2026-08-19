@@ -22,6 +22,10 @@ from pyrung.core.analysis.pilot.correction_lifecycle import (
     _install_confirmed_correction,
     _revoke_corrections,
 )
+from pyrung.core.analysis.pilot.correction_records import (
+    _ConfirmedCorrection,
+    _CorrectionReceipt,
+)
 from pyrung.core.analysis.pilot.departure import (
     DepartureResult,
 )
@@ -40,6 +44,7 @@ from pyrung.core.analysis.pilot.effects import (
     occurrence_snapshot,
 )
 from pyrung.core.analysis.pilot.execution import ExecutionPoint, MotionKind
+from pyrung.core.analysis.pilot.incidents import BearingDeparture
 from pyrung.core.analysis.pilot.investigate import (
     InvestigationRejection,
     InvestigationResult,
@@ -72,11 +77,8 @@ from pyrung.core.analysis.pilot.requirements import (
 )
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
-    BearingDeparture,
     PilotEvent,
     _AcceptedTrial,
-    _ConfirmedCorrection,
-    _CorrectionReceipt,
     _IterationFrame,
     _PilotContext,
     _PilotState,

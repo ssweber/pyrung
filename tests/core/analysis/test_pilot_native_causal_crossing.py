@@ -38,7 +38,7 @@ from pyrung import (
 from pyrung.core.analysis.pilot.causal import chase_chain_tags
 from pyrung.core.analysis.pilot.correction_candidates import _rank_hypotheses
 from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis
-from pyrung.core.analysis.pilot.types import BearingDeparture, DeviationIncident
+from pyrung.core.analysis.pilot.incidents import BearingDeparture, DeviationIncident
 
 # ---------------------------------------------------------------------------
 # The gate program — a PackML jump-table pipeline whose ABORT request comes

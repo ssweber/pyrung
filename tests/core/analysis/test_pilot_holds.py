@@ -10,15 +10,17 @@ from types import SimpleNamespace
 
 from pyrung import Bool, Int, Or, Program, Rung, out, rise
 from pyrung.core.analysis.pilot import pilot_how
+from pyrung.core.analysis.pilot.correction_records import (
+    CorrectionStatus,
+    _ConfirmedCorrection,
+    _CorrectionReceipt,
+)
 from pyrung.core.analysis.pilot.execution import ChannelMotion, ExecutionReceipt
 from pyrung.core.analysis.pilot.navigation_contracts import ActPolicy, ActSource
 from pyrung.core.analysis.pilot.overlay import OperationReceipt, PilotRung
 from pyrung.core.analysis.pilot.recording import _build_plan_journal
 from pyrung.core.analysis.pilot.types import (
-    CorrectionStatus,
     _CommittedAct,
-    _ConfirmedCorrection,
-    _CorrectionReceipt,
     _HoldLogEntry,
     _Step,
     _StepContext,

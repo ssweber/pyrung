@@ -9,13 +9,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrsistent import PVector, pvector
 
 import pyrung.core.analysis.pilot.world as _world
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
+from pyrung.core.analysis.pilot.correction_records import (
+    _ConfirmedCorrection,
+    _CorrectionReceipt,
+)
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
 from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,
@@ -159,50 +162,6 @@ class _Step:
     @property
     def scans(self) -> int:
         return self.scan_after - self.scan_before
-
-
-# ---------------------------------------------------------------------------
-# Investigation incident — shared by investigation_replay.py (builds it) and
-# corrections.py (consumes it); lives here so neither module imports the other.
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class BearingDeparture:
-    """One fact that held at the incident anchor and later departed."""
-
-    tag: str
-    value: Any
-    scan: int | None
-
-
-@dataclass(frozen=True)
-class DeviationIncident:
-    """The bounded window where verify observed a loss of bearing."""
-
-    anchor_scan: int
-    departure_scan: int | None
-    end_scan: int
-    action: tuple[_ActionPair, ...]
-    bearing: tuple[_ActionPair, ...]
-    before_snap: Mapping[str, Any]
-    after_snap: Mapping[str, Any]
-    # Complete factual movement set: every timeline transition plus every
-    # before/after endpoint difference. Consumers filter it locally.
-    changed_tags: tuple[str, ...]
-    departures: tuple[BearingDeparture, ...]
-    # The macro-state register whose departure IS the incident (the bearing /
-    # terminal-letrun channel tag) — other departures downstream of it are
-    # collateral.  Hypothesis ranking keys causal primacy off its cause chain.
-    channel_tag: str | None = None
-    # The recorded session events inside the window (CoastTriggerEvents, ordered,
-    # same-scan groups preserved).  This is the incident's evidence: a
-    # fire-then-reset pulse is two transitions here, never a net no-op.
-    timeline: tuple[Any, ...] = ()
-    # Exact conditions on the retained writer occurrence.  Retained-prefix
-    # recovery projects only the corrected direct conjuncts out of this tuple;
-    # the remaining terms are the correction's executable lifetime.
-    occurrence_conditions: tuple[Any, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -390,56 +349,6 @@ class _HoldLogEntry:
         """Concise recording view derived from the installed executable form."""
 
         return tuple((rung.dest, rung.value) for rung in self.pilot_rungs)
-
-
-class CorrectionStatus(Enum):
-    """Evidence maturity for an investigation-owned overlay."""
-
-    PROBATIONARY = "probationary"
-    ACTIVE = "active"
-    REVOKED = "revoked"
-
-    @property
-    def effective(self) -> bool:
-        """Whether the correction still participates in the live overlay."""
-        return self is not CorrectionStatus.REVOKED
-
-
-@dataclass(frozen=True)
-class _CorrectionReceipt:
-    """Bounded replay proof and lifecycle for one investigation correction."""
-
-    receipt_id: int
-    origin_key: _StateKey
-    correction: _ConfirmedCorrection
-    status: CorrectionStatus = CorrectionStatus.PROBATIONARY
-    admitted_origins: frozenset[_StateKey] = frozenset()
-
-    @property
-    def identity(self) -> tuple[tuple[Any, ...], ...]:
-        return self.correction.identity
-
-    @property
-    def pilot_rungs(self) -> tuple[PilotRung, ...]:
-        return self.correction.pilot_rungs
-
-    @property
-    def sources(self) -> tuple[str, ...]:
-        return self.correction.sources
-
-    @property
-    def justification(self) -> str:
-        return self.correction.justification
-
-
-@dataclass(frozen=True)
-class _ConfirmedCorrection:
-    """One replay-proven correction, including its exact executable lifetime."""
-
-    identity: tuple[tuple[Any, ...], ...]
-    pilot_rungs: tuple[PilotRung, ...]
-    sources: tuple[str, ...]
-    justification: str
 
 
 @dataclass(frozen=True)

@@ -614,7 +614,8 @@ Orchestration:
   rollback checkpoints
 - `recording.py` — event/plan rendering; no drive decisions
 - `types.py` — mutable drive state plus the remaining drive-owned records;
-  execution, world, trace-read, and navigation contracts do not live here
+  execution, world, trace-read, navigation, incident, and correction-lifecycle
+  contracts do not live here
 - `__init__.py` — package exports
 - `physical.py` — harness install, feedback-tag exclusion
 - `multitarget.py` — multi-target incompatibility proof, ordering
@@ -702,6 +703,8 @@ Judgment and recovery:
   settlement bookkeeping, and pure earned-work assessment
 - `correction_lifecycle.py` — confirmed-correction installation, promotion,
   causal revocation, and checkpoint overlay rebasing
+- `correction_records.py` — immutable confirmed-correction identity, receipt,
+  and maturity records
 - `regression_requirements.py` — exact accepted-expectation matching and
   delayed regression-to-requirement adaptation
 - `departure.py` — departure observation and classification
@@ -709,6 +712,7 @@ Judgment and recovery:
 - `causal.py` — recorded cause-chain queries
 - `investigation_replay.py` — bounded replay evidence, incident construction,
   regression comparison, and excursion diagnosis
+- `incidents.py` — immutable observed departure and deviation-window facts
 - `investigate.py` — corrective candidate composition and confirmation; no
   replay or drive-loop ownership
 - `correction_candidates.py` — correction identity, ordering, composition,

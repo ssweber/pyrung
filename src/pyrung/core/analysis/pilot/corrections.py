@@ -37,6 +37,7 @@ from pyrung.core.analysis.pilot.causal import (
     chase_chain_tags,
     empirical_program_writes,
 )
+from pyrung.core.analysis.pilot.incidents import BearingDeparture
 from pyrung.core.analysis.pilot.overlay import (
     OperationReceipt,
     PilotRung,
@@ -50,13 +51,12 @@ from pyrung.core.analysis.pilot.trace import (
 )
 from pyrung.core.analysis.pilot.trace_read import UnsupportedConstruct
 from pyrung.core.analysis.pilot.trace_tree import TraceAction
-from pyrung.core.analysis.pilot.types import BearingDeparture
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.analysis.sp_values import _values_match, _writer_for_tag
 from pyrung.core.crossing import Eq, complement_scalar_constraint
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.types import DeviationIncident
+    from pyrung.core.analysis.pilot.incidents import DeviationIncident
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
