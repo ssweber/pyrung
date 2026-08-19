@@ -279,8 +279,8 @@ def _monitor_committed_trial(
     # Verification is the one authority for whether this exact S0 -> S1/S2
     # execution advanced its selected working edge.  Re-proving the receipt
     # here from a newly traversed tree creates a second, drift-prone progress
-    # protocol.  An accepted trial without a receipt still reaches legacy trend
-    # handling; neither assertion horizon nor an active theory is an exemption.
+    # protocol.  Every accepted trial owns the enriched receipt on its attempt;
+    # neither assertion horizon nor an active theory is an exemption.
     progress = trial.execution.scan_progress
     retained_selected_landing = bool(
         progress is not None and progress.kind == "selected-producer" and progress.landing_owns_tip

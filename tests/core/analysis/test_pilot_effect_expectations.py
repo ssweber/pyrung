@@ -2281,8 +2281,7 @@ def test_execution_and_recording_retain_only_detached_effect_observations() -> N
         post_pulse_snap={},
     )
     accepted = _AcceptedTrial(
-        _ExecutedAttempt(pulse, bearing, raw),  # type: ignore[arg-type]
-        evidence,
+        _ExecutedAttempt(pulse, bearing, raw, execution=evidence),  # type: ignore[arg-type]
         TargetReached(),
     )
     frame = SimpleNamespace(

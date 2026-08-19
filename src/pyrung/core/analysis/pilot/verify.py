@@ -451,8 +451,7 @@ def _accepted_trial(
         intrascan_act=intrascan_act,
     )
     return _AcceptedTrial(
-        attempt=attempt,
-        execution=execution,
+        attempt=replace(attempt, execution=execution),
         earned_work_receipt=earned_work_receipt,
         gate_events=tuple(gate_events),
         verification=verification,
@@ -1444,18 +1443,21 @@ def _verify_gates(
         assert scan_progress is not None
         accepted = replace(
             accepted,
-            execution=replace(
-                accepted.execution,
-                scan_progress=replace(
-                    scan_progress,
-                    kind=(
-                        "observation"
-                        if isinstance(bearing.act, ObserveScan)
-                        else "intrascan-direct"
-                        if isinstance(bearing.act, IntrascanPulse)
-                        else "intrascan-stage"
+            attempt=replace(
+                accepted.attempt,
+                execution=replace(
+                    accepted.execution,
+                    scan_progress=replace(
+                        scan_progress,
+                        kind=(
+                            "observation"
+                            if isinstance(bearing.act, ObserveScan)
+                            else "intrascan-direct"
+                            if isinstance(bearing.act, IntrascanPulse)
+                            else "intrascan-stage"
+                        ),
+                        landing_owns_tip=not isinstance(bearing.act, ObserveScan),
                     ),
-                    landing_owns_tip=not isinstance(bearing.act, ObserveScan),
                 ),
             ),
         )

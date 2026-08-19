@@ -592,13 +592,13 @@ def _saboteur_scenario():
                     cp_frontier,
                 ),
             ),
-        ),
-        execution=ExecutionReceipt(
-            source_snapshot,
-            landing_snapshot,
-            ChannelMotion("State", 6, stop_reason="departed"),
-            None,
-            (),
+            execution=ExecutionReceipt(
+                source_snapshot,
+                landing_snapshot,
+                ChannelMotion("State", 6, stop_reason="departed"),
+                None,
+                (),
+            ),
         ),
         verification=AssessedMotion(
             new_key=("ejected",),

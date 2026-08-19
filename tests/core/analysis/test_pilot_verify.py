@@ -1409,6 +1409,7 @@ class TestVerifyGates:
         assert result.trial is not None
         assert result.trial.attempt.pulse is pulse
         assert result.trial.attempt.bearing is bearing
+        assert result.trial.attempt.execution is result.trial.execution
         assert isinstance(result.trial.verification, TargetReached)
         assert result.trial.attempt.pulse.fork is pulse.fork
         assert result.trial.attempt.bearing.objective is objective
@@ -1547,6 +1548,7 @@ class TestVerifyGates:
 
         assert result.trial is not None
         assert result.trial.attempt.pulse.fork is replay
+        assert result.trial.attempt.execution is result.trial.execution
         assert result.trial.execution.after_snap == dict(replay.state.tags)
         assert result.trial.execution.timeline == timeline
         assert result.trial.execution.timeline != pulse.timeline

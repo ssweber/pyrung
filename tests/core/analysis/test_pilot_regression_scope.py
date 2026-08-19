@@ -92,8 +92,8 @@ def test_regression_nogood_uses_action_source_world(monkeypatch) -> None:
                 act=BatchPulse(policy),
                 objective=BearingObjective(TargetSpec("Target", True)),
             ),
+            execution=ExecutionReceipt({}, {}, ChannelMotion(), None, ()),
         ),
-        execution=ExecutionReceipt({}, {}, ChannelMotion(), None, ()),
         verification=AssessedMotion(
             new_key=pulse.key,
             trend=4,

@@ -260,13 +260,13 @@ def _make_trial(
                 act=BatchPulse(policy),
                 objective=objective,
             ),
-        ),
-        execution=ExecutionReceipt(
-            before_snap=before_snap,
-            after_snap=fork_snap,
-            channel_motion=channel_motion,
-            coast_receipt=coast_receipt,
-            timeline=timeline,
+            execution=ExecutionReceipt(
+                before_snap=before_snap,
+                after_snap=fork_snap,
+                channel_motion=channel_motion,
+                coast_receipt=coast_receipt,
+                timeline=timeline,
+            ),
         ),
         earned_work_receipt=over.pop("earned_work_receipt", EarnedWorkReceipt()),
         gate_events=over.pop("gate_events", ()),
@@ -471,10 +471,13 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
     )
     trial = replace(
         trial,
-        execution=replace(
-            trial.execution,
-            spans=capture_execution_spans(fork, (fork.state.scan_id,)),
-            source_scan=work.state.scan_id,
+        attempt=replace(
+            trial.attempt,
+            execution=replace(
+                trial.execution,
+                spans=capture_execution_spans(fork, (fork.state.scan_id,)),
+                source_scan=work.state.scan_id,
+            ),
         ),
     )
     state = _make_state(2, [], work=work)
@@ -807,10 +810,13 @@ def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
     )
     trial = replace(
         trial,
-        execution=replace(
-            trial.execution,
-            spans=capture_execution_spans(source, (source.state.scan_id,)),
-            source_scan=base.state.scan_id,
+        attempt=replace(
+            trial.attempt,
+            execution=replace(
+                trial.execution,
+                spans=capture_execution_spans(source, (source.state.scan_id,)),
+                source_scan=base.state.scan_id,
+            ),
         ),
     )
     commit_trial(

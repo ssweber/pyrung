@@ -772,16 +772,25 @@ TrialVerification = TargetReached | AssessedMotion
 class _AcceptedTrial:
     """One accepted execution with verification's evidence and judgment.
 
-    The executed attempt remains intact beside the frozen, PLC-free evidence
-    VERIFY selected from its final pulse. Consumers read navigation declarations
-    from ``attempt`` and durable observations from ``execution`` explicitly.
+    VERIFY enriches the attempt's frozen receipt before acceptance. Consumers
+    read navigation declarations from ``attempt`` and durable observations from
+    its derived ``execution`` view; there is no second receipt owner.
     """
 
     attempt: _ExecutedAttempt
-    execution: ExecutionReceipt
     verification: TrialVerification
     earned_work_receipt: EarnedWorkReceipt = field(default_factory=EarnedWorkReceipt)
     gate_events: tuple[PilotGateEvent, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.attempt.execution is None:
+            raise ValueError("accepted trial requires an immutable execution receipt")
+
+    @property
+    def execution(self) -> ExecutionReceipt:
+        execution = self.attempt.execution
+        assert execution is not None  # enforced at construction
+        return execution
 
 
 @dataclass(frozen=True)
