@@ -487,7 +487,6 @@ def _derive_charted_intrascan_front(
     ):
         return None
     question = IntrascanQuestion(
-        assertion_scan=projection.scan_id,
         source_checkpoint=checkpoint,
         advance_index=None,
         operand_authorities={},
@@ -505,12 +504,12 @@ def _derive_charted_intrascan_front(
             state,
             executed.execution,
         ),
-        projection_at=projection_at,
     )
     return derive_recorded_observations(
         question,
         observations,
         fallback_scan=projection.scan_id,
+        projection_at=projection_at,
     )
 
 
@@ -575,7 +574,6 @@ def _derive_attempt_requirements(
         return None
     fallback_scan = _attempt_productive_scan(executed)
     question = IntrascanQuestion(
-        assertion_scan=fallback_scan,
         source_checkpoint=checkpoint,
         advance_index=None,
         operand_authorities={},
@@ -593,12 +591,12 @@ def _derive_attempt_requirements(
             state,
             attempt.execution_receipt,
         ),
-        projection_at=executed.projection_at,
     )
     report = derive_recorded_observations(
         question,
         executed.effect_observations,
         fallback_scan=fallback_scan,
+        projection_at=executed.projection_at,
     )
     exact_report_displacement = any(
         finding.observation.disposition in {"OVERWRITTEN", "DISPLACED"}
@@ -768,7 +766,6 @@ def _derive_settled_target_requirements(
         candidate_scans[0],
     )
     question = IntrascanQuestion(
-        assertion_scan=fallback_scan,
         source_checkpoint=checkpoint,
         advance_index=None,
         operand_authorities={},
@@ -786,12 +783,12 @@ def _derive_settled_target_requirements(
             state,
             trial.execution,
         ),
-        projection_at=projection_at,
     )
     report = derive_recorded_observations(
         question,
         (promoted,),
         fallback_scan=fallback_scan,
+        projection_at=projection_at,
     )
     _retain_intrascan_findings(
         report,

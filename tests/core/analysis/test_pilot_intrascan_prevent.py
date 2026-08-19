@@ -132,13 +132,11 @@ def test_prevent_observation_is_unknown_when_exact_projection_is_unavailable(
         return projection
 
     question = IntrascanQuestion(
-        assertion_scan=1,
         source_checkpoint=checkpoint,
         advance_index=None,
         operand_authorities={},
         steerable=frozenset({RepeatedPermit.name}),
         program_written=frozenset({RepeatedValue.name}),
-        projection_at=exact_projection_at,
     )
 
     observations = observe_execution_window(
@@ -149,7 +147,12 @@ def test_prevent_observation_is_unknown_when_exact_projection_is_unavailable(
         action_scan=1,
         projection_at=exact_projection_at,
     )
-    result = derive_recorded_observations(question, observations)
+    result = derive_recorded_observations(
+        question,
+        observations,
+        fallback_scan=1,
+        projection_at=exact_projection_at,
+    )
 
     assert len(result.observations) == 1
     assert result.observations[0].disposition == "UNKNOWN"

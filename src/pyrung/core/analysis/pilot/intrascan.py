@@ -67,20 +67,14 @@ from pyrung.core.runner import EpochRef
 
 @dataclass(frozen=True)
 class IntrascanQuestion:
-    """Evidence and authority needed to inspect one exact assertion scan."""
+    """Derivation authority for already-recorded intrascan observations."""
 
-    assertion_scan: int
     source_checkpoint: Any = field(compare=False, repr=False)
     advance_index: AdvanceIndex | None = field(compare=False, repr=False)
     operand_authorities: Mapping[str, OperandAuthority] = field(compare=False, repr=False)
     steerable: frozenset[str]
     program_written: frozenset[str]
     configured_inputs: frozenset[str] = frozenset()
-    projection_at: Callable[[int], ScanRungWriteProjection | None] | None = field(
-        default=None,
-        compare=False,
-        repr=False,
-    )
     advance_index_factory: Callable[[], AdvanceIndex] | None = field(
         default=None,
         compare=False,
@@ -1525,7 +1519,8 @@ def derive_recorded_observations(
     question: IntrascanQuestion,
     observations: Sequence[EffectObservation],
     *,
-    fallback_scan: int | None = None,
+    fallback_scan: int,
+    projection_at: Callable[[int], ScanRungWriteProjection | None],
 ) -> IntrascanResult:
     """Interpret already-recorded observations without making a decision.
 
@@ -1563,13 +1558,10 @@ def derive_recorded_observations(
             )
             if occurrence is not None
         )
-        scan = max(
-            scans, default=question.assertion_scan if fallback_scan is None else fallback_scan
-        )
+        scan = max(scans, default=fallback_scan)
         projection = observation.execution_projection
         if projection is None or projection.scan_id != scan:
-            project = question.projection_at or owner._runner()._replay_rung_write_projection_at
-            projection = project(scan)
+            projection = projection_at(scan)
         if projection is None or projection.scan_id != scan:
             continue
         if observation.disposition not in {"ABSENT", "STRANDED"} and advance_index is None:
