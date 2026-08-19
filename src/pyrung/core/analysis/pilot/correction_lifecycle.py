@@ -27,12 +27,12 @@ from pyrung.core.analysis.pilot.overlay import (
 from pyrung.core.analysis.pilot.recovery import assert_recovery_disposable_state
 from pyrung.core.analysis.pilot.types import (
     CorrectionStatus,
-    _Checkpoint,
     _ConfirmedCorrection,
     _CorrectionReceipt,
     _HoldLogEntry,
     _PilotState,
 )
+from pyrung.core.analysis.pilot.world import _Checkpoint
 from pyrung.core.analysis.pilot.world_key import (
     _pilot_world_key,
     _rung_identity,

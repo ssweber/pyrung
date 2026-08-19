@@ -95,16 +95,15 @@ from pyrung.core.analysis.pilot.types import (
     RevisitCredential,
     TargetReached,
     _AcceptedTrial,
-    _Checkpoint,
     _CommittedAct,
     _ExecutedAttempt,
     _PilotState,
     _PulseState,
     _Step,
     _StepContext,
-    _World,
 )
 from pyrung.core.analysis.pilot.verify import _gate_revisit
+from pyrung.core.analysis.pilot.world import _Checkpoint, _World
 from pyrung.core.analysis.steerable import compute_steerable
 
 

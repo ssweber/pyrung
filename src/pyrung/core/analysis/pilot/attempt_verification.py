@@ -27,7 +27,6 @@ from pyrung.core.analysis.pilot.theory_evidence import _theory_live_boundary
 from pyrung.core.analysis.pilot.types import (
     WorldView,
     _AttemptResult,
-    _CausalCheckpoint,
     _ContinuationCheckpoint,
     _IterationFrame,
     _PilotContext,
@@ -35,6 +34,7 @@ from pyrung.core.analysis.pilot.types import (
 )
 from pyrung.core.analysis.pilot.verify import verify_excursion_replay, verify_gates
 from pyrung.core.analysis.pilot.working_theory import active_theory
+from pyrung.core.analysis.pilot.world import _CausalCheckpoint
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 from pyrung.core.analysis.sp_values import _values_match
 

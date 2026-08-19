@@ -522,11 +522,11 @@ this table only locates the owner.
 
 ## World and knowledge
 
-`types.py` and `compass.py` separate state that a revert may undo from
-knowledge that must survive:
+`world.py`, `types.py`, and `compass.py` separate state that a revert may undo
+from knowledge that must survive:
 
-- `_World`: PLC fork, committed steps and contexts, pilot rungs, trend, and
-  dwell accounting.
+- `world.py::_World` and its checkpoint records: PLC fork, committed steps and
+  contexts, pilot rungs, trend, dwell accounting, and exact rollback ownership.
 - `_PilotState` orchestration knowledge: seen keys, checkpoints, pending-departure
   recovery, earned work, correction receipts/revocations, and diagnostic history.
 - `CompassKnowledge`: empirical transitions/tombstones, scoped nogoods, probe
@@ -609,6 +609,8 @@ Orchestration:
   invocation
 - `execution.py` — one execution request's configuration, stop, physical span,
   and verified progress/producer/intrascan findings
+- `world.py` — persistent executable World plus trend, causal, and recovery
+  rollback checkpoints
 - `recording.py` — event/plan rendering; no drive decisions
 - `types.py` — mutable drive state plus remaining cross-module records and
   protocols; execution-owned findings do not live here

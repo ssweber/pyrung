@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.analysis.pilot.execution import ExecutionReceipt
     from pyrung.core.analysis.pilot.trace_tree import TraceNode
-    from pyrung.core.analysis.pilot.types import _CausalCheckpoint
+    from pyrung.core.analysis.pilot.world import _CausalCheckpoint
 
 StaticRungAddress = tuple[str | None, int, tuple[int, ...]]
 

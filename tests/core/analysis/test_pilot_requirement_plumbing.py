@@ -12,7 +12,8 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationWorld,
     TargetSpec,
 )
-from pyrung.core.analysis.pilot.types import _PilotContext, _PilotState, _World
+from pyrung.core.analysis.pilot.types import _PilotContext, _PilotState
+from pyrung.core.analysis.pilot.world import _World
 from tests.fixtures.pilot_alarm_presets import alarmed_at_start
 
 

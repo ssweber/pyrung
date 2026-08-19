@@ -12,7 +12,7 @@ from pyrung.core.analysis.pilot.theory_reducer import (
     RecordTheoryAttempt,
     reduce_theory,
 )
-from pyrung.core.analysis.pilot.types import _CausalCheckpoint, _PilotState, _World
+from pyrung.core.analysis.pilot.types import _PilotState
 from pyrung.core.analysis.pilot.working_theory import (
     TheoryAttemptDisposition,
     TheoryBoundaryIdentity,
@@ -20,6 +20,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryObjectiveSnapshot,
     TheoryState,
 )
+from pyrung.core.analysis.pilot.world import _CausalCheckpoint, _World
 from pyrung.core.runner import EpochRef
 
 

@@ -49,12 +49,11 @@ from pyrung.core.analysis.pilot.theory_evidence import (
 from pyrung.core.analysis.pilot.types import (
     _AcceptedTrial,
     _AttemptResult,
-    _CausalCheckpoint,
-    _Checkpoint,
     _IterationFrame,
     _PilotContext,
     _PilotState,
 )
+from pyrung.core.analysis.pilot.world import _CausalCheckpoint, _Checkpoint
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 
 logger = logging.getLogger(__name__)

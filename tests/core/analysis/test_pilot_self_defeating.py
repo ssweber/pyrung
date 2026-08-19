@@ -79,14 +79,13 @@ from pyrung.core.analysis.pilot.types import (
     RevisitCredential,
     _AcceptedTrial,
     _AttemptResult,
-    _Checkpoint,
     _ConfirmedCorrection,
     _CorrectionReceipt,
     _ExecutedAttempt,
     _PilotState,
     _PulseState,
-    _World,
 )
+from pyrung.core.analysis.pilot.world import _Checkpoint, _World
 from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.condition import AllCondition, CompareEq, CompareNe

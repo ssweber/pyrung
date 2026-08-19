@@ -30,13 +30,11 @@ from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     TargetReached,
     _AcceptedTrial,
-    _Checkpoint,
-    _CheckpointOwner,
     _IterationFrame,
     _PilotContext,
     _PilotState,
-    _RecoveryOrigin,
 )
+from pyrung.core.analysis.pilot.world import _Checkpoint, _CheckpointOwner, _RecoveryOrigin
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 from pyrung.core.analysis.sp_values import _values_match
 

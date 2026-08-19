@@ -74,14 +74,13 @@ from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     _AcceptedTrial,
     _ActionPair,
-    _CausalCheckpoint,
     _ConfirmedCorrection,
     _CorrectionReceipt,
     _IterationFrame,
     _PilotContext,
     _PilotState,
-    _RecoveryOrigin,
 )
+from pyrung.core.analysis.pilot.world import _CausalCheckpoint, _RecoveryOrigin
 from pyrung.core.analysis.pilot.world_key import (
     _pilot_world_key,
 )

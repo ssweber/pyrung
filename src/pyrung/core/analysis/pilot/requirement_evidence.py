@@ -58,7 +58,6 @@ from pyrung.core.analysis.pilot.types import (
     TargetReached,
     _AcceptedTrial,
     _AttemptResult,
-    _CausalCheckpoint,
     _ExecutedAttempt,
     _IterationFrame,
     _PilotContext,
@@ -69,6 +68,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     temporal_setup_rung_identities,
     theory_view,
 )
+from pyrung.core.analysis.pilot.world import _CausalCheckpoint
 from pyrung.core.analysis.pilot.world_key import _rung_identity
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.context import RungId

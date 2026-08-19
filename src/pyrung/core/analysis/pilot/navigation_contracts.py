@@ -17,8 +17,8 @@ from pyrung.core.analysis.pilot.execution import (
     ScanEntryConfiguration,
     StopCondition,
 )
-from pyrung.core.analysis.pilot.types import _ActionPair, _StateKey
-from pyrung.core.analysis.pilot.world_key import _semantic_key
+from pyrung.core.analysis.pilot.types import _ActionPair
+from pyrung.core.analysis.pilot.world_key import _semantic_key, _StateKey
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:

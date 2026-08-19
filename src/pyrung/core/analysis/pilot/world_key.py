@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+_StateKey = tuple[Any, ...]
+
 _THRESHOLD_DOWN_KINDS = frozenset({"count_down", "int_down", "real_down"})
 _THRESHOLD_FORM_GT = "gt"
 

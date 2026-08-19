@@ -12,14 +12,13 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
-from pyrsistent import PRecord, PVector, pvector
-from pyrsistent import field as _precord_field
+from pyrsistent import PVector, pvector
 
+import pyrung.core.analysis.pilot.world as _world
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
 from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,
-    CheckpointRef,
     ExecutionPoint,
     ExecutionReceipt,
     ScanEntryConfiguration,
@@ -29,6 +28,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryState,
     TheoryView,
 )
+from pyrung.core.analysis.pilot.world_key import _StateKey
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
@@ -45,7 +45,6 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.navigation_contracts import (
         ActPolicy,
         Bearing,
-        BearingObjective,
         TargetSpec,
     )
     from pyrung.core.analysis.pilot.outcome import TrialAssessment
@@ -65,7 +64,6 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 _ActionPair = tuple[str, Any]
-_StateKey = tuple[Any, ...]
 
 
 @dataclass(frozen=True)
@@ -209,120 +207,6 @@ class _AvoidPredicate:
     @property
     def names(self) -> tuple[str, ...]:
         return tuple(m.name for m in self.members)
-
-
-class _World(PRecord):
-    """The revertible half of the pilot's state — *the world*.
-
-    ``knowledge commits, the world reverts``: every field here rolls back to a
-    checkpoint on regression, and every field *not* here (compass, nogoods,
-    journey, …) survives. Pilot rungs belong here: they change what the next
-    scan means, so the same PLC tags under a different rung overlay are a
-    different world.  A ``pyrsistent`` PRecord so the value is
-    persistent: the ``committed_acts`` PVector is immutable, so once a checkpoint
-    captures a world (``snapshot_world``) later appends build a fresh world value
-    and never mutate the captured one — the pointer semantics revert relies on.
-
-    ``work`` is a live runner fork (a mutable object); the world merely holds a
-    *reference* to it.  The persistence lives in the structure around it — the
-    step vectors and ``best_trend`` — which is exactly the bookkeeping the old
-    scan-cutoff filtering hand-reconstructed on revert.
-    """
-
-    work = _precord_field()
-    committed_acts = _precord_field()
-    best_trend = _precord_field()
-    pilot_rungs = _precord_field()
-    # Committed scan-ids spent *waiting* — accepted bearing-coast / let-run spans.
-    # Timer dwell is waiting, not searching (see ``coast._COAST_BUDGET``),
-    # so invocation-relative search scans subtract this credit. An accepted
-    # coast that rides a 39k-scan dwell must not bankrupt the search. Lives in
-    # the world so a revert rewinds the credit together with the scans it
-    # excused.
-    dwell_scans = _precord_field()
-
-    def execution_at(self, scan_id: int) -> ExecutionPoint | None:
-        """Resolve one exact scan through its committed operation owner."""
-
-        matches = tuple(
-            point
-            for act in self.committed_acts
-            if (point := act.point_at(scan_id)) is not None
-        )
-        if len(matches) > 1:
-            raise RuntimeError("one physical scan belongs to multiple committed executions")
-        return matches[0] if matches else None
-
-
-@dataclass(frozen=True, eq=False)
-class _CheckpointOwner:
-    """Stable identity for one rollback receipt as its executable world changes."""
-
-    reference: CheckpointRef = field(default_factory=CheckpointRef)
-
-
-@dataclass(frozen=True)
-class _Checkpoint:
-    """A revert anchor: a *pointer* to a world value plus the facts the launch knew.
-
-    ``world`` is the immutable :class:`_World` captured at creation
-    (``_PilotState.snapshot_world``); revert is ``state.load_world(cp.world)`` —
-    plain assignment, not a scan-cutoff reconstruction.
-
-    ``objective`` is Orientation's complete target-relative receipt that
-    justified banking this world. Source anchors carry the objective of the
-    operation launched there; progress anchors carry the objective of the
-    operation that reached them. Recovery keeps rollback ownership separate
-    from the current incident's objective.
-    """
-
-    key: _StateKey
-    world: _World
-    trend: int
-    objective: BearingObjective
-    owner: _CheckpointOwner = field(
-        default_factory=_CheckpointOwner,
-        compare=False,
-        repr=False,
-    )
-
-
-@dataclass(frozen=True)
-class _RecoveryOrigin:
-    """Exact rollback owner and bounded incident evidence for one recovery."""
-
-    checkpoint_owner: _CheckpointOwner
-    anchor_scan: int
-    before_snap: Mapping[str, Any]
-
-
-@dataclass(frozen=True)
-class _CausalCheckpoint:
-    """A target-owned source boundary retained without a progress judgment.
-
-    Ordinary :class:`_Checkpoint` values are trend checkpoints: their
-    ``trend`` and complete Bearing objective exist only after Orientation has
-    read a world.  The cold-start boundary precedes that read, so retaining it
-    as this narrower causal checkpoint avoids inventing target progress while
-    preserving the exact executable world needed by later occurrence-scoped
-    recovery.
-    """
-
-    # ``None`` is explicit when the prover supplied no pre-orientation key
-    # projection.  The frozen world remains exact; an empty tuple would falsely
-    # claim a valid (and globally colliding) executable-world identity.
-    key: _StateKey | None
-    world: _World
-    objective: BearingObjective
-    # Exact external configuration visible at the source boundary. Runner
-    # forks intentionally do not retain mutable patch/force managers, so
-    # requirement authority must travel as immutable checkpoint provenance.
-    configured_inputs: frozenset[str] = frozenset()
-    owner: _CheckpointOwner = field(
-        default_factory=_CheckpointOwner,
-        compare=False,
-        repr=False,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -667,16 +551,16 @@ class _PilotState:
     # once and revert restores it by assignment (``snapshot_world`` /
     # ``load_world``). Flat steps are a read-only public/replay view derived from
     # the operation records below.
-    world: _World
+    world: _world._World
     # ── Knowledge (commits — never rolled back on revert) ──
     key_config: _StateKeyConfig | None
     seen_keys: set[_StateKey]
-    checkpoints: list[_Checkpoint]
+    checkpoints: list[_world._Checkpoint]
     watch_tags: list[str]
     # Exact executable boundary where this drive invocation began. Unlike the
     # optional bootstrap receipt, this exists at every scan number so a live
     # DAP/runner invocation can rebase an accepted early transaction.
-    invocation_checkpoint: _CausalCheckpoint | None = None
+    invocation_checkpoint: _world._CausalCheckpoint | None = None
     # Execution-only receipt for the optional cold-start ``0 -> 1`` scan.
     # Knowledge side: later world reverts must not erase the retained causal
     # source or reinterpret the immutable execution projection.
@@ -690,7 +574,7 @@ class _PilotState:
     # Exact source scans retained only when a temporal interpretation makes
     # them a future working edge. They are evidence/checkpoints, never cached
     # Bearings or executable suffixes.
-    temporal_checkpoints: list[_CausalCheckpoint] = field(default_factory=list)
+    temporal_checkpoints: list[_world._CausalCheckpoint] = field(default_factory=list)
     # Immutable WorkingTheory knowledge. It is deliberately not part of
     # ``_World``: checkpoint restore must not erase observed lifecycle facts.
     # Some exact temporal facts now guide Compass, while optional lifecycle
@@ -870,7 +754,7 @@ class _PilotState:
         at_scan = self.work.state.scan_id if scan_id is None else scan_id
         return max(0, max_scans - self.search_scans_at(at_scan))
 
-    def snapshot_world(self) -> _World:
+    def snapshot_world(self) -> _world._World:
         """Freeze the live world for a checkpoint pointer.
 
         Fork the runner (a mutable object must be copied to stay reusable); the
@@ -881,7 +765,7 @@ class _PilotState:
 
         return self.world.set(work=fork_with_pilot_rungs(self.world.work, self.pilot_rungs))
 
-    def load_world(self, world: _World) -> None:
+    def load_world(self, world: _world._World) -> None:
         """Revert: the checkpoint's world *is* the answer.
 
         Re-fork ``work`` so the checkpoint stays reusable for a repeat revert;

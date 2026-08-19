@@ -23,11 +23,11 @@ from pyrung.core.analysis.pilot.requirements import (
     match_expectation_receipt,
 )
 from pyrung.core.analysis.pilot.types import (
-    _CausalCheckpoint,
     _PilotContext,
     _PilotState,
 )
 from pyrung.core.analysis.pilot.working_theory import temporal_setup_rung_identities
+from pyrung.core.analysis.pilot.world import _CausalCheckpoint
 from pyrung.core.analysis.pilot.world_key import _rung_identity
 from pyrung.core.analysis.sp_values import _values_match
 

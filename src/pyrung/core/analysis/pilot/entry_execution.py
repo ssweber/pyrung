@@ -37,12 +37,11 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints
 from pyrung.core.analysis.pilot.types import (
-    _CausalCheckpoint,
     _IterationFrame,
     _PilotContext,
     _PilotState,
-    _World,
 )
+from pyrung.core.analysis.pilot.world import _CausalCheckpoint, _World
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 
 logger = logging.getLogger(__name__)

@@ -44,10 +44,10 @@ from pyrung.core.analysis.pilot.trace import trace_relational
 from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints
 from pyrung.core.analysis.pilot.types import (
     _AttemptResult,
-    _CausalCheckpoint,
     _PilotState,
 )
 from pyrung.core.analysis.pilot.working_theory import theory_view
+from pyrung.core.analysis.pilot.world import _CausalCheckpoint
 from pyrung.core.runner import _compile_avoid
 from pyrung.dap.console import _PilotProgressFormatter
 

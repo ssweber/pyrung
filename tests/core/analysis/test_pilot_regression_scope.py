@@ -25,8 +25,8 @@ from pyrung.core.analysis.pilot.types import (
     _AcceptedTrial,
     _ExecutedAttempt,
     _PulseState,
-    _RecoveryOrigin,
 )
+from pyrung.core.analysis.pilot.world import _RecoveryOrigin
 
 
 class _RecordingCompass:

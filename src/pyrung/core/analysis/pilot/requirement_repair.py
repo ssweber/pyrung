@@ -31,7 +31,8 @@ from pyrung.core.analysis.pilot.requirements import (
     OperandAuthority,
     RequirementStatus,
 )
-from pyrung.core.analysis.pilot.types import _CausalCheckpoint, _PilotContext, _PilotState
+from pyrung.core.analysis.pilot.types import _PilotContext, _PilotState
+from pyrung.core.analysis.pilot.world import _CausalCheckpoint
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _semantic_key
 from pyrung.core.context import RungId
 from pyrung.core.crossing import Cmp

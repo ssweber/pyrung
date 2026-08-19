@@ -48,13 +48,13 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
 from pyrung.core.analysis.pilot.types import (
     WorldView,
     _AcceptedTrial,
-    _CausalCheckpoint,
     _ContinuationCheckpoint,
     _IterationFrame,
     _PilotContext,
     _PilotState,
     _RecoveryContinuation,
 )
+from pyrung.core.analysis.pilot.world import _CausalCheckpoint
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 from pyrung.core.analysis.sp_values import _values_match
 

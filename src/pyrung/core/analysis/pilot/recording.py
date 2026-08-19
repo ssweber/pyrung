@@ -37,9 +37,9 @@ from pyrung.core.analysis.pilot.types import (
     _IterationFrame,
     _PilotContext,
     _PilotState,
-    _RecoveryOrigin,
     _StepContext,
 )
+from pyrung.core.analysis.pilot.world import _RecoveryOrigin
 from pyrung.core.analysis.pilot.world_key import _rung_identity
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.validation.render import (

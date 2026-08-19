@@ -76,7 +76,6 @@ from pyrung.core.analysis.pilot.types import (
     _AcceptedTrial,
     _ActionPair,
     _AttemptResult,
-    _CausalCheckpoint,
     _HoldLogEntry,
     _PilotContext,
     _PilotState,
@@ -102,6 +101,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     theory_source_is_retained,
     theory_view,
 )
+from pyrung.core.analysis.pilot.world import _CausalCheckpoint
 from pyrung.core.analysis.pilot.world_key import _rung_identity, _semantic_key
 from pyrung.core.analysis.sp_values import _values_match
 

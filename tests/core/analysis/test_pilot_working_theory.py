@@ -56,7 +56,6 @@ from pyrung.core.analysis.pilot.theory_reducer import (
     reduce_theory,
 )
 from pyrung.core.analysis.pilot.trace_read import TraceChoice
-from pyrung.core.analysis.pilot.types import _Checkpoint, _World
 from pyrung.core.analysis.pilot.working_theory import (
     ConductivityResearchFinding,
     IntrascanTracebackFinding,
@@ -84,6 +83,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     temporal_need_request,
     theory_view,
 )
+from pyrung.core.analysis.pilot.world import _Checkpoint, _World
 from pyrung.core.context import RungId
 from pyrung.core.intrascan_counterfactual import OccurrenceBoundary
 from pyrung.core.runner import EpochRef

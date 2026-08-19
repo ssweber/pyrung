@@ -106,12 +106,10 @@ from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     _AcceptedTrial,
     _ActionPair,
-    _CausalCheckpoint,
     _IterationFrame,
     _PilotContext,
     _PilotState,
     _Step,
-    _World,
 )
 from pyrung.core.analysis.pilot.working_theory import (
     ConductivityResearchFinding,
@@ -124,6 +122,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     temporal_need_request,
     theory_view,
 )
+from pyrung.core.analysis.pilot.world import _CausalCheckpoint, _World
 from pyrung.core.analysis.pilot.world_key import (
     _pilot_world_key,
 )

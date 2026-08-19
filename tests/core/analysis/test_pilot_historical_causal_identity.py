@@ -10,7 +10,8 @@ from pyrsistent import pmap, pvector
 from pyrung import PLC, Bool, Program, latch, rung, system
 from pyrung.core.analysis.causal import CausalChain, EnablingCondition, Transition
 from pyrung.core.analysis.pilot.overlay import PilotRung, _set_pilot_rungs
-from pyrung.core.analysis.pilot.types import _PilotState, _World
+from pyrung.core.analysis.pilot.types import _PilotState
+from pyrung.core.analysis.pilot.world import _World
 from pyrung.core.condition import AnyCondition
 from pyrung.core.context import RungId
 
