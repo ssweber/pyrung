@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from itertools import count
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -18,6 +19,7 @@ from pyrung.core.analysis.pilot.effects import (
 )
 from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,
+    CheckpointRef,
     ExecutionReceipt,
     ExecutionSpan,
 )
@@ -40,6 +42,9 @@ from pyrung.core.analysis.pilot.regression_requirements import (
 from pyrung.core.analysis.pilot.requirements import ExpectationReceipt
 from pyrung.core.context import RungId
 from pyrung.core.executor import WriteOccurrence
+from pyrung.core.runner import EpochRef
+
+_EPOCH_REFS = count(10_000)
 
 
 class _ReplayOwner:
@@ -117,7 +122,7 @@ def _receipt(
         act=act,
         objective=BearingObjective(TargetSpec("ReceiptTarget", True)),
     )
-    checkpoint_owner = object()
+    checkpoint_owner = SimpleNamespace(reference=CheckpointRef())
     checkpoint = SimpleNamespace(
         owner=checkpoint_owner,
         key=(source,),
@@ -160,7 +165,11 @@ def _match(receipts, *, occurrence, epoch, owner):
 
 
 def _epoch() -> SimpleNamespace:
-    return SimpleNamespace(first_scan=8, last_scan=8)
+    return SimpleNamespace(
+        first_scan=8,
+        last_scan=8,
+        reference=EpochRef(next(_EPOCH_REFS)),
+    )
 
 
 def test_same_tag_and_rung_with_a_different_dynamic_address_does_not_match() -> None:
@@ -185,7 +194,7 @@ def test_foreign_epoch_or_execution_owner_does_not_match(foreign_dimension: str)
             (receipt,),
             occurrence=write,
             epoch=object() if foreign_dimension == "epoch" else epoch,
-            owner=object() if foreign_dimension == "owner" else owner,
+            owner=_ReplayOwner(epoch) if foreign_dimension == "owner" else owner,
         )
         is None
     )
@@ -272,12 +281,25 @@ def test_receipt_source_identity_must_remain_intact(corruption: str) -> None:
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="source")
     corrupted = (
-        replace(receipt, checkpoint_owner=object())
+        replace(
+            receipt,
+            checkpoint_owner=SimpleNamespace(reference=CheckpointRef()),
+        )
         if corruption == "checkpoint_owner"
         else replace(receipt, source_world_key=("foreign-source",))
     )
 
     assert _match((corrupted,), occurrence=write, epoch=epoch, owner=owner) is None
+
+
+def test_receipt_rejects_an_untyped_checkpoint_owner() -> None:
+    epoch = _epoch()
+    owner = _ReplayOwner(epoch)
+    write = _write(call_invocation=1)
+    receipt = _receipt(write, epoch=epoch, owner=owner, source="source")
+
+    with pytest.raises(ValueError, match="typed CheckpointRef"):
+        replace(receipt, checkpoint_owner=object())
 
 
 def test_malformed_source_checkpoint_fails_closed() -> None:

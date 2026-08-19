@@ -343,7 +343,7 @@ def _continuation_source_checkpoint(
         if requirement.checkpoint_owner is continuation.checkpoint_owner
         and requirement.source_world_key == continuation.source_world_key
     )
-    unique = {id(checkpoint): checkpoint for checkpoint in matches}
+    unique = {checkpoint.owner.reference: checkpoint for checkpoint in matches}
     return next(iter(unique.values())) if len(unique) == 1 else None
 
 

@@ -24,6 +24,7 @@ from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligation,
 )
+from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.requirement_derivation import (
     _residualize_guard_requirement,
     derive_advance_operand_requirement,
@@ -43,6 +44,7 @@ from pyrung.core.context import RungId
 from pyrung.core.crossing import Cmp
 from pyrung.core.executor import ReadOccurrence, WriteOccurrence
 from pyrung.core.instruction.timers import OnDelayInstruction
+from pyrung.core.runner import EpochRef
 from tests.fixtures.pilot_alarm_presets import (
     aborted_on_first_scan,
     alarmed_at_start,
@@ -202,9 +204,13 @@ def _evidence() -> _Evidence:
         reads=(enable_read, acc_read, preset_read, demanding_read),
     )
     owner = AdvanceOwner(owner_instruction.advance_profile(), owner_instruction)
-    epoch = SimpleNamespace(first_scan=1, last_scan=1)
+    epoch = SimpleNamespace(
+        first_scan=1,
+        last_scan=1,
+        reference=EpochRef(99_000),
+    )
     epoch_owner = SimpleNamespace(epoch=epoch)
-    checkpoint = SimpleNamespace(owner=object())
+    checkpoint = SimpleNamespace(owner=SimpleNamespace(reference=CheckpointRef()))
     return _Evidence(
         AdvanceIndex(
             MappingProxyType({"Watchdog.Done": owner}),
@@ -608,7 +614,11 @@ def test_missing_epoch_or_checkpoint_fails_closed() -> None:
 def test_distinct_same_range_epochs_have_distinct_requirement_identity() -> None:
     evidence = _evidence()
     first = _derive(evidence).requirement
-    other_epoch = SimpleNamespace(first_scan=1, last_scan=1)
+    other_epoch = SimpleNamespace(
+        first_scan=1,
+        last_scan=1,
+        reference=EpochRef(99_001),
+    )
     second = _derive(
         evidence,
         execution_epoch=other_epoch,
@@ -617,9 +627,7 @@ def test_distinct_same_range_epochs_have_distinct_requirement_identity() -> None
 
     assert first is not None and second is not None
     assert first.identity != second.identity
-    assert (
-        first.diagnostic_snapshot().causal_identity != second.diagnostic_snapshot().causal_identity
-    )
+    assert first.execution_ref != second.execution_ref
 
 
 def test_ambiguous_owner_fails_closed() -> None:
@@ -805,7 +813,9 @@ def test_failed_alarm_effect_derives_exact_preset_requirement() -> None:
         execution_owner=observation.execution_owner,
         selected_writer=obligation.producer,
         source_world_key=("source",),
-        source_checkpoint=SimpleNamespace(owner=object()),
+        source_checkpoint=SimpleNamespace(
+            owner=SimpleNamespace(reference=CheckpointRef()),
+        ),
         provenance="steer",
     )
 
@@ -831,7 +841,8 @@ def test_committed_expectation_event_retains_exact_source_and_occurrences() -> N
     assert not any(event.kind == "failed_effect_explained" for event in events)
     receipt = committed[0].data["receipt"]
     assert receipt.source_scan == 1
-    assert len(receipt.causal_identity) == 3
+    assert receipt.execution_ref
+    assert receipt.checkpoint_ref
     assert receipt.act_identity[0] == "pulse"
     assert receipt.producer_occurrences
     assert receipt.producer_occurrences[0].tag == target.name
@@ -867,7 +878,10 @@ def test_absent_selected_writer_explains_exact_false_guard() -> None:
     explanation = explain_selected_absence(
         observation,
         projection,
-        SimpleNamespace(world=SimpleNamespace(work=source), owner=object()),
+        SimpleNamespace(
+            world=SimpleNamespace(work=source),
+            owner=SimpleNamespace(reference=CheckpointRef()),
+        ),
     )
 
     assert explanation.kind is FailureExplanationKind.GUARD_FALSE
@@ -916,7 +930,7 @@ def test_absent_guard_requirement_preserves_or_and_short_circuit_frontier() -> N
         action_scan=1,
     )[0]
     checkpoint = SimpleNamespace(
-        owner=object(),
+        owner=SimpleNamespace(reference=CheckpointRef()),
         world=SimpleNamespace(work=source),
     )
 
@@ -999,7 +1013,7 @@ def test_false_or_retains_exact_arm_when_sibling_inverse_is_opaque() -> None:
         selected_writer=obligation.producer,
         source_world_key=("partial-or-source",),
         source_checkpoint=SimpleNamespace(
-            owner=object(),
+            owner=SimpleNamespace(reference=CheckpointRef()),
             world=SimpleNamespace(work=source),
         ),
     )
@@ -1057,7 +1071,7 @@ def test_stranded_exact_consumer_guard_becomes_active_requirement() -> None:
         selected_writer=obligation.producer,
         source_world_key=("stranded-source",),
         source_checkpoint=SimpleNamespace(
-            owner=object(),
+            owner=SimpleNamespace(reference=CheckpointRef()),
             world=SimpleNamespace(work=source),
         ),
         provenance="test",
@@ -1110,7 +1124,10 @@ def test_absent_selected_oneshot_reads_spentness_from_source_checkpoint() -> Non
     explanation = explain_selected_absence(
         observation,
         projection,
-        SimpleNamespace(world=SimpleNamespace(work=source), owner=object()),
+        SimpleNamespace(
+            world=SimpleNamespace(work=source),
+            owner=SimpleNamespace(reference=CheckpointRef()),
+        ),
     )
 
     assert explanation.kind is FailureExplanationKind.SPENT
@@ -1144,7 +1161,7 @@ def test_conditional_negative_uses_upstream_deadline_but_honors_set_preset() -> 
         if pair[0].first_scan <= 1 <= pair[0].last_scan
     )
     checkpoint = SimpleNamespace(
-        owner=object(),
+        owner=SimpleNamespace(reference=CheckpointRef()),
         world=SimpleNamespace(work=source),
     )
 

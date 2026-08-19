@@ -33,6 +33,7 @@ from pyrung.core.analysis.pilot.effects import (
     occurrence_selector,
     occurrence_snapshot,
 )
+from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     fork_with_pilot_rungs,
@@ -63,6 +64,7 @@ from pyrung.core.context import RungId
 from pyrung.core.crossing import Cmp
 from pyrung.core.instruction.advance import constraint_holds
 from pyrung.core.intrascan_counterfactual import OccurrenceBoundary
+from pyrung.core.runner import EpochRef
 
 
 @dataclass(frozen=True)
@@ -139,6 +141,13 @@ class IntrascanFinding:
             None,
         )
         requirement = self.derivation.requirement
+        execution_ref = self.observation.execution_ref
+        checkpoint_ref = getattr(self.source_checkpoint.owner, "reference", None)
+        if not isinstance(execution_ref, EpochRef) or not isinstance(
+            checkpoint_ref,
+            CheckpointRef,
+        ):
+            raise ValueError("intrascan finding has no typed execution source")
         return IntrascanFindingSnapshot(
             observation=self.observation.diagnostic_snapshot(),
             explanation=self.derivation.explanation,
@@ -146,11 +155,8 @@ class IntrascanFinding:
             selected_writer=self.observation.obligation.producer,
             source_world_key=self.source_checkpoint.key,
             source_scan=getattr(getattr(checkpoint_work, "state", None), "scan_id", None),
-            causal_identity=(
-                id(self.observation.execution_epoch),
-                id(self.observation.execution_owner),
-                id(self.source_checkpoint.owner),
-            ),
+            execution_ref=execution_ref,
+            checkpoint_ref=checkpoint_ref,
             source_walk=self.derivation.source_walk,
             consumed_before_displacement=self.consumed_before_displacement,
         )
@@ -166,7 +172,8 @@ class IntrascanFindingSnapshot:
     selected_writer: Any
     source_world_key: Any
     source_scan: int | None
-    causal_identity: tuple[int, int, int]
+    execution_ref: EpochRef
+    checkpoint_ref: CheckpointRef
     source_walk: RequirementSourceWalk | None
     consumed_before_displacement: bool = False
 

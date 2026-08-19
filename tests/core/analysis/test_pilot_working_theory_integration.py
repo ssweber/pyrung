@@ -52,11 +52,10 @@ def _direct_producer_program() -> tuple[Program, Bool]:
 
 
 def _stable_public_value(value: Any, *, field_name: str = "") -> Any:
-    """Retain every stable diagnostic field while naming opaque owner roles."""
+    """Retain every stable diagnostic field in one comparable value."""
 
-    if field_name == "causal_identity":
-        assert len(value) == 3
-        return ("execution-epoch", "execution-owner", "checkpoint-owner")
+    if field_name in {"execution_ref", "checkpoint_ref"}:
+        return field_name
     if value is None or isinstance(value, bool | int | float | str | bytes):
         return value
     if isinstance(value, Enum):
@@ -238,7 +237,8 @@ def test_requirement_event_preserves_exact_scan_call_and_deadline() -> None:
     assert snapshot.demanding_occurrence.scan_id == 1
     assert snapshot.deadline == snapshot.demanding_occurrence
     assert snapshot.deadline.dynamic_address[5] == snapshot.deadline.call_invocation
-    assert snapshot.causal_identity
+    assert snapshot.execution_ref
+    assert snapshot.checkpoint_ref
 
 
 def test_optional_reducer_failure_cannot_change_production_result(monkeypatch: Any) -> None:

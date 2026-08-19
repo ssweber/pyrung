@@ -19,6 +19,7 @@ from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligation,
 )
+from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.intrascan import IntrascanQuestion, inspect_assertion_scan
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
@@ -113,7 +114,7 @@ def _question(
     graph = build_program_graph(program)
     checkpoint = SimpleNamespace(
         key=("intrascan-source", 0),
-        owner=object(),
+        owner=SimpleNamespace(reference=CheckpointRef()),
         world=SimpleNamespace(work=source),
     )
     return IntrascanQuestion(
@@ -219,11 +220,8 @@ def test_report_matches_exact_overwrite_and_existing_requirement_derivation() ->
     assert snapshot.selected_writer == direct[0].obligation.producer
     assert snapshot.source_world_key == question.source_checkpoint.key
     assert snapshot.source_scan == 0
-    assert snapshot.causal_identity == (
-        id(direct[0].execution_epoch),
-        id(direct[0].execution_owner),
-        id(question.source_checkpoint.owner),
-    )
+    assert snapshot.execution_ref == direct[0].execution_ref
+    assert snapshot.checkpoint_ref == question.source_checkpoint.owner.reference
 
 
 def test_report_matches_displaced_consumer_shape() -> None:
@@ -504,7 +502,8 @@ def test_pilot_adapter_reuses_the_steer_projection_for_overwrite_evidence() -> N
     assert receipt.selected_writer == expected.selected_writer
     assert receipt.source_world_key == expected.source_world_key
     assert receipt.source_scan == expected.source_scan
-    assert receipt.causal_identity == expected.causal_identity
+    assert receipt.execution_ref == expected.execution_ref
+    assert receipt.checkpoint_ref == expected.checkpoint_ref
     assert requirement == expected.requirement
 
     replayed = _ExecutedAttempt(
@@ -610,7 +609,8 @@ def test_pilot_adapter_matches_service_snapshots_order_and_dedupe() -> None:
         assert receipt.selected_writer == finding.selected_writer
         assert receipt.source_world_key == finding.source_world_key
         assert receipt.source_scan == finding.source_scan
-        assert receipt.causal_identity == finding.causal_identity
+        assert receipt.execution_ref == finding.execution_ref
+        assert receipt.checkpoint_ref == finding.checkpoint_ref
         assert receipt.act_identity == act_identity(bearing.act)
         assert requirement == finding.requirement
 

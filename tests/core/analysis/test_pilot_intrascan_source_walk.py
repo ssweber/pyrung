@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import fields, replace
+from itertools import count
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -22,6 +23,7 @@ from pyrung.core.analysis.pilot.effects import (
     occurrence_snapshot,
     promote_terminal_target_observation,
 )
+from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.intrascan import IntrascanFinding
 from pyrung.core.analysis.pilot.intrascan_schedule import iter_guard_alternatives
 from pyrung.core.analysis.pilot.requirement_derivation import (
@@ -40,6 +42,9 @@ from pyrung.core.analysis.pilot.requirements import (
 )
 from pyrung.core.crossing import Cmp
 from pyrung.core.executor import WriteOccurrence
+from pyrung.core.runner import EpochRef
+
+_EPOCH_REFS = count(1_100_000)
 
 
 def _terminal_overwrite(
@@ -77,7 +82,7 @@ def _terminal_overwrite(
     )
     assert promoted is not None and promoted.displacement is not None
     checkpoint = SimpleNamespace(
-        owner=object(),
+        owner=SimpleNamespace(reference=CheckpointRef()),
         key=("source-walk", 0),
         world=SimpleNamespace(work=source),
     )
@@ -648,7 +653,10 @@ def test_existing_one_hop_facade_matches_the_typed_walk() -> None:
     stage1_condition = replace(typed.condition, source_links=())
     assert strengthened == stage1_condition
 
-    epoch = object()
+    epoch = SimpleNamespace(reference=EpochRef(next(_EPOCH_REFS)))
+    checkpoint = SimpleNamespace(
+        owner=SimpleNamespace(reference=CheckpointRef()),
+    )
     active = ActiveRequirement(
         condition=strengthened,
         demanding_occurrence=atom.deadline,
@@ -657,8 +665,8 @@ def test_existing_one_hop_facade_matches_the_typed_walk() -> None:
         operand_authority=OperandAuthority.UNKNOWN,
         execution_owner=SimpleNamespace(epoch=epoch),
         source_world_key=("stage1-navigation",),
-        checkpoint_owner=object(),
-        source_checkpoint=object(),
+        checkpoint_owner=checkpoint.owner,
+        source_checkpoint=checkpoint,
     )
     expected = replace(active, condition=stage1_condition)
     transitive = replace(active, condition=typed.condition)

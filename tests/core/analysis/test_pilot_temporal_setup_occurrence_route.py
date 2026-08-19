@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from pyrung import PLC
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.effects import occurrence_snapshot
+from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.requirements import ActiveRequirement, OperandAuthority
 from pyrung.core.analysis.pilot.verify import _observe_temporal_setup_occurrences
 from pyrung.core.crossing import Cmp
@@ -51,6 +52,7 @@ def test_gate_restoration_is_proved_at_its_exact_short_circuit_read() -> None:
 
     owner = source._causal_lineage.owner_at(1)
     assert owner is not None
+    checkpoint_owner = SimpleNamespace(reference=CheckpointRef())
     requirement = ActiveRequirement(
         condition=Cmp(fixture.GateAvailable.name, "!=", False),
         demanding_occurrence=occurrence_snapshot(demanding_read),
@@ -59,8 +61,11 @@ def test_gate_restoration_is_proved_at_its_exact_short_circuit_read() -> None:
         operand_authority=OperandAuthority.ADJUSTABLE,
         execution_owner=owner,
         source_world_key=("occurrence-route-source",),
-        checkpoint_owner=object(),
-        source_checkpoint=SimpleNamespace(configured_inputs=frozenset()),
+        checkpoint_owner=checkpoint_owner,
+        source_checkpoint=SimpleNamespace(
+            configured_inputs=frozenset(),
+            owner=checkpoint_owner,
+        ),
     )
 
     # At the restored source Gate is already true. One assertion scan changes

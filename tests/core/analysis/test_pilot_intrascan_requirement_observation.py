@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from itertools import count
 from types import SimpleNamespace
 from typing import Any
 
 from pyrung import PLC, Bool, Int, Program, call, copy, latch, reset, rung, subroutine
 from pyrung.core.analysis.pilot.effects import occurrence_selector, occurrence_snapshot
+from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.intrascan import (
     IntrascanRequirementDisposition,
     build_intrascan_requirement_evidence,
@@ -20,11 +22,14 @@ from pyrung.core.analysis.pilot.requirements import (
     OperandAuthority,
 )
 from pyrung.core.crossing import Cmp
+from pyrung.core.runner import EpochRef
+
+_EPOCH_REFS = count(1_000_000)
 
 
 def _checkpoint(source: PLC, label: str) -> Any:
     return SimpleNamespace(
-        owner=object(),
+        owner=SimpleNamespace(reference=CheckpointRef()),
         key=(label, source.state.scan_id),
         world=SimpleNamespace(work=source, pilot_rungs=()),
     )
@@ -56,7 +61,7 @@ def _guard_evidence(
 
     collect(condition)
     checkpoint = _checkpoint(source, label)
-    epoch = object()
+    epoch = SimpleNamespace(reference=EpochRef(next(_EPOCH_REFS)))
     requirement = ActiveRequirement(
         condition=condition,
         demanding_occurrence=demanding_occurrence or atoms[0].deadline,

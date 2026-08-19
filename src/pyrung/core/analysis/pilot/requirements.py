@@ -26,10 +26,26 @@ from pyrung.core.analysis.pilot.effects import (
     expectation_snapshot,
     occurrence_snapshot,
 )
+from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.navigation_contracts import act_identity
 from pyrung.core.crossing import (
     Constraint,
 )
+from pyrung.core.runner import EpochRef
+
+
+def _execution_ref(owner: Any) -> EpochRef:
+    reference = getattr(getattr(owner, "epoch", None), "reference", None)
+    if not isinstance(reference, EpochRef):
+        raise ValueError("evidence owner must expose one typed EpochRef")
+    return reference
+
+
+def _checkpoint_ref(owner: Any) -> CheckpointRef:
+    reference = getattr(owner, "reference", None)
+    if not isinstance(reference, CheckpointRef):
+        raise ValueError("evidence checkpoint must expose one typed CheckpointRef")
+    return reference
 
 
 class FailureExplanationKind(StrEnum):
@@ -257,7 +273,8 @@ class FailedEffectReceiptSnapshot:
     selected_writer: Any
     source_world_key: Any
     source_scan: int | None
-    causal_identity: tuple[int, int, int]
+    execution_ref: EpochRef
+    checkpoint_ref: CheckpointRef
     act_identity: tuple[Any, ...]
 
 
@@ -282,8 +299,8 @@ class FailedEffectReceipt:
     expectation_role: EffectReceiptRole = EffectReceiptRole.IMMEDIATE
 
     def __post_init__(self) -> None:
-        if getattr(self.execution_owner, "epoch", None) is None:
-            raise ValueError("failed effect receipt owner must expose one Epoch")
+        _execution_ref(self.execution_owner)
+        _checkpoint_ref(self.checkpoint_owner)
 
     @property
     def execution_epoch(self) -> Epoch:
@@ -292,15 +309,22 @@ class FailedEffectReceipt:
         return self.execution_owner.epoch
 
     @property
+    def execution_ref(self) -> EpochRef:
+        return _execution_ref(self.execution_owner)
+
+    @property
+    def checkpoint_ref(self) -> CheckpointRef:
+        return _checkpoint_ref(self.checkpoint_owner)
+
+    @property
     def identity(self) -> tuple[Any, ...]:
         return (
             self.explanation,
             self.observation,
             self.selected_writer,
             self.source_world_key,
-            self.checkpoint_owner,
-            id(self.execution_epoch),
-            id(self.execution_owner),
+            self.execution_ref,
+            self.checkpoint_ref,
             self.act_identity,
             self.expectation_role,
         )
@@ -317,11 +341,8 @@ class FailedEffectReceipt:
             selected_writer=self.selected_writer,
             source_world_key=self.source_world_key,
             source_scan=getattr(getattr(checkpoint_work, "state", None), "scan_id", None),
-            causal_identity=(
-                id(self.execution_epoch),
-                id(self.execution_owner),
-                id(self.checkpoint_owner),
-            ),
+            execution_ref=self.execution_ref,
+            checkpoint_ref=self.checkpoint_ref,
             act_identity=self.act_identity,
         )
 
@@ -337,7 +358,8 @@ class ActiveRequirementSnapshot:
     operand_authority: OperandAuthority
     source_world_key: Any
     source_scan: int | None
-    causal_identity: tuple[int, int, int]
+    execution_ref: EpochRef
+    checkpoint_ref: CheckpointRef
     phase: RequirementPhase
     status: RequirementStatus
     provenance: str
@@ -372,14 +394,22 @@ class ActiveRequirement:
     obstruction_occurrence: EffectOccurrenceSnapshot | None = None
 
     def __post_init__(self) -> None:
-        if getattr(self.execution_owner, "epoch", None) is None:
-            raise ValueError("active requirement owner must expose one Epoch")
+        _execution_ref(self.execution_owner)
+        _checkpoint_ref(self.checkpoint_owner)
 
     @property
     def execution_epoch(self) -> Epoch:
         """Derive the physical Epoch from the requirement's sole owner."""
 
         return self.execution_owner.epoch
+
+    @property
+    def execution_ref(self) -> EpochRef:
+        return _execution_ref(self.execution_owner)
+
+    @property
+    def checkpoint_ref(self) -> CheckpointRef:
+        return _checkpoint_ref(self.checkpoint_owner)
 
     @property
     def permits_assignment(self) -> bool:
@@ -422,11 +452,8 @@ class ActiveRequirement:
             operand_authority=self.operand_authority,
             source_world_key=self.source_world_key,
             source_scan=source_scan,
-            causal_identity=(
-                id(self.execution_epoch),
-                id(self.execution_owner),
-                id(self.checkpoint_owner),
-            ),
+            execution_ref=self.execution_ref,
+            checkpoint_ref=self.checkpoint_ref,
             phase=self.phase,
             status=self.status,
             provenance=self.provenance,
@@ -444,10 +471,9 @@ class ActiveRequirement:
             self.deadline,
             self.selected_writer,
             self.operand_authority,
-            id(self.execution_epoch),
-            id(self.execution_owner),
+            self.execution_ref,
+            self.checkpoint_ref,
             self.source_world_key,
-            self.checkpoint_owner,
             self.phase,
             self.status,
             self.provenance,
@@ -480,7 +506,8 @@ class ExpectationReceiptSnapshot:
     obligations: tuple[Any, ...]
     producer_occurrences: tuple[EffectOccurrenceSnapshot, ...]
     consumer_occurrences: tuple[EffectOccurrenceSnapshot, ...]
-    causal_identity: tuple[int, int, int]
+    execution_ref: EpochRef
+    checkpoint_ref: CheckpointRef
     expectation_role: EffectReceiptRole = EffectReceiptRole.IMMEDIATE
 
 
@@ -502,6 +529,10 @@ class ExpectationReceipt:
     expectation: Any = field(default=None, compare=False, repr=False)
     expectation_role: EffectReceiptRole = EffectReceiptRole.IMMEDIATE
 
+    def __post_init__(self) -> None:
+        _checkpoint_ref(self.checkpoint_owner)
+        _execution_ref(self.execution_owner)
+
     @property
     def execution_owner(self) -> Any:
         """The one Epoch query owning every producer occurrence."""
@@ -522,6 +553,14 @@ class ExpectationReceipt:
 
         return self.execution_owner.epoch
 
+    @property
+    def execution_ref(self) -> EpochRef:
+        return _execution_ref(self.execution_owner)
+
+    @property
+    def checkpoint_ref(self) -> CheckpointRef:
+        return _checkpoint_ref(self.checkpoint_owner)
+
     def diagnostic_snapshot(self) -> ExpectationReceiptSnapshot:
         checkpoint_work = getattr(
             getattr(self.source_checkpoint, "world", None),
@@ -536,11 +575,8 @@ class ExpectationReceipt:
             obligations=self.obligations,
             producer_occurrences=self.producer_occurrences,
             consumer_occurrences=self.consumer_occurrences,
-            causal_identity=(
-                id(self.execution_epoch),
-                id(self.execution_owner),
-                id(self.checkpoint_owner),
-            ),
+            execution_ref=self.execution_ref,
+            checkpoint_ref=self.checkpoint_ref,
             expectation_role=self.expectation_role,
         )
 
@@ -548,14 +584,13 @@ class ExpectationReceipt:
     def identity(self) -> tuple[Any, ...]:
         return (
             self.source_world_key,
-            self.checkpoint_owner,
             self.act_identity,
             self.active_rung_identities,
             self.obligations,
             self.producer_occurrences,
             self.consumer_occurrences,
-            id(self.execution_epoch),
-            id(self.execution_owner),
+            self.execution_ref,
+            self.checkpoint_ref,
             self.expectation_role,
         )
 
@@ -655,7 +690,7 @@ def expectation_occurrence_ownerships(
     """Group logical receipt aliases by immutable physical occurrence owner."""
 
     grouped: dict[
-        tuple[EffectOccurrenceSnapshot, int, int],
+        tuple[EffectOccurrenceSnapshot, EpochRef],
         list[ExpectationOccurrenceSupport],
     ] = {}
     for receipt in receipts:
@@ -663,7 +698,7 @@ def expectation_occurrence_ownerships(
             producer = resolve_expectation_receipt_producer(receipt, index)
             if producer is None:
                 continue
-            key = (occurrence, id(receipt.execution_epoch), id(receipt.execution_owner))
+            key = (occurrence, receipt.execution_ref)
             grouped.setdefault(key, []).append(
                 ExpectationOccurrenceSupport(receipt, index, producer)
             )

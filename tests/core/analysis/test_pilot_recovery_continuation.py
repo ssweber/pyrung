@@ -9,7 +9,7 @@ from pyrung import PLC, Int, Program, copy, rung
 from pyrung.core.analysis.pilot import attempt_transition as attempt_transition_module
 from pyrung.core.analysis.pilot import recovery_continuation
 from pyrung.core.analysis.pilot.effects import EffectExpectation
-from pyrung.core.analysis.pilot.execution import MotionKind
+from pyrung.core.analysis.pilot.execution import CheckpointRef, MotionKind
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -147,7 +147,9 @@ def test_multi_scan_recovery_window_retains_exact_causal_source(monkeypatch) -> 
     epoch_ref = EpochRef(10_002)
     epoch = SimpleNamespace(reference=epoch_ref)
     checkpoint_owner = object()
-    source_checkpoint = object()
+    source_checkpoint = SimpleNamespace(
+        owner=SimpleNamespace(reference=CheckpointRef()),
+    )
     source_key = ("source",)
     continuation = _RecoveryContinuation(
         checkpoint_owner=checkpoint_owner,

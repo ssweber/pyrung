@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     )
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.context import ConditionView
-    from pyrung.core.runner import Epoch, EpochQuery
+    from pyrung.core.runner import Epoch, EpochQuery, EpochRef
 
 StaticRungAddress = tuple[str | None, int, tuple[int, ...]]
 EffectDisposition = Literal[
@@ -295,6 +295,14 @@ class EffectObservation:
         if self.execution_owner is None:
             return None
         return self.execution_owner.epoch
+
+    @property
+    def execution_ref(self) -> EpochRef | None:
+        """Stable physical identity of this observation's execution."""
+
+        if self.execution_owner is None:
+            return None
+        return self.execution_owner.epoch.reference
 
     def diagnostic_snapshot(self) -> EffectObservationSnapshot:
         return EffectObservationSnapshot(

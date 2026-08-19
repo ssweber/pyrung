@@ -264,7 +264,8 @@ def _theory_requirement_snapshot(requirement: ActiveRequirement) -> TheoryRequir
         selected_writer_identity,
         diagnostic.operand_authority.value,
         source_world_identity,
-        diagnostic.causal_identity,
+        diagnostic.execution_ref,
+        diagnostic.checkpoint_ref,
         diagnostic.phase.value,
         diagnostic.status.value,
         diagnostic.provenance,
@@ -280,7 +281,7 @@ def _theory_requirement_snapshot(requirement: ActiveRequirement) -> TheoryRequir
         operand_authority=diagnostic.operand_authority.value,
         source_world_key=source_world_identity,
         source_scan=diagnostic.source_scan,
-        execution_ref=requirement.execution_epoch.reference,
+        execution_ref=requirement.execution_ref,
         phase=diagnostic.phase.value,
         status=diagnostic.status.value,
         provenance=diagnostic.provenance,
@@ -684,13 +685,13 @@ def _theory_transition_after_monitor(
     if observation is None:
         failed_receipts = tuple(failed for _requirement, failed in exact_pairs)
         checkpoints = {
-            id(failed.source_checkpoint): failed.source_checkpoint for failed in failed_receipts
+            failed.checkpoint_ref: failed.source_checkpoint for failed in failed_receipts
         }
         expectations = tuple(
             {id(failed.expectation): failed.expectation for failed in failed_receipts}.values()
         )
         act_identities = {failed.act_identity for failed in failed_receipts}
-        execution_refs = {failed.execution_epoch.reference for failed in failed_receipts}
+        execution_refs = {failed.execution_ref for failed in failed_receipts}
         bearings = {id(failed.local_bearing): failed.local_bearing for failed in failed_receipts}
         if (
             len(checkpoints) != 1

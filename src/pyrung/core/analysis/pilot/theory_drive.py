@@ -142,11 +142,11 @@ def _open_theory_from_program_guard_rebases(
         return False
     if len({id(failed.local_bearing) for failed in failed_receipts}) != 1:
         return False
-    if len({id(failed.source_checkpoint) for failed in failed_receipts}) != 1:
+    if len({failed.checkpoint_ref for failed in failed_receipts}) != 1:
         return False
     failed = failed_receipts[0]
     rebase_checkpoints = {
-        id(requirement.source_checkpoint): requirement.source_checkpoint
+        requirement.checkpoint_ref: requirement.source_checkpoint
         for requirement, _failed in exact_pairs
     }
     if len(rebase_checkpoints) != 1:
@@ -162,7 +162,7 @@ def _open_theory_from_program_guard_rebases(
     transition = _TheoryTransitionEvidence(
         claim=_theory_claim(failed.expectation, failed.local_bearing.objective, source),
         source=source,
-        execution_ref=failed.execution_epoch.reference,
+        execution_ref=failed.execution_ref,
         occurrence_evidence=tuple(_semantic_key(item.explanation) for item in failed_receipts),
         act_identity=failed.act_identity,
         act_pairs=tuple(failed.local_bearing.act.policy.applied),
@@ -221,7 +221,7 @@ def _refine_active_theory_from_program_guard_rebases(
     if (
         len({failed.act_identity for failed in failed_receipts}) != 1
         or len({id(failed.local_bearing) for failed in failed_receipts}) != 1
-        or len({id(failed.source_checkpoint) for failed in failed_receipts}) != 1
+        or len({failed.checkpoint_ref for failed in failed_receipts}) != 1
     ):
         return False
     progress = state.theory_state.ledger.progress[theory.current_progress_id]
@@ -258,7 +258,7 @@ def _refine_active_theory_from_program_guard_rebases(
             version_id=theory.current_version_id,
             attempt_identity=attempt_identity,
             source=trigger_source,
-            execution_ref=failed.execution_epoch.reference,
+            execution_ref=failed.execution_ref,
             occurrence_evidence=tuple(_semantic_key(item.explanation) for item in failed_receipts),
             act_identity=failed.act_identity,
             act_pairs=tuple(failed.local_bearing.act.policy.applied),
@@ -769,7 +769,7 @@ def _temporal_source_checkpoint(
 
     checkpoints = tuple(
         {
-            id(checkpoint): checkpoint
+            checkpoint.owner.reference: checkpoint
             for checkpoint in (
                 *(requirement.source_checkpoint for requirement in requirements),
                 *(receipt.source_checkpoint for receipt in state.expectation_receipts),

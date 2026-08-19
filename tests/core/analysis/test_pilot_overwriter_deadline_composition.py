@@ -14,6 +14,7 @@ from pyrung.core.analysis.pilot.effects import (
     occurrence_snapshot,
     promote_terminal_target_observation,
 )
+from pyrung.core.analysis.pilot.execution import CheckpointRef
 from pyrung.core.analysis.pilot.requirement_derivation import (
     _refine_preserved_tag_deadlines,
     derive_overwriter_guard_requirement_from_effect,
@@ -90,7 +91,7 @@ def test_compatible_same_tag_deadline_refines_through_earlier_writer() -> None:
         selected_writer=obligation.producer,
         source_world_key=("deadline-composition-source",),
         source_checkpoint=SimpleNamespace(
-            owner=object(),
+            owner=SimpleNamespace(reference=CheckpointRef()),
             world=SimpleNamespace(work=source),
         ),
         preserved_values=((state.name, target_value),),

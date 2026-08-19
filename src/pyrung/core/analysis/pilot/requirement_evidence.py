@@ -930,9 +930,8 @@ def _retain_expectation_receipt(
         )
         if len(observations) != len(expectation.obligations):
             continue
-        epochs = {id(item.execution_epoch) for item in observations}
-        owners = {id(item.execution_owner) for item in observations}
-        if len(epochs) != 1 or len(owners) != 1:
+        execution_refs = {item.execution_ref for item in observations}
+        if len(execution_refs) != 1 or None in execution_refs:
             continue
         first = observations[0]
         if first.execution_epoch is None or first.execution_owner is None:

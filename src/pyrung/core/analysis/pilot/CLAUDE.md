@@ -245,6 +245,10 @@ Timer and counter presets are `ScanEntryConfiguration` values, not PilotRungs.
 Each physical Epoch interval has one lineage-issued `EpochRef` which survives
 live-tip resealing and fork inheritance; detached theory facts carry that typed
 reference rather than Python object-ID owner tokens.
+Requirement, failed-effect, expectation, and intrascan diagnostic receipts pair
+that `EpochRef` with the retained source's typed `CheckpointRef`; raw
+`id(epoch) / id(query) / id(checkpoint)` tuples are not evidence or semantic
+identity, and constructing a receipt without those typed owners fails closed.
 
 A departure settlement is a second executor request, so it receives a second
 immutable `ExecutionReceipt`; the verified receipt is never widened after the

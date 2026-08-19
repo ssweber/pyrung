@@ -163,9 +163,9 @@ def _program_guard_rebase_surfaces(
                 surfaces.append((checkpoint, epoch, owner))
 
     unique: list[tuple[_CausalCheckpoint, Any, Any]] = []
-    identities: set[tuple[int, int, int]] = set()
+    identities: set[tuple[Any, Any]] = set()
     for checkpoint, epoch, owner in surfaces:
-        identity = (id(checkpoint), id(epoch), id(owner))
+        identity = (checkpoint.owner.reference, epoch.reference)
         if identity in identities or getattr(owner, "epoch", None) is not epoch:
             continue
         identities.add(identity)
@@ -319,9 +319,13 @@ def _program_guard_rebase_requirement(
                 ranked.append((candidate_scan, checkpoint_scan, checkpoint, epoch, owner))
 
     ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    seen_candidates: set[tuple[int, int, int]] = set()
+    seen_candidates: set[tuple[int, Any, Any]] = set()
     for candidate_scan, _checkpoint_scan, checkpoint, epoch, owner in ranked:
-        candidate_identity = (candidate_scan, id(epoch), id(checkpoint))
+        candidate_identity = (
+            candidate_scan,
+            epoch.reference,
+            checkpoint.owner.reference,
+        )
         if candidate_identity in seen_candidates:
             continue
         seen_candidates.add(candidate_identity)
