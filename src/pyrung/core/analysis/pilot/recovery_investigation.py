@@ -39,7 +39,7 @@ from pyrung.core.analysis.pilot.effects import (
     exact_last_landing_write,
     occurrence_snapshot,
 )
-from pyrung.core.analysis.pilot.execution import MotionKind
+from pyrung.core.analysis.pilot.execution import ExecutionPoint, MotionKind
 from pyrung.core.analysis.pilot.investigate import (
     CausalOccurrence,
     InvestigationRejection,
@@ -100,6 +100,7 @@ class _ConductivityDepartureLink:
     departure: BearingDeparture
     harmful_write: Any
     projection: Any
+    harmful_execution: ExecutionPoint
 
 
 def _productive_tip_checkpoint(
@@ -337,20 +338,23 @@ def _investigate_and_revert(
             )
             if departure_write is not None:
                 projection, write = departure_write
-                bridged_frontier = frontier
-                exact_delayed_links.append(
-                    _ConductivityDepartureLink(
-                        source=retained_source,
-                        frontier=frontier,
-                        departure=BearingDeparture(
-                            retained_source.obligation.tag,
-                            retained_source.obligation.value,
-                            write.scan_id,
-                        ),
-                        harmful_write=write,
-                        projection=projection,
+                harmful_execution = state.world.execution_at(write.scan_id)
+                if harmful_execution is not None:
+                    bridged_frontier = frontier
+                    exact_delayed_links.append(
+                        _ConductivityDepartureLink(
+                            source=retained_source,
+                            frontier=frontier,
+                            departure=BearingDeparture(
+                                retained_source.obligation.tag,
+                                retained_source.obligation.value,
+                                write.scan_id,
+                            ),
+                            harmful_write=write,
+                            projection=projection,
+                            harmful_execution=harmful_execution,
+                        )
                     )
-                )
         if not exact_delayed_links and retained_source is not None:
             fulfilled = (*fulfilled, retained_source)
         for observation in fulfilled:
@@ -391,6 +395,9 @@ def _investigate_and_revert(
             )
             if landing is not None:
                 projection, write = landing
+                harmful_execution = state.world.execution_at(write.scan_id)
+                if harmful_execution is None:
+                    continue
                 exact_delayed_links.append(
                     _ConductivityDepartureLink(
                         source=observation,
@@ -402,6 +409,7 @@ def _investigate_and_revert(
                         ),
                         harmful_write=write,
                         projection=projection,
+                        harmful_execution=harmful_execution,
                     )
                 )
         exact_delayed_departures = [link.departure for link in exact_delayed_links]
@@ -422,7 +430,8 @@ def _investigate_and_revert(
         window_timeline = tuple(
             event
             for act in state.committed_acts
-            for event in act.context.execution.timeline
+            for receipt in act.context.execution_receipts
+            for event in receipt.timeline
             if origin.anchor_scan <= event.scan <= end_scan
         )
         incident = build_deviation_incident(
@@ -483,7 +492,6 @@ def _investigate_and_revert(
         exact_witnesses: list[
             tuple[RegressionWitness, ExpectationReceipt, _ConductivityDepartureLink]
         ] = []
-        sealed = state.work._causal_lineage.seal_through(end_scan)
         for link in exact_delayed_links:
             observation = link.source
             if observation.appeared is None:
@@ -499,15 +507,7 @@ def _investigate_and_revert(
                 if support.receipt.expectation.obligations[support.obligation_index]
                 is observation.obligation
             )
-            harmful_owner = next(
-                (
-                    owner
-                    for epoch, owner in sealed
-                    if epoch.first_scan <= harmful_write.scan_id <= epoch.last_scan
-                ),
-                None,
-            )
-            if len(source_matches) != 1 or harmful_owner is None or departure.scan is None:
+            if len(source_matches) != 1 or departure.scan is None:
                 continue
             receipt, _index, producer = source_matches[0]
             source_link = CausalOccurrence(
@@ -527,7 +527,7 @@ def _investigate_and_revert(
                 scan_id=harmful_write.scan_id,
                 occurrence_ordinal=harmful_write.ordinal,
                 exact_write=harmful_write,
-                execution_owner=harmful_owner,
+                execution_owner=link.harmful_execution.owner,
                 execution_projection=projection,
             )
             exact_witnesses.append(

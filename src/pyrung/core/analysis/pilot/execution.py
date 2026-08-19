@@ -270,3 +270,26 @@ class ExecutionReceipt:
             (span.owner for span in self.spans if scan_id in span.kernel_scan_ids),
             None,
         )
+
+    def point_at(self, scan_id: int) -> ExecutionPoint | None:
+        """Return this execution's exact logical and physical owner at one scan."""
+
+        owner = self.owner_at(scan_id)
+        return ExecutionPoint(self, owner, scan_id) if owner is not None else None
+
+
+@dataclass(frozen=True)
+class ExecutionPoint:
+    """One exact kernel scan inside one immutable execution receipt."""
+
+    execution: ExecutionReceipt = field(repr=False)
+    owner: EpochQuery = field(repr=False)
+    scan_id: int
+
+    def __post_init__(self) -> None:
+        if self.execution.owner_at(self.scan_id) is not self.owner:
+            raise ValueError("execution point owner does not own its scan")
+
+    @property
+    def epoch_ref(self) -> Any:
+        return self.owner.epoch.reference

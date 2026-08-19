@@ -21,6 +21,7 @@ from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkMovement,
     EarnedWorkReceipt,
 )
+from pyrung.core.analysis.pilot.execution import ExecutionReceipt
 from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective
 from pyrung.core.analysis.pilot.outcome import Agency, BearingEffect, ProgressEffect
 from pyrung.core.analysis.pilot.trace import target_reached
@@ -283,7 +284,11 @@ def _open_pending_departure(
     # operation belongs to that operation, not to the state it happened to land
     # in. Only work earned after PILOT can read the departed world may validate
     # staying there.
-    _adopt_settled_world(settled_work, state)
+    _adopt_settled_world(
+        settled_work,
+        state,
+        observation.settlement_execution,
+    )
     earned_work_mark = (
         earned_work.mark(dict(state.work.state.tags))
         if earned_work is not None and earned_work.components
@@ -318,7 +323,11 @@ def _open_pending_departure(
     )
 
 
-def _adopt_settled_world(settled_work: PLC, state: _PilotState) -> None:
+def _adopt_settled_world(
+    settled_work: PLC,
+    state: _PilotState,
+    settlement_execution: ExecutionReceipt | None,
+) -> None:
     """Adopt an observed settled landing without changing pending policy.
 
     Settlement is evidence shared by both a newly-opened pending departure and
@@ -326,16 +335,13 @@ def _adopt_settled_world(settled_work: PLC, state: _PilotState) -> None:
     operation separate prevents ``_open_pending_departure`` from becoming the only
     way to consume the settled fork.
     """
-    scan_before = state.work.state.scan_id
-    # ``_settle_departure`` already created this fork with the current overlay;
-    # it owns the settlement suffix and is the next executable world. A later
-    # overlay change crosses its own boundary through ``state.pilot_rungs``.
-    state.work = settled_work
-    state.dwell_scans += settled_work.state.scan_id - scan_before
-    if state.steps:
-        # The coast + settlement is one dwell: extend the recorded step's span
-        # to the settled landing (mirrors the finished-arm rewrite).
-        state.extend_last_step(settled_work.state.scan_id)
+    if settlement_execution is None:
+        if settled_work is not state.work or settled_work.state.scan_id != state.work.state.scan_id:
+            raise RuntimeError("settled World has no execution receipt")
+        return
+    # The settlement fork, its sparse exact kernel scans, logical replay span,
+    # and dwell credit enter the persistent World as one operation update.
+    state.adopt_settlement(settled_work, settlement_execution)
 
 
 def _bank_pending_landing(trial: _AcceptedTrial, state: _PilotState) -> None:

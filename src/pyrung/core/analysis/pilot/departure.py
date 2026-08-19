@@ -37,6 +37,11 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
     Unknown,
 )
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement, EarnedWorkReceipt
+from pyrung.core.analysis.pilot.execution import (
+    ChannelMotion,
+    ExecutionReceipt,
+    capture_execution_spans,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM
@@ -44,7 +49,6 @@ from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.execution import ExecutionReceipt
     from pyrung.core.analysis.pilot.types import (
         _PilotContext,
         _PilotState,
@@ -126,6 +130,7 @@ class DepartureObservation:
     reading: DepartureReading
     continuation: ContinuationEvidence
     execution: ExecutionReceipt | None = None
+    settlement_execution: ExecutionReceipt | None = None
 
     @property
     def logical_scans(self) -> int:
@@ -148,7 +153,10 @@ class DepartureResult:
     reason: str
 
 
-def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[PLC, CoastReceipt]:
+def _settle_departure(
+    state: _PilotState,
+    channel_tag: str,
+) -> tuple[PLC, ExecutionReceipt]:
     """Ride a rung-driven fork to the departure's stable landing (bounded).
 
     The departure trigger lands at the *first* departure scan — mid-transition
@@ -158,9 +166,29 @@ def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[PLC, CoastR
     receipt records the chain.  A ``"timeout"`` receipt means the cap-hit
     value may be mid-transition; the caller must not trust it as settled.
     """
+    source_scan = state.work.state.scan_id
+    source_snap = dict(state.work.state.tags)
     fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
-    receipt = CoastSession(fork, kind="departure-settle").settle_landing(channel_tag)
-    return fork, receipt
+    session = CoastSession(fork, kind="departure-settle")
+    receipt = session.settle_landing(channel_tag)
+    if receipt.kernel_scans != len(session.kernel_scan_ids):
+        raise RuntimeError("settlement kernel accounting does not match its session")
+    return (
+        fork,
+        ExecutionReceipt(
+            before_snap=source_snap,
+            after_snap=dict(fork.state.tags),
+            channel_motion=ChannelMotion(
+                channel_tag=channel_tag,
+                target_value=fork.state.tags.get(channel_tag),
+                stop_reason=receipt.stop_reason,
+            ),
+            coast_receipt=receipt,
+            timeline=session.events,
+            spans=capture_execution_spans(fork, session.kernel_scan_ids),
+            source_scan=source_scan,
+        ),
+    )
 
 
 def _completed_channel_actions(
@@ -572,7 +600,9 @@ def observe_departure(
                 work,
             )
 
-    fork, receipt = _settle_departure(state, channel_tag)
+    fork, settlement_execution = _settle_departure(state, channel_tag)
+    receipt = settlement_execution.coast_receipt
+    assert receipt is not None
     settled_value = fork.state.tags.get(channel_tag)
     progress = (
         earned_work.receipt(anchor_snap, dict(fork.state.tags))
@@ -608,6 +638,7 @@ def observe_departure(
                 reading=_reading(explain=explain),
                 continuation=continuation,
                 execution=execution,
+                settlement_execution=settlement_execution,
             ),
             fork,
         )

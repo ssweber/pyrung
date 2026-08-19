@@ -21,6 +21,7 @@ from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
 from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,
     CheckpointRef,
+    ExecutionPoint,
     ExecutionReceipt,
     ScanEntryConfiguration,
     StopReceipt,
@@ -304,6 +305,18 @@ class _World(PRecord):
     # the world so a revert rewinds the credit together with the scans it
     # excused.
     dwell_scans = _precord_field()
+
+    def execution_at(self, scan_id: int) -> ExecutionPoint | None:
+        """Resolve one exact scan through its committed operation owner."""
+
+        matches = tuple(
+            point
+            for act in self.committed_acts
+            if (point := act.point_at(scan_id)) is not None
+        )
+        if len(matches) > 1:
+            raise RuntimeError("one physical scan belongs to multiple committed executions")
+        return matches[0] if matches else None
 
 
 @dataclass(frozen=True, eq=False)
@@ -715,6 +728,7 @@ class _StepContext:
 
     policy: ActPolicy
     execution: ExecutionReceipt
+    settlement_execution: ExecutionReceipt | None = None
     frontier_tags: tuple[str, ...] = ()
     # Exact pilot rungs present during this step. Kept as ``Any`` here to
     # avoid coupling the state container back to the PilotRung implementation.
@@ -724,6 +738,28 @@ class _StepContext:
     def steady_holds(self) -> tuple[str, ...]:
         """Concise view derived from the exact executable rung evidence."""
         return tuple(dict.fromkeys(rung.dest for rung in self.pilot_rungs))
+
+    @property
+    def execution_receipts(self) -> tuple[ExecutionReceipt, ...]:
+        """Primary execution followed by its optional landing settlement."""
+
+        return (
+            (self.execution, self.settlement_execution)
+            if self.settlement_execution is not None
+            else (self.execution,)
+        )
+
+    def point_at(self, scan_id: int) -> ExecutionPoint | None:
+        """Resolve one exact kernel scan without confusing logical fold gaps."""
+
+        matches = tuple(
+            point
+            for receipt in self.execution_receipts
+            if (point := receipt.point_at(scan_id)) is not None
+        )
+        if len(matches) > 1:
+            raise RuntimeError("one operation receipt owns the same scan twice")
+        return matches[0] if matches else None
 
 
 @dataclass(frozen=True)
@@ -741,6 +777,13 @@ class _CommittedAct:
     def __post_init__(self) -> None:
         if not self.steps:
             raise ValueError("a committed act must own at least one replay step")
+
+    def point_at(self, scan_id: int) -> ExecutionPoint | None:
+        """Resolve an exact scan only inside this act's retained logical prefix."""
+
+        if not any(step.scan_before < scan_id <= step.scan_after for step in self.steps):
+            return None
+        return self.context.point_at(scan_id)
 
 
 @dataclass(frozen=True)
@@ -953,17 +996,48 @@ class _PilotState:
         """Flattened public/replay view derived from committed operation owners."""
         return pvector(step for act in self.committed_acts for step in act.steps)
 
-    def extend_last_step(self, scan_after: int) -> None:
-        """Extend the last operation's final physical step to a settled landing."""
+    def adopt_settlement(
+        self,
+        settled_work: PLC,
+        settlement_execution: ExecutionReceipt,
+    ) -> None:
+        """Atomically adopt one operation's explicit settlement execution."""
+
         if not self.committed_acts:
-            return
+            raise RuntimeError("settlement has no committed operation owner")
         act = self.committed_acts[-1]
+        if act.context.settlement_execution is not None:
+            raise RuntimeError("committed operation already owns a settlement")
         last = act.steps[-1]
-        final_step = replace(last, scan_after=scan_after)
-        final_act = replace(act, steps=(*act.steps[:-1], final_step))
+        coast = settlement_execution.coast_receipt
+        if coast is None or coast.kind != "departure-settle":
+            raise ValueError("settlement execution requires a departure-settle receipt")
+        if settlement_execution.source_scan != last.scan_after:
+            raise ValueError("settlement source does not match its committed operation")
+        if coast.start_scan != last.scan_after or coast.end_scan != settled_work.state.scan_id:
+            raise ValueError("settlement receipt does not match its executable landing")
+        final_step = replace(last, scan_after=coast.end_scan)
+        final_act = replace(
+            act,
+            steps=(*act.steps[:-1], final_step),
+            context=replace(act.context, settlement_execution=settlement_execution),
+        )
         if self.journey and self.journey[-1] is last:
             self.journey[-1] = final_step
-        self.committed_acts = self.committed_acts.set(len(self.committed_acts) - 1, final_act)
+        committed = self.committed_acts.set(len(self.committed_acts) - 1, final_act)
+        self.world = self.world.set(
+            work=settled_work,
+            committed_acts=committed,
+            dwell_scans=self.dwell_scans + coast.logical_scans,
+        )
+
+    def assert_replay_tip(self) -> None:
+        """Refuse to annex an unreceipted suffix when the target is observed."""
+
+        if self.committed_acts and self.committed_acts[-1].steps[-1].scan_after != (
+            self.work.state.scan_id
+        ):
+            raise RuntimeError("working World advanced beyond its committed replay tip")
 
     @property
     def best_trend(self) -> int | None:

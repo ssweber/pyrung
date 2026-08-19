@@ -246,6 +246,16 @@ Each physical Epoch interval has one lineage-issued `EpochRef` which survives
 live-tip resealing and fork inheritance; detached theory facts carry that typed
 reference rather than Python object-ID owner tokens.
 
+A departure settlement is a second executor request, so it receives a second
+immutable `ExecutionReceipt`; the verified receipt is never widened after the
+fact. The owning committed act holds the primary receipt and its optional
+settlement receipt together. Its replay step records the complete logical span,
+while each receipt records only the actual kernel scans produced by its own
+`CoastSession`; scans skipped by folding are never fabricated as execution
+points. `_World.execution_at(scan)` is the sole logical-operation lookup for an
+exact committed scan. Settlement work, receipt, logical replay extension, and
+dwell credit enter or revert with the same persistent World update.
+
 WorkingTheory handles a different problem: an executed scan can reveal the
 next condition needed to keep the selected producer/frontier conductive. It
 retains only causal facts and lifecycle state: the exact source/provisional

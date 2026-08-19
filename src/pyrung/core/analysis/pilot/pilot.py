@@ -609,10 +609,9 @@ def _pilot_loop_events(
             )
             _promote_probationary_corrections(state)
             if state.steps:
-                # The terminal let-run's span extends to the actual finish scan;
-                # rewrite the last step (and its journey twin, the same object) so
-                # both the clean path and the journey carry the true coast length.
-                state.extend_last_step(state.work.state.scan_id)
+                # Target observation executes nothing. Every logical scan at
+                # this tip must already belong to the committed operation.
+                state.assert_replay_tip()
             yield _finished_event(
                 state,
                 ctx,

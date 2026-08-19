@@ -1255,6 +1255,31 @@ class TestSettleLandingCapHonesty:
 
 
 class TestSettleLandingFolds:
+    def test_departure_settlement_receipt_owns_only_actual_kernel_scans(self):
+        from pyrung.core.analysis.pilot.departure import _settle_departure
+
+        plc = PLC(_static_channel_long_timer_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        source_scan = plc.state.scan_id
+
+        settled, execution = _settle_departure(
+            SimpleNamespace(work=plc, pilot_rungs=()),
+            "Chan",
+        )
+
+        receipt = execution.coast_receipt
+        assert receipt is not None
+        assert execution.source_scan == source_scan
+        assert execution.after_snap == settled.state.tags
+        assert len(execution.kernel_scan_ids) == receipt.kernel_scans
+        assert receipt.kernel_scans < receipt.logical_scans
+        skipped = next(
+            scan
+            for scan in range(receipt.start_scan + 1, receipt.end_scan + 1)
+            if scan not in execution.kernel_scan_ids
+        )
+        assert execution.point_at(skipped) is None
+
     def test_confirmation_window_folds_scan_ids_still_elapse(self):
         plc = PLC(_static_channel_long_timer_program(), dt=0.010)
         plc.patch({"Enable": True})  # long timer runs -> a foldable window
@@ -1313,6 +1338,7 @@ class TestClassifyDepartureRefusal:
         from types import SimpleNamespace
 
         from pyrung.core.analysis.pilot import departure
+        from pyrung.core.analysis.pilot.execution import ChannelMotion, ExecutionReceipt
         from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective, TargetSpec
 
         timeout_receipt = CoastReceipt(
@@ -1328,7 +1354,17 @@ class TestClassifyDepartureRefusal:
         monkeypatch.setattr(
             departure,
             "_settle_departure",
-            lambda state, channel_tag: (fake_fork, timeout_receipt),
+            lambda state, channel_tag: (
+                fake_fork,
+                ExecutionReceipt(
+                    before_snap={"Chan": 1},
+                    after_snap={"Chan": 7},
+                    channel_motion=ChannelMotion("Chan", 7),
+                    coast_receipt=timeout_receipt,
+                    timeline=(),
+                    source_scan=0,
+                ),
+            ),
         )
 
         observation, settled_work = departure.observe_departure(

@@ -28,7 +28,7 @@ from pyrsistent import pvector
 from pyrung import And, Bool, Or, Program, Rung, latch, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
-from pyrung.core.analysis.pilot.coast import CoastReceipt
+from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.constrained_reachability import Reachable, Unknown
 from pyrung.core.analysis.pilot.departure import (
@@ -62,6 +62,7 @@ from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,
     ExecutionReceipt,
     MotionKind,
+    capture_execution_spans,
 )
 from pyrung.core.analysis.pilot.investigate import _deviation_bearing
 from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -342,14 +343,14 @@ def _departure_result(
     channel_tag: str = "State",
     from_value: Any = None,
     settle_scans: int = 0,
+    settlement_execution: ExecutionReceipt | None = None,
 ) -> DepartureResult:
     """Build a complete departure receipt for focused progress-policy tests."""
     start_scan = settled_work.state.scan_id - settle_scans
-    observation = DepartureObservation(
-        channel_tag=channel_tag,
-        from_value=from_value,
-        settled_value=settled_value,
-        landing_receipt=CoastReceipt(
+    landing_receipt = (
+        settlement_execution.coast_receipt
+        if settlement_execution is not None
+        else CoastReceipt(
             kind="departure-settle",
             start_scan=start_scan,
             end_scan=settled_work.state.scan_id,
@@ -357,7 +358,14 @@ def _departure_result(
             fired=(),
             events=(),
             budget=settle_scans,
-        ),
+        )
+    )
+    assert landing_receipt is not None
+    observation = DepartureObservation(
+        channel_tag=channel_tag,
+        from_value=from_value,
+        settled_value=settled_value,
+        landing_receipt=landing_receipt,
         progress=progress or EarnedWorkReceipt(),
         reading=DepartureReading(DepartureDisposition.UNKNOWN, None, None),
         continuation=ContinuationEvidence(
@@ -365,6 +373,7 @@ def _departure_result(
             if classification is DepartureClassification.CLEAN_CONTINUATION
             else Unknown("focused policy fixture")
         ),
+        settlement_execution=settlement_execution,
     )
     return DepartureResult(observation, classification, reason)
 
@@ -461,6 +470,14 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
         coast_receipt=receipt,
         revisit_credentials=(earned_occurrence,),
     )
+    trial = replace(
+        trial,
+        execution=replace(
+            trial.execution,
+            spans=capture_execution_spans(fork, (fork.state.scan_id,)),
+            source_scan=work.state.scan_id,
+        ),
+    )
     state = _make_state(2, [], work=work)
     frame = SimpleNamespace()
     ctx = SimpleNamespace(resting={}, edge_tags=set())
@@ -473,9 +490,43 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
     assert context.execution.accelerators == (("Acc", 7),)
     assert state.consumed_revisits == {earned_occurrence}
 
-    state.extend_last_step(fork.state.scan_id + 3)
-    assert state.committed_acts[-1].context.execution is trial.execution
-    assert state.committed_acts[-1].steps[-1].scan_after == fork.state.scan_id + 3
+    before_settlement = state.snapshot_world()
+    settled = fork.fork()
+    session = CoastSession(settled, kind="departure-settle")
+    settlement_coast = session.dwell(3)
+    settlement = ExecutionReceipt(
+        before_snap=after,
+        after_snap=dict(settled.state.tags),
+        channel_motion=ChannelMotion("State", 17),
+        coast_receipt=settlement_coast,
+        timeline=session.events,
+        spans=capture_execution_spans(settled, session.kernel_scan_ids),
+        source_scan=fork.state.scan_id,
+    )
+    state.adopt_settlement(settled, settlement)
+
+    committed = state.committed_acts[-1]
+    assert committed.context.execution is trial.execution
+    assert committed.context.settlement_execution is settlement
+    assert committed.steps[-1].scan_after == settled.state.scan_id
+    primary_point = state.world.execution_at(fork.state.scan_id)
+    settlement_point = state.world.execution_at(settled.state.scan_id)
+    assert primary_point is not None
+    assert settlement_point is not None
+    assert primary_point.execution is trial.execution
+    assert settlement_point.execution is settlement
+    assert primary_point.epoch_ref != settlement_point.epoch_ref
+
+    clipped_act = replace(
+        committed,
+        steps=(replace(committed.steps[-1], scan_after=fork.state.scan_id),),
+    )
+    clipped_world = state.world.set(committed_acts=pvector((clipped_act,)))
+    assert clipped_world.execution_at(settled.state.scan_id) is None
+
+    state.load_world(before_settlement)
+    assert state.work.state.scan_id == fork.state.scan_id
+    assert state.committed_acts[-1].context.settlement_execution is None
 
 
 def _frame() -> SimpleNamespace:
@@ -730,24 +781,63 @@ def test_improved_trace_distance_does_not_promote_pending_departure():
 
 
 def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
-    source = _oneshot_plc()
-    source._state = source.state.with_tags({"State": 6, "Step": 105})
+    base = _oneshot_plc()
+    base._state = base.state.with_tags({"State": 6, "Step": 105})
+    source = base.fork()
+    source.step()
+    source._state = source.state.with_tags({"State": 10, "Step": 105})
     settled = source.fork()
+    settled.step()
     settled._state = settled.state.with_tags({"State": 11, "Step": 107})
-    checkpoint = _cp(("source",), source, 5)
+    checkpoint = _cp(("source",), base, 5)
     earned_work = EarnedWork((EarnedWorkComponent("Step", "stepper", 1),))
     state = _make_state(
         best_trend=5,
         checkpoints=[checkpoint],
-        work=source,
+        work=base,
         earned_work=earned_work,
     )
     trial = _make_trial(
         5,
         BearingEffect.DEPARTED,
+        fork=source,
+        scan_before=base.state.scan_id,
         before_snap={"State": 6, "Step": 105},
         fork_snap={"State": 10, "Step": 105},
         channel_motion=ChannelMotion("State", 16, stop_reason="departed"),
+    )
+    trial = replace(
+        trial,
+        execution=replace(
+            trial.execution,
+            spans=capture_execution_spans(source, (source.state.scan_id,)),
+            source_scan=base.state.scan_id,
+        ),
+    )
+    commit_trial(
+        trial,
+        SimpleNamespace(),
+        state,
+        SimpleNamespace(resting={}, edge_tags=set()),
+    )
+    settlement_coast = CoastReceipt(
+        kind="departure-settle",
+        start_scan=source.state.scan_id,
+        end_scan=settled.state.scan_id,
+        stop_reason="quiescent",
+        fired=(),
+        events=(),
+        budget=1,
+        kernel_scans=1,
+    )
+    settlement_execution = ExecutionReceipt(
+        before_snap=source.state.tags,
+        after_snap=settled.state.tags,
+        channel_motion=ChannelMotion("State", 11),
+        coast_receipt=settlement_coast,
+        timeline=(),
+        spans=capture_execution_spans(settled, (settled.state.scan_id,)),
+        source_scan=source.state.scan_id,
     )
     departure = _departure_result(
         settled,
@@ -756,6 +846,7 @@ def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
         settle_scans=1,
         progress=earned_work.receipt(trial.execution.before_snap, settled.state.tags),
         from_value=6,
+        settlement_execution=settlement_execution,
     )
     assert state.work is source
     assert settled is not state.work
