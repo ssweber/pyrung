@@ -64,7 +64,7 @@ from pyrung.core.context import RungId
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.types import _PilotContext
-    from pyrung.core.runner import PLC
+    from pyrung.core.runner import PLC, Epoch, EpochQuery
 
 logger = logging.getLogger(__name__)
 
@@ -162,9 +162,23 @@ class CausalOccurrence:
     scan_id: int | None = None
     occurrence_ordinal: int | None = None
     exact_write: Any = field(default=None, compare=False, repr=False)
-    execution_epoch: Any = field(default=None, compare=False, repr=False)
-    execution_owner: Any = field(default=None, compare=False, repr=False)
+    execution_owner: EpochQuery | None = field(default=None, compare=False, repr=False)
     execution_projection: Any = field(default=None, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if (
+            self.execution_owner is not None
+            and getattr(self.execution_owner, "epoch", None) is None
+        ):
+            raise ValueError("causal occurrence owner must expose one Epoch")
+
+    @property
+    def execution_epoch(self) -> Epoch | None:
+        """Derive the physical Epoch from the occurrence's sole owner."""
+
+        if self.execution_owner is None:
+            return None
+        return self.execution_owner.epoch
 
 
 @dataclass(frozen=True)
@@ -183,7 +197,7 @@ class RegressionWitness:
     # Full, unfiltered deep-chain occurrences.  ``cause`` intentionally begins
     # after the incident anchor for replay comparison; accepted expectations
     # which later participate in a regression can have produced their effect
-    # at or before that anchor.  These links retain the projection/epoch proof
+    # at or before that anchor.  These links retain the projection/owner proof
     # needed to join such a cause back to its expectation receipt.
     receipt_links: tuple[CausalOccurrence, ...] = ()
 
@@ -289,7 +303,7 @@ def incident_regression_witness(
         )
         owned = next(
             (
-                (epoch, owner)
+                owner
                 for epoch, owner in sealed
                 if epoch.first_scan <= transition.scan_id <= epoch.last_scan
             ),
@@ -297,7 +311,6 @@ def incident_regression_witness(
         )
         if len(exact) != 1 or owned is None:
             return None
-        epoch, owner = owned
         return CausalOccurrence(
             rung=RungId(step.subroutine, step.rung_index),
             tag=transition.tag_name,
@@ -305,8 +318,7 @@ def incident_regression_witness(
             scan_id=transition.scan_id,
             occurrence_ordinal=ordinal,
             exact_write=exact[0],
-            execution_epoch=epoch,
-            execution_owner=owner,
+            execution_owner=owned,
             execution_projection=projection,
         )
 
@@ -321,7 +333,6 @@ def incident_regression_witness(
         if exact_occurrence is not None and not any(
             prior.scan_id == exact_occurrence.scan_id
             and prior.occurrence_ordinal == exact_occurrence.occurrence_ordinal
-            and prior.execution_epoch is exact_occurrence.execution_epoch
             and prior.execution_owner is exact_occurrence.execution_owner
             for prior in receipt_links
         ):
@@ -336,11 +347,7 @@ def incident_regression_witness(
             continue
         projection = plc._replay_rung_write_projection_at(held_since)
         owned = next(
-            (
-                (epoch, owner)
-                for epoch, owner in sealed
-                if epoch.first_scan <= held_since <= epoch.last_scan
-            ),
+            (owner for epoch, owner in sealed if epoch.first_scan <= held_since <= epoch.last_scan),
             None,
         )
         candidates = (
@@ -357,7 +364,6 @@ def incident_regression_witness(
         if len(candidates) != 1 or owned is None:
             continue
         write = candidates[0]
-        epoch, owner = owned
         exact_occurrence = CausalOccurrence(
             rung=write.rung_id,
             tag=write.transition.tag_name,
@@ -365,14 +371,12 @@ def incident_regression_witness(
             scan_id=write.scan_id,
             occurrence_ordinal=write.ordinal,
             exact_write=write,
-            execution_epoch=epoch,
-            execution_owner=owner,
+            execution_owner=owned,
             execution_projection=projection,
         )
         if not any(
             prior.scan_id == exact_occurrence.scan_id
             and prior.occurrence_ordinal == exact_occurrence.occurrence_ordinal
-            and prior.execution_epoch is exact_occurrence.execution_epoch
             and prior.execution_owner is exact_occurrence.execution_owner
             for prior in receipt_links
         ):
@@ -396,7 +400,7 @@ def incident_regression_witness(
         )
         owned = next(
             (
-                (epoch, owner)
+                owner
                 for epoch, owner in sealed
                 if epoch.first_scan <= transition.scan_id <= epoch.last_scan
             ),
@@ -405,7 +409,6 @@ def incident_regression_witness(
         if len(candidates) != 1 or owned is None:
             continue
         write = candidates[0]
-        epoch, owner = owned
         exact_occurrence = CausalOccurrence(
             rung=write.rung_id,
             tag=transition.tag_name,
@@ -413,14 +416,12 @@ def incident_regression_witness(
             scan_id=transition.scan_id,
             occurrence_ordinal=ordinal,
             exact_write=write,
-            execution_epoch=epoch,
-            execution_owner=owner,
+            execution_owner=owned,
             execution_projection=projection,
         )
         if not any(
             prior.scan_id == exact_occurrence.scan_id
             and prior.occurrence_ordinal == exact_occurrence.occurrence_ordinal
-            and prior.execution_epoch is exact_occurrence.execution_epoch
             and prior.execution_owner is exact_occurrence.execution_owner
             for prior in receipt_links
         ):

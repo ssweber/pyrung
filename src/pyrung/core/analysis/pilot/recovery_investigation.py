@@ -501,7 +501,7 @@ def _investigate_and_revert(
             )
             harmful_owner = next(
                 (
-                    (epoch, owner)
+                    owner
                     for epoch, owner in sealed
                     if epoch.first_scan <= harmful_write.scan_id <= epoch.last_scan
                 ),
@@ -510,7 +510,6 @@ def _investigate_and_revert(
             if len(source_matches) != 1 or harmful_owner is None or departure.scan is None:
                 continue
             receipt, _index, producer = source_matches[0]
-            epoch, owner = harmful_owner
             source_link = CausalOccurrence(
                 rung=producer.rung_id,
                 tag=producer.transition.tag_name,
@@ -518,7 +517,6 @@ def _investigate_and_revert(
                 scan_id=producer.scan_id,
                 occurrence_ordinal=producer.ordinal,
                 exact_write=producer,
-                execution_epoch=receipt.execution_epoch,
                 execution_owner=receipt.execution_owner,
                 execution_projection=state.work._replay_rung_write_projection_at(producer.scan_id),
             )
@@ -529,8 +527,7 @@ def _investigate_and_revert(
                 scan_id=harmful_write.scan_id,
                 occurrence_ordinal=harmful_write.ordinal,
                 exact_write=harmful_write,
-                execution_epoch=epoch,
-                execution_owner=owner,
+                execution_owner=harmful_owner,
                 execution_projection=projection,
             )
             exact_witnesses.append(

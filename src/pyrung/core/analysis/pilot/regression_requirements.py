@@ -48,7 +48,7 @@ def _regression_expectation_source(
         return None
     matches: list[tuple[ExpectationReceipt, Any]] = []
     for link in witness.receipt_links:
-        if link.exact_write is None or link.execution_epoch is None or link.execution_owner is None:
+        if link.exact_write is None or link.execution_owner is None:
             continue
         receipt = match_expectation_receipt(
             state.expectation_receipts,
@@ -101,7 +101,6 @@ def _delayed_requirement_from_regression(
         and occurrence.scan_id == witness.departure_scan
         and _values_match(occurrence.value, witness.departed)
         and occurrence.exact_write is not None
-        and occurrence.execution_epoch is not None
         and occurrence.execution_owner is not None
     )
     if len(producer_indices) != 1 or len(harmful) != 1:

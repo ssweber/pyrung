@@ -347,9 +347,9 @@ def test_progress_handoff_uses_unfiltered_exact_link_without_reading_a_future_su
         scan_id=write.scan_id,
         occurrence_ordinal=write.ordinal,
         exact_write=write,
-        execution_epoch=epoch,
         execution_owner=owner,
     )
+    assert source_link.execution_epoch is owner.epoch
     later_cause = CausalOccurrence(
         rung=RungId(None, 9),
         tag="ReceiptEffect",
