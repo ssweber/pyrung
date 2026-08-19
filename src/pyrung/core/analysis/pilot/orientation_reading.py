@@ -32,7 +32,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ProgramScan,
     Stuck,
     TargetSpec,
-    act_identity,
 )
 from pyrung.core.analysis.pilot.overlay import (
     _pilot_rung_execution_receipt,
@@ -325,9 +324,6 @@ def _probe_or_stuck(
         world_key=world.world_key,
         world=world,
         candidates=candidates,
-        considered_paths=((candidates.route.plan,) if candidates.route is not None else ()),
-        rankings=tuple(candidates.options),
-        exclusions=exclusions,
     )
     if count < _PROBE_BUDGET:
         request = ProbeRequest(frontier=frontier, reason=reason)
@@ -375,10 +371,6 @@ def _bearing(
         world_key=world.world_key,
         world=world,
         candidates=candidates,
-        considered_paths=((candidates.route.plan,) if candidates.route is not None else ()),
-        rankings=tuple(candidates.options),
-        exclusions=tuple(world.context.compass.knowledge.nogood_identities(world.world_key)),
-        selected_bearing_id=repr(act_identity(act)),
     )
     # Single program scans must execute the already-established World. Route
     # prerequisites are hypotheses from the current static read; installing

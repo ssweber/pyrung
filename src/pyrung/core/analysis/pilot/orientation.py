@@ -135,11 +135,6 @@ def _orient_read(
                         world_key=world.world_key,
                         world=world,
                         candidates=candidates,
-                        considered_paths=(
-                            (candidates.route.plan,) if candidates.route is not None else ()
-                        ),
-                        rankings=tuple(candidates.options),
-                        exclusions=tuple(compass.knowledge.nogood_identities(world.world_key)),
                     ),
                 )
             completed_research = (

@@ -396,7 +396,7 @@ NavigationAct = Pulse | BatchPulse | IntrascanPulse | Coast | Dwell | ObserveSca
 
 @dataclass(frozen=True)
 class OrientationRead:
-    """Named current-world readings and diagnostics for one orientation.
+    """Named current-world readings for one orientation.
 
     ``world`` carries the fully assembled frame consumed by execution.
     ``candidates`` is the evidence-rich option reading that explains the
@@ -407,10 +407,6 @@ class OrientationRead:
     world_key: _StateKey
     world: OrientationWorld
     candidates: CandidateRead
-    considered_paths: tuple[Any, ...] = ()
-    rankings: tuple[Any, ...] = ()
-    exclusions: tuple[Any, ...] = ()
-    selected_bearing_id: str | None = None
 
 
 @dataclass(frozen=True)

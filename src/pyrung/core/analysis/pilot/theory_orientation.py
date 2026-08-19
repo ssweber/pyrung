@@ -1036,11 +1036,6 @@ def _theory_correction_composition(
                 world_key=world.world_key,
                 world=world,
                 candidates=candidates,
-                considered_paths=((candidates.route.plan,) if candidates.route is not None else ()),
-                rankings=tuple(candidates.options),
-                exclusions=tuple(
-                    world.context.compass.knowledge.nogood_identities(world.world_key)
-                ),
             )
             if not owned:
                 conducted = tuple(
@@ -1487,9 +1482,6 @@ def _theory_intrascan_boundary_realization(
             world_key=world.world_key,
             world=world,
             candidates=candidates,
-            considered_paths=((candidates.route.plan,) if candidates.route is not None else ()),
-            rankings=tuple(candidates.options),
-            exclusions=tuple(world.context.compass.knowledge.nogood_identities(world.world_key)),
         ),
     )
 
@@ -1716,13 +1708,6 @@ def _theory_setup_traceback(
                     world_key=world.world_key,
                     world=world,
                     candidates=candidates,
-                    considered_paths=(
-                        (candidates.route.plan,) if candidates.route is not None else ()
-                    ),
-                    rankings=tuple(candidates.options),
-                    exclusions=tuple(
-                        world.context.compass.knowledge.nogood_identities(world.world_key)
-                    ),
                 ),
             )
     return None
@@ -1899,11 +1884,6 @@ def _theory_intrascan_continuation_traceback(
                 world_key=world.world_key,
                 world=world,
                 candidates=candidates,
-                considered_paths=((candidates.route.plan,) if candidates.route is not None else ()),
-                rankings=tuple(candidates.options),
-                exclusions=tuple(
-                    world.context.compass.knowledge.nogood_identities(world.world_key)
-                ),
             ),
         )
     return None
