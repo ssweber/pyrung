@@ -41,8 +41,11 @@ from pyrung.core.analysis.pilot.effects import (
 )
 from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,
+    IntrascanActReceipt,
+    InvestigationProducerReceipt,
     MotionKind,
     PulseHorizon,
+    ScanProgressReceipt,
     capture_execution_spans,
 )
 from pyrung.core.analysis.pilot.intrascan import (
@@ -80,11 +83,8 @@ from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints
 from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
-    IntrascanActReceipt,
-    InvestigationProducerReceipt,
     PilotGateEvent,
     RevisitCredential,
-    ScanProgressReceipt,
     TargetReached,
     _AcceptedTrial,
     _ActionPair,
@@ -710,12 +710,7 @@ def _accepted_trial(
             productive_scan=productive_scan,
             landing_scan=pulse.fork.state.scan_id,
             kind=progress_kind,
-            source_world=getattr(frame, "key", attempt.bearing.world_key),
-            landing_world=(
-                verification.new_key if isinstance(verification, AssessedMotion) else pulse.key
-            ),
             selected_act=act_identity(attempt.bearing.act),
-            distance_before=getattr(frame, "distance_before", 0),
             distance_after=(verification.trend if isinstance(verification, AssessedMotion) else 0),
             landing_owns_tip=(
                 selected_producer_landing if progress_kind == "selected-producer" else True

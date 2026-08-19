@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 from itertools import count
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.runner import PLC, Epoch, EpochQuery
@@ -22,11 +22,6 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.effects import (
         ConsumerBoundary,
         EffectObservationSnapshot,
-    )
-    from pyrung.core.analysis.pilot.types import (
-        IntrascanActReceipt,
-        InvestigationProducerReceipt,
-        ScanProgressReceipt,
     )
 
 _CHECKPOINT_REFERENCE_VALUES = count(1)
@@ -41,6 +36,56 @@ class CheckpointRef:
     """Stable identity of one retained source before an Epoch owns it."""
 
     value: int = field(default_factory=_new_checkpoint_reference_value)
+
+
+@dataclass(frozen=True)
+class ScanProgressReceipt:
+    """Proof that one exact accepted scan advanced the selected working edge.
+
+    ``productive_scan`` identifies S1, while ``landing_scan`` may be the one
+    retained S2 look-ahead. The receipt is bounded to this execution; it is
+    not a general promise that later scans are productive.
+    """
+
+    source_scan: int
+    productive_scan: int
+    landing_scan: int
+    kind: Literal[
+        "target",
+        "selected-producer",
+        "frontier",
+        "earned-work",
+        "conductivity",
+        "observation",
+        "intrascan-stage",
+        "intrascan-direct",
+    ]
+    selected_act: tuple[Any, ...]
+    distance_after: int | None = None
+    landing_owns_tip: bool = True
+
+
+@dataclass(frozen=True)
+class InvestigationProducerReceipt:
+    """Verified writer occurrence discharging one traceback producer goal."""
+
+    frontier_id: tuple[Any, ...]
+    producer_goal_id: tuple[Any, ...]
+    assertion_scan: int
+    write_identity: tuple[Any, ...]
+    retained_assignment: tuple[str, Any]
+
+
+@dataclass(frozen=True)
+class IntrascanActReceipt:
+    """Exact stage or consumer write accepted from one evidence-owned scan."""
+
+    evidence_identity: tuple[Any, ...]
+    kind: Literal["stage", "consumer"]
+    assertion_scan: int
+    expected_write_identity: tuple[Any, ...]
+    matched_write_identity: tuple[Any, ...]
+    retained_assignment: tuple[str, Any]
 
 
 @dataclass(frozen=True)

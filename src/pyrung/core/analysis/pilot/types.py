@@ -89,65 +89,6 @@ class RevisitCredential:
     transition: tuple[Any, ...]
 
 
-@dataclass(frozen=True)
-class ScanProgressReceipt:
-    """Proof that one exact accepted scan advanced the selected working edge.
-
-    ``productive_scan`` identifies S1, while ``landing_scan`` may be the one
-    retained S2 look-ahead.  The receipt is source- and landing-scoped; it is
-    not a general promise that later scans are productive.
-    """
-
-    source_scan: int
-    productive_scan: int
-    landing_scan: int
-    kind: Literal[
-        "target",
-        "selected-producer",
-        "frontier",
-        "earned-work",
-        "conductivity",
-        "observation",
-        "intrascan-stage",
-        "intrascan-direct",
-    ]
-    source_world: _StateKey
-    landing_world: _StateKey
-    selected_act: tuple[Any, ...]
-    distance_before: int
-    distance_after: int | None = None
-    landing_owns_tip: bool = True
-
-
-@dataclass(frozen=True)
-class InvestigationProducerReceipt:
-    """Verified writer occurrence discharging one traceback producer goal.
-
-    A Bearing only declares frontier ownership.  Verification creates this
-    receipt after observing exactly one matching write in the selected scan
-    and its value at the accepted landing.  WorkingTheory can therefore carry
-    the exact ownership across a World advance without parsing diagnostics.
-    """
-
-    frontier_id: tuple[Any, ...]
-    producer_goal_id: tuple[Any, ...]
-    assertion_scan: int
-    write_identity: tuple[Any, ...]
-    retained_assignment: _ActionPair
-
-
-@dataclass(frozen=True)
-class IntrascanActReceipt:
-    """Exact stage or consumer write accepted from one evidence-owned scan."""
-
-    evidence_identity: tuple[Any, ...]
-    kind: Literal["stage", "consumer"]
-    assertion_scan: int
-    expected_write_identity: tuple[Any, ...]
-    matched_write_identity: tuple[Any, ...]
-    retained_assignment: _ActionPair
-
-
 # ---------------------------------------------------------------------------
 # WalkContext — the read-side seam of a backward trace
 # ---------------------------------------------------------------------------

@@ -6,9 +6,8 @@ from types import SimpleNamespace
 
 from pyrung import PLC, Int, Program, Timer, copy, on_delay, rung, system
 from pyrung.core.analysis.pilot import pilot_events
-from pyrung.core.analysis.pilot.execution import ChannelMotion
+from pyrung.core.analysis.pilot.execution import ChannelMotion, ScanProgressReceipt
 from pyrung.core.analysis.pilot.pilot import _monitor_committed_trial
-from pyrung.core.analysis.pilot.types import ScanProgressReceipt
 
 
 def test_bootstrap_retries_an_intermediate_designation_before_reaching_target() -> None:
@@ -100,10 +99,7 @@ def test_post_commit_progress_follows_the_exact_scan_receipt(monkeypatch) -> Non
                 productive_scan=12,
                 landing_scan=12,
                 kind="frontier",
-                source_world=("source",),
-                landing_world=("landing",),
                 selected_act=("pulse", (("Input", True),)),
-                distance_before=2,
                 distance_after=1,
             ),
         ),
@@ -154,10 +150,7 @@ def test_exact_scan_progress_does_not_bypass_channel_departure(monkeypatch) -> N
                 productive_scan=12,
                 landing_scan=12,
                 kind="frontier",
-                source_world=("source",),
-                landing_world=("landing",),
                 selected_act=("coast", ()),
-                distance_before=2,
                 distance_after=1,
             ),
         ),
@@ -221,10 +214,7 @@ def test_selected_producer_landing_outranks_crossed_intermediate_heading(
                 productive_scan=12,
                 landing_scan=13,
                 kind="selected-producer",
-                source_world=("source",),
-                landing_world=("next-route-tip",),
                 selected_act=("pulse", (("Advance", True),)),
-                distance_before=2,
                 distance_after=1,
                 landing_owns_tip=True,
             ),

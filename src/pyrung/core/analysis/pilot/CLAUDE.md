@@ -470,7 +470,7 @@ this table only locates the owner.
 - Local trial gates and accepted execution evidence:
   `verify.py::verify_gates` / `verify_excursion_replay`
 - Exact scan-level progress proof: verification mints
-  `types.py::ScanProgressReceipt`; post-commit handling consumes it without
+  `execution.py::ScanProgressReceipt`; post-commit handling consumes it without
   retraversing the trace to re-prove its selected producer/frontier.
 - Verification-time excursion orchestration:
   `attempt_verification.py::resolve_excursion`; verify reports the exact
@@ -607,8 +607,11 @@ Orchestration:
   `CommittedAct`, and replay-step recording
 - `entry_execution.py` — import and route-bind the execution adjacent to Pilot
   invocation
+- `execution.py` — one execution request's configuration, stop, physical span,
+  and verified progress/producer/intrascan findings
 - `recording.py` — event/plan rendering; no drive decisions
-- `types.py` — cross-module records and protocols
+- `types.py` — mutable drive state plus remaining cross-module records and
+  protocols; execution-owned findings do not live here
 - `__init__.py` — package exports
 - `physical.py` — harness install, feedback-tag exclusion
 - `multitarget.py` — multi-target incompatibility proof, ordering
