@@ -675,8 +675,10 @@ Static reading and orientation:
 - `intrascan_schedule.py` — pure authority-aware scalar schedule compilation
 - `requirements.py` — inert failed-effect explanations, active-requirement and
   occurrence-source contracts, exact expectation receipts, and receipt matching
-- `requirement_derivation.py` — exact guard, advance, overwrite, and strictly
-  decreasing same-scan occurrence-source derivation over execution evidence
+- `guard_evaluation.py` — exact dynamic guard truth and scalar complements from
+  execution projections
+- `requirement_derivation.py` — guard, advance, overwrite, and strictly decreasing
+  same-scan requirement derivation over exact execution evidence
 - `working_theory.py` — controlling detached facts, typed temporal intent,
   consumer stops, and normalized program transactions; it never stores
   navigation reads, acts, checkpoints,

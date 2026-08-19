@@ -24,7 +24,7 @@ from pyrung.core.analysis.causal._rung_writes import (
     ScanRungWriteProjection,
     compact_projection_condition_views,
 )
-from pyrung.core.analysis.pilot.requirement_derivation import _evaluate_run_guard
+from pyrung.core.analysis.pilot.guard_evaluation import _evaluate_run_guard
 from pyrung.core.condition import Condition
 from pyrung.core.executor import ConditionViewCapture, WriteOccurrence
 
