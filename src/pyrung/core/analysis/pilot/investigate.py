@@ -4,20 +4,16 @@
 causal regression comparison, and excursion replay.
 ``corrections.py`` derives the hypothesis families; investigation ranks,
 composes, and confirms them with the replay engine.
-``refinement.py`` owns bounded relational counterexample refinement and pinned
-suppression nominations; this module retains compatibility facades for its
-former private imports.
+``refinement.py`` owns bounded relational counterexample refinement.
 ``correction_candidates.py`` owns candidate identity, ordering, composition,
-materialization, and self-defeat checks; compatibility facades here preserve
-the established investigation test surface.
+materialization, and self-defeat checks.
 ``_resolve_replay_attempt`` either accepts, rejects, or composes a candidate;
-bounded candidate composition uses ``_compose_hypotheses`` and always replays
-the composite from the original checkpoint.  This is an orient-phase
+bounded candidate composition always replays the composite from the original
+checkpoint.  This is an orient-phase
 optimization, not another PILOT iteration: it neither commits a world nor
 installs a correction. A surviving exploratory result receives an
-evidence-derived lifetime from
-``_scoped_correction_rungs`` and must survive a guarded replay before the first
-confirmed composite is returned.
+evidence-derived lifetime from ``correction_candidates.py`` and must survive a
+guarded replay before the first confirmed composite is returned.
 
 Departure investigation does not install a correction; installation belongs
 to the orchestration/recovery owner.
@@ -26,7 +22,7 @@ to the orchestration/recovery owner.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -35,7 +31,6 @@ import pyrung.core.analysis.pilot.investigation_replay as _replay
 import pyrung.core.analysis.pilot.refinement as _refinement
 from pyrung.core.analysis.pilot.avoid import _hold_allowed as _hold_allowed
 from pyrung.core.analysis.pilot.constrained_reachability import (
-    FrontierStatus,
     NoRoute,
     Reachable,
 )
@@ -78,43 +73,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_RELATIONAL_REFINEMENT_BUDGET = _refinement._RELATIONAL_REFINEMENT_BUDGET
-_SKIFF_MAX_PROBES = _refinement._SKIFF_MAX_PROBES
-_SKIFF_SCANS = _refinement._SKIFF_SCANS
-_RelationalRefinementReceipt = _refinement._RelationalRefinementReceipt
 _MAX_CANDIDATE_COMPOSITIONS = 8
 
 ActionPair = tuple[str, Any]
-CorrectionIdentity = _candidates.CorrectionIdentity
-UnsupportedOccurrenceScope = _candidates.UnsupportedOccurrenceScope
-_proposal_pair = _candidates._proposal_pair
-_proposal_identity = _candidates._proposal_identity
-_hypothesis_identity = _candidates._hypothesis_identity
-correction_identity = _candidates.correction_identity
-
-
-def _continuation_ground(status: FrontierStatus) -> str:
-    """Compatibility facade for refinement's continuation-ground renderer."""
-
-    return _refinement._continuation_ground(status)
-
-
-def _refine_unknown_continuation(
-    candidate: CorrectionHypothesis,
-    replay_outcome: _replay.ReplayOutcome,
-    ctx: Any,
-    receipt: _RelationalRefinementReceipt,
-) -> tuple[CorrectionHypothesis | None, str]:
-    """Compatibility facade for bounded relational counterexample refinement."""
-
-    return _refinement._refine_unknown_continuation(
-        candidate,
-        replay_outcome,
-        ctx,
-        receipt,
-        refiner=refine_relational_hypothesis,
-        identity=_hypothesis_identity,
-    )
 
 
 @dataclass(frozen=True)
@@ -155,7 +116,7 @@ class _InvestigationCompositionCandidate:
     """One hypothesis plus retry evidence retained across its extensions."""
 
     hypothesis: CorrectionHypothesis
-    refinement: _RelationalRefinementReceipt
+    refinement: _refinement._RelationalRefinementReceipt
 
 
 @dataclass(frozen=True)
@@ -240,137 +201,9 @@ def _replacement_identity(replacement: _replay.ReplacementEvidence) -> tuple[Any
     )
 
 
-def _scoped_correction_rungs(
-    plc: PLC,
-    proposals: tuple[Any, ...],
-    incident: DeviationIncident,
-    outcome: _replay.ReplayOutcome,
-    ctx: Any,
-    progress_mark: tuple[tuple[str, Any], ...] = (),
-    producer_envelope: bool = False,
-) -> tuple[PilotRung, ...]:
-    """Compatibility facade for candidate correction materialization."""
-
-    return _candidates._scoped_correction_rungs(
-        plc,
-        proposals,
-        incident,
-        outcome,
-        ctx,
-        progress_mark,
-        producer_envelope,
-        neutralized=outcome.justification is _replay.ReplayJustification.NEUTRALIZED,
-    )
-
-
-def _retained_occurrence_scope(
-    proposals: tuple[Any, ...],
-    incident: DeviationIncident,
-) -> Any:
-    """Compatibility facade for retained occurrence projection."""
-
-    return _candidates._retained_occurrence_scope(proposals, incident)
-
-
-def _retained_scoped_rungs(
-    plc: PLC,
-    proposals: tuple[Any, ...],
-    occurrence_scope: Any,
-    ctx: Any,
-) -> tuple[PilotRung, ...]:
-    """Compatibility facade for retained correction materialization."""
-
-    return _candidates._retained_scoped_rungs(plc, proposals, occurrence_scope, ctx)
-
-
-def _discharges_occurrence_requirements(
-    proposals: tuple[Any, ...],
-    requirements: tuple[tuple[str, Any], ...],
-) -> bool:
-    """Compatibility facade for retained support-demand classification."""
-
-    return _candidates._discharges_occurrence_requirements(proposals, requirements)
-
-
-def _exploratory_correction_rungs(
-    plc: PLC,
-    proposals: tuple[Any, ...],
-    incident: DeviationIncident,
-    progress_mark: tuple[tuple[str, Any], ...],
-    ctx: Any,
-) -> tuple[Any, ...]:
-    """Compatibility facade for exploratory candidate materialization."""
-
-    return _candidates._exploratory_correction_rungs(
-        plc,
-        proposals,
-        incident,
-        progress_mark,
-        ctx,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Investigation engine
 # ---------------------------------------------------------------------------
-
-
-def _hold_is_noop(
-    tag: str,
-    value: Any,
-    snap: Mapping[str, Any],
-    pdg: Any,
-    program: Any,
-    incident_movers: frozenset[str] = frozenset(),
-    after_snap: Mapping[str, Any] | None = None,
-    synthesis_rungs: Sequence[PilotRung] = (),
-) -> bool:
-    """Compatibility facade for inert-candidate classification."""
-
-    return _candidates._hold_is_noop(
-        tag,
-        value,
-        snap,
-        pdg,
-        program,
-        incident_movers,
-        after_snap,
-        synthesis_rungs,
-    )
-
-
-def _rank_hypotheses(
-    plc: PLC,
-    hypotheses: Sequence[CorrectionHypothesis],
-    incident: DeviationIncident,
-    primal_extra: frozenset[str] = frozenset(),
-) -> list[CorrectionHypothesis]:
-    """Compatibility facade for correction-candidate ordering."""
-
-    return _candidates._rank_hypotheses(plc, hypotheses, incident, primal_extra)
-
-
-def _compose_hypotheses(
-    base: CorrectionHypothesis,
-    addition: CorrectionHypothesis,
-) -> CorrectionHypothesis | None:
-    """Compatibility facade for correction-candidate composition."""
-
-    return _candidates._compose_hypotheses(base, addition)
-
-
-def _reprove_composite_producer_envelope(
-    hypothesis: CorrectionHypothesis,
-    ctx: Any,
-    channel_tag: str | None,
-) -> CorrectionHypothesis:
-    """Compatibility facade for coordinated producer-envelope proof."""
-
-    return _candidates._reprove_composite_producer_envelope(
-        hypothesis,
-        ctx,
-        channel_tag,
-    )
 
 
 def investigate_deviation(
@@ -384,7 +217,7 @@ def investigate_deviation(
     correction_pilot_rungs: Sequence[Any] = (),
     correction_progress_mark: tuple[tuple[str, Any], ...] = (),
     occurrence_requirements: tuple[tuple[str, Any], ...] = (),
-    excluded_corrections: frozenset[CorrectionIdentity] = frozenset(),
+    excluded_corrections: frozenset[_candidates.CorrectionIdentity] = frozenset(),
     regression_witness: _replay.RegressionWitness | None = None,
 ) -> InvestigationResult:
     """Investigate an incident with precise hypothesis generation.
@@ -451,8 +284,8 @@ def investigate_deviation(
             incident_local_only=True,
             causal_spine=causal_spine,
         )
-        local = tuple(_rank_hypotheses(plc, local, incident))
-        local_ids = {_hypothesis_identity(item.holds) for item in local}
+        local = tuple(_candidates._rank_hypotheses(plc, local, incident))
+        local_ids = {_candidates._hypothesis_identity(item.holds) for item in local}
         yield from local
 
         # A moved trigger frontier belongs to the exact departure occurrence,
@@ -470,10 +303,10 @@ def investigate_deviation(
         )
         transition_local = tuple(
             item
-            for item in _rank_hypotheses(plc, transition_local, incident)
-            if _hypothesis_identity(item.holds) not in local_ids
+            for item in _candidates._rank_hypotheses(plc, transition_local, incident)
+            if _candidates._hypothesis_identity(item.holds) not in local_ids
         )
-        local_ids.update(_hypothesis_identity(item.holds) for item in transition_local)
+        local_ids.update(_candidates._hypothesis_identity(item.holds) for item in transition_local)
         yield from transition_local
 
         produced, absence_tags = derive_correction_hypotheses(
@@ -483,13 +316,13 @@ def investigate_deviation(
             installed=correction_active,
             causal_spine=causal_spine,
         )
-        for item in _rank_hypotheses(
+        for item in _candidates._rank_hypotheses(
             plc,
             produced,
             incident,
             primal_extra=absence_tags,
         ):
-            if _hypothesis_identity(item.holds) not in local_ids:
+            if _candidates._hypothesis_identity(item.holds) not in local_ids:
                 yield item
 
     hypotheses = _initial_hypotheses()
@@ -518,28 +351,28 @@ def investigate_deviation(
             ctx,
             causal_spine=evidence.witness.causal_spine,
         )
-        nested = _rank_hypotheses(
+        nested = _candidates._rank_hypotheses(
             evidence.plc,
             nested_raw,
             evidence.incident,
             primal_extra=nested_absence,
         )
         for candidate in nested:
-            identity = _hypothesis_identity(candidate.holds)
+            identity = _candidates._hypothesis_identity(candidate.holds)
             equivalent = next(
                 (
                     known
                     for known in observed_hypotheses
-                    if _hypothesis_identity(known.holds) == identity
+                    if _candidates._hypothesis_identity(known.holds) == identity
                 ),
                 None,
             )
             chosen = equivalent or candidate
             if equivalent is None:
                 observed_hypotheses.append(candidate)
-            composite = _compose_hypotheses(current, chosen)
+            composite = _candidates._compose_hypotheses(current, chosen)
             if composite is not None:
-                return _reprove_composite_producer_envelope(
+                return _candidates._reprove_composite_producer_envelope(
                     composite,
                     ctx,
                     incident.channel_tag,
@@ -558,7 +391,8 @@ def investigate_deviation(
 
     for hypothesis in hypotheses:
         if not any(
-            _hypothesis_identity(known.holds) == _hypothesis_identity(hypothesis.holds)
+            _candidates._hypothesis_identity(known.holds)
+            == _candidates._hypothesis_identity(hypothesis.holds)
             for known in observed_hypotheses
         ):
             observed_hypotheses.append(hypothesis)
@@ -568,7 +402,7 @@ def investigate_deviation(
         # A hypothesis made entirely of PilotRungs already owns its executable
         # scope.  Raw pairs acquire one only after their exploratory replay.
         if all(isinstance(hold, PilotRung) for hold in hypothesis.holds) and (
-            correction_identity(hypothesis.holds) in excluded_corrections
+            _candidates.correction_identity(hypothesis.holds) in excluded_corrections
         ):
             _reject(
                 hypothesis,
@@ -579,7 +413,7 @@ def investigate_deviation(
         if installed_active and all(
             ht in installed_active
             and (installed_active[ht] == hv or _values_match(installed_active[ht], hv))
-            for ht, hv in map(_proposal_pair, hypothesis.holds)
+            for ht, hv in map(_candidates._proposal_pair, hypothesis.holds)
         ):
             # Skip only when an installed rung *actively covered* every proposed
             # pair at the incident anchor: it was truly active when the incident
@@ -595,7 +429,7 @@ def investigate_deviation(
                     action_tag == ht and not _values_match(action_value, hv)
                     for action_tag, action_value in incident.action
                 )
-                and _hold_is_noop(
+                and _candidates._hold_is_noop(
                     ht,
                     hv,
                     incident.before_snap,
@@ -605,7 +439,7 @@ def investigate_deviation(
                     incident.after_snap,
                     installed_pilot_rungs,
                 )
-                for ht, hv in map(_proposal_pair, hypothesis.holds)
+                for ht, hv in map(_candidates._proposal_pair, hypothesis.holds)
             )
         ):
             # Every hold pins a value already in place that the program cannot
@@ -717,14 +551,14 @@ def investigate_deviation(
                     if current.producer_envelope and current.fallback_holds
                     else current.holds
                 )
-                exploratory = _exploratory_correction_rungs(
+                exploratory = _candidates._exploratory_correction_rungs(
                     plc,
                     exploratory_holds,
                     incident,
                     correction_progress_mark,
                     ctx,
                 )
-                preflight = _continuation_with_active_correction(
+                preflight = _candidates._continuation_with_active_correction(
                     exploratory,
                     incident.before_snap,
                     ctx,
@@ -736,11 +570,13 @@ def investigate_deviation(
                     outcome.continuation,
                     Reachable,
                 ):
-                    refined, ground = _refine_unknown_continuation(
+                    refined, ground = _refinement._refine_unknown_continuation(
                         current,
                         outcome,
                         ctx,
                         refinement_receipt,
+                        refiner=refine_relational_hypothesis,
+                        identity=_candidates._hypothesis_identity,
                     )
                     if refined is not None:
                         current = refined
@@ -764,13 +600,13 @@ def investigate_deviation(
                 # replayed below; this only selects between the two existing scopes.
                 scoped_progress_mark = (
                     ()
-                    if _discharges_occurrence_requirements(
+                    if _candidates._discharges_occurrence_requirements(
                         current.holds,
                         occurrence_requirements,
                     )
                     else correction_progress_mark
                 )
-                scoped = _scoped_correction_rungs(
+                scoped = _candidates._scoped_correction_rungs(
                     plc,
                     current.holds,
                     incident,
@@ -778,6 +614,7 @@ def investigate_deviation(
                     ctx,
                     scoped_progress_mark,
                     current.producer_envelope,
+                    neutralized=(outcome.justification is _replay.ReplayJustification.NEUTRALIZED),
                 )
 
                 def _fall_back_from_envelope() -> bool:
@@ -788,7 +625,7 @@ def investigate_deviation(
                     current = fallback.hypothesis
                     return True
 
-                if correction_identity(scoped) in excluded_corrections:
+                if _candidates.correction_identity(scoped) in excluded_corrections:
                     if _fall_back_from_envelope():
                         continue
                     return Reject(
@@ -798,7 +635,7 @@ def investigate_deviation(
                             "correction was previously revoked after causing a later regression",
                         )
                     )
-                scoped_preflight = _continuation_with_active_correction(
+                scoped_preflight = _candidates._continuation_with_active_correction(
                     scoped,
                     incident.before_snap,
                     ctx,
@@ -813,7 +650,7 @@ def investigate_deviation(
                 if (
                     pdg is not None
                     and program is not None
-                    and _active_pilot_rungs_defeat_needed(
+                    and _candidates._active_pilot_rungs_defeat_needed(
                         scoped,
                         required_progress,
                         incident.before_snap,
@@ -837,7 +674,9 @@ def investigate_deviation(
                 # already proved its installed form in the exploratory pass.
                 same_executable = all(
                     isinstance(rung, PilotRung) for rung in exploratory
-                ) and correction_identity(scoped) == correction_identity(exploratory)
+                ) and _candidates.correction_identity(scoped) == _candidates.correction_identity(
+                    exploratory
+                )
                 installed_outcome = (
                     outcome if same_executable else _replay_candidate(current, scoped)
                 )
@@ -845,11 +684,13 @@ def investigate_deviation(
                     installed_outcome.continuation,
                     Reachable,
                 ):
-                    refined, ground = _refine_unknown_continuation(
+                    refined, ground = _refinement._refine_unknown_continuation(
                         current,
                         installed_outcome,
                         ctx,
                         refinement_receipt,
+                        refiner=refine_relational_hypothesis,
+                        identity=_candidates._hypothesis_identity,
                     )
                     if refined is not None:
                         current = refined
@@ -889,7 +730,7 @@ def investigate_deviation(
                     else installed_outcome.reason or "replay-confirmed"
                 )
                 confirmed_candidate = _ConfirmedCorrection(
-                    identity=correction_identity(scoped),
+                    identity=_candidates.correction_identity(scoped),
                     pilot_rungs=scoped,
                     sources=confirmed_hypothesis.sources,
                     justification=(
@@ -897,7 +738,7 @@ def investigate_deviation(
                         if isinstance(installed_outcome.continuation, Reachable)
                         else (
                             "legacy-local-replay; target continuation unknown: "
-                            f"{_continuation_ground(installed_outcome.continuation)}; "
+                            f"{_refinement._continuation_ground(installed_outcome.continuation)}; "
                             f"{installed_justification}"
                         )
                     ),
@@ -912,7 +753,7 @@ def investigate_deviation(
         composition = compose_corrections(
             _InvestigationCompositionCandidate(
                 hypothesis,
-                _RelationalRefinementReceipt(),
+                _refinement._RelationalRefinementReceipt(),
             ),
             budget=CompositionBudget(_MAX_CANDIDATE_COMPOSITIONS + 1),
             attempt=_attempt_composition,
@@ -941,56 +782,3 @@ def investigate_deviation(
         rejected=tuple(rejected),
         unresolved=incident.changed_tags if not confirmed else (),
     )
-
-
-# ---------------------------------------------------------------------------
-# Investigation-local correction checks
-# ---------------------------------------------------------------------------
-
-
-def _active_pilot_rungs_defeat_needed(
-    pilot_rungs: Sequence[PilotRung],
-    needed: Sequence[tuple[str, Any]],
-    snapshot: Mapping[str, Any],
-    pdg: Any,
-    program: Any,
-) -> bool:
-    """Compatibility facade for active correction self-defeat checks."""
-
-    return _candidates._active_pilot_rungs_defeat_needed(
-        pilot_rungs,
-        needed,
-        snapshot,
-        pdg,
-        program,
-    )
-
-
-def _continuation_with_active_correction(
-    pilot_rungs: Sequence[Any],
-    snapshot: Mapping[str, Any],
-    ctx: Any,
-) -> FrontierStatus:
-    """Compatibility facade for static correction continuation checks."""
-
-    return _candidates._continuation_with_active_correction(
-        pilot_rungs,
-        snapshot,
-        ctx,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _last_transition_scan(
-    plc: PLC,
-    tag: str,
-    start_scan: int,
-    end_scan: int,
-) -> int | None:
-    """Compatibility facade for candidate-ranking transition evidence."""
-
-    return _candidates._last_transition_scan(plc, tag, start_scan, end_scan)

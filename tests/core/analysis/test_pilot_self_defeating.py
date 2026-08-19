@@ -28,6 +28,10 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.attempt_transition import record_attempt
 from pyrung.core.analysis.pilot.attempt_verification import resolve_excursion
 from pyrung.core.analysis.pilot.candidate_policy import hold_defeats_needed
+from pyrung.core.analysis.pilot.correction_candidates import (
+    _active_pilot_rungs_defeat_needed,
+    correction_identity,
+)
 from pyrung.core.analysis.pilot.correction_lifecycle import (
     _causally_harmful_corrections,
     _contradicted_corrections,
@@ -44,8 +48,6 @@ from pyrung.core.analysis.pilot.execution import (
 )
 from pyrung.core.analysis.pilot.investigate import (
     InvestigationResult,
-    _active_pilot_rungs_defeat_needed,
-    correction_identity,
     investigate_deviation,
 )
 from pyrung.core.analysis.pilot.investigation_replay import (

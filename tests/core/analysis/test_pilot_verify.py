@@ -19,6 +19,7 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
 from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence, Unknown
+from pyrung.core.analysis.pilot.correction_candidates import correction_identity
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWork,
     EarnedWorkComponent,
@@ -38,7 +39,6 @@ from pyrung.core.analysis.pilot.execution import (
     MotionKind,
     capture_execution_spans,
 )
-from pyrung.core.analysis.pilot.investigate import correction_identity
 from pyrung.core.analysis.pilot.investigation_replay import ExcursionResult
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,

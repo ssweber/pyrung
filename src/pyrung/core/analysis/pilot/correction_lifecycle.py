@@ -13,10 +13,8 @@ from typing import Any
 
 from pyrsistent import pvector
 
-from pyrung.core.analysis.pilot.investigate import (
-    InvestigationResult,
-    correction_identity,
-)
+from pyrung.core.analysis.pilot.correction_candidates import correction_identity
+from pyrung.core.analysis.pilot.investigate import InvestigationResult
 from pyrung.core.analysis.pilot.investigation_replay import RegressionWitness
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,

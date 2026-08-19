@@ -34,6 +34,13 @@ from pyrung import (
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import CoastSession, CoastTriggerEvent, _coast_holding_state
 from pyrung.core.analysis.pilot.constrained_reachability import NoRoute, Unknown
+from pyrung.core.analysis.pilot.correction_candidates import (
+    _compose_hypotheses,
+    _continuation_with_active_correction,
+    _hold_is_noop,
+    _reprove_composite_producer_envelope,
+    correction_identity,
+)
 from pyrung.core.analysis.pilot.corrections import (
     CorrectionHypothesis,
     _dedupe_pairs,
@@ -46,16 +53,10 @@ from pyrung.core.analysis.pilot.investigate import (
     _MAX_CANDIDATE_COMPOSITIONS,
     InvestigationRejection,
     _CandidateComposed,
-    _compose_hypotheses,
-    _continuation_with_active_correction,
     _hold_allowed,
-    _hold_is_noop,
-    _RelationalRefinementReceipt,
     _ReplayAccepted,
     _ReplayRejected,
-    _reprove_composite_producer_envelope,
     _resolve_replay_attempt,
-    correction_identity,
     investigate_deviation,
 )
 from pyrung.core.analysis.pilot.investigation_replay import (
@@ -82,6 +83,7 @@ from pyrung.core.analysis.pilot.overlay import (
     _set_pilot_rungs,
     fork_with_pilot_rungs,
 )
+from pyrung.core.analysis.pilot.refinement import _RelationalRefinementReceipt
 from pyrung.core.analysis.pilot.types import BearingDeparture, DeviationIncident
 from pyrung.core.analysis.pilot.world_key import _pilot_state_key, _StateKeyConfig
 from pyrung.core.analysis.sp_values import _SnapshotView
@@ -307,11 +309,11 @@ def test_rejected_producer_envelope_falls_back_to_exact_occurrence(monkeypatch):
         lambda *_args, **_kwargs: ((hypothesis,), frozenset()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        "pyrung.core.analysis.pilot.correction_candidates._hold_is_noop",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._continuation_with_active_correction",
+        "pyrung.core.analysis.pilot.correction_candidates._continuation_with_active_correction",
         lambda *_args, **_kwargs: Unknown("execution must judge"),
     )
 
@@ -581,11 +583,11 @@ def test_unrefinable_relational_unknown_is_not_legacy_confirmed(monkeypatch) -> 
         lambda *_args, **_kwargs: ((hypothesis,), frozenset()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        "pyrung.core.analysis.pilot.correction_candidates._rank_hypotheses",
         lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        "pyrung.core.analysis.pilot.correction_candidates._hold_is_noop",
         lambda *_args, **_kwargs: False,
     )
 
@@ -622,15 +624,15 @@ def test_relational_refinement_budget_exhaustion_stays_unknown(monkeypatch) -> N
         lambda *_args, **_kwargs: ((hypothesis,), frozenset()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        "pyrung.core.analysis.pilot.correction_candidates._rank_hypotheses",
         lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        "pyrung.core.analysis.pilot.correction_candidates._hold_is_noop",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._RelationalRefinementReceipt",
+        "pyrung.core.analysis.pilot.refinement._RelationalRefinementReceipt",
         lambda: _RelationalRefinementReceipt(budget=2),
     )
     monkeypatch.setattr(
@@ -681,19 +683,21 @@ def test_investigation_rejections_carry_raw_and_guarded_replay_grounds(monkeypat
         lambda *_args, **_kwargs: (),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        "pyrung.core.analysis.pilot.correction_candidates._rank_hypotheses",
         lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        "pyrung.core.analysis.pilot.correction_candidates._hold_is_noop",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._scoped_correction_rungs",
-        lambda _plc, holds, *_args: tuple(PilotRung(t, v, A == A) for t, v in holds),
+        "pyrung.core.analysis.pilot.correction_candidates._scoped_correction_rungs",
+        lambda _plc, holds, *_args, **_kwargs: tuple(
+            PilotRung(t, v, A == A) for t, v in holds
+        ),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._active_pilot_rungs_defeat_needed",
+        "pyrung.core.analysis.pilot.correction_candidates._active_pilot_rungs_defeat_needed",
         lambda *_args, **_kwargs: False,
     )
 
@@ -840,11 +844,11 @@ def test_investigation_static_rejections_carry_their_grounds(monkeypatch):
         lambda *_args, **_kwargs: (),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        "pyrung.core.analysis.pilot.correction_candidates._rank_hypotheses",
         lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        "pyrung.core.analysis.pilot.correction_candidates._hold_is_noop",
         lambda *_args, **_kwargs: True,
     )
 
@@ -893,15 +897,15 @@ def test_revoked_correction_is_skipped_and_runner_up_is_replayed(monkeypatch):
         lambda *_args, **_kwargs: (),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        "pyrung.core.analysis.pilot.correction_candidates._rank_hypotheses",
         lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        "pyrung.core.analysis.pilot.correction_candidates._hold_is_noop",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._active_pilot_rungs_defeat_needed",
+        "pyrung.core.analysis.pilot.correction_candidates._active_pilot_rungs_defeat_needed",
         lambda *_args, **_kwargs: False,
     )
 
@@ -958,15 +962,15 @@ def test_revoked_broad_correction_does_not_exclude_new_safe_scope(monkeypatch):
         lambda *_args, **_kwargs: (),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        "pyrung.core.analysis.pilot.correction_candidates._rank_hypotheses",
         lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        "pyrung.core.analysis.pilot.correction_candidates._hold_is_noop",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._active_pilot_rungs_defeat_needed",
+        "pyrung.core.analysis.pilot.correction_candidates._active_pilot_rungs_defeat_needed",
         lambda *_args, **_kwargs: False,
     )
 
@@ -1029,11 +1033,11 @@ def test_raw_hypothesis_is_rejected_after_it_acquires_revoked_scope(monkeypatch)
         lambda *_args, **_kwargs: (),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        "pyrung.core.analysis.pilot.correction_candidates._rank_hypotheses",
         lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        "pyrung.core.analysis.pilot.correction_candidates._hold_is_noop",
         lambda *_args, **_kwargs: False,
     )
 
@@ -1092,16 +1096,18 @@ def test_investigation_filters_corrections_after_observing_full_overlay(monkeypa
         lambda *_args, **_kwargs: (),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        "pyrung.core.analysis.pilot.correction_candidates._hold_is_noop",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._active_pilot_rungs_defeat_needed",
+        "pyrung.core.analysis.pilot.correction_candidates._active_pilot_rungs_defeat_needed",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._scoped_correction_rungs",
-        lambda _plc, holds, *_args: tuple(PilotRung(tag, value, ~Never) for tag, value in holds),
+        "pyrung.core.analysis.pilot.correction_candidates._scoped_correction_rungs",
+        lambda _plc, holds, *_args, **_kwargs: tuple(
+            PilotRung(tag, value, ~Never) for tag, value in holds
+        ),
     )
     incident = _ground_test_incident(plc)
     incident = DeviationIncident(
@@ -1151,11 +1157,11 @@ def test_investigation_reuses_exploratory_proof_for_identical_installed_rungs(mo
         lambda *_args, **_kwargs: ((hypothesis,), set()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        "pyrung.core.analysis.pilot.correction_candidates._hold_is_noop",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._active_pilot_rungs_defeat_needed",
+        "pyrung.core.analysis.pilot.correction_candidates._active_pilot_rungs_defeat_needed",
         lambda *_args, **_kwargs: False,
     )
     replayed: list[tuple[Any, ...]] = []
@@ -1227,16 +1233,16 @@ def test_investigation_composes_cuts_before_returning_one_candidate(monkeypatch)
         ),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        "pyrung.core.analysis.pilot.correction_candidates._hold_is_noop",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._active_pilot_rungs_defeat_needed",
+        "pyrung.core.analysis.pilot.correction_candidates._active_pilot_rungs_defeat_needed",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._scoped_correction_rungs",
-        lambda _plc, holds, *_args: tuple(
+        "pyrung.core.analysis.pilot.correction_candidates._scoped_correction_rungs",
+        lambda _plc, holds, *_args, **_kwargs: tuple(
             hold if isinstance(hold, PilotRung) else PilotRung(hold[0], hold[1], A == A)
             for hold in holds
         ),

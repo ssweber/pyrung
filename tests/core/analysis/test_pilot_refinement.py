@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from pyrung.core.analysis.pilot import investigate, refinement
+from pyrung.core.analysis.pilot import refinement
 from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis
 
 
@@ -42,30 +42,6 @@ def test_relational_refinement_uses_caller_owned_identity_and_budget() -> None:
     )
     assert candidate is None
     assert "repeated a prior counterexample" in ground
-
-
-def test_investigate_refinement_facade_preserves_patchable_refiner(monkeypatch) -> None:
-    """Legacy investigate imports still dispatch through its patched dependency."""
-
-    original = CorrectionHypothesis("relational", (("Limit", 1),))
-    refined = CorrectionHypothesis("relational", (("Limit", 2),))
-    outcome = SimpleNamespace(continuation_snapshot={"Limit": 2}, snapshot={})
-    monkeypatch.setattr(
-        investigate,
-        "refine_relational_hypothesis",
-        lambda *_args: refined,
-    )
-
-    candidate, ground = investigate._refine_unknown_continuation(
-        original,
-        outcome,
-        SimpleNamespace(),
-        investigate._RelationalRefinementReceipt(),
-    )
-
-    assert investigate._RelationalRefinementReceipt is refinement._RelationalRefinementReceipt
-    assert candidate is refined
-    assert ground == ""
 
 
 def test_pinned_suppression_nominations_are_bounded_evidence() -> None:

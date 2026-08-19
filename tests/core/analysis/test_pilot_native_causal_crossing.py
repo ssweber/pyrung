@@ -36,8 +36,8 @@ from pyrung import (
     rung,
 )
 from pyrung.core.analysis.pilot.causal import chase_chain_tags
+from pyrung.core.analysis.pilot.correction_candidates import _rank_hypotheses
 from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis
-from pyrung.core.analysis.pilot.investigate import _rank_hypotheses
 from pyrung.core.analysis.pilot.types import BearingDeparture, DeviationIncident
 
 # ---------------------------------------------------------------------------

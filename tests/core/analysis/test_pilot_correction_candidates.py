@@ -5,14 +5,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from pyrung import Bool
-from pyrung.core.analysis.pilot import correction_candidates, investigate
+from pyrung.core.analysis.pilot import correction_candidates
 from pyrung.core.analysis.pilot.constrained_reachability import Unknown
 from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis
 from pyrung.core.analysis.pilot.overlay import PilotRung
 
 
-def test_candidate_identity_and_composition_have_one_owner() -> None:
-    """Pair and executable proposal decisions live behind the investigate facade."""
+def test_candidate_composition_combines_sources() -> None:
 
     active = Bool("CandidateActive", external=True)
     first = CorrectionHypothesis(
@@ -31,12 +30,6 @@ def test_candidate_identity_and_composition_have_one_owner() -> None:
     assert composite is not None
     assert composite.kind == "nested-cause"
     assert composite.sources == ("FirstSource", "SecondSource")
-    assert investigate._proposal_identity(first.holds[0]) == (
-        correction_candidates._proposal_identity(first.holds[0])
-    )
-    assert investigate._hypothesis_identity(composite.holds) == (
-        correction_candidates._hypothesis_identity(composite.holds)
-    )
 
 
 def test_candidate_composition_declines_conflicting_destinations() -> None:
@@ -55,14 +48,6 @@ def test_non_executable_candidate_continuation_is_honestly_unknown() -> None:
 
     assert isinstance(status, Unknown)
     assert "no executable scope" in status.reason
-    assert (
-        investigate._continuation_with_active_correction(
-            (("Input", True),),
-            {},
-            SimpleNamespace(),
-        )
-        == status
-    )
 
 
 def test_candidate_selection_exposes_no_historical_replay_entrypoint() -> None:
