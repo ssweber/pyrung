@@ -208,7 +208,6 @@ def _theory_objective_snapshot(objective: BearingObjective) -> TheoryObjectiveSn
 
 
 def _theory_obligation_snapshot(obligation: Any) -> TheoryObligationSnapshot:
-    selector = _semantic_key(getattr(obligation, "occurrence_selector", None))
     return TheoryObligationSnapshot(
         tag=obligation.tag,
         value=_semantic_key(obligation.value),
@@ -223,10 +222,6 @@ def _theory_obligation_snapshot(obligation: Any) -> TheoryObligationSnapshot:
             else None
         ),
         terminal_target=obligation.terminal_target,
-        polarity=str(getattr(obligation, "polarity", "produce")),
-        occurrence_selector=(selector if isinstance(selector, tuple) else (selector,))
-        if getattr(obligation, "occurrence_selector", None) is not None
-        else None,
     )
 
 
@@ -310,8 +305,6 @@ def _theory_claim(
                         item.producer,
                         item.consumer,
                         item.boundary,
-                        item.polarity,
-                        item.occurrence_selector,
                     )
                     for item in obligations
                 ),
@@ -944,8 +937,6 @@ def _theory_bootstrap_transition(
             ),
             boundary=(ctx.target.tag, _semantic_key(ctx.target.value)),
             terminal_target=effect.designation.tag == ctx.target.tag,
-            polarity="produce",
-            occurrence_selector=None,
         )
         for effect in receipt.appeared_effects
     )

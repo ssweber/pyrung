@@ -139,7 +139,7 @@ class TheoryObjectiveSnapshot:
 
 @dataclass(frozen=True)
 class TheoryObligationSnapshot:
-    """Detached positive or negative occurrence obligation."""
+    """Detached selected producer/effect obligation."""
 
     tag: str
     value: Any
@@ -148,8 +148,6 @@ class TheoryObligationSnapshot:
     required_shape: tuple[tuple[str, Any], ...]
     boundary: tuple[str, Any] | None
     terminal_target: bool
-    polarity: str
-    occurrence_selector: tuple[Any, ...] | None
     projected_consumer: bool = False
 
 

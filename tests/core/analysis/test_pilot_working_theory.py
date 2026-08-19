@@ -115,8 +115,6 @@ def _claim(*, target: str = "stepper_complete", source: str = "source") -> Theor
                 required_shape=(("consumer_ready", True),),
                 boundary=("consumer", 1),
                 terminal_target=False,
-                polarity="produce",
-                occurrence_selector=("call", 0),
             ),
         ),
         selected_boundary=boundary,
