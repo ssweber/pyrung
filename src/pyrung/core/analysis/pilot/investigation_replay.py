@@ -528,11 +528,7 @@ class _RegressionOwnership:
     """Current replay evidence about one recorded regression branch."""
 
     source_preserved: bool
-    cause_silenced: bool
     replacement_cause: frozenset[str] | None
-    replacement_owned: bool | None
-    replacement_replays_recorded: bool | None
-    unrelated_departure: bool
     neutralized: bool
     shared_suffix: tuple[CausalOccurrence, ...] = ()
 
@@ -664,11 +660,7 @@ def _regression_ownership(
     unrelated_departure = unrelated_departure and not shared_suffix
     return _RegressionOwnership(
         source_preserved=source_preserved,
-        cause_silenced=cause_silenced,
         replacement_cause=replacement_cause,
-        replacement_owned=replacement_owned,
-        replacement_replays_recorded=replacement_replays_recorded,
-        unrelated_departure=unrelated_departure,
         neutralized=(
             (source_preserved and cause_silenced)
             or branch_replaced

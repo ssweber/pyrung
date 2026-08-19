@@ -1250,8 +1250,6 @@ def test_proposal_owned_different_landing_neutralizes_only_the_recorded_incident
         cause_replayed=lambda *_args, **_kwargs: True,
     )
 
-    assert ownership.replacement_owned is True
-    assert ownership.replacement_replays_recorded is False
     assert ownership.neutralized is True
 
 
