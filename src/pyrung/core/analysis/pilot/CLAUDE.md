@@ -444,9 +444,10 @@ this table only locates the owner.
   restores its source checkpoint, and owns the handoff to local repair
 - Candidate-read orchestration and wait-source choice:
   `options.py::_build_candidates` / `_select_wait`; pure action/hold admission:
-  `candidate_policy.py`; static route and chart materialization:
-  `route_options.py`; completion and program-evidence wait materialization:
-  `wait_options.py`
+  `candidate_policy.py`; trace/wait admission, exact operation batching, and
+  prerequisite separation: `candidate_admission.py`; static route and chart
+  materialization: `route_options.py`; completion and program-evidence wait
+  materialization: `wait_options.py`
 - Static chart-edge admission:
   `constrained_reachability.py::NavigationEvidence.static_edge_admission`
 - Local trial gates and accepted execution evidence:
@@ -607,8 +608,10 @@ Static reading and orientation:
 - `static_expressions.py` — static-expression helpers
 - `compass.py` — navigation facade, durable knowledge
 - `orientation.py` — current-world read, result synthesis
-- `options.py` — candidate-read orchestration, admission, and ranking
+- `options.py` — candidate-read orchestration and ranking
 - `candidate_policy.py` — pure action admission and static hold-conflict proof
+- `candidate_admission.py` — trace/wait admission, exact operation batching,
+  and durable prerequisite-overlay separation
 - `route_options.py` — static route/chart selection and route-owned overlay
   materialization
 - `wait_options.py` — instruction-boundary, completion, and program-evidence
