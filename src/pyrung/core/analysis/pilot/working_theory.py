@@ -20,6 +20,7 @@ from pyrsistent import PMap, pmap
 
 from pyrung.core.analysis.pilot.effects import (
     ConsumerBoundary,
+    EffectObligationSnapshot,
     EffectObservationSnapshot,
     EffectOccurrenceSnapshot,
 )
@@ -138,20 +139,6 @@ class TheoryObjectiveSnapshot:
 
 
 @dataclass(frozen=True)
-class TheoryObligationSnapshot:
-    """Detached selected producer/effect obligation."""
-
-    tag: str
-    value: Any
-    producer: tuple[Any, ...]
-    consumer: tuple[Any, ...] | None
-    required_shape: tuple[tuple[str, Any], ...]
-    boundary: tuple[str, Any] | None
-    terminal_target: bool
-    projected_consumer: bool = False
-
-
-@dataclass(frozen=True)
 class TheoryRequirementSnapshot:
     """Detached exact requirement, including occurrence and deadline evidence."""
 
@@ -177,7 +164,7 @@ class TheoryClaim:
 
     source: TheoryBoundaryIdentity
     objective: TheoryObjectiveSnapshot
-    obligations: tuple[TheoryObligationSnapshot, ...]
+    obligations: tuple[EffectObligationSnapshot, ...]
     selected_boundary: TheoryBoundaryIdentity
     selected_artifact_identity: tuple[Any, ...] | None = None
 

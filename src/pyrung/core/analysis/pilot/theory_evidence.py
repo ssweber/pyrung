@@ -20,6 +20,7 @@ from pyrung.core.analysis.pilot.effect_observation import effect_reached_consume
 from pyrung.core.analysis.pilot.effects import (
     ConsumerBoundary,
     EffectExpectation,
+    EffectObligationSnapshot,
     EffectObservationSnapshot,
     displacement_consumer_read,
     occurrence_selector,
@@ -62,7 +63,6 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryBoundaryIdentity,
     TheoryClaim,
     TheoryObjectiveSnapshot,
-    TheoryObligationSnapshot,
     TheoryRequirementSnapshot,
     active_theory,
     theory_view,
@@ -207,8 +207,8 @@ def _theory_objective_snapshot(objective: BearingObjective) -> TheoryObjectiveSn
     )
 
 
-def _theory_obligation_snapshot(obligation: Any) -> TheoryObligationSnapshot:
-    return TheoryObligationSnapshot(
+def _theory_obligation_snapshot(obligation: Any) -> EffectObligationSnapshot:
+    return EffectObligationSnapshot(
         tag=obligation.tag,
         value=_semantic_key(obligation.value),
         producer=tuple(obligation.producer),
@@ -923,7 +923,7 @@ def _theory_bootstrap_transition(
         _semantic_key(effect.diagnostic_snapshot()) for effect in receipt.appeared_effects
     )
     obligations = tuple(
-        TheoryObligationSnapshot(
+        EffectObligationSnapshot(
             tag=effect.designation.tag,
             value=_semantic_key(effect.designation.value),
             producer=tuple(effect.designation.producer),

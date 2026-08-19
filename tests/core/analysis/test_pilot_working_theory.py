@@ -66,7 +66,6 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryFirstEdgeExclusion,
     TheoryInvariantError,
     TheoryObjectiveSnapshot,
-    TheoryObligationSnapshot,
     TheoryPhaseKind,
     TheoryPhaseReceipt,
     TheoryRequirementSnapshot,
@@ -107,7 +106,7 @@ def _claim(*, target: str = "stepper_complete", source: str = "source") -> Theor
         source=boundary,
         objective=TheoryObjectiveSnapshot(target, True),
         obligations=(
-            TheoryObligationSnapshot(
+            EffectObligationSnapshot(
                 tag="consumer_ready",
                 value=True,
                 producer=("producer", 0),
