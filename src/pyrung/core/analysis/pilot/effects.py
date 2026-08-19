@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from enum import StrEnum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -35,8 +34,6 @@ EffectDisposition = Literal[
     "DISPLACED",
     "SURVIVED",
     "SUBSUMED",
-    "PREVENTED",
-    "FIRED",
     "UNKNOWN",
 ]
 
@@ -68,13 +65,6 @@ class EffectPathStep:
     tag: str
     value: Any
     local_requirements: tuple[tuple[str, Any], ...] = ()
-
-
-class EffectPolarity(StrEnum):
-    """Whether one exact writer must produce or must not produce its effect."""
-
-    PRODUCE = "produce"
-    PREVENT = "prevent"
 
 
 @dataclass(frozen=True)
@@ -123,8 +113,6 @@ class EffectObligation:
     projected_consumer: bool = False
     producer_rung: object = field(compare=False, repr=False, default=None)
     consumer_rung: object | None = field(compare=False, repr=False, default=None)
-    polarity: EffectPolarity = field(default=EffectPolarity.PRODUCE, repr=False)
-    occurrence_selector: EffectOccurrenceSelector | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)

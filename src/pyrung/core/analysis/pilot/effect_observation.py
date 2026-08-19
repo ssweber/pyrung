@@ -18,7 +18,6 @@ from pyrung.core.analysis.write_sites import (
     static_write_target_names,
 )
 from pyrung.core.context import RungId
-from pyrung.core.executor import RungRun
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
 
@@ -32,10 +31,6 @@ from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligation,
     EffectObservation,
-    EffectOccurrenceSelector,
-    EffectPolarity,
-    _instruction_path,
-    _run_static_address,
 )
 
 
@@ -52,18 +47,6 @@ def observe_expectation(
     projection_tuple = tuple(projections)
     result: list[EffectObservation] = []
     for obligation in expectation.obligations:
-        if obligation.polarity is EffectPolarity.PREVENT:
-            result.append(
-                EffectObservation(
-                    obligation,
-                    "UNKNOWN",
-                    detail="prevention requires one complete intrascan projection",
-                    execution_projection=(
-                        projection_tuple[0] if len(projection_tuple) == 1 else None
-                    ),
-                )
-            )
-            continue
         appeared: list[tuple[ScanRungWriteProjection, OrderedEffectObservation]] = []
         for projection in projection_tuple:
             appeared.extend(
@@ -218,113 +201,6 @@ def _observe_projected_consumer(
         detail="exact projection resolved the selected consumer",
         execution_projection=projection,
     )
-
-
-def _selector_runs(
-    projection: ScanRungWriteProjection,
-    obligation: EffectObligation,
-    selector: EffectOccurrenceSelector,
-) -> tuple[RungRun, ...]:
-    return tuple(
-        run
-        for run in projection.runs
-        if _run_static_address(projection, run) == selector.static_address
-        and run.kind == selector.execution_kind
-        and run.caller_rung == selector.caller_rung
-        and run.call_stack == selector.call_stack
-        and run.depth == selector.depth
-        and projection._call_invocation_by_run.get(id(run)) == selector.call_invocation
-        and (obligation.producer_rung is None or run.rung is obligation.producer_rung)
-    )
-
-
-def _observe_prevention(
-    obligation: EffectObligation,
-    projection: ScanRungWriteProjection,
-) -> EffectObservation:
-    """Observe one forbidden exact write in one complete assertion projection."""
-
-    selector = obligation.occurrence_selector
-    if selector is None:
-        return EffectObservation(
-            obligation,
-            "UNKNOWN",
-            detail="prevention obligation has no exact occurrence selector",
-            execution_projection=projection,
-        )
-    if (
-        selector.kind != "write"
-        or selector.tag != obligation.tag
-        or selector.static_address != obligation.producer
-        or not selector.instruction_path
-        or selector.access_index < 0
-    ):
-        return EffectObservation(
-            obligation,
-            "UNKNOWN",
-            detail="prevention selector does not match the forbidden write contract",
-            execution_projection=projection,
-        )
-    runs = _selector_runs(projection, obligation, selector)
-    if len(runs) != 1:
-        return EffectObservation(
-            obligation,
-            "UNKNOWN",
-            detail="prevention writer occurrence is unavailable or ambiguous",
-            execution_projection=projection,
-        )
-    run = runs[0]
-    writes = tuple(
-        write
-        for write in projection.writes_for_run(run)
-        if write.instruction is not None
-        and _instruction_path(run, write.instruction) == selector.instruction_path
-        and write.transition.tag_name == selector.tag
-    )
-    if selector.access_index >= len(writes):
-        return EffectObservation(
-            obligation,
-            "PREVENTED",
-            detail="selected forbidden write did not occur",
-            execution_projection=projection,
-        )
-    write = writes[selector.access_index]
-    if not _values_match(write.transition.to_value, obligation.value):
-        return EffectObservation(
-            obligation,
-            "PREVENTED",
-            detail="selected instruction did not write the forbidden value",
-            execution_projection=projection,
-        )
-    return EffectObservation(
-        obligation,
-        "FIRED",
-        appeared=write,
-        observed_reads=projection.enabling_reads_observed_by_write(write),
-        detail="selected forbidden write occurred",
-        execution_projection=projection,
-    )
-
-
-def observe_intrascan_expectation(
-    expectation: EffectExpectation,
-    projection: ScanRungWriteProjection,
-) -> tuple[EffectObservation, ...]:
-    """Observe a polarized conjunction on one complete exact projection.
-
-    Positive obligations retain the established appeared-handoff semantics.
-    Prevention is intentionally unavailable through ``observe_expectation``:
-    absence over an arbitrary iterable of projections is not evidence that the
-    execution window was complete.
-    """
-
-    result: list[EffectObservation] = []
-    for obligation in expectation.obligations:
-        if obligation.polarity is EffectPolarity.PRODUCE:
-            result.extend(observe_expectation(EffectExpectation((obligation,)), (projection,)))
-        else:
-            result.append(_observe_prevention(obligation, projection))
-    return tuple(result)
 
 
 def fulfilled_expectation_observations(
