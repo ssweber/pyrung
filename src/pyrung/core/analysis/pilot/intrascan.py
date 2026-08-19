@@ -1544,8 +1544,7 @@ def derive_recorded_observations(
         ):
             continue
         owner = observation.execution_owner
-        epoch = observation.execution_epoch
-        if owner is None or epoch is None:
+        if owner is None or observation.execution_epoch is None:
             continue
         scans = tuple(
             occurrence.scan_id
@@ -1573,7 +1572,6 @@ def derive_recorded_observations(
             question,
             observation,
             projection,
-            epoch,
             owner,
             advance_index,
         )
@@ -1585,7 +1583,6 @@ def _derive_observation(
     question: IntrascanQuestion,
     observation: EffectObservation,
     projection: ScanRungWriteProjection,
-    epoch: Any,
     owner: Any,
     advance_index: AdvanceIndex | None,
 ) -> RequirementDerivation:
@@ -1599,7 +1596,6 @@ def _derive_observation(
             derive_guard_requirement_from_effect(
                 observation,
                 projection,
-                execution_epoch=epoch,
                 execution_owner=owner,
                 selected_writer=selected_writer,
                 source_world_key=checkpoint.key,
@@ -1620,7 +1616,6 @@ def _derive_observation(
         projection,
         observation,
         operand_authorities=operand_authorities,
-        execution_epoch=epoch,
         execution_owner=owner,
         selected_writer=selected_writer,
         source_world_key=checkpoint.key,
@@ -1634,7 +1629,6 @@ def _derive_observation(
         derive_overwriter_guard_requirement_from_effect(
             observation,
             projection,
-            execution_epoch=epoch,
             execution_owner=owner,
             selected_writer=selected_writer,
             source_world_key=checkpoint.key,

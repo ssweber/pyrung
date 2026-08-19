@@ -53,7 +53,6 @@ def _regression_expectation_source(
         receipt = match_expectation_receipt(
             state.expectation_receipts,
             occurrence=link.exact_write,
-            execution_epoch=link.execution_epoch,
             execution_owner=link.execution_owner,
         )
         if receipt is not None:
@@ -173,7 +172,6 @@ def _delayed_requirement_from_regression(
         projection,
         observation,
         operand_authorities=authorities,
-        execution_epoch=harmful_owner.epoch,
         execution_owner=harmful_owner,
         selected_writer=obligation.producer,
         source_world_key=source_world_key,
@@ -184,7 +182,6 @@ def _delayed_requirement_from_regression(
         derivation = derive_overwriter_guard_requirement_from_effect(
             observation,
             projection,
-            execution_epoch=harmful_owner.epoch,
             execution_owner=harmful_owner,
             selected_writer=obligation.producer,
             source_world_key=source_world_key,

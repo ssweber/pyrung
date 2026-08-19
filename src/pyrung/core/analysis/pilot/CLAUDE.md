@@ -555,9 +555,9 @@ historical identity. Cache residency is only a performance detail: a recorded
 state may be returned directly or reconstructed under its owning epoch. Never
 reconstruct an inherited scan under the current overlay; that changes writer
 and occurrence identity. An expectation receipt binds the source world,
-checkpoint owner, act, obligation shape, execution epoch/owner, and exact
-producer occurrence. Regression matching fails closed when any of those
-identities is missing or ambiguous.
+checkpoint owner, act, obligation shape, execution `EpochQuery` owner (and its
+derived `EpochRef`), and exact producer occurrence. Regression matching fails
+closed when any of those identities is missing or ambiguous.
 
 ## Soundness and behavior invariants
 

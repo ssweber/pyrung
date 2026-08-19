@@ -363,7 +363,6 @@ def _program_guard_rebase_requirement(
             derive_overwriter_guard_requirement_from_write(
                 displacement,
                 projection,
-                execution_epoch=epoch,
                 execution_owner=owner,
                 selected_writer=selected_writer,
                 source_world_key=checkpoint.key,

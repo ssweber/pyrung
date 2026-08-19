@@ -172,7 +172,6 @@ def _direct_guard_derivation(question: IntrascanQuestion, observation: Any, proj
     derivation = derive_guard_requirement_from_effect(
         observation,
         projection,
-        execution_epoch=observation.execution_epoch,
         execution_owner=observation.execution_owner,
         selected_writer=observation.obligation.producer,
         source_world_key=question.source_checkpoint.key,
@@ -215,7 +214,6 @@ def test_report_matches_exact_overwrite_and_existing_requirement_derivation() ->
     direct_derivation = derive_overwriter_guard_requirement_from_effect(
         direct[0],
         projection,
-        execution_epoch=direct[0].execution_epoch,
         execution_owner=direct[0].execution_owner,
         selected_writer=direct[0].obligation.producer,
         source_world_key=question.source_checkpoint.key,

@@ -241,7 +241,6 @@ def _derive(
         "operand_read": evidence.preset_read,
         "demanding_read": evidence.demanding_read,
         "operand_authority": authority,
-        "execution_epoch": evidence.epoch,
         "execution_owner": evidence.epoch_owner,
         "selected_writer": (None, 2, ()),
         "source_world_key": ("world", 0),
@@ -604,10 +603,10 @@ def test_later_operand_cannot_be_an_exact_deadline() -> None:
     assert result.explanation.kind is FailureExplanationKind.UNKNOWN
 
 
-def test_missing_epoch_or_checkpoint_fails_closed() -> None:
+def test_missing_execution_owner_or_checkpoint_fails_closed() -> None:
     evidence = _evidence()
 
-    assert _derive(evidence, execution_epoch=None).requirement is None
+    assert _derive(evidence, execution_owner=None).requirement is None
     assert _derive(evidence, source_checkpoint=None).requirement is None
 
 
@@ -621,7 +620,6 @@ def test_distinct_same_range_epochs_have_distinct_requirement_identity() -> None
     )
     second = _derive(
         evidence,
-        execution_epoch=other_epoch,
         execution_owner=SimpleNamespace(epoch=other_epoch),
     ).requirement
 
@@ -660,7 +658,6 @@ def test_effect_adapter_uses_only_exact_consequential_owner_read() -> None:
         evidence.projection,
         observation,
         operand_authorities={"WatchdogPresetMs": OperandAuthority.ADJUSTABLE},
-        execution_epoch=evidence.epoch,
         execution_owner=evidence.epoch_owner,
         selected_writer=(None, 2, ()),
         source_world_key=("world", 0),
@@ -684,7 +681,6 @@ def test_effect_adapter_uses_exact_displacement_ancestry_before_local_reads() ->
         evidence.projection,
         observation,
         operand_authorities={"WatchdogPresetMs": OperandAuthority.ADJUSTABLE},
-        execution_epoch=evidence.epoch,
         execution_owner=evidence.epoch_owner,
         selected_writer=(None, 2, ()),
         source_world_key=("world", 0),
@@ -708,7 +704,6 @@ def test_effect_adapter_keeps_exact_predecessor_reads_beyond_displacement_ancest
         evidence.projection,
         observation,
         operand_authorities={"WatchdogPresetMs": OperandAuthority.ADJUSTABLE},
-        execution_epoch=evidence.epoch,
         execution_owner=evidence.epoch_owner,
         selected_writer=(None, 2, ()),
         source_world_key=("world", 0),
@@ -732,7 +727,6 @@ def test_effect_adapter_does_not_invent_writability() -> None:
         evidence.projection,
         observation,
         operand_authorities={},
-        execution_epoch=evidence.epoch,
         execution_owner=evidence.epoch_owner,
         selected_writer=(None, 2, ()),
         source_world_key=("world", 0),
@@ -809,7 +803,6 @@ def test_failed_alarm_effect_derives_exact_preset_requirement() -> None:
         projection,
         observation,
         operand_authorities={"WatchdogPresetMs": OperandAuthority.ADJUSTABLE},
-        execution_epoch=observation.execution_epoch,
         execution_owner=observation.execution_owner,
         selected_writer=obligation.producer,
         source_world_key=("source",),
@@ -937,7 +930,6 @@ def test_absent_guard_requirement_preserves_or_and_short_circuit_frontier() -> N
     result = derive_guard_requirement_from_effect(
         observation,
         projection,
-        execution_epoch=observation.execution_epoch,
         execution_owner=observation.execution_owner,
         selected_writer=obligation.producer,
         source_world_key=("compound-source",),
@@ -1008,7 +1000,6 @@ def test_false_or_retains_exact_arm_when_sibling_inverse_is_opaque() -> None:
     result = derive_guard_requirement_from_effect(
         observation,
         projection,
-        execution_epoch=observation.execution_epoch,
         execution_owner=observation.execution_owner,
         selected_writer=obligation.producer,
         source_world_key=("partial-or-source",),
@@ -1066,7 +1057,6 @@ def test_stranded_exact_consumer_guard_becomes_active_requirement() -> None:
     result = derive_guard_requirement_from_effect(
         observation,
         projection,
-        execution_epoch=observation.execution_epoch,
         execution_owner=observation.execution_owner,
         selected_writer=obligation.producer,
         source_world_key=("stranded-source",),
@@ -1174,7 +1164,6 @@ def test_conditional_negative_uses_upstream_deadline_but_honors_set_preset() -> 
         operand_read=preset_read,
         demanding_read=demanding_read,
         operand_authority=OperandAuthority.CONFIGURED,
-        execution_epoch=epoch,
         execution_owner=epoch_owner,
         selected_writer=(None, 1, ()),
         source_world_key=("conditional-source",),

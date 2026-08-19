@@ -86,7 +86,6 @@ def _exact_failed_source(
         if receipt.checkpoint_owner is requirement.checkpoint_owner
         and receipt.source_world_key == requirement.source_world_key
         and receipt.selected_writer == requirement.selected_writer
-        and receipt.execution_epoch is requirement.execution_epoch
         and receipt.execution_owner is requirement.execution_owner
         and requirement.deadline in receipt.explanation.supporting_occurrences
         and receipt.local_act is not None
@@ -224,7 +223,6 @@ def _derive_bootstrap_requirements(
             receipt.projection,
             effect.observation,
             operand_authorities=authorities,
-            execution_epoch=execution_owner.epoch,
             execution_owner=execution_owner,
             selected_writer=effect.designation.producer,
             source_world_key=receipt.checkpoint.key,
@@ -236,7 +234,6 @@ def _derive_bootstrap_requirements(
                 derive_overwriter_guard_requirement_from_effect(
                     effect.observation,
                     receipt.projection,
-                    execution_epoch=execution_owner.epoch,
                     execution_owner=execution_owner,
                     selected_writer=effect.designation.producer,
                     source_world_key=receipt.checkpoint.key,
@@ -351,7 +348,6 @@ def _derive_route_landing_requirements(
             derive_overwriter_guard_requirement_from_write(
                 crossing.write,
                 crossing.projection,
-                execution_epoch=owner.epoch,
                 execution_owner=owner,
                 selected_writer=(node.subroutine, node.rung_index, node.branch_path),
                 source_world_key=checkpoint.key,

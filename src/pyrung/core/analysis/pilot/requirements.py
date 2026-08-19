@@ -634,8 +634,6 @@ def resolve_expectation_receipt_producer(
     if snapshot.kind != "write":
         return None
     owner = receipt.execution_owner
-    if getattr(owner, "epoch", None) is not receipt.execution_epoch:
-        return None
     runner_factory = getattr(owner, "_runner", None)
     if runner_factory is None:
         return None
@@ -668,8 +666,6 @@ def resolve_expectation_receipt_consumer(
         return None
     snapshot = snapshots[0]
     owner = receipt.execution_owner
-    if getattr(owner, "epoch", None) is not receipt.execution_epoch:
-        return None
     runner_factory = getattr(owner, "_runner", None)
     if runner_factory is None:
         return None
@@ -711,7 +707,6 @@ def match_expectation_receipt(
     receipts: tuple[ExpectationReceipt, ...] | list[ExpectationReceipt],
     *,
     occurrence: RungWrite,
-    execution_epoch: Any,
     execution_owner: Any,
 ) -> ExpectationReceipt | None:
     """Return the unique accepted expectation owning one exact causal write.
@@ -727,8 +722,7 @@ def match_expectation_receipt(
     matches: list[ExpectationReceipt] = []
     for receipt in receipts:
         if (
-            receipt.execution_epoch is not execution_epoch
-            or receipt.execution_owner is not execution_owner
+            receipt.execution_owner is not execution_owner
             or receipt.local_act is None
             or receipt.local_bearing is None
             or receipt.expectation is None

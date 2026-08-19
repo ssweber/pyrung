@@ -86,7 +86,6 @@ def test_compatible_same_tag_deadline_refines_through_earlier_writer() -> None:
     result = derive_overwriter_guard_requirement_from_effect(
         promoted,
         projection,
-        execution_epoch=promoted.execution_epoch,
         execution_owner=promoted.execution_owner,
         selected_writer=obligation.producer,
         source_world_key=("deadline-composition-source",),

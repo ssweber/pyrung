@@ -153,13 +153,12 @@ def _receipt(
     return receipt
 
 
-def _match(receipts, *, occurrence, epoch, owner):
+def _match(receipts, *, occurrence, owner):
     from pyrung.core.analysis.pilot.requirements import match_expectation_receipt
 
     return match_expectation_receipt(
         receipts,
         occurrence=occurrence,
-        execution_epoch=epoch,
         execution_owner=owner,
     )
 
@@ -179,11 +178,10 @@ def test_same_tag_and_rung_with_a_different_dynamic_address_does_not_match() -> 
     later_invocation = _write(call_invocation=2)
     receipt = _receipt(recorded, epoch=epoch, owner=owner, source="first")
 
-    assert _match((receipt,), occurrence=later_invocation, epoch=epoch, owner=owner) is None
+    assert _match((receipt,), occurrence=later_invocation, owner=owner) is None
 
 
-@pytest.mark.parametrize("foreign_dimension", ["epoch", "owner"])
-def test_foreign_epoch_or_execution_owner_does_not_match(foreign_dimension: str) -> None:
+def test_foreign_execution_owner_does_not_match() -> None:
     epoch = _epoch()
     owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
@@ -193,8 +191,7 @@ def test_foreign_epoch_or_execution_owner_does_not_match(foreign_dimension: str)
         _match(
             (receipt,),
             occurrence=write,
-            epoch=object() if foreign_dimension == "epoch" else epoch,
-            owner=_ReplayOwner(epoch) if foreign_dimension == "owner" else owner,
+            owner=_ReplayOwner(epoch),
         )
         is None
     )
@@ -211,7 +208,6 @@ def test_unique_exact_dynamic_occurrence_selects_its_source_receipt() -> None:
     matched = _match(
         (sibling, selected),
         occurrence=selected_write,
-        epoch=epoch,
         owner=owner,
     )
 
@@ -236,7 +232,6 @@ def test_corrected_overlay_bearing_key_may_differ_from_source_checkpoint() -> No
     matched = _match(
         (corrected,),
         occurrence=write,
-        epoch=epoch,
         owner=owner,
     )
 
@@ -257,7 +252,6 @@ def test_equal_epoch_reconstruction_of_the_exact_occurrence_still_matches() -> N
         _match(
             (receipt,),
             occurrence=reconstructed,
-            epoch=epoch,
             owner=owner,
         )
         is receipt
@@ -271,7 +265,7 @@ def test_duplicate_exact_receipts_are_ambiguous() -> None:
     first = _receipt(write, epoch=epoch, owner=owner, source="same")
     second = _receipt(write, epoch=epoch, owner=owner, source="same")
 
-    assert _match((first, second), occurrence=write, epoch=epoch, owner=owner) is None
+    assert _match((first, second), occurrence=write, owner=owner) is None
 
 
 @pytest.mark.parametrize("corruption", ["checkpoint_owner", "source_world"])
@@ -289,7 +283,7 @@ def test_receipt_source_identity_must_remain_intact(corruption: str) -> None:
         else replace(receipt, source_world_key=("foreign-source",))
     )
 
-    assert _match((corrupted,), occurrence=write, epoch=epoch, owner=owner) is None
+    assert _match((corrupted,), occurrence=write, owner=owner) is None
 
 
 def test_receipt_rejects_an_untyped_checkpoint_owner() -> None:
@@ -312,7 +306,7 @@ def test_malformed_source_checkpoint_fails_closed() -> None:
         source_checkpoint=SimpleNamespace(owner=receipt.checkpoint_owner),
     )
 
-    assert _match((malformed,), occurrence=write, epoch=epoch, owner=owner) is None
+    assert _match((malformed,), occurrence=write, owner=owner) is None
 
 
 def test_receipt_obligation_shape_must_match_its_local_expectation() -> None:
@@ -327,7 +321,7 @@ def test_receipt_obligation_shape_must_match_its_local_expectation() -> None:
     )
     corrupted = replace(receipt, obligations=(obligation,))
 
-    assert _match((corrupted,), occurrence=write, epoch=epoch, owner=owner) is None
+    assert _match((corrupted,), occurrence=write, owner=owner) is None
 
 
 def test_receipt_static_producer_must_own_the_dynamic_occurrence() -> None:
@@ -354,7 +348,7 @@ def test_receipt_static_producer_must_own_the_dynamic_occurrence() -> None:
         expectation=wrong_expectation,
     )
 
-    assert _match((corrupted,), occurrence=write, epoch=epoch, owner=owner) is None
+    assert _match((corrupted,), occurrence=write, owner=owner) is None
 
 
 def test_progress_handoff_uses_unfiltered_exact_link_without_reading_a_future_suffix() -> None:

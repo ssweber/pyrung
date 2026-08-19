@@ -106,7 +106,6 @@ def _derive_terminal_overwrite(
     result = derive_overwriter_guard_requirement_from_effect(
         observation,
         projection,
-        execution_epoch=observation.execution_epoch,
         execution_owner=observation.execution_owner,
         selected_writer=observation.obligation.producer,
         source_world_key=checkpoint.key,

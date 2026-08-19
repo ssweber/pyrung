@@ -930,17 +930,16 @@ def explain_selected_absence(
 
 def _validate_source_identity(
     *,
-    execution_epoch: Any,
     execution_owner: Any,
-    source_world_key: Any,
     source_checkpoint: Any,
     selected_writer: Any,
     projection: ScanRungWriteProjection,
 ) -> str | None:
-    if execution_epoch is None or execution_owner is None:
+    if execution_owner is None:
         return "exact execution epoch owner is required"
-    if getattr(execution_owner, "epoch", None) is not execution_epoch:
-        return "execution owner does not own the exact epoch"
+    execution_epoch = getattr(execution_owner, "epoch", None)
+    if execution_epoch is None:
+        return "execution owner does not expose an exact epoch"
     if not (
         getattr(execution_epoch, "first_scan", projection.scan_id + 1)
         <= projection.scan_id
@@ -978,7 +977,6 @@ def derive_guard_requirement_from_effect(
     observation: Any,
     projection: ScanRungWriteProjection,
     *,
-    execution_epoch: Any,
     execution_owner: Any,
     selected_writer: Any,
     source_world_key: Any,
@@ -997,9 +995,7 @@ def derive_guard_requirement_from_effect(
     """
 
     source_error = _validate_source_identity(
-        execution_epoch=execution_epoch,
         execution_owner=execution_owner,
-        source_world_key=source_world_key,
         source_checkpoint=source_checkpoint,
         selected_writer=selected_writer,
         projection=projection,
@@ -1084,7 +1080,6 @@ def derive_overwriter_guard_requirement_from_effect(
     observation: Any,
     projection: ScanRungWriteProjection,
     *,
-    execution_epoch: Any,
     execution_owner: Any,
     selected_writer: Any,
     source_world_key: Any,
@@ -1100,7 +1095,6 @@ def derive_overwriter_guard_requirement_from_effect(
         getattr(observation, "displacement", None),
         projection,
         disposition=getattr(observation, "disposition", None),
-        execution_epoch=execution_epoch,
         execution_owner=execution_owner,
         selected_writer=selected_writer,
         source_world_key=source_world_key,
@@ -1117,7 +1111,6 @@ def derive_overwriter_guard_requirement_from_write(
     projection: ScanRungWriteProjection,
     *,
     disposition: str | None = "DISPLACED",
-    execution_epoch: Any,
     execution_owner: Any,
     selected_writer: Any,
     source_world_key: Any,
@@ -1136,9 +1129,7 @@ def derive_overwriter_guard_requirement_from_write(
     """
 
     source_error = _validate_source_identity(
-        execution_epoch=execution_epoch,
         execution_owner=execution_owner,
-        source_world_key=source_world_key,
         source_checkpoint=source_checkpoint,
         selected_writer=selected_writer,
         projection=projection,
@@ -1712,7 +1703,6 @@ def derive_advance_operand_requirement(
     operand_read: RungRead,
     demanding_read: RungRead,
     operand_authority: OperandAuthority,
-    execution_epoch: Any,
     execution_owner: Any,
     selected_writer: Any,
     source_world_key: Any,
@@ -1730,9 +1720,7 @@ def derive_advance_operand_requirement(
     """
 
     source_error = _validate_source_identity(
-        execution_epoch=execution_epoch,
         execution_owner=execution_owner,
-        source_world_key=source_world_key,
         source_checkpoint=source_checkpoint,
         selected_writer=selected_writer,
         projection=projection,
@@ -1825,7 +1813,6 @@ def derive_advance_requirement_from_effect(
     observation: Any,
     *,
     operand_authorities: Mapping[str, OperandAuthority],
-    execution_epoch: Any,
     execution_owner: Any,
     selected_writer: Any,
     source_world_key: Any,
@@ -1919,7 +1906,6 @@ def derive_advance_requirement_from_effect(
                     operand_read=matching_reads[0],
                     demanding_read=demanding_read,
                     operand_authority=authority,
-                    execution_epoch=execution_epoch,
                     execution_owner=execution_owner,
                     selected_writer=selected_writer,
                     source_world_key=source_world_key,
