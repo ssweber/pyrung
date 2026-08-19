@@ -25,6 +25,7 @@ from pyrsistent import pvector
 
 from pyrung import PLC, Bool, Int, Or, Program, copy, fill, latch, out, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.attempt_verification import resolve_excursion
 from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis, _precise_causes
 from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,
@@ -57,7 +58,7 @@ from pyrung.core.analysis.pilot.outcome import (
     TrialAssessment,
 )
 from pyrung.core.analysis.pilot.overlay import OperationReceipt, PilotRung
-from pyrung.core.analysis.pilot.pilot import _record_attempt, _resolve_excursion
+from pyrung.core.analysis.pilot.pilot import _record_attempt
 from pyrung.core.analysis.pilot.progress import (
     _causally_harmful_corrections,
     _checkpoint_recovery_origin,
@@ -826,15 +827,15 @@ def test_pilot_investigates_one_reported_excursion_then_returns_it_to_verify(
         return resolved
 
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.pilot.investigate_excursion",
+        "pyrung.core.analysis.pilot.attempt_verification.investigate_excursion",
         investigate,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.pilot.verify_excursion_replay",
+        "pyrung.core.analysis.pilot.attempt_verification.verify_excursion_replay",
         judge,
     )
 
-    assert _resolve_excursion(detected, frame, state, ctx) is resolved
+    assert resolve_excursion(detected, frame, state, ctx) is resolved
     assert len(calls) == 1
     assert calls[0][0][5] == policy.applied
     assert executed.pulse._projection_cache == {}
