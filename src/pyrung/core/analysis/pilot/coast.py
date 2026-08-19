@@ -99,7 +99,7 @@ class CoastReceipt:
     departure fired without a target), ``"quiescent"`` (a quiescence trigger or
     cone fixpoint), ``"timeout"`` (budget/ceiling exhausted, nothing fired),
     ``"paused"`` (an external pause stopped the coast early), ``"dwell"``
-    (a fixed dwell completed), or ``"skipped"`` (nothing to coast).
+    (a fixed dwell completed).
     ``fired`` names every terminal trigger true at the landing scan —
     simultaneous firings are all present.  ``trajectory`` is populated only
     by :meth:`CoastSession.settle` (per-scan snapshots of the dwell).
@@ -821,52 +821,6 @@ def coast_departure_tags(state: Any, ctx: Any) -> tuple[str, ...]:
     ):
         channels.append(target)
     return tuple(channels)
-
-
-def _coast_to_value(
-    plc: PLC,
-    channel_tag: str | None,
-    target_value: Any,
-    *,
-    budget: int = _COAST_BUDGET,
-    session: Any = None,
-) -> CoastReceipt:
-    """Coast *plc* forward (folding) until ``channel_tag == target_value``.
-
-    Arms two coast triggers — the target and a departure (the channel leaving
-    its start value for anything but the target) — so the coast lands on the
-    exact scan either fires and the receipt says which. This is the single
-    mechanism for "hold heading and let scans pass": the live bearing coast
-    (``steer``) and the investigation replay (``investigate``) both coast
-    through timer dwell identically, so a replay reproduces the live coast.
-
-    Conditional holds animate during the coast exactly as in
-    :func:`_coast_holding_state` — a confirmed oscillation corrective (a
-    watchdog pet) that only the terminal let-run animated would silently drop
-    out of every coast, re-tripping the watchdog it exists to feed.
-
-    ``receipt.stop_reason == "reached"`` means the target was reached without
-    ejection.
-    """
-    if channel_tag is None:
-        return CoastReceipt(
-            kind=session.kind if session is not None else "bearing_coast",
-            start_scan=plc.state.scan_id,
-            end_scan=plc.state.scan_id,
-            stop_reason="skipped",
-            fired=(),
-            events=(),
-            budget=0,
-        )
-
-    return _coast_until(
-        plc,
-        value_trigger(plc, "target", TARGET, channel_tag, target_value),
-        (channel_tag,),
-        budget=budget,
-        session=session,
-        departure_excluding={channel_tag: target_value},
-    )
 
 
 def _coast_until(

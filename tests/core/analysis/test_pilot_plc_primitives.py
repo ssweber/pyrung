@@ -3,7 +3,6 @@
 Coverage targets:
 - PilotRung: guarded-rule value_for selection
 - rung list: steady vs conditional partition
-- _coast_to_value: budget, ejection guard, target reached
 - _coast_holding_state: role-tag ejection, conditional-hold animation
 - _threshold_crossed_snap: up/down/tag-name/form/non-numeric
 - _pilot_state_key: projection, done-bit abstraction, threshold vectors, masking
@@ -21,7 +20,6 @@ from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
 from pyrung.core.analysis.pilot.advance import build_advance_index
 from pyrung.core.analysis.pilot.coast import (
     _coast_holding_state,
-    _coast_to_value,
     _has_pending_effects,
     _settle_delayed_effects,
 )
@@ -72,10 +70,6 @@ from pyrung.core.physical import Physical
 from pyrung.core.program.context._state import _current_rung
 from pyrung.core.runner import PLC
 
-# ---------------------------------------------------------------------------
-# Coast to value
-# ---------------------------------------------------------------------------
-
 
 def _timer_program():
     Enable = Bool("Enable", external=True)
@@ -112,43 +106,6 @@ def _variant_named_timer_program():
         with Rung(Ready):
             out(Out)
     return prog
-
-
-class TestCoastToValue:
-    def test_reaches_target(self):
-        prog = _timer_program()
-        plc = PLC(prog, dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        receipt = _coast_to_value(plc, "Done", True, budget=50)
-        assert receipt.stop_reason == "reached"
-        assert receipt.fired == ("target",)
-        assert plc.state.tags["Done"] is True
-
-    def test_budget_limits_scans(self):
-        prog = _timer_program()
-        plc = PLC(prog, dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        scan_before = plc.state.scan_id
-        _coast_to_value(plc, "Done", True, budget=3)
-        assert plc.state.scan_id - scan_before <= 3
-
-    def test_ejection_stops_early(self):
-        """If the channel tag goes to an unexpected third value, coast stops."""
-        prog = _timer_program()
-        plc = PLC(prog, dt=0.010)
-        # Don't enable the timer — Done stays False, never reaches True
-        receipt = _coast_to_value(plc, "Done", True, budget=20)
-        assert receipt.stop_reason != "reached"
-        assert receipt.stop_reason == "timeout"
-
-    def test_none_channel_tag_returns_false(self):
-        prog = _timer_program()
-        plc = PLC(prog, dt=0.010)
-        receipt = _coast_to_value(plc, None, True, budget=20)
-        assert receipt.stop_reason != "reached"
-        assert receipt.stop_reason == "skipped"
 
 
 # ---------------------------------------------------------------------------

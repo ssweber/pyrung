@@ -1,9 +1,7 @@
 """Tests for the CoastSession spine (the technician's trend recorder).
 
 These exercise ``CoastSession.seek`` and the trigger helpers
-(``value_trigger`` / ``departure_trigger`` / ``predicate_trigger``) directly,
-not through the higher-level adapters. Those adapters are covered in
-``test_pilot_plc_primitives.py``.
+(``value_trigger`` / ``departure_trigger`` / ``predicate_trigger``) directly.
 
 Coverage targets (per the CoastSession v2 design):
 - Receipt basics + fold/no-fold landing-scan parity (perfect reaction)
@@ -15,7 +13,6 @@ Coverage targets (per the CoastSession v2 design):
 - predicate_trigger (opaque callable) plateau-guard landing
 - cyclefold dispatch under oscillating conditional holds
 - seek([]) guard
-- skipped receipt
 """
 
 from __future__ import annotations
@@ -35,7 +32,6 @@ from pyrung.core.analysis.pilot.coast import (
     CoastReceipt,
     CoastSession,
     CoastTrigger,
-    _coast_to_value,
     _settle_delayed_effects,
     departure_trigger,
     predicate_trigger,
@@ -923,22 +919,7 @@ class TestEmptyBumps:
 
 
 # ---------------------------------------------------------------------------
-# 10. skipped receipt (via the _coast_to_value builder)
-# ---------------------------------------------------------------------------
-
-
-class TestSkippedReceipt:
-    def test_none_channel_tag_is_skipped(self):
-        plc = PLC(_timer_program(), dt=0.010)
-        receipt = _coast_to_value(plc, None, True, budget=20)
-        assert receipt.stop_reason == "skipped"
-        assert receipt.stop_reason != "reached"
-        assert receipt.fired == ()
-        assert receipt.events == ()
-
-
-# ---------------------------------------------------------------------------
-# 11. settle — watched-tag fixpoint (quiescence)
+# 10. settle — watched-tag fixpoint (quiescence)
 # ---------------------------------------------------------------------------
 
 
