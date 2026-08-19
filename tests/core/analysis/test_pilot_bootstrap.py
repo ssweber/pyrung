@@ -11,11 +11,11 @@ from pyrung import PLC, Bool, Program, Rung, latch, out
 from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
 from pyrung.core.analysis.pilot import entry_execution as entry_execution_module
 from pyrung.core.analysis.pilot.api import pilot_events
-from pyrung.core.analysis.pilot.types import (
+from pyrung.core.analysis.pilot.bootstrap import (
     BootstrapExecutionSnapshot,
-    PilotEvent,
     _BootstrapExecution,
 )
+from pyrung.core.analysis.pilot.types import PilotEvent
 from pyrung.core.runner import _compile_avoid
 from tests.fixtures.pilot_alarm_presets import aborted_on_first_scan as first_scan
 from tests.fixtures.pilot_alarm_presets import alarmed_at_start as alarmed

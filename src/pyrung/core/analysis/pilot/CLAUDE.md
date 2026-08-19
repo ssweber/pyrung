@@ -648,8 +648,8 @@ Static reading and orientation:
 - `awaited_actions.py` — program-awaited actions and producer families
 - `advance.py` — instruction-owned channels and boundaries
 - `program_step.py` — one-producer counterfactual proof
-- `bootstrap.py` — conservative cold-start designation and factual projection
-  observation adapter
+- `bootstrap.py` — conservative cold-start designation, factual projection
+  observation, and the resulting immutable bootstrap receipt/snapshot family
 - `effects.py` — act-owned effect contracts, occurrence selection,
   required-shape policy, observation promotion, and detached snapshots
 - `effect_observation.py` — exact intrascan and execution-window effect

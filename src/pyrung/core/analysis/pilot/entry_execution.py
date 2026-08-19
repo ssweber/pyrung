@@ -15,6 +15,7 @@ from pyrsistent import pvector
 
 import pyrung.core.analysis.pilot.theory_drive as _theory_drive
 from pyrung.core.analysis.pilot.bootstrap import (
+    _BootstrapExecution,
     bind_observed_route_designations,
     observe_bootstrap_effects,
 )
@@ -36,7 +37,6 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints
 from pyrung.core.analysis.pilot.types import (
-    _BootstrapExecution,
     _CausalCheckpoint,
     _IterationFrame,
     _PilotContext,

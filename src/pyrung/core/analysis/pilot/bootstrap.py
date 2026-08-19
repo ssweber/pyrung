@@ -32,7 +32,9 @@ if TYPE_CHECKING:
         ScanRungWriteProjection,
     )
     from pyrung.core.analysis.pdg import ProgramGraph
+    from pyrung.core.analysis.pilot.execution import ExecutionReceipt
     from pyrung.core.analysis.pilot.trace_tree import TraceNode
+    from pyrung.core.analysis.pilot.types import _CausalCheckpoint
 
 StaticRungAddress = tuple[str | None, int, tuple[int, ...]]
 
@@ -156,6 +158,123 @@ class BootstrapEffect:
                 _read_snapshot(read) for read in observation.displacement_enabling_reads
             ),
             detail=observation.detail,
+        )
+
+
+@dataclass(frozen=True)
+class BootstrapAccessSnapshot:
+    """One deeply detached read or write in bootstrap execution order."""
+
+    scan: int
+    ordinal: int
+    run_order: int
+    rung: tuple[str | None, int]
+    kind: Literal["read", "write"]
+    tag: str
+    values: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
+class BootstrapExecutionSnapshot:
+    """Safe event view of one internal bootstrap execution receipt."""
+
+    source_scan: int
+    landing_scan: int
+    source_world_key: Any
+    objective: tuple[str, Any]
+    objective_frontier: tuple[tuple[str, Any], ...]
+    source: Mapping[str, Any]
+    landing: Mapping[str, Any]
+    ordered_accesses: tuple[BootstrapAccessSnapshot, ...]
+    designations: tuple[BootstrapDesignationSnapshot, ...]
+    appeared_effects: tuple[BootstrapEffectSnapshot, ...]
+
+
+@dataclass(frozen=True)
+class _BootstrapExecution:
+    """Exact receipt for Pilot's single cold-start program scan."""
+
+    checkpoint: _CausalCheckpoint
+    projection: ScanRungWriteProjection = field(compare=False, repr=False)
+    designations: tuple[BootstrapDesignation, ...]
+    appeared_effects: tuple[BootstrapEffect, ...]
+    execution: ExecutionReceipt = field(compare=False, repr=False)
+    route_bound: bool = False
+
+    def __post_init__(self) -> None:
+        if self.execution.source_scan is None:
+            raise ValueError("bootstrap execution receipt has no source scan")
+        if self.scan_after != self.scan_before + 1:
+            raise ValueError("bootstrap execution must contain exactly one scan")
+        if self.projection.scan_id != self.scan_after:
+            raise ValueError("bootstrap projection does not match its landing scan")
+        if self.execution.kernel_scan_ids != (self.scan_after,):
+            raise ValueError("bootstrap execution receipt must own its landing scan")
+
+    @property
+    def scan_before(self) -> int:
+        assert self.execution.source_scan is not None
+        return self.execution.source_scan
+
+    @property
+    def scan_after(self) -> int:
+        return self.execution.kernel_scan_ids[0]
+
+    @property
+    def landing(self) -> Mapping[str, Any]:
+        return self.execution.after_snap
+
+    def diagnostic_snapshot(self) -> BootstrapExecutionSnapshot:
+        """Return a detached immutable event view of this causal evidence."""
+
+        accesses: list[BootstrapAccessSnapshot] = [
+            BootstrapAccessSnapshot(
+                scan=read.scan_id,
+                ordinal=read.ordinal,
+                run_order=read.run_order,
+                rung=(read.rung_id.subroutine, read.rung_id.rung_index),
+                kind="read",
+                tag=read.occurrence.name,
+                values=(_detached(read.occurrence.value),),
+            )
+            for read in self.projection.reads
+        ]
+        accesses.extend(
+            BootstrapAccessSnapshot(
+                scan=write.scan_id,
+                ordinal=write.ordinal,
+                run_order=write.run_order,
+                rung=(write.rung_id.subroutine, write.rung_id.rung_index),
+                kind="write",
+                tag=write.transition.tag_name,
+                values=(
+                    _detached(write.transition.from_value),
+                    _detached(write.transition.to_value),
+                ),
+            )
+            for write in self.projection.writes
+        )
+        accesses.sort(key=lambda access: access.ordinal)
+        objective = self.checkpoint.objective
+        return BootstrapExecutionSnapshot(
+            source_scan=self.scan_before,
+            landing_scan=self.scan_after,
+            source_world_key=_detached(self.checkpoint.key),
+            objective=(objective.target.tag, _detached(objective.target.value)),
+            objective_frontier=tuple(
+                (tag, _detached(value)) for tag, value in objective.frontier
+            ),
+            source=MappingProxyType(
+                {tag: _detached(value) for tag, value in self.projection.entry_tags.items()}
+            ),
+            landing=MappingProxyType(
+                {tag: _detached(value) for tag, value in self.landing.items()}
+            ),
+            ordered_accesses=tuple(accesses),
+            designations=tuple(designation_snapshot(item) for item in self.designations),
+            appeared_effects=tuple(
+                effect.diagnostic_snapshot() for effect in self.appeared_effects
+            ),
         )
 
 

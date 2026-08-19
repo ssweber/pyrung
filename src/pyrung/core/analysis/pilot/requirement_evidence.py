@@ -11,6 +11,7 @@ from typing import Any
 
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.advance import build_advance_index
+from pyrung.core.analysis.pilot.bootstrap import _BootstrapExecution
 from pyrung.core.analysis.pilot.conductivity import charted_front_extends_current
 from pyrung.core.analysis.pilot.effect_observation import (
     effect_reached_consumer,
@@ -57,7 +58,6 @@ from pyrung.core.analysis.pilot.types import (
     TargetReached,
     _AcceptedTrial,
     _AttemptResult,
-    _BootstrapExecution,
     _CausalCheckpoint,
     _ExecutedAttempt,
     _IterationFrame,

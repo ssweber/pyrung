@@ -15,6 +15,7 @@ from pyrung.core.analysis.pilot.attempt_interpretation import (
     interpret_attempt,
     interpret_failed_requirements,
 )
+from pyrung.core.analysis.pilot.bootstrap import _BootstrapExecution
 from pyrung.core.analysis.pilot.effect_observation import effect_reached_consumer
 from pyrung.core.analysis.pilot.effects import (
     ConsumerBoundary,
@@ -51,7 +52,6 @@ from pyrung.core.analysis.pilot.types import (
     _AcceptedTrial,
     _ActionPair,
     _AttemptResult,
-    _BootstrapExecution,
     _CausalCheckpoint,
     _ExecutedAttempt,
     _PilotContext,
