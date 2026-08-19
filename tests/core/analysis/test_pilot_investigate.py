@@ -53,11 +53,7 @@ from pyrung.core.analysis.pilot.incidents import BearingDeparture, DeviationInci
 from pyrung.core.analysis.pilot.investigate import (
     _MAX_CANDIDATE_COMPOSITIONS,
     InvestigationRejection,
-    _CandidateComposed,
     _hold_allowed,
-    _ReplayAccepted,
-    _ReplayRejected,
-    _resolve_replay_attempt,
     investigate_deviation,
 )
 from pyrung.core.analysis.pilot.investigation_replay import (
@@ -723,103 +719,6 @@ def test_investigation_rejections_carry_raw_and_guarded_replay_grounds(monkeypat
             "guarded replay rejected: guard released before landing",
         ),
     )
-
-
-@pytest.mark.parametrize(
-    ("phase", "slug", "ground"),
-    (
-        (
-            "exploratory",
-            "exploratory-replay-failed",
-            "exploratory replay rejected: exploratory failed",
-        ),
-        (
-            "guarded",
-            "guarded-replay-failed",
-            "guarded replay rejected: guarded failed",
-        ),
-    ),
-)
-def test_replay_resolution_keeps_phase_specific_rejection_ground(phase, slug, ground):
-    hypothesis = CorrectionHypothesis("cause", (("Input", True),))
-
-    resolved = _resolve_replay_attempt(
-        phase=phase,
-        current=hypothesis,
-        outcome=ReplayOutcome(False, None, {}, f"{phase} failed"),
-        seen_replacements=set(),
-        extend=lambda *_args: pytest.fail("a failed replay cannot extend"),
-    )
-
-    assert resolved == _ReplayRejected(InvestigationRejection(hypothesis, slug, ground))
-
-
-def test_replay_resolution_distinguishes_acceptance_extension_and_shared_cycle():
-    hypothesis = CorrectionHypothesis("cause", (("A", False),))
-    extended = CorrectionHypothesis("nested-cause", (("A", False), ("B", False)))
-    occurrence = CausalOccurrence(RungId(None, 2), "State", 8)
-    witness = RegressionWitness(
-        channel_tag="State",
-        source=3,
-        departed=8,
-        landing=8,
-        departure_scan=2,
-        cause=(occurrence,),
-        causal_spine=frozenset({"State"}),
-    )
-    incident = DeviationIncident(
-        anchor_scan=0,
-        departure_scan=2,
-        end_scan=2,
-        action=(),
-        bearing=(),
-        before_snap={"State": 3},
-        after_snap={"State": 8},
-        changed_tags=("State",),
-        departures=(),
-    )
-    replacement = ReplacementEvidence(
-        plc=object(),
-        incident=incident,
-        witness=witness,
-        shared_suffix=(occurrence,),
-    )
-    accepted = ReplayOutcome(True, None, {}, "accepted")
-    replaced = ReplayOutcome(True, None, {}, "replacement", replacement=replacement)
-    seen: set[tuple[Any, ...]] = set()
-    extensions = 0
-
-    def _extend(*_args):
-        nonlocal extensions
-        extensions += 1
-        return extended
-
-    assert _resolve_replay_attempt(
-        phase="exploratory",
-        current=hypothesis,
-        outcome=accepted,
-        seen_replacements=seen,
-        extend=_extend,
-    ) == _ReplayAccepted(accepted)
-    assert _resolve_replay_attempt(
-        phase="exploratory",
-        current=hypothesis,
-        outcome=replaced,
-        seen_replacements=seen,
-        extend=_extend,
-    ) == _CandidateComposed(extended)
-    cycled = _resolve_replay_attempt(
-        phase="guarded",
-        current=extended,
-        outcome=replaced,
-        seen_replacements=seen,
-        extend=_extend,
-    )
-
-    assert extensions == 1
-    assert isinstance(cycled, _ReplayRejected)
-    assert cycled.rejection.slug == "nested-cause-cycle"
-    assert cycled.rejection.ground == ("guarded replay repeated a counterfactual replacement cause")
 
 
 def test_investigation_static_rejections_carry_their_grounds(monkeypatch):

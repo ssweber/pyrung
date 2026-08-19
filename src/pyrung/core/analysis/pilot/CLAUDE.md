@@ -510,7 +510,7 @@ this table only locates the owner.
 - Corrective incidents, replay, neutralization-versus-masking, and excursion
   diagnosis: `investigation_replay.py`
 - Corrective candidate composition and confirmation:
-  `investigate.py::_resolve_replay_attempt` / `investigate_deviation`
+  `investigate.py::investigate_deviation`
 - Bounded relational counterexample refinement and pinned suppression
   nominations: `refinement.py`
 - Bounded corrective composition: `recovery.py::compose_corrections`

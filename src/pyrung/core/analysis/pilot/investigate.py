@@ -7,13 +7,13 @@ composes, and confirms them with the replay engine.
 ``refinement.py`` owns bounded relational counterexample refinement.
 ``correction_candidates.py`` owns candidate identity, ordering, composition,
 materialization, and self-defeat checks.
-``_resolve_replay_attempt`` either accepts, rejects, or composes a candidate;
-bounded candidate composition always replays the composite from the original
-checkpoint.  This is an orient-phase
-optimization, not another PILOT iteration: it neither commits a world nor
-installs a correction. A surviving exploratory result receives an
-evidence-derived lifetime from ``correction_candidates.py`` and must survive a
-guarded replay before the first confirmed composite is returned.
+``recovery.compose_corrections`` owns bounded accept, reject, retry, and
+extension control. Candidate composition always replays the composite from
+the original checkpoint. This is an orient-phase optimization, not another
+PILOT iteration: it neither commits a world nor installs a correction. A
+surviving exploratory result receives an evidence-derived lifetime from
+``correction_candidates.py`` and must survive a guarded replay before the
+first confirmed composite is returned.
 
 Departure investigation does not install a correction; installation belongs
 to the orchestration/recovery owner.
@@ -22,7 +22,7 @@ to the orchestration/recovery owner.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -86,30 +86,6 @@ class InvestigationRejection:
 
 
 @dataclass(frozen=True)
-class _ReplayAccepted:
-    """A replay attempt accepted without exposing another causal cut."""
-
-    outcome: _replay.ReplayOutcome
-
-
-@dataclass(frozen=True)
-class _CandidateComposed:
-    """A replay exposed another causal cut and composed one candidate."""
-
-    hypothesis: CorrectionHypothesis
-
-
-@dataclass(frozen=True)
-class _ReplayRejected:
-    """A replay attempt rejected the current hypothesis on an exact ground."""
-
-    rejection: InvestigationRejection
-
-
-_ReplayResolution = _ReplayAccepted | _CandidateComposed | _ReplayRejected
-
-
-@dataclass(frozen=True)
 class _InvestigationCompositionCandidate:
     """One hypothesis plus retry evidence retained across its extensions."""
 
@@ -135,60 +111,6 @@ class InvestigationResult:
     # classification, and human ground cannot become index-desynchronized.
     rejected: tuple[InvestigationRejection, ...] = ()
     unresolved: tuple[str, ...] = ()
-
-
-def _resolve_replay_attempt(
-    *,
-    phase: Literal["exploratory", "guarded"],
-    current: CorrectionHypothesis,
-    outcome: _replay.ReplayOutcome,
-    seen_replacements: set[tuple[Any, ...]],
-    extend: Callable[
-        [CorrectionHypothesis, _replay.ReplacementEvidence],
-        CorrectionHypothesis | None,
-    ],
-) -> _ReplayResolution:
-    """Resolve one replay without flattening acceptance, extension, or rejection.
-
-    Replacement identity is shared across exploratory and guarded attempts in
-    one investigation. A repeated cause is rejected before another extension
-    is derived, so causal closure cannot manufacture work from a cycle.
-    """
-    if not outcome.accepted:
-        return _ReplayRejected(
-            InvestigationRejection(
-                current,
-                f"{phase}-replay-failed",
-                f"{phase} replay rejected: " + (outcome.reason or "no replay reason supplied"),
-            )
-        )
-
-    replacement = outcome.replacement
-    if replacement is None or not replacement.shared_suffix:
-        return _ReplayAccepted(outcome)
-
-    fingerprint = _replacement_identity(replacement)
-    if fingerprint in seen_replacements:
-        ground = (
-            "counterfactual replacement cause repeated inside one investigation"
-            if phase == "exploratory"
-            else "guarded replay repeated a counterfactual replacement cause"
-        )
-        return _ReplayRejected(InvestigationRejection(current, "nested-cause-cycle", ground))
-    seen_replacements.add(fingerprint)
-
-    extended = extend(current, replacement)
-    if extended is None:
-        prefix = "replacement" if phase == "exploratory" else "guarded replacement"
-        return _ReplayRejected(
-            InvestigationRejection(
-                current,
-                "nested-cause-unresolved",
-                f"{prefix} reproduced the same bounded outcome and pipeline "
-                "but yielded no additional corrective cut",
-            )
-        )
-    return _CandidateComposed(extended)
 
 
 def _replacement_identity(replacement: _replay.ReplacementEvidence) -> tuple[Any, ...]:
