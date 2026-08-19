@@ -310,7 +310,7 @@ def test_bootstrap_event_consumer_cannot_mutate_or_advance_internal_receipt(
     assert retained_state.tags[first_scan.ProcessStep.name] == first_scan.ABORTED
     assert retained_capture is not None
     assert retained_capture.runs
-    retained_projection = execution_owner._runner()._replay_rung_write_projection_at(1)
+    retained_projection = execution_owner.rung_write_projection_at(1)
     assert retained_projection is not None
     assert _ordered_accesses(retained_projection) == _ordered_accesses(internal.projection)
 

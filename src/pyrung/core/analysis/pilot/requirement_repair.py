@@ -330,7 +330,7 @@ def _program_guard_rebase_requirement(
         if candidate_identity in seen_candidates:
             continue
         seen_candidates.add(candidate_identity)
-        projection = owner._runner()._replay_rung_write_projection_at(candidate_scan)
+        projection = owner.rung_write_projection_at(candidate_scan)
         if projection is None or projection.scan_id != candidate_scan:
             continue
         crossings = []

@@ -827,6 +827,11 @@ class EpochQuery:
         """Reconstruct one disposable capture without retaining it in the raw LRU."""
         return self._runner()._build_replay_capture_at(scan_id)
 
+    def rung_write_projection_at(self, scan_id: int) -> Any:
+        """Replay the exact tag-only read/write projection for this epoch."""
+
+        return self._runner()._replay_rung_write_projection_at(scan_id)
+
     def pilot_rung_write_projection_at(self, scan_id: int) -> Any:
         """Replay Pilot's exact tag-and-memory access projection for this epoch."""
 
