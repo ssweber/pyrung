@@ -1491,40 +1491,6 @@ def _record_optional_requirement_delta(
     )
 
 
-def _record_optional_theory_advance(
-    state: _PilotState,
-    observation: _TheoryTransitionEvidence | None,
-    *,
-    remaining_budget: int,
-    phase_receipts: tuple[TheoryPhaseReceipt, ...] = (),
-) -> None:
-    if observation is None or observation.adopted_boundary is None:
-        return
-    theory = active_theory(state.theory_state)
-    if theory is None:
-        return
-    boundary = _theory_live_boundary(state)
-    if boundary.scan_id < observation.adopted_boundary.scan_id or (
-        boundary.scan_id == observation.source.scan_id
-        and boundary.world_key == observation.source.world_key
-    ):
-        return
-    parent = state.theory_state.ledger.progress[theory.current_progress_id]
-    _record_optional_theory_fact(
-        state,
-        AdvanceTheory(
-            theory_id=theory.theory_id,
-            version_id=theory.current_version_id,
-            accepted_attempt_id=_theory_attempt_identity(theory.theory_id, observation),
-            source=observation.source,
-            boundary=boundary,
-            advance_identity=("theory-advance", observation.identity, boundary),
-            phase_receipts=phase_receipts,
-            remaining_budget=min(parent.remaining_budget, max(0, remaining_budget)),
-        ),
-    )
-
-
 def _record_optional_theory_proved(state: _PilotState) -> None:
     theory = active_theory(state.theory_state)
     if theory is None:
