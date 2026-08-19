@@ -479,9 +479,11 @@ this table only locates the owner.
 - Transition-knowledge update: `Compass.apply`, invoked by drive-loop
   observation commits and post-commit regression-nogood retention
 - Coast-departure channel ownership: `coast.py::coast_departure_tags`
-- Post-commit retention, recovery, and correction installation: `progress.py`;
-  `_handle_channel_departure` is the terminal event-streaming owner after
-  `_monitor_trend` detects a channel departure
+- Post-commit retention, recovery decisions, and checkpoint restore:
+  `progress.py`; `_handle_channel_departure` is the terminal event-streaming
+  owner after `_monitor_trend` detects a channel departure
+- Confirmed-correction installation, promotion, contradiction/revocation, and
+  symmetric checkpoint overlay rebasing: `correction_lifecycle.py`
 - Corrective hypothesis production:
   `corrections.py::derive_correction_hypotheses`
 - Corrective hypothesis identity, ranking, composition, executable scoping,
@@ -665,7 +667,9 @@ Judgment and recovery:
 
 - `verify.py` — trial gates, excursion detection, and replay judgment
 - `outcome.py` — evidence classification
-- `progress.py` — retention, recovery, corrections, reverts
+- `progress.py` — retention, departure/recovery policy, investigation, reverts
+- `correction_lifecycle.py` — confirmed-correction installation, promotion,
+  causal revocation, and checkpoint overlay rebasing
 - `regression_requirements.py` — exact accepted-expectation matching and
   delayed regression-to-requirement adaptation
 - `departure.py` — departure observation and classification

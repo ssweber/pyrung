@@ -28,6 +28,13 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.attempt_transition import record_attempt
 from pyrung.core.analysis.pilot.attempt_verification import resolve_excursion
 from pyrung.core.analysis.pilot.candidate_policy import hold_defeats_needed
+from pyrung.core.analysis.pilot.correction_lifecycle import (
+    _causally_harmful_corrections,
+    _contradicted_corrections,
+    _install_confirmed_correction,
+    _promote_probationary_corrections,
+    _revoke_corrections,
+)
 from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis, _precise_causes
 from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,
@@ -60,14 +67,9 @@ from pyrung.core.analysis.pilot.outcome import (
 )
 from pyrung.core.analysis.pilot.overlay import OperationReceipt, PilotRung
 from pyrung.core.analysis.pilot.progress import (
-    _causally_harmful_corrections,
     _checkpoint_recovery_origin,
-    _contradicted_corrections,
-    _install_confirmed_correction,
     _investigate_and_revert,
     _monitor_trend,
-    _promote_probationary_corrections,
-    _revoke_corrections,
 )
 from pyrung.core.analysis.pilot.steer import _install_prerequisites
 from pyrung.core.analysis.pilot.trace import trace_back

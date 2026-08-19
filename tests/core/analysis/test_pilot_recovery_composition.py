@@ -228,11 +228,13 @@ def test_protected_outer_state_cannot_self_grant_disposable_capability() -> None
 
 
 def test_recovery_rejects_outer_orchestration_owners() -> None:
+    from pyrung.core.analysis.pilot.correction_lifecycle import (
+        _install_confirmed_correction,
+    )
     from pyrung.core.analysis.pilot.pilot import (
         _monitor_committed_trial,
         _pilot_loop_events,
     )
-    from pyrung.core.analysis.pilot.progress import _install_confirmed_correction
     from pyrung.core.analysis.pilot.skiff import run_skiff_scan
 
     def attempt(candidate, _ctx):

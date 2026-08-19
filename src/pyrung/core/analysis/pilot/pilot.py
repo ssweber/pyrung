@@ -29,6 +29,9 @@ from pyrung.core.analysis.pilot.advance import iter_advance_owners
 from pyrung.core.analysis.pilot.compass import (
     ProbeExhaustedObservation,
 )
+from pyrung.core.analysis.pilot.correction_lifecycle import (
+    _promote_probationary_corrections,
+)
 from pyrung.core.analysis.pilot.earned_work import (
     build_earned_work,
 )
@@ -54,7 +57,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.progress import (
     _monitor_trend,
-    _promote_probationary_corrections,
     _record_pending_landing,
     _trial_checkpoint,
 )
@@ -144,11 +146,9 @@ class _DriveOutcome:
     root_route: TraceChoice | None
 
 
-
 # ---------------------------------------------------------------------------
 # Core PILOT loop — layered acceptance (causal momentum)
 # ---------------------------------------------------------------------------
-
 
 
 def _with_avoid_reason(
@@ -254,9 +254,6 @@ def _avoid_route_names(frame: _IterationFrame, ctx: _PilotContext) -> tuple[str,
     return tuple(getattr(avoid, "names", ()) or sorted(names))
 
 
-
-
-
 def _monitor_committed_trial(
     trial: _AcceptedTrial,
     frame: _IterationFrame,
@@ -326,10 +323,6 @@ def _monitor_committed_trial(
         return
     if not continuation_hop:
         yield from _monitor_trend(trial, frame, state, ctx)
-
-
-
-
 
 
 def _finished_event(
