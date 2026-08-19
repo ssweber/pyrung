@@ -40,6 +40,7 @@ if TYPE_CHECKING:
         BootstrapEffectSnapshot,
     )
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
+    from pyrung.core.analysis.pilot.departure_state import PendingDeparture
     from pyrung.core.analysis.pilot.effects import (
         EffectExpectation,
         EffectObservation,
@@ -54,7 +55,6 @@ if TYPE_CHECKING:
     )
     from pyrung.core.analysis.pilot.outcome import TrialAssessment
     from pyrung.core.analysis.pilot.overlay import PilotRung
-    from pyrung.core.analysis.pilot.progress import PendingDeparture
     from pyrung.core.analysis.pilot.requirements import (
         ActiveRequirement,
         ExpectationReceipt,

@@ -36,6 +36,7 @@ from pyrung.core.analysis.pilot.correction_lifecycle import (
     _revoke_corrections,
 )
 from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis, _precise_causes
+from pyrung.core.analysis.pilot.departure_state import _checkpoint_recovery_origin
 from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,
     ExecutionReceipt,
@@ -67,7 +68,6 @@ from pyrung.core.analysis.pilot.outcome import (
 )
 from pyrung.core.analysis.pilot.overlay import OperationReceipt, PilotRung
 from pyrung.core.analysis.pilot.progress import (
-    _checkpoint_recovery_origin,
     _investigate_and_revert,
     _monitor_trend,
 )

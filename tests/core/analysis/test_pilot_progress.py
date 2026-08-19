@@ -39,6 +39,18 @@ from pyrung.core.analysis.pilot.departure import (
     DepartureReading,
     DepartureResult,
 )
+from pyrung.core.analysis.pilot.departure_state import (
+    DepartureAction,
+    DepartureBasis,
+    DepartureDecision,
+    PendingDeparture,
+    _anchor_bearing_receipt,
+    _anchor_frame_receipt,
+    _assess_pending_departure,
+    _channel_recovery_origin,
+    _departure_event_outcome,
+    _open_pending_departure,
+)
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWork,
     EarnedWorkComponent,
@@ -67,20 +79,10 @@ from pyrung.core.analysis.pilot.outcome import (
     TrialAssessment,
 )
 from pyrung.core.analysis.pilot.progress import (
-    DepartureAction,
-    DepartureBasis,
-    DepartureDecision,
-    PendingDeparture,
-    _anchor_bearing_receipt,
-    _anchor_frame_receipt,
     _apply_departure_decision,
-    _assess_pending_departure,
-    _channel_recovery_origin,
-    _departure_event_outcome,
     _handle_channel_departure,
     _investigate_and_revert,
     _monitor_trend,
-    _open_pending_departure,
 )
 from pyrung.core.analysis.pilot.regression_requirements import (
     _delayed_overwriter_fallback_allowed,

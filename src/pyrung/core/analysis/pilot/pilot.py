@@ -32,6 +32,10 @@ from pyrung.core.analysis.pilot.compass import (
 from pyrung.core.analysis.pilot.correction_lifecycle import (
     _promote_probationary_corrections,
 )
+from pyrung.core.analysis.pilot.departure_state import (
+    _record_pending_landing,
+    _trial_checkpoint,
+)
 from pyrung.core.analysis.pilot.earned_work import (
     build_earned_work,
 )
@@ -57,8 +61,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.progress import (
     _monitor_trend,
-    _record_pending_landing,
-    _trial_checkpoint,
 )
 from pyrung.core.analysis.pilot.recording import (
     _act_event,

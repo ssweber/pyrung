@@ -473,7 +473,8 @@ this table only locates the owner.
   accepted trial's receipt
 - Departure observation and classification:
   `departure.py::observe_departure` / pure `classify_departure`; `progress.py`
-  alone adopts or discards the returned settled work
+  decides whether to retain, settle, or discard the result, while
+  `departure_state.py` owns pending-state and checkpoint bookkeeping
 - Evidence classification: `outcome.py::assess_outcome`; consumers read the
   returned `TrialAssessment` axes directly
 - Transition-knowledge update: `Compass.apply`, invoked by drive-loop
@@ -668,6 +669,8 @@ Judgment and recovery:
 - `verify.py` — trial gates, excursion detection, and replay judgment
 - `outcome.py` — evidence classification
 - `progress.py` — retention, departure/recovery policy, investigation, reverts
+- `departure_state.py` — pending-departure contracts, exact checkpoint and
+  settlement bookkeeping, and pure earned-work assessment
 - `correction_lifecycle.py` — confirmed-correction installation, promotion,
   causal revocation, and checkpoint overlay rebasing
 - `regression_requirements.py` — exact accepted-expectation matching and

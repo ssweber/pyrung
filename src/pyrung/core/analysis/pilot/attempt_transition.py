@@ -19,6 +19,7 @@ from pyrung.core.analysis.pilot.compass import (
 from pyrung.core.analysis.pilot.correction_lifecycle import (
     _install_confirmed_correction,
 )
+from pyrung.core.analysis.pilot.departure_state import _anchor_frame_receipt
 from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
     BearingObjective,
@@ -32,7 +33,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     TargetSpec,
     act_identity,
 )
-from pyrung.core.analysis.pilot.progress import _anchor_frame_receipt
 from pyrung.core.analysis.pilot.recovery import assert_recovery_disposable_state
 from pyrung.core.analysis.pilot.requirement_evidence import (
     _configured_input_names,

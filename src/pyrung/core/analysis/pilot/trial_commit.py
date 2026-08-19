@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pilot.departure_state import _anchor_bearing_receipt
 from pyrung.core.analysis.pilot.earned_work import earned_work_is_useful_motion
 from pyrung.core.analysis.pilot.navigation_contracts import LocalProgressKind
 from pyrung.core.analysis.pilot.overlay import (
@@ -12,7 +13,6 @@ from pyrung.core.analysis.pilot.overlay import (
     _target_unresolved_condition,
     _until_unresolved_condition,
 )
-from pyrung.core.analysis.pilot.progress import _anchor_bearing_receipt
 from pyrung.core.analysis.pilot.recovery import assert_recovery_disposable_state
 from pyrung.core.analysis.pilot.steer import _install_prerequisites
 from pyrung.core.analysis.pilot.types import (
