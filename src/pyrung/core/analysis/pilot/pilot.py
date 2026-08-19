@@ -38,7 +38,7 @@ from pyrung.core.analysis.pilot.departure_state import (
 from pyrung.core.analysis.pilot.earned_work import (
     build_earned_work,
 )
-from pyrung.core.analysis.pilot.intrascan import (
+from pyrung.core.analysis.pilot.intrascan_research import (
     research_intrascan_boundary_realization,
     research_intrascan_traceback,
     research_retained_frontier_realization,

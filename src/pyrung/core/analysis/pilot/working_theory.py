@@ -31,7 +31,7 @@ from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.runner import EpochRef
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.intrascan import (
+    from pyrung.core.analysis.pilot.intrascan_research import (
         IntrascanBoundaryRealization,
         IntrascanProducerGoal,
         IntrascanTracebackWitness,

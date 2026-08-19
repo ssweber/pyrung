@@ -23,7 +23,7 @@ from pyrung.core.analysis.pilot.effects import (
     EffectOccurrenceSnapshot,
 )
 from pyrung.core.analysis.pilot.execution import CheckpointRef, ScanEntryConfiguration
-from pyrung.core.analysis.pilot.intrascan import (
+from pyrung.core.analysis.pilot.intrascan_research import (
     IntrascanBoundaryRealization,
     IntrascanProducerGoal,
     IntrascanProducerTrace,

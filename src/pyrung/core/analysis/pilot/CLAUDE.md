@@ -283,11 +283,12 @@ WorkingTheory retains the complete ordered effect observations from every
 relevant attempt. Compass derives a `ConductivityFront` from those immutable
 receipts: where the produced value appeared, which exact consumer read it, and
 which later write displaced it. Conductivity is therefore a read model, not a
-second stored verdict. `intrascan.py` uses the same occurrence order to walk
-backward from a failed consumer or displacement. When a backward question
-needs execution, `intrascan_counterfactual.py` may inject an analysis-only
-value at one exact occurrence boundary on a disposable fork. That patch is a
-"what if" instrument and can never be emitted as a production `Bearing`.
+second stored verdict. `intrascan_research.py` uses the same occurrence order
+to walk backward from a failed consumer or displacement. When a backward
+question needs execution, `intrascan_counterfactual.py` may inject an
+analysis-only value at one exact occurrence boundary on a disposable fork.
+That patch is a "what if" instrument and can never be emitted as a production
+`Bearing`.
 
 A `ConsumerBoundary` names the exact dynamic consumer occurrence where the
 transaction's value was observed. The investigation scope retains one plain
@@ -428,10 +429,11 @@ this table only locates the owner.
 - Exact intrascan and execution-window effect interpretation:
   `effect_observation.py`; factual `observed_shape` and appeared-write
   classification stay on `ScanRungWriteProjection`.
-- Exact assertion-scan observation and bounded diagnostic closure:
-  `intrascan.py`. Its projection is the semantic oracle; diagnostic closure
-  remains disposable and cannot install logic, mutate PILOT state, adopt a
-  world, or retain a navigation future.
+- Exact assertion-scan observation and requirement interpretation:
+  `intrascan.py`. Its projection is the semantic oracle.
+- Disposable boundary realization and occurrence-local traceback research:
+  `intrascan_research.py`. Its evidence cannot install logic, mutate PILOT
+  state, adopt a world, or retain a navigation future.
 - Analysis-only execution at an exact occurrence boundary:
   `core/intrascan_counterfactual.py`. It owns `CounterfactualPatch` execution
   and its application receipt; PILOT may consume the evidence but may never
@@ -667,8 +669,9 @@ Static reading and orientation:
 - `conductivity.py` — Compass-owned read model of immutable occurrence-ordered
   effect history and progress between attempts
 - `intrascan.py` — interpretation of execution-owned assertion-scan
-  observations, backward occurrence research, inert failed-effect derivation,
-  and occurrence-local traceback evidence
+  observations and inert failed-effect/requirement derivation
+- `intrascan_research.py` — disposable boundary realization, backward
+  occurrence research, and detached occurrence-local traceback evidence
 - `core/intrascan_counterfactual.py` — analysis-only patches at exact dynamic
   occurrence boundaries; never an executable PILOT correction
 - `temporal_need.py` — lazy current-world `AND`/`OR` requirement branches

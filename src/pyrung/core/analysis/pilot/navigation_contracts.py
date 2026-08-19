@@ -30,7 +30,7 @@ if TYPE_CHECKING:
         EffectExpectation,
         EffectOccurrenceSnapshot,
     )
-    from pyrung.core.analysis.pilot.intrascan import (
+    from pyrung.core.analysis.pilot.intrascan_research import (
         IntrascanProducerGoal,
         IntrascanWriteEvidence,
     )
