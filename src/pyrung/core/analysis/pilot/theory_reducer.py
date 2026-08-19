@@ -32,8 +32,6 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryPhaseReceipt,
     TheoryProgressId,
     TheoryProgressSnapshot,
-    TheoryReceipt,
-    TheoryReceiptId,
     TheoryRequirementSnapshot,
     TheoryState,
     TheoryStatus,
@@ -189,15 +187,6 @@ class AbandonTheory:
     abandonment_identity: tuple[Any, ...]
 
 
-@dataclass(frozen=True)
-class OpenSuccessor:
-    parent_receipt_id: TheoryReceiptId
-    claim: TheoryClaim
-    opening_identity: tuple[Any, ...]
-    link_identity: tuple[Any, ...]
-    remaining_budget: int
-
-
 TheoryFact: TypeAlias = (
     OpenTheory
     | RecordTheoryAttempt
@@ -210,7 +199,6 @@ TheoryFact: TypeAlias = (
     | RefineTheory
     | ProveTheory
     | AbandonTheory
-    | OpenSuccessor
 )
 
 
@@ -328,8 +316,6 @@ def _open(
     claim: TheoryClaim,
     opening_identity: tuple[Any, ...],
     remaining_budget: int,
-    *,
-    parent_receipt_id: TheoryReceiptId | None = None,
 ) -> TheoryState:
     if remaining_budget < 0:
         raise TheoryInvariantError("remaining theory budget cannot be negative")
@@ -371,9 +357,6 @@ def _open(
         progress=_put_unique(state.ledger.progress, progress_id, progress, "progress"),
         theories=_put_unique(state.ledger.theories, theory_id, working, "theory"),
     )
-    if parent_receipt_id is not None:
-        if parent_receipt_id not in ledger.receipts:
-            raise TheoryInvariantError("successor parent receipt is missing")
     return TheoryState(ledger, theory_id)
 
 
@@ -400,8 +383,6 @@ def _fact_identity(fact: TheoryFact) -> tuple[Any, ...]:
         return ("prove", fact.proof_identity)
     if isinstance(fact, AbandonTheory):
         return ("abandon", fact.abandonment_identity)
-    if isinstance(fact, OpenSuccessor):
-        return ("successor", fact.link_identity)
     raise AssertionError(f"unhandled theory fact {type(fact).__name__}")
 
 
@@ -428,14 +409,6 @@ def reduce_theory(state: TheoryState, fact: TheoryFact) -> TheoryState:
 def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState:
     if isinstance(fact, OpenTheory):
         return _open(state, fact.claim, fact.opening_identity, fact.remaining_budget)
-    if isinstance(fact, OpenSuccessor):
-        return _open(
-            state,
-            fact.claim,
-            fact.opening_identity,
-            fact.remaining_budget,
-            parent_receipt_id=fact.parent_receipt_id,
-        )
     if isinstance(fact, RecordTheoryAttempt):
         theory = _active(state, fact.theory_id)
         if fact.version_id != theory.current_version_id:
@@ -1185,7 +1158,6 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         theory = _active(state, fact.theory_id)
         if fact.version_id != theory.current_version_id:
             raise TheoryInvariantError("proof addresses a stale theory version")
-        claim = state.ledger.claims[theory.claim_id]
         if fact.accepted_attempt_id is not None:
             accepted = state.ledger.attempts.get(fact.accepted_attempt_id)
             if accepted is None:
@@ -1198,24 +1170,10 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
                 raise TheoryInvariantError(
                     "proof's accepted attempt does not match its current theory version"
                 )
-        receipt_id: TheoryReceiptId = ("receipt", fact.theory_id, fact.proof_identity)
-        receipt = TheoryReceipt(
-            receipt_id,
-            fact.theory_id,
-            fact.version_id,
-            claim.source,
-            fact.promoted_landing,
-            fact.fulfilled_obligations,
-            fact.requirement_observations,
-            fact.retained_pilot_rung_identities,
-            fact.accepted_attempt_id,
-        )
-        receipts = _put_unique(state.ledger.receipts, receipt_id, receipt, "receipt")
         updated = replace(theory, status=TheoryStatus.PROVED)
         return TheoryState(
             replace(
                 state.ledger,
-                receipts=receipts,
                 theories=state.ledger.theories.set(fact.theory_id, updated),
             ),
             None,

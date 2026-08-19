@@ -40,7 +40,6 @@ if TYPE_CHECKING:
 TheoryId: TypeAlias = tuple[Any, ...]
 TheoryVersionId: TypeAlias = tuple[Any, ...]
 TheoryProgressId: TypeAlias = tuple[Any, ...]
-TheoryReceiptId: TypeAlias = tuple[Any, ...]
 
 
 class TheoryInvariantError(ValueError):
@@ -797,19 +796,6 @@ class TemporalNeedRequest:
 
 
 @dataclass(frozen=True)
-class TheoryReceipt:
-    receipt_id: TheoryReceiptId
-    theory_id: TheoryId
-    version_id: TheoryVersionId
-    root: TheoryBoundaryIdentity
-    promoted_landing: TheoryBoundaryIdentity
-    fulfilled_obligations: tuple[Any, ...]
-    requirement_observations: tuple[Any, ...]
-    retained_pilot_rung_identities: tuple[tuple[Any, ...], ...]
-    accepted_attempt_id: tuple[Any, ...] | None = None
-
-
-@dataclass(frozen=True)
 class WorkingTheory:
     theory_id: TheoryId
     claim_id: tuple[Any, ...]
@@ -834,7 +820,6 @@ class TheoryLedger:
         pmap()
     )
     traceback_frontiers: PMap[Any, IntrascanTracebackFrontier] = pmap()
-    receipts: PMap[Any, TheoryReceipt] = pmap()
     applied_facts: PMap[Any, object] = pmap()
 
 

@@ -44,7 +44,6 @@ from pyrung.core.analysis.pilot.theory_reducer import (
     AbandonTheory,
     AdvanceTheory,
     ComposeTheoryCorrection,
-    OpenSuccessor,
     OpenTheory,
     ProveTheory,
     RebaseTheoryWorld,
@@ -253,7 +252,6 @@ def test_open_creates_one_active_theory_and_initial_version() -> None:
     assert len(state.ledger.versions) == 1
     assert len(state.ledger.theories) == 1
     assert not state.ledger.attempts
-    assert not state.ledger.receipts
 
 
 def test_research_finding_records_exact_evidence_without_advancing_the_world() -> None:
@@ -2551,7 +2549,7 @@ def test_advance_accepts_attempt_from_direct_parent_version_after_refinement() -
     assert progress.accepted_attempt_id == accepted.attempt_identity
 
 
-def test_prove_closes_theory_with_detached_receipt() -> None:
+def test_prove_closes_theory_and_retains_detached_fact() -> None:
     state, theory_id, version_id = _opened()
     fact = ProveTheory(
         theory_id=theory_id,
@@ -2566,8 +2564,8 @@ def test_prove_closes_theory_with_detached_receipt() -> None:
     state = reduce_theory(state, fact)
 
     assert state.active_theory_id is None
-    assert len(state.ledger.receipts) == 1
-    assert next(iter(state.ledger.receipts.values())).theory_id == theory_id
+    assert state.ledger.theories[theory_id].status is TheoryStatus.PROVED
+    assert state.ledger.applied_facts[("prove", fact.proof_identity)] == fact
 
 
 def test_abandon_closes_only_the_exact_version() -> None:
@@ -2584,71 +2582,6 @@ def test_abandon_closes_only_the_exact_version() -> None:
     assert state.active_theory_id is None
     assert state.ledger.theories[theory_id].status is TheoryStatus.ABANDONED
     assert state.ledger.applied_facts[("abandon", fact.abandonment_identity)] == fact
-    assert not state.ledger.receipts
-
-
-def test_successor_opens_only_from_a_proved_receipt() -> None:
-    state, theory_id, version_id = _opened()
-    state = reduce_theory(
-        state,
-        ProveTheory(
-            theory_id=theory_id,
-            version_id=version_id,
-            promoted_landing=_boundary("landing", 1),
-            proof_identity=("prove",),
-        ),
-    )
-    receipt = next(iter(state.ledger.receipts.values()))
-    successor = OpenSuccessor(
-        parent_receipt_id=receipt.receipt_id,
-        claim=_claim(source="landing"),
-        opening_identity=("successor",),
-        link_identity=("successor-link",),
-        remaining_budget=4,
-    )
-
-    state = reduce_theory(state, successor)
-
-    assert state.active_theory_id is not None
-    assert state.active_theory_id != theory_id
-    assert state.ledger.applied_facts[("successor", successor.link_identity)] == successor
-
-
-def test_successor_rejects_missing_or_abandoned_parent() -> None:
-    with pytest.raises(TheoryInvariantError):
-        reduce_theory(
-            TheoryState(),
-            OpenSuccessor(
-                parent_receipt_id=("receipt", "missing"),
-                claim=_claim(),
-                opening_identity=("missing-parent",),
-                link_identity=("missing-link",),
-                remaining_budget=4,
-            ),
-        )
-
-    abandoned, theory_id, version_id = _opened()
-    abandoned = reduce_theory(
-        abandoned,
-        AbandonTheory(
-            theory_id=theory_id,
-            version_id=version_id,
-            termination=TheoryTermination.STUCK,
-            abandonment_identity=("abandon",),
-        ),
-    )
-    assert not abandoned.ledger.receipts
-    with pytest.raises(TheoryInvariantError):
-        reduce_theory(
-            abandoned,
-            OpenSuccessor(
-                parent_receipt_id=("receipt", theory_id, ("abandoned",)),
-                claim=_claim(),
-                opening_identity=("abandoned-parent",),
-                link_identity=("abandoned-link",),
-                remaining_budget=4,
-            ),
-        )
 
 
 def test_identical_fact_streams_produce_identical_ledgers_and_ids() -> None:
