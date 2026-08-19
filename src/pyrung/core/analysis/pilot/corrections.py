@@ -44,10 +44,10 @@ from pyrung.core.analysis.pilot.overlay import (
     _union_conditions,
     _until_unresolved_condition,
 )
-from pyrung.core.analysis.pilot.trace import (
+from pyrung.core.analysis.pilot.trace import trace_back
+from pyrung.core.analysis.pilot.trace_constraints import (
     _constraint_atom,
     _inequality_levers,
-    trace_back,
 )
 from pyrung.core.analysis.pilot.trace_read import UnsupportedConstruct
 from pyrung.core.analysis.pilot.trace_tree import TraceAction

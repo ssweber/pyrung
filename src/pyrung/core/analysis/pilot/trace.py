@@ -32,18 +32,16 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import pyrung.core.analysis.pilot.availability as _availability
 import pyrung.core.analysis.pilot.route_judgment as _route_judgment
+import pyrung.core.analysis.pilot.trace_constraints as _trace_constraints
 import pyrung.core.analysis.pilot.trace_read as _trace_read
 from pyrung.core.analysis.pdg import TagRole, resolve_rung
 from pyrung.core.analysis.pilot.advance import demand_holds
 from pyrung.core.analysis.pilot.navigation_contracts import CrossingFidelity
 from pyrung.core.analysis.pilot.static_expressions import (
     _atom_text,
-    _heuristic_inequality_target,
-    _resolve_inequality_target,
 )
 from pyrung.core.analysis.pilot.trace_tree import (
     _FORM_TO_OP,
-    _OP_TO_FORM,
     TraceAction,
     TraceCrossingBranch,
     TraceNode,
@@ -260,263 +258,6 @@ def _expr_route_key(expr: Any) -> str:
 _SAME_TAG_VALUE_BUDGET = 1
 
 
-def _atom_target(
-    atom: Atom,
-    snapshot: dict[str, Any] | None = None,
-) -> tuple[str, Any] | None:
-    """Convert an Atom to the ``(tag, value)`` needed to satisfy it.
-
-    ``rise``/``fall`` need the tag at the transition target value.
-    ``truthy`` needs a truthy value — use ``True`` as proxy.
-    """
-    form = atom.form
-    if form == "xic":
-        return (atom.tag, True)
-    if form == "xio":
-        return (atom.tag, False)
-    if form == "eq":
-        if atom.operand_is_tag:
-            if snapshot is None or atom.operand not in snapshot:
-                return None
-            try:
-                operand = atom.operand_scale * snapshot[atom.operand] + atom.operand_offset
-            except TypeError:
-                return None
-            return (atom.tag, operand)
-        return (atom.tag, atom.operand)
-    if form == "rise":
-        return (atom.tag, True)
-    if form == "fall":
-        return (atom.tag, False)
-    if form == "truthy":
-        return (atom.tag, True)
-    if form in {"ne", "lt", "le", "gt", "ge"}:
-        return None
-    return None
-
-
-@dataclass(frozen=True)
-class _Lever:
-    """One actionable lever for an inequality atom, with provenance.
-
-    ``heuristic`` marks a stage-3 boundary proposal (no sound derivation —
-    the value is an example, the relation is the requirement); ``note`` is the
-    human-readable relational report threaded to ``PlanStep.notes``.
-    """
-
-    label: str  # "left" | "right" — which operand this lever steers
-    tag: str
-    value: Any
-    heuristic: bool = False
-    note: str = ""
-
-
-
-
-def _rewrite_internal_compare(
-    atom: Atom,
-    steerable: frozenset[str],
-    pdg: ProgramGraph,
-    program: Any,
-    snapshot: dict[str, Any],
-    *,
-    _depth: int = 0,
-) -> list[Atom]:
-    """Rewrite an inequality on an internal copy/calc register onto input-level
-    atoms by reversing through its writer via the Crossings registry.
-
-    The prover *dissolves* transparent pass-throughs (``copy(Temp, TempCopy)``,
-    ``calc(Sensor + 10, Adjusted)``, ``calc(A + B, Sum)``) — back-propagating the
-    boundary into the source domains and dropping the intermediate — so an
-    inequality guard on the intermediate (``TempCopy > 50``, ``Sum > 8``) has no
-    domain and would dead-end.  Reverse the guard through the writer instead
-    (``crossings.reverse`` on a ``Cmp`` target):
-
-    - single-source affine (copy / ``scale*src + offset``): one rewritten atom on
-      ``src`` with the threshold shifted (form flipped on a negative scale).
-      Recurses, so copy/calc chains collapse to the steerable source.
-    Returns ``[atom]`` unchanged when the tag is steerable or the registry falls
-    through. Verify-required fallthrough proposals are consumed separately as
-    branch receipts so their DNF grouping cannot be flattened here. The
-    per-instruction inversion lives in ``core/analysis/crossings/``; this
-    consumer drives sound reverse results and recurses for multi-hop chains.
-    """
-    if _depth > 6 or atom.tag in steerable:
-        return [atom]
-    if atom.operand_is_tag and (atom.operand_scale != 1 or atom.operand_offset != 0):
-        # This is already a sound affine producer boundary. Registered
-        # instruction crossings accept plain Cmp targets, so preserve it.
-        return [atom]
-    op = _FORM_TO_OP.get(atom.form)
-    if op is None:
-        return [atom]  # not an inequality form
-    instr = _sole_write_instr(atom.tag, pdg, program)
-    if instr is None:
-        return [atom]
-
-    from pyrung.core.analysis import crossings
-    from pyrung.core.crossing import Cmp, CrossingContext
-
-    target = Cmp(atom.tag, op, atom.operand, bound_is_tag=atom.operand_is_tag)
-    result = crossings.reverse(instr, None, target, CrossingContext(snapshot=snapshot))
-    normalized = normalize_reverse_result(result)
-    if normalized.fallthrough or normalized.contradiction or normalized.trivial:
-        return [atom]
-    branches = normalized.branches
-    if len(branches) != 1 or len(branches[0]) != 1 or not isinstance(branches[0][0], Cmp):
-        # DNF and every conjunction belong to the grouped branch consumer.
-        # Decline here rather than flattening alternatives, dissolving AND, or
-        # silently dropping a mixed-kind conjunct after grouped lowering found
-        # the branch non-executable.
-        return [atom]
-
-    c = branches[0][0]
-    assert isinstance(c, Cmp)
-    form = _OP_TO_FORM.get(c.op)
-    if form is None:
-        return [atom]
-    return _rewrite_internal_compare(
-        Atom(
-            tag=c.tag,
-            form=form,
-            operand=c.bound,
-            operand_is_tag=c.bound_is_tag,
-        ),
-        steerable,
-        pdg,
-        program,
-        snapshot,
-        _depth=_depth + 1,
-    )
-
-
-def _lever_note(req: Atom, orig: Atom, tag: str, value: Any, marker: str = "") -> str:
-    """The relational report for one lever — the requirement, with the proposed
-    value as an *example* (``held Band < -100.0 to satisfy PV < Lower (e.g.,
-    Band = -100.000001; heuristic …)``)."""
-    req_txt = _atom_text(req)
-    orig_txt = _atom_text(orig)
-    body = req_txt if req._key() == orig._key() else f"{req_txt} to satisfy {orig_txt}"
-    note = f"held {body} (e.g., {tag} = {value!r}"
-    if marker:
-        note += f"; {marker}"
-    return note + ")"
-
-
-def _inequality_levers(
-    atom: Atom,
-    snapshot: dict[str, Any],
-    steerable: frozenset[str],
-    pdg: ProgramGraph,
-    prior: _trace_read.DomainPrior | None,
-    program: Any = None,
-) -> list[_Lever]:
-    """Actionable levers for ``A op B``, as :class:`_Lever` values.
-
-    The **left** lever steers the LHS (``A`` toward the boundary set by the
-    current ``B``); the **right** lever — only when the operand is itself a tag —
-    steers the RHS (``B`` toward the boundary set by the current ``A``), via the
-    flipped comparison (``A > B`` ⟺ ``B < A``).  Both are reactive *candidates*:
-    the loop tries one, verifies, and the existing ranker/nogood learning
-    switches to the other if it was a no-op — nothing is pre-committed.
-
-    A lever is kept only when its tag is **actionable** — steerable, or
-    logic-written so trace can chase it.  A free, non-actionable operand (a
-    harness-linked sensor) yields no lever; that is the converging/coast
-    disposition's job (handled by the self-advancing branch upstream).
-
-    When *program* is given, an inequality on an internal copy/calc register is
-    first rewritten onto its input-level source(s) (``_rewrite_internal_compare``)
-    so the levers land on steerable inputs the prover dissolved.  A tag-bound
-    compare (``PV < Lower``) cannot cross the registry as-is (the calc crossing
-    defers on a tag bound), so each side is *also* rewritten with the partner
-    frozen at its snapshot value — the same freeze the two-tag calc branch
-    applies one level down — landing literal-operand atoms on the sources
-    (``Band < -100.0``, ``Level > 100.0``) that the resolver, or failing it the
-    stage-3 heuristic (:func:`_heuristic_inequality_target`, steerable free
-    words only), can turn into levers.
-    """
-    levers: list[_Lever] = []
-    seen: set[str] = set()
-
-    def _actionable(tag: str) -> bool:
-        return tag in steerable or bool(pdg.writers_of.get(tag))
-
-    def _add(label: str, req: Atom) -> None:
-        heuristic = False
-        marker = ""
-        target = _resolve_inequality_target(req, snapshot, prior, pdg)
-        if target is None:
-            hit = _heuristic_inequality_target(req, snapshot, steerable, pdg)
-            if hit is None:
-                return
-            value, marker = hit
-            target = (req.tag, value)
-            heuristic = True
-        tag, value = target
-        if tag in seen or not _actionable(tag):
-            return
-        seen.add(tag)
-        note = _lever_note(req, atom, tag, value, marker)
-        levers.append(_Lever(label, tag, value, heuristic=heuristic, note=note))
-
-    def _rewrite(a: Atom) -> list[Atom]:
-        if program is None:
-            return [a]
-        return _rewrite_internal_compare(a, steerable, pdg, program, snapshot)
-
-    base = _rewrite(atom)
-    operand = atom.operand
-    if atom.operand_is_tag and program is not None:
-        # Snapshot-frozen variants of both sides (see docstring).  Dedup by
-        # atom key so an unchanged rewrite adds nothing new.
-        seen_atoms = {a._key() for a in base}
-        frozen: list[Atom] = []
-        raw_threshold = snapshot.get(operand)
-        try:
-            threshold = (
-                atom.operand_scale * raw_threshold + atom.operand_offset
-                if raw_threshold is not None
-                else None
-            )
-        except TypeError:
-            threshold = None
-        if isinstance(threshold, (int, float)) and not isinstance(threshold, bool):
-            frozen.extend(_rewrite(Atom(tag=atom.tag, form=atom.form, operand=threshold)))
-        lhs_now = snapshot.get(atom.tag)
-        if (
-            atom.form in _FLIP_FORM
-            and atom.operand_scale != 0
-            and isinstance(lhs_now, (int, float))
-            and not isinstance(lhs_now, bool)
-        ):
-            right_form = _FLIP_FORM[atom.form] if atom.operand_scale > 0 else atom.form
-            right_bound = (lhs_now - atom.operand_offset) / atom.operand_scale
-            frozen.extend(_rewrite(Atom(tag=operand, form=right_form, operand=right_bound)))
-        for a in frozen:
-            if a._key() not in seen_atoms:
-                seen_atoms.add(a._key())
-                base.append(a)
-
-    for a in base:
-        _add("left", a)
-        if a.operand_is_tag and a.form in _FLIP_FORM and a.operand_scale != 0:
-            right_form = _FLIP_FORM[a.form] if a.operand_scale > 0 else a.form
-            _add(
-                "right",
-                Atom(
-                    tag=a.operand,
-                    form=right_form,
-                    operand=a.tag,
-                    operand_is_tag=True,
-                    operand_scale=1 / a.operand_scale,
-                    operand_offset=-a.operand_offset / a.operand_scale,
-                ),
-            )
-
-    return levers
-
-
 def _expr_satisfied(expr: Any, snapshot: dict[str, Any]) -> bool:
     """Whether *expr* is definitely satisfied in *snapshot*.
 
@@ -542,48 +283,6 @@ def target_reached(
     if target_predicate is not None:
         return _eval_expr_from_state(target_predicate, snapshot) is True
     return _values_match(snapshot.get(target_tag), target_value)
-
-
-def _constraint_atom(constraint: Constraint) -> Atom | None:
-    """Render an advance boundary in the trace predicate language."""
-
-    if isinstance(constraint, Eq):
-        if len(constraint.values) != 1:
-            return None
-        return Atom(constraint.tag, "eq", next(iter(constraint.values)))
-    if isinstance(constraint, Cmp):
-        form = {
-            "==": "eq",
-            "!=": "ne",
-            "<": "lt",
-            "<=": "le",
-            ">": "gt",
-            ">=": "ge",
-        }.get(constraint.op, constraint.op)
-        return Atom(
-            constraint.tag,
-            form,
-            constraint.bound,
-            operand_is_tag=constraint.bound_is_tag,
-        )
-    if isinstance(constraint, AffineCmp):
-        form = {
-            "==": "eq",
-            "!=": "ne",
-            "<": "lt",
-            "<=": "le",
-            ">": "gt",
-            ">=": "ge",
-        }.get(constraint.op, constraint.op)
-        return Atom(
-            constraint.tag,
-            form,
-            constraint.bound_tag,
-            operand_is_tag=True,
-            operand_scale=constraint.scale,
-            operand_offset=constraint.offset,
-        )
-    return None
 
 
 def _trace_crossing_branches(
@@ -667,11 +366,11 @@ def _trace_crossing_branches(
         for constraint in crossing_branch:
             if constraint_holds(constraint, env.snapshot) is True:
                 continue
-            req = _constraint_atom(constraint)
+            req = _trace_constraints._constraint_atom(constraint)
             if req is None:
                 supported = False
                 break
-            concrete = _atom_target(req, env.snapshot)
+            concrete = _trace_constraints._atom_target(req, env.snapshot)
             if concrete is not None:
                 tag, value = concrete
                 child = _trace_back(
@@ -692,7 +391,7 @@ def _trace_crossing_branches(
             if req.form not in ("lt", "le", "gt", "ge", "ne"):
                 supported = False
                 break
-            levers = _inequality_levers(
+            levers = _trace_constraints._inequality_levers(
                 req,
                 env.snapshot,
                 env.steerable,
@@ -1062,7 +761,7 @@ def _advance_frontier(
         # reader-owned chain.
         return None
     stage_boundary = owner.profile.linear is None
-    atom = _constraint_atom(step.until)
+    atom = _trace_constraints._constraint_atom(step.until)
     boundary = TraceNode(
         tag=step.until.tag,
         value=(atom.operand if atom is not None else step.until),
@@ -1157,7 +856,7 @@ def _advance_frontier(
         # retracing will make this profile the immediate frontier.
         return None
     children = [boundary, *gate_nodes, *demand_nodes]
-    target_atom = _constraint_atom(constraint)
+    target_atom = _trace_constraints._constraint_atom(constraint)
     return TraceNode(
         tag=constraint.tag,
         value=(target_atom.operand if target_atom is not None else constraint),
@@ -1559,7 +1258,7 @@ def _trace_expression(
     if isinstance(expr, Atom):
         if expr.unsupported is not None:
             raise _trace_read.UnsupportedConstruct("condition", expr.unsupported, provenance)
-        target = _atom_target(expr, env.snapshot)
+        target = _trace_constraints._atom_target(expr, env.snapshot)
         if target is None:
             if expr.form in ("lt", "le", "gt", "ge", "ne"):
                 op = {
@@ -1636,7 +1335,7 @@ def _trace_expression(
                 # picks one and switches if it was a no-op.  Distance counts the
                 # predicate once (the relational node stops recursion), so the
                 # levers do not double-count as separate goals.
-                levers = _inequality_levers(
+                levers = _trace_constraints._inequality_levers(
                     expr, env.snapshot, env.steerable, env.pdg, env.prior, env.program
                 )
                 lever_children: list[TraceNode] = []
@@ -2044,7 +1743,7 @@ def _trace_back(
                 child.data_flow = "producer"
                 attempt_node.children.append(child)
                 continue
-            atom = _constraint_atom(constraint)
+            atom = _trace_constraints._constraint_atom(constraint)
             if atom is None:
                 continue
             children = _trace_expression(

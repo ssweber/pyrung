@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import pyrung.core.analysis.pilot.route_judgment as _route_judgment
 import pyrung.core.analysis.pilot.trace as _trace
+import pyrung.core.analysis.pilot.trace_constraints as _trace_constraints
 import pyrung.core.analysis.pilot.trace_read as _trace_read
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.trace_tree import TraceNode
@@ -63,8 +64,8 @@ def _arm_fully_steerable(e: Any, self_tag: str, steerable: frozenset[str]) -> bo
     * ``Or`` — *any* term suffices, since asserting one satisfies it
       (``And(Manual, Or(BtnA, BtnB))``).
     * ``Atom`` — a steerable input the trace can drive: a bit/equality whose
-      ``_trace._atom_target`` tag is steerable, **or** an inequality (``Size > 100``)
-      whose LHS tag is steerable (the trace's ``_inequality_levers`` drives it).
+      ``trace_constraints._atom_target`` tag is steerable, **or** an inequality
+      (``Size > 100``) whose LHS tag is steerable.
 
     Disqualified — and so kept as a surfaced choice — are a non-input /
     coil-backed tag (``ProdMode``), an inequality on a non-steerable computed
@@ -80,7 +81,7 @@ def _arm_fully_steerable(e: Any, self_tag: str, steerable: frozenset[str]) -> bo
     if isinstance(e, Atom):
         if e.tag == self_tag:
             return False  # self-referencing seal-in arm — not a real route
-        target = _trace._atom_target(e)
+        target = _trace_constraints._atom_target(e)
         if target is not None:
             return target[0] in steerable
         # No single target value (an inequality): a steerable LHS is still a
@@ -504,7 +505,7 @@ def _enumerate_expr_routes(
 
 def _route_label_for_expr(expr: Any) -> str:
     if isinstance(expr, Atom):
-        target = _trace._atom_target(expr)
+        target = _trace_constraints._atom_target(expr)
         if target is not None:
             tag, value = target
             return f"{tag}={value!r}"
@@ -520,7 +521,7 @@ def _expr_route_condition(expr: Any) -> tuple[str, Any] | None:
     route label.
     """
     if isinstance(expr, Atom):
-        return _trace._atom_target(expr)
+        return _trace_constraints._atom_target(expr)
     if isinstance(expr, (And, Or)):
         for term in expr.terms:
             route_condition = _expr_route_condition(term)

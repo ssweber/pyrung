@@ -629,6 +629,8 @@ Static reading and orientation:
 - `trace_routes.py` — complete route enumeration and ranking policy
 - `route_judgment.py` — completed-route dead-end, avoidance, scoring, and
   conflicting-demand judgment
+- `trace_constraints.py` — scalar constraint lowering, transparent-writer
+  reversal, and actionable inequality-lever synthesis
 - `writer_selection.py` — program-writer resolution, classification, and rank
 - `program_facts.py` — static reference, edge, resting-value, and transient-rest
   facts used during drive setup

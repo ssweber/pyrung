@@ -163,7 +163,7 @@ class TraceNode:
     predicate: Any = None
     lever: str | None = None  # "left"/"right" — which operand this subtree steers
     # Lever provenance (set alongside ``lever``): a stage-3 heuristic boundary
-    # proposal and its relational report (see ``_Lever`` / ``_lever_note``).
+    # proposal and its relational report (see ``trace_constraints._Lever``).
     heuristic: bool = False
     note: str = ""
     # Set when the writer chosen for this (tag, value) frontier is gated by a
