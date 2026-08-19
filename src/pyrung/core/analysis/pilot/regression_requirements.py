@@ -107,6 +107,9 @@ def _delayed_requirement_from_regression(
         return None
     index = producer_indices[0]
     harmful_link = harmful[0]
+    harmful_owner = harmful_link.execution_owner
+    if harmful_owner is None:
+        return None
     projection = harmful_link.execution_projection
     if projection is None or not any(
         write is harmful_link.exact_write for write in projection.writes
@@ -170,8 +173,8 @@ def _delayed_requirement_from_regression(
         projection,
         observation,
         operand_authorities=authorities,
-        execution_epoch=harmful_link.execution_epoch,
-        execution_owner=harmful_link.execution_owner,
+        execution_epoch=harmful_owner.epoch,
+        execution_owner=harmful_owner,
         selected_writer=obligation.producer,
         source_world_key=source_world_key,
         source_checkpoint=source_checkpoint,
@@ -181,8 +184,8 @@ def _delayed_requirement_from_regression(
         derivation = derive_overwriter_guard_requirement_from_effect(
             observation,
             projection,
-            execution_epoch=harmful_link.execution_epoch,
-            execution_owner=harmful_link.execution_owner,
+            execution_epoch=harmful_owner.epoch,
+            execution_owner=harmful_owner,
             selected_writer=obligation.producer,
             source_world_key=source_world_key,
             source_checkpoint=source_checkpoint,
@@ -196,8 +199,7 @@ def _delayed_requirement_from_regression(
         selected_writer=obligation.producer,
         source_world_key=source_world_key,
         checkpoint_owner=source_checkpoint.owner,
-        execution_epoch=harmful_link.execution_epoch,
-        execution_owner=harmful_link.execution_owner,
+        execution_owner=harmful_owner,
         source_checkpoint=source_checkpoint,
         act_identity=receipt.act_identity,
         local_act=receipt.local_act,

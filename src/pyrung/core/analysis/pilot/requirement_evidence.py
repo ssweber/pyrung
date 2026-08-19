@@ -647,6 +647,9 @@ def _retain_intrascan_findings(
         ):
             continue
         observation = finding.observation
+        observation_owner = observation.execution_owner
+        if observation_owner is None:
+            continue
         derivation = finding.derivation
         diagnostic = finding.diagnostic_snapshot()
         immediate_expectation = executed.bearing.expectation
@@ -670,8 +673,7 @@ def _retain_intrascan_findings(
             selected_writer=diagnostic.selected_writer,
             source_world_key=diagnostic.source_world_key,
             checkpoint_owner=checkpoint.owner,
-            execution_epoch=observation.execution_epoch,
-            execution_owner=observation.execution_owner,
+            execution_owner=observation_owner,
             source_checkpoint=checkpoint,
             act_identity=act_identity(executed.bearing.act),
             local_act=executed.bearing.act,

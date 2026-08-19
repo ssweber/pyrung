@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.execution import ExecutionReceipt
+    from pyrung.core.runner import Epoch, EpochQuery
 
 from pyrung.core.analysis.causal._rung_writes import (
     RungRead,
@@ -269,8 +270,7 @@ class FailedEffectReceipt:
     selected_writer: Any
     source_world_key: Any
     checkpoint_owner: Any
-    execution_epoch: Any = field(compare=False, repr=False)
-    execution_owner: Any = field(compare=False, repr=False)
+    execution_owner: EpochQuery = field(compare=False, repr=False)
     source_checkpoint: Any = field(compare=False, repr=False)
     # The exact local transaction which owned the failed expectation.  Phase 5
     # may re-execute this designation from its causal checkpoint; it must never
@@ -280,6 +280,16 @@ class FailedEffectReceipt:
     local_bearing: Any = field(default=None, compare=False, repr=False)
     expectation: Any = field(default=None, compare=False, repr=False)
     expectation_role: EffectReceiptRole = EffectReceiptRole.IMMEDIATE
+
+    def __post_init__(self) -> None:
+        if getattr(self.execution_owner, "epoch", None) is None:
+            raise ValueError("failed effect receipt owner must expose one Epoch")
+
+    @property
+    def execution_epoch(self) -> Epoch:
+        """Derive the physical Epoch from the receipt's sole owner."""
+
+        return self.execution_owner.epoch
 
     @property
     def identity(self) -> tuple[Any, ...]:
