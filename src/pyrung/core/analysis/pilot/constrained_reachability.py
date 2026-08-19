@@ -73,8 +73,6 @@ class StaticEdgeExclusion:
 class StaticEdgeAdmission:
     """Whether one static chart edge may participate in this world's path search."""
 
-    edge_identity: tuple[Any, ...]
-    world_key: tuple[Any, ...] | None
     exclusions: tuple[StaticEdgeExclusion, ...] = ()
 
     @property
@@ -215,8 +213,6 @@ class NavigationEvidence:
                 )
 
         return StaticEdgeAdmission(
-            edge_identity=edge.identity,
-            world_key=world_key,
             exclusions=tuple(exclusions),
         )
 
