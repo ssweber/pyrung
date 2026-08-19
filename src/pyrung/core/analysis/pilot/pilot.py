@@ -1302,7 +1302,6 @@ def _pilot_loop_events(
                     theory_transition = replace(
                         theory_transition,
                         disposition=TheoryAttemptDisposition.REJECTED_EMPIRICAL,
-                        adopted_boundary=None,
                         evidence=(
                             *theory_transition.evidence,
                             (

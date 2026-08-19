@@ -41,7 +41,6 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
 )
 from pyrung.core.analysis.pilot.steer import execute
 from pyrung.core.analysis.pilot.theory_evidence import (
-    _theory_live_boundary,
     _theory_transition_from_attempt,
     _TheoryTransitionEvidence,
 )
@@ -359,14 +358,6 @@ def transition_once(
         state,
         receipt_checkpoint,
     )
-    if theory_transition is not None:
-        try:
-            theory_transition = replace(
-                theory_transition,
-                adopted_boundary=_theory_live_boundary(state),
-            )
-        except Exception:  # noqa: BLE001 - optional theory recording cannot change the drive
-            logger.debug("pilot: theory adoption snapshot failed", exc_info=True)
     return AttemptTransition(
         result=result,
         frame=frame,
@@ -395,12 +386,8 @@ def adopt_deferred_transition(
         state,
         transition.adoption_checkpoint,
     )
-    observation = transition.theory_transition
-    if observation is not None:
-        observation = replace(observation, adopted_boundary=_theory_live_boundary(state))
     return replace(
         transition,
         trial=trial,
-        theory_transition=observation,
         adoption_checkpoint=None,
     )

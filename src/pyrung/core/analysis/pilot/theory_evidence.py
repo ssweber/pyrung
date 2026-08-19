@@ -97,7 +97,6 @@ class _TheoryTransitionEvidence:
     program_transaction: ProgramTransaction | None = None
     conductivity_observations: tuple[EffectObservationSnapshot, ...] = ()
     consumer_boundary: ConsumerBoundary | None = None
-    adopted_boundary: TheoryBoundaryIdentity | None = None
     investigation_frontier_id: tuple[Any, ...] | None = None
     producer_goal_id: tuple[Any, ...] | None = None
     observation_boundary: TheoryBoundaryIdentity | None = None
