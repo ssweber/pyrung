@@ -67,6 +67,12 @@ from pyrung.core.analysis.pilot.requirements import (
     RequirementStatus,
 )
 from pyrung.core.analysis.pilot.trace_tree import TraceNode
+from pyrung.core.analysis.pilot.trial_gates import (
+    _gate_dead_end,
+    _gate_revisit,
+    _gate_spin,
+    _SpinVerdict,
+)
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     RevisitCredential,
@@ -79,12 +85,8 @@ from pyrung.core.analysis.pilot.types import (
 from pyrung.core.analysis.pilot.verify import (
     _accepted_trial,
     _executed_source_world_key,
-    _gate_dead_end,
-    _gate_revisit,
-    _gate_spin,
     _owned_channel_motion,
     _replayed_channel_motion,
-    _SpinVerdict,
     verify_excursion_replay,
     verify_gates,
 )
@@ -1006,7 +1008,7 @@ def _empty_frontier_with_channel_motion(monkeypatch, motion):
     old_tree = TraceNode("Target", True)
     new_tree = TraceNode("Target", True)
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.verify.trace_back",
+        "pyrung.core.analysis.pilot.trial_gates.trace_back",
         lambda *_args, **_kwargs: new_tree,
     )
     monkeypatch.setattr(
@@ -1073,7 +1075,7 @@ class TestGateDeadEnd:
             unsatisfied_conditions=lambda: set(),
         )
         monkeypatch.setattr(
-            "pyrung.core.analysis.pilot.verify.trace_back",
+            "pyrung.core.analysis.pilot.trial_gates.trace_back",
             lambda *_args, **_kwargs: new_tree,
         )
         monkeypatch.setattr(
@@ -1144,7 +1146,7 @@ class TestGateDeadEnd:
             return TraceNode(target.name, 1)
 
         monkeypatch.setattr(
-            "pyrung.core.analysis.pilot.verify.trace_back",
+            "pyrung.core.analysis.pilot.trial_gates.trace_back",
             _post_trial_trace,
         )
         monkeypatch.setattr(
@@ -1291,11 +1293,11 @@ class TestVerifyGates:
             consumed_revisits=set(),
         )
         monkeypatch.setattr(
-            "pyrung.core.analysis.pilot.verify._gate_spin",
+            "pyrung.core.analysis.pilot.trial_gates._gate_spin",
             lambda *_args, **_kwargs: _SpinVerdict.PASS,
         )
         monkeypatch.setattr(
-            "pyrung.core.analysis.pilot.verify._gate_dead_end",
+            "pyrung.core.analysis.pilot.trial_gates._gate_dead_end",
             lambda *_args, **_kwargs: SimpleNamespace(
                 trend=1,
                 has_new_frontier=True,

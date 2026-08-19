@@ -89,6 +89,7 @@ from pyrung.core.analysis.pilot.regression_requirements import (
     _delayed_overwriter_fallback_allowed,
 )
 from pyrung.core.analysis.pilot.trial_commit import commit_trial
+from pyrung.core.analysis.pilot.trial_gates import _gate_revisit
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     PilotEvent,
@@ -102,7 +103,6 @@ from pyrung.core.analysis.pilot.types import (
     _Step,
     _StepContext,
 )
-from pyrung.core.analysis.pilot.verify import _gate_revisit
 from pyrung.core.analysis.pilot.world import _Checkpoint, _World
 from pyrung.core.analysis.steerable import compute_steerable
 

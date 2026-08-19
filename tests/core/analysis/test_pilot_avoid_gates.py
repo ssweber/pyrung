@@ -338,8 +338,8 @@ def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
 
 def test_start_inside_one_avoid_member_does_not_exempt_clear_sibling() -> None:
     """Snapshot verification exempts members independently, not the whole union."""
+    from pyrung.core.analysis.pilot.trial_gates import _avoid_names_after_clear
     from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
-    from pyrung.core.analysis.pilot.verify import _avoid_names_after_clear
 
     avoid = _AvoidPredicate(
         (

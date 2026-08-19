@@ -125,7 +125,8 @@ the current world.
 
 `steer.py` executes exactly one `Pulse`, `BatchPulse`, `Coast`, or `Dwell` on a
 fork. `attempt_observation.py` reads exact occurrence facts from the immutable
-execution, and all modes converge on `verify.py` for judgment:
+execution, and all modes converge on `verify.py` for ordered judgment;
+`trial_gates.py` owns the individual stateless gate decisions:
 
 1. Avoid and banked-work gates run before target acceptance.
 2. `effect_observation.py` observes an act's selected producer-to-consumer
@@ -472,8 +473,9 @@ this table only locates the owner.
   materialization: `wait_options.py`
 - Static chart-edge admission:
   `constrained_reachability.py::NavigationEvidence.static_edge_admission`
-- Local trial gates and accepted execution evidence:
-  `verify.py::verify_gates` / `verify_excursion_replay`
+- Stateless local effect, spin, revisit, and dead-end judgments:
+  `trial_gates.py`; ordered verification, accepted execution evidence, and
+  replay judgment: `verify.py::verify_gates` / `verify_excursion_replay`
 - Exact scan-level progress proof: verification mints
   `execution.py::ScanProgressReceipt`; post-commit handling consumes it without
   retraversing the trace to re-prove its selected producer/frontier.
@@ -487,7 +489,7 @@ this table only locates the owner.
   `trial_commit.py::_build_step_context` / `adopt_trial`
 - Physical planning versus proof: orientation's
   `TraceReadConstraints.from_context` may propose a coupling driver;
-  `verify.py::_gate_dead_end` deliberately omits that model
+  `trial_gates.py::_gate_dead_end` deliberately omits that model
 - Trial-coast avoid observation: `coast.py::CoastSession.seek`
 - Target-relative movement: `earned_work.py::EarnedWork.receipt`; verification owns the
   accepted trial's receipt
@@ -709,7 +711,10 @@ Judgment and recovery:
 
 - `attempt_observation.py` — projection-to-occurrence receipts from immutable
   executed attempts; it owns no gate or world mutation
-- `verify.py` — trial gates, excursion detection, and replay judgment
+- `trial_gates.py` — stateless local effect, spin, revisit, and dead-end
+  judgments plus immutable gate-event recording
+- `verify.py` — ordered gate orchestration, accepted execution evidence,
+  excursion detection, and replay judgment
 - `outcome.py` — evidence classification
 - `progress.py` — post-commit retention, departure/recovery policy, and event
   streaming
