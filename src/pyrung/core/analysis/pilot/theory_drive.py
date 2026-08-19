@@ -67,7 +67,6 @@ from pyrung.core.analysis.pilot.theory_reducer import (
     ProveTheory,
     RebaseTheoryWorld,
     RecordTheoryAttempt,
-    RecordUnattributedEvidence,
     RefineTheory,
     RetainedCorrectionReceipt,
     reduce_theory,
@@ -92,7 +91,6 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryRequirementSnapshot,
     TheoryTemporalIntent,
     TheoryTermination,
-    UnattributedTheoryEvidence,
     active_theory,
     active_theory_configurations,
     active_theory_pilot_rung_identities,
@@ -366,21 +364,6 @@ def _record_theory_transition(
         return
     if state.theory_state.active_theory_id is None:
         if not observation.interpretation.opens_theory:
-            record_fact(
-                state,
-                RecordUnattributedEvidence(
-                    UnattributedTheoryEvidence(
-                        observation_id=("theory-interpretation", observation.identity),
-                        boundary=observation.source,
-                        evidence=(
-                            observation.interpretation.kind.value,
-                            observation.interpretation.reason,
-                            observation.interpretation.supporting_identities,
-                            observation.claim.identity,
-                        ),
-                    )
-                ),
-            )
             return
         record_fact(
             state,
@@ -391,16 +374,6 @@ def _record_theory_transition(
             ),
         )
     elif not _theory_claim_correlates(state, observation.claim):
-        record_fact(
-            state,
-            RecordUnattributedEvidence(
-                UnattributedTheoryEvidence(
-                    observation_id=("unattributed", observation.identity),
-                    boundary=observation.source,
-                    evidence=(observation.claim.identity, observation.evidence),
-                )
-            ),
-        )
         return
 
     theory = active_theory(state.theory_state)
@@ -1563,27 +1536,6 @@ def _record_optional_theory_proved(state: _PilotState) -> None:
         if requirement.status is RequirementStatus.ACTIVE
     )
     if unresolved:
-        _record_optional_theory_fact(
-            state,
-            RecordUnattributedEvidence(
-                UnattributedTheoryEvidence(
-                    observation_id=(
-                        "theory-target-reached-with-active-requirements",
-                        theory.theory_id,
-                        theory.current_version_id,
-                        boundary,
-                    ),
-                    boundary=boundary,
-                    evidence=(
-                        "proof-withheld",
-                        tuple(
-                            _theory_requirement_snapshot(requirement).semantic_identity
-                            for requirement in unresolved
-                        ),
-                    ),
-                )
-            ),
-        )
         return
     attempts = tuple(
         state.theory_state.ledger.attempts[attempt_id]

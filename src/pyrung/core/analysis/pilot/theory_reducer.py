@@ -41,7 +41,6 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryTermination,
     TheoryVersion,
     TheoryVersionId,
-    UnattributedTheoryEvidence,
     WorkingTheory,
     _allowed_source_boundaries,
     _transaction_execution_source,
@@ -199,11 +198,6 @@ class OpenSuccessor:
     remaining_budget: int
 
 
-@dataclass(frozen=True)
-class RecordUnattributedEvidence:
-    observation: UnattributedTheoryEvidence
-
-
 TheoryFact: TypeAlias = (
     OpenTheory
     | RecordTheoryAttempt
@@ -217,7 +211,6 @@ TheoryFact: TypeAlias = (
     | ProveTheory
     | AbandonTheory
     | OpenSuccessor
-    | RecordUnattributedEvidence
 )
 
 
@@ -409,8 +402,6 @@ def _fact_identity(fact: TheoryFact) -> tuple[Any, ...]:
         return ("abandon", fact.abandonment_identity)
     if isinstance(fact, OpenSuccessor):
         return ("successor", fact.link_identity)
-    if isinstance(fact, RecordUnattributedEvidence):
-        return ("unattributed", fact.observation.observation_id)
     raise AssertionError(f"unhandled theory fact {type(fact).__name__}")
 
 
@@ -445,8 +436,6 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             fact.remaining_budget,
             parent_receipt_id=fact.parent_receipt_id,
         )
-    if isinstance(fact, RecordUnattributedEvidence):
-        return state
     if isinstance(fact, RecordTheoryAttempt):
         theory = _active(state, fact.theory_id)
         if fact.version_id != theory.current_version_id:

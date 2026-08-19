@@ -27,7 +27,6 @@ from pyrung.core.analysis.pilot.theory_reducer import (
     ProveTheory,
     RecordConductivityResearch,
     RecordTheoryAttempt,
-    RecordUnattributedEvidence,
     RefineTheory,
 )
 from pyrung.core.analysis.pilot.working_theory import (
@@ -131,7 +130,7 @@ def _stable_plan_result(plan: Any) -> tuple[Any, ...]:
     )
 
 
-def test_optional_theory_recording_does_not_change_existing_decisions(
+def test_noncontrolling_interpretation_stays_out_of_working_theory(
     monkeypatch: Any,
 ) -> None:
     logic, consumer = _direct_producer_program()
@@ -154,18 +153,7 @@ def test_optional_theory_recording_does_not_change_existing_decisions(
     )
     without_recording = PLC(logic).how(consumer, max_scans=30, on_event=no_recording_events.append)
 
-    interpretations = tuple(
-        fact
-        for fact in recorded_facts
-        if isinstance(fact, RecordUnattributedEvidence)
-        and fact.observation.evidence
-        and fact.observation.evidence[0] == AttemptInterpretationKind.KEEP_AND_REREAD.value
-    )
-    assert len(interpretations) == 1
-    assert not any(isinstance(fact, OpenTheory) for fact in recorded_facts)
-    assert not any(isinstance(fact, RecordTheoryAttempt) for fact in recorded_facts)
-    assert not any(isinstance(fact, AdvanceTheory) for fact in recorded_facts)
-    assert not any(isinstance(fact, ProveTheory) for fact in recorded_facts)
+    assert recorded_facts == []
     assert not any("theory" in event.kind for event in recorded_events)
 
     assert _stable_plan_result(with_recording) == _stable_plan_result(without_recording)

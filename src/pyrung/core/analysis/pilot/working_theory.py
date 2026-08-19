@@ -810,13 +810,6 @@ class TheoryReceipt:
 
 
 @dataclass(frozen=True)
-class UnattributedTheoryEvidence:
-    observation_id: tuple[Any, ...]
-    boundary: TheoryBoundaryIdentity
-    evidence: tuple[Any, ...]
-
-
-@dataclass(frozen=True)
 class WorkingTheory:
     theory_id: TheoryId
     claim_id: tuple[Any, ...]
