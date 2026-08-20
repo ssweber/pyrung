@@ -11,7 +11,11 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     NavigationConstraints,
     TargetSpec,
 )
-from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
+from pyrung.core.analysis.pilot.world_key import (
+    _physical_world_key,
+    _pilot_world_key,
+    _StateKeyConfig,
+)
 
 
 def _config() -> _StateKeyConfig:
@@ -58,6 +62,22 @@ def test_receipt_retry_identity_does_not_mint_a_new_navigation_world() -> None:
     assert _pilot_world_key(snap, config, (), (first,)) == _pilot_world_key(
         snap, config, (), (retry,)
     )
+
+
+def test_physical_world_key_strips_only_requirement_identity() -> None:
+    config = _config()
+    requirement = SimpleNamespace(identity=("preset", ">", 10))
+    rung = SimpleNamespace(dest="Command", value=True, guard=None, operation=None)
+
+    bare = _pilot_world_key({"State": 7}, config, ())
+    constrained = _pilot_world_key({"State": 7}, config, (), (requirement,))
+    changed_state = _pilot_world_key({"State": 8}, config, ())
+    changed_rungs = _pilot_world_key({"State": 7}, config, (rung,))
+
+    assert constrained != bare
+    assert _physical_world_key(constrained) == bare
+    assert _physical_world_key(changed_state) != bare
+    assert _physical_world_key(changed_rungs) != bare
 
 
 def test_orientation_queries_nogoods_with_active_requirement_world_key(monkeypatch) -> None:

@@ -66,6 +66,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     active_theory_pilot_rung_identities,
     active_theory_superseded_pilot_rung_identities,
     assert_temporal_need_current,
+    theory_boundary_overlay_delta,
     theory_view,
 )
 from pyrung.core.analysis.pilot.world import _CausalCheckpoint
@@ -224,21 +225,10 @@ def _rebase_restored_theory_world(
     live = _theory_live_boundary(state)
     if live == request.source:
         return None
-    source_key = request.source.world_key
-    live_key = live.world_key
-    if (
-        live.scan_id != request.source.scan_id
-        or live.execution_ref != request.source.execution_ref
-        or live.occurrence_identity != request.source.occurrence_identity
-        or len(source_key) != 2
-        or len(live_key) != 2
-        or source_key[0] != live_key[0]
-    ):
+    overlay_delta = theory_boundary_overlay_delta(request.source, live)
+    if overlay_delta is None:
         raise ValueError("restored temporal source changed its physical execution boundary")
-    source_rungs = tuple(source_key[1])
-    live_rungs = tuple(live_key[1])
-    retained = tuple(rung for rung in live_rungs if rung not in source_rungs)
-    superseded = tuple(rung for rung in source_rungs if rung not in live_rungs)
+    retained, superseded = overlay_delta
     owned_superseded = active_theory_superseded_pilot_rung_identities(state.theory_state)
     if not set(superseded) <= owned_superseded:
         raise ValueError("restored temporal source lost an unowned overlay")

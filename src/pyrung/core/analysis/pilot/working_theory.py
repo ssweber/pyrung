@@ -129,6 +129,43 @@ class TheoryBoundaryIdentity:
         return self.owner_ref if isinstance(self.owner_ref, EpochRef) else None
 
 
+_TheoryOverlayDelta: TypeAlias = tuple[
+    tuple[tuple[Any, ...], ...],
+    tuple[tuple[Any, ...], ...],
+]
+
+
+def theory_boundary_overlay_delta(
+    source: TheoryBoundaryIdentity,
+    candidate: TheoryBoundaryIdentity,
+) -> _TheoryOverlayDelta | None:
+    """Return ``(added, removed)`` overlays at one physical execution boundary.
+
+    PLC state, scan, execution owner, and occurrence are the physical boundary.
+    The exact rung identities may differ and are returned without weakening
+    their ordering or equality semantics. Requirement constraints are already
+    absent from ``TheoryBoundaryIdentity.world_key``.
+    """
+
+    source_key = source.world_key
+    candidate_key = candidate.world_key
+    if (
+        source.scan_id != candidate.scan_id
+        or source.execution_ref != candidate.execution_ref
+        or source.occurrence_identity != candidate.occurrence_identity
+        or len(source_key) != 2
+        or len(candidate_key) != 2
+        or source_key[0] != candidate_key[0]
+    ):
+        return None
+    source_rungs = tuple(source_key[1])
+    candidate_rungs = tuple(candidate_key[1])
+    return (
+        tuple(rung for rung in candidate_rungs if rung not in source_rungs),
+        tuple(rung for rung in source_rungs if rung not in candidate_rungs),
+    )
+
+
 @dataclass(frozen=True)
 class TheoryObjectiveSnapshot:
     """Predicate-free semantic form of a target-relative objective."""

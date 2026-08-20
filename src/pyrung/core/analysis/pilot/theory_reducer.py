@@ -43,6 +43,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     _allowed_source_boundaries,
     _transaction_execution_source,
     assert_detached_theory_value,
+    theory_boundary_overlay_delta,
     theory_source_is_retained,
 )
 from pyrung.core.runner import EpochRef
@@ -794,22 +795,14 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         parent = state.ledger.progress[theory.current_progress_id]
         if fact.source != parent.provisional_tip:
             raise TheoryInvariantError("world rebase source is not the current progress boundary")
-        if fact.rebased_source == fact.source or (
-            fact.rebased_source.scan_id != fact.source.scan_id
-            or fact.rebased_source.execution_ref != fact.source.execution_ref
-            or fact.rebased_source.occurrence_identity != fact.source.occurrence_identity
-        ):
+        if fact.rebased_source == fact.source:
+            raise TheoryInvariantError("world rebase changed its physical execution boundary")
+        overlay_delta = theory_boundary_overlay_delta(fact.source, fact.rebased_source)
+        if overlay_delta is None:
             raise TheoryInvariantError("world rebase changed its physical execution boundary")
         if not fact.retained_pilot_rung_identities and not fact.superseded_pilot_rung_identities:
             raise TheoryInvariantError("world rebase has no overlay change evidence")
-        source_key = fact.source.world_key
-        rebased_key = fact.rebased_source.world_key
-        if len(source_key) != 2 or len(rebased_key) != 2 or source_key[0] != rebased_key[0]:
-            raise TheoryInvariantError("world rebase changed its physical state")
-        source_rungs = tuple(source_key[1])
-        rebased_rungs = tuple(rebased_key[1])
-        added = tuple(rung for rung in rebased_rungs if rung not in source_rungs)
-        removed = tuple(rung for rung in source_rungs if rung not in rebased_rungs)
+        added, removed = overlay_delta
         if set(added) != set(fact.retained_pilot_rung_identities):
             raise TheoryInvariantError("world rebase overlay delta lacks exact ownership")
         if set(removed) != set(fact.superseded_pilot_rung_identities):

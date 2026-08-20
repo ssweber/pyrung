@@ -80,6 +80,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     assert_temporal_need_current,
     temporal_need_request,
     temporal_setup_configuration_tags,
+    theory_boundary_overlay_delta,
     theory_view,
 )
 from pyrung.core.analysis.pilot.world import _Checkpoint, _World
@@ -934,6 +935,48 @@ def test_world_rebase_retains_only_theory_owned_overlay_at_same_physical_boundar
                 rebase_identity=("foreign-overlay",),
             ),
         )
+
+
+def test_boundary_overlay_delta_requires_exact_physical_owner_and_occurrence() -> None:
+    common = ("Common", True, "guard")
+    retained = ("Retained", True, "guard")
+    superseded = ("Superseded", False, "guard")
+    source = TheoryBoundaryIdentity(
+        world_key=(("physical", "source"), (common, superseded)),
+        scan_id=4,
+        owner_ref=_execution_ref("source-owner"),
+        occurrence_identity=("occurrence", "source"),
+    )
+    rebased = replace(
+        source,
+        world_key=(("physical", "source"), (common, retained)),
+    )
+
+    assert theory_boundary_overlay_delta(source, rebased) == (
+        (retained,),
+        (superseded,),
+    )
+    assert (
+        theory_boundary_overlay_delta(
+            source,
+            replace(rebased, world_key=(("physical", "other"), (common, retained))),
+        )
+        is None
+    )
+    assert (
+        theory_boundary_overlay_delta(
+            source,
+            replace(rebased, owner_ref=_execution_ref("other-owner")),
+        )
+        is None
+    )
+    assert (
+        theory_boundary_overlay_delta(
+            source,
+            replace(rebased, occurrence_identity=("occurrence", "other")),
+        )
+        is None
+    )
 
 
 def test_multiple_attempts_share_one_version_and_duplicate_is_idempotent() -> None:

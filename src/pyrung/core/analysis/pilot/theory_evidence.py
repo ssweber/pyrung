@@ -70,6 +70,7 @@ from pyrung.core.analysis.pilot.working_theory import (
 )
 from pyrung.core.analysis.pilot.world import _CausalCheckpoint
 from pyrung.core.analysis.pilot.world_key import (
+    _physical_world_key,
     _pilot_world_key,
     _rung_identity,
     _semantic_key,
@@ -150,8 +151,7 @@ def _theory_boundary_from_checkpoint(checkpoint: _CausalCheckpoint) -> TheoryBou
     # physical scan-source identity. Compass world keys append them as a third
     # member for candidate/nogood isolation; strip that suffix here so adding a
     # later requirement does not manufacture a different historical source.
-    raw_world_key = tuple(checkpoint.key)
-    world_key = raw_world_key[:2] if len(raw_world_key) == 3 else raw_world_key
+    world_key = _physical_world_key(tuple(checkpoint.key))
     if owner is None:
         # Boundary zero precedes the first execution epoch. Its retained
         # checkpoint owner is the exact source identity; the subsequent attempt
@@ -181,7 +181,7 @@ def _theory_live_boundary(state: _PilotState) -> TheoryBoundaryIdentity:
         if state.key_config is not None
         else ()
     )
-    key = key[:2] if len(key) == 3 else key
+    key = _physical_world_key(key)
     scan_id = state.work.state.scan_id
     owner = execution_owner(state.work, scan_id)
     if owner is None:
@@ -245,11 +245,11 @@ def _theory_requirement_snapshot(requirement: ActiveRequirement) -> TheoryRequir
         _rung_identity(rung) for rung in diagnostic.corrective_pilot_rungs
     )
     raw_source_world_key = diagnostic.source_world_key
-    if isinstance(raw_source_world_key, tuple) and len(raw_source_world_key) == 3:
+    if isinstance(raw_source_world_key, tuple):
         # Requirement constraints version the current Compass world, not the
         # retained physical checkpoint. TheoryBoundaryIdentity applies the
         # same normalization so backward rebases compare like with like.
-        raw_source_world_key = raw_source_world_key[:2]
+        raw_source_world_key = _physical_world_key(raw_source_world_key)
     source_world_key = _semantic_key(raw_source_world_key)
     source_world_identity = (
         source_world_key if isinstance(source_world_key, tuple) else (source_world_key,)

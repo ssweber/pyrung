@@ -242,7 +242,7 @@ those broader migrations under new names.
 
 ### 13. Name physical source identity once
 
-**Status:** ready, narrow behavior-preserving vocabulary
+**Status:** done
 
 `theory_evidence` and `theory_orientation` independently derive the
 requirement-free/physical source key and compare its overlay delta around
@@ -256,6 +256,10 @@ requirement-free/physical source key and compare its overlay delta around
 - Focused tests: a requirement-only change preserves physical identity;
   state, rung, Epoch, or occurrence changes do not; overlay delta remains
   exact.
+
+Implemented as one requirement-free world-key projection plus one pure
+same-boundary overlay-delta operation. Drive formation and reducer admission
+still invoke the boundary check independently.
 
 ### 14. Carry the exact TheoryAttemptReceipt through RecordTheoryAttempt
 

@@ -63,7 +63,12 @@ from pyrung.core.analysis.pilot.working_theory import (
     ProgramTransaction,
     TheoryTemporalIntent,
 )
-from pyrung.core.analysis.pilot.world_key import _rung_identity, _semantic_key, _StateKeyConfig
+from pyrung.core.analysis.pilot.world_key import (
+    _physical_world_key,
+    _rung_identity,
+    _semantic_key,
+    _StateKeyConfig,
+)
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.context import RungId
 from pyrung.core.crossing import Cmp
@@ -1185,8 +1190,7 @@ def _theory_intrascan_bearing(
     findings = tuple(getattr(view, "traceback_findings", ()))
     if not findings:
         return None
-    current_key = tuple(world.world_key)
-    physical_key = current_key[:2] if len(current_key) == 3 else current_key
+    physical_key = _physical_world_key(tuple(world.world_key))
     if physical_key != tuple(view.source.world_key):
         return None
     for finding in reversed(findings):
@@ -1302,8 +1306,7 @@ def _theory_intrascan_frontier_bearing(
     )
     if not frontiers:
         return None
-    current_key = tuple(world.world_key)
-    physical_key = current_key[:2] if len(current_key) == 3 else current_key
+    physical_key = _physical_world_key(tuple(world.world_key))
     if physical_key != tuple(view.source.world_key):
         return None
 
@@ -1515,8 +1518,7 @@ def _theory_intrascan_boundary_realization(
     source = getattr(view, "source", None)
     if source is None:
         return None
-    current_key = tuple(world.world_key)
-    physical_key = current_key[:2] if len(current_key) == 3 else current_key
+    physical_key = _physical_world_key(tuple(world.world_key))
     if physical_key != tuple(source.world_key) or not _values_match(
         world.snapshot.get(goal.tag), goal.value
     ):

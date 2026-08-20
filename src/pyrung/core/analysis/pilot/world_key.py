@@ -174,3 +174,9 @@ def _pilot_world_key(
         if getattr(getattr(requirement, "status", None), "value", "active") == "active"
     )
     return base if not requirement_key else (*base, requirement_key)
+
+
+def _physical_world_key(world_key: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Project a navigable world key onto its requirement-free identity."""
+
+    return world_key[:2] if len(world_key) == 3 else world_key
