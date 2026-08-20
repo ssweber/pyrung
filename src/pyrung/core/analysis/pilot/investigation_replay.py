@@ -1,9 +1,10 @@
 """Incident records and disposable replay engines for PILOT investigation.
 
 This module owns recorded-step projection, deviation incidents, causal
-regression comparison, bounded replay judgment, and excursion replay.  It
-returns evidence or one confirmation; candidate selection and composition
-remain in :mod:`investigate`.
+regression comparison, bounded replay judgment, and excursion replay. It
+returns exact causal evidence or one replay-confirmed excursion correction;
+``regression_requirements.py`` adapts that evidence into ordinary requirement
+contracts.
 """
 
 from __future__ import annotations

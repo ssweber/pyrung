@@ -1,4 +1,4 @@
-"""Immutable evidence emitted by legacy correction investigation."""
+"""Immutable correction evidence emitted by verification-time excursion replay."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class _ConfirmedCorrection:
-    """One replay-proven correction, including its exact executable lifetime."""
+    """One replay-proven excursion correction with its exact executable lifetime."""
 
     identity: tuple[tuple[Any, ...], ...]
     pilot_rungs: tuple[PilotRung, ...]

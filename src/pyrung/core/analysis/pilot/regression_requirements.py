@@ -1,8 +1,10 @@
-"""Derive delayed repair requirements from exact regression evidence.
+"""Derive ordinary repair requirements from exact regression evidence.
 
-This module joins a later causal departure to one accepted expectation receipt
-and adapts that evidence into the ordinary failed-effect requirement contracts.
-It does not choose a correction, restore a checkpoint, or handle departures.
+This module joins a later causal departure to one accepted expectation receipt,
+discovers and boundedly proves exact corrective evidence where necessary, and
+adapts regression or excursion evidence into ordinary failed-effect requirement
+contracts. It does not record WorkingTheory, restore a checkpoint, or handle
+departures.
 """
 
 from __future__ import annotations
@@ -682,7 +684,7 @@ def _confirmed_correction_requirement_from_excursion(
 ) -> ActiveRequirement | None:
     """Adapt one replay-confirmed excursion into an inert exact requirement.
 
-    The legacy replay remains useful evidence that a proposed guard cut keeps
+    The excursion replay remains useful evidence that a proposed guard cut keeps
     the pulse-established value alive.  It does not authorize adopting that
     replay or installing its overlay.  Admission additionally requires the
     original execution to identify one exact first clobbering write and owner;

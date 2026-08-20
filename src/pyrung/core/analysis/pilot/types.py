@@ -785,9 +785,8 @@ class _AcceptedTrial:
 class _AttemptResult:
     trial: _AcceptedTrial | None
     # Exact disposable execution produced by the attempt, retained even when
-    # verification rejects it.  The outer loop alone decides whether to apply
-    # its observations/nogoods or commit its fork; bounded candidate composers
-    # may instead orient that fork locally and discard it.
+    # verification rejects it. The outer loop alone decides whether to apply
+    # its observations/nogoods or commit its fork.
     executed: _ExecutedAttempt | None = None
     # A verification-time excursion is reported to the drive loop with the
     # exact execution that exhibited it.  PILOT owns the one investigation and
@@ -795,7 +794,7 @@ class _AttemptResult:
     excursion_attempt: _ExecutedAttempt | None = None
     gate_events: tuple[PilotGateEvent, ...] = ()
     nogood_pairs: frozenset[_ActionPair] = frozenset()
-    # A replay-confirmed legacy excursion may supply exact correction evidence,
+    # A replay-confirmed excursion may supply exact correction evidence,
     # but never an adopted replay World.  The requirement is inert until the
     # ordinary WorkingTheory/Compass loop composes and executes its PilotRungs.
     correction_requirement: ActiveRequirement | None = None

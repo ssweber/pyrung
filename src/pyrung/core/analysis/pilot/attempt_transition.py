@@ -31,7 +31,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     TargetSpec,
     act_identity,
 )
-from pyrung.core.analysis.pilot.recovery import assert_recovery_disposable_state
 from pyrung.core.analysis.pilot.requirement_evidence import (
     _configured_input_names,
     _derive_attempt_requirements,
@@ -60,10 +59,9 @@ logger = logging.getLogger(__name__)
 class AttemptTransition:
     """One current-world orientation and its locally adopted trial result.
 
-    The supplied state/context are the transaction boundary: a live caller
-    keeps the effects, while a bounded investigation passes disposable clones.
-    Post-commit progress policy, probing, event emission, and repetition remain
-    outside this non-looping seam.
+    The supplied state/context are the transaction boundary. Post-commit
+    progress policy, probing, event emission, and repetition remain outside
+    this non-looping seam.
     """
 
     result: OrientationResult
@@ -161,12 +159,10 @@ def transition_once(
     NeedProbe or Stuck result is returned without acting.  The function never
     probes, monitors post-commit progress, emits events, or repeats.
 
-    Mutations are scoped entirely by ``state`` and ``ctx``.  The outer loop
-    passes its live objects; bounded investigation passes disposable clones and
-    may roll them back without leaking Compass knowledge.
+    Mutations are scoped entirely by the live ``state`` and ``ctx`` supplied by
+    the outer loop.
     """
 
-    assert_recovery_disposable_state(state, "execute a transition")
     result = oriented
     if result is None:
         raw_world = OrientationWorld(

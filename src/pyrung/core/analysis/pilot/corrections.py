@@ -2,8 +2,9 @@
 
 The producer emits absence-root, precise fired-chain, and enabler hypotheses in
 that order. These are hypotheses, not installed corrections:
-``correction_candidates.py`` ranks and materializes them, ``investigate.py``
-replay-validates them, and ``progress.py`` installs at most one confirmed result.
+``correction_candidates.py`` ranks and materializes them, and
+``regression_requirements.py`` binds exact evidence into ordinary requirement
+contracts. WorkingTheory and Compass own persistent composition and execution.
 
 Coil writers produce guard-breaking candidates; accumulating instructions ask
 their owner for the operation that prevents or clears an unwanted completion.

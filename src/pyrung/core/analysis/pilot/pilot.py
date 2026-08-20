@@ -69,9 +69,6 @@ from pyrung.core.analysis.pilot.recording import (
     _iteration_payload,
     _knowledge_payload,
 )
-from pyrung.core.analysis.pilot.recovery import (
-    assert_recovery_inactive,
-)
 from pyrung.core.analysis.pilot.requirement_evidence import (
     _attempt_productive_scan,
     _configured_input_names,
@@ -258,7 +255,6 @@ def _monitor_committed_trial(
 ) -> Iterator[PilotEvent]:
     """Emit one adopted trial and apply outer-loop progress policy."""
 
-    assert_recovery_inactive("monitor a committed trial")
     policy = trial.attempt.bearing.act.policy
     yield PilotEvent(
         "trial_committed",
@@ -413,7 +409,6 @@ def _pilot_loop_events(
 ) -> Iterator[PilotEvent]:
     """Run the PILOT loop as a structured event stream."""
 
-    assert_recovery_inactive("invoke the drive loop")
     # Semantic sets for the plan journal (see ``_build_plan_journal``): the
     # channel registers (opaque-loop tags + each pipeline role's
     # ``channel_tag``) pick the transition label; the accumulator registers

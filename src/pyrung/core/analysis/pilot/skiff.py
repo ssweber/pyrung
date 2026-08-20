@@ -25,7 +25,6 @@ from pyrung.core.analysis.pilot.compass import (
 )
 from pyrung.core.analysis.pilot.effect_observation import value_or_varied_replay_scan_ids
 from pyrung.core.analysis.pilot.effects import expectation_from_writer
-from pyrung.core.analysis.pilot.recovery import assert_recovery_inactive
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -91,7 +90,6 @@ def run_skiff_scan(
     executes normally; isolation is achieved by forcing every mutable tag outside
     the participating set to its pre-scan value for the scan window.
     """
-    assert_recovery_inactive("invoke skiff navigation")
     allowed = participating_tags_for_skiff(
         role,
         routes=routes,
@@ -225,7 +223,6 @@ def probe_live_guard_frontiers(
     probes added no knowledge. A learned edge only surfaces a candidate on the
     next iteration and must still pass live trial verification.
     """
-    assert_recovery_inactive("invoke skiff navigation")
     frontiers = []
     seen_frontier: set[tuple[str, str]] = set()
     for n in frame.tree.iter_nodes():

@@ -13,7 +13,6 @@ from pyrung.core.analysis.pilot.overlay import (
     _target_unresolved_condition,
     _until_unresolved_condition,
 )
-from pyrung.core.analysis.pilot.recovery import assert_recovery_disposable_state
 from pyrung.core.analysis.pilot.steer import _install_prerequisites
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
@@ -130,18 +129,18 @@ def adopt_trial(
     """Adopt one gate-approved trial without applying post-commit policy.
 
     Verification already ran inside the steering wrapper and
-    ``record_attempt`` already committed its knowledge.  This is the shared
-    local commit used by the live loop and disposable composition; only the
-    live caller may subsequently invoke ``_monitor_trend``.
+    ``record_attempt`` already committed its knowledge. The live caller may
+    subsequently invoke post-commit progress policy.
     """
     # Capture a satisfied bearing's launch world before commit. Its landing
     # remains pending until ordinary progress is banked; an Alarm ejection must
     # replays from this exact source with its PilotRungs, not an older trend CP.
     _anchor_bearing_receipt(trial, frame, state)
 
-    # Knowledge handling may have installed an excursion correction after verification built the
-    # trial.  The accepted world key must describe that effective rung overlay,
-    # not the pre-correction one used by the diagnostic fork.
+    # Knowledge handling may have retained an excursion requirement after
+    # verification built the trial. The accepted world key must describe the
+    # effective active requirements and rung overlay, not the pre-investigation
+    # key used by the diagnostic fork.
     verified = trial.verification
     execution = trial.execution
     if isinstance(verified, AssessedMotion):
@@ -168,7 +167,6 @@ def commit_trial(
     state: _PilotState,
     ctx: _PilotContext,
 ) -> None:
-    assert_recovery_disposable_state(state, "commit")
     attempt = trial.attempt
     pulse = attempt.pulse
     bearing = attempt.bearing

@@ -104,9 +104,9 @@ The following modules extend that read:
 5. `requirements.py` retains an accepted expectation's exact producer and
    consumer occurrences with its source checkpoint. On a later regression,
    `regression_requirements.py` matches one causal occurrence to that receipt
-   and derives an occurrence-scoped requirement. `progress.py` restores the
-   exact checkpoint and retries only the local act. The outer loop then
-   performs a fresh current-world read.
+   and derives an occurrence-scoped requirement. `recovery_investigation.py`
+   records that evidence into WorkingTheory, restores the exact checkpoint,
+   and returns control to a fresh Compass read.
 6. Only a genuinely unresolved `NeedProbe` reaches `skiff.py`. Skiff pins
    unrelated state, probes a finite action domain on isolated forks, and
    returns observations without committing or choosing an action. Probe rounds
@@ -188,11 +188,12 @@ scan.
    durable. `departure.py` observes and classifies later channel motion;
    `earned_work.py` supplies conservative target-relative evidence for whether
    a pending departure should be promoted, kept pending, regressed, or expired.
-4. A regression or anomalous departure invokes `causal.py` to read recorded
-   causes. `corrections.py` produces hypotheses; `correction_candidates.py`
-   ranks and materializes them; `investigate.py` replay-tests them;
-   `progress.py` alone installs one confirmed correction and reverts to the
-   selected checkpoint.
+4. A regression or anomalous departure enters
+   `recovery_investigation.py`, which reads recorded causes, adapts exact
+   evidence through `regression_requirements.py`, records the requirement in
+   WorkingTheory, and restores its exact source. Compass then rereads that
+   source; WorkingTheory may compose one correction, and ordinary
+   steer/verification executes and judges it.
 5. Pending-departure expiry rolls back without claiming the transition was
    impossible and without creating a nogood.
 
@@ -233,11 +234,13 @@ silent churn.
 7. `Stuck` is terminal. No candidate list or route suffix survives an
    observation.
 
-An expectation correction is checkpoint-local: exact receipt matching selects
-the causal source, the source checkpoint is restored on a disposable state,
-one corrected local act is executed and verified, and only its landing may
-replace the live world. No later action is stored with that receipt.
-`recovery.py::compose_corrections` owns this bounded regression transaction.
+A post-commit regression correction is checkpoint-local: exact receipt and
+causal matching select the source, `theory_recording.py` records the resulting
+requirement in WorkingTheory, and `recovery_investigation.py` restores that
+source before returning to Compass. `theory_orientation.py` may then emit one
+`ComposeCorrection`; `theory_drive.py` records the no-scan composition, Compass
+rereads, and ordinary steer/verification executes and judges it. No action
+suffix or private correction transaction is retained.
 
 Every steer/run/observe cycle freezes one immutable `ExecutionReceipt` before
 VERIFY. Its `ExecutionSpan` values point to the exact Epoch-owned kernel scans;
@@ -273,10 +276,11 @@ fork, or branch iterator.
 
 On every iteration Compass performs one fresh read at the theory's current tip
 and lowers the typed need through the readers available in that world. One
-correction is installed as configuration and yields immediately; Compass then
-rereads the changed world before retrying, researching, or composing another
-correction. ProgramStep context remains evidence for that reread and is not
-automatically folded into the physical retry. The accepted landing becomes the
+correction is composed as scan-entry configuration or PilotRungs and yields
+immediately; Compass then rereads the changed world before retrying,
+researching, or composing another correction. ProgramStep context remains
+evidence for that reread and is not automatically folded into the physical
+retry. The accepted landing becomes the
 next tip only through an exact scan-progress receipt; PILOT never proves a
 sequence and then replays it.
 
@@ -466,8 +470,8 @@ this table only locates the owner.
   `requirement_derivation.py`; strictly decreasing exact same-scan source walks:
   `requirement_sources.py`;
   `regression_requirements.py` selects one exact later causal link and adapts it
-  into those same requirement contracts; `progress.py` owns checkpoint restore
-  and the handoff to local repair
+  into those same requirement contracts; `recovery_investigation.py` records
+  the WorkingTheory evidence and restores its exact source
 - Candidate-read orchestration and wait-source choice:
   `options.py::_build_candidates` / `_select_wait`; pure action/hold admission:
   `candidate_policy.py`; trace/wait admission, exact operation batching, and
@@ -505,13 +509,11 @@ this table only locates the owner.
 - Transition-knowledge update: `Compass.apply`, invoked by drive-loop
   observation commits and post-commit regression-nogood retention
 - Coast-departure channel ownership: `coast.py::coast_departure_tags`
-- Post-commit retention, recovery decisions, and checkpoint restore:
-  `progress.py`; `_handle_channel_departure` is the terminal event-streaming
-  owner after `_monitor_trend` detects a channel departure
-- Bounded causal/replay recovery transaction and exact-origin restoration:
-  `recovery_investigation.py`
-- Confirmed-correction installation, promotion, contradiction/revocation, and
-  symmetric checkpoint overlay rebasing: `correction_lifecycle.py`
+- Post-commit retention and recovery decisions: `progress.py`;
+  `_handle_channel_departure` is the terminal event-streaming owner after
+  `_monitor_trend` detects a channel departure
+- Exact post-commit causal investigation, WorkingTheory requirement recording,
+  and exact-origin restoration: `recovery_investigation.py`
 - Finite-domain guard forcing and structural driver resolution:
   `guard_forcing.py`
 - Corrective hypothesis production: `corrections.py::derive_correction_hypotheses`
@@ -519,11 +521,8 @@ this table only locates the owner.
   and self-defeat classification: `correction_candidates.py`
 - Corrective incidents, replay, neutralization-versus-masking, and excursion
   diagnosis: `investigation_replay.py`
-- Corrective candidate composition and confirmation:
-  `investigate.py::investigate_deviation`
 - Bounded relational counterexample refinement and pinned suppression
   nominations: `refinement.py`
-- Bounded corrective composition: `recovery.py::compose_corrections`
 - Corrective operation lifetime: the instruction owner, carried through
   `trace.py::TraceAction.operation`; `overlay.py::_set_pilot_rungs` only compiles that
   receipt and preserves an already-active owner by its progress witness
@@ -538,8 +537,9 @@ from knowledge that must survive:
 
 - `world.py::_World` and its checkpoint records: PLC fork, committed steps and
   contexts, pilot rungs, trend, dwell accounting, and exact rollback ownership.
-- `_PilotState` orchestration knowledge: seen keys, checkpoints, pending-departure
-  recovery, earned work, correction receipts/revocations, and diagnostic history.
+- `_PilotState` orchestration knowledge: seen keys, checkpoints,
+  pending-departure recovery, active requirements, WorkingTheory, earned work,
+  and diagnostic history.
 - `CompassKnowledge`: empirical transitions/tombstones, scoped nogoods, probe
   budgets/results, coast receipts, and static-edge evidence overlays.
 - `_PilotContext`: static program analysis plus the current persistent
@@ -624,8 +624,8 @@ Orchestration:
   rollback checkpoints
 - `recording.py` — event/plan rendering; no drive decisions
 - `types.py` — mutable drive state plus the remaining drive-owned records;
-  execution, world, trace-read, navigation, incident, and correction-lifecycle
-  contracts do not live here
+  execution, world, trace-read, navigation, incident, WorkingTheory, and
+  correction-evidence contracts do not live here
 - `__init__.py` — package exports
 - `physical.py` — harness install, feedback-tag exclusion
 - `multitarget.py` — multi-target incompatibility proof, ordering
@@ -725,30 +725,25 @@ Judgment and recovery:
 - `outcome.py` — evidence classification
 - `progress.py` — post-commit retention, departure/recovery policy, and event
   streaming
-- `recovery_investigation.py` — bounded causal/replay recovery transaction,
-  exact-origin restoration, and correction handoff
+- `recovery_investigation.py` — exact causal regression investigation,
+  WorkingTheory requirement recording, and exact-origin restoration
 - `recovery_continuation.py` — exact repaired-handoff, target-suffix, and local
   repair-window evidence; it retains no cross-attempt continuation state
 - `departure_state.py` — pending-departure contracts, exact checkpoint and
   settlement bookkeeping, and pure earned-work assessment
-- `correction_lifecycle.py` — confirmed-correction installation, promotion,
-  causal revocation, and checkpoint overlay rebasing
-- `correction_records.py` — immutable confirmed-correction identity, receipt,
-  and maturity records
-- `regression_requirements.py` — exact accepted-expectation matching and
-  delayed regression-to-requirement adaptation
+- `correction_records.py` — immutable replay-confirmed excursion correction
+  evidence
+- `regression_requirements.py` — exact correction discovery and bounded proof,
+  accepted-expectation matching, and regression/excursion requirement adaptation
 - `departure.py` — departure observation and classification
 - `earned_work.py` — target-relative earned-work marks
 - `causal.py` — recorded cause-chain queries
 - `investigation_replay.py` — bounded replay evidence, incident construction,
   regression comparison, and excursion diagnosis
 - `incidents.py` — immutable observed departure and deviation-window facts
-- `investigate.py` — corrective candidate composition and confirmation; no
-  replay or drive-loop ownership
 - `correction_candidates.py` — correction identity, ordering, composition,
   executable scoping, and self-defeat checks
 - `refinement.py` — bounded relational refinement and pinned suppression evidence
-- `recovery.py` — bounded corrective-composition transaction
 - `guard_forcing.py` — policy-free finite-domain guard forcing and structural
   driver resolution shared by correction generation and replay
 - `corrections.py` — corrective-hold hypothesis production
@@ -827,9 +822,9 @@ plain language on first use.
   branches are lazy, and corrective installations still yield one at a time.
 - **expectation receipt** — an accepted local act's exact source checkpoint,
   selected obligations, producer/consumer occurrences, and execution identity.
-- **checkpoint-local repair** — restore the receipt's exact source on a
-  disposable state, apply compatible active requirements, and execute only the
-  original local act. A successful landing returns to fresh orientation; no
+- **checkpoint-local repair** — record the exact obstruction as a WorkingTheory
+  requirement, restore the receipt's exact source, and return to fresh Compass
+  orientation. One correction may be composed before ordinary execution; no
   action suffix is retained.
 
 Avoid extending the nautical metaphor in technical contracts. Words such as

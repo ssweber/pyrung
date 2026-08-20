@@ -1,9 +1,9 @@
 """Investigate one accepted departure and restore its recovery origin.
 
-This module owns the bounded causal investigation transaction after post-commit
-progress policy requests recovery. It may derive Working Theory evidence,
-retain exact delayed requirements, and rebuild the selected checkpoint, but it
-does not install corrections, monitor trials, or decide departure policy.
+This module owns bounded causal investigation after post-commit progress policy
+requests recovery. It may derive and record WorkingTheory requirements, retain
+exact delayed requirements, and restore the selected checkpoint, but it does
+not compose corrections, monitor trials, or decide departure policy.
 """
 
 from __future__ import annotations
@@ -47,9 +47,6 @@ from pyrung.core.analysis.pilot.investigation_replay import (
 from pyrung.core.analysis.pilot.navigation_contracts import act_identity
 from pyrung.core.analysis.pilot.overlay import (
     fork_with_pilot_rungs,
-)
-from pyrung.core.analysis.pilot.recovery import (
-    recovery_transaction_active,
 )
 from pyrung.core.analysis.pilot.regression_requirements import (
     _MAX_TENTATIVE_PROOF_SCANS,
@@ -437,8 +434,8 @@ def _investigate_and_revert(
 ) -> tuple[PilotEvent, ...]:
     """Build an incident from ``origin`` through the current world and recover.
 
-    Exact and legacy-derived corrections enter the ordinary Working Theory
-    lifecycle.  A legacy correction that cannot name one exact, adjustable
+    Exact causal corrections enter the ordinary WorkingTheory lifecycle. A
+    correction that cannot name one exact, adjustable
     obstruction fails closed and is never installed privately.
 
     A regression origin anchors at its checkpoint, while a terminal-let-run
@@ -1017,34 +1014,6 @@ def _investigate_and_revert(
                 )
                 if activated is not None:
                     return activated
-        if recovery_transaction_active():
-            # This landing was observed while the already-selected local
-            # repair transaction was being proved.  It may use the existing
-            # exact receipt matcher above, but it may not start the legacy
-            # hypothesis composer recursively. Restore the transaction's
-            # checkpoint and hand the changed causal shape back to the fresh
-            # outer read.
-            state.load_world(cp_world)
-            state.best_trend = cp_trend
-            state.pending_departure = None
-            return (
-                PilotEvent(
-                    "trend_regression",
-                    state.work.state.scan_id,
-                    {
-                        "from_trend": verified.trend,
-                        "to_trend": cp_trend,
-                        "checkpoint_key": cp_key,
-                        "regression_nogoods": frozenset(),
-                        "pilot_rungs": tuple(state.pilot_rungs),
-                        "channel_transitions": (),
-                        "investigation": {"local_repair_handoff": True},
-                        "revoked_corrections": (),
-                        "revoked_pilot_rungs": (),
-                        "position": recording._channel_position(ctx, state.work.state.tags),
-                    },
-                ),
-            )
         investigation_payload = {
             "retained_sources": len(retained_sources),
             "exact_delayed_links": len(exact_delayed_links),
