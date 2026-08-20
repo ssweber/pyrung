@@ -175,11 +175,19 @@ phases.
 
 ### 9. Stop exploding NavigationConstraints into _PilotContext
 
-**Status:** later, broader migration
+**Status:** deferred: coherent attempt was too broad
 
 `orientation.orient` copies the fields of `NavigationConstraints` into parallel
 `_PilotContext` fields using a field-by-field `hasattr` block. Other paths then
 reconstruct partial constraints.
+
+A coherent attempt confirmed the authority reduction was real, but required
+simultaneous changes across candidate admission, route and wait readers,
+`TraceRead`, theory policy, verification, and structural fixtures. Revisit
+after candidate/route/wait admission accepts the existing world/read receipt
+end-to-end, or after post-read verification and departure read constraints
+from `Bearing.orientation.world`; either seam would let the parallel context
+fields be removed incrementally.
 
 - Likely owner: `OrientationWorld.constraints` with a safe default.
 - `_PilotContext` should retain stable drive/program facts, not ephemeral
