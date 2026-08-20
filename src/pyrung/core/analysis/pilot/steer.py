@@ -778,6 +778,13 @@ def _compass_observations(
     """
     action_tag = cause[0] if is_action(cause) else None
     observations: list[CompassObservation] = []
+    observed_tags: set[str] = set()
+    # Every node in this observation pass describes the same executable
+    # source world.  Trace trees can mention one physical tag through many
+    # logical branches, but Compass stores evidence by tag/outcome rather than
+    # by trace-node provenance.  Build the expensive context once and emit at
+    # most one equivalent receipt for each physical tag.
+    observation_context = tuple(sorted(before_snap.items()))
     learning_writes: list[Any] = []
     if fork is not None and action_tag is not None:
         assertion_scan = fork.state.scan_id if scan is None else scan
@@ -820,6 +827,9 @@ def _compass_observations(
         # static-catalog ones.
         if n.satisfied or n.is_steerable:
             continue
+        if n.tag in observed_tags:
+            continue
+        observed_tags.add(n.tag)
         old_v = before_snap.get(n.tag)
         new_v = after_snap.get(n.tag)
         if old_v != new_v and new_v is not None:
@@ -851,7 +861,7 @@ def _compass_observations(
                     old_v,
                     new_v,
                     world_key,
-                    tuple(sorted(before_snap.items())),
+                    observation_context,
                     applied,
                     _learned_expectation(n.tag, new_v),
                 )
@@ -869,7 +879,7 @@ def _compass_observations(
                     old_v,
                     None,
                     world_key,
-                    tuple(sorted(before_snap.items())),
+                    observation_context,
                     applied,
                 )
             )

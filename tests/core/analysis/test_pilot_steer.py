@@ -321,6 +321,37 @@ class TestCompassObservations:
         assert observation.world_key == world_key
         assert observation.applied == (action,)
 
+    def test_repeated_trace_tags_share_one_source_receipt(self):
+        action = ("CompassRepeated", True)
+        snap = {"RepeatedState": 0, "OtherState": 0}
+        tree = TraceNode(
+            "Goal",
+            True,
+            satisfied=True,
+            children=[
+                TraceNode("RepeatedState", 1),
+                TraceNode("RepeatedState", 2),
+                TraceNode("OtherState", 1),
+            ],
+        )
+
+        observations = _compass_observations(
+            action,
+            SimpleNamespace(tree=tree),
+            snap,
+            snap,
+            SimpleNamespace(steerable=frozenset({action[0]})),
+            contradict_no_change=True,
+            world_key=("shared-source",),
+            applied=(action,),
+        )
+
+        assert [observation.tag for observation in observations] == [
+            "RepeatedState",
+            "OtherState",
+        ]
+        assert observations[0].context is observations[1].context
+
     def test_ambient_changes_filtered_with_fork(self):
         action = Bool("CompassControl", external=True)
         ambient_source = Bool("CompassAmbientSource", external=True)

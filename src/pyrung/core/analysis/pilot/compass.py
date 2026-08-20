@@ -817,6 +817,8 @@ class CompassKnowledge:
     def apply(
         self,
         observations: Iterable[NavigationObservation],
+        *,
+        _evidence_scopes: dict[int, EvidenceScope | None] | None = None,
     ) -> tuple[CompassKnowledge, bool]:
         """Fold runtime observations into a new durable knowledge value."""
 
@@ -863,9 +865,13 @@ class CompassKnowledge:
                     )
                     changed = True
             elif observation.kind == "edge":
-                evidence_scope = EvidenceScope.capture(
-                    observation.world_key,
-                    observation.context,
+                evidence_scope = (
+                    _evidence_scopes[id(observation)]
+                    if _evidence_scopes is not None
+                    else EvidenceScope.capture(
+                        observation.world_key,
+                        observation.context,
+                    )
                 )
                 applied = observation.applied_artifact
                 table, touched = _table_record(
@@ -881,9 +887,13 @@ class CompassKnowledge:
                 )
                 changed |= touched
             elif observation.kind == "contradict":
-                evidence_scope = EvidenceScope.capture(
-                    observation.world_key,
-                    observation.context,
+                evidence_scope = (
+                    _evidence_scopes[id(observation)]
+                    if _evidence_scopes is not None
+                    else EvidenceScope.capture(
+                        observation.world_key,
+                        observation.context,
+                    )
                 )
                 applied = observation.applied_artifact
                 table, touched, _ = _table_contradict(
@@ -896,9 +906,13 @@ class CompassKnowledge:
                 )
                 changed |= touched
             else:
-                evidence_scope = EvidenceScope.capture(
-                    observation.world_key,
-                    observation.context,
+                evidence_scope = (
+                    _evidence_scopes[id(observation)]
+                    if _evidence_scopes is not None
+                    else EvidenceScope.capture(
+                        observation.world_key,
+                        observation.context,
+                    )
                 )
                 applied = observation.applied_artifact
                 table, touched = _table_no_change(
@@ -999,6 +1013,14 @@ class Compass:
 
         supplied = tuple(observations)
         overlays: list[StaticEdgeObservation] = []
+        evidence_scopes: dict[int, EvidenceScope | None] = {}
+        # Producers deliberately share one immutable context object across an
+        # observation batch.  Canonicalize that exact source scope once, then
+        # reuse it for both static overlays and dynamic Compass knowledge.
+        scope_cache: dict[
+            int,
+            tuple[tuple[ActionPair, ...], tuple[Any, ...] | None, EvidenceScope | None],
+        ] = {}
         for observation in supplied:
             if not isinstance(observation, CompassObservation):
                 continue
@@ -1008,10 +1030,24 @@ class Compass:
             # contradiction, is still meaningful overlay evidence.
             if observation.kind == "no_change" and not is_action(observation.cause):
                 continue
-            evidence_scope = EvidenceScope.capture(
-                observation.world_key,
-                observation.context,
-            )
+            cached = scope_cache.get(id(observation.context))
+            if (
+                cached is not None
+                and cached[0] is observation.context
+                and cached[1] == observation.world_key
+            ):
+                evidence_scope = cached[2]
+            else:
+                evidence_scope = EvidenceScope.capture(
+                    observation.world_key,
+                    observation.context,
+                )
+                scope_cache[id(observation.context)] = (
+                    observation.context,
+                    observation.world_key,
+                    evidence_scope,
+                )
+            evidence_scopes[id(observation)] = evidence_scope
             applied_artifact = observation.applied_artifact
             for graph in self.catalog.graphs:
                 if graph.role.channel_tag != observation.tag:
@@ -1052,7 +1088,10 @@ class Compass:
                             _applied_key(applied_artifact),
                         )
                     )
-        knowledge, changed = self.knowledge.apply((*supplied, *overlays))
+        knowledge, changed = self.knowledge.apply(
+            (*supplied, *overlays),
+            _evidence_scopes=evidence_scopes,
+        )
         if not changed:
             return self, False
         return replace(self, knowledge=knowledge), True

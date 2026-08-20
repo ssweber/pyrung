@@ -1373,6 +1373,33 @@ def test_compass_route_plan_builds_evidence_scope_once(monkeypatch) -> None:
     assert builds == 1
 
 
+def test_compass_apply_canonicalizes_one_shared_observation_scope(monkeypatch) -> None:
+    """One execution batch pays for its full context projection only once."""
+
+    action = ("SharedScopeAction", True)
+    world = ("shared-observation-world",)
+    context = (("First", 0), ("Second", 0), ("Recipe", 17))
+    observations = (
+        CompassObservation("edge", "First", action, 0, 1, world, context, (action,)),
+        CompassObservation("contradict", "Second", action, 0, None, world, context, (action,)),
+    )
+    builds = 0
+    original_capture = EvidenceScope.capture
+
+    def counted_capture(cls, world_key, source_context=None):
+        nonlocal builds
+        builds += 1
+        return original_capture(world_key, source_context)
+
+    monkeypatch.setattr(EvidenceScope, "capture", classmethod(counted_capture))
+
+    compass, changed = Compass().apply(observations)
+
+    assert changed
+    assert compass is not None
+    assert builds == 1
+
+
 def test_program_owned_sibling_preserves_an_automatic_edge() -> None:
     role = PipelineRoles("State")
     route = _action_route(6, 16, "Complete")

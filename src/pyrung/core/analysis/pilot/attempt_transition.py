@@ -13,9 +13,11 @@ import pyrung.core.analysis.pilot.trial_commit as _trial_commit
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     CoastObservation,
+    CompassObservation,
     EvidenceScope,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
+    BatchPulse,
     Bearing,
     BearingObjective,
     Coast,
@@ -25,6 +27,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationResult,
     OrientationWorld,
     ProgramScan,
+    Pulse,
     TargetSpec,
     act_identity,
 )
@@ -88,8 +91,22 @@ def record_attempt(
     # The commit point: apply() returns the next compass value; this single
     # assignment replaces the context's compass (a value, never a shared
     # mutable advanced behind readers' backs).
+    observations = attempt.observations
+    if attempt.trial is not None and isinstance(act, (Pulse, BatchPulse)):
+        # A verified pulse already carries its complete before/after/timeline
+        # receipt into the committed execution.  Retain the positive causal
+        # edges Compass can navigate immediately; do not eagerly materialize
+        # a tombstone for every unrelated trace leaf that happened not to move.
+        # Rejected attempts keep their negative empirical evidence because it
+        # prevents another probe in the exact reverted world.
+        observations = tuple(
+            observation
+            for observation in observations
+            if not isinstance(observation, CompassObservation)
+            or observation.kind == "edge"
+        )
     knowledge_observations = [
-        *attempt.observations,
+        *observations,
         *(ActionNogoodObservation(frame.key, ("pair", pair)) for pair in attempt.nogood_pairs),
     ]
     ctx.compass, _ = ctx.compass.apply(knowledge_observations)
