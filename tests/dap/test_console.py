@@ -779,6 +779,39 @@ class TestCausalVerbs:
             "latch(ProgressTest_Door); latch(ProgressTest_LintDoor).\n"
         )
 
+    def test_how_progress_keeps_intrascan_investigation_grounded_in_the_channel(self):
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        progress = _PilotProgressFormatter()
+        progress.format(PilotEvent("investigation_started", 10))
+
+        pending = progress.format(
+            PilotEvent(
+                "trend_regression",
+                11,
+                {"investigation": {}, "position": (("HeelStep", 40),)},
+            )
+        )
+        correction = progress.format(
+            PilotEvent(
+                "theory_correction_composed",
+                11,
+                {
+                    "configuration": (("FirstWatchdogMs", 21),),
+                    "requirement_conditions": (("FirstWatchdogMs", ">", 20),),
+                    "superseded_configuration_identities": (("old",),),
+                    "position": (("HeelStep", 40),),
+                },
+            )
+        )
+
+        assert pending == " Not yet -- returned to HeelStep=40 to investigate.\n"
+        assert correction == (
+            "  Working theory at HeelStep=40: refine the setting to "
+            "FirstWatchdogMs=21 before retrying (FirstWatchdogMs > 20).\n"
+        )
+
     def test_how_progress_names_actual_temporary_logic_revocation_and_replacement(self):
         from pyrung import Bool, Int
         from pyrung.core.analysis.pilot.overlay import PilotRung

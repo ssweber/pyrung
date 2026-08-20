@@ -64,6 +64,7 @@ from pyrung.core.analysis.pilot.recording import (
     _act_event,
     _build_plan_journal,
     _candidates_built_payload,
+    _channel_position,
     _frontier_clause,
     _iteration_payload,
     _knowledge_payload,
@@ -720,6 +721,9 @@ def _pilot_loop_events(
                         _theory_requirement_snapshot(requirement).condition_identity
                         for requirement in composed.requirements
                     ),
+                    "requirement_conditions": tuple(
+                        requirement.condition for requirement in composed.requirements
+                    ),
                     "superseded_configuration_identities": (
                         composed.superseded_configuration_identities
                     ),
@@ -728,6 +732,7 @@ def _pilot_loop_events(
                     ),
                     "research_finding_identity": composed.research_finding_identity,
                     "reason": result.rationale,
+                    "position": _channel_position(ctx, state.work.state.tags),
                 },
             )
             # Composition changes the durable case but consumes no PLC scan.

@@ -150,6 +150,28 @@ def _channel_transitions(
     return tuple(transitions)
 
 
+def _channel_position(
+    ctx: _PilotContext,
+    snapshot: Mapping[str, Any],
+) -> tuple[tuple[str, Any], ...]:
+    """Return the small, technician-facing position of one Pilot world.
+
+    Pipeline carriers describe *where* the machine is more usefully than a
+    full tag snapshot.  Keep the target as a fallback for direct scalar routes,
+    while preserving inferred carrier order for nested state machines.
+    """
+
+    tags = tuple(
+        dict.fromkeys(
+            (
+                *(role.channel_tag for role in (*ctx.pipeline_roles, *ctx.chart_roles)),
+                ctx.target.tag,
+            )
+        )
+    )
+    return tuple((tag, snapshot[tag]) for tag in tags if tag in snapshot)
+
+
 def _fmt_need(tag: str, value: Any, snap: dict[str, Any]) -> str:
     """Render one ``still_need`` display entry."""
     from pyrung.core.analysis.pilot.static_expressions import _atom_text
@@ -240,6 +262,7 @@ def _build_plan_journal(
             )
         )
 
+    previous_landing: Mapping[str, Any] | None = None
     for act in state.committed_acts:
         sc = act.context
         first_step = act.steps[0]
@@ -247,10 +270,17 @@ def _build_plan_journal(
         is_coast = sc.policy.motion.is_coast
         transition = _format_transition(sc, channel_tags)
         span = semantic_step.scan_after - first_step.scan_before
-        configuration_inputs = tuple(
+        active_configuration_inputs = tuple(
             assignment
             for configuration in sc.execution.applied_configurations
             for assignment in configuration.assignments
+        )
+        configuration_inputs = tuple(
+            (tag, value)
+            for tag, value in active_configuration_inputs
+            if previous_landing is None
+            or tag not in previous_landing
+            or not _values_match(previous_landing[tag], value)
         )
 
         if configuration_inputs:
@@ -328,6 +358,8 @@ def _build_plan_journal(
                         ),
                     )
                 )
+
+        previous_landing = sc.execution.after_snap
 
     if state.committed_acts:
         path_start = state.committed_acts[0].steps[0].scan_before

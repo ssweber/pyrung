@@ -186,6 +186,91 @@ def test_scan_entry_configuration_is_a_patch_not_a_pulse() -> None:
     )
 
 
+def test_scan_entry_journal_reports_only_configuration_changes() -> None:
+    first = ScanEntryConfiguration((("FirstPresetMs", 31),))
+    both = ScanEntryConfiguration(
+        (("FirstPresetMs", 31), ("SecondPresetMs", 11))
+    )
+
+    def _act(
+        scan: int,
+        configuration: ScanEntryConfiguration,
+        before: dict[str, object],
+        after: dict[str, object],
+    ) -> _CommittedAct:
+        policy = ActPolicy(ActSource.TRACE, motion=MotionKind.COAST_TO_BEARING)
+        receipt = ExecutionReceipt(
+            before_snap=before,
+            after_snap=after,
+            channel_motion=ChannelMotion(),
+            coast_receipt=None,
+            timeline=(),
+            applied_configurations=(configuration,),
+        )
+        return _CommittedAct(
+            steps=(_Step(inputs={}, scan_before=scan, scan_after=scan + 1),),
+            context=_StepContext(policy=policy, execution=receipt),
+        )
+
+    state = SimpleNamespace(
+        committed_acts=(
+            _act(10, first, {"FirstPresetMs": 31}, {"FirstPresetMs": 31}),
+            _act(11, first, {"FirstPresetMs": 31}, {"FirstPresetMs": 31}),
+            _act(
+                12,
+                both,
+                {"FirstPresetMs": 31, "SecondPresetMs": 11},
+                {"FirstPresetMs": 31, "SecondPresetMs": 11},
+            ),
+        ),
+        lever_notes={},
+        hold_log=(),
+        correction_receipts=(),
+    )
+
+    journal = _build_plan_journal(state, None, frozenset(), frozenset())
+
+    assert tuple(item.inputs for item in journal if item.kind == "patch") == (
+        (("FirstPresetMs", 31),),
+        (("SecondPresetMs", 11),),
+    )
+
+
+def test_scan_entry_journal_repeats_configuration_overwritten_by_program() -> None:
+    configuration = ScanEntryConfiguration((("PresetMs", 31),))
+
+    def _act(scan: int, after_value: int) -> _CommittedAct:
+        receipt = ExecutionReceipt(
+            before_snap={"PresetMs": 31},
+            after_snap={"PresetMs": after_value},
+            channel_motion=ChannelMotion(),
+            coast_receipt=None,
+            timeline=(),
+            applied_configurations=(configuration,),
+        )
+        return _CommittedAct(
+            steps=(_Step(inputs={}, scan_before=scan, scan_after=scan + 1),),
+            context=_StepContext(
+                policy=ActPolicy(ActSource.TRACE, motion=MotionKind.COAST_TO_BEARING),
+                execution=receipt,
+            ),
+        )
+
+    state = SimpleNamespace(
+        committed_acts=(_act(10, 0), _act(11, 31)),
+        lever_notes={},
+        hold_log=(),
+        correction_receipts=(),
+    )
+
+    journal = _build_plan_journal(state, None, frozenset(), frozenset())
+
+    assert tuple(item.inputs for item in journal if item.kind == "patch") == (
+        (("PresetMs", 31),),
+        (("PresetMs", 31),),
+    )
+
+
 def test_ordinary_fold_journal_uses_receipt_with_unusable_scan_log() -> None:
     """The coast receipt, not runner history, owns exact fold edits."""
     step = _Step(inputs={}, scan_before=10, scan_after=13)

@@ -285,6 +285,7 @@ def _activate_regression_theory_requirement(
                 },
                 "revoked_corrections": (),
                 "revoked_pilot_rungs": (),
+                "position": recording._channel_position(ctx, state.work.state.tags),
             },
         ),
     )
@@ -416,6 +417,7 @@ def _activate_delayed_regression_requirement(
                 },
                 "revoked_corrections": (),
                 "revoked_pilot_rungs": (),
+                "position": recording._channel_position(ctx, state.work.state.tags),
             },
         ),
     )
@@ -1010,6 +1012,7 @@ def _investigate_and_revert(
                         "investigation": {"local_repair_handoff": True},
                         "revoked_corrections": (),
                         "revoked_pilot_rungs": (),
+                        "position": recording._channel_position(ctx, state.work.state.tags),
                     },
                 ),
             )
@@ -1106,6 +1109,7 @@ def _investigate_and_revert(
                 "investigation": investigation_payload,
                 "revoked_corrections": (),
                 "revoked_pilot_rungs": (),
+                "position": recording._channel_position(ctx, state.work.state.tags),
             },
         ),
     )

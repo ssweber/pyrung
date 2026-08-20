@@ -151,6 +151,34 @@ class TestPlanDisplay:
         assert "(found during investigation)" in text
         assert "force DoorClosed" not in text
 
+    def test_working_theory_owner_is_not_shown_as_plan_rationale(self):
+        State = Int("TheoryState")
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(
+                state=SimpleNamespace(scan_id=10),
+                _dt=0.010,
+            ),
+            journal=(
+                PlanStep(
+                    kind="force",
+                    scan=2,
+                    scans=0,
+                    inputs=(("DoorClosed", True),),
+                    label="DoorClosed",
+                    rungs=(PilotRung("DoorClosed", True, State == 6),),
+                    source="working-theory-composition",
+                ),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "Install temporary logic:" in text
+        assert "working-theory-composition" not in text
+
     def test_guarded_pair_renders_as_oscillator(self):
         State = Int("Sts_StateCurrent")
         RotateSensor = Bool("RotateSensor", external=True)

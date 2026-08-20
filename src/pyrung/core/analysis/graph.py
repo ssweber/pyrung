@@ -266,8 +266,12 @@ def _source_suffix(source: str, *, next_step: int | None = None) -> str:
             f"needed for step {next_step}" if next_step is not None else "needed for the next step"
         ),
         "excursion": "found while testing",
+        # Working Theory remains the semantic owner on PlanStep; its internal
+        # lifecycle name is not an instruction or rationale for a technician.
+        "working-theory-composition": "",
     }
-    return f" ({labels.get(source, source)})" if source else ""
+    label = labels.get(source, source)
+    return f" ({label})" if label else ""
 
 
 def _lever_requirement(note: str) -> str:

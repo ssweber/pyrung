@@ -479,6 +479,60 @@ class _PilotProgressFormatter:
         self._investigation_open = False
         self._after_correction = False
         self._last_holds: tuple[tuple[str, Any], ...] = ()
+        self._position: tuple[tuple[str, Any], ...] = ()
+
+    def _position_text(self, position: Any = ()) -> str:
+        values = tuple(position) or self._position
+        if position:
+            self._position = tuple(position)
+        if not values:
+            return ""
+        tag, value = values[0]
+        return f"{tag}={_pilot_value(value)}"
+
+    def _render_theory_conditions(self, conditions: Any) -> str:
+        from pyrung.core.analysis.pilot.requirements import (
+            GuardLogic,
+            GuardRequirementAtom,
+            GuardRequirementExpr,
+        )
+        from pyrung.core.crossing import AffineCmp, Cmp, Eq
+
+        def render(condition: Any) -> str:
+            if isinstance(condition, GuardRequirementAtom):
+                return render(condition.condition)
+            if isinstance(condition, GuardRequirementExpr):
+                conjunction = " and " if condition.logic is GuardLogic.ALL else " or "
+                terms = tuple(filter(None, (render(term) for term in condition.terms)))
+                return conjunction.join(terms)
+            if isinstance(condition, Cmp):
+                bound = condition.bound if condition.bound_is_tag else _pilot_value(condition.bound)
+                return f"{condition.tag} {condition.op} {bound}"
+            if isinstance(condition, AffineCmp):
+                rhs = condition.bound_tag
+                if condition.scale != 1 or condition.offset != 0:
+                    rhs = f"{condition.scale} * {rhs} + {condition.offset}"
+                return f"{condition.tag} {condition.op} {rhs}"
+            if isinstance(condition, Eq):
+                values = tuple(sorted(condition.values, key=repr))
+                if len(values) == 1:
+                    return f"{condition.tag} == {_pilot_value(values[0])}"
+                joined = ", ".join(_pilot_value(value) for value in values)
+                return f"{condition.tag} in {{{joined}}}"
+            if isinstance(condition, tuple) and len(condition) == 3:
+                tag, operator, value = condition
+                return f"{tag} {operator} {_pilot_value(value)}"
+            return ""
+
+        rendered = []
+        for condition in conditions:
+            text = render(condition)
+            if text:
+                rendered.append(text)
+        # Requirements are ordered oldest-to-newest.  A refinement commonly
+        # retains the weaker earlier bound; naming the newest condition gives
+        # the technician the reason for *this* setting instead of a ledger dump.
+        return rendered[-1] if rendered else ""
 
     def _confirmed_corrections(self, data: dict[str, Any]) -> list[str]:
         from pyrung.core.analysis.graph import _format_synthesis_instruction
@@ -717,6 +771,7 @@ class _PilotProgressFormatter:
             return prefix + "  Preventable?"
 
         if kind == "trend_regression":
+            position = self._position_text(data.get("position", ()))
             corrections = self._confirmed_corrections(data)
             revoked = self._render_rungs(data.get("revoked_pilot_rungs", ()))
             transitions = data.get("channel_transitions", ())
@@ -731,7 +786,8 @@ class _PilotProgressFormatter:
                     return "\n".join(lines) + "\n"
                 if corrections:
                     return f" Yes -- {'; '.join(corrections)}.\n"
-                return " Unknown -- no corrective temporary logic was confirmed.\n"
+                where = f" -- returned to {position} to investigate" if position else ""
+                return f" Not yet{where}.\n"
             moved = ", ".join(
                 f"{tag} {_pilot_value(before)} -> {_pilot_value(after)}"
                 for tag, before, after in transitions
@@ -742,6 +798,27 @@ class _PilotProgressFormatter:
                 correction = correction[:1].upper() + correction[1:]
                 return f"\n  Returning to the last good state{after_move}. {correction}.\n"
             return f"\n  Returning to the last good state{after_move}; no correction was found.\n"
+
+        if kind == "theory_correction_composed":
+            configuration = tuple(data.get("configuration", ()))
+            # Exact PilotRungs were already explained where the regression was
+            # observed.  Scan-entry configuration is the intrascan result that
+            # otherwise disappears from the technician's live narrative.
+            if not configuration:
+                return None
+            position = self._position_text(data.get("position", ()))
+            conditions = self._render_theory_conditions(
+                data.get("requirement_conditions", data.get("conditions", ()))
+            )
+            superseded = bool(data.get("superseded_configuration_identities", ()))
+            verb = "refine the setting to" if superseded else "set"
+            setting = _pilot_assignments(configuration)
+            where = f" at {position}" if position else ""
+            need = f" ({conditions})" if conditions else ""
+            self._after_correction = True
+            return (
+                f"  Working theory{where}: {verb} {setting} before retrying{need}.\n"
+            )
 
         if kind == "stuck":
             reason = str(data.get("reason") or "No productive next action was found.")
