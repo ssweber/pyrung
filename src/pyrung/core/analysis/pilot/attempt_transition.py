@@ -100,8 +100,7 @@ def record_attempt(
         observations = tuple(
             observation
             for observation in observations
-            if not isinstance(observation, CompassObservation)
-            or observation.kind == "edge"
+            if not isinstance(observation, CompassObservation) or observation.kind == "edge"
         )
     knowledge_observations = [
         *observations,
@@ -280,18 +279,16 @@ def transition_once(
             intrascan_report=intrascan_report,
         )
         if theory_transition is None and attempt.correction_requirement is not None:
-            theory_transition = (
-                _theory_recording._theory_transition_from_regression_requirement(
-                    state,
-                    attempt.correction_requirement,
-                    result,
-                    evidence=(
-                        (
-                            "exact-excursion-requirement",
-                            attempt.correction_requirement.diagnostic_snapshot(),
-                        ),
+            theory_transition = _theory_recording._theory_transition_from_regression_requirement(
+                state,
+                attempt.correction_requirement,
+                result,
+                evidence=(
+                    (
+                        "exact-excursion-requirement",
+                        attempt.correction_requirement.diagnostic_snapshot(),
                     ),
-                )
+                ),
             )
     except Exception:  # noqa: BLE001 - optional theory conversion cannot change the drive
         logger.debug("pilot: working theory observation failed", exc_info=True)

@@ -196,18 +196,19 @@ def test_full_pilot_learns_complementary_dwell_as_separate_local_incidents() -> 
         investigation["requirement"]
         for event in events
         if event.kind == "trend_regression"
-        if (investigation := event.data.get("investigation") or {}).get(
-            "hypothesis_kind"
-        )
+        if (investigation := event.data.get("investigation") or {}).get("hypothesis_kind")
         == "liveness"
     ]
     assert len(requirements) == 2
-    assert all(investigation["working_theory"] is True for investigation in (
-        event.data["investigation"]
-        for event in events
-        if event.kind == "trend_regression"
-        and (event.data.get("investigation") or {}).get("hypothesis_kind") == "liveness"
-    ))
+    assert all(
+        investigation["working_theory"] is True
+        for investigation in (
+            event.data["investigation"]
+            for event in events
+            if event.kind == "trend_regression"
+            and (event.data.get("investigation") or {}).get("hypothesis_kind") == "liveness"
+        )
+    )
     assert {
         (hold.dest, hold.value)
         for requirement in requirements

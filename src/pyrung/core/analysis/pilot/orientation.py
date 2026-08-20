@@ -61,11 +61,7 @@ def _orient_read(
 
     if world.frame is None:
         raise ValueError("single-alternative orientation requires a complete frame")
-    candidates = (
-        _candidate_read
-        if _candidate_read is not None
-        else read_candidates(world)
-    )
+    candidates = _candidate_read if _candidate_read is not None else read_candidates(world)
 
     # Boundary zero has no executed program scan to read yet.  Make that one
     # observation an ordinary Compass-selected bearing; its landing is always
@@ -286,9 +282,9 @@ def _orient_read(
             continue
         applied = _theory_orientation._current_candidate_applied(option, candidates, world)
         act = Pulse(_orientation_reading._pulse_policy(option, applied, world))
-        if _theory_orientation._act_preserves_requirements(world, act) and not compass.knowledge.act_is_nogood(
-            world.world_key, act_identity(act)
-        ):
+        if _theory_orientation._act_preserves_requirements(
+            world, act
+        ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             return _orientation_reading._bearing(
                 world,
                 act,
@@ -365,9 +361,9 @@ def _orient_read(
                 ),
             )
         )
-        if _theory_orientation._act_preserves_requirements(world, act) and not compass.knowledge.act_is_nogood(
-            world.world_key, act_identity(act)
-        ):
+        if _theory_orientation._act_preserves_requirements(
+            world, act
+        ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             return _orientation_reading._bearing(
                 world,
                 act,
@@ -394,9 +390,9 @@ def _orient_read(
             if len(branch.actions) == 1
             else BatchPulse(policy, crossing=fidelity)
         )
-        if _theory_orientation._act_preserves_requirements(world, act) and not compass.knowledge.act_is_nogood(
-            world.world_key, act_identity(act)
-        ):
+        if _theory_orientation._act_preserves_requirements(
+            world, act
+        ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             return _orientation_reading._bearing(
                 world,
                 act,
@@ -414,9 +410,9 @@ def _orient_read(
             continue
         applied = _theory_orientation._current_candidate_applied(option, candidates, world)
         act = Pulse(_orientation_reading._pulse_policy(option, applied, world))
-        if not _theory_orientation._act_preserves_requirements(world, act) or compass.knowledge.act_is_nogood(
-            world.world_key, act_identity(act)
-        ):
+        if not _theory_orientation._act_preserves_requirements(
+            world, act
+        ) or compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             continue
         return _orientation_reading._bearing(
             world,
@@ -457,9 +453,9 @@ def _orient_read(
                 ),
             )
         )
-        if _theory_orientation._act_preserves_requirements(world, act) and not compass.knowledge.act_is_nogood(
-            world.world_key, act_identity(act)
-        ):
+        if _theory_orientation._act_preserves_requirements(
+            world, act
+        ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             return _orientation_reading._bearing(
                 world,
                 act,
@@ -496,9 +492,9 @@ def _orient_read(
             )
         )
         rationale = "terminal coast already observed; run one verified dwell"
-    if _theory_orientation._act_preserves_requirements(world, terminal) and not compass.knowledge.act_is_nogood(
-        world.world_key, act_identity(terminal)
-    ):
+    if _theory_orientation._act_preserves_requirements(
+        world, terminal
+    ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(terminal)):
         return _orientation_reading._bearing(
             world,
             terminal,
@@ -610,12 +606,14 @@ def orient(
     if hasattr(world.context, "temporal_source_anchor"):
         context_changes["temporal_source_anchor"] = constraints.temporal_source_anchor
     if hasattr(world.context, "defer_program_input_receipts"):
-        context_changes["defer_program_input_receipts"] = (
-            constraints.defer_program_input_receipts
-        )
+        context_changes["defer_program_input_receipts"] = constraints.defer_program_input_receipts
     read_context = replace(world.context, **context_changes)
     seed = replace(world, context=read_context)
-    worlds = (seed,) if seed.frame is not None else _orientation_reading._read_worlds(seed, target, constraints)
+    worlds = (
+        (seed,)
+        if seed.frame is not None
+        else _orientation_reading._read_worlds(seed, target, constraints)
+    )
     open_worlds: list[OrientationWorld] = []
     fresh_worlds: list[OrientationWorld] = []
     for alternative in worlds:

@@ -216,9 +216,7 @@ def _inequality_levers(
             and requirement.operand_scale != 0
         ):
             right_form = (
-                _FLIP_FORM[requirement.form]
-                if requirement.operand_scale > 0
-                else requirement.form
+                _FLIP_FORM[requirement.form] if requirement.operand_scale > 0 else requirement.form
             )
             add(
                 "right",

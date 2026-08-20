@@ -34,9 +34,7 @@ class _World(PRecord):
         """Resolve one exact scan through its committed operation owner."""
 
         matches = tuple(
-            point
-            for act in self.committed_acts
-            if (point := act.point_at(scan_id)) is not None
+            point for act in self.committed_acts if (point := act.point_at(scan_id)) is not None
         )
         if len(matches) > 1:
             raise RuntimeError("one physical scan belongs to multiple committed executions")

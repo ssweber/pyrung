@@ -434,10 +434,7 @@ def _extract_investigation(inv: Mapping[str, Any] | None) -> Any:
                 "status": getattr(status, "value", status),
                 "provenance": getattr(requirement, "provenance", None),
                 "corrective_pilot_rungs": sorted(
-                    (
-                        _jsonify(rung)
-                        for rung in getattr(requirement, "corrective_pilot_rungs", ())
-                    ),
+                    (_jsonify(rung) for rung in getattr(requirement, "corrective_pilot_rungs", ())),
                     key=_address_neutral_sort_key,
                 ),
             }

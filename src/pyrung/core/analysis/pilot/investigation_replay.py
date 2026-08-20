@@ -52,6 +52,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ActionPair = tuple[str, Any]
+
+
 def _deviation_bearing(
     execution: ExecutionReceipt,
     frame: _IterationFrame,
@@ -357,8 +359,6 @@ def incident_regression_witness(
         ),
         receipt_links=tuple(receipt_links),
     )
-
-
 
 
 # ---------------------------------------------------------------------------

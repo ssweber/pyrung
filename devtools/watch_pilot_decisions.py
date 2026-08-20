@@ -282,8 +282,7 @@ def _decision_lines(
     if event.kind == "theory_correction_composed":
         configuration = tuple(event.data["configuration"])
         pilot_rungs = tuple(
-            (rung.dest, rung.value, repr(rung.guard))
-            for rung in event.data.get("pilot_rungs", ())
+            (rung.dest, rung.value, repr(rung.guard)) for rung in event.data.get("pilot_rungs", ())
         )
         conditions = tuple(event.data["conditions"])
         return (
@@ -369,7 +368,11 @@ def _decision_lines(
         requirement = investigation.get("requirement")
         exact_requirement = None
         if requirement is not None:
-            read = requirement.get if isinstance(requirement, dict) else lambda key: getattr(requirement, key, None)
+            read = (
+                requirement.get
+                if isinstance(requirement, dict)
+                else lambda key: getattr(requirement, key, None)
+            )
             demanding = read("demanding_occurrence")
             deadline = read("deadline")
             occurrence_scan = lambda occurrence: (
@@ -614,13 +617,9 @@ def _compact_fast_path_line(message: Mapping[str, Any]) -> str:
             ("writes", _bounded_items(message.get("writes"))),
         )
     elif stage == "checkpoint":
-        detail = tuple(
-            (name, message.get(name)) for name in ("requested", "admitted", "actual")
-        )
+        detail = tuple((name, message.get(name)) for name in ("requested", "admitted", "actual"))
     elif stage == "requirement":
-        detail = tuple(
-            (name, message.get(name)) for name in ("admitted", "condition", "source")
-        )
+        detail = tuple((name, message.get(name)) for name in ("admitted", "condition", "source"))
     elif stage == "phase":
         detail = (
             ("kinds", message.get("kinds")),
@@ -719,9 +718,7 @@ def _drive_worker(
         original_record = theory_recording_module._record_working_theory_transition
         original_record_fact = theory_recording_module._record_controlling_theory_fact
         original_derive_hypotheses = regression_requirements_module.derive_correction_hypotheses
-        original_exact_corrections = (
-            recovery_investigation_module._exact_regression_corrections
-        )
+        original_exact_corrections = recovery_investigation_module._exact_regression_corrections
         original_checkpoint_at_scan = recovery_investigation_module._checkpoint_at_scan
         original_exact_requirement = (
             recovery_investigation_module._exact_correction_requirement_from_regression
@@ -767,10 +764,7 @@ def _drive_worker(
                     (
                         item.hypothesis_kind,
                         item.done_tag,
-                        tuple(
-                            (hold.dest, hold.value, repr(hold.guard))
-                            for hold in item.holds
-                        ),
+                        tuple((hold.dest, hold.value, repr(hold.guard)) for hold in item.holds),
                         item.obstruction.transition.tag_name,
                         item.obstruction.scan_id,
                     )
@@ -788,7 +782,8 @@ def _drive_worker(
                     if occurrence.scan_id is not None
                     and (
                         occurrence.tag.startswith(("Heat", "Sail", "i_Sail", "x_Sail"))
-                        or occurrence.tag in {
+                        or occurrence.tag
+                        in {
                             "A_Alm16_Sail_Trig",
                             "Sts_StateCurrent",
                             "Sts_StateRequested",
@@ -827,10 +822,7 @@ def _drive_worker(
                 candidates=tuple(
                     (
                         hypothesis.kind,
-                        tuple(
-                            proposal_parts(hold)
-                            for hold in hypothesis.holds
-                        ),
+                        tuple(proposal_parts(hold) for hold in hypothesis.holds),
                         hypothesis.sources,
                         hypothesis.incident_local,
                         tuple(
@@ -844,8 +836,7 @@ def _drive_worker(
                                 - witness_tags
                             )
                         )[:24]
-                        if derive_ctx is not None
-                        and getattr(derive_ctx, "pdg", None) is not None
+                        if derive_ctx is not None and getattr(derive_ctx, "pdg", None) is not None
                         else (),
                     )
                     for hypothesis in hypotheses
@@ -887,10 +878,7 @@ def _drive_worker(
                 admitted=result.admitted,
                 reason=result.reason,
                 kind=getattr(evidence, "hypothesis_kind", None),
-                dest=tuple(
-                    (hold.dest, hold.value)
-                    for hold in getattr(evidence, "holds", ())
-                ),
+                dest=tuple((hold.dest, hold.value) for hold in getattr(evidence, "holds", ())),
                 done=(
                     getattr(evidence, "done_tag", None),
                     getattr(
@@ -1356,9 +1344,9 @@ def _drive_worker(
             observe_tentative_proof
         )
         vars(recovery_investigation_module)["_checkpoint_at_scan"] = observe_checkpoint_at_scan
-        vars(recovery_investigation_module)[
-            "_exact_correction_requirement_from_regression"
-        ] = observe_exact_requirement
+        vars(recovery_investigation_module)["_exact_correction_requirement_from_regression"] = (
+            observe_exact_requirement
+        )
         vars(theory_recording_module)["_advance_theory_to_regression_prefix"] = (
             observe_advance_prefix
         )
@@ -1366,9 +1354,7 @@ def _drive_worker(
             observe_record_regression
         )
         vars(theory_recording_module)["_record_controlling_theory_fact"] = observe_record_fact
-        vars(attempt_transition_module)["_theory_transition_from_attempt"] = (
-            observe_interpretation
-        )
+        vars(attempt_transition_module)["_theory_transition_from_attempt"] = observe_interpretation
         vars(pilot_module)["_theory_transition_after_monitor"] = observe_after_monitor
         vars(theory_recording_module)["_record_working_theory_transition"] = (
             observe_recorded_interpretation
@@ -1675,8 +1661,7 @@ def watch_worker(
                 last_event_at = now
                 pending_overlays = (
                     tuple(
-                        _rung_identity_summary(identity)
-                        for identity in message["pending_overlays"]
+                        _rung_identity_summary(identity) for identity in message["pending_overlays"]
                     )
                     if compact
                     else message["pending_overlays"]

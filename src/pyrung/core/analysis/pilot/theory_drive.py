@@ -426,9 +426,7 @@ def _compose_theory_correction(
                     continue
                 if proposed.operation is None or active.operation is None:
                     return True
-                if _semantic_key(proposed.operation.until) == _semantic_key(
-                    active.operation.until
-                ):
+                if _semantic_key(proposed.operation.until) == _semantic_key(active.operation.until):
                     return True
             return False
 

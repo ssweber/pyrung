@@ -86,7 +86,9 @@ def _route_overlay(nodes: list[TraceNode], snapshot: dict[str, Any]) -> dict[str
 def _value_sets_intersect(left: Any, right: Any) -> bool:
     """Whether either small value set contains a loosely matching pair."""
 
-    return any(_values_match(left_value, right_value) for left_value in left for right_value in right)
+    return any(
+        _values_match(left_value, right_value) for left_value in left for right_value in right
+    )
 
 
 @dataclass(frozen=True, order=True)

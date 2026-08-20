@@ -182,11 +182,7 @@ def _checkpoint_at_scan(
 ) -> _CausalCheckpoint | None:
     """Retain one already-executed physical prefix as a causal source."""
 
-    if (
-        scan_id < 0
-        or state.key_config is None
-        or not state.work.history.contains(scan_id)
-    ):
+    if scan_id < 0 or state.key_config is None or not state.work.history.contains(scan_id):
         return None
     work = fork_with_pilot_rungs(
         state.work,
@@ -977,7 +973,7 @@ def _investigate_and_revert(
                 key=cp_key,
                 world=cp_world,
                 objective=bearing_owner.objective,
-                    configured_inputs=getattr(ctx, "configured_inputs", frozenset()),
+                configured_inputs=getattr(ctx, "configured_inputs", frozenset()),
             )
             for candidate_evidence in _ordinary_correction_order(exact_corrections):
                 candidate_requirement = _exact_correction_requirement_from_regression(

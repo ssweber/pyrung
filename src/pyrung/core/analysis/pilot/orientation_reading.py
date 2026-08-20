@@ -385,9 +385,7 @@ def _bearing(
     view = getattr(world.context, "theory_view", None)
     entry_configurations = tuple(getattr(view, "configurations", ()))
     configured_tags = frozenset(
-        tag
-        for configuration in entry_configurations
-        for tag, _value in configuration.assignments
+        tag for configuration in entry_configurations for tag, _value in configuration.assignments
     )
     # WorkingTheory's entry configuration is the sole representation of these
     # user-style values.  Static route discovery can independently rediscover
@@ -401,8 +399,7 @@ def _bearing(
     stop_condition = StopCondition(
         (
             PulseHorizon.ASSERTION_SCAN
-            if entry_configurations
-            and policy.pulse_horizon is PulseHorizon.LOOKAHEAD_SCAN
+            if entry_configurations and policy.pulse_horizon is PulseHorizon.LOOKAHEAD_SCAN
             else policy.pulse_horizon
         ),
         (
@@ -412,8 +409,7 @@ def _bearing(
         ),
         (
             "observe the configured entry scan"
-            if entry_configurations
-            and policy.pulse_horizon is PulseHorizon.LOOKAHEAD_SCAN
+            if entry_configurations and policy.pulse_horizon is PulseHorizon.LOOKAHEAD_SCAN
             else "execute to the declared consumer"
             if policy.pulse_horizon is PulseHorizon.CONSUMER_BOUNDARY
             else "observe the assertion scan"

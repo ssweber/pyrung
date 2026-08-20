@@ -816,9 +816,7 @@ class _PilotProgressFormatter:
             where = f" at {position}" if position else ""
             need = f" ({conditions})" if conditions else ""
             self._after_correction = True
-            return (
-                f"  Working theory{where}: {verb} {setting} before retrying{need}.\n"
-            )
+            return f"  Working theory{where}: {verb} {setting} before retrying{need}.\n"
 
         if kind == "stuck":
             reason = str(data.get("reason") or "No productive next action was found.")

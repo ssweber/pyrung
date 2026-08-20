@@ -188,9 +188,7 @@ def test_scan_entry_configuration_is_a_patch_not_a_pulse() -> None:
 
 def test_scan_entry_journal_reports_only_configuration_changes() -> None:
     first = ScanEntryConfiguration((("FirstPresetMs", 31),))
-    both = ScanEntryConfiguration(
-        (("FirstPresetMs", 31), ("SecondPresetMs", 11))
-    )
+    both = ScanEntryConfiguration((("FirstPresetMs", 31), ("SecondPresetMs", 11)))
 
     def _act(
         scan: int,

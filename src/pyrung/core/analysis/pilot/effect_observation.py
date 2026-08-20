@@ -742,15 +742,12 @@ def value_or_varied_replay_scan_ids(
         return exact
 
     values_by_tag = {
-        tag: candidates
-        for tag, values in candidate_values.items()
-        if (candidates := tuple(values))
+        tag: candidates for tag, values in candidate_values.items() if (candidates := tuple(values))
     }
     tags = frozenset(values_by_tag)
     owners = tuple(owner for owner, _owned_scans in segments)
     if any(
-        owner.firing_retained_tags is not None
-        and not tags.issubset(owner.firing_retained_tags)
+        owner.firing_retained_tags is not None and not tags.issubset(owner.firing_retained_tags)
         for owner in owners
     ):
         return exact

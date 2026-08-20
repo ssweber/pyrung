@@ -261,9 +261,7 @@ class _BootstrapExecution:
             landing_scan=self.scan_after,
             source_world_key=_detached(self.checkpoint.key),
             objective=(objective.target.tag, _detached(objective.target.value)),
-            objective_frontier=tuple(
-                (tag, _detached(value)) for tag, value in objective.frontier
-            ),
+            objective_frontier=tuple((tag, _detached(value)) for tag, value in objective.frontier),
             source=MappingProxyType(
                 {tag: _detached(value) for tag, value in self.projection.entry_tags.items()}
             ),

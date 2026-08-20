@@ -162,9 +162,7 @@ class StopCondition:
     reason: str = ""
 
     def __post_init__(self) -> None:
-        if (self.horizon is PulseHorizon.CONSUMER_BOUNDARY) != (
-            self.consumer_boundary is not None
-        ):
+        if (self.horizon is PulseHorizon.CONSUMER_BOUNDARY) != (self.consumer_boundary is not None):
             raise ValueError("consumer-bound stop condition requires one exact boundary")
 
 
@@ -196,10 +194,7 @@ class ExecutionSpan:
         scans = tuple(self.kernel_scan_ids)
         if not scans:
             raise ValueError("an execution span must own at least one kernel scan")
-        if any(
-            later <= earlier
-            for earlier, later in zip(scans, scans[1:], strict=False)
-        ):
+        if any(later <= earlier for earlier, later in zip(scans, scans[1:], strict=False)):
             raise ValueError("execution span scans must be strictly increasing")
         epoch = self.owner.epoch
         if any(scan < epoch.first_scan or scan > epoch.last_scan for scan in scans):
@@ -228,10 +223,7 @@ def capture_execution_spans(
     scans = tuple(kernel_scan_ids)
     if not scans:
         return ()
-    if any(
-        later <= earlier
-        for earlier, later in zip(scans, scans[1:], strict=False)
-    ):
+    if any(later <= earlier for earlier, later in zip(scans, scans[1:], strict=False)):
         raise ValueError("execution scan stream must be strictly increasing")
 
     lineage = fork._causal_lineage

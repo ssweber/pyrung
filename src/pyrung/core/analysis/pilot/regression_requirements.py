@@ -154,7 +154,10 @@ def _ordinary_correction_order(
     if len(coordinated) != 1:
         return corrections
     selected = coordinated[0]
-    return (corrections[selected], *(item for index, item in enumerate(corrections) if index != selected))
+    return (
+        corrections[selected],
+        *(item for index, item in enumerate(corrections) if index != selected),
+    )
 
 
 def _hypothesis_source_obstruction(
@@ -223,9 +226,8 @@ def _owner_progress_obstruction(
     if progress is None or progress.condition is None:
         return None
     scan = completion.scan_id - 1
-    while (
-        scan >= state.work.history.oldest_scan_id
-        and demand_holds(progress, state.work.history.at(scan).tags)
+    while scan >= state.work.history.oldest_scan_id and demand_holds(
+        progress, state.work.history.at(scan).tags
     ):
         scan -= 1
     activation_scan = scan + 1
@@ -404,9 +406,7 @@ def _exact_regression_corrections(
         if occurrences:
             latest_scan = max(completion.scan_id for _tag, completion, _owner in occurrences)
             latest = tuple(
-                occurrence
-                for occurrence in occurrences
-                if occurrence[1].scan_id == latest_scan
+                occurrence for occurrence in occurrences if occurrence[1].scan_id == latest_scan
             )
             if len(latest) == 1:
                 selected = latest[0]
@@ -509,9 +509,7 @@ def _tentative_rung_prevents_completion(
                 tuple(scans),
             )
 
-    admitted = len(effective) == len(
-        {(hold.dest, hold.value) for hold in evidence.holds}
-    )
+    admitted = len(effective) == len({(hold.dest, hold.value) for hold in evidence.holds})
     return _TentativeRungProof(
         admitted,
         "tentative rung suppressed the exact harmful occurrence"

@@ -469,8 +469,7 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     door_corrections = [
         event
         for kind, destinations, event in theory_corrections
-        if kind == "latch-exposure"
-        and {"x_DoorClosed", "x_LintDoorClosed"} <= destinations
+        if kind == "latch-exposure" and {"x_DoorClosed", "x_LintDoorClosed"} <= destinations
     ]
     assert len(door_corrections) == 1
     assert any(

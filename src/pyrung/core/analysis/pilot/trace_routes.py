@@ -361,8 +361,7 @@ def rank_trace_choices(
     # to the trace scorer. Witnesses must not collapse to tag names: common
     # ``Mode 0 ↔ 1`` sequencing must not hide Manual's distinct ``Mode 3 ↔ 1``.
     route_conflicts = [
-        frozenset(_route_judgment.route_conflicts(tree, pdg, program))
-        for _choice, tree in traced
+        frozenset(_route_judgment.route_conflicts(tree, pdg, program)) for _choice, tree in traced
     ]
     shared_conflicts = frozenset.intersection(*route_conflicts) if route_conflicts else frozenset()
 

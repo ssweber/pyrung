@@ -519,9 +519,7 @@ def test_pending_configuration_retries_the_fresh_actionless_program_transaction(
             theory_view=SimpleNamespace(
                 temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
                 trigger_act_identity=act_identity(coast),
-                configurations=(
-                    ScanEntryConfiguration((("WatchdogPreset", 11),)),
-                ),
+                configurations=(ScanEntryConfiguration((("WatchdogPreset", 11),)),),
                 trigger_program_transaction=ProgramTransaction.from_heading(
                     heading,
                     world.snapshot,
@@ -567,9 +565,7 @@ def test_pending_configuration_retries_the_fresh_actionless_program_transaction(
     assert result.act.policy.local_progress_requirements == ("watchdog-requirement",)
     assert result.act.policy.local_progress_sources == ("watchdog-parent",)
     assert result.prerequisites == ()
-    assert result.entry_configurations == (
-        ScanEntryConfiguration((("WatchdogPreset", 11),)),
-    )
+    assert result.entry_configurations == (ScanEntryConfiguration((("WatchdogPreset", 11),)),)
     assert act_identity(result.act) == act_identity(coast)
 
 

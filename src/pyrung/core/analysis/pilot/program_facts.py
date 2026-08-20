@@ -255,7 +255,9 @@ def scan_transient_rest(
         return next(iter(sites)) if len(sites) == 1 else None
 
     for rest in candidate_rests:
-        producers = [(node, value) for node, _rung, value in writes if not _values_match(value, rest)]
+        producers = [
+            (node, value) for node, _rung, value in writes if not _values_match(value, rest)
+        ]
         clearers = [(node, rung) for node, rung, value in writes if _values_match(value, rest)]
         if not producers or not clearers:
             continue

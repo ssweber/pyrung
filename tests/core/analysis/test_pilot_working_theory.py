@@ -387,9 +387,7 @@ def test_no_scan_composition_keeps_the_physical_tip_and_updates_configuration() 
     progress = state.ledger.progress[theory.current_progress_id]
 
     assert progress.provisional_tip == source
-    assert progress.phase_receipts[-1].superseded_configuration_identities == (
-        first.identity,
-    )
+    assert progress.phase_receipts[-1].superseded_configuration_identities == (first.identity,)
     assert active_theory_configurations(state) == (replacement,)
     assert temporal_setup_configuration_tags(state) == frozenset({"PresetMs"})
 

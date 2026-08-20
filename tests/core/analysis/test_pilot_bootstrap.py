@@ -289,9 +289,7 @@ def test_bootstrap_event_consumer_cannot_mutate_or_advance_internal_receipt(
     assert execution_owner is not None
     assert execution_owner.epoch.reference == internal.execution.epoch_ref
     assert (
-        execution_owner.epoch.first_scan
-        <= internal.scan_after
-        <= execution_owner.epoch.last_scan
+        execution_owner.epoch.first_scan <= internal.scan_after <= execution_owner.epoch.last_scan
     )
     assert execution_owner._live_plc is None
 

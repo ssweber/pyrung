@@ -98,11 +98,9 @@ def test_startup_alarm_becomes_a_compass_setup_bearing_in_one_scan() -> None:
     assert plan.state.tags[fixture.ProcessStep.name] == fixture.AT_TARGET
     assert plan.state.tags[fixture.WatchdogPresetMs.name] == 11
     assert plan.ordered_steps == [(1, {fixture.WatchdogPresetMs.name: 11})]
-    assert tuple(
-        step.inputs
-        for step in plan.journal
-        if step.kind == "patch"
-    ) == (((fixture.WatchdogPresetMs.name, 11),),)
+    assert tuple(step.inputs for step in plan.journal if step.kind == "patch") == (
+        ((fixture.WatchdogPresetMs.name, 11),),
+    )
     assert not any(
         rung.dest == fixture.WatchdogPresetMs.name
         for entry in plan.hold_log

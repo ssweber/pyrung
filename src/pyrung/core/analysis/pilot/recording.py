@@ -300,9 +300,7 @@ def _build_plan_journal(
                         scan=first_step.scan_before,
                         scans=0,
                         inputs=configuration_inputs,
-                        label=", ".join(
-                            dict.fromkeys(tag for tag, _value in configuration_inputs)
-                        ),
+                        label=", ".join(dict.fromkeys(tag for tag, _value in configuration_inputs)),
                         notes=_notes_for(configuration_inputs),
                     ),
                 )

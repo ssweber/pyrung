@@ -1065,9 +1065,7 @@ def _build_theory_view(state: TheoryState) -> TheoryView | None:
             installed = pending_overlays.intersection(receipt.pilot_rung_identities)
             pending_overlays.difference_update(installed)
             pending_overlays.update(
-                identity
-                for identity in receipt.pilot_rung_identities
-                if identity not in installed
+                identity for identity in receipt.pilot_rung_identities if identity not in installed
             )
             pending_configurations.update(
                 configuration.identity for configuration in receipt.configurations

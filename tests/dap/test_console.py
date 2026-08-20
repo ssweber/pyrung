@@ -736,17 +736,14 @@ class TestCausalVerbs:
                 {
                     "investigation": {
                         "working_theory": True,
-                        "requirement": SimpleNamespace(
-                            corrective_pilot_rungs=(correction,)
-                        ),
+                        "requirement": SimpleNamespace(corrective_pilot_rungs=(correction,)),
                     }
                 },
             )
         )
 
         assert result == (
-            " Yes -- with rung(ProgressTest_TheoryRunning): "
-            "latch(ProgressTest_TheorySail).\n"
+            " Yes -- with rung(ProgressTest_TheoryRunning): latch(ProgressTest_TheorySail).\n"
         )
 
     def test_how_progress_groups_corrections_on_their_exact_rung(self):

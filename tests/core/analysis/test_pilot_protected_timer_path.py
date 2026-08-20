@@ -89,9 +89,7 @@ def test_repair_preserves_a_complete_target_path() -> None:
     assert all(item["working_theory"] is True for item in investigations)
     assert all(item["private_replay"] is False for item in investigations)
     holds = tuple(
-        hold
-        for item in investigations
-        for hold in item["requirement"].corrective_pilot_rungs
+        hold for item in investigations for hold in item["requirement"].corrective_pilot_rungs
     )
     configurations = tuple(
         pair
@@ -104,8 +102,7 @@ def test_repair_preserves_a_complete_target_path() -> None:
         for hold in holds
     ), holds
     assert any(
-        tag == tags["preset"].name and float(value) > 30.0
-        for tag, value in configurations
+        tag == tags["preset"].name and float(value) > 30.0 for tag, value in configurations
     ), configurations
     assert finished.data["work"].state.tags[tags["step"].name] == 2
     assert finished.data["reached"] is True
@@ -134,9 +131,7 @@ def test_relational_refinement_has_its_own_bounded_search() -> None:
     assert all(item["working_theory"] is True for item in investigations)
     assert all(item["private_replay"] is False for item in investigations)
     holds = tuple(
-        hold
-        for item in investigations
-        for hold in item["requirement"].corrective_pilot_rungs
+        hold for item in investigations for hold in item["requirement"].corrective_pilot_rungs
     )
     configurations = tuple(
         pair
@@ -150,8 +145,7 @@ def test_relational_refinement_has_its_own_bounded_search() -> None:
         for hold in holds
     ), holds
     assert any(
-        tag == tags["preset"].name and float(value) > 100.0
-        for tag, value in configurations
+        tag == tags["preset"].name and float(value) > 100.0 for tag, value in configurations
     ), configurations
     assert finished.data["work"].state.tags[tags["step"].name] == 2
     assert finished.data["reached"] is True

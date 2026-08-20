@@ -752,9 +752,7 @@ def _record_controlled_setup_attempt(
     view = theory_view(state.theory_state)
     pending = view.pending_overlay_identities if view is not None else frozenset()
     executed_pending = tuple(
-        _rung_identity(rung)
-        for rung in state.pilot_rungs
-        if _rung_identity(rung) in pending
+        _rung_identity(rung) for rung in state.pilot_rungs if _rung_identity(rung) in pending
     )
     attempt_id = (
         "working-theory-setup",

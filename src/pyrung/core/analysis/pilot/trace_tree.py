@@ -120,6 +120,7 @@ class TraceCrossingBranch:
     def proposed(self) -> bool:
         return self.fidelity.proposed
 
+
 @dataclass
 class TraceNode:
     """One node in the backward-trace tree.
@@ -473,6 +474,8 @@ class TraceNode:
         """Dedup key for a relational frontier: tag + (form, operand)."""
         p = self.predicate
         return (self.tag, (getattr(p, "form", None), getattr(p, "operand", self.value)))
+
+
 def _trace_node_constraint(node: TraceNode) -> Constraint | None:
     """Concrete condition represented by one ordinary sibling trace node."""
 

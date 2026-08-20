@@ -628,8 +628,7 @@ def _pilot_loop_events(
                 else None
             ),
             defer_program_input_receipts=bool(
-                state.bootstrap_execution is not None
-                and not state.bootstrap_execution.route_bound
+                state.bootstrap_execution is not None and not state.bootstrap_execution.route_bound
             ),
         )
         result = ctx.compass.orient(raw_world, target, constraints)
@@ -711,9 +710,7 @@ def _pilot_loop_events(
                 state.work.state.scan_id,
                 {
                     "configuration": (
-                        result.configuration.assignments
-                        if result.configuration is not None
-                        else ()
+                        result.configuration.assignments if result.configuration is not None else ()
                     ),
                     "pilot_rungs": result.pilot_rungs,
                     "conditions": tuple(
@@ -726,9 +723,7 @@ def _pilot_loop_events(
                     "superseded_configuration_identities": (
                         composed.superseded_configuration_identities
                     ),
-                    "superseded_pilot_rung_identities": (
-                        composed.superseded_pilot_rung_identities
-                    ),
+                    "superseded_pilot_rung_identities": (composed.superseded_pilot_rung_identities),
                     "research_finding_identity": composed.research_finding_identity,
                     "reason": result.rationale,
                     "position": _channel_position(ctx, state.work.state.tags),
@@ -1279,17 +1274,13 @@ def _pilot_loop_events(
                 trial=trial,
                 source_checkpoint=transition.adoption_checkpoint,
             )
-            transition_has_need = _theory_recording._records_controlling_need(
-                theory_transition
-            )
+            transition_has_need = _theory_recording._records_controlling_need(theory_transition)
             # Post-commit recovery may already have recorded an exact
             # regression requirement and restored its source.  That is the
             # same controlling Working Theory handoff as an intrascan failure;
             # do not subsequently advance the rejected landing over it.
             monitor_need = temporal_need_request(state.theory_state)
-            monitor_opened_need = (
-                monitor_need is not None and monitor_need != temporal_request
-            )
+            monitor_opened_need = monitor_need is not None and monitor_need != temporal_request
             successor_need = transition_has_need or monitor_opened_need
             if successor_need:
                 # Keep the monitor's exact rollback world. The next fresh

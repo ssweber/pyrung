@@ -583,10 +583,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
     assert investigation["bounded_proof"] is True
     requirement = investigation["requirement"]
     assert resolution.data["pilot_rungs"] == ()
-    assert any(
-        rung.dest == tags["Door"].name
-        for rung in requirement.corrective_pilot_rungs
-    )
+    assert any(rung.dest == tags["Door"].name for rung in requirement.corrective_pilot_rungs)
     door_correction = next(
         rung
         for rung in reversed(requirement.corrective_pilot_rungs)

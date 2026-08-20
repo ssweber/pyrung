@@ -135,9 +135,7 @@ def _writer_clobbers_codemand(
     for codemand_tag, codemand_value in codemands:
         if codemand_tag == tag:
             continue
-        produced = _concrete_written_value(
-            _written_value_for_tag(rung, codemand_tag), snapshot
-        )
+        produced = _concrete_written_value(_written_value_for_tag(rung, codemand_tag), snapshot)
         if produced is _UNRESOLVED:
             continue
         if not _values_match(produced, codemand_value):
@@ -189,7 +187,9 @@ def _rank_writers(
     pinned_overlay = {name: snapshot.get(name) for name in opaque_loop}
     pinned = frozenset(opaque_loop)
     ranked: list[tuple[_WriterAvailability, int, int, int]] = []
-    prior_same_tag_values = tuple(item_value for item_tag, item_value in ancestry if item_tag == tag)
+    prior_same_tag_values = tuple(
+        item_value for item_tag, item_value in ancestry if item_tag == tag
+    )
     ancestry_tags = frozenset(
         item_tag for item_tag, _item_value in ancestry if item_tag not in steerable
     )
@@ -263,9 +263,7 @@ def _rank_writers(
                 bucket = 3
 
         clobber = (
-            1
-            if codemands and _writer_clobbers_codemand(rung, tag, codemands, snapshot)
-            else 0
+            1 if codemands and _writer_clobbers_codemand(rung, tag, codemands, snapshot) else 0
         )
         ranked.append((availability, bucket, clobber, rung_index))
         if availability_out is not None:

@@ -233,8 +233,7 @@ def _proof(*, escaping_reader: bool, source_scan: int):
     obstructions = tuple(
         write
         for write in projection.writes
-        if write.transition.tag_name == tags["fault"].name
-        and write.transition.to_value is True
+        if write.transition.tag_name == tags["fault"].name and write.transition.to_value is True
     )
     assert len(obstructions) == 1
 

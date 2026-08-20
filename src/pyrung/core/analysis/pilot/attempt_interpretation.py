@@ -252,10 +252,7 @@ def interpret_exact_regression_requirement(
         "exact-regression-requirement",
         _semantic_key(requirement.navigation_identity),
         _semantic_key(obstruction),
-        tuple(
-            _rung_identity(rung)
-            for rung in getattr(requirement, "corrective_pilot_rungs", ())
-        ),
+        tuple(_rung_identity(rung) for rung in getattr(requirement, "corrective_pilot_rungs", ())),
     )
     if (
         requirement.operand_authority is OperandAuthority.ADJUSTABLE

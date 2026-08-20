@@ -574,12 +574,8 @@ def test_neutral_route_uses_exact_regression_requirement_for_third_correction(
         if close is not None:
             close()
 
-    scalar_compositions = tuple(
-        item for item in compositions if item[0].configuration is not None
-    )
-    composed_values = tuple(
-        fact.configuration.assignments[0][1] for fact, _ in scalar_compositions
-    )
+    scalar_compositions = tuple(item for item in compositions if item[0].configuration is not None)
+    composed_values = tuple(fact.configuration.assignments[0][1] for fact, _ in scalar_compositions)
     assert composed_values == (
         11,
         21,

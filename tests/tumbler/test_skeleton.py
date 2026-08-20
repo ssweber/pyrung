@@ -226,7 +226,8 @@ def test_working_theory_regression_keeps_correction_decision_not_legacy_shape() 
     assert investigation["working_theory"] is True
     assert investigation["private_replay"] is False
     assert investigation["hypothesis_kind"] == "latch-exposure"
-    assert [
-        rung["dest"] for rung in investigation["requirement"]["corrective_pilot_rungs"]
-    ] == ["x_DoorClosed", "x_LintDoorClosed"]
+    assert [rung["dest"] for rung in investigation["requirement"]["corrective_pilot_rungs"]] == [
+        "x_DoorClosed",
+        "x_LintDoorClosed",
+    ]
     assert "confirmed_detail" not in investigation

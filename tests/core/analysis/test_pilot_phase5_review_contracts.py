@@ -51,9 +51,7 @@ def test_bootstrap_retries_an_intermediate_designation_before_reaching_target() 
         if event.kind == "theory_correction_composed"
         and event.data["configuration"] == ((preset.name, 11),)
     )
-    assert len(corrections) == 1, tuple(
-        (event.kind, event.scan, event.data) for event in events
-    )
+    assert len(corrections) == 1, tuple((event.kind, event.scan, event.data) for event in events)
     assert not any(
         event.kind == "candidate_try" and (preset.name, 11) in event.data["applied"]
         for event in events

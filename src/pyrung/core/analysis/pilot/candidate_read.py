@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 # Dataclasses
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class _Candidate:
     """One action option with exactly one provenance category."""

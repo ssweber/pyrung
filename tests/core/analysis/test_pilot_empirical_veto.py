@@ -87,12 +87,15 @@ def test_veto_prefilters_quiet_history_before_state_comparison(monkeypatch) -> N
 
     monkeypatch.setattr(causal, "changed_replay_scan_ids", recorded_filter)
 
-    assert empirical_program_writes(
-        plc,
-        frozenset({"Status"}),
-        start_scan=0,
-        end_scan=plc.state.scan_id,
-    ) == frozenset()
+    assert (
+        empirical_program_writes(
+            plc,
+            frozenset({"Status"}),
+            start_scan=0,
+            end_scan=plc.state.scan_id,
+        )
+        == frozenset()
+    )
     assert observed == [()]
 
 

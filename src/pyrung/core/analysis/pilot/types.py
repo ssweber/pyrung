@@ -62,6 +62,7 @@ if TYPE_CHECKING:
 # Type aliases
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class RevisitCredential:
     """Consumable identity of one policy-admissible revisit transition.

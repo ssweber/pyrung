@@ -1677,6 +1677,7 @@ def test_awaited_same_action_multiple_writers_is_order_independent_ambiguity(
     monkeypatch,
 ) -> None:
     import pyrung.core.analysis.pilot.awaited_actions as awaited
+
     first = awaited._Transition(12, {"Command": frozenset({1})}, "RequestA", 7)
     second = awaited._Transition(13, {"Command": frozenset({1})}, "RequestB", 3)
     world = SimpleNamespace(

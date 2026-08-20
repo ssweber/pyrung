@@ -263,6 +263,8 @@ def test_producer_envelope_punts_when_lever_is_mixed_with_context():
     )
 
     assert guard is None
+
+
 class TestPreciseCauses:
     """_precise_causes: cause walks to steerable inputs."""
 

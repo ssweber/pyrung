@@ -1088,8 +1088,7 @@ def _theory_correction_composition(
                 frontier=_orientation_reading._frontier(world, candidates),
                 requirements=exact_requirements,
                 rationale=(
-                    "working theory: compose the exact corrective rung, then read "
-                    "Compass again"
+                    "working theory: compose the exact corrective rung, then read Compass again"
                 ),
                 pilot_rungs=pending_rungs,
                 research_finding_identity=research_finding_identity,
@@ -1669,9 +1668,7 @@ def _uses_ordinary_correction_validation(requirement: Any) -> bool:
         (
             item
             for item in getattr(requirement, "scope", ())
-            if isinstance(item, tuple)
-            and len(item) >= 3
-            and item[0] == "tentative-execution"
+            if isinstance(item, tuple) and len(item) >= 3 and item[0] == "tentative-execution"
         ),
         None,
     )
@@ -2043,9 +2040,7 @@ def _theory_pending_configuration_bearing(
     )
     pending_overlay_ids = getattr(view, "pending_overlay_identities", frozenset())
     pilot_rungs = tuple(
-        rung
-        for rung in world.state.pilot_rungs
-        if _rung_identity(rung) in pending_overlay_ids
+        rung for rung in world.state.pilot_rungs if _rung_identity(rung) in pending_overlay_ids
     )
     if not configurations and not pilot_rungs:
         return None
@@ -2081,7 +2076,7 @@ def _theory_pending_configuration_bearing(
             local_progress_requirements=requirements,
             local_progress_sources=requirements,
             pulse_horizon=PulseHorizon.ASSERTION_SCAN,
-        )
+        ),
     )
     if not _act_preserves_requirements(world, act) or world.context.compass.knowledge.act_is_nogood(
         world.world_key,
@@ -2230,9 +2225,7 @@ def _current_candidate_applied(
     pending = _pending_theory_pairs(world)
     return tuple(
         pair
-        for pair in _orientation_reading._candidate_applied(
-            candidate, candidates, world.context
-        )
+        for pair in _orientation_reading._candidate_applied(candidate, candidates, world.context)
         if not _pair_matches_any(pair, pending)
     )
 
