@@ -337,6 +337,7 @@ def test_awaited_action_policy_defers_a_command_with_an_automatic_sibling() -> N
         _awaited_action_bearing(
             SimpleNamespace(snap=dict(plc.state.tags)),
             ctx,
+            set(),
         )
         is None
     )

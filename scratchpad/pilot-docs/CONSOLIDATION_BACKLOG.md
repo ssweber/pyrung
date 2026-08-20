@@ -132,7 +132,7 @@ behavior in reachability and candidate reading.
 
 ### 6. Apply every awaited-action exclusion before uniqueness
 
-**Status:** characterize first
+**Status:** done
 
 Ordinary candidate construction judges awaited-action uniqueness before pair
 nogoods, while departure admission applies pair nogoods before cardinality.

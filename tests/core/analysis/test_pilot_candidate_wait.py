@@ -45,6 +45,7 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
     Reachable,
     StaticEdgeExclusionReason,
 )
+from pyrung.core.analysis.pilot.departure import _awaited_action_allowed
 from pyrung.core.analysis.pilot.effects import (
     EffectPathStep,
     expectation_from_writer,
@@ -1701,6 +1702,81 @@ def test_awaited_same_action_multiple_writers_is_order_independent_ambiguity(
             )
             is None
         )
+
+
+@pytest.mark.parametrize("excluded_by", ("blocked", "avoid", "nogood"))
+def test_awaited_action_exclusions_apply_before_uniqueness(
+    monkeypatch,
+    excluded_by: str,
+) -> None:
+    """Orientation and departure admit the same sole legal structural action."""
+    import pyrung.core.analysis.pilot.awaited_actions as awaited
+    from pyrung.core.analysis.pilot.options import _awaited_action_bearing
+
+    excluded = AwaitedAction(
+        action=("Excluded", True),
+        command_tag="Command",
+        command_value=1,
+        command_writes=(("Command", 1),),
+        from_state=11,
+        to_state=12,
+        note="excluded structural action",
+    )
+    legal = replace(excluded, action=("Legal", True), note="legal structural action")
+    readings = (excluded, legal)
+    monkeypatch.setattr(awaited, "awaited_actions", lambda *_args: readings)
+
+    world_key = ("current-world",)
+    pair_nogoods = {excluded.action} if excluded_by == "nogood" else set()
+    blocked_actions = frozenset({excluded.action}) if excluded_by == "blocked" else frozenset()
+    avoid_pred = (
+        (lambda snap: snap.get(excluded.action[0]) is True) if excluded_by == "avoid" else None
+    )
+    frame = SimpleNamespace(
+        key=world_key,
+        snap={"Channel": 11, "Excluded": False, "Legal": False},
+    )
+    ctx = SimpleNamespace(
+        target=TargetSpec("Channel", 17),
+        opaque_loop=frozenset({"Channel"}),
+        pdg=SimpleNamespace(writers_of={}),
+        program=SimpleNamespace(),
+        steerable=frozenset({"Excluded", "Legal"}),
+        domain_prior=None,
+        pipeline_roles=(),
+        blocked_actions=blocked_actions,
+        avoid_pred=avoid_pred,
+    )
+    assert (
+        unique_legal_awaited_action(
+            SimpleNamespace(),
+            "Channel",
+            (),
+            action_avoided=lambda _action: False,
+        )
+        is None
+    )
+
+    oriented = _awaited_action_bearing(frame, ctx, pair_nogoods)
+
+    knowledge = SimpleNamespace(
+        nogood_pairs=lambda key: frozenset(pair_nogoods) if key == world_key else frozenset()
+    )
+    departed = unique_legal_awaited_action(
+        SimpleNamespace(),
+        "Channel",
+        (),
+        action_allowed=lambda action: _awaited_action_allowed(
+            action,
+            settled_key=world_key,
+            knowledge=knowledge,
+            blocked_actions=blocked_actions,
+        ),
+        action_avoided=lambda action: options_module._avoid_forces(ctx, [action], frame.snap),
+    )
+
+    assert oriented is legal
+    assert departed is legal
 
 
 def _effect_collision_fixture():

@@ -145,7 +145,11 @@ def _diagnose_stuck_reason(
 # ---------------------------------------------------------------------------
 
 
-def _awaited_action_bearing(frame: Any, ctx: Any) -> AwaitedAction | None:
+def _awaited_action_bearing(
+    frame: Any,
+    ctx: Any,
+    key_nogoods: set[_ActionPair],
+) -> AwaitedAction | None:
     """The program-awaited operator action for the current state, or
     ``None``.
 
@@ -171,7 +175,7 @@ def _awaited_action_bearing(frame: Any, ctx: Any) -> AwaitedAction | None:
         world,
         channel,
         ctx.pipeline_roles,
-        action_allowed=lambda action: _action_allowed(ctx, action),
+        action_allowed=lambda action: action not in key_nogoods and _action_allowed(ctx, action),
         action_avoided=lambda action: _avoid_forces(ctx, [action], frame.snap),
         awaits_operator=True,
     )
@@ -1028,7 +1032,7 @@ def _build_candidates(
         ctx,
         key_nogoods,
     )
-    awaited_action = _awaited_action_bearing(frame, ctx)
+    awaited_action = _awaited_action_bearing(frame, ctx, key_nogoods)
     return _assemble_candidate_read(
         route_and_wait,
         separated,
