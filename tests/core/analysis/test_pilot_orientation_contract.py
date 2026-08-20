@@ -156,7 +156,7 @@ def test_orientation_threads_one_expectation_for_batch_crossing_widening_and_coa
 
     monkeypatch.setattr(
         orientation,
-        "_build_candidates",
+        "read_candidates",
         lambda *_args: _options(
             prescribed_batch=(("A", True), ("B", True)),
             batch_expectation=expectation,
@@ -169,7 +169,7 @@ def test_orientation_threads_one_expectation_for_batch_crossing_widening_and_coa
 
     monkeypatch.setattr(
         orientation,
-        "_build_candidates",
+        "read_candidates",
         lambda *_args: _options(
             crossing_batches=(
                 CrossingBatchRead(
@@ -186,7 +186,7 @@ def test_orientation_threads_one_expectation_for_batch_crossing_widening_and_coa
 
     monkeypatch.setattr(
         orientation,
-        "_build_candidates",
+        "read_candidates",
         lambda *_args: _options(
             active_trace_actions=(("A", True), ("B", True)),
             widening_expectation=expectation,
@@ -199,7 +199,7 @@ def test_orientation_threads_one_expectation_for_batch_crossing_widening_and_coa
     heading = ChannelHeading("State", 2)
     monkeypatch.setattr(
         orientation,
-        "_build_candidates",
+        "read_candidates",
         lambda *_args: _options(
             wait=WaitRead(WaitPrescription(heading, "program coast", expectation=expectation))
         ),
@@ -215,7 +215,7 @@ def test_terminal_orientation_is_explicit_ambient_non_promise(monkeypatch) -> No
 
     compass = Compass()
     world = _world(compass)
-    monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options())
+    monkeypatch.setattr(orientation, "read_candidates", lambda *_args: _options())
 
     terminal = orientation._orient_read(compass, world, TargetSpec("Target", True))
 
@@ -248,7 +248,7 @@ def test_unresolved_executable_policies_are_explicitly_exempt(monkeypatch) -> No
     for candidate_read in reads:
         monkeypatch.setattr(
             orientation,
-            "_build_candidates",
+            "read_candidates",
             lambda *_args, _read=candidate_read: _read,
         )
         bearing = orientation._orient_read(compass, world, TargetSpec("Target", True))
@@ -845,7 +845,7 @@ def test_temporal_retry_uses_one_read_and_can_lower_standalone_tip_setup(
         build_calls += 1
         return candidates
 
-    monkeypatch.setattr(orientation, "_build_candidates", build_once)
+    monkeypatch.setattr(orientation, "read_candidates", build_once)
     monkeypatch.setattr(
         Compass,
         "conductivity_research",
@@ -1227,7 +1227,7 @@ def test_temporal_retry_yields_to_conductivity_research_before_another_steer(
             temporal_requirements=(object(),),
         ),
     )
-    monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options())
+    monkeypatch.setattr(orientation, "read_candidates", lambda *_args: _options())
     monkeypatch.setattr(
         Compass,
         "conductivity_research",
@@ -1281,7 +1281,7 @@ def test_temporal_retry_researches_after_pending_overlay_was_in_exact_attempt(
             temporal_requirements=(object(),),
         ),
     )
-    monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options())
+    monkeypatch.setattr(orientation, "read_candidates", lambda *_args: _options())
     monkeypatch.setattr(
         Compass,
         "conductivity_research",
@@ -1701,11 +1701,11 @@ def test_orient_passes_blocked_actions_to_candidate_admission(monkeypatch) -> No
     blocked = frozenset({("Blocked", True)})
     seen: list[frozenset] = []
 
-    def _read(_frame, _state, context):
-        seen.append(context.blocked_actions)
+    def _read(world):
+        seen.append(world.context.blocked_actions)
         return _options(stuck_reason="trace_empty")
 
-    monkeypatch.setattr(orientation, "_build_candidates", _read)
+    monkeypatch.setattr(orientation, "read_candidates", _read)
     compass = Compass()
 
     compass.orient(
@@ -1723,7 +1723,7 @@ def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
 
     compass = Compass()
     first = _candidate("First")
-    monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options(first))
+    monkeypatch.setattr(orientation, "read_candidates", lambda *_args: _options(first))
     monkeypatch.setattr(
         theory_orientation,
         "_current_candidate_applied",
@@ -1760,7 +1760,7 @@ def test_learned_batch_materializes_the_common_policy_once(monkeypatch) -> None:
     actions = (("First", True), ("Gate", True))
     monkeypatch.setattr(
         orientation,
-        "_build_candidates",
+        "read_candidates",
         lambda *_args: _options(prescribed_batch=actions),
     )
 
@@ -1812,7 +1812,7 @@ def test_crossing_branch_materializes_one_atomic_verified_act(monkeypatch) -> No
     )
     monkeypatch.setattr(
         orientation,
-        "_build_candidates",
+        "read_candidates",
         lambda *_args: _options(crossing_batches=(branch,)),
     )
 
@@ -1853,7 +1853,7 @@ def test_crossing_batch_nogood_identity_is_canonical_and_falls_back(monkeypatch)
     )
     monkeypatch.setattr(
         orientation,
-        "_build_candidates",
+        "read_candidates",
         lambda *_args: _options(crossing_batches=(first, sibling)),
     )
 
@@ -2042,7 +2042,7 @@ def test_bearing_preserves_downstream_channel_goal(monkeypatch) -> None:
 
     compass = Compass()
     first = _candidate("First")
-    monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options(first))
+    monkeypatch.setattr(orientation, "read_candidates", lambda *_args: _options(first))
     monkeypatch.setattr(
         theory_orientation,
         "_current_candidate_applied",
@@ -2108,7 +2108,7 @@ def test_orient_carries_wait_heading_and_outer_route_context_whole(monkeypatch) 
     )
     monkeypatch.setattr(
         orientation,
-        "_build_candidates",
+        "read_candidates",
         lambda *_args: _options(wait=read),
     )
 
@@ -2160,7 +2160,7 @@ def test_orient_returns_need_probe_then_stuck_after_budget(monkeypatch) -> None:
 
     monkeypatch.setattr(
         orientation,
-        "_build_candidates",
+        "read_candidates",
         lambda *_args: _options(stuck_reason="trace_opaque"),
     )
     compass = Compass()
@@ -2192,7 +2192,7 @@ def test_orient_returns_stuck_after_budget_with_route_receipt(monkeypatch) -> No
         compass, _ = compass.apply((ProbeExhaustedObservation(("world",)),))
     monkeypatch.setattr(
         orientation,
-        "_build_candidates",
+        "read_candidates",
         lambda *_args: _options(stuck_reason="trace_opaque"),
     )
     world = replace(_world(compass), root_route=active)
@@ -2217,7 +2217,7 @@ def test_orient_does_not_mutate_world_context_or_knowledge(monkeypatch) -> None:
     before_context = dict(vars(world.context))
     monkeypatch.setattr(
         orientation,
-        "_build_candidates",
+        "read_candidates",
         lambda *_args: _options(stuck_reason="trace_empty"),
     )
 
@@ -2237,7 +2237,7 @@ def test_rejected_act_knowledge_forces_fresh_next_orientation(monkeypatch) -> No
     second = _candidate("Second")
     monkeypatch.setattr(
         orientation,
-        "_build_candidates",
+        "read_candidates",
         lambda *_args: _options(first, second),
     )
     monkeypatch.setattr(
@@ -2388,6 +2388,22 @@ def test_candidate_orientation_dependencies_point_away_from_compass() -> None:
     assert "from pyrung.core.analysis.pilot.options import" not in sources["theory_orientation"]
     assert "def _candidate_applied(" not in sources["options"]
     assert "def _candidate_applied(" in sources["orientation_reading"]
+
+
+def test_orientation_uses_the_typed_candidate_reader_boundary() -> None:
+    """Candidate construction details remain private to their owning module."""
+
+    from pathlib import Path
+
+    import pyrung.core.analysis.pilot.options as options
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    orientation_source = Path(orientation.__file__).read_text(encoding="utf-8")
+    options_source = Path(options.__file__).read_text(encoding="utf-8")
+
+    assert "from pyrung.core.analysis.pilot.options import read_candidates" in orientation_source
+    assert "_build_candidates" not in orientation_source
+    assert "def read_candidates(world: OrientationWorld)" in options_source
 
 
 def test_production_pilot_forks_only_through_rung_aware_helper() -> None:

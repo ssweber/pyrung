@@ -655,7 +655,8 @@ Static reading and orientation:
 - `orientation.py` — current-world read and result synthesis; the Compass
   facade points inward here, while readers and WorkingTheory policy never
   import the facade
-- `options.py` — candidate-read orchestration and ranking
+- `options.py` — typed current-world candidate-reader boundary, private
+  candidate-read orchestration, and ranking
 - `candidate_policy.py` — pure action admission and static hold-conflict proof
 - `candidate_admission.py` — trace/wait admission, exact operation batching,
   and durable prerequisite-overlay separation

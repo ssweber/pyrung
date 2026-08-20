@@ -1,9 +1,10 @@
 """Materialize the action and wait options for one orientation.
 
-``_build_candidates`` orchestrates separate reads for static routes and charted
-completion, instruction-owned boundaries and prerequisites, learned
-transitions, and program-awaited actions. Frozen private receipts keep those
-sources distinct until ``_select_wait`` applies their precedence and
+``read_candidates`` is the typed current-world boundary. Its private
+``_build_candidates`` implementation orchestrates separate reads for static
+routes and charted completion, instruction-owned boundaries and prerequisites,
+learned transitions, and program-awaited actions. Frozen private receipts keep
+those sources distinct until ``_select_wait`` applies their precedence and
 ``_assemble_candidate_read`` creates the sole durable ``CandidateRead``.
 
 Wait precedence is explicit: a prescribed learned wait wins, otherwise a
@@ -44,6 +45,7 @@ from pyrung.core.analysis.pilot.effects import (
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     ChannelHeading,
+    OrientationWorld,
     RouteEdgeContext,
     _ActionPair,
     is_action,
@@ -1037,3 +1039,11 @@ def _build_candidates(
         key_nogoods,
         state=state,
     )
+
+
+def read_candidates(world: OrientationWorld) -> _candidate_read.CandidateRead:
+    """Return the complete candidate reading for one assembled current world."""
+
+    if world.frame is None:
+        raise ValueError("candidate reading requires a complete orientation frame")
+    return _build_candidates(world.frame, world.state, world.context)

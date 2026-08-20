@@ -34,7 +34,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     TargetSpec,
     act_identity,
 )
-from pyrung.core.analysis.pilot.options import _build_candidates
+from pyrung.core.analysis.pilot.options import read_candidates
 from pyrung.core.analysis.pilot.working_theory import (
     TheoryTemporalIntent,
 )
@@ -64,11 +64,7 @@ def _orient_read(
     candidates = (
         _candidate_read
         if _candidate_read is not None
-        else _build_candidates(
-            world.frame,
-            world.state,
-            world.context,
-        )
+        else read_candidates(world)
     )
 
     # Boundary zero has no executed program scan to read yet.  Make that one

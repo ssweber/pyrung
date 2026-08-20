@@ -64,11 +64,11 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.options import (
     _assemble_candidate_read,
-    _build_candidates,
     _read_learned_fallback,
     _read_route_and_wait,
     _select_wait,
     _unique_learned_expectation,
+    read_candidates,
 )
 from pyrung.core.analysis.pilot.orientation_reading import _candidate_applied
 from pyrung.core.analysis.pilot.overlay import PilotRung
@@ -1496,7 +1496,15 @@ def test_prescribed_wait_suppresses_stuck_reason():
         target=TargetSpec("State", 17),
     )
 
-    candidates = _build_candidates(frame, state, ctx)
+    candidates = read_candidates(
+        OrientationWorld(
+            world_key=frame.key,
+            snapshot=frame.snap,
+            frame=frame,
+            state=state,
+            context=ctx,
+        )
+    )
 
     assert candidates.route is not None
     assert candidates.route.plan.first_edge.from_value == 6

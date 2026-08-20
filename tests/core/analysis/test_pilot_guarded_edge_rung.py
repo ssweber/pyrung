@@ -7,8 +7,8 @@ from types import SimpleNamespace
 from pyrung import PLC, Bool, Int, Program, copy, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.compass import Compass
-from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
-from pyrung.core.analysis.pilot.options import _build_candidates
+from pyrung.core.analysis.pilot.navigation_contracts import OrientationWorld, TargetSpec
+from pyrung.core.analysis.pilot.options import read_candidates
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     _set_pilot_rungs,
@@ -116,7 +116,15 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
         resting={door_closed.name: False},
     )
 
-    candidates = _build_candidates(frame, pilot_state, ctx)
+    candidates = read_candidates(
+        OrientationWorld(
+            world_key=frame.key,
+            snapshot=frame.snap,
+            frame=frame,
+            state=pilot_state,
+            context=ctx,
+        )
+    )
 
     assert candidates.options == ()
     assert candidates.diagnosis is None
