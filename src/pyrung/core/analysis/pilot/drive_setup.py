@@ -23,7 +23,7 @@ from pyrung.core.analysis.pilot.program_facts import (
     compute_resting_values,
 )
 from pyrung.core.analysis.pilot.requirement_evidence import _configured_input_names
-from pyrung.core.analysis.pilot.trace_read import DomainPrior, TraceChoice
+from pyrung.core.analysis.pilot.trace_read import DomainPrior
 from pyrung.core.analysis.pilot.types import _PilotContext
 from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
@@ -69,65 +69,54 @@ class ProverContext:
 
 
 def _make_pilot_context(
-    plc: PLC,
+    setup: DriveSetup,
+    work: PLC,
     target_tag: str,
     target_value: Any,
-    pdg: ProgramGraph,
-    program: Any,
-    steerable: frozenset[str],
-    edge_tags: set[str],
-    resting: dict[str, Any],
+    target_predicate: Any,
     *,
-    nd_domains: dict[str, tuple[Any, ...]] | None,
-    stateful_domains: dict[str, tuple[Any, ...]] | None,
-    evidence: TransitionEvidence | None,
-    key_config: _StateKeyConfig | None,
-    compass: Compass | None,
-    opaque_loop: frozenset[str],
-    route: TraceChoice | None,
     max_scans: int,
-    avoid_pred: Any = None,
-    target_predicate: Any = None,
-    configured_inputs: frozenset[str] = frozenset(),
+    avoid_pred: Any,
+    compass: Compass | None = None,
 ) -> _PilotContext:
     from pyrung.core.analysis.pilot.evidence import discover_chart_roles
 
     pipeline_roles = infer_opaque_pipeline_roles(
-        pdg,
-        program,
-        steerable,
-        opaque_loop,
-        evidence,
+        setup.pdg,
+        setup.program,
+        setup.steerable,
+        setup.opaque_loop,
+        setup.evidence,
     )
     chart_roles = discover_chart_roles(
-        pdg,
-        program,
-        steerable,
-        opaque_loop,
-        evidence,
+        setup.pdg,
+        setup.program,
+        setup.steerable,
+        setup.opaque_loop,
+        setup.evidence,
     )
     pipeline_internal_tags = frozenset(
         tag for role in pipeline_roles for tag in role.trace_internal_tags
     )
-    prior_compass = compass or Compass()
+    prior_compass = setup.compass if compass is None else compass
     compass = Compass(
         catalog=NavigationCatalog(
             slices=prior_compass.catalog.slices,
             graphs=_build_static_transition_graphs(
                 pipeline_roles,
-                pdg,
-                program,
-                steerable,
-                opaque_loop,
-                evidence,
+                setup.pdg,
+                setup.program,
+                setup.steerable,
+                setup.opaque_loop,
+                setup.evidence,
             ),
             chart_graphs=_build_static_transition_graphs(
                 chart_roles,
-                pdg,
-                program,
-                steerable,
-                opaque_loop,
-                evidence,
+                setup.pdg,
+                setup.program,
+                setup.steerable,
+                setup.opaque_loop,
+                setup.evidence,
             ),
         ),
         knowledge=prior_compass.knowledge,
@@ -136,34 +125,38 @@ def _make_pilot_context(
     # for free inputs, stateful domains for program-owned tags, and affine
     # func-deps for derived tags. All are receipts from the same ExploreContext.
     domain_prior = DomainPrior(
-        nd_domains=nd_domains,
-        stateful_domains=stateful_domains,
-        func_deps=evidence.affine_projections() if evidence is not None else None,
+        nd_domains=setup.nd_domains,
+        stateful_domains=setup.stateful_domains,
+        func_deps=(setup.evidence.affine_projections() if setup.evidence is not None else None),
     )
     # Clear-only (ack-cleared momentary) command tags: a subset of ``steerable``
     # kept off prerequisite holds and off preferred init/reset writer selection.
-    clear_only = compute_clear_only(pdg, plc._known_tags_by_name, program)
+    clear_only = compute_clear_only(
+        setup.pdg,
+        work._known_tags_by_name,
+        setup.program,
+    )
     return _PilotContext(
         target=TargetSpec(target_tag, target_value, target_predicate),
-        pdg=pdg,
-        program=program,
-        steerable=steerable,
-        edge_tags=edge_tags,
+        pdg=setup.pdg,
+        program=setup.program,
+        steerable=setup.steerable,
+        edge_tags=setup.edge_tags,
         clear_only=clear_only,
-        resting=resting,
-        nd_domains=nd_domains,
+        resting=setup.resting,
+        nd_domains=setup.nd_domains,
         domain_prior=domain_prior,
-        evidence=evidence,
-        key_config=key_config,
+        evidence=setup.evidence,
+        key_config=setup.key_config,
         compass=compass,
-        opaque_loop=opaque_loop,
+        opaque_loop=setup.opaque_loop,
         pipeline_roles=pipeline_roles,
         pipeline_internal_tags=pipeline_internal_tags,
-        route=route,
+        route=None,
         blocked_actions=frozenset(),
         max_scans=max_scans,
         avoid_pred=avoid_pred,
-        configured_inputs=configured_inputs,
+        configured_inputs=setup.configured_inputs,
         chart_roles=chart_roles,
     )
 
@@ -237,25 +230,14 @@ def prepare_target_context(
         avoid_pred=avoid_pred,
     )
     ctx = _make_pilot_context(
+        setup,
         target_work,
         target_tag,
         target_value,
-        setup.pdg,
-        setup.program,
-        setup.steerable,
-        setup.edge_tags,
-        setup.resting,
-        nd_domains=setup.nd_domains,
-        stateful_domains=setup.stateful_domains,
-        evidence=setup.evidence,
-        key_config=setup.key_config,
-        compass=compass or setup.compass,
-        opaque_loop=setup.opaque_loop,
-        route=None,
+        target_predicate,
         max_scans=max_scans,
         avoid_pred=avoid_pred,
-        target_predicate=target_predicate,
-        configured_inputs=setup.configured_inputs,
+        compass=compass,
     )
     return ctx, route_taken
 

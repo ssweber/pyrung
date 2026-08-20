@@ -196,7 +196,7 @@ fields be removed incrementally.
 
 ### 10. Stop unpacking DriveSetup into a one-caller context factory
 
-**Status:** later
+**Status:** done
 
 `drive_setup._make_pilot_context` has a broad parameter list and one production
 caller. `prepare_target_context` unpacks most of an existing `DriveSetup` only
