@@ -79,6 +79,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     assert_detached_theory_value,
     assert_temporal_need_current,
     temporal_need_request,
+    temporal_setup_configuration_tags,
     theory_view,
 )
 from pyrung.core.analysis.pilot.world import _Checkpoint, _World
@@ -390,6 +391,101 @@ def test_no_scan_composition_keeps_the_physical_tip_and_updates_configuration() 
         first.identity,
     )
     assert active_theory_configurations(state) == (replacement,)
+    assert temporal_setup_configuration_tags(state) == frozenset({"PresetMs"})
+
+
+def test_no_scan_composition_owns_and_supersedes_exact_pilot_rungs() -> None:
+    state, theory_id, version_id = _opened()
+    source = _boundary("source", 0)
+    first = ("Sail", True, ("guard", "running"), None)
+    replacement = ("Sail", False, ("guard", "running"), None)
+
+    state = reduce_theory(
+        state,
+        ComposeTheoryCorrection(
+            theory_id=theory_id,
+            version_id=version_id,
+            source=source,
+            composed_source=source,
+            requirement_identities=(("requirement", "sail-on"),),
+            pilot_rung_identities=(first,),
+            composition_identity=("compose", "sail-on"),
+        ),
+    )
+    assert active_theory_pilot_rung_identities(state) == frozenset((first,))
+
+    state = reduce_theory(
+        state,
+        ComposeTheoryCorrection(
+            theory_id=theory_id,
+            version_id=version_id,
+            source=source,
+            composed_source=source,
+            requirement_identities=(("requirement", "sail-off"),),
+            pilot_rung_identities=(replacement,),
+            superseded_pilot_rung_identities=(first,),
+            composition_identity=("compose", "sail-off"),
+        ),
+    )
+
+    assert active_theory_pilot_rung_identities(state) == frozenset((replacement,))
+    assert active_theory_superseded_pilot_rung_identities(state) == frozenset((first,))
+
+
+def test_correction_install_promotes_tentative_pilot_rung() -> None:
+    state, theory_id, version_id = _opened()
+    source = _boundary("source", 0)
+    correction = ("Sail", True, ("guard", "running"), None)
+    state = reduce_theory(
+        state,
+        ComposeTheoryCorrection(
+            theory_id=theory_id,
+            version_id=version_id,
+            source=source,
+            composed_source=source,
+            requirement_identities=(("requirement", "sail-on"),),
+            pilot_rung_identities=(correction,),
+            composition_identity=("compose", "sail-on"),
+        ),
+    )
+    composed = theory_view(state)
+    assert composed is not None
+    assert composed.pending_overlay_identities == frozenset((correction,))
+
+    accepted = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="install-sail-on",
+            actions=(),
+            disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+        ),
+        pilot_rung_identities=(correction,),
+    )
+    state = reduce_theory(state, accepted)
+    state = reduce_theory(
+        state,
+        AdvanceTheory(
+            theory_id=theory_id,
+            version_id=version_id,
+            source=source,
+            boundary=_boundary("installed", 1),
+            accepted_attempt_id=accepted.attempt_identity,
+            advance_identity=("advance", "installed-sail-on"),
+            phase_receipts=(
+                TheoryPhaseReceipt(
+                    kind=TheoryPhaseKind.CORRECTION_INSTALL,
+                    evidence_identity=accepted.attempt_identity,
+                    pilot_rung_identities=(correction,),
+                ),
+            ),
+        ),
+    )
+
+    installed = theory_view(state)
+    assert installed is not None
+    assert installed.pending_overlay_identities == frozenset()
+    assert installed.overlay_identities == frozenset((correction,))
 
 
 def test_intrascan_traceback_finding_is_retained_without_advancing_world() -> None:

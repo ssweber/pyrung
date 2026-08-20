@@ -10,11 +10,6 @@ from types import SimpleNamespace
 
 from pyrung import Bool, Int, Or, Program, Rung, out, rise
 from pyrung.core.analysis.pilot import pilot_how
-from pyrung.core.analysis.pilot.correction_records import (
-    CorrectionStatus,
-    _ConfirmedCorrection,
-    _CorrectionReceipt,
-)
 from pyrung.core.analysis.pilot.execution import ChannelMotion, ExecutionReceipt
 from pyrung.core.analysis.pilot.navigation_contracts import ActPolicy, ActSource
 from pyrung.core.analysis.pilot.overlay import OperationReceipt, PilotRung
@@ -113,7 +108,7 @@ def test_shared_gate_journal_retains_hold_values_and_guards() -> None:
 
 
 def test_journal_distinguishes_correction_operation_ownership() -> None:
-    """A revoked operation cannot hide an active sibling with another lifetime."""
+    """Revocation names one operation without hiding its active sibling."""
     State = Int("JournalState")
     guard = State != 6
     revoked = PilotRung(
@@ -129,29 +124,19 @@ def test_journal_distinguishes_correction_operation_ownership() -> None:
         OperationReceipt(State <= 0),
     )
 
-    def _receipt(receipt_id: int, hold: PilotRung, status: CorrectionStatus) -> _CorrectionReceipt:
-        correction = _ConfirmedCorrection(
-            identity=((hold.dest, hold.value),),
-            pilot_rungs=(hold,),
-            sources=(hold.dest,),
-            justification="test",
-        )
-        return _CorrectionReceipt(receipt_id, (), correction, status)
-
     state = SimpleNamespace(
         committed_acts=(_committed_test_act(),),
         lever_notes={},
         hold_log=[
             _HoldLogEntry(scan=2, source="investigation", pilot_rungs=(revoked,)),
             _HoldLogEntry(scan=3, source="investigation", pilot_rungs=(active,)),
-        ],
-        correction_receipts=[
-            _receipt(1, revoked, CorrectionStatus.REVOKED),
-            _receipt(2, active, CorrectionStatus.ACTIVE),
+            _HoldLogEntry(scan=4, source="revocation", pilot_rungs=(revoked,)),
         ],
     )
 
     journal = _build_plan_journal(state, None, frozenset(), frozenset())
     force_steps = [step for step in journal if step.kind == "force"]
+    revoke_steps = [step for step in journal if step.kind == "revoke"]
 
-    assert [step.rungs for step in force_steps] == [(active,)]
+    assert [step.rungs for step in force_steps] == [(revoked,), (active,)]
+    assert [step.rungs for step in revoke_steps] == [(revoked,)]

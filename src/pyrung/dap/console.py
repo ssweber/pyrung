@@ -484,7 +484,17 @@ class _PilotProgressFormatter:
         from pyrung.core.analysis.graph import _format_synthesis_instruction
         from pyrung.core.validation.render import render_condition
 
-        confirmed = data.get("investigation", {}).get("confirmed_detail", ())
+        investigation = data.get("investigation", {})
+        confirmed = investigation.get("confirmed_detail", ())
+        if not confirmed:
+            requirement = investigation.get("requirement")
+            exact_rungs = (
+                requirement.get("corrective_pilot_rungs", ())
+                if isinstance(requirement, dict)
+                else getattr(requirement, "corrective_pilot_rungs", ())
+            )
+            if exact_rungs:
+                confirmed = ({"holds": exact_rungs},)
         steady: list[str] = []
         by_guard: dict[str, list[str]] = {}
         for hypothesis in confirmed:

@@ -34,6 +34,7 @@ def _excursion_program():
     x_Hold = Bool("x_Hold", external=True)
     y_Motor = Bool("y_Motor")
     y_Started = Bool("y_Started")
+    y_Ready = Bool("y_Ready")
     y_Started_Fb = Bool(
         "y_Started_Fb",
         physical=FAST_FB,
@@ -46,14 +47,18 @@ def _excursion_program():
             out(y_Started)
         with Rung(y_Started_Fb, ~x_Hold):
             reset(y_Motor)
-    return prog, y_Motor
+        # The target lies beyond the clobber.  Observing y_Motor itself would
+        # stop on its transient pulse and never exercise excursion recovery.
+        with Rung(y_Motor, y_Started_Fb):
+            out(y_Ready)
+    return prog, y_Motor, y_Ready
 
 
 def test_excursion_premise() -> None:
     """Verify the excursion exists: start without hold → motor reverts."""
     from pyrung.core.harness import Harness
 
-    prog, _y_Motor = _excursion_program()
+    prog, _y_Motor, _y_Ready = _excursion_program()
     plc = PLC(prog, dt=0.010)
     harness = Harness(plc)
     harness.install()
@@ -72,7 +77,7 @@ def test_excursion_premise_with_hold() -> None:
     """Verify the hold works: start WITH hold → motor stays."""
     from pyrung.core.harness import Harness
 
-    prog, _y_Motor = _excursion_program()
+    prog, _y_Motor, _y_Ready = _excursion_program()
     plc = PLC(prog, dt=0.010)
     harness = Harness(plc)
     harness.install()
@@ -87,10 +92,11 @@ def test_excursion_premise_with_hold() -> None:
 
 
 def test_layer2_excursion_recovery() -> None:
-    """PILOT detects the excursion, derives hold, retries successfully."""
-    prog, y_Motor = _excursion_program()
+    """Compass can select the guard directly and reach beyond the clobber."""
+    prog, _y_Motor, y_Ready = _excursion_program()
     plc = PLC(prog, dt=0.010)
-    path = pilot_how(plc, y_Motor, max_scans=3000)
+    path = pilot_how(plc, y_Ready, max_scans=3000)
+
     assert path.reachable
 
 

@@ -59,7 +59,7 @@ from pyrung.core.analysis.pilot.types import (
     _ExecutedAttempt,
     _PulseState,
 )
-from pyrung.core.analysis.pilot.verify import _owned_channel_motion, _rebind_replay_attempt
+from pyrung.core.analysis.pilot.verify import _owned_channel_motion
 from pyrung.core.context import RungId
 from pyrung.core.rung_firings import RungFiringTimelines
 
@@ -1747,7 +1747,6 @@ def test_local_route_miss_stays_authoritative_without_exact_boundary_handoff() -
         boundary=("GenericOperationStep", 1),
     )
     landing = (EffectObservation(local, "OVERWRITTEN"),)
-
     reconciled = _reconcile_landing_receipts(
         (EffectObservation(structural, "SURVIVED"),),
         landing,
@@ -1845,128 +1844,6 @@ def test_exact_next_scan_write_overwrites_pending_wrapped_handoff() -> None:
     assert observations[0].consumer_read.occurrence.source != "entry"
     assert observations[0].displacement is not None
     assert observations[0].displacement.run.rung is program.rungs[0]
-
-
-def test_excursion_replay_recomputes_effect_receipt_from_replacement_fork() -> None:
-    enabled = Bool("ReplayExpectationEnabled")
-    effect = Int("ReplayExpectationEffect")
-    with Program() as program:
-        with rung(enabled):
-            copy(1, effect)
-    expectation = EffectExpectation((_terminal_obligation(program, effect.name, 1),))
-    policy = ActPolicy(ActSource.TRACE, expectation=expectation)
-    bearing = Bearing((), Pulse(policy), BearingObjective(TargetSpec("Target", True)))
-
-    original = PLC(program)
-    original.step()
-    old_snap = dict(original.state.tags)
-    old_pulse = _PulseState(
-        fork=original,
-        scan_before=0,
-        action_scan=1,
-        action_snap=old_snap,
-        wait_snaps=(),
-        post_pulse_snap=old_snap,
-        post_pulse_key=(),
-        snap=old_snap,
-        key=(),
-        kernel_scan_ids=(1,),
-        coast_receipt=None,
-        timeline=(),
-        source_snap=dict(original.history.at(0).tags),
-    )
-    old_attempt = _executed_attempt(bearing, old_pulse)  # type: ignore[arg-type]
-    assert old_attempt.effect_observations[0].disposition == "ABSENT"
-
-    replay = PLC(program)
-    replay.patch({enabled.name: True})
-    replay.step()
-    replay_snap = dict(replay.state.tags)
-    replay_pulse = _PulseState(
-        fork=replay,
-        scan_before=0,
-        action_scan=1,
-        action_snap=replay_snap,
-        wait_snaps=(),
-        post_pulse_snap=replay_snap,
-        post_pulse_key=(),
-        snap=replay_snap,
-        key=(),
-        kernel_scan_ids=(1,),
-        coast_receipt=None,
-        timeline=(),
-        source_snap=dict(replay.history.at(0).tags),
-    )
-    rebound = _rebind_replay_attempt(old_attempt, replay_pulse)  # type: ignore[arg-type]
-
-    assert rebound.effect_observations[0].disposition == "SURVIVED"
-    assert rebound.effect_observations is not old_attempt.effect_observations
-
-
-def test_coast_replay_rebind_preserves_execution_corridor_mode() -> None:
-    effect = Int("ReplayCoastEffect")
-    with Program() as program:
-        with rung():
-            copy(1, effect)
-    expectation = EffectExpectation((_terminal_obligation(program, effect.name, 1),))
-    bearing = Bearing(
-        (),
-        Coast(
-            "bearing",
-            ActPolicy(
-                ActSource.PROGRAM,
-                heading=ChannelHeading(effect.name, 1),
-                expectation=expectation,
-            ),
-        ),
-        BearingObjective(TargetSpec(effect.name, 1)),
-    )
-    original = PLC(program)
-    original.step()
-    original_receipt = CoastReceipt("bearing", 0, 1, "reached", ("target",), (), 1, kernel_scans=1)
-    original_snap = dict(original.state.tags)
-    original_pulse = _PulseState(
-        fork=original,
-        scan_before=0,
-        action_scan=0,
-        action_snap=original_snap,
-        wait_snaps=(),
-        post_pulse_snap=original_snap,
-        post_pulse_key=(),
-        snap=original_snap,
-        key=(),
-        kernel_scan_ids=(1,),
-        coast_receipt=original_receipt,
-        timeline=(),
-        source_snap=dict(original.history.at(0).tags),
-    )
-    attempt = _executed_attempt(bearing, original_pulse)  # type: ignore[arg-type]
-    replay = PLC(program)
-    replay.step()
-    replay_receipt = CoastReceipt("bearing", 0, 1, "reached", ("target",), (), 1, kernel_scans=1)
-    replay_snap = dict(replay.state.tags)
-    replay_pulse = _PulseState(
-        fork=replay,
-        scan_before=0,
-        action_scan=0,
-        action_snap=replay_snap,
-        wait_snaps=(),
-        post_pulse_snap=replay_snap,
-        post_pulse_key=(),
-        snap=replay_snap,
-        key=(),
-        kernel_scan_ids=(1,),
-        coast_receipt=replay_receipt,
-        timeline=(),
-        source_snap=dict(replay.history.at(0).tags),
-    )
-
-    rebound = _rebind_replay_attempt(attempt, replay_pulse)  # type: ignore[arg-type]
-
-    assert [item.disposition for item in attempt.effect_observations] == ["SURVIVED"]
-    assert [item.disposition for item in rebound.effect_observations] == ["SURVIVED"]
-    assert rebound.effect_observations[0].appeared is not None
-    assert rebound.effect_observations[0].appeared.scan_id == 1
 
 
 def test_alarm_reset_action_scan_records_exact_watchdog_overwrite() -> None:

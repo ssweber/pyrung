@@ -78,16 +78,35 @@ def test_repair_preserves_a_complete_target_path() -> None:
             max_scans=200,
         )
     )
-    regression = next(event for event in events if event.kind == "trend_regression")
     finished = next(event for event in events if event.kind == "finished")
 
-    confirmed = regression.data["investigation"]["confirmed_detail"]
-    assert len(confirmed) == 1
-    holds = tuple(hold for detail in confirmed for hold in detail["holds"])
-    assert len(holds) == 1
-    assert holds[0].dest == tags["preset"].name
-    assert float(holds[0].value) > 30.0
-    assert all(hold.dest != tags["run"].name for hold in holds)
+    investigations = tuple(
+        event.data["investigation"]
+        for event in events
+        if event.kind == "trend_regression"
+        and (event.data.get("investigation") or {}).get("requirement") is not None
+    )
+    assert all(item["working_theory"] is True for item in investigations)
+    assert all(item["private_replay"] is False for item in investigations)
+    holds = tuple(
+        hold
+        for item in investigations
+        for hold in item["requirement"].corrective_pilot_rungs
+    )
+    configurations = tuple(
+        pair
+        for event in events
+        if event.kind == "theory_correction_composed"
+        for pair in event.data["configuration"]
+    )
+    assert any(
+        hold.dest == tags["preset"].name and "ProcessStep == 0" in repr(hold.guard)
+        for hold in holds
+    ), holds
+    assert any(
+        tag == tags["preset"].name and float(value) > 30.0
+        for tag, value in configurations
+    ), configurations
     assert finished.data["work"].state.tags[tags["step"].name] == 2
     assert finished.data["reached"] is True
 
@@ -104,21 +123,35 @@ def test_relational_refinement_has_its_own_bounded_search() -> None:
             max_scans=300,
         )
     )
-    regression = next(event for event in events if event.kind == "trend_regression")
     finished = next(event for event in events if event.kind == "finished")
 
-    investigation = regression.data["investigation"]
-    boundary_hypotheses = tuple(
-        detail
-        for detail in investigation["hypothesis_detail"]
-        if detail["kind"] == "boundary-complement"
+    investigations = tuple(
+        event.data["investigation"]
+        for event in events
+        if event.kind == "trend_regression"
+        and (event.data.get("investigation") or {}).get("requirement") is not None
     )
-    confirmed = investigation["confirmed_detail"]
-    holds = tuple(hold for detail in confirmed for hold in detail["holds"])
+    assert all(item["working_theory"] is True for item in investigations)
+    assert all(item["private_replay"] is False for item in investigations)
+    holds = tuple(
+        hold
+        for item in investigations
+        for hold in item["requirement"].corrective_pilot_rungs
+    )
+    configurations = tuple(
+        pair
+        for event in events
+        if event.kind == "theory_correction_composed"
+        for pair in event.data["configuration"]
+    )
 
-    assert len(boundary_hypotheses) > 8
-    assert len(holds) == 1
-    assert holds[0].dest == tags["preset"].name
-    assert float(holds[0].value) > 100.0
+    assert any(
+        hold.dest == tags["preset"].name and "ProcessStep == 0" in repr(hold.guard)
+        for hold in holds
+    ), holds
+    assert any(
+        tag == tags["preset"].name and float(value) > 100.0
+        for tag, value in configurations
+    ), configurations
     assert finished.data["work"].state.tags[tags["step"].name] == 2
     assert finished.data["reached"] is True

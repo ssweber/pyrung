@@ -9,6 +9,7 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.attempt_observation import _observe_temporal_setup_occurrences
 from pyrung.core.analysis.pilot.effects import occurrence_snapshot
 from pyrung.core.analysis.pilot.execution import CheckpointRef
+from pyrung.core.analysis.pilot.overlay import PilotRung, fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.requirements import ActiveRequirement, OperandAuthority
 from pyrung.core.crossing import Cmp
 from tests.fixtures import pilot_temporal_setup_occurrence_route as fixture
@@ -116,3 +117,83 @@ def test_gate_restoration_is_proved_at_its_exact_short_circuit_read() -> None:
     )
     assert unrelated.requirements_observed is True
     assert unrelated.consumed_actions == ()
+
+
+def test_exact_regression_setup_is_proved_by_its_effective_pilot_rung() -> None:
+    source = PLC(fixture.logic)
+    source.patch(
+        {
+            fixture.ResetCommand.name: True,
+            fixture.GateAvailable.name: True,
+        }
+    )
+    source.step()
+    source_projection = source._replay_pilot_rung_write_projection_at(1)
+    assert source_projection is not None
+    obstructions = tuple(
+        write
+        for write in source_projection.writes
+        if write.transition.tag_name == fixture.SequenceState.name
+        and write.transition.to_value == fixture.FIRST_FAULT
+    )
+    assert len(obstructions) == 1
+    obstruction = occurrence_snapshot(obstructions[0])
+    owner = source._causal_lineage.owner_at(1)
+    assert owner is not None
+    checkpoint_owner = SimpleNamespace(reference=CheckpointRef())
+    corrective = PilotRung(
+        fixture.GateAvailable.name,
+        False,
+        fixture.GateAvailable,
+    )
+    requirement = ActiveRequirement(
+        condition=Cmp(fixture.GateAvailable.name, "==", False),
+        demanding_occurrence=obstruction,
+        deadline=obstruction,
+        selected_writer=(None, 2, ()),
+        operand_authority=OperandAuthority.ADJUSTABLE,
+        execution_owner=owner,
+        source_world_key=("exact-regression-source",),
+        checkpoint_owner=checkpoint_owner,
+        source_checkpoint=SimpleNamespace(
+            configured_inputs=frozenset(),
+            owner=checkpoint_owner,
+        ),
+        provenance="exact-regression-liveness",
+        obstruction_occurrence=obstruction,
+        corrective_pilot_rungs=(corrective,),
+    )
+
+    candidate = fork_with_pilot_rungs(PLC(fixture.logic), (corrective,))
+    candidate.step()
+    candidate_projection = candidate._replay_pilot_rung_write_projection_at(1)
+    assert candidate_projection is not None
+    attempt = SimpleNamespace(
+        assertion_scan=1,
+        projection_at=lambda scan_id: candidate_projection if scan_id == 1 else None,
+    )
+    receipt = _observe_temporal_setup_occurrences(
+        attempt,
+        (requirement,),
+        ((fixture.GateAvailable.name, False),),
+        SimpleNamespace(),
+        pilot_rungs=(corrective,),
+    )
+
+    assert receipt.requirements_observed is True
+    assert receipt.consumed_actions == ((fixture.GateAvailable.name, False),)
+    assert receipt.observations[0][0] == "corrective-pilot-rungs"
+
+    unresolved = _observe_temporal_setup_occurrences(
+        SimpleNamespace(
+            assertion_scan=1,
+            projection_at=lambda scan_id: source_projection if scan_id == 1 else None,
+        ),
+        (requirement,),
+        ((fixture.GateAvailable.name, False),),
+        SimpleNamespace(),
+        pilot_rungs=(),
+    )
+    assert unresolved.requirements_observed is False
+    assert unresolved.consumed_actions == ()
+    assert unresolved.observations[0][0] == "corrective-pilot-rungs"

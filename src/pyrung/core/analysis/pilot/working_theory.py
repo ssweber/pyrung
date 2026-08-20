@@ -156,6 +156,7 @@ class TheoryRequirementSnapshot:
     provenance: str
     scope: tuple[Any, ...]
     obstruction_occurrence: tuple[Any, ...] | None = None
+    corrective_pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -849,6 +850,28 @@ def temporal_setup_rung_identities(state: TheoryState) -> frozenset[tuple[Any, .
     return frozenset(owned)
 
 
+def temporal_setup_configuration_tags(state: TheoryState) -> frozenset[str]:
+    """Read tags whose configuration came from a Working Theory phase."""
+
+    owned: set[str] = set()
+    for progress in state.ledger.progress.values():
+        for receipt in progress.phase_receipts:
+            if receipt.kind not in {
+                TheoryPhaseKind.TEMPORAL_SETUP,
+                TheoryPhaseKind.REARM,
+                TheoryPhaseKind.TRANSACTION_ATTEMPT,
+                TheoryPhaseKind.CORRECTION_COMPOSITION,
+                TheoryPhaseKind.CORRECTION_INSTALL,
+            }:
+                continue
+            owned.update(
+                tag
+                for configuration in receipt.configurations
+                for tag, _value in configuration.assignments
+            )
+    return frozenset(owned)
+
+
 def active_theory_configurations(
     state: TheoryState,
 ) -> tuple[ScanEntryConfiguration, ...]:
@@ -1020,11 +1043,19 @@ def theory_view(state: TheoryState) -> TheoryView | None:
     for receipt in progress.phase_receipts:
         pending_overlays.difference_update(receipt.superseded_pilot_rung_identities)
         pending_configurations.difference_update(receipt.superseded_configuration_identities)
-        if receipt.kind in {
-            TheoryPhaseKind.CORRECTION_COMPOSITION,
-            TheoryPhaseKind.CORRECTION_INSTALL,
-        }:
+        if receipt.kind is TheoryPhaseKind.CORRECTION_COMPOSITION:
             pending_overlays.update(receipt.pilot_rung_identities)
+            pending_configurations.update(
+                configuration.identity for configuration in receipt.configurations
+            )
+        elif receipt.kind is TheoryPhaseKind.CORRECTION_INSTALL:
+            installed = pending_overlays.intersection(receipt.pilot_rung_identities)
+            pending_overlays.difference_update(installed)
+            pending_overlays.update(
+                identity
+                for identity in receipt.pilot_rung_identities
+                if identity not in installed
+            )
             pending_configurations.update(
                 configuration.identity for configuration in receipt.configurations
             )

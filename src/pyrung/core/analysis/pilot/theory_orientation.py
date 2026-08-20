@@ -341,6 +341,7 @@ def _theory_temporal_retry_bearing(
     prescription = candidates.wait.prescription if candidates.wait is not None else None
     temporal_intent = getattr(world.context.theory_view, "temporal_intent", None)
     pending_configuration = _pending_theory_pairs(world)
+    configured_overlays = _configured_theory_overlay_pairs(world)
     scope = getattr(world.context.theory_view, "investigation_scope", None)
     configured_corrections = (
         _configured_theory_pairs(world)
@@ -358,6 +359,55 @@ def _theory_temporal_retry_bearing(
         rearm = _theory_rearm_bearing(world, candidates, target)
         if rearm is not None:
             return rearm
+    if (
+        temporal_intent is TheoryTemporalIntent.SETUP_FIRST
+        and ordinary is not None
+        and configured_overlays
+        and not _pending_overlay_pairs(world)
+    ):
+        configured_ids = getattr(
+            world.context.theory_view,
+            "overlay_identities",
+            frozenset(),
+        )
+        correction_requirements = tuple(
+            requirement
+            for requirement in requirements
+            if _uses_ordinary_correction_validation(requirement)
+            and getattr(requirement, "corrective_pilot_rungs", ())
+            and all(
+                _rung_identity(rung) in configured_ids
+                for rung in requirement.corrective_pilot_rungs
+            )
+        )
+        if correction_requirements:
+            # The PilotRung is already installed and has completed its first
+            # observation scan.  Its finite guard may be waiting for the
+            # ordinary producer (for example Start -> Starting).  Retry that
+            # producer unchanged; do not widen the correction into a second
+            # direct assignment merely because its destination is currently
+            # false.
+            policy = replace(
+                ordinary.act.policy,
+                source=ActSource.WIDENING,
+                note="working theory: activate the exact correction on the fresh steer",
+                provenance=(
+                    *ordinary.act.policy.provenance,
+                    "working-theory exact corrective continuation",
+                ),
+                local_progress=LocalProgressKind.TEMPORAL_EDGE,
+                local_progress_requirements=correction_requirements,
+                local_progress_sources=correction_requirements,
+            )
+            act = replace(ordinary.act, policy=policy)
+            if _act_preserves_requirements(world, act):
+                return _orientation_reading._bearing(
+                    world,
+                    act,
+                    candidates,
+                    target=target,
+                    rationale="working theory: activate the installed exact correction",
+                )
     structural_companions = _temporal_transaction_pairs(world, candidates)
 
     # CandidateRead has already applied availability, tide-table, route,
@@ -1013,6 +1063,48 @@ def _theory_correction_composition(
     requirements = tuple(getattr(world.context, "temporal_requirements", ()))
     if not requirements:
         raise ValueError("temporal retry has no resolved live requirements")
+    exact_requirements = tuple(
+        requirement
+        for requirement in requirements
+        if getattr(requirement, "corrective_pilot_rungs", ())
+    )
+    if exact_requirements:
+        exact_rungs_by_identity = {
+            _rung_identity(rung): rung
+            for requirement in exact_requirements
+            for rung in requirement.corrective_pilot_rungs
+        }
+        exact_rungs = tuple(exact_rungs_by_identity.values())
+        installed_rungs = frozenset(getattr(view, "overlay_identities", ()))
+        pending_rungs = tuple(
+            rung for rung in exact_rungs if _rung_identity(rung) not in installed_rungs
+        )
+        if pending_rungs and not _avoid_forces(
+            world.context,
+            tuple((rung.dest, rung.value) for rung in pending_rungs),
+            world.snapshot,
+        ):
+            return ComposeCorrection(
+                world_key=world.world_key,
+                frontier=_orientation_reading._frontier(world, candidates),
+                requirements=exact_requirements,
+                rationale=(
+                    "working theory: compose the exact corrective rung, then read "
+                    "Compass again"
+                ),
+                pilot_rungs=pending_rungs,
+                research_finding_identity=research_finding_identity,
+                orientation=OrientationRead(
+                    world_key=world.world_key,
+                    world=world,
+                    candidates=candidates,
+                ),
+            )
+        # Exact regression requirements already retain their executable form.
+        # Once that form is composed, the next question is whether its pending
+        # overlay executes—not whether the same value can also be patched as a
+        # scan-entry configuration.
+        return None
     installed = frozenset(
         configuration.identity for configuration in getattr(view, "configurations", ())
     )
@@ -1576,6 +1668,26 @@ def _requirement_obstruction(requirement: Any) -> Any | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def _uses_ordinary_correction_validation(requirement: Any) -> bool:
+    """Whether a tentative exact rung delegated proof to fresh execution."""
+
+    proof = next(
+        (
+            item
+            for item in getattr(requirement, "scope", ())
+            if isinstance(item, tuple)
+            and len(item) >= 3
+            and item[0] == "tentative-execution"
+        ),
+        None,
+    )
+    return bool(
+        getattr(requirement, "provenance", "") == "exact-regression-corrective"
+        and proof is not None
+        and proof[2] == "ordinary Working Theory execution owns validation"
+    )
+
+
 def _theory_setup_bearing(
     world: OrientationWorld,
     candidates: CandidateRead,
@@ -1595,8 +1707,25 @@ def _theory_setup_bearing(
     requirements = tuple(getattr(world.context, "temporal_requirements", ()))
     if not requirements:
         raise ValueError("setup-first theory has no resolved live requirements")
+    configured_ids = getattr(view, "overlay_identities", frozenset())
+    configured_tentative_pairs = tuple(
+        (rung.dest, rung.value)
+        for requirement in requirements
+        if _uses_ordinary_correction_validation(requirement)
+        for rung in getattr(requirement, "corrective_pilot_rungs", ())
+        if _rung_identity(rung) in configured_ids
+    )
     for schedule in _iter_temporal_schedules(world, target, requirements):
-        actions = tuple(schedule.assignments)
+        # A composed PilotRung is already the physical intervention.  While
+        # its finite guard is dormant, the scalar condition may still look
+        # false at this boundary; emitting a second direct assignment would
+        # replace the exact correction with a broader generic hold.  Let the
+        # ordinary current-world steer activate the installed rung instead.
+        actions = tuple(
+            pair
+            for pair in schedule.assignments
+            if not _pair_matches_any(pair, configured_tentative_pairs)
+        )
         if not actions:
             continue
         act_policy = ActPolicy(
@@ -1909,7 +2038,7 @@ def _theory_pending_configuration_bearing(
     candidates: CandidateRead,
     target: TargetSpec,
 ) -> Bearing | None:
-    """Apply newly composed configuration and observe exactly one fresh scan."""
+    """Execute one newly composed configuration or PilotRung correction."""
 
     view = getattr(world.context, "theory_view", None)
     pending = getattr(view, "pending_configuration_identities", frozenset())
@@ -1918,15 +2047,28 @@ def _theory_pending_configuration_bearing(
         for configuration in getattr(view, "configurations", ())
         if configuration.identity in pending
     )
-    if not configurations:
+    pending_overlay_ids = getattr(view, "pending_overlay_identities", frozenset())
+    pilot_rungs = tuple(
+        rung
+        for rung in world.state.pilot_rungs
+        if _rung_identity(rung) in pending_overlay_ids
+    )
+    if not configurations and not pilot_rungs:
         return None
     configured_tags = frozenset(
-        tag for configuration in configurations for tag, _value in configuration.assignments
+        {
+            *(tag for configuration in configurations for tag, _value in configuration.assignments),
+            *(rung.dest for rung in pilot_rungs),
+        }
     )
     requirements = tuple(
         requirement
         for requirement in getattr(world.context, "temporal_requirements", ())
         if getattr(getattr(requirement, "condition", None), "tag", None) in configured_tags
+        or any(
+            _rung_identity(rung) in pending_overlay_ids
+            for rung in getattr(requirement, "corrective_pilot_rungs", ())
+        )
     )
     if not requirements:
         return None
@@ -1935,9 +2077,13 @@ def _theory_pending_configuration_bearing(
         ActPolicy(
             source=ActSource.WIDENING,
             motion=MotionKind.COAST_HOLDING_WORLD,
-            note="working theory: observe one newly configured scan",
+            note="working theory: observe one newly corrected scan",
             expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
-            local_progress=LocalProgressKind.TEMPORAL_EDGE,
+            local_progress=(
+                LocalProgressKind.THEORY_CORRECTIVE
+                if pilot_rungs
+                else LocalProgressKind.TEMPORAL_EDGE
+            ),
             local_progress_requirements=requirements,
             local_progress_sources=requirements,
             pulse_horizon=PulseHorizon.ASSERTION_SCAN,
@@ -1953,7 +2099,7 @@ def _theory_pending_configuration_bearing(
         act,
         candidates,
         target=target,
-        rationale="working theory: apply configuration for one scan, then read Compass again",
+        rationale="working theory: execute one correction, then read Compass again",
     )
 
 
@@ -2052,18 +2198,24 @@ def _configured_theory_pairs(world: OrientationWorld) -> tuple[_ActionPair, ...]
     """All theory-owned overlays and configuration, pending or observed."""
 
     view = getattr(world.context, "theory_view", None)
-    configured = getattr(view, "overlay_identities", frozenset())
-    overlays = tuple(
-        (rung.dest, rung.value)
-        for rung in world.state.pilot_rungs
-        if _rung_identity(rung) in configured
-    )
     assignments = tuple(
         assignment
         for configuration in getattr(view, "configurations", ())
         for assignment in configuration.assignments
     )
-    return (*overlays, *assignments)
+    return (*_configured_theory_overlay_pairs(world), *assignments)
+
+
+def _configured_theory_overlay_pairs(world: OrientationWorld) -> tuple[_ActionPair, ...]:
+    """Persistent theory-owned PilotRungs, whether pending or observed."""
+
+    view = getattr(world.context, "theory_view", None)
+    configured = getattr(view, "overlay_identities", frozenset())
+    return tuple(
+        (rung.dest, rung.value)
+        for rung in world.state.pilot_rungs
+        if _rung_identity(rung) in configured
+    )
 
 
 def _pair_matches_any(pair: _ActionPair, others: tuple[_ActionPair, ...]) -> bool:

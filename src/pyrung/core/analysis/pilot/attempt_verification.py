@@ -16,6 +16,10 @@ from pyrung.core.analysis.pilot.effects import (
 )
 from pyrung.core.analysis.pilot.investigation_replay import investigate_excursion
 from pyrung.core.analysis.pilot.navigation_contracts import Bearing
+from pyrung.core.analysis.pilot.regression_requirements import (
+    _confirmed_correction_requirement_from_excursion,
+)
+from pyrung.core.analysis.pilot.requirement_evidence import _retain_active_requirement
 from pyrung.core.analysis.pilot.theory_evidence import _theory_live_boundary
 from pyrung.core.analysis.pilot.types import (
     _AttemptResult,
@@ -23,7 +27,7 @@ from pyrung.core.analysis.pilot.types import (
     _PilotContext,
     _PilotState,
 )
-from pyrung.core.analysis.pilot.verify import verify_excursion_replay, verify_gates
+from pyrung.core.analysis.pilot.verify import verify_gates
 from pyrung.core.analysis.pilot.working_theory import active_theory
 from pyrung.core.analysis.pilot.world import _CausalCheckpoint
 from pyrung.core.analysis.sp_values import _values_match
@@ -34,12 +38,12 @@ def resolve_excursion(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
+    source_checkpoint: _CausalCheckpoint | None = None,
 ) -> _AttemptResult:
-    """Investigate one reported excursion and continue verification on its replay."""
+    """Turn exact excursion evidence into a requirement for ordinary retry."""
     executed = attempt.excursion_attempt
     if executed is None:
         return attempt
-    executed.pulse.release_projections()
     executed = replace(executed, effect_observations=())
     attempt = replace(attempt, excursion_attempt=executed)
 
@@ -64,11 +68,29 @@ def resolve_excursion(
             program=ctx.program,
             ctx=ctx,
         )
-        return verify_excursion_replay(attempt, result, frame, state, ctx)
+        requirement = (
+            _confirmed_correction_requirement_from_excursion(
+                state,
+                ctx,
+                executed,
+                result.correction,
+                source_checkpoint,
+                tuple(result.reverted),
+            )
+            if result.correction is not None and source_checkpoint is not None
+            else None
+        )
+        _retain_active_requirement(state, requirement)
+        return replace(
+            attempt,
+            executed=executed,
+            excursion_attempt=None,
+            correction_requirement=requirement,
+            proof_rejection=requirement is not None,
+        )
     finally:
-        # The returned AttemptResult owns the replay pulse (if any). The
-        # superseded excursion pulse is no longer reachable by the outer
-        # transition finalizer, so release it here on every replay outcome.
+        # Investigation may inspect exact projections, but the returned result
+        # owns only the original failed execution.  No replay fork is adopted.
         pulse.release_projections()
 
 
@@ -209,5 +231,4 @@ def promote_transient_target_failure(
     return rebound, replace(
         verified,
         observations=attempt.observations,
-        confirmed_correction=attempt.confirmed_correction,
     )

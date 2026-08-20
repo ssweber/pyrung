@@ -35,11 +35,14 @@ from pyrung import PLC
 from pyrung.core.analysis.pilot import attempt_transition as attempt_transition_module
 from pyrung.core.analysis.pilot import pilot as pilot_module
 from pyrung.core.analysis.pilot import pilot_events
-from pyrung.core.analysis.pilot import theory_drive as theory_drive_module
+from pyrung.core.analysis.pilot import recovery_investigation as recovery_investigation_module
+from pyrung.core.analysis.pilot import regression_requirements as regression_requirements_module
+from pyrung.core.analysis.pilot import theory_recording as theory_recording_module
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.intrascan import IntrascanResult
 from pyrung.core.analysis.pilot.navigation_contracts import Bearing
 from pyrung.core.analysis.pilot.theory_evidence import _TheoryTransitionEvidence
+from pyrung.core.analysis.pilot.theory_reducer import AdvanceTheory
 from pyrung.core.analysis.pilot.trace import trace_relational
 from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints
 from pyrung.core.analysis.pilot.types import (
@@ -59,6 +62,7 @@ _DECISION_EVENT_KINDS = frozenset(
     {
         "bearing_coast",
         "candidate_try",
+        "crossing_try",
         "conductivity_research_requested",
         "intrascan_boundary_realization_researched",
         "intrascan_pulse",
@@ -277,11 +281,16 @@ def _decision_lines(
         ), False
     if event.kind == "theory_correction_composed":
         configuration = tuple(event.data["configuration"])
+        pilot_rungs = tuple(
+            (rung.dest, rung.value, repr(rung.guard))
+            for rung in event.data.get("pilot_rungs", ())
+        )
         conditions = tuple(event.data["conditions"])
         return (
             (
                 "[composition] "
                 f"scan={event.scan} configuration={configuration!r} "
+                f"pilot_rungs={pilot_rungs!r} "
                 f"conditions={len(conditions) if compact else conditions!r} "
                 f"reason={event.data.get('reason')!r}"
             ),
@@ -314,6 +323,25 @@ def _decision_lines(
                 f"obligations={obligations!r}"
             ),
         ), False
+    if event.kind == "bearing_coast_rejected":
+        local_progress = next(
+            (
+                gate
+                for gate in event.data.get("gates", ())
+                if gate.event == "theory-local-progress-rejected"
+            ),
+            None,
+        )
+        return (
+            (
+                "[coast-rejected] "
+                f"scan={event.scan} "
+                "local_progress="
+                f"{dict(local_progress.evidence) if local_progress is not None else None!r} "
+                "gates="
+                f"{tuple((gate.event, gate.detail, dict(gate.evidence)) for gate in event.data.get('gates', ()))!r}"
+            ),
+        ), False
     if event.kind == "bearing_coast_accepted":
         effects = tuple(
             (
@@ -338,6 +366,23 @@ def _decision_lines(
         ), False
     if event.kind in {"departure_investigated", "trend_regression"}:
         investigation = event.data.get("investigation") or {}
+        requirement = investigation.get("requirement")
+        exact_requirement = None
+        if requirement is not None:
+            read = requirement.get if isinstance(requirement, dict) else lambda key: getattr(requirement, key, None)
+            demanding = read("demanding_occurrence")
+            deadline = read("deadline")
+            occurrence_scan = lambda occurrence: (
+                occurrence.get("scan_id")
+                if isinstance(occurrence, dict)
+                else getattr(occurrence, "scan_id", None)
+            )
+            exact_requirement = (
+                read("condition"),
+                read("operand_authority") or read("authority"),
+                occurrence_scan(demanding) if demanding is not None else read("demanding_scan"),
+                occurrence_scan(deadline) if deadline is not None else read("deadline_scan"),
+            )
         confirmed = tuple(
             (
                 item.get("kind"),
@@ -350,6 +395,8 @@ def _decision_lines(
             (
                 item.get("kind"),
                 item.get("slug"),
+                tuple(item.get("holds", ())),
+                tuple(item.get("sources", ())),
                 repr(item.get("ground"))[:320],
             )
             for item in investigation.get("rejected_detail", ())
@@ -358,6 +405,9 @@ def _decision_lines(
             (
                 f"[{event.kind.replace('_', '-')}] "
                 f"scan={event.scan} retained={event.data.get('retained')!r} "
+                f"delayed={investigation.get('delayed_expectation')!r} "
+                f"theory={investigation.get('working_theory')!r} "
+                f"requirement={exact_requirement!r} "
                 f"confirmed={confirmed!r} rejected={rejected!r} "
                 f"unresolved={investigation.get('unresolved')!r}"
             ),
@@ -488,6 +538,32 @@ def _condition_identity_summary(identity: Any) -> tuple[Any, ...]:
     return (kind,)
 
 
+def _scan_span_summary(scans: Any) -> tuple[Any, ...]:
+    """Keep bounded-watch output proportional to decisions, not coast length."""
+
+    values = tuple(scans or ())
+    if not values:
+        return ()
+    if len(values) <= 4:
+        return values
+    return (values[0], values[-1], f"{len(values)} scans")
+
+
+def _bounded_items(values: Any, *, limit: int = 8) -> tuple[Any, ...]:
+    """Bound diagnostic collections independently of their proof size."""
+
+    items = tuple(values or ())
+    if len(items) <= limit:
+        return items
+    return (*items[:limit], ("...", len(items) - limit, "more"))
+
+
+def _rung_identity_summary(identity: Any) -> Any:
+    """Name a PilotRung identity without expanding its guard tree."""
+
+    return identity[:2] if isinstance(identity, tuple) and len(identity) >= 2 else identity
+
+
 def _compact_interpretation_line(message: Mapping[str, Any]) -> str:
     """Render the decision-bearing part without expanding proof support."""
 
@@ -505,9 +581,78 @@ def _compact_interpretation_line(message: Mapping[str, Any]) -> str:
     return (
         "[interpretation] "
         f"scan={message['scan']} kind={message['kind']} "
-        f"projected_scans={message['projected_scans']} "
+        f"projected_scans={_scan_span_summary(message['projected_scans'])!r} "
         f"requirements={requirements!r}"
     )
+
+
+def _compact_fast_path_line(message: Mapping[str, Any]) -> str:
+    """Render only the receipt fields needed to judge the fast path."""
+
+    stage = message["stage"]
+    if stage == "hypotheses":
+        candidates = tuple(
+            (candidate[0], candidate[1], candidate[2])
+            for candidate in message.get("candidates", ())
+        )
+        detail = ("candidates", candidates), ("absence", message.get("absence", ()))
+    elif stage == "evidence":
+        detail = (
+            ("admitted", message.get("admitted")),
+            ("corrections", message.get("corrections", ())),
+            ("departure", message.get("departure")),
+            ("cause", message.get("cause", ())),
+            ("tail", message.get("tail", ())),
+        )
+    elif stage == "proof":
+        detail = (
+            ("admitted", message.get("admitted")),
+            ("reason", message.get("reason")),
+            ("candidate", (message.get("kind"), message.get("dest"), message.get("done"))),
+            ("scans", _scan_span_summary(message.get("scans"))),
+            ("differing", _bounded_items(message.get("differing"))),
+            ("writes", _bounded_items(message.get("writes"))),
+        )
+    elif stage == "checkpoint":
+        detail = tuple(
+            (name, message.get(name)) for name in ("requested", "admitted", "actual")
+        )
+    elif stage == "requirement":
+        detail = tuple(
+            (name, message.get(name)) for name in ("admitted", "condition", "source")
+        )
+    elif stage == "phase":
+        detail = (
+            ("kinds", message.get("kinds")),
+            (
+                "rung_ids",
+                tuple(
+                    tuple(_rung_identity_summary(identity) for identity in group)
+                    for group in message.get("rung_ids", ())
+                ),
+            ),
+            (
+                "pending_before",
+                tuple(
+                    _rung_identity_summary(identity)
+                    for identity in message.get("pending_before", ())
+                ),
+            ),
+            (
+                "pending_after",
+                tuple(
+                    _rung_identity_summary(identity)
+                    for identity in message.get("pending_after", ())
+                ),
+            ),
+        )
+    else:
+        detail = tuple(
+            (key, value)
+            for key, value in message.items()
+            if key not in {"type", "elapsed", "stage"}
+        )
+    return f"[fast-path] stage={stage!r} detail={detail!r}"
 
 
 def _conductivity_line(message: Mapping[str, Any]) -> str:
@@ -571,8 +716,226 @@ def _drive_worker(
         original_orient = Compass.orient
         original_interpret = attempt_transition_module._theory_transition_from_attempt
         original_after_monitor = pilot_module._theory_transition_after_monitor
-        original_record = theory_drive_module._record_working_theory_transition
+        original_record = theory_recording_module._record_working_theory_transition
+        original_record_fact = theory_recording_module._record_controlling_theory_fact
+        original_derive_hypotheses = regression_requirements_module.derive_correction_hypotheses
+        original_exact_corrections = (
+            recovery_investigation_module._exact_regression_corrections
+        )
+        original_checkpoint_at_scan = recovery_investigation_module._checkpoint_at_scan
+        original_exact_requirement = (
+            recovery_investigation_module._exact_correction_requirement_from_regression
+        )
+        original_tentative_proof = (
+            regression_requirements_module._tentative_rung_prevents_completion
+        )
+        original_advance_prefix = theory_recording_module._advance_theory_to_regression_prefix
+        original_record_regression = (
+            theory_recording_module._record_theory_from_regression_requirement
+        )
         projection_receipts: dict[tuple[Any, ...], tuple[int, tuple[int, ...], bool]] = {}
+
+        def fast_path(stage: str, **detail: Any) -> None:
+            # Compact mode is a decision leash, not a transcript of every
+            # failed micro-proof.  The evidence/hypothesis messages already
+            # identify what was considered; only admitted proof/requirement
+            # receipts affect the route.  Suppressing the rest keeps a bounded
+            # Tumbler run readable without changing the computation under
+            # observation.
+            if config["compact"] and (
+                stage == "checkpoint"
+                or (stage in {"proof", "requirement"} and not detail.get("admitted"))
+            ):
+                return
+            messages.put(
+                {
+                    "type": "fast_path",
+                    "elapsed": time.monotonic() - started,
+                    "stage": stage,
+                    **detail,
+                }
+            )
+
+        def observe_exact_corrections(*args: Any, **kwargs: Any) -> Any:
+            result = original_exact_corrections(*args, **kwargs)
+            incident = args[2] if len(args) > 2 else kwargs.get("incident")
+            witness = args[3] if len(args) > 3 else kwargs.get("witness")
+            fast_path(
+                "evidence",
+                admitted=bool(result),
+                corrections=tuple(
+                    (
+                        item.hypothesis_kind,
+                        item.done_tag,
+                        tuple(
+                            (hold.dest, hold.value, repr(hold.guard))
+                            for hold in item.holds
+                        ),
+                        item.obstruction.transition.tag_name,
+                        item.obstruction.scan_id,
+                    )
+                    for item in result
+                ),
+                departure=getattr(witness, "departure_scan", None),
+                cause=tuple(
+                    (
+                        occurrence.tag,
+                        occurrence.value,
+                        occurrence.scan_id,
+                        occurrence.rung,
+                    )
+                    for occurrence in getattr(witness, "cause", ())
+                    if occurrence.scan_id is not None
+                    and (
+                        occurrence.tag.startswith(("Heat", "Sail", "i_Sail", "x_Sail"))
+                        or occurrence.tag in {
+                            "A_Alm16_Sail_Trig",
+                            "Sts_StateCurrent",
+                            "Sts_StateRequested",
+                        }
+                    )
+                ),
+                spine=tuple(sorted(getattr(witness, "causal_spine", ()))),
+                tail=tuple(
+                    (event.scan, event.transitions)
+                    for event in getattr(incident, "timeline", ())
+                    if any(
+                        tag.startswith(("Sail", "Heat_Error", "i_Sail", "x_Sail"))
+                        or tag == "Sts_StateCurrent"
+                        for tag, _before, _after in event.transitions
+                    )
+                )[-16:],
+            )
+            return result
+
+        def observe_derive_hypotheses(*args: Any, **kwargs: Any) -> Any:
+            result = original_derive_hypotheses(*args, **kwargs)
+            hypotheses, absence = result
+            derive_ctx = args[2] if len(args) > 2 else kwargs.get("ctx")
+            incident = args[1] if len(args) > 1 else kwargs.get("incident")
+            witness_tags = set(getattr(incident, "changed_tags", ()))
+
+            def proposal_parts(hold: Any) -> tuple[Any, Any, bool]:
+                if hasattr(hold, "dest"):
+                    return hold.dest, hold.value, hold.operation is not None
+                if isinstance(hold, tuple) and len(hold) == 2:
+                    return hold[0], hold[1], False
+                return None, None, False
+
+            fast_path(
+                "hypotheses",
+                candidates=tuple(
+                    (
+                        hypothesis.kind,
+                        tuple(
+                            proposal_parts(hold)
+                            for hold in hypothesis.holds
+                        ),
+                        hypothesis.sources,
+                        hypothesis.incident_local,
+                        tuple(
+                            sorted(
+                                set(
+                                    derive_ctx.pdg.downstream_slice(
+                                        proposal_parts(hypothesis.holds[0])[0] or "",
+                                        follow_calls=True,
+                                    )
+                                )
+                                - witness_tags
+                            )
+                        )[:24]
+                        if derive_ctx is not None
+                        and getattr(derive_ctx, "pdg", None) is not None
+                        else (),
+                    )
+                    for hypothesis in hypotheses
+                ),
+                absence=tuple(sorted(absence)),
+            )
+            return result
+
+        def observe_checkpoint_at_scan(*args: Any, **kwargs: Any) -> Any:
+            result = original_checkpoint_at_scan(*args, **kwargs)
+            requested = args[3] if len(args) > 3 else kwargs.get("scan_id")
+            fast_path(
+                "checkpoint",
+                requested=requested,
+                admitted=result is not None,
+                actual=(result.world.work.state.scan_id if result is not None else None),
+            )
+            return result
+
+        def observe_exact_requirement(*args: Any, **kwargs: Any) -> Any:
+            result = original_exact_requirement(*args, **kwargs)
+            fast_path(
+                "requirement",
+                admitted=result is not None,
+                condition=getattr(result, "condition", None),
+                source=(
+                    result.source_checkpoint.world.work.state.scan_id
+                    if result is not None
+                    else None
+                ),
+            )
+            return result
+
+        def observe_tentative_proof(*args: Any, **kwargs: Any) -> Any:
+            result = original_tentative_proof(*args, **kwargs)
+            evidence = args[3] if len(args) > 3 else kwargs.get("evidence")
+            fast_path(
+                "proof",
+                admitted=result.admitted,
+                reason=result.reason,
+                kind=getattr(evidence, "hypothesis_kind", None),
+                dest=tuple(
+                    (hold.dest, hold.value)
+                    for hold in getattr(evidence, "holds", ())
+                ),
+                done=(
+                    getattr(evidence, "done_tag", None),
+                    getattr(
+                        getattr(getattr(evidence, "obstruction", None), "transition", None),
+                        "tag_name",
+                        None,
+                    ),
+                ),
+                scans=result.scans,
+            )
+            return result
+
+        def observe_advance_prefix(*args: Any, **kwargs: Any) -> Any:
+            result = original_advance_prefix(*args, **kwargs)
+            fast_path("prefix", admitted=bool(result))
+            return result
+
+        def observe_record_regression(*args: Any, **kwargs: Any) -> Any:
+            result = original_record_regression(*args, **kwargs)
+            fast_path("theory", admitted=result is not None)
+            return result
+
+        def observe_record_fact(state: Any, fact: Any) -> Any:
+            before = theory_view(state.theory_state)
+            result = original_record_fact(state, fact)
+            if isinstance(fact, AdvanceTheory) and fact.phase_receipts:
+                after = theory_view(state.theory_state)
+                fast_path(
+                    "phase",
+                    kinds=tuple(receipt.kind.value for receipt in fact.phase_receipts),
+                    rung_ids=tuple(
+                        receipt.pilot_rung_identities for receipt in fact.phase_receipts
+                    ),
+                    pending_before=(
+                        tuple(sorted(before.pending_overlay_identities, key=repr))
+                        if before is not None
+                        else ()
+                    ),
+                    pending_after=(
+                        tuple(sorted(after.pending_overlay_identities, key=repr))
+                        if after is not None
+                        else ()
+                    ),
+                )
+            return result
 
         def observe_orientation(
             self: Compass,
@@ -803,6 +1166,10 @@ def _drive_worker(
                             )
                             for configuration in getattr(result, "entry_configurations", ())
                         ),
+                        "prerequisites": tuple(
+                            (rung.dest, rung.value, repr(rung.guard))
+                            for rung in getattr(result, "prerequisites", ())
+                        ),
                         "overlay": tuple(
                             (rung.dest, rung.value) for rung in world.state.pilot_rungs
                         ),
@@ -979,11 +1346,31 @@ def _drive_worker(
             return result, absorbed
 
         Compass.orient = observe_orientation
+        vars(recovery_investigation_module)["_exact_regression_corrections"] = (
+            observe_exact_corrections
+        )
+        vars(regression_requirements_module)["derive_correction_hypotheses"] = (
+            observe_derive_hypotheses
+        )
+        vars(regression_requirements_module)["_tentative_rung_prevents_completion"] = (
+            observe_tentative_proof
+        )
+        vars(recovery_investigation_module)["_checkpoint_at_scan"] = observe_checkpoint_at_scan
+        vars(recovery_investigation_module)[
+            "_exact_correction_requirement_from_regression"
+        ] = observe_exact_requirement
+        vars(theory_recording_module)["_advance_theory_to_regression_prefix"] = (
+            observe_advance_prefix
+        )
+        vars(theory_recording_module)["_record_theory_from_regression_requirement"] = (
+            observe_record_regression
+        )
+        vars(theory_recording_module)["_record_controlling_theory_fact"] = observe_record_fact
         vars(attempt_transition_module)["_theory_transition_from_attempt"] = (
             observe_interpretation
         )
         vars(pilot_module)["_theory_transition_after_monitor"] = observe_after_monitor
-        vars(theory_drive_module)["_record_working_theory_transition"] = (
+        vars(theory_recording_module)["_record_working_theory_transition"] = (
             observe_recorded_interpretation
         )
         messages.put(
@@ -1269,8 +1656,41 @@ def watch_worker(
                 print(line, flush=True)
                 last_visible_at = now
                 last_visible = {"visible": line, "elapsed": message["elapsed"]}
+            elif kind == "fast_path":
+                last_event_at = now
+                detail = tuple(
+                    (key, value)
+                    for key, value in message.items()
+                    if key not in {"type", "elapsed", "stage"}
+                )
+                line = (
+                    _compact_fast_path_line(message)
+                    if compact
+                    else f"[fast-path] stage={message['stage']!r} detail={detail!r}"
+                )
+                print(line, flush=True)
+                last_visible_at = now
+                last_visible = {"visible": line, "elapsed": message["elapsed"]}
             elif kind == "orientation":
                 last_event_at = now
+                pending_overlays = (
+                    tuple(
+                        _rung_identity_summary(identity)
+                        for identity in message["pending_overlays"]
+                    )
+                    if compact
+                    else message["pending_overlays"]
+                )
+                entry_configurations = (
+                    tuple(assignments for _identity, assignments in message["entry_configurations"])
+                    if compact
+                    else message["entry_configurations"]
+                )
+                prerequisites = (
+                    tuple((dest, value) for dest, value, _guard in message["prerequisites"])
+                    if compact
+                    else message["prerequisites"]
+                )
                 line = (
                     "[orientation] "
                     f"scan={message['scan']} intent={message['intent']!r} "
@@ -1280,7 +1700,7 @@ def watch_worker(
                     f"focus={message['focus']!r} "
                     f"requirements={message['active_requirements']!r} "
                     f"progress_attempt={message['progress_attempt']!r} "
-                    f"pending_overlays={message['pending_overlays']!r} "
+                    f"pending_overlays={pending_overlays!r} "
                     f"pending_configurations={message['pending_configurations']!r} "
                     f"scope={message['investigation_scope']!r} "
                     f"trigger_boundary={message['trigger_consumer_boundary']!r} "
@@ -1293,7 +1713,8 @@ def watch_worker(
                     f"local={message['local_progress']!r} "
                     f"horizon={message['pulse_horizon']!r} "
                     f"consumer_boundary={message['consumer_boundary']!r} "
-                    f"entry_configurations={message['entry_configurations']!r} "
+                    f"entry_configurations={entry_configurations!r} "
+                    f"prerequisites={prerequisites!r} "
                     f"overlay={message['overlay']!r}"
                 )
                 print(line, flush=True)

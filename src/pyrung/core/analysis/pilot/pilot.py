@@ -29,9 +29,6 @@ from pyrung.core.analysis.pilot.advance import iter_advance_owners
 from pyrung.core.analysis.pilot.compass import (
     ProbeExhaustedObservation,
 )
-from pyrung.core.analysis.pilot.correction_lifecycle import (
-    _promote_probationary_corrections,
-)
 from pyrung.core.analysis.pilot.departure_state import (
     _record_pending_landing,
     _trial_checkpoint,
@@ -315,7 +312,6 @@ def _monitor_committed_trial(
             state.checkpoints.append(_trial_checkpoint(trial, state))
             if progress.distance_after is not None:
                 state.best_trend = progress.distance_after
-            _promote_probationary_corrections(state)
         return
     yield from _monitor_trend(trial, frame, state, ctx)
 
@@ -600,7 +596,6 @@ def _pilot_loop_events(
             _theory_recording._run_optional_theory_hook(
                 _theory_recording._record_optional_theory_proved, state
             )
-            _promote_probationary_corrections(state)
             if state.steps:
                 # Target observation executes nothing. Every logical scan at
                 # this tip must already belong to the committed operation.
@@ -715,13 +710,21 @@ def _pilot_loop_events(
                 "theory_correction_composed",
                 state.work.state.scan_id,
                 {
-                    "configuration": result.configuration.assignments,
+                    "configuration": (
+                        result.configuration.assignments
+                        if result.configuration is not None
+                        else ()
+                    ),
+                    "pilot_rungs": result.pilot_rungs,
                     "conditions": tuple(
                         _theory_requirement_snapshot(requirement).condition_identity
                         for requirement in composed.requirements
                     ),
                     "superseded_configuration_identities": (
                         composed.superseded_configuration_identities
+                    ),
+                    "superseded_pilot_rung_identities": (
+                        composed.superseded_pilot_rung_identities
                     ),
                     "research_finding_identity": composed.research_finding_identity,
                     "reason": result.rationale,
@@ -1272,7 +1275,18 @@ def _pilot_loop_events(
                 trial=trial,
                 source_checkpoint=transition.adoption_checkpoint,
             )
-            successor_need = _theory_recording._records_controlling_need(theory_transition)
+            transition_has_need = _theory_recording._records_controlling_need(
+                theory_transition
+            )
+            # Post-commit recovery may already have recorded an exact
+            # regression requirement and restored its source.  That is the
+            # same controlling Working Theory handoff as an intrascan failure;
+            # do not subsequently advance the rejected landing over it.
+            monitor_need = temporal_need_request(state.theory_state)
+            monitor_opened_need = (
+                monitor_need is not None and monitor_need != temporal_request
+            )
+            successor_need = transition_has_need or monitor_opened_need
             if successor_need:
                 # Keep the monitor's exact rollback world. The next fresh
                 # Compass read re-executes this scan with the newly learned
@@ -1318,7 +1332,7 @@ def _pilot_loop_events(
                     controlled_setup_attempt,
                     successor_need=successor_need,
                 )
-                if successor_need:
+                if transition_has_need:
                     assert theory_transition is not None
                     _theory_recording._record_working_theory_transition(
                         state,
@@ -1326,14 +1340,14 @@ def _pilot_loop_events(
                         remaining_budget=state.remaining_search_scans(ctx.max_scans),
                     )
             else:
-                if successor_need:
+                if transition_has_need:
                     assert theory_transition is not None
                     _theory_recording._record_working_theory_transition(
                         state,
                         theory_transition,
                         remaining_budget=state.remaining_search_scans(ctx.max_scans),
                     )
-                else:
+                elif not successor_need:
                     if active_theory(state.theory_state) is not None:
                         _theory_recording._record_theory_transition(
                             state,
@@ -1360,17 +1374,18 @@ def _pilot_loop_events(
                             theory_transition,
                             remaining_budget=state.remaining_search_scans(ctx.max_scans),
                         )
-                _theory_recording._run_optional_theory_hook(
-                    _theory_recording._record_optional_requirement_delta,
-                    state,
-                    requirements_before_monitor | absorbed_requirement_ids,
-                    identity=(
-                        "post-commit",
-                        transition.theory_transition.identity
-                        if transition.theory_transition is not None
-                        else (),
-                    ),
-                )
+                if not monitor_opened_need:
+                    _theory_recording._run_optional_theory_hook(
+                        _theory_recording._record_optional_requirement_delta,
+                        state,
+                        requirements_before_monitor | absorbed_requirement_ids,
+                        identity=(
+                            "post-commit",
+                            transition.theory_transition.identity
+                            if transition.theory_transition is not None
+                            else (),
+                        ),
+                    )
         except Exception:
             if controlling_source_world is not None:
                 state.load_world(controlling_source_world)

@@ -4,8 +4,8 @@
 dead ends, delegates motion attribution and progress classification to
 ``outcome.py``, then decides whether that classified landing may revisit an
 executable world. It reports a suspicious excursion to the drive loop without
-performing runtime investigation. ``verify_excursion_replay`` judges the one
-replay returned by that owner and continues the remaining gates after spin.
+performing runtime investigation; recovery converts any exact correction
+evidence into an inert Working Theory requirement.
 
 Passing these gates makes a trial eligible for commit and progress monitoring;
 it does not guarantee that later assessment will retain the committed world.
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import pyrung.core.analysis.pilot.trial_gates as _trial_gates
 from pyrung.core.analysis.pilot.attempt_observation import (
@@ -34,10 +34,6 @@ from pyrung.core.analysis.pilot.earned_work import (
 from pyrung.core.analysis.pilot.effect_observation import (
     effect_reached_consumer,
     fulfilled_expectation_observations,
-    observe_execution_window,
-)
-from pyrung.core.analysis.pilot.effects import (
-    promote_route_landing_observations,
 )
 from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,
@@ -46,7 +42,6 @@ from pyrung.core.analysis.pilot.execution import (
     MotionKind,
     PulseHorizon,
     ScanProgressReceipt,
-    capture_execution_spans,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
@@ -88,87 +83,6 @@ from pyrung.core.instruction.advance import constraint_holds
 
 logger = logging.getLogger(__name__)
 
-if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.investigation_replay import ExcursionResult
-
-
-def _rebind_replay_attempt(
-    attempt: _ExecutedAttempt,
-    replay_trial: _PulseState,
-) -> _ExecutedAttempt:
-    """Replace a replayed fork and freeze its own physical execution receipt."""
-
-    execution = attempt.execution
-    if execution is None:
-        raise ValueError("excursion replay requires the opening execution receipt")
-
-    immediate = observe_execution_window(
-        attempt.bearing.expectation,
-        replay_trial.fork,
-        scan_before=replay_trial.scan_before,
-        action_scan=(
-            None
-            if isinstance(attempt.bearing.act, (Coast, Dwell, ObserveScan, ProgramScan))
-            else replay_trial.action_scan
-        ),
-        coast_receipt=replay_trial.coast_receipt,
-        kernel_scan_ids=replay_trial.kernel_scan_ids,
-        projection_at=replay_trial.projection_at,
-    )
-    landing = observe_execution_window(
-        attempt.landing_expectation,
-        replay_trial.fork,
-        scan_before=replay_trial.scan_before,
-        action_scan=(
-            None
-            if isinstance(attempt.bearing.act, (Coast, Dwell, ObserveScan, ProgramScan))
-            else replay_trial.action_scan
-        ),
-        coast_receipt=replay_trial.coast_receipt,
-        kernel_scan_ids=replay_trial.kernel_scan_ids,
-        projection_at=replay_trial.projection_at,
-    )
-    if landing:
-        projections = tuple(
-            projection
-            for scan_id in replay_trial.kernel_scan_ids
-            if replay_trial.scan_before < scan_id <= replay_trial.fork.state.scan_id
-            and (projection := replay_trial.projection_at(scan_id)) is not None
-        )
-        landing = promote_route_landing_observations(
-            landing,
-            projections,
-            final_landing=replay_trial.snap,
-        )
-    observations = (*immediate, *landing)
-    source_snap = replay_trial.source_snap
-    configurations = tuple(replay_trial.applied_configurations)
-    replay_execution = replace(
-        execution,
-        before_snap=(source_snap or execution.before_snap),
-        after_snap=replay_trial.snap,
-        channel_motion=replay_trial.channel_motion,
-        coast_receipt=replay_trial.coast_receipt,
-        timeline=replay_trial.timeline,
-        effect_observations=tuple(
-            observation.diagnostic_snapshot() for observation in observations
-        ),
-        replay_motion=replay_trial.replay_motion,
-        spans=capture_execution_spans(
-            replay_trial.fork,
-            replay_trial.kernel_scan_ids,
-        ),
-        source_scan=replay_trial.scan_before,
-        applied_configurations=configurations,
-        stop=replay_trial.stop_receipt,
-    )
-    return replace(
-        attempt,
-        pulse=replay_trial,
-        effect_observations=observations,
-        execution=replay_execution,
-    )
-
 
 def _owned_channel_motion(
     trial: _PulseState,
@@ -198,25 +112,6 @@ def _owned_channel_motion(
         else "timeout"
     )
     return replace(motion, stop_reason=stop_reason)
-
-
-def _replayed_channel_motion(
-    replay_snap: dict[str, Any],
-    source_snap: dict[str, Any],
-    motion: ChannelMotion,
-) -> ChannelMotion:
-    """Classify a correction replay without reusing the original coast receipt."""
-    if not motion.active:
-        return motion
-    channel_tag = motion.channel_tag
-    assert channel_tag is not None
-    if motion.boundary is not None and constraint_holds(motion.boundary, replay_snap) is True:
-        return replace(motion, stop_reason="reached")
-    if _values_match(replay_snap.get(channel_tag), motion.target_value):
-        return replace(motion, stop_reason="reached")
-    if not _values_match(replay_snap.get(channel_tag), source_snap.get(channel_tag)):
-        return replace(motion, stop_reason="departed")
-    return replace(motion, stop_reason="timeout")
 
 
 def _executed_source_world_key(frame: Any, state: Any) -> tuple[Any, ...]:
@@ -433,7 +328,6 @@ def _verify_after_spin(
             executed=attempt,
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
-            confirmed_correction=trial.confirmed_correction,
             observations=observations,
             avoid_names=tuple(avoid_names),
         )
@@ -457,7 +351,6 @@ def _verify_after_spin(
             trial=accepted,
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
-            confirmed_correction=trial.confirmed_correction,
             observations=observations,
             avoid_names=tuple(avoid_names),
         )
@@ -592,153 +485,8 @@ def _verify_after_spin(
         ),
         gate_events=tuple(gate_events),
         nogood_pairs=frozenset(collected_nogoods),
-        confirmed_correction=trial.confirmed_correction,
         observations=observations,
         avoid_names=tuple(avoid_names),
-    )
-
-
-def verify_excursion_replay(
-    detected_result: _AttemptResult,
-    investigation_result: ExcursionResult,
-    frame: Any,
-    state: Any,
-    ctx: Any,
-) -> _AttemptResult:
-    """Judge one drive-loop-owned excursion replay after the spin gate.
-
-    The original attempt's observations and partial gate history survive
-    unchanged.  The replay is checked against every retained history snapshot
-    for ``avoid=`` before its exact correction, timeline, key, and earned-work
-    receipt may proceed through the remaining gates.
-    """
-    attempt = detected_result.excursion_attempt
-    if attempt is None:
-        raise ValueError("excursion replay requires the detected executed attempt")
-
-    trial = attempt.pulse
-    policy = attempt.bearing.act.policy
-    nogood_pair = policy.nogood_pair
-    gate_events = list(detected_result.gate_events)
-    collected_nogoods = list(detected_result.nogood_pairs)
-    avoid_names = list(detected_result.avoid_names)
-    observations = detected_result.observations
-
-    if investigation_result.replay_fork is None or investigation_result.correction is None:
-        _trial_gates._record_gate(
-            "EXCURSION-NO-HOLDS" if investigation_result.reverted else "EXCURSION-REPLAY-FAIL",
-            gate_events=gate_events,
-        )
-        return _AttemptResult(
-            trial=None,
-            executed=attempt,
-            gate_events=tuple(gate_events),
-            nogood_pairs=frozenset(collected_nogoods),
-            confirmed_correction=detected_result.confirmed_correction,
-            observations=observations,
-            avoid_names=tuple(avoid_names),
-        )
-
-    key_config = state.key_config
-    assert key_config is not None
-    replay_fork = investigation_result.replay_fork
-    correction = investigation_result.correction
-    replay_snap = dict(replay_fork.state.tags)
-    replay_pilot_rungs = (*state.pilot_rungs, *correction.pilot_rungs)
-
-    if ctx.avoid_pred is not None:
-        replay_violations: list[str] = list(_avoid_snap_names(ctx.avoid_pred, replay_snap))
-        for scan in range(trial.scan_before + 1, replay_fork.state.scan_id + 1):
-            replay_violations.extend(
-                _trial_gates._avoid_names_after_clear(
-                    ctx.avoid_pred,
-                    frame.snap,
-                    dict(replay_fork.history.at(scan).tags),
-                )
-            )
-        if replay_violations:
-            names = tuple(dict.fromkeys(replay_violations))
-            avoid_names.extend(names)
-            if nogood_pair is not None:
-                collected_nogoods.append(nogood_pair)
-            _trial_gates._record_gate(
-                "AVOID",
-                f": excursion replay enters avoid: {', '.join(names)}",
-                gate_events,
-            )
-            return _AttemptResult(
-                trial=None,
-                executed=attempt,
-                gate_events=tuple(gate_events),
-                nogood_pairs=frozenset(collected_nogoods),
-                confirmed_correction=detected_result.confirmed_correction,
-                observations=observations,
-                avoid_names=tuple(avoid_names),
-            )
-
-    replay_key = _pilot_world_key(
-        replay_snap,
-        key_config,
-        replay_pilot_rungs,
-        getattr(state, "active_requirements", ()),
-    )
-    _trial_gates._record_gate(
-        "EXCURSION-REPLAY-OK",
-        (
-            f": reverted={investigation_result.reverted}, "
-            f"pilot_rungs={tuple((r.dest, r.value) for r in correction.pilot_rungs)}"
-        ),
-        gate_events,
-    )
-    replay_trial = replace(
-        trial,
-        fork=replay_fork,
-        snap=replay_snap,
-        key=replay_key,
-        coast_receipt=None,
-        timeline=investigation_result.replay_timeline,
-        kernel_scan_ids=investigation_result.replay_kernel_scan_ids,
-        confirmed_correction=correction,
-    )
-    earned_work = getattr(state, "earned_work", None)
-    earned_work_receipt = (
-        earned_work.receipt(frame.snap, replay_snap)
-        if earned_work is not None
-        else EarnedWorkReceipt()
-    )
-    declared_motion = (
-        ChannelMotion(
-            policy.heading.channel_tag,
-            policy.heading.target_value,
-            policy.heading.boundary,
-        )
-        if policy.heading is not None
-        else ChannelMotion()
-    )
-    channel_motion = _replayed_channel_motion(
-        replay_snap,
-        frame.snap,
-        trial.channel_motion if trial.channel_motion.active else declared_motion,
-    )
-    replay_trial = replace(replay_trial, channel_motion=channel_motion)
-    replay_attempt = _rebind_replay_attempt(attempt, replay_trial)
-    return _verify_after_spin(
-        replay_attempt,
-        frame,
-        state,
-        ctx,
-        gate_events=gate_events,
-        collected_nogoods=collected_nogoods,
-        avoid_names=avoid_names,
-        earned_work_receipt=earned_work_receipt,
-        channel_motion=channel_motion,
-        source_world_key=_pilot_world_key(
-            frame.snap,
-            key_config,
-            replay_pilot_rungs,
-            getattr(state, "active_requirements", ()),
-        ),
-        observations=observations,
     )
 
 
@@ -799,7 +547,6 @@ def _verify_gates(
             executed=attempt,
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods if nogoods is None else nogoods),
-            confirmed_correction=trial.confirmed_correction,
             avoid_names=tuple(avoid_violations if avoid_names is None else avoid_names),
             proof_rejection=proof_rejection,
         )
@@ -817,7 +564,6 @@ def _verify_gates(
             ),
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
-            confirmed_correction=trial.confirmed_correction,
             avoid_names=tuple(avoid_violations),
         )
 
@@ -1166,13 +912,24 @@ def _verify_gates(
         temporal_setup_consumed: tuple[_ActionPair, ...] = ()
         temporal_setup_requirements_observed = False
         temporal_setup_observation_receipts: tuple[Any, ...] = ()
+        corrective_actions = tuple(
+            (rung.dest, rung.value)
+            for requirement in progress_requirements
+            for rung in getattr(requirement, "corrective_pilot_rungs", ())
+        )
         temporal_setup_actions = (
             tuple(pair for pair in configured_actions if pair[0] in requirement_tags)
             if configured_temporal_edge
+            else corrective_actions
+            if policy.local_progress is LocalProgressKind.THEORY_CORRECTIVE
             else tuple(applied_actions)
         )
         if (
-            (policy.local_progress is LocalProgressKind.TEMPORAL_SETUP or configured_temporal_edge)
+            (
+                policy.local_progress
+                in {LocalProgressKind.TEMPORAL_SETUP, LocalProgressKind.THEORY_CORRECTIVE}
+                or configured_temporal_edge
+            )
             and temporal_setup_actions
             and progress_requirements
         ):
@@ -1181,6 +938,7 @@ def _verify_gates(
                 tuple(progress_requirements),
                 temporal_setup_actions,
                 ctx,
+                pilot_rungs=tuple(state.pilot_rungs),
             )
             temporal_setup_consumed = temporal_receipt.consumed_actions
             temporal_setup_requirements_observed = temporal_receipt.requirements_observed
@@ -1306,7 +1064,6 @@ def _verify_gates(
                 ),
                 gate_events=tuple(gate_events),
                 nogood_pairs=frozenset(collected_nogoods),
-                confirmed_correction=trial.confirmed_correction,
                 avoid_names=tuple(avoid_violations),
             )
         if not (
@@ -1420,7 +1177,6 @@ def _verify_gates(
             ),
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
-            confirmed_correction=trial.confirmed_correction,
             avoid_names=tuple(avoid_violations),
         )
 
@@ -1455,7 +1211,6 @@ def _verify_gates(
             # An excursion is evidence of a real transient effect.  It is not a
             # spin and therefore never rejects this action on detection.
             nogood_pairs=frozenset(),
-            confirmed_correction=trial.confirmed_correction,
             avoid_names=tuple(avoid_violations),
         )
     return _verify_after_spin(

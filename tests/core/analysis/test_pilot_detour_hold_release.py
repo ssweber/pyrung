@@ -577,21 +577,31 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
         for event in events[initial_index + 1 :]
         if event.kind in {"departure_investigated", "trend_regression", "pending_departure_started"}
     ]
-    assert resolution.data["investigation"]["confirmed"] > 0
-    assert any(rung.dest == tags["Door"].name for rung in resolution.data["pilot_rungs"])
-    door_correction = next(
-        rung for rung in reversed(resolution.data["pilot_rungs"]) if rung.dest == tags["Door"].name
+    investigation = resolution.data["investigation"]
+    assert investigation["working_theory"] is True
+    assert investigation["exact_regression"] is True
+    assert investigation["bounded_proof"] is True
+    requirement = investigation["requirement"]
+    assert resolution.data["pilot_rungs"] == ()
+    assert any(
+        rung.dest == tags["Door"].name
+        for rung in requirement.corrective_pilot_rungs
     )
-    # The exact missing-support requirement belongs to the safety producer's
-    # Execute tenure, not to the Step-103 earned-work coordinate. It must survive the
-    # recipe advance that discharges that producer and release at the genuine
-    # station Hold.
+    door_correction = next(
+        rung
+        for rung in reversed(requirement.corrective_pilot_rungs)
+        if rung.dest == tags["Door"].name
+    )
+    # The exact missing-support requirement is just-in-time for the harmful
+    # Execute/103 occurrence. Ordinary execution owns what happens after that
+    # earned-work coordinate advances; the correction must not claim the whole
+    # Execute tenure merely because the old replay crossed it.
     assert door_correction.guard.evaluate(
         _SnapshotView(
             {
                 **initial_landing,
                 tags["State"].name: tags["Execute"],
-                tags["Step"].name: 105,
+                tags["Step"].name: 103,
             },
             {},
         )
@@ -600,7 +610,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
         _SnapshotView(
             {
                 **initial_landing,
-                tags["State"].name: tags["Held"],
+                tags["State"].name: tags["Execute"],
                 tags["Step"].name: 105,
             },
             {},

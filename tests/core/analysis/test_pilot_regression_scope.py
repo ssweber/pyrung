@@ -112,8 +112,6 @@ def test_regression_nogood_uses_action_source_world(monkeypatch) -> None:
         before_snap={},
     )
     monkeypatch.setattr(recording, "_channel_transitions", lambda *_args: ())
-    monkeypatch.setattr(recovery_investigation, "_revoke_corrections", lambda *_args: ())
-
     recovery_investigation._investigate_and_revert(
         trial,
         frame,

@@ -25,9 +25,12 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ProgramScan,
     _ActionPair,
 )
-from pyrung.core.analysis.pilot.overlay import project_pilot_overlay
+from pyrung.core.analysis.pilot.overlay import (
+    _pilot_rung_execution_receipt,
+    project_pilot_overlay,
+)
 from pyrung.core.analysis.pilot.types import _ExecutedAttempt
-from pyrung.core.analysis.pilot.world_key import _semantic_key
+from pyrung.core.analysis.pilot.world_key import _rung_identity, _semantic_key
 from pyrung.core.analysis.pilot.writer_selection import _can_produce
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.simplified import _sp_to_expr
@@ -159,16 +162,78 @@ class _TemporalSetupOccurrenceReceipt:
     observations: tuple[Any, ...] = ()
 
 
+def _observe_exact_regression_prevention(
+    attempt: _ExecutedAttempt,
+    requirements: tuple[Any, ...],
+    applied_actions: tuple[_ActionPair, ...],
+    pilot_rungs: tuple[Any, ...],
+) -> _TemporalSetupOccurrenceReceipt | None:
+    """Prove the exact corrective rungs own their first installed scan.
+
+    This is deliberately not a replay-equivalence check.  A corrective rung
+    may make its owner complete sooner; later ordinary execution proves the
+    resulting route.  The installation scan only has to show that every exact
+    correction retained by the requirement is present in the executed overlay.
+    It may legitimately be dormant on this scan: a self-guarded operation can
+    wait for the program to clear its destination, then become effective at the
+    next input boundary.
+    """
+
+    if not requirements or not all(
+        getattr(requirement, "provenance", "").startswith("exact-regression-")
+        and getattr(requirement, "obstruction_occurrence", None) is not None
+        for requirement in requirements
+    ):
+        return None
+    assertion_projection = attempt.projection_at(attempt.assertion_scan)
+    if assertion_projection is None:
+        return _TemporalSetupOccurrenceReceipt(
+            observations=(("assertion-projection-unavailable",),)
+        )
+
+    installed = {_rung_identity(rung): rung for rung in pilot_rungs}
+    overlay = _pilot_rung_execution_receipt(pilot_rungs, assertion_projection.entry_tags)
+    effective = {_rung_identity(rung) for rung in overlay.effective}
+    consumed: list[_ActionPair] = []
+    observations: list[Any] = []
+    for requirement in requirements:
+        required = tuple(getattr(requirement, "corrective_pilot_rungs", ()))
+        required_ids = tuple(_rung_identity(rung) for rung in required)
+        owned = tuple(identity for identity in required_ids if identity in installed)
+        active = tuple(identity for identity in required_ids if identity in effective)
+        observations.append(("corrective-pilot-rungs", required_ids, owned, active))
+        if not required_ids or len(owned) != len(required_ids):
+            return _TemporalSetupOccurrenceReceipt(observations=tuple(observations))
+        consumed.extend((rung.dest, rung.value) for rung in required)
+    if tuple(consumed) != applied_actions:
+        return _TemporalSetupOccurrenceReceipt(observations=tuple(observations))
+    return _TemporalSetupOccurrenceReceipt(
+        tuple(consumed),
+        requirements_observed=True,
+        observations=tuple(observations),
+    )
+
+
 def _observe_temporal_setup_occurrences(
     attempt: _ExecutedAttempt,
     requirements: tuple[Any, ...],
     applied_actions: tuple[_ActionPair, ...],
     ctx: Any,
+    *,
+    pilot_rungs: tuple[Any, ...] = (),
 ) -> _TemporalSetupOccurrenceReceipt:
     """Prove each setup action at its relocated demanding guard surface."""
 
     if not applied_actions or not requirements:
         return _TemporalSetupOccurrenceReceipt()
+    regression = _observe_exact_regression_prevention(
+        attempt,
+        requirements,
+        applied_actions,
+        pilot_rungs,
+    )
+    if regression is not None:
+        return regression
     assertion_projection = attempt.projection_at(attempt.assertion_scan)
     if assertion_projection is None:
         return _TemporalSetupOccurrenceReceipt(

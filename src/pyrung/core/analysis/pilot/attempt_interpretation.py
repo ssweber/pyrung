@@ -24,7 +24,7 @@ from pyrung.core.analysis.pilot.requirements import (
     RequirementSourceWalkStatus,
 )
 from pyrung.core.analysis.pilot.types import AssessedMotion, TargetReached, _AcceptedTrial
-from pyrung.core.analysis.pilot.world_key import _semantic_key
+from pyrung.core.analysis.pilot.world_key import _rung_identity, _semantic_key
 
 
 class AttemptInterpretationKind(StrEnum):
@@ -223,6 +223,61 @@ def _classify_requirement(
     if authorities == frozenset((OperandAuthority.ADJUSTABLE,)) and exact_consumer_shape:
         return AttemptInterpretationKind.RETRY_TOGETHER
     return AttemptInterpretationKind.UNRESOLVED
+
+
+@dataclass(frozen=True)
+class _ExactRegressionObservation:
+    """Minimal observation shape for one exact causal obstruction."""
+
+    displacement: Any
+    consumer_read: Any = None
+    disposition: str = "DISPLACED"
+
+
+def interpret_exact_regression_requirement(
+    requirement: ActiveRequirement,
+    *,
+    assertion_scan: int,
+) -> AttemptInterpretation:
+    """Name the temporal move for one exact post-commit causal obstruction."""
+
+    obstruction = requirement.obstruction_occurrence
+    if obstruction is None or obstruction.scan_id != assertion_scan:
+        return AttemptInterpretation(
+            AttemptInterpretationKind.UNRESOLVED,
+            "regression requirement has no exact obstruction at the assertion scan",
+        )
+    source_scan = requirement.source_checkpoint.world.work.state.scan_id
+    supporting_identity = (
+        "exact-regression-requirement",
+        _semantic_key(requirement.navigation_identity),
+        _semantic_key(obstruction),
+        tuple(
+            _rung_identity(rung)
+            for rung in getattr(requirement, "corrective_pilot_rungs", ())
+        ),
+    )
+    if (
+        requirement.operand_authority is OperandAuthority.ADJUSTABLE
+        and source_scan < assertion_scan
+        and bool(getattr(requirement, "corrective_pilot_rungs", ()))
+    ):
+        return AttemptInterpretation(
+            AttemptInterpretationKind.SETUP_FIRST,
+            "install the exact adjustable prevention before its causal consumer",
+            supporting_identities=(supporting_identity,),
+        )
+    kind = _classify_requirement(
+        requirement,
+        _ExactRegressionObservation(obstruction),
+        assertion_scan,
+        owner_bound=True,
+    )
+    return AttemptInterpretation(
+        kind,
+        "an exact causal obstruction names the just-in-time requirement",
+        supporting_identities=(supporting_identity,),
+    )
 
 
 def interpret_failed_requirements(

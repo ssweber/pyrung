@@ -1,9 +1,9 @@
 """Investigate one accepted departure and restore its recovery origin.
 
-This module owns the bounded causal/replay investigation transaction after
-post-commit progress policy requests recovery. It may derive and install one
-confirmed correction, retain exact delayed requirements, and rebuild the
-selected checkpoint, but it does not monitor trials or decide departure policy.
+This module owns the bounded causal investigation transaction after post-commit
+progress policy requests recovery. It may derive Working Theory evidence,
+retain exact delayed requirements, and rebuild the selected checkpoint, but it
+does not install corrections, monitor trials, or decide departure policy.
 """
 
 from __future__ import annotations
@@ -14,18 +14,8 @@ from typing import TYPE_CHECKING, Any
 from pyrsistent import pvector
 
 import pyrung.core.analysis.pilot.recording as recording
-from pyrung.core.analysis.pilot.coast import coast_departure_tags
+import pyrung.core.analysis.pilot.theory_recording as _theory_recording
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
-from pyrung.core.analysis.pilot.correction_lifecycle import (
-    _causally_harmful_corrections,
-    _contradicted_corrections,
-    _install_confirmed_correction,
-    _revoke_corrections,
-)
-from pyrung.core.analysis.pilot.correction_records import (
-    _ConfirmedCorrection,
-    _CorrectionReceipt,
-)
 from pyrung.core.analysis.pilot.departure import (
     DepartureResult,
 )
@@ -43,24 +33,16 @@ from pyrung.core.analysis.pilot.effects import (
     exact_last_landing_write,
     occurrence_snapshot,
 )
-from pyrung.core.analysis.pilot.execution import ExecutionPoint, MotionKind
+from pyrung.core.analysis.pilot.execution import ExecutionPoint
 from pyrung.core.analysis.pilot.incidents import BearingDeparture
-from pyrung.core.analysis.pilot.investigate import (
-    InvestigationRejection,
-    InvestigationResult,
-    investigate_deviation,
-)
 from pyrung.core.analysis.pilot.investigation_replay import (
     CausalOccurrence,
     RegressionWitness,
-    ReplayIncident,
     _deviation_bearing,
-    _replay_step,
     build_deviation_incident,
-    build_replay_fn,
     incident_regression_witness,
 )
-from pyrung.core.analysis.pilot.navigation_contracts import _ActionPair, act_identity
+from pyrung.core.analysis.pilot.navigation_contracts import act_identity
 from pyrung.core.analysis.pilot.overlay import (
     fork_with_pilot_rungs,
 )
@@ -68,9 +50,14 @@ from pyrung.core.analysis.pilot.recovery import (
     recovery_transaction_active,
 )
 from pyrung.core.analysis.pilot.regression_requirements import (
+    _MAX_TENTATIVE_PROOF_SCANS,
     _delayed_requirement_from_regression,
+    _exact_correction_requirement_from_regression,
+    _exact_regression_corrections,
+    _ordinary_correction_order,
 )
 from pyrung.core.analysis.pilot.requirements import (
+    ActiveRequirement,
     ExpectationReceipt,
     expectation_occurrence_ownerships,
     resolve_expectation_receipt_consumer,
@@ -105,6 +92,50 @@ class _ConductivityDepartureLink:
     harmful_execution: ExecutionPoint
 
 
+def _is_consumer_owned_same_scan_handback(
+    projection: Any,
+    consumer: Any,
+    harmful_write: Any,
+) -> bool:
+    """Whether the consumer's own output causally triggers a later reset.
+
+    A fulfilled handoff may deliberately be returned to its idle value later
+    in the same scan.  Treat that as completion of the selected transaction,
+    not as a delayed regression, but only when exact captured read sources
+    connect an output of the declared consumer to the later write.  Merely
+    sharing a scan is insufficient: an independently enabled watchdog remains
+    a real departure.
+    """
+
+    if harmful_write.scan_id != consumer.scan_id:
+        return False
+
+    consumer_outputs = tuple(
+        write
+        for write in projection.writes
+        if write.run_order == consumer.run_order
+        and write.rung_id == consumer.rung_id
+        and consumer.ordinal < write.ordinal <= harmful_write.ordinal
+    )
+    if not consumer_outputs:
+        return False
+    if any(write is harmful_write for write in consumer_outputs):
+        return True
+
+    causal_sources = {id(write.occurrence) for write in consumer_outputs}
+    for write in projection.writes:
+        if not consumer.ordinal < write.ordinal <= harmful_write.ordinal:
+            continue
+        if id(write.occurrence) in causal_sources:
+            continue
+        enabling_reads = projection.enabling_read_closure_observed_by_write(write)
+        if any(id(read.occurrence.source) in causal_sources for read in enabling_reads):
+            if write is harmful_write:
+                return True
+            causal_sources.add(id(write.occurrence))
+    return False
+
+
 def _productive_tip_checkpoint(
     trial: _AcceptedTrial,
     state: _PilotState,
@@ -133,7 +164,31 @@ def _productive_tip_checkpoint(
         or not state.work.history.contains(progress.productive_scan)
     ):
         return None
-    scan_id = progress.productive_scan
+    return _checkpoint_at_scan(
+        state,
+        ctx,
+        trial.attempt.bearing.objective,
+        progress.productive_scan,
+        configured_inputs=getattr(source_checkpoint, "configured_inputs", frozenset()),
+    )
+
+
+def _checkpoint_at_scan(
+    state: _PilotState,
+    ctx: _PilotContext,
+    objective: Any,
+    scan_id: int,
+    *,
+    configured_inputs: frozenset[str] = frozenset(),
+) -> _CausalCheckpoint | None:
+    """Retain one already-executed physical prefix as a causal source."""
+
+    if (
+        scan_id < 0
+        or state.key_config is None
+        or not state.work.history.contains(scan_id)
+    ):
+        return None
     work = fork_with_pilot_rungs(
         state.work,
         state.pilot_rungs,
@@ -152,7 +207,6 @@ def _productive_tip_checkpoint(
         work=work,
         committed_acts=pvector(committed),
     )
-    assert state.key_config is not None
     key = _pilot_world_key(
         dict(work.state.tags),
         state.key_config,
@@ -161,15 +215,209 @@ def _productive_tip_checkpoint(
     )
     configured = frozenset(
         {
-            *ctx.configured_inputs,
-            *getattr(source_checkpoint, "configured_inputs", frozenset()),
+            *getattr(ctx, "configured_inputs", frozenset()),
+            *configured_inputs,
         }
     )
     return _CausalCheckpoint(
         key=key,
         world=world,
-        objective=trial.attempt.bearing.objective,
+        objective=objective,
         configured_inputs=configured,
+    )
+
+
+def _activate_regression_theory_requirement(
+    state: _PilotState,
+    ctx: _PilotContext,
+    bearing: Any,
+    requirement: ActiveRequirement,
+    source: _CausalCheckpoint,
+    *,
+    from_trend: Any,
+    evidence: tuple[Any, ...],
+    investigation: dict[str, Any],
+) -> tuple[PilotEvent, ...] | None:
+    """Record one regression fact, restore its source, and return to Compass."""
+
+    transition = _theory_recording._record_theory_from_regression_requirement(
+        state,
+        requirement,
+        bearing,
+        evidence=evidence,
+        remaining_budget=state.remaining_search_scans(ctx.max_scans),
+    )
+    if transition is None:
+        return None
+    if not any(
+        current.navigation_identity == requirement.navigation_identity
+        for current in state.active_requirements
+    ):
+        state.active_requirements.append(requirement)
+    incident_scan = state.work.state.scan_id
+    state.load_world(source.world)
+    if all(current.owner is not source.owner for current in state.temporal_checkpoints):
+        state.temporal_checkpoints.append(source)
+    state.checkpoints.clear()
+    state.pending_departure = None
+    return (
+        PilotEvent(
+            "requirement_activated",
+            requirement.deadline.scan_id,
+            {"requirement": requirement.diagnostic_snapshot()},
+        ),
+        PilotEvent(
+            "trend_regression",
+            state.work.state.scan_id,
+            {
+                "from_trend": from_trend,
+                "to_trend": state.best_trend,
+                "checkpoint_key": source.key,
+                "regression_nogoods": frozenset(),
+                "pilot_rungs": tuple(state.pilot_rungs),
+                "channel_transitions": (),
+                "investigation": {
+                    **investigation,
+                    "working_theory": True,
+                    "requirement": requirement.diagnostic_snapshot(),
+                    "retained_suffix": False,
+                    "incident_scan": incident_scan,
+                },
+                "revoked_corrections": (),
+                "revoked_pilot_rungs": (),
+            },
+        ),
+    )
+
+
+def _activate_delayed_regression_requirement(
+    state: _PilotState,
+    ctx: _PilotContext,
+    trial: _AcceptedTrial,
+    regression_witness: RegressionWitness | None,
+    generic_incident: Any,
+    exact_witnesses: tuple[Any, ...],
+    selected_exact: Any,
+    current_act_identity: tuple[Any, ...],
+    *,
+    from_trend: Any,
+) -> tuple[PilotEvent, ...] | None:
+    """Prefer an exact accepted-effect receipt over a corrective hypothesis."""
+
+    bearing = trial.attempt.bearing
+    recovery_checkpoint = (
+        _productive_tip_checkpoint(
+            trial,
+            state,
+            ctx,
+            selected_exact[1].source_checkpoint,
+            departure_scan=regression_witness.departure_scan,
+        )
+        if selected_exact is not None
+        and selected_exact[1].act_identity == current_act_identity
+        and regression_witness is not None
+        else None
+    )
+    delayed = _delayed_requirement_from_regression(
+        state,
+        ctx,
+        regression_witness,
+        recovery_checkpoint=recovery_checkpoint,
+    )
+    if delayed is None and exact_witnesses:
+        delayed = _delayed_requirement_from_regression(
+            state,
+            ctx,
+            incident_regression_witness(state.work, generic_incident),
+        )
+    if delayed is None:
+        return None
+    recovery_source, requirement, observation, failed_receipt = delayed
+    appeared = observation.appeared
+    transition = (
+        _theory_recording._record_theory_from_failed_requirements(
+            state,
+            ((requirement, failed_receipt),),
+            assertion_scan=appeared.scan_id,
+            evidence=(
+                (
+                    "delayed-regression",
+                    failed_receipt.act_identity,
+                    appeared.scan_id,
+                    requirement.deadline.scan_id,
+                    requirement.navigation_identity,
+                ),
+            ),
+            remaining_budget=state.remaining_search_scans(ctx.max_scans),
+        )
+        if appeared is not None
+        else None
+    )
+    if transition is None:
+        return None
+    if not any(
+        current.identity == failed_receipt.identity for current in state.failed_effect_receipts
+    ):
+        state.failed_effect_receipts.append(failed_receipt)
+    if not any(
+        current.navigation_identity == requirement.navigation_identity
+        for current in state.active_requirements
+    ):
+        state.active_requirements.append(requirement)
+    incident_scan = state.work.state.scan_id
+    state.load_world(recovery_source.world)
+    if all(current.owner is not recovery_source.owner for current in state.temporal_checkpoints):
+        state.temporal_checkpoints.append(recovery_source)
+    state.checkpoints.clear()
+    state.pending_departure = None
+    policy = bearing.act.policy
+    return (
+        PilotEvent(
+            "candidate_rejected",
+            incident_scan,
+            {
+                "index": 0,
+                "candidate": recording._candidate_payload(policy),
+                "applied": policy.applied,
+                "co_actions": tuple(
+                    pair for pair in policy.applied if pair != policy.primary_action
+                ),
+                "gates": trial.gate_events,
+                "effect_observations": (failed_receipt.observation,),
+                "post_commit": True,
+            },
+        ),
+        PilotEvent(
+            "failed_effect_explained",
+            incident_scan,
+            {"receipt": failed_receipt.diagnostic_snapshot()},
+        ),
+        PilotEvent(
+            "requirement_activated",
+            requirement.deadline.scan_id,
+            {"requirement": requirement.diagnostic_snapshot()},
+        ),
+        PilotEvent(
+            "trend_regression",
+            state.work.state.scan_id,
+            {
+                "from_trend": from_trend,
+                "to_trend": state.best_trend,
+                "checkpoint_key": recovery_source.key,
+                "regression_nogoods": frozenset(),
+                "pilot_rungs": tuple(state.pilot_rungs),
+                "channel_transitions": (),
+                "investigation": {
+                    "delayed_expectation": True,
+                    "working_theory": True,
+                    "requirement": requirement.diagnostic_snapshot(),
+                    "receipt": failed_receipt.diagnostic_snapshot(),
+                    "retained_suffix": False,
+                },
+                "revoked_corrections": (),
+                "revoked_pilot_rungs": (),
+            },
+        ),
     )
 
 
@@ -182,18 +430,18 @@ def _investigate_and_revert(
     origin: _RecoveryOrigin,
     retain_if_unresolved: DepartureResult | None = None,
     settled_if_unresolved: PLC | None = None,
-    occurrence_requirements: tuple[tuple[str, Any], ...] = (),
 ) -> tuple[PilotEvent, ...]:
-    """Build a bounded incident from ``origin`` through the current world, replay-test
-    corrective holds, install the confirmed ones, and revert to the selected
-    checkpoint.
+    """Build an incident from ``origin`` through the current world and recover.
+
+    Exact and legacy-derived corrections enter the ordinary Working Theory
+    lifecycle.  A legacy correction that cannot name one exact, adjustable
+    obstruction fails closed and is never installed privately.
 
     A regression origin anchors at its checkpoint, while a terminal-let-run
     ejection may anchor at the coast start. The origin owns that distinction;
     recovery derives the end from the committed world it is about to revert.
     """
     attempt = trial.attempt
-    pulse = attempt.pulse
     bearing_owner = attempt.bearing
     policy = bearing_owner.act.policy
     execution = trial.execution
@@ -206,11 +454,7 @@ def _investigate_and_revert(
     cp_key, cp_world, cp_trend = checkpoint.key, checkpoint.world, checkpoint.trend
     cp_fork = cp_world.work
     end_scan = state.work.state.scan_id
-    confirmed_correction: _ConfirmedCorrection | None = None
-    reused_receipt: _CorrectionReceipt | None = None
-    investigation: InvestigationResult | None = None
-    revoked_receipts: tuple[_CorrectionReceipt, ...] = ()
-    investigation_nogoods: set[_ActionPair] = set()
+    legacy_unrepresentable = False
     investigation_payload: dict[str, Any] = {}
     if policy.chase_regression_causes:
         # A watch tag that moved TO a value the target still needs (the
@@ -397,6 +641,14 @@ def _investigate_and_revert(
             )
             if landing is not None:
                 projection, write = landing
+                if (
+                    consumer is not None
+                    and observation is not bridged_frontier
+                    and _is_consumer_owned_same_scan_handback(projection, consumer, write)
+                ):
+                    # The declared consumer already fulfilled the handoff and
+                    # its exact output ancestry owns the later hand-back.
+                    continue
                 harmful_execution = state.world.execution_at(write.scan_id)
                 if harmful_execution is None:
                     continue
@@ -435,6 +687,7 @@ def _investigate_and_revert(
             for receipt in act.context.execution_receipts
             for event in receipt.timeline
             if origin.anchor_scan <= event.scan <= end_scan
+            and any(step.scan_before < event.scan <= step.scan_after for step in act.steps)
         )
         incident = build_deviation_incident(
             anchor_scan=origin.anchor_scan,
@@ -479,15 +732,6 @@ def _investigate_and_revert(
                 ),
             )
 
-        # Replay re-arms each step's recorded session spec (kind + channel +
-        # target) from the committed step context.
-        replay_steps = tuple(
-            _replay_step(step, act.context)
-            for act in state.committed_acts
-            for step in act.steps
-            if step.scan_before >= cp_fork.state.scan_id
-        )
-        role_tags = coast_departure_tags(state, ctx)
         # Join later causes on the adopted live lineage.  The disposable pulse
         # fork can contain equal history under distinct Epoch/query objects;
         # expectation receipts are intentionally bound to ``state.work``.
@@ -586,93 +830,162 @@ def _investigate_and_revert(
             if selected_exact is not None
             else incident_regression_witness(state.work, incident)
         )
-        recovery_checkpoint = (
-            _productive_tip_checkpoint(
-                trial,
-                state,
-                ctx,
-                selected_exact[1].source_checkpoint,
-                departure_scan=regression_witness.departure_scan,
-            )
-            if selected_exact is not None
-            and selected_exact[1].act_identity == current_act_identity
-            and regression_witness is not None
-            else None
-        )
-        delayed_requirement = _delayed_requirement_from_regression(
+        delayed_events = _activate_delayed_regression_requirement(
             state,
             ctx,
+            trial,
             regression_witness,
-            recovery_checkpoint=recovery_checkpoint,
+            generic_incident,
+            tuple(exact_witnesses),
+            selected_exact,
+            current_act_identity,
+            from_trend=verified.trend,
         )
-        if delayed_requirement is None and exact_witnesses:
-            regression_witness = incident_regression_witness(state.work, generic_incident)
-            delayed_requirement = _delayed_requirement_from_regression(
+        if delayed_events is not None:
+            return delayed_events
+        # The correction belongs to the exact occurrence that exposed it.
+        # Earned-work coordinates provide a finite executable guard; the old
+        # rollback checkpoint is only a source of history and must not widen
+        # the rung's lifetime.
+        correction_anchor = (
+            regression_witness.owner_snapshot
+            if regression_witness is not None and regression_witness.owner_snapshot is not None
+            else incident.before_snap
+        )
+        correction_progress_mark = (
+            state.earned_work.mark(dict(correction_anchor))
+            if state.earned_work is not None and state.earned_work.components
+            else ()
+        )
+        exact_corrections = _exact_regression_corrections(
+            state,
+            ctx,
+            incident,
+            regression_witness,
+            progress_mark=correction_progress_mark,
+        )
+        exact_requirement = None
+        just_in_time_source = None
+        exact_evidence = None
+        for candidate_evidence in _ordinary_correction_order(exact_corrections):
+            # Start at the latest possible source and widen only across the
+            # small scan pipeline needed to make the real PilotRung visible at
+            # the exact consumer.  This is bounded executor validation, not a
+            # replay of the surrounding operation.
+            for lead_scans in range(1, _MAX_TENTATIVE_PROOF_SCANS + 1):
+                candidate_source = _checkpoint_at_scan(
+                    state,
+                    ctx,
+                    bearing_owner.objective,
+                    candidate_evidence.obstruction.scan_id - lead_scans,
+                )
+                if candidate_source is None:
+                    continue
+                candidate_requirement = _exact_correction_requirement_from_regression(
+                    state,
+                    ctx,
+                    incident,
+                    candidate_evidence,
+                    candidate_source,
+                )
+                if candidate_requirement is None:
+                    continue
+                exact_evidence = candidate_evidence
+                exact_requirement = candidate_requirement
+                just_in_time_source = candidate_source
+                break
+            if exact_requirement is not None:
+                break
+        if (
+            exact_requirement is not None
+            and just_in_time_source is not None
+            and exact_requirement.obstruction_occurrence is not None
+        ):
+            _theory_recording._advance_theory_to_regression_prefix(
+                state,
+                trial,
+                just_in_time_source,
+                exact_requirement.obstruction_occurrence,
+            )
+        if (
+            exact_requirement is not None
+            and just_in_time_source is not None
+            and exact_evidence is not None
+        ):
+            activated = _activate_regression_theory_requirement(
                 state,
                 ctx,
-                regression_witness,
+                bearing_owner,
+                exact_requirement,
+                just_in_time_source,
+                from_trend=verified.trend,
+                evidence=(
+                    (
+                        "exact-regression-corrective",
+                        exact_requirement.navigation_identity,
+                        exact_evidence.hypothesis_kind,
+                    ),
+                ),
+                investigation={
+                    "exact_regression": True,
+                    "private_replay": False,
+                    "bounded_proof": True,
+                    "hypothesis_kind": exact_evidence.hypothesis_kind,
+                },
             )
-        if delayed_requirement is not None:
-            recovery_source, requirement, _observation, failed_receipt = delayed_requirement
-            # Same-scan failures restore the matched transaction source.  A
-            # later exact deadline may instead retain its already-executed
-            # productive tip.  In either case the selected checkpoint is an
-            # executable prefix, never a folded future.
-            incident_scan = state.work.state.scan_id
-            state.load_world(recovery_source.world)
-            if all(
-                current.owner is not recovery_source.owner for current in state.temporal_checkpoints
-            ):
-                state.temporal_checkpoints.append(recovery_source)
-            state.checkpoints.clear()
-            state.pending_departure = None
-            return (
-                PilotEvent(
-                    "candidate_rejected",
-                    incident_scan,
-                    {
-                        "index": 0,
-                        "candidate": recording._candidate_payload(policy),
-                        "applied": policy.applied,
-                        "co_actions": tuple(
-                            pair for pair in policy.applied if pair != policy.primary_action
+            if activated is not None:
+                return activated
+        # Some exact incidents begin after operation-owned temporary inputs
+        # have already disappeared from the retained log.  In that case a
+        # tiny historical fork cannot reproduce the consumer even though the
+        # exact causal writer names a finite, adjustable correction.  Keep the
+        # correction tentative: restore the ordinary regression source, let
+        # Working Theory compose the PilotRung, and make the fresh executor
+        # continuation prove or reject it.  This is the same user-visible
+        # steer -> obstruction -> steer loop, without a private incident
+        # replay or an unbounded static cone.
+        if exact_corrections:
+            ordinary_source = _CausalCheckpoint(
+                key=cp_key,
+                world=cp_world,
+                objective=bearing_owner.objective,
+                    configured_inputs=getattr(ctx, "configured_inputs", frozenset()),
+            )
+            for candidate_evidence in _ordinary_correction_order(exact_corrections):
+                candidate_requirement = _exact_correction_requirement_from_regression(
+                    state,
+                    ctx,
+                    incident,
+                    candidate_evidence,
+                    ordinary_source,
+                    require_bounded_proof=False,
+                )
+                if candidate_requirement is None:
+                    continue
+                activated = _activate_regression_theory_requirement(
+                    state,
+                    ctx,
+                    bearing_owner,
+                    candidate_requirement,
+                    ordinary_source,
+                    from_trend=verified.trend,
+                    evidence=(
+                        (
+                            "tentative-regression-corrective",
+                            candidate_requirement.navigation_identity,
+                            candidate_evidence.hypothesis_kind,
                         ),
-                        "gates": trial.gate_events,
-                        "effect_observations": (failed_receipt.observation,),
-                        "post_commit": True,
+                    ),
+                    investigation={
+                        "exact_regression": True,
+                        "private_replay": False,
+                        "bounded_proof": False,
+                        "validation": "ordinary-working-theory",
+                        "hypothesis_kind": candidate_evidence.hypothesis_kind,
                     },
-                ),
-                PilotEvent(
-                    "failed_effect_explained",
-                    incident_scan,
-                    {"receipt": failed_receipt.diagnostic_snapshot()},
-                ),
-                PilotEvent(
-                    "requirement_activated",
-                    requirement.deadline.scan_id,
-                    {"requirement": requirement.diagnostic_snapshot()},
-                ),
-                PilotEvent(
-                    "trend_regression",
-                    state.work.state.scan_id,
-                    {
-                        "from_trend": verified.trend,
-                        "to_trend": state.best_trend,
-                        "checkpoint_key": recovery_source.key,
-                        "regression_nogoods": frozenset(),
-                        "pilot_rungs": tuple(state.pilot_rungs),
-                        "channel_transitions": (),
-                        "investigation": {
-                            "delayed_expectation": True,
-                            "requirement": requirement.diagnostic_snapshot(),
-                            "receipt": failed_receipt.diagnostic_snapshot(),
-                            "retained_suffix": False,
-                        },
-                        "revoked_corrections": (),
-                        "revoked_pilot_rungs": (),
-                    },
-                ),
-            )
+                )
+                if activated is not None:
+                    return activated
         if recovery_transaction_active():
             # This landing was observed while the already-selected local
             # repair transaction was being proved.  It may use the existing
@@ -700,165 +1013,15 @@ def _investigate_and_revert(
                     },
                 ),
             )
-        # A corrective fact belongs to the occurrence that exposed it. The
-        # witness carries the scan-entry snapshot for the harmful writer; its
-        # Earned-work coordinates distinguish a late fault from earlier useful work
-        # inside the same coast. The rollback checkpoint is only where replay
-        # starts and is not corrective context.
-        correction_anchor = (
-            regression_witness.owner_snapshot
-            if regression_witness is not None and regression_witness.owner_snapshot is not None
-            else incident.before_snap
-        )
-        correction_progress_mark = (
-            state.earned_work.mark(dict(correction_anchor))
-            if state.earned_work is not None and state.earned_work.components
-            else ()
-        )
-        regression_progress_floor = dict(cp_fork.state.tags)
-        regression_progress_floor.update(correction_progress_mark)
-        causally_revoked = _causally_harmful_corrections(
-            state,
-            regression_witness,
-            incident.before_snap,
-        )
-        excluded_corrections = {
-            *state.correction_nogoods.get(cp_key, ()),
-            *(receipt.identity for receipt in causally_revoked),
-        }
-        replay = build_replay_fn(
-            cp_fork,
-            cp_trend,
-            tuple(state.pilot_rungs),
-            replay_steps,
-            ctx=ctx,
-            incident=ReplayIncident(
-                channel_tag=channel_motion.channel_tag,
-                channel_target=channel_motion.target_value,
-                terminal_role_tags=(
-                    role_tags if policy.motion is MotionKind.COAST_HOLDING_WORLD else None
-                ),
-                # The replay reproduces the incident, so its eject watch is the
-                # departed channel alone when one exists (audit I2 — an explicit
-                # caller decision, not buried dispatch); the full role set only
-                # when no channel register is recognized.
-                watch_roles=(
-                    (channel_motion.channel_tag,)
-                    if channel_motion.channel_tag is not None
-                    else role_tags
-                ),
-                departure_bearing=tuple((d.tag, d.value) for d in incident.departures),
-                regression_witness=regression_witness,
-                earned_work=state.earned_work,
-                progress_anchor=dict(cp_fork.state.tags),
-                regression_progress_floor=(
-                    regression_progress_floor if correction_progress_mark else None
-                ),
-            ),
-        )
-
-        # The register set the target still needs comes from the exact Bearing
-        # that produced this incident. The live frame here is useless — a
-        # terminal-let-run frame is a coast with no tree — and the rollback
-        # checkpoint may predate this operation. Re-deriving from either loses
-        # completion-frontier needs (``Sts_StateCurrent = 17``) that the target
-        # tree alone cannot surface.
-        needed = list(bearing_owner.objective.frontier)
-        investigation = investigate_deviation(
-            # Derive hypotheses from the PLC that actually observed the
-            # incident.  Replay still starts from ``cp_fork`` above.
-            pulse.fork,
-            incident,
-            ctx,
-            replay,
-            needed=needed,
-            installed_pilot_rungs=tuple(state.pilot_rungs),
-            correction_pilot_rungs=tuple(
-                rung
-                for receipt in state.correction_receipts
-                if receipt.status.effective
-                for rung in receipt.pilot_rungs
-            ),
-            correction_progress_mark=correction_progress_mark,
-            occurrence_requirements=occurrence_requirements,
-            excluded_corrections=frozenset(excluded_corrections),
-            regression_witness=regression_witness,
-        )
-        investigation_nogoods.update(investigation.regression_nogoods)
-        # Investigation has already derived a finite guard and replayed this
-        # exact installed form. Post-commit recovery does not reinterpret that proof through
-        # a second, globally-steady-hold rule.
-        confirmed_correction = investigation.correction
-        revoked_by_id = {
-            receipt.receipt_id: receipt
-            for receipt in (
-                *causally_revoked,
-                *_contradicted_corrections(state, investigation, incident.before_snap),
-            )
-        }
-        revoked_receipts = tuple(revoked_by_id.values())
-        revoked_receipt_ids = {receipt.receipt_id for receipt in revoked_receipts}
-        reused_receipt = next(
-            (
-                receipt
-                for receipt in state.correction_receipts
-                if receipt.status.effective
-                and receipt.receipt_id not in revoked_receipt_ids
-                and confirmed_correction is not None
-                and receipt.identity == confirmed_correction.identity
-            ),
-            None,
-        )
-        if reused_receipt is not None:
-            # The skeleton owns one correction for one exact executable form.
-            # A repeated incident may reconfirm that form before useful work
-            # promotes it, but it must not report or install a second
-            # correction.  The existing receipt remains the sole authority.
-            confirmed_correction = None
-
-        def _hyp_detail(h: Any) -> dict[str, Any]:
-            return {
-                "kind": h.kind,
-                "holds": h.holds,
-                "sources": h.sources,
-                "detail": h.detail,
-            }
-
-        def _rejection_detail(rejection: InvestigationRejection) -> dict[str, Any]:
-            return {
-                **_hyp_detail(rejection.hypothesis),
-                "slug": rejection.slug,
-                "ground": rejection.ground,
-            }
-
         investigation_payload = {
             "retained_sources": len(retained_sources),
             "exact_delayed_links": len(exact_delayed_links),
             "exact_witnesses": len(exact_witnesses),
-            "hypotheses": len(investigation.hypotheses),
-            "confirmed": 0 if reused_receipt is not None else len(investigation.confirmed),
-            "rejected": len(investigation.rejected),
-            "unresolved": investigation.unresolved,
-            "hypothesis_detail": tuple(_hyp_detail(h) for h in investigation.hypotheses),
-            "confirmed_detail": (
-                ()
-                if reused_receipt is not None
-                else tuple(_hyp_detail(h) for h in investigation.confirmed)
-            ),
-            "rejected_detail": tuple(_rejection_detail(r) for r in investigation.rejected),
-            "revoked_corrections": tuple(receipt.receipt_id for receipt in revoked_receipts),
-            **(
-                {"reused_correction": reused_receipt.receipt_id}
-                if reused_receipt is not None
-                else {}
-            ),
+            "legacy_replay": False,
+            "working_theory_admission": "unrepresentable",
         }
-    if (
-        retain_if_unresolved is not None
-        and confirmed_correction is None
-        and reused_receipt is None
-        and not revoked_receipts
-    ):
+        legacy_unrepresentable = True
+    if retain_if_unresolved is not None and not legacy_unrepresentable:
         # The departure earned no target-relative credit, but investigation found no
         # executable correction that preserves the target frontier.  The
         # independently-proven continuation therefore receives the ordinary
@@ -908,8 +1071,7 @@ def _investigate_and_revert(
     # actions inside one channel tenure; ``frame.key`` owns the action source.
     # A replay-confirmed correction changes that source key, so the same action
     # remains naturally eligible in the corrected executable world.
-    regression_nogoods = set(investigation_nogoods)
-    regression_nogoods.update(policy.regression_nogoods)
+    regression_nogoods = set(policy.regression_nogoods)
     observations = [
         ActionNogoodObservation(frame.key, ("pair", pair)) for pair in regression_nogoods
     ]
@@ -929,19 +1091,6 @@ def _investigate_and_revert(
     # longer describe an executable clean world; return to the tenure owner.
     del state.checkpoints[checkpoint_index + 1 :]
     state.load_world(cp_world)
-    revoked_ids = _revoke_corrections(state, revoked_receipts)
-    if confirmed_correction is not None:
-        # Revocation removes contradicted owners before this append.  The
-        # replay-confirmed remedy is therefore an ownership replacement, not a
-        # second hold layered over the stale correction.
-        correction_origin_key = state.checkpoints[-1].key
-        _install_confirmed_correction(
-            state,
-            confirmed_correction,
-            origin_key=correction_origin_key,
-            scan=cp_fork.state.scan_id,
-            source="investigation",
-        )
     state.best_trend = cp_trend
     return (
         PilotEvent(
@@ -955,10 +1104,8 @@ def _investigate_and_revert(
                 "pilot_rungs": tuple(state.pilot_rungs),
                 "channel_transitions": channel_transitions,
                 "investigation": investigation_payload,
-                "revoked_corrections": revoked_ids,
-                "revoked_pilot_rungs": tuple(
-                    rung for receipt in revoked_receipts for rung in receipt.pilot_rungs
-                ),
+                "revoked_corrections": (),
+                "revoked_pilot_rungs": (),
             },
         ),
     )

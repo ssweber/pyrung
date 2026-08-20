@@ -715,6 +715,40 @@ class TestCausalVerbs:
             "~ProgressTest_Sensor)): latch(ProgressTest_Sensor).\n"
         )
 
+    def test_how_progress_prints_working_theory_corrective_rung(self):
+        from types import SimpleNamespace
+
+        from pyrung import Bool
+        from pyrung.core.analysis.pilot.overlay import PilotRung
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        running = Bool("ProgressTest_TheoryRunning")
+        sail = Bool("ProgressTest_TheorySail", external=True)
+        correction = PilotRung(sail.name, True, running == True)  # noqa: E712
+        progress = _PilotProgressFormatter()
+        progress.format(PilotEvent("investigation_started", 10))
+
+        result = progress.format(
+            PilotEvent(
+                "trend_regression",
+                20,
+                {
+                    "investigation": {
+                        "working_theory": True,
+                        "requirement": SimpleNamespace(
+                            corrective_pilot_rungs=(correction,)
+                        ),
+                    }
+                },
+            )
+        )
+
+        assert result == (
+            " Yes -- with rung(ProgressTest_TheoryRunning): "
+            "latch(ProgressTest_TheorySail).\n"
+        )
+
     def test_how_progress_groups_corrections_on_their_exact_rung(self):
         from pyrung import Bool, Int
         from pyrung.core.analysis.pilot.overlay import PilotRung

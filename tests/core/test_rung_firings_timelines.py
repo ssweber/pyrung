@@ -103,6 +103,26 @@ def test_varied_is_a_sparse_sticky_true_fact_per_scope_and_tag() -> None:
     assert timelines.varied_scans(frozenset({0}), "A", (1, 2, 3)) == (1, 3)
 
 
+def test_value_or_varied_scans_queries_compressed_columns() -> None:
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    for scan_id in range(1, 101):
+        timelines.append(
+            0,
+            scan_id,
+            {
+                "constant": False,
+                "alternating": scan_id % 2,
+                "arithmetic": scan_id * 3,
+            },
+            {"constant"} if scan_id == 75 else set(),
+        )
+    selected = (2, 3, 50, 75, 99, 100)
+
+    assert timelines.value_or_varied_scans(0, "constant", True, selected) == (75,)
+    assert timelines.value_or_varied_scans(0, "alternating", 1, selected) == (3, 75, 99)
+    assert timelines.value_or_varied_scans(0, "arithmetic", 150, selected) == (50,)
+
+
 def test_unknown_degrades_only_one_high_complexity_column() -> None:
     timelines: RungFiringTimelines[int] = RungFiringTimelines()
     for scan_id in range(1, _VALUE_VARIETY_THRESHOLD + 2):

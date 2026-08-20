@@ -189,3 +189,44 @@ def test_hypothesis_hold_order_ignores_process_local_guard_addresses() -> None:
     assert forward == reversed_order
     holds = forward[0]["investigation"]["confirmed_detail"][0]["holds"]
     assert [hold["value"] for hold in holds] == [False, True]
+
+
+def test_working_theory_regression_keeps_correction_decision_not_legacy_shape() -> None:
+    requirement = SimpleNamespace(
+        condition="DoorClosed == True",
+        operand_authority=SimpleNamespace(value="adjustable"),
+        phase=SimpleNamespace(value="steady"),
+        status=SimpleNamespace(value="active"),
+        provenance="exact-regression-corrective",
+        corrective_pilot_rungs=(
+            PilotRung("x_LintDoorClosed", True, "Execute"),
+            PilotRung("x_DoorClosed", True, "Execute or Completed"),
+        ),
+    )
+    event = SimpleNamespace(
+        kind="trend_regression",
+        data={
+            "from_trend": 2,
+            "to_trend": 1,
+            "channel_transitions": (),
+            "regression_nogoods": (),
+            "investigation": {
+                "working_theory": True,
+                "private_replay": False,
+                "bounded_proof": False,
+                "validation": "ordinary-working-theory",
+                "hypothesis_kind": "latch-exposure",
+                "requirement": requirement,
+            },
+        },
+    )
+
+    investigation = extract_skeleton([event])[0]["investigation"]
+
+    assert investigation["working_theory"] is True
+    assert investigation["private_replay"] is False
+    assert investigation["hypothesis_kind"] == "latch-exposure"
+    assert [
+        rung["dest"] for rung in investigation["requirement"]["corrective_pilot_rungs"]
+    ] == ["x_DoorClosed", "x_LintDoorClosed"]
+    assert "confirmed_detail" not in investigation

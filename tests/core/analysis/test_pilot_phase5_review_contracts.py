@@ -82,11 +82,6 @@ def test_post_commit_progress_follows_the_exact_scan_receipt(monkeypatch) -> Non
         "_trial_checkpoint",
         lambda *_args: receipt_checkpoint,
     )
-    monkeypatch.setattr(
-        pilot_module,
-        "_promote_probationary_corrections",
-        lambda _state: (),
-    )
     policy = SimpleNamespace(action_pairs=(("Input", True),), applied=(("Input", True),))
     trial = SimpleNamespace(
         attempt=SimpleNamespace(
@@ -196,11 +191,6 @@ def test_selected_producer_landing_outranks_crossed_intermediate_heading(
         pilot_module,
         "_trial_checkpoint",
         lambda *_args: receipt_checkpoint,
-    )
-    monkeypatch.setattr(
-        pilot_module,
-        "_promote_probationary_corrections",
-        lambda _state: (),
     )
     policy = SimpleNamespace(action_pairs=(), applied=())
     trial = SimpleNamespace(

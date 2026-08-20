@@ -115,17 +115,6 @@ class AdvanceTheory:
 
 
 @dataclass(frozen=True)
-class RetainedCorrectionReceipt:
-    """Detached proof that the trend monitor owns a retained overlay."""
-
-    receipt_id: int
-    correction_identity: tuple[tuple[Any, ...], ...]
-    pilot_rung_identities: tuple[tuple[Any, ...], ...]
-    origin_world_key: tuple[Any, ...]
-    status: str
-
-
-@dataclass(frozen=True)
 class RebaseTheoryWorld:
     """Move one same-owner progress tip across already-owned overlay facts."""
 
@@ -136,7 +125,6 @@ class RebaseTheoryWorld:
     retained_pilot_rung_identities: tuple[tuple[Any, ...], ...]
     rebase_identity: tuple[Any, ...]
     superseded_pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
-    retained_correction_receipts: tuple[RetainedCorrectionReceipt, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -148,9 +136,11 @@ class ComposeTheoryCorrection:
     source: TheoryBoundaryIdentity
     composed_source: TheoryBoundaryIdentity
     requirement_identities: tuple[tuple[Any, ...], ...]
-    configuration: ScanEntryConfiguration
     composition_identity: tuple[Any, ...]
+    configuration: ScanEntryConfiguration | None = None
+    pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
     superseded_configuration_identities: tuple[tuple[Any, ...], ...] = ()
+    superseded_pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
     research_finding_identity: tuple[Any, ...] | None = None
 
 
@@ -838,22 +828,8 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
                 owned.update(receipt.pilot_rung_identities)
             elif receipt.kind is TheoryPhaseKind.WORLD_REBASE:
                 owned.update(receipt.pilot_rung_identities)
-        correction_owned: set[tuple[Any, ...]] = set()
-        for receipt in fact.retained_correction_receipts:
-            if (
-                receipt.receipt_id <= 0
-                or not receipt.origin_world_key
-                or receipt.status not in {"probationary", "active"}
-                or not receipt.pilot_rung_identities
-                or tuple(sorted(receipt.pilot_rung_identities, key=repr))
-                != receipt.correction_identity
-                or not set(receipt.pilot_rung_identities) & set(added)
-            ):
-                raise TheoryInvariantError("retained correction receipt is malformed or inactive")
-            correction_owned.update(set(receipt.pilot_rung_identities) & set(added))
-        allowed = owned | correction_owned
-        if not set(added) <= allowed:
-            unowned_identities = tuple(identity for identity in added if identity not in allowed)
+        if not set(added) <= owned:
+            unowned_identities = tuple(identity for identity in added if identity not in owned)
             unowned = tuple((identity[0], identity[1]) for identity in unowned_identities)
             related_owned = tuple(
                 identity
@@ -931,6 +907,10 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             raise TheoryInvariantError("scan-entry composition changed the physical World")
         if fact.composed_source.scan_id > 0 and fact.composed_source.execution_ref is None:
             raise TheoryInvariantError("composition boundary evidence is incomplete")
+        if (fact.configuration is None) == (not fact.pilot_rung_identities):
+            raise TheoryInvariantError(
+                "composition must contain exactly one configuration or PilotRung form"
+            )
         prior_configurations = {
             configuration.identity
             for phase in parent.phase_receipts
@@ -945,8 +925,29 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         active_prior = prior_configurations - prior_superseded
         if not set(fact.superseded_configuration_identities) <= active_prior:
             raise TheoryInvariantError("composition supersedes an unowned correction")
-        if fact.configuration.identity in fact.superseded_configuration_identities:
+        if (
+            fact.configuration is not None
+            and fact.configuration.identity in fact.superseded_configuration_identities
+        ):
             raise TheoryInvariantError("composition cannot supersede its new correction")
+        prior_rungs: set[tuple[Any, ...]] = set()
+        prior_superseded_rungs: set[tuple[Any, ...]] = set()
+        for phase in parent.phase_receipts:
+            prior_superseded_rungs.update(phase.superseded_pilot_rung_identities)
+            if phase.kind in {
+                TheoryPhaseKind.TEMPORAL_SETUP,
+                TheoryPhaseKind.REARM,
+                TheoryPhaseKind.TRANSACTION_ATTEMPT,
+                TheoryPhaseKind.CORRECTION_COMPOSITION,
+                TheoryPhaseKind.CORRECTION_INSTALL,
+                TheoryPhaseKind.WORLD_REBASE,
+            }:
+                prior_rungs.update(phase.pilot_rung_identities)
+        active_prior_rungs = prior_rungs - prior_superseded_rungs
+        if not set(fact.superseded_pilot_rung_identities) <= active_prior_rungs:
+            raise TheoryInvariantError("composition supersedes an unowned PilotRung")
+        if set(fact.pilot_rung_identities) & set(fact.superseded_pilot_rung_identities):
+            raise TheoryInvariantError("composition cannot supersede its new PilotRung")
         if fact.research_finding_identity is not None:
             finding = state.ledger.research_findings.get(fact.research_finding_identity)
             if finding is None:
@@ -961,7 +962,9 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             kind=TheoryPhaseKind.CORRECTION_COMPOSITION,
             evidence_identity=fact.composition_identity,
             requirement_identities=fact.requirement_identities,
-            configurations=(fact.configuration,),
+            pilot_rung_identities=fact.pilot_rung_identities,
+            superseded_pilot_rung_identities=fact.superseded_pilot_rung_identities,
+            configurations=((fact.configuration,) if fact.configuration is not None else ()),
             superseded_configuration_identities=(fact.superseded_configuration_identities),
         )
         progress_id: TheoryProgressId = _ledger_identity(

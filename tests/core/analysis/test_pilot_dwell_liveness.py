@@ -192,20 +192,27 @@ def test_full_pilot_learns_complementary_dwell_as_separate_local_incidents() -> 
     assert finished[0].data["reached"] is True
     assert finished[0].data["work"].state.tags[tags["state"].name] == 7
 
-    confirmed = [
-        detail
+    requirements = [
+        investigation["requirement"]
         for event in events
         if event.kind == "trend_regression"
-        for detail in event.data["investigation"]["confirmed_detail"]
+        if (investigation := event.data.get("investigation") or {}).get(
+            "hypothesis_kind"
+        )
+        == "liveness"
     ]
-    assert [detail["kind"] for detail in confirmed] == ["liveness", "liveness"]
-    assert {(hold.dest, hold.value) for detail in confirmed for hold in detail["holds"]} == {
+    assert len(requirements) == 2
+    assert all(investigation["working_theory"] is True for investigation in (
+        event.data["investigation"]
+        for event in events
+        if event.kind == "trend_regression"
+        and (event.data.get("investigation") or {}).get("hypothesis_kind") == "liveness"
+    ))
+    assert {
+        (hold.dest, hold.value)
+        for requirement in requirements
+        for hold in requirement.corrective_pilot_rungs
+    } == {
         (tags["sensor"].name, False),
         (tags["sensor"].name, True),
     }
-    assert not any(
-        rejection["slug"] == "sibling-regression"
-        for event in events
-        if event.kind == "trend_regression"
-        for rejection in event.data["investigation"]["rejected_detail"]
-    )

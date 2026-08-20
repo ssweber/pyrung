@@ -408,6 +408,40 @@ def _extract_hypothesis(detail: Mapping[str, Any]) -> dict[str, Any]:
 def _extract_investigation(inv: Mapping[str, Any] | None) -> Any:
     if inv is None:
         return None
+    if inv.get("working_theory"):
+        requirement = inv.get("requirement")
+        condition = getattr(requirement, "condition", None)
+        authority = getattr(requirement, "operand_authority", None)
+        phase = getattr(requirement, "phase", None)
+        status = getattr(requirement, "status", None)
+        return {
+            key: _jsonify(inv[key])
+            for key in (
+                "working_theory",
+                "private_replay",
+                "bounded_proof",
+                "validation",
+                "hypothesis_kind",
+                "delayed_expectation",
+                "legacy_evidence",
+            )
+            if key in inv
+        } | {
+            "requirement": {
+                "condition": _scrub(repr(condition)) if condition is not None else None,
+                "authority": getattr(authority, "value", authority),
+                "phase": getattr(phase, "value", phase),
+                "status": getattr(status, "value", status),
+                "provenance": getattr(requirement, "provenance", None),
+                "corrective_pilot_rungs": sorted(
+                    (
+                        _jsonify(rung)
+                        for rung in getattr(requirement, "corrective_pilot_rungs", ())
+                    ),
+                    key=_address_neutral_sort_key,
+                ),
+            }
+        }
     return {
         "hypotheses": inv.get("hypotheses"),
         "confirmed": inv.get("confirmed"),

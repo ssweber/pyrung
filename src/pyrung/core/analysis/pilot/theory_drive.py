@@ -1,7 +1,7 @@
 """Resolve and execute the next durable WorkingTheory temporal request.
 
 This module restores and rebases the exact World named by a temporal request,
-resolves retained requirements, composes desired scan-entry configuration, and
+resolves retained requirements, composes desired executable correction, and
 completes controlled setup. Accepted fact application lives in
 ``theory_recording.py``. This module does not interpret raw execution evidence,
 choose a Bearing, execute one, or run the outer Pilot loop.
@@ -47,7 +47,6 @@ from pyrung.core.analysis.pilot.theory_reducer import (
     ProveTheory,
     RebaseTheoryWorld,
     RefineTheory,
-    RetainedCorrectionReceipt,
 )
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
@@ -70,7 +69,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     theory_view,
 )
 from pyrung.core.analysis.pilot.world import _CausalCheckpoint
-from pyrung.core.analysis.pilot.world_key import _rung_identity
+from pyrung.core.analysis.pilot.world_key import _rung_identity, _semantic_key
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -240,19 +239,6 @@ def _rebase_restored_theory_world(
     live_rungs = tuple(live_key[1])
     retained = tuple(rung for rung in live_rungs if rung not in source_rungs)
     superseded = tuple(rung for rung in source_rungs if rung not in live_rungs)
-    retained_identities = set(retained)
-    retained_correction_receipts = tuple(
-        RetainedCorrectionReceipt(
-            receipt_id=receipt.receipt_id,
-            correction_identity=receipt.identity,
-            pilot_rung_identities=receipt.identity,
-            origin_world_key=receipt.origin_key,
-            status=receipt.status.value,
-        )
-        for receipt in state.correction_receipts
-        if receipt.status.effective
-        and any(identity in retained_identities for identity in receipt.identity)
-    )
     owned_superseded = active_theory_superseded_pilot_rung_identities(state.theory_state)
     if not set(superseded) <= owned_superseded:
         raise ValueError("restored temporal source lost an unowned overlay")
@@ -275,7 +261,6 @@ def _rebase_restored_theory_world(
                 retained,
                 superseded,
             ),
-            retained_correction_receipts=retained_correction_receipts,
         ),
     )
     rebased_checkpoint = _CausalCheckpoint(
@@ -336,7 +321,11 @@ def _setup_request_for_result(
     view = getattr(getattr(result, "orientation", None), "world", None)
     view = getattr(getattr(view, "context", None), "theory_view", None)
     configured_continuation = bool(
-        policy.local_progress is LocalProgressKind.TEMPORAL_EDGE
+        policy.local_progress
+        in {
+            LocalProgressKind.TEMPORAL_EDGE,
+            LocalProgressKind.THEORY_CORRECTIVE,
+        }
         and (
             getattr(view, "pending_configuration_identities", frozenset())
             or getattr(view, "pending_overlay_identities", frozenset())
@@ -356,8 +345,10 @@ class _TheoryCorrectionCompositionReceipt:
     """Exact no-scan WorkingTheory change produced by one composition."""
 
     requirements: tuple[ActiveRequirement, ...]
-    configuration: ScanEntryConfiguration
+    configuration: ScanEntryConfiguration | None
+    pilot_rungs: tuple[PilotRung, ...]
     superseded_configuration_identities: tuple[tuple[Any, ...], ...]
+    superseded_pilot_rung_identities: tuple[tuple[Any, ...], ...]
     research_finding_identity: tuple[Any, ...] | None
 
 
@@ -366,7 +357,7 @@ def _compose_theory_correction(
     request: TemporalNeedRequest,
     result: ComposeCorrection,
 ) -> _TheoryCorrectionCompositionReceipt:
-    """Persist desired entry configuration without changing the physical World."""
+    """Persist one correction, then expose its executable form to fresh Compass."""
 
     theory = active_theory(state.theory_state)
     if theory is None or theory.theory_id != request.theory_id:
@@ -404,28 +395,62 @@ def _compose_theory_correction(
     matched_identities = tuple(
         (
             _theory_requirement_snapshot(requirement).semantic_identity
-            if getattr(requirement.condition, "tag", None) is None
+            if getattr(requirement, "corrective_pilot_rungs", ())
+            or getattr(requirement.condition, "tag", None) is None
             else requirement.identity
         )
         for requirement in matched
     )
     configuration = result.configuration
-    destinations = frozenset(tag for tag, _value in configuration.assignments)
-    superseded = tuple(
-        active
-        for active in active_theory_configurations(state.theory_state)
-        if active.identity != configuration.identity
-        and any(tag in destinations for tag, _value in active.assignments)
-    )
-    superseded_identities = tuple(item.identity for item in superseded)
+    pilot_rungs = tuple(result.pilot_rungs)
+    superseded_identities: tuple[tuple[Any, ...], ...] = ()
+    superseded_rungs: tuple[PilotRung, ...] = ()
+    if configuration is not None:
+        destinations = frozenset(tag for tag, _value in configuration.assignments)
+        superseded = tuple(
+            active
+            for active in active_theory_configurations(state.theory_state)
+            if active.identity != configuration.identity
+            and any(tag in destinations for tag, _value in active.assignments)
+        )
+        superseded_identities = tuple(item.identity for item in superseded)
+        executable_identity: Any = configuration.identity
+    else:
+        owned = active_theory_pilot_rung_identities(state.theory_state)
+        destinations = frozenset(rung.dest for rung in pilot_rungs)
+        new_identities = frozenset(_rung_identity(rung) for rung in pilot_rungs)
+
+        def supersedes(active: PilotRung) -> bool:
+            for proposed in pilot_rungs:
+                if proposed.dest != active.dest:
+                    continue
+                if proposed.operation is None or active.operation is None:
+                    return True
+                if _semantic_key(proposed.operation.until) == _semantic_key(
+                    active.operation.until
+                ):
+                    return True
+            return False
+
+        superseded_rungs = tuple(
+            rung
+            for rung in state.pilot_rungs
+            if _rung_identity(rung) in owned
+            and rung.dest in destinations
+            and _rung_identity(rung) not in new_identities
+            and supersedes(rung)
+        )
+        executable_identity = tuple(sorted(new_identities, key=repr))
+    superseded_rung_identities = tuple(_rung_identity(rung) for rung in superseded_rungs)
     composition_identity = (
         "working-theory-compose",
         request.theory_id,
         request.version_id,
         request.source,
         matched_identities,
-        configuration.identity,
+        executable_identity,
         superseded_identities,
+        superseded_rung_identities,
         result.research_finding_identity,
     )
     composed_source = _theory_live_boundary(state)
@@ -437,9 +462,11 @@ def _compose_theory_correction(
             source=request.source,
             composed_source=composed_source,
             requirement_identities=matched_identities,
-            configuration=configuration,
             composition_identity=composition_identity,
+            configuration=configuration,
+            pilot_rung_identities=tuple(_rung_identity(rung) for rung in pilot_rungs),
             superseded_configuration_identities=superseded_identities,
+            superseded_pilot_rung_identities=superseded_rung_identities,
             research_finding_identity=result.research_finding_identity,
         ),
     )
@@ -464,6 +491,27 @@ def _compose_theory_correction(
             temporal_source=retry_source,
         ),
     )
+    if pilot_rungs:
+        superseded_set = set(superseded_rung_identities)
+        retained = pvector(
+            rung for rung in state.pilot_rungs if _rung_identity(rung) not in superseded_set
+        )
+        state.pilot_rungs = _merged_pilot_rungs(pilot_rungs, retained)
+        if superseded_rungs:
+            state.hold_log.append(
+                _HoldLogEntry(
+                    scan=state.work.state.scan_id,
+                    source="working-theory-supersession",
+                    pilot_rungs=superseded_rungs,
+                )
+            )
+        state.hold_log.append(
+            _HoldLogEntry(
+                scan=state.work.state.scan_id,
+                source="working-theory-composition",
+                pilot_rungs=pilot_rungs,
+            )
+        )
     # Installing temporary logic is a hypothesis, not proof that its parent
     # requirement is discharged. The refinement versions the exact composed
     # World while retaining the trigger and requirement scope, so fresh Compass
@@ -471,7 +519,9 @@ def _compose_theory_correction(
     return _TheoryCorrectionCompositionReceipt(
         requirements=matched,
         configuration=configuration,
+        pilot_rungs=pilot_rungs,
         superseded_configuration_identities=superseded_identities,
+        superseded_pilot_rung_identities=superseded_rung_identities,
         research_finding_identity=result.research_finding_identity,
     )
 

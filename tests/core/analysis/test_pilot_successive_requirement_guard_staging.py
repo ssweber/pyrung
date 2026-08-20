@@ -154,7 +154,6 @@ def test_same_source_requirements_compose_before_adjustable_final_guard() -> Non
             "theory_correction_composed",
             (scenario.SecondPresetMs.name, 11),
         ),
-        ("candidate_try", ((scenario.StartCommand.name, True),)),
         (
             "candidate_try",
             ((scenario.FinalGuard.name, True),),
@@ -166,7 +165,7 @@ def test_same_source_requirements_compose_before_adjustable_final_guard() -> Non
             and (scenario.StartCommand.name, True) in tuple(event.data["applied"])
             for event in events
         )
-        == 3
+        == 2
     )
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True

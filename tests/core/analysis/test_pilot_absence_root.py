@@ -29,13 +29,8 @@ from pyrung import Bool, Int, Program, Real, Rung, Timer, calc, copy, latch, on_
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import CoastTriggerEvent
 from pyrung.core.analysis.pilot.corrections import _absence_root_correctives
-from pyrung.core.analysis.pilot.investigate import investigate_deviation
 from pyrung.core.analysis.pilot.investigation_replay import (
-    ReplayIncident,
-    ReplayStep,
     build_deviation_incident,
-    build_replay_fn,
-    incident_regression_witness,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
 from pyrung.core.analysis.steerable import compute_steerable
@@ -208,95 +203,3 @@ class TestAnalogAbsenceRoot:
         # Crossing Temp <= Setpoint means strictly past the 130 threshold.
         assert value > 130
         assert "Temp > Setpoint" in temp_holds[0].detail
-
-    def test_analog_root_confirmed_by_replay(self) -> None:
-        plc, cp, anchor, before = _drive_to_abort(_cold_heater_program)
-        prog = plc._sail_trap_prog
-        incident = _incident(plc, anchor, before)
-        ctx = _ctx(prog, plc)
-        witness = incident_regression_witness(plc, incident)
-        assert witness is not None
-        assert (
-            witness.cause[0].rung.subroutine,
-            witness.cause[0].rung.rung_index,
-            witness.cause[0].tag,
-        ) == (None, 5, "Phase")
-        assert len(witness.cause) > 1
-
-        # A recorded let-run step: the coast holds Phase and re-arms toward the
-        # channel target, bounded by its own span (the abort window).
-        steps = [ReplayStep(inputs=(), scans=incident.end_scan - anchor, kind="letrun")]
-        replay = build_replay_fn(
-            cp,
-            99,
-            {},
-            steps,
-            ctx=ctx,
-            incident=ReplayIncident(
-                channel_tag="Phase",
-                channel_target=6,
-                terminal_role_tags=("Phase",),
-                watch_roles=("Phase",),
-                regression_witness=witness,
-            ),
-        )
-
-        result = investigate_deviation(plc, incident, ctx, replay)
-        assert result.correction is not None
-        temp_holds = [
-            (rung.dest, rung.value) for rung in result.correction.pilot_rungs if rung.dest == "Temp"
-        ]
-        assert temp_holds, "the boundary hold must survive its replay"
-        assert temp_holds[0][1] > 130
-        assert not any(
-            rung.dest == "Suspend" and rung.value is True for rung in result.correction.pilot_rungs
-        )
-
-
-class TestAbsenceRootConfirmation:
-    """investigate_deviation confirms the stuck permissive, not the suppressor."""
-
-    def test_confirms_sail_over_suspend(self) -> None:
-        plc, cp, anchor, before = _drive_to_abort()
-        prog = plc._sail_trap_prog
-        incident = _incident(plc, anchor, before)
-        ctx = _ctx(prog, plc)
-        witness = incident_regression_witness(plc, incident)
-        assert witness is not None
-        assert (
-            witness.cause[0].rung.subroutine,
-            witness.cause[0].rung.rung_index,
-            witness.cause[0].tag,
-        ) == (None, 5, "Phase")
-        assert len(witness.cause) > 1
-
-        # A recorded let-run step: the coast holds Phase and re-arms toward the
-        # channel target, bounded by its own span (the abort window).
-        steps = [ReplayStep(inputs=(), scans=incident.end_scan - anchor, kind="letrun")]
-        replay = build_replay_fn(
-            cp,
-            99,
-            {},
-            steps,
-            ctx=ctx,
-            incident=ReplayIncident(
-                channel_tag="Phase",
-                channel_target=6,
-                terminal_role_tags=("Phase",),
-                watch_roles=("Phase",),
-                regression_witness=witness,
-            ),
-        )
-
-        raw = replay((("Sail", True),))
-        assert raw.accepted, raw
-        result = investigate_deviation(plc, incident, ctx, replay)
-        assert result.correction is not None
-        assert any(
-            rung.dest == "Sail" and rung.value is True for rung in result.correction.pilot_rungs
-        )
-        assert not any(
-            rung.dest == "Suspend" and rung.value is True for rung in result.correction.pilot_rungs
-        )
-        confirmed_kinds = {h.kind for h in result.confirmed}
-        assert "absence-root" in confirmed_kinds

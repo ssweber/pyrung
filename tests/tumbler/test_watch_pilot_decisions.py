@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from devtools.watch_pilot_decisions import (
+    _DECISION_EVENT_KINDS,
     EXIT_TIMEOUT,
     _conductivity_line,
     _decision_lines,
@@ -17,6 +18,10 @@ from devtools.watch_pilot_decisions import (
     watch_worker,
 )
 from pyrung import Bool, Int
+
+
+def test_decision_budget_counts_both_route_and_crossing_action_selection() -> None:
+    assert {"candidate_try", "crossing_try"} <= _DECISION_EVENT_KINDS
 
 
 def _silent_worker(messages: Any) -> None:
@@ -151,6 +156,7 @@ def test_composition_receipt_names_no_scan_theory_update() -> None:
         scan=17,
         data={
             "configuration": (("WatchdogPresetMs", 11),),
+            "pilot_rungs": (),
             "conditions": (("WatchdogPresetMs", ">", 10),),
             "reason": "compose one correction, then read Compass again",
         },
@@ -161,9 +167,36 @@ def test_composition_receipt_names_no_scan_theory_update() -> None:
     assert stopped is False
     assert lines == (
         "[composition] scan=17 configuration=(('WatchdogPresetMs', 11),) "
+        "pilot_rungs=() "
         "conditions=(('WatchdogPresetMs', '>', 10),) "
         "reason='compose one correction, then read Compass again'",
     )
+
+
+def test_regression_receipt_names_exact_working_theory_requirement() -> None:
+    event = SimpleNamespace(
+        kind="trend_regression",
+        scan=2621,
+        data={
+            "retained": False,
+            "investigation": {
+                "delayed_expectation": True,
+                "working_theory": True,
+                "requirement": {
+                    "condition": ("Sail", "==", True),
+                    "authority": "external",
+                    "demanding_scan": 2621,
+                    "deadline_scan": 2622,
+                },
+            },
+        },
+    )
+
+    lines, stopped = _decision_lines(event, {}, None)
+
+    assert stopped is False
+    assert "delayed=True theory=True" in lines[0]
+    assert "(('Sail', '==', True), 'external', 2621, 2622)" in lines[0]
 
 
 def test_research_receipt_names_exact_stop_and_requirement_drift() -> None:

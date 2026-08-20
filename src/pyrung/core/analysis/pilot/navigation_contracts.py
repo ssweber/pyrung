@@ -454,15 +454,20 @@ class Bearing:
 
 @dataclass(frozen=True)
 class ComposeCorrection:
-    """Compose one desired scan-entry correction without executing a scan."""
+    """Compose one desired correction without executing a program scan."""
 
     world_key: _StateKey
     frontier: tuple[_ActionPair, ...]
-    configuration: ScanEntryConfiguration
     requirements: tuple[ActiveRequirement, ...]
     rationale: str
+    configuration: ScanEntryConfiguration | None = None
+    pilot_rungs: tuple[PilotRung, ...] = ()
     research_finding_identity: tuple[Any, ...] | None = None
     orientation: OrientationRead | None = None
+
+    def __post_init__(self) -> None:
+        if (self.configuration is None) == (not self.pilot_rungs):
+            raise ValueError("a correction composition must contain exactly one executable form")
 
 
 @dataclass(frozen=True)

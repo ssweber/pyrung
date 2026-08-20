@@ -334,22 +334,6 @@ def _build_plan_journal(
         path_end = state.committed_acts[-1].steps[-1].scan_after
 
     seen_pilot_rungs: set[tuple[Any, ...]] = set()
-    correction_receipts = getattr(state, "correction_receipts", ())
-    managed_pilot_rungs = {
-        _rung_identity(rung) for receipt in correction_receipts for rung in receipt.pilot_rungs
-    }
-    active_managed_pilot_rungs = {
-        _rung_identity(rung)
-        for receipt in correction_receipts
-        if receipt.status.effective
-        for rung in receipt.pilot_rungs
-    }
-    recorded_removals = {
-        _rung_identity(rung)
-        for entry in state.hold_log
-        if entry.source == "revocation"
-        for rung in entry.pilot_rungs
-    }
     for log_index, entry in enumerate(state.hold_log):
         if entry.scan < path_start or entry.scan > path_end:
             continue
@@ -373,12 +357,6 @@ def _build_plan_journal(
         new_pilot_rungs: list[Any] = []
         for rung in entry.pilot_rungs:
             key = _rung_identity(rung)
-            if (
-                key in managed_pilot_rungs
-                and key not in active_managed_pilot_rungs
-                and key not in recorded_removals
-            ):
-                continue
             if key in seen_pilot_rungs:
                 continue
             seen_pilot_rungs.add(key)

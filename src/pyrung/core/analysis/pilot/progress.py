@@ -19,9 +19,6 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pyrung.core.analysis.pilot.recording as recording
-from pyrung.core.analysis.pilot.correction_lifecycle import (
-    _promote_probationary_corrections,
-)
 from pyrung.core.analysis.pilot.departure import (
     DepartureClassification,
     DepartureDisposition,
@@ -188,7 +185,6 @@ def _monitor_trend(
             return
         state.checkpoints.append(_trial_checkpoint(trial, state))
         state.best_trend = verified.trend
-        promoted_corrections = _promote_probationary_corrections(state)
         checkpoint_event = PilotEvent(
             "trend_checkpoint",
             state.work.state.scan_id,
@@ -196,7 +192,6 @@ def _monitor_trend(
                 "trend": state.best_trend,
                 "key": verified.new_key,
                 "checkpoint_count": len(state.checkpoints),
-                "promoted_corrections": promoted_corrections,
             },
         )
         yield checkpoint_event
@@ -365,7 +360,6 @@ def _handle_channel_departure(
             origin=origin,
             retain_if_unresolved=departure,
             settled_if_unresolved=settled_work,
-            occurrence_requirements=observation.reading.external_supports,
         )
         return
     if departure.classification is DepartureClassification.CLEAN_CONTINUATION:
@@ -405,7 +399,6 @@ def _handle_channel_departure(
                 origin=origin,
                 retain_if_unresolved=departure,
                 settled_if_unresolved=settled_work,
-                occurrence_requirements=observation.reading.external_supports,
             )
             return
         if state.pending_departure is None:
@@ -431,11 +424,6 @@ def _handle_channel_departure(
         state,
         ctx,
         origin=origin,
-        occurrence_requirements=(
-            observation.reading.external_supports
-            if observation.reading.disposition is DepartureDisposition.REACTIVE
-            else ()
-        ),
     )
 
 
@@ -466,7 +454,6 @@ def _apply_departure_decision(
         if isinstance(verified, AssessedMotion):
             state.checkpoints.append(_trial_checkpoint(trial, state, trend=promoted_trend))
         state.best_trend = promoted_trend
-        promoted_corrections = _promote_probationary_corrections(state)
         return (
             PilotEvent(
                 "pending_departure_promoted",
@@ -483,7 +470,6 @@ def _apply_departure_decision(
                         "trend": promoted_trend,
                         "checkpoint_count": len(state.checkpoints),
                         "terminal": isinstance(verified, TargetReached),
-                        "promoted_corrections": promoted_corrections,
                     },
                 ),
             ),

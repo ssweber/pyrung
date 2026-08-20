@@ -22,6 +22,7 @@ from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligationSnapshot,
     EffectObservationSnapshot,
+    EffectOccurrenceSnapshot,
     displacement_consumer_read,
     occurrence_selector,
     occurrence_snapshot,
@@ -240,6 +241,9 @@ def _theory_requirement_snapshot(requirement: ActiveRequirement) -> TheoryRequir
         if diagnostic.obstruction_occurrence is not None
         else None
     )
+    corrective_pilot_rung_identities = tuple(
+        _rung_identity(rung) for rung in diagnostic.corrective_pilot_rungs
+    )
     raw_source_world_key = diagnostic.source_world_key
     if isinstance(raw_source_world_key, tuple) and len(raw_source_world_key) == 3:
         # Requirement constraints version the current Compass world, not the
@@ -265,6 +269,7 @@ def _theory_requirement_snapshot(requirement: ActiveRequirement) -> TheoryRequir
         diagnostic.provenance,
         scope_identity,
         obstruction_identity,
+        corrective_pilot_rung_identities,
     )
     return TheoryRequirementSnapshot(
         semantic_identity=semantic_identity,
@@ -281,6 +286,7 @@ def _theory_requirement_snapshot(requirement: ActiveRequirement) -> TheoryRequir
         provenance=diagnostic.provenance,
         scope=scope_identity,
         obstruction_occurrence=obstruction_identity,
+        corrective_pilot_rung_identities=corrective_pilot_rung_identities,
     )
 
 
@@ -310,6 +316,26 @@ def _theory_claim(
                 ),
             ),
         ),
+    )
+
+
+def _theory_regression_claim(
+    objective: BearingObjective,
+    source: TheoryBoundaryIdentity,
+    obstruction: EffectOccurrenceSnapshot,
+) -> TheoryClaim:
+    """Claim the selected objective at one exact harmful occurrence boundary."""
+
+    occurrence_identity = _theory_occurrence_identity(obstruction)
+    return TheoryClaim(
+        source=source,
+        objective=_theory_objective_snapshot(objective),
+        obligations=(),
+        selected_boundary=replace(
+            source,
+            occurrence_identity=("regression-obstruction", occurrence_identity),
+        ),
+        selected_artifact_identity=("regression-obstruction", occurrence_identity),
     )
 
 

@@ -234,13 +234,14 @@ def test_pilot_golden_skeleton_completed(tumbler_logic) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _confirmed_holds(skeleton: list[dict], kind: str) -> list[list]:
+def _theory_correction_rungs(skeleton: list[dict], kind: str) -> list[list]:
     return [
-        hypothesis.get("holds", [])
+        investigation["requirement"].get("corrective_pilot_rungs", [])
         for entry in skeleton
         if entry["kind"] == "trend_regression"
-        for hypothesis in (entry.get("investigation") or {}).get("confirmed_detail", ())
-        if hypothesis.get("kind") == kind
+        for investigation in (entry.get("investigation") or {},)
+        if investigation.get("hypothesis_kind") == kind
+        and isinstance(investigation.get("requirement"), dict)
     ]
 
 
@@ -278,7 +279,7 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
     # reappear as a broad batch.
     latch_dest_sets = [
         {_hold_dest(hold) for hold in holds}
-        for holds in _confirmed_holds(skeleton, "latch-exposure")
+        for holds in _theory_correction_rungs(skeleton, "latch-exposure")
     ]
     assert {"x_DoorClosed", "x_LintDoorClosed"} in latch_dest_sets
     assert not any(
@@ -292,13 +293,15 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
     # own the shared Execute producer, while only the main door owns the
     # Completed sibling.
     door_rungs = [
-        hold
+        rung
         for event in events
         if event.kind == "trend_regression"
-        for hypothesis in (event.data.get("investigation") or {}).get("confirmed_detail", ())
-        if hypothesis.get("kind") == "latch-exposure"
-        for hold in hypothesis.get("holds", ())
-        if isinstance(hold, PilotRung) and hold.dest in {"x_DoorClosed", "x_LintDoorClosed"}
+        for investigation in (event.data.get("investigation") or {},)
+        if investigation.get("hypothesis_kind") == "latch-exposure"
+        for requirement in (investigation.get("requirement"),)
+        if requirement is not None
+        for rung in getattr(requirement, "corrective_pilot_rungs", ())
+        if isinstance(rung, PilotRung) and rung.dest in {"x_DoorClosed", "x_LintDoorClosed"}
     ]
     assert {rung.dest for rung in door_rungs} == {
         "x_DoorClosed",
@@ -313,7 +316,8 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
 
     # The later complement-reset watchdog is a separate causal era.
     liveness_dest_sets = [
-        {_hold_dest(hold) for hold in holds} for holds in _confirmed_holds(skeleton, "liveness")
+        {_hold_dest(hold) for hold in holds}
+        for holds in _theory_correction_rungs(skeleton, "liveness")
     ]
     assert {"x_RotateSensor"} in liveness_dest_sets
 
@@ -373,8 +377,8 @@ def test_held_dry_route_chooses_unhold_not_start(tumbler_logic) -> None:
     pytest.fail("PILOT did not produce a HELD/Step101 candidate reading")
 
 
-def test_completed_first_door_incident_replays_the_rotate_boundary(tumbler_logic) -> None:
-    """A route-less Rotate coast still exposes and composes both door causes."""
+def test_completed_first_door_incident_opens_working_theory(tumbler_logic) -> None:
+    """A route-less Rotate coast records both door causes as one theory repair."""
 
     plc = PLC(tumbler_logic)
     plc.step()
@@ -390,11 +394,12 @@ def test_completed_first_door_incident_replays_the_rotate_boundary(tumbler_logic
         if event.kind != "trend_regression":
             assert time.monotonic() <= deadline, "first Completed incident exceeded 45s"
             continue
-        confirmed = event.data["investigation"]["confirmed_detail"]
-        door = next(
-            hypothesis for hypothesis in confirmed if hypothesis.get("kind") == "latch-exposure"
-        )
-        rungs = tuple(door["holds"])
+        investigation = event.data["investigation"]
+        assert investigation["working_theory"] is True
+        assert investigation["private_replay"] is False
+        assert investigation["hypothesis_kind"] == "latch-exposure"
+        assert not investigation.get("confirmed_detail")
+        rungs = tuple(investigation["requirement"].corrective_pilot_rungs)
         assert {rung.dest for rung in rungs} == {
             "x_DoorClosed",
             "x_LintDoorClosed",
@@ -428,9 +433,7 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     tags = plc._known_tags_by_name
     avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
     events = []
-    door_corrections = []
-    liveness_correction = None
-    sail_correction = None
+    theory_corrections = []
     finished = None
     deadline = time.monotonic() + INTERNAL_ROUTE_WALL_BUDGET_S
     for event in pilot_events(
@@ -441,37 +444,20 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     ):
         events.append(event)
         if event.kind == "trend_regression":
-            confirmed = (event.data.get("investigation") or {}).get(
-                "confirmed_detail",
-                (),
-            )
-            latch_exposure = {
-                rung.dest
-                for hypothesis in confirmed
-                if hypothesis.get("kind") == "latch-exposure"
-                for rung in hypothesis.get("holds", ())
-                if hasattr(rung, "dest")
-            }
-            if {"x_DoorClosed", "x_LintDoorClosed"} <= latch_exposure:
-                door_corrections.append(event)
-            liveness = {
-                rung.dest
-                for hypothesis in confirmed
-                if hypothesis.get("kind") == "liveness"
-                for rung in hypothesis.get("holds", ())
-                if hasattr(rung, "dest")
-            }
-            if "x_RotateSensor" in liveness:
-                liveness_correction = event
-            absence_roots = {
-                rung.dest
-                for hypothesis in confirmed
-                if hypothesis.get("kind") == "absence-root"
-                for rung in hypothesis.get("holds", ())
-                if hasattr(rung, "dest")
-            }
-            if "x_SailRelay" in absence_roots:
-                sail_correction = event
+            investigation = event.data.get("investigation") or {}
+            requirement = investigation.get("requirement")
+            rungs = tuple(getattr(requirement, "corrective_pilot_rungs", ()))
+            if rungs:
+                assert investigation["working_theory"] is True
+                assert investigation["private_replay"] is False
+                assert not investigation.get("confirmed_detail")
+                theory_corrections.append(
+                    (
+                        investigation.get("hypothesis_kind"),
+                        {rung.dest for rung in rungs},
+                        event,
+                    )
+                )
         if event.kind == "finished":
             finished = event
             break
@@ -480,21 +466,23 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
                 "cold avoided-Complete drive did not correct its Execute watchdog departure"
             )
 
+    door_corrections = [
+        event
+        for kind, destinations, event in theory_corrections
+        if kind == "latch-exposure"
+        and {"x_DoorClosed", "x_LintDoorClosed"} <= destinations
+    ]
     assert len(door_corrections) == 1
-    assert liveness_correction is not None
-    assert sail_correction is not None
+    assert any(
+        kind == "liveness" and "x_RotateSensor" in destinations
+        for kind, destinations, _event in theory_corrections
+    )
+    assert any(
+        kind == "absence-root" and "x_SailRelay" in destinations
+        for kind, destinations, _event in theory_corrections
+    )
     assert finished is not None
     assert finished.data["reached"] is True
-    assert liveness_correction.data["investigation"]["confirmed"] > 0
-    assert any(
-        hypothesis.get("kind") == "liveness"
-        for hypothesis in liveness_correction.data["investigation"]["confirmed_detail"]
-    )
-    assert any(
-        hypothesis.get("kind") == "absence-root"
-        and any(getattr(rung, "dest", None) == "x_SailRelay" for rung in hypothesis["holds"])
-        for hypothesis in sail_correction.data["investigation"]["confirmed_detail"]
-    )
     assert any(
         event.kind == "candidate_accepted"
         and tuple(event.data.get("applied") or ()) == (("Cmd_State_Unhold", True),)

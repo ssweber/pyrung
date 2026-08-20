@@ -365,6 +365,7 @@ class ActiveRequirementSnapshot:
     provenance: str
     scope: tuple[Any, ...]
     obstruction_occurrence: EffectOccurrenceSnapshot | None = None
+    corrective_pilot_rungs: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -392,6 +393,9 @@ class ActiveRequirement:
     # Exact harmful write whose guard this requirement prevents. Keeping this
     # typed avoids rediscovering the physical obstruction from ``scope``.
     obstruction_occurrence: EffectOccurrenceSnapshot | None = None
+    # Exact executable correction retained by a regression adapter. Ordinary
+    # requirements leave this empty and let Compass derive their schedule.
+    corrective_pilot_rungs: tuple[Any, ...] = ()
 
     def __post_init__(self) -> None:
         _execution_ref(self.execution_owner)
@@ -459,6 +463,7 @@ class ActiveRequirement:
             provenance=self.provenance,
             scope=self.scope,
             obstruction_occurrence=self.obstruction_occurrence,
+            corrective_pilot_rungs=self.corrective_pilot_rungs,
         )
 
     @property
@@ -479,6 +484,7 @@ class ActiveRequirement:
             self.provenance,
             self.scope,
             self.obstruction_occurrence,
+            self.corrective_pilot_rungs,
         )
 
 

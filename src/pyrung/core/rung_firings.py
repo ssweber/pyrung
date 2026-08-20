@@ -13,6 +13,7 @@ replay only the selected kernel scans when they need that evidence.
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
@@ -202,6 +203,76 @@ class RungFiringTimelines(Generic[K]):
         """Final attempted value, or a private unknown/missing sentinel."""
         range_ = _find_value_range(self._value_timelines.get((rung_index, tag_name), ()), scan_id)
         return _MISSING_WRITE if range_ is None else _value_at(range_, scan_id)
+
+    def value_or_varied_scans(
+        self,
+        rung_index: K,
+        tag_name: str,
+        value: Any,
+        scan_ids: tuple[int, ...],
+    ) -> tuple[int, ...]:
+        """Intersect ordered scans with matching final values or varied writes.
+
+        The retained columns are range-compressed.  Walk those ranges directly
+        so a long constant non-matching interval stays O(ranges), rather than
+        issuing one binary-search lookup per physical scan.  Unknown value
+        ranges remain conservative and nominate every selected scan they cover.
+        """
+
+        if not scan_ids:
+            return ()
+        selected: set[int] = set()
+        first_scan, last_scan = scan_ids[0], scan_ids[-1]
+
+        for range_ in self._value_timelines.get((rung_index, tag_name), ()):
+            if range_.end_scan_id < first_scan:
+                continue
+            if range_.start_scan_id > last_scan:
+                break
+            lo = bisect_left(scan_ids, range_.start_scan_id)
+            hi = bisect_right(scan_ids, range_.end_scan_id, lo)
+            if lo == hi:
+                continue
+            payload = range_.payload
+            if isinstance(payload, Constant):
+                if payload.value is not _MISSING_WRITE and _equal(payload.value, value):
+                    selected.update(scan_ids[lo:hi])
+            elif isinstance(payload, Alternating):
+                selected.update(
+                    scan_id
+                    for scan_id in scan_ids[lo:hi]
+                    if (candidate := _value_at(range_, scan_id)) is not _MISSING_WRITE
+                    and _equal(candidate, value)
+                )
+            elif isinstance(payload, Arithmetic):
+                try:
+                    offset = (value - payload.base) // payload.delta
+                    candidate = range_.start_scan_id + offset
+                except (TypeError, ValueError, ZeroDivisionError):
+                    candidate = None
+                candidate_index = (
+                    bisect_left(scan_ids, candidate, lo, hi) if candidate is not None else hi
+                )
+                if (
+                    candidate is not None
+                    and candidate_index < hi
+                    and scan_ids[candidate_index] == candidate
+                    and _equal(_value_at(range_, candidate), value)
+                ):
+                    selected.add(scan_ids[candidate_index])
+            else:
+                selected.update(scan_ids[lo:hi])
+
+        for range_ in self._varied_ranges.get((rung_index, tag_name), ()):
+            if range_.end_scan_id < first_scan:
+                continue
+            if range_.start_scan_id > last_scan:
+                break
+            lo = bisect_left(scan_ids, range_.start_scan_id)
+            hi = bisect_right(scan_ids, range_.end_scan_id, lo)
+            selected.update(scan_ids[lo:hi])
+
+        return tuple(sorted(selected))
 
     def any_wrote_on(self, tag_name: str, scan_id: int, *, excluding: K | None = None) -> bool:
         return any(

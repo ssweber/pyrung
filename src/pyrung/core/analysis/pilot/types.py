@@ -15,10 +15,6 @@ from pyrsistent import PVector, pvector
 
 import pyrung.core.analysis.pilot.world as _world
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
-from pyrung.core.analysis.pilot.correction_records import (
-    _ConfirmedCorrection,
-    _CorrectionReceipt,
-)
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
 from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,
@@ -418,14 +414,6 @@ class _PilotState:
     # ejected, learned, retried" record surfaced on the resulting plan.
     journey: list[_Step] = field(default_factory=list)
     hold_log: list[_HoldLogEntry] = field(default_factory=list)
-    # Investigation corrections are hypotheses with lifecycle, not irrevocable
-    # facts. The receipt journal survives world reverts; active rungs remain in
-    # the world and are removed when a later incident causally revokes a receipt.
-    correction_receipts: list[_CorrectionReceipt] = field(default_factory=list)
-    correction_nogoods: dict[
-        _StateKey,
-        set[tuple[tuple[Any, ...], ...]],
-    ] = field(default_factory=dict)
     # Names of ``avoid=`` conditions that excluded a candidate/hold/scan somewhere
     # in the drive (Knowledge side — commits, never reverted).  A terminal stuck
     # or budget-exhausted decline reads this so the miss names the violated avoid
@@ -638,10 +626,6 @@ class _PulseState:
     # pulse, settle, and coast) — stamped onto the committed step context so
     # incident construction reads recorded evidence, not history re-diffs.
     timeline: tuple[CoastTriggerEvent, ...] = ()
-    # A spin excursion may replace this trial with a replay-corrected fork.
-    # Carry that exact correction with the fork so later gates cannot detach or
-    # reconstruct the operation they are judging.
-    confirmed_correction: _ConfirmedCorrection | None = None
     # Execution-owned channel selection. Navigation may declare a heading on
     # its ActPolicy, but only a physical coast can identify a terminal
     # departure or choose between an inner boundary and its outer route edge.
@@ -807,7 +791,10 @@ class _AttemptResult:
     excursion_attempt: _ExecutedAttempt | None = None
     gate_events: tuple[PilotGateEvent, ...] = ()
     nogood_pairs: frozenset[_ActionPair] = frozenset()
-    confirmed_correction: _ConfirmedCorrection | None = None
+    # A replay-confirmed legacy excursion may supply exact correction evidence,
+    # but never an adopted replay World.  The requirement is inert until the
+    # ordinary WorkingTheory/Compass loop composes and executes its PilotRungs.
+    correction_requirement: ActiveRequirement | None = None
     # Compass observations gathered during the Act — applied only at the loop's
     # transition application point (``record_attempt``), never by the instrument itself.
     observations: tuple[CompassObservation, ...] = ()

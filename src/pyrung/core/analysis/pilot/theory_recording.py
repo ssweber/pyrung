@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot.attempt_interpretation import (
     AttemptInterpretationKind,
+    interpret_exact_regression_requirement,
     interpret_failed_requirements,
 )
 from pyrung.core.analysis.pilot.bootstrap import _BootstrapExecution
@@ -31,9 +32,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     _ActionPair,
     act_identity,
 )
-from pyrung.core.analysis.pilot.overlay import (
-    _pilot_rung_execution_receipt,
-)
 from pyrung.core.analysis.pilot.requirement_evidence import _exact_failed_source
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
@@ -46,6 +44,7 @@ from pyrung.core.analysis.pilot.theory_evidence import (
     _theory_boundary_from_checkpoint,
     _theory_claim,
     _theory_live_boundary,
+    _theory_regression_claim,
     _theory_requirement_snapshot,
     _TheoryTransitionEvidence,
 )
@@ -88,6 +87,247 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _theory_transition_from_failed_requirements(
+    state: _PilotState,
+    exact_pairs: tuple[tuple[ActiveRequirement, FailedEffectReceipt], ...],
+    *,
+    assertion_scan: int,
+    evidence: tuple[Any, ...],
+    landing_owns_tip: bool = True,
+) -> _TheoryTransitionEvidence | None:
+    """Build one detached controlling transition from exact failed requirements.
+
+    The caller owns how the failure was discovered.  This adapter admits only
+    one transaction, one expectation, and one executable requirement source;
+    it neither mutates the ledger nor restores that source.
+    """
+
+    if not exact_pairs:
+        return None
+    failed_receipts = tuple(failed for _requirement, failed in exact_pairs)
+    if (
+        len({failed.act_identity for failed in failed_receipts}) != 1
+        or len({id(failed.expectation) for failed in failed_receipts}) != 1
+        or len({id(failed.local_bearing) for failed in failed_receipts}) != 1
+        or len({failed.checkpoint_ref for failed in failed_receipts}) != 1
+    ):
+        return None
+    failed = failed_receipts[0]
+    if failed.expectation is None or failed.local_bearing is None:
+        return None
+    source_checkpoints = {
+        requirement.checkpoint_ref: requirement.source_checkpoint
+        for requirement, _failed in exact_pairs
+    }
+    if len(source_checkpoints) != 1:
+        return None
+    checkpoint = next(iter(source_checkpoints.values()))
+    source = _theory_boundary_from_checkpoint(checkpoint)
+    interpretation = interpret_failed_requirements(
+        exact_pairs=exact_pairs,
+        assertion_scan=assertion_scan,
+        landing_owns_tip=landing_owns_tip,
+    )
+    if not interpretation.opens_theory:
+        return None
+    return _TheoryTransitionEvidence(
+        claim=_theory_claim(failed.expectation, failed.local_bearing.objective, source),
+        source=source,
+        execution_ref=failed.execution_ref,
+        occurrence_evidence=tuple(_semantic_key(item.explanation) for item in failed_receipts),
+        act_identity=failed.act_identity,
+        act_pairs=tuple(failed.local_bearing.act.policy.applied),
+        selected_act_pairs=tuple(failed.local_bearing.act.policy.action_pairs),
+        pilot_rung_identities=tuple(_rung_identity(rung) for rung in state.pilot_rungs),
+        disposition=TheoryAttemptDisposition.REJECTED_EXACT,
+        evidence=evidence,
+        requirements=tuple(
+            _theory_requirement_snapshot(requirement) for requirement, _failed in exact_pairs
+        ),
+        interpretation=interpretation,
+        conductivity_observations=tuple(item.observation for item in failed_receipts),
+    )
+
+
+def _record_theory_from_failed_requirements(
+    state: _PilotState,
+    exact_pairs: tuple[tuple[ActiveRequirement, FailedEffectReceipt], ...],
+    *,
+    assertion_scan: int,
+    evidence: tuple[Any, ...],
+    remaining_budget: int,
+    landing_owns_tip: bool = True,
+) -> _TheoryTransitionEvidence | None:
+    """Admit one exact failed transaction to the controlling theory lifecycle."""
+
+    transition = _theory_transition_from_failed_requirements(
+        state,
+        exact_pairs,
+        assertion_scan=assertion_scan,
+        evidence=evidence,
+        landing_owns_tip=landing_owns_tip,
+    )
+    if transition is None:
+        return None
+    before = state.theory_state
+    _record_theory_transition(
+        state,
+        transition,
+        remaining_budget=remaining_budget,
+        record_fact=_record_controlling_theory_fact,
+    )
+    return transition if state.theory_state != before else None
+
+
+def _theory_transition_from_regression_requirement(
+    state: _PilotState,
+    requirement: ActiveRequirement,
+    bearing: Bearing,
+    *,
+    evidence: tuple[Any, ...],
+) -> _TheoryTransitionEvidence | None:
+    """Detach one exact corrective obstruction for the common theory reducer."""
+
+    obstruction = requirement.obstruction_occurrence
+    if obstruction is None:
+        return None
+    source = _theory_boundary_from_checkpoint(requirement.source_checkpoint)
+    interpretation = interpret_exact_regression_requirement(
+        requirement,
+        assertion_scan=obstruction.scan_id,
+    )
+    if not interpretation.opens_theory:
+        return None
+    return _TheoryTransitionEvidence(
+        claim=_theory_regression_claim(bearing.objective, source, obstruction),
+        source=source,
+        execution_ref=requirement.execution_ref,
+        occurrence_evidence=(("regression-obstruction", _semantic_key(obstruction)),),
+        act_identity=act_identity(bearing.act),
+        act_pairs=tuple(bearing.act.policy.applied),
+        selected_act_pairs=tuple(bearing.act.policy.action_pairs),
+        pilot_rung_identities=tuple(_rung_identity(rung) for rung in state.pilot_rungs),
+        disposition=TheoryAttemptDisposition.REJECTED_EXACT,
+        evidence=evidence,
+        requirements=(_theory_requirement_snapshot(requirement),),
+        interpretation=interpretation,
+    )
+
+
+def _record_theory_from_regression_requirement(
+    state: _PilotState,
+    requirement: ActiveRequirement,
+    bearing: Bearing,
+    *,
+    evidence: tuple[Any, ...],
+    remaining_budget: int,
+) -> _TheoryTransitionEvidence | None:
+    """Admit one exact causal obstruction without private counterfactual replay."""
+
+    transition = _theory_transition_from_regression_requirement(
+        state,
+        requirement,
+        bearing,
+        evidence=evidence,
+    )
+    if transition is None:
+        return None
+    before = state.theory_state
+    _record_theory_transition(
+        state,
+        transition,
+        remaining_budget=remaining_budget,
+        record_fact=_record_controlling_theory_fact,
+    )
+    return transition if state.theory_state != before else None
+
+
+def _advance_theory_to_regression_prefix(
+    state: _PilotState,
+    trial: _AcceptedTrial,
+    checkpoint: _CausalCheckpoint,
+    obstruction: Any,
+) -> bool:
+    """Receipt the clean part of an accepted act before one exact obstruction.
+
+    The admitted tentative-rung proof owns the bounded scan pipeline between
+    ``boundary`` and ``obstruction``.  This adapter only advances the theory to
+    the executable source of that proof; it must not re-impose one-scan
+    adjacency here.
+    """
+
+    theory = active_theory(state.theory_state)
+    if theory is None:
+        return False
+    source = state.theory_state.ledger.progress[theory.current_progress_id].provisional_tip
+    boundary = _theory_boundary_from_checkpoint(checkpoint)
+    if theory_source_is_retained(state.theory_state, boundary):
+        return True
+    execution = trial.execution
+    owner = execution.owner_at(boundary.scan_id)
+    if (
+        trial.attempt.pulse.scan_before != source.scan_id
+        or boundary.scan_id <= source.scan_id
+        or boundary.scan_id >= obstruction.scan_id
+        or owner is None
+        or owner.epoch.reference != boundary.execution_ref
+    ):
+        return False
+    evidence = (
+        "accepted-prefix-before-obstruction",
+        source,
+        boundary,
+        _semantic_key(obstruction),
+    )
+    attempt_id = (
+        "regression-prefix-attempt",
+        theory.theory_id,
+        theory.current_version_id,
+        evidence,
+    )
+    _record_controlling_theory_fact(
+        state,
+        RecordTheoryAttempt(
+            theory_id=theory.theory_id,
+            version_id=theory.current_version_id,
+            attempt_identity=attempt_id,
+            source=source,
+            execution_ref=owner.epoch.reference,
+            occurrence_evidence=(evidence,),
+            act_identity=act_identity(trial.attempt.bearing.act),
+            act_pairs=(),
+            selected_act_pairs=tuple(trial.attempt.bearing.act.policy.action_pairs),
+            pilot_rung_identities=tuple(_rung_identity(rung) for rung in state.pilot_rungs),
+            disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+            evidence=(evidence,),
+            execution_source=source,
+            program_transaction=ProgramTransaction.from_heading(
+                trial.attempt.bearing.act.policy.heading,
+                execution.before_snap,
+            ),
+        ),
+    )
+    _record_controlling_theory_fact(
+        state,
+        AdvanceTheory(
+            theory_id=theory.theory_id,
+            version_id=theory.current_version_id,
+            accepted_attempt_id=attempt_id,
+            source=source,
+            boundary=boundary,
+            advance_identity=("regression-prefix-advance", attempt_id, boundary),
+            phase_receipts=(
+                TheoryPhaseReceipt(
+                    kind=TheoryPhaseKind.SCAN_PROGRESS,
+                    evidence_identity=(evidence,),
+                ),
+            ),
+            execution_source=source,
+        ),
+    )
+    return theory_source_is_retained(state.theory_state, boundary)
+
+
 def _open_theory_from_program_guard_rebases(
     state: _PilotState,
     rebases: tuple[tuple[ActiveRequirement, ActiveRequirement], ...],
@@ -112,55 +352,17 @@ def _open_theory_from_program_guard_rebases(
     exact_pairs = tuple(exact_pairs_list)
     if not exact_pairs:
         return False
-    failed_receipts = tuple(failed for _requirement, failed in exact_pairs)
-    if len({failed.act_identity for failed in failed_receipts}) != 1:
-        return False
-    if len({id(failed.expectation) for failed in failed_receipts}) != 1:
-        return False
-    if len({id(failed.local_bearing) for failed in failed_receipts}) != 1:
-        return False
-    if len({failed.checkpoint_ref for failed in failed_receipts}) != 1:
-        return False
-    failed = failed_receipts[0]
-    rebase_checkpoints = {
-        requirement.checkpoint_ref: requirement.source_checkpoint
-        for requirement, _failed in exact_pairs
-    }
-    if len(rebase_checkpoints) != 1:
-        return False
-    checkpoint = next(iter(rebase_checkpoints.values()))
-    source = _theory_boundary_from_checkpoint(checkpoint)
-    interpretation = interpret_failed_requirements(
+    transition = _record_theory_from_failed_requirements(
+        state,
         exact_pairs=exact_pairs,
         assertion_scan=max(requirement.deadline.scan_id for requirement, _ in exact_pairs),
-    )
-    if not interpretation.opens_theory:
-        return False
-    transition = _TheoryTransitionEvidence(
-        claim=_theory_claim(failed.expectation, failed.local_bearing.objective, source),
-        source=source,
-        execution_ref=failed.execution_ref,
-        occurrence_evidence=tuple(_semantic_key(item.explanation) for item in failed_receipts),
-        act_identity=failed.act_identity,
-        act_pairs=tuple(failed.local_bearing.act.policy.applied),
-        selected_act_pairs=tuple(failed.local_bearing.act.policy.action_pairs),
-        pilot_rung_identities=tuple(_rung_identity(rung) for rung in state.pilot_rungs),
-        disposition=TheoryAttemptDisposition.REJECTED_EXACT,
         evidence=(
             ("program-guard-rebases", tuple(item.navigation_identity for _, item in rebases)),
         ),
-        requirements=tuple(
-            _theory_requirement_snapshot(requirement) for requirement, _failed in exact_pairs
-        ),
-        interpretation=interpretation,
-        conductivity_observations=tuple(item.observation for item in failed_receipts),
-    )
-    _record_theory_transition(
-        state,
-        transition,
         remaining_budget=remaining_budget,
-        record_fact=_record_controlling_theory_fact,
     )
+    if transition is None:
+        return False
     return active_theory(state.theory_state) is not None
 
 
@@ -549,12 +751,10 @@ def _record_controlled_setup_attempt(
     rung_identities = tuple(_rung_identity(rung) for rung in state.pilot_rungs)
     view = theory_view(state.theory_state)
     pending = view.pending_overlay_identities if view is not None else frozenset()
-    effective = _pilot_rung_execution_receipt(
-        state.pilot_rungs,
-        dict(source_checkpoint.world.work.state.tags),
-    ).effective
     executed_pending = tuple(
-        _rung_identity(rung) for rung in effective if _rung_identity(rung) in pending
+        _rung_identity(rung)
+        for rung in state.pilot_rungs
+        if _rung_identity(rung) in pending
     )
     attempt_id = (
         "working-theory-setup",

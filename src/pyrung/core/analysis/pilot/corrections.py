@@ -64,9 +64,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Local alias — corrections imports nothing at runtime from investigate, so the
-# investigate <-> corrections dependency stays one-directional (investigate
-# depends on this module, never the reverse).
+# Keep the action-pair vocabulary local to causal correction evidence.
 ActionPair = tuple[str, Any]
 
 

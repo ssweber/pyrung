@@ -85,9 +85,6 @@ from pyrung.core.analysis.pilot.progress import (
     _monitor_trend,
 )
 from pyrung.core.analysis.pilot.recovery_investigation import _investigate_and_revert
-from pyrung.core.analysis.pilot.regression_requirements import (
-    _delayed_overwriter_fallback_allowed,
-)
 from pyrung.core.analysis.pilot.trial_commit import commit_trial
 from pyrung.core.analysis.pilot.trial_gates import _gate_revisit
 from pyrung.core.analysis.pilot.types import (
@@ -105,16 +102,6 @@ from pyrung.core.analysis.pilot.types import (
 )
 from pyrung.core.analysis.pilot.world import _Checkpoint, _World
 from pyrung.core.analysis.steerable import compute_steerable
-
-
-def test_delayed_overwriter_fallback_is_terminal_target_only() -> None:
-    ordinary = SimpleNamespace(obligation=SimpleNamespace(terminal_target=False))
-    terminal = SimpleNamespace(obligation=SimpleNamespace(terminal_target=True))
-
-    assert not _delayed_overwriter_fallback_allowed(ordinary)
-    assert _delayed_overwriter_fallback_allowed(terminal)
-
-
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -1409,14 +1396,13 @@ class TestRegression:
 
         assert [e.kind for e in events] == ["investigation_started", "trend_regression"]
         investigation = events[1].data["investigation"]
-        # The investigation ran (payload populated), unlike the chase=False path
-        # which leaves it empty.
-        assert "hypotheses" in investigation
-        assert "confirmed" in investigation
+        # Exact evidence is either admitted to Working Theory or explicitly
+        # rejected as unrepresentable; the removed replay investigator is not
+        # a second correction lifecycle.
+        assert investigation["legacy_replay"] is False
+        assert investigation["working_theory_admission"] == "unrepresentable"
 
     def test_recovery_consumes_the_executed_bearing_objective(self, monkeypatch):
-        from pyrung.core.analysis.pilot.investigate import InvestigationResult
-
         state, trial, frame, ctx = _seal_in_regression_inputs()
         objective = BearingObjective(
             TargetSpec("Completed", True),
@@ -1430,20 +1416,28 @@ class TestRegression:
             ),
         )
         assert state.checkpoints[-1].objective is not objective
-        captured: list[tuple[tuple[str, Any], ...]] = []
-
-        def _stub(_plc, _incident, _ctx, _replay, **kwargs):
-            captured.append(tuple(kwargs["needed"]))
-            return InvestigationResult()
-
+        candidate = SimpleNamespace(obstruction=SimpleNamespace(scan_id=999), holds=())
+        captured: list[Any] = []
         monkeypatch.setattr(
-            "pyrung.core.analysis.pilot.recovery_investigation.investigate_deviation",
-            _stub,
+            "pyrung.core.analysis.pilot.recovery_investigation._activate_delayed_regression_requirement",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.recovery_investigation._exact_regression_corrections",
+            lambda *_args, **_kwargs: (candidate,),
+        )
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.recovery_investigation._checkpoint_at_scan",
+            lambda _state, _ctx, selected, _scan: captured.append(selected),
+        )
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.recovery_investigation._exact_correction_requirement_from_regression",
+            lambda *_args, **_kwargs: None,
         )
 
         tuple(_monitor_trend(trial, frame, state, ctx))
 
-        assert captured == [objective.frontier]
+        assert captured and all(selected is objective for selected in captured)
 
     def test_regression_reverts_to_checkpoint(self):
         cp_fork = _oneshot_plc()
@@ -1770,52 +1764,3 @@ def test_deviation_bearing_is_departed_source_not_unvisited_coast_target():
     bearing = _deviation_bearing(trial.execution, frame, ["State"], ())
 
     assert bearing == (("State", 6),)
-
-
-def test_investigation_event_rejected_detail_carries_slug(monkeypatch):
-    """The regression event's investigation payload surfaces the machine-readable
-    ground slug beside the human detail for every rejected hypothesis."""
-    from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis
-    from pyrung.core.analysis.pilot.investigate import (
-        InvestigationRejection,
-        InvestigationResult,
-    )
-
-    reject_a = CorrectionHypothesis("a", (("GroundA", True),))
-    reject_b = CorrectionHypothesis("b", (("GroundB", True),))
-
-    def _stub(_plc, _incident, _ctx, _replay, **_kwargs):
-        return InvestigationResult(
-            hypotheses=(reject_a, reject_b),
-            confirmed=(),
-            rejected=(
-                InvestigationRejection(
-                    reject_a,
-                    "exploratory-replay-failed",
-                    "exploratory replay rejected: watchdog still fired",
-                ),
-                InvestigationRejection(
-                    reject_b,
-                    "guarded-replay-failed",
-                    "guarded replay rejected: guard released",
-                ),
-            ),
-            unresolved=("GroundA",),
-        )
-
-    monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.recovery_investigation.investigate_deviation",
-        _stub,
-    )
-
-    state, trial, frame, ctx = _seal_in_regression_inputs()
-    events = tuple(_monitor_trend(trial, frame, state, ctx))
-
-    assert [e.kind for e in events] == ["investigation_started", "trend_regression"]
-    rejected_detail = events[1].data["investigation"]["rejected_detail"]
-    assert [r["slug"] for r in rejected_detail] == [
-        "exploratory-replay-failed",
-        "guarded-replay-failed",
-    ]
-    # The human ground rides alongside the slug, unchanged.
-    assert rejected_detail[0]["ground"] == "exploratory replay rejected: watchdog still fired"

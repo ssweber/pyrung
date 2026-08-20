@@ -498,23 +498,7 @@ def _scoped_correction_rungs(
         return tuple(proposals)
 
     if producer_envelope and all(isinstance(proposal, PilotRung) for proposal in proposals):
-        from pyrung.core.condition import AllCondition
-
-        unresolved = _target_unresolved_condition(
-            plc,
-            ctx.target.tag,
-            ctx.target.value,
-            ctx.target.predicate,
-        )
-        return tuple(
-            PilotRung(
-                proposal.dest,
-                proposal.value,
-                AllCondition(unresolved, proposal.guard),
-                operation=proposal.operation,
-            )
-            for proposal in proposals
-        )
+        return _target_scoped_producer_envelope_rungs(plc, tuple(proposals), ctx)
 
     scoped_proposals = tuple(
         (proposal.dest, proposal.value)
@@ -574,6 +558,32 @@ def _scoped_correction_rungs(
             coordinates.append(CompareEq(tag, value))
         scope = AllCondition(scope, *coordinates)
     return tuple(_pilot_rungs_from_proposals(list(scoped_proposals), scope))
+
+
+def _target_scoped_producer_envelope_rungs(
+    plc: Any,
+    proposals: tuple[PilotRung, ...],
+    ctx: Any,
+) -> tuple[PilotRung, ...]:
+    """Bound a statically complete producer envelope by the requested target."""
+
+    from pyrung.core.condition import AllCondition
+
+    unresolved = _target_unresolved_condition(
+        plc,
+        ctx.target.tag,
+        ctx.target.value,
+        ctx.target.predicate,
+    )
+    return tuple(
+        PilotRung(
+            proposal.dest,
+            proposal.value,
+            AllCondition(unresolved, proposal.guard),
+            operation=proposal.operation,
+        )
+        for proposal in proposals
+    )
 
 
 def _active_pilot_rungs_defeat_needed(

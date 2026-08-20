@@ -228,9 +228,6 @@ def test_protected_outer_state_cannot_self_grant_disposable_capability() -> None
 
 
 def test_recovery_rejects_outer_orchestration_owners() -> None:
-    from pyrung.core.analysis.pilot.correction_lifecycle import (
-        _install_confirmed_correction,
-    )
     from pyrung.core.analysis.pilot.pilot import (
         _monitor_committed_trial,
         _pilot_loop_events,
@@ -241,13 +238,6 @@ def test_recovery_rejects_outer_orchestration_owners() -> None:
         forbidden = (
             lambda: next(_pilot_loop_events(None, None)),
             lambda: next(_monitor_committed_trial(None, None, None, None)),
-            lambda: _install_confirmed_correction(
-                None,
-                None,
-                origin_key=(),
-                scan=0,
-                source="test",
-            ),
             lambda: run_skiff_scan(None, None, None, pilot_rungs=()),
         )
         for invoke in forbidden:

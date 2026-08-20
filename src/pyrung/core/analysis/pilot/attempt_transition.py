@@ -15,10 +15,6 @@ from pyrung.core.analysis.pilot.compass import (
     CoastObservation,
     EvidenceScope,
 )
-from pyrung.core.analysis.pilot.correction_lifecycle import (
-    _install_confirmed_correction,
-)
-from pyrung.core.analysis.pilot.departure_state import _anchor_frame_receipt
 from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
     BearingObjective,
@@ -97,15 +93,6 @@ def record_attempt(
         *(ActionNogoodObservation(frame.key, ("pair", pair)) for pair in attempt.nogood_pairs),
     ]
     ctx.compass, _ = ctx.compass.apply(knowledge_observations)
-    if attempt.confirmed_correction is not None:
-        _anchor_frame_receipt(frame, state, objective)
-        _install_confirmed_correction(
-            state,
-            attempt.confirmed_correction,
-            origin_key=frame.key,
-            scan=state.work.state.scan_id,
-            source="excursion",
-        )
     if attempt.avoid_names:
         # Knowledge: which avoid conditions excluded a path, for a naming decline.
         state.avoid_names.update(attempt.avoid_names)
@@ -217,7 +204,13 @@ def transition_once(
     requirements_before_theory_recording = _theory_recording._requirement_identities(state)
     attempt = execute(result, orientation_world)
     if resolve_excursion and attempt.excursion_attempt is not None:
-        attempt = _attempt_verification.resolve_excursion(attempt, frame, state, ctx)
+        attempt = _attempt_verification.resolve_excursion(
+            attempt,
+            frame,
+            state,
+            ctx,
+            attempt_source_checkpoint,
+        )
     if terminal_target_expectation is not None:
         result, attempt = _attempt_verification.promote_transient_target_failure(
             result,
@@ -273,6 +266,20 @@ def transition_once(
             prior_requirement_identities=requirements_before_theory_recording,
             intrascan_report=intrascan_report,
         )
+        if theory_transition is None and attempt.correction_requirement is not None:
+            theory_transition = (
+                _theory_recording._theory_transition_from_regression_requirement(
+                    state,
+                    attempt.correction_requirement,
+                    result,
+                    evidence=(
+                        (
+                            "exact-excursion-requirement",
+                            attempt.correction_requirement.diagnostic_snapshot(),
+                        ),
+                    ),
+                )
+            )
     except Exception:  # noqa: BLE001 - optional theory conversion cannot change the drive
         logger.debug("pilot: working theory observation failed", exc_info=True)
     record_attempt(attempt, frame, state, ctx, result.objective, act)

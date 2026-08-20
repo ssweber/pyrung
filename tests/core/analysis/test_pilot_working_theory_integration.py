@@ -542,7 +542,7 @@ def test_advanced_reconnect_front_yields_to_watchdog_research_and_replacement(
     )
 
 
-def test_neutral_route_steers_again_before_researching_third_intrascan_correction(
+def test_neutral_route_uses_exact_regression_requirement_for_third_correction(
     monkeypatch: Any,
 ) -> None:
     compositions: list[tuple[Any, tuple[Any, ...]]] = []
@@ -564,14 +564,22 @@ def test_neutral_route_steers_again_before_researching_third_intrascan_correctio
     try:
         for emitted in stream:
             events.append(emitted)
-            if len(compositions) == 3 and emitted.kind == "bearing_coast":
+            scalar_compositions = tuple(
+                item for item in compositions if item[0].configuration is not None
+            )
+            if len(scalar_compositions) == 3 and emitted.kind == "bearing_coast":
                 break
     finally:
         close = getattr(stream, "close", None)
         if close is not None:
             close()
 
-    composed_values = tuple(fact.configuration.assignments[0][1] for fact, _ in compositions)
+    scalar_compositions = tuple(
+        item for item in compositions if item[0].configuration is not None
+    )
+    composed_values = tuple(
+        fact.configuration.assignments[0][1] for fact, _ in scalar_compositions
+    )
     assert composed_values == (
         11,
         21,
@@ -593,12 +601,16 @@ def test_neutral_route_steers_again_before_researching_third_intrascan_correctio
     second_composition_index = next(
         index
         for index, event in enumerate(events)
-        if event.kind == "theory_correction_composed" and event.data["configuration"][0][1] == 21
+        if event.kind == "theory_correction_composed"
+        and event.data["configuration"]
+        and event.data["configuration"][0][1] == 21
     )
     third_composition_index = next(
         index
         for index, event in enumerate(events)
-        if event.kind == "theory_correction_composed" and event.data["configuration"][0][1] == 31
+        if event.kind == "theory_correction_composed"
+        and event.data["configuration"]
+        and event.data["configuration"][0][1] == 31
     )
     intervening = events[second_composition_index + 1 : third_composition_index]
     assert any(
@@ -606,10 +618,18 @@ def test_neutral_route_steers_again_before_researching_third_intrascan_correctio
         and event.data["applied"] == ((sequence_route.CheckpointSensor.name, True),)
         for event in intervening
     )
-    assert sum(event.kind == "conductivity_research_requested" for event in intervening) == 1
+    delayed_regressions = tuple(
+        event
+        for event in intervening
+        if event.kind == "trend_regression"
+        and event.data.get("investigation", {}).get("delayed_expectation")
+    )
+    assert len(delayed_regressions) == 1
+    assert delayed_regressions[0].data["investigation"]["working_theory"] is True
+    assert not any(event.kind == "conductivity_research_requested" for event in intervening)
 
-    third_fact, installed = compositions[-1]
-    assert third_fact.research_finding_identity is not None
+    third_fact, installed = scalar_compositions[-1]
+    assert third_fact.research_finding_identity is None
     assert len(third_fact.superseded_configuration_identities) == 1
     preset_configurations = tuple(
         configuration

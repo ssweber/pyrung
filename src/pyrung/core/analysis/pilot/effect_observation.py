@@ -7,12 +7,12 @@ consumer crossings; it never selects a producer, required shape, or route.
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.causal._rung_writes import RungRead, RungWrite
-from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.analysis.write_sites import (
     instruction_write_targets,
     static_write_target_names,
@@ -713,10 +713,22 @@ def terminal_target_replay_scan_ids(
     exact = tuple(sorted(set(exact_scan_ids)))
     if not exact:
         return ()
-    owners = tuple(fork._causal_lineage.owner_at(scan_id) for scan_id in exact)
-    if any(owner is None for owner in owners):
+
+    lineage = fork._causal_lineage
+    segments: list[tuple[Any, tuple[int, ...]]] = []
+    consumed = 0
+    for epoch, first_scan, last_scan in lineage.epochs_covering(exact[0], exact[-1]):
+        lo = bisect_left(exact, first_scan, consumed)
+        hi = bisect_right(exact, last_scan, lo)
+        if lo != consumed:
+            break
+        if lo < hi:
+            segments.append((lineage._query_for(epoch), exact[lo:hi]))
+            consumed = hi
+    if consumed != len(exact):
         return exact
-    exact_owners = tuple(owner for owner in owners if owner is not None)
+
+    exact_owners = tuple(owner for owner, _owned_scans in segments)
     selected: set[int] = set()
     for obligation in expectation.obligations:
         if not obligation.terminal_target:
@@ -741,13 +753,16 @@ def terminal_target_replay_scan_ids(
         ):
             selected.update(exact)
             continue
-        for scan_id, owner in zip(exact, exact_owners, strict=True):
+        for owner, owned_scans in segments:
             timelines = getattr(owner, timeline_name)
-            if _values_match(
-                timelines.value_at(producer, obligation.tag, scan_id),
-                obligation.value,
-            ) or timelines.varied_on(producer, obligation.tag, scan_id):
-                selected.add(scan_id)
+            selected.update(
+                timelines.value_or_varied_scans(
+                    producer,
+                    obligation.tag,
+                    obligation.value,
+                    owned_scans,
+                )
+            )
     return tuple(sorted(selected))
 
 
