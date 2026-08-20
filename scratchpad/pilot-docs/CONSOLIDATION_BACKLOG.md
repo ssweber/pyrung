@@ -325,7 +325,7 @@ receipts. Recording still precedes retention in both recovery paths.
 
 ### 17. Characterize temporal-checkpoint admission identity
 
-**Status:** characterize first
+**Status:** characterized — preserve the path-specific rules
 
 Temporal checkpoint admission currently mixes owner identity, object identity,
 detached boundary equality, and later `CheckpointRef` resolution across
@@ -338,6 +338,30 @@ recovery, evidence, drive, and recording paths.
   and ambiguous live resolution.
 - Preserve execution-time resolution back to current live requirements; do not
   cache or carry a detached requirement as executable authority.
+
+The characterized matrix is intentionally not one equivalence relation:
+
+| Path | Admission / resolution identity | Characterized consequence |
+| --- | --- | --- |
+| Recovery | `_CheckpointOwner` object identity | A refreshed World for one owner is not appended; a distinct owner at the same executed boundary is retained. |
+| Evidence | `_CausalCheckpoint` object identity | A distinct checkpoint object is retained even when its owner or detached boundary is already present. |
+| Drive and recording | exact `TheoryBoundaryIdentity` equality | Overlay changes and new Epochs are distinct; distinct checkpoint owners collapse when the executed boundary has the same Epoch owner. |
+| Executable source resolution | `CheckpointRef` projection, then exact boundary; last retained match wins | A refreshed checkpoint replaces the older value for one reference. Distinct references can remain candidates for the same executed boundary. |
+| Executable requirement resolution | unique active semantic-identity match | The detached snapshot never becomes executable authority; zero matches are historical, one returns the current live object, and multiple matches fail closed as ambiguous. |
+
+The main drift is between provenance-local admission rules, not boundary
+comparison itself: owner-based recovery can suppress an overlay/Epoch-refreshed
+World, while object-based evidence can retain redundant views that boundary-
+based recording would suppress. The resolver makes same-reference refreshes
+deterministic, and exact boundary matching prevents a rollback re-execution
+from impersonating its earlier Epoch.
+
+Do not consolidate these rules yet. First decide whether recovery is allowed to
+reuse a `_CheckpointOwner` across a changed executable boundary and whether
+evidence intentionally preserves multiple objects for one owner. Until those
+ownership lifetimes are explicit, a canonical admission predicate would hide a
+policy choice. Keep live requirement resolution at execution time and retain
+its ambiguity rejection independently of checkpoint admission.
 
 ### 18. Name the occurrence-identity modes
 
