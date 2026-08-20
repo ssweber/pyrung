@@ -86,7 +86,7 @@ identity.
 
 ### 4. Reuse route command-effectiveness evidence
 
-**Status:** ready
+**Status:** done
 
 `route_options._compass_route_plan._first_edge_open` constructs an execution
 overlay and checks that every edge action/co-action is effective, then calls

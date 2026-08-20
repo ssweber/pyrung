@@ -7,6 +7,7 @@ orientation orchestrator; it never selects or executes a Bearing.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
@@ -21,6 +22,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     is_composite_action,
 )
 from pyrung.core.analysis.pilot.overlay import (
+    PilotOverlayExecution,
     PilotRung,
     _atom_condition,
     _pilot_rung_execution_receipt,
@@ -56,6 +58,21 @@ def _learned_edge_allowed(
             for pair in members
         )
     return wait_edge_nogood(tag, source, destination) not in key_nogoods
+
+
+def _edge_commands_effective(
+    edge: Any,
+    snapshot: Mapping[str, Any],
+    overlay: PilotOverlayExecution,
+) -> bool:
+    """Whether the edge's complete command recipe already owns this world."""
+
+    commanded = () if edge.action is None else (edge.action, *edge.co_actions)
+    return bool(commanded) and all(
+        ((owner := overlay.owner(tag)) is not None and _values_match(owner.value, value))
+        or _values_match(snapshot.get(tag), value)
+        for tag, value in commanded
+    )
 
 
 def _compass_route_plan(
@@ -106,12 +123,7 @@ def _compass_route_plan(
             for tag, value in (*edge.source_constraints, *edge.enablers)
         ):
             return False
-        commanded = () if edge.action is None else (edge.action, *edge.co_actions)
-        already_effective = bool(commanded) and all(
-            ((owner := overlay.owner(tag)) is not None and _values_match(owner.value, value))
-            or _values_match(frame.snap.get(tag), value)
-            for tag, value in commanded
-        )
+        already_effective = _edge_commands_effective(edge, frame.snap, overlay)
         # An already-effective command is not another candidate.  It admits
         # precisely one chart coast only when the selected writer's complete
         # live guard proves that the program can consume it in this world.
@@ -122,6 +134,7 @@ def _compass_route_plan(
                 frame,
                 state,
                 ctx,
+                overlay=overlay,
             )
             is not None
         )
@@ -360,6 +373,8 @@ def _live_chart_completion_edge(
     frame: Any,
     state: Any,
     ctx: Any,
+    *,
+    overlay: PilotOverlayExecution | None = None,
 ) -> Any | None:
     """Ground an already-asserted action edge in the exact current world.
 
@@ -373,17 +388,13 @@ def _live_chart_completion_edge(
 
     if edge.action is None:
         return None
-    overlay = _pilot_rung_execution_receipt(
-        getattr(state, "pilot_rungs", ()),
-        frame.snap,
+    execution = (
+        overlay
+        if overlay is not None
+        else _pilot_rung_execution_receipt(getattr(state, "pilot_rungs", ()), frame.snap)
     )
-    for tag, value in (edge.action, *edge.co_actions):
-        owner = overlay.owner(tag)
-        if not (
-            (owner is not None and _values_match(owner.value, value))
-            or _values_match(frame.snap.get(tag), value)
-        ):
-            return None
+    if not _edge_commands_effective(edge, frame.snap, execution):
+        return None
 
     from pyrung.core.analysis.pilot.evidence import selected_chart_producer_guard_rungs
     from pyrung.core.analysis.sp_values import _SnapshotView
