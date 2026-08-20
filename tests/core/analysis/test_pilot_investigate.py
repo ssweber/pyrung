@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
+import pyrung.core.analysis.pilot.attempt_verification as _attempt_verification
+import pyrung.core.analysis.pilot.investigation_replay as _investigation_replay
 from pyrung import (
     And,
     Bool,
@@ -39,6 +42,7 @@ from pyrung.core.analysis.pilot.corrections import (
 )
 from pyrung.core.analysis.pilot.incidents import BearingDeparture, DeviationIncident
 from pyrung.core.analysis.pilot.investigation_replay import (
+    ExcursionResult,
     _first_timeline_departure,
     build_deviation_incident,
     investigate_excursion,
@@ -49,6 +53,7 @@ from pyrung.core.analysis.pilot.overlay import (
     _set_pilot_rungs,
     fork_with_pilot_rungs,
 )
+from pyrung.core.analysis.pilot.types import _AttemptResult
 from pyrung.core.analysis.pilot.world_key import _pilot_state_key, _StateKeyConfig
 from pyrung.core.analysis.sp_values import _SnapshotView
 from pyrung.core.analysis.steerable import compute_steerable
@@ -1140,6 +1145,127 @@ def _excursion_inputs():
     return work, fork, pre_snap, post_pulse_snap, pre_key, cfg, steerable
 
 
+def _excursion_owners(
+    work: PLC,
+    fork: PLC,
+    post_pulse_snap: dict[str, Any],
+    pre_key: tuple[Any, ...],
+    cfg: _StateKeyConfig,
+    steerable: frozenset[str],
+    applied_actions: tuple[tuple[str, Any], ...],
+    *,
+    resting: dict[str, Any],
+    edge_tags: set[str],
+    pdg: Any = None,
+    program: Program | None = None,
+    live_work: PLC | None = None,
+    pilot_rungs: Any = (),
+    scan_budget: int = 50,
+) -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace, SimpleNamespace]:
+    """Build the four owner shapes consumed by excursion replay."""
+
+    executed = SimpleNamespace(
+        pulse=SimpleNamespace(fork=fork, post_pulse_snap=post_pulse_snap),
+        bearing=SimpleNamespace(
+            act=SimpleNamespace(policy=SimpleNamespace(applied=applied_actions))
+        ),
+    )
+    checkpoint = SimpleNamespace(
+        key=pre_key,
+        world=SimpleNamespace(work=work),
+    )
+    state = SimpleNamespace(
+        work=work if live_work is None else live_work,
+        key_config=cfg,
+        pilot_rungs=pilot_rungs,
+        remaining_search_scans=lambda _max_scans: scan_budget,
+    )
+    ctx = SimpleNamespace(
+        pdg=pdg,
+        program=program,
+        steerable=steerable,
+        resting=resting,
+        edge_tags=edge_tags,
+        max_scans=scan_budget,
+        avoid_pred=None,
+        blocked_actions=frozenset(),
+        compass=SimpleNamespace(action_tags=frozenset()),
+    )
+    return executed, checkpoint, state, ctx
+
+
+@dataclass(frozen=True)
+class _ExcursionAttemptStub:
+    pulse: Any
+    bearing: Any
+    effect_observations: tuple[Any, ...] = ()
+
+
+def test_resolver_passes_exact_excursion_owners(monkeypatch):
+    released: list[bool] = []
+    pulse = SimpleNamespace(release_projections=lambda: released.append(True))
+    executed = _ExcursionAttemptStub(
+        pulse=pulse,
+        bearing=object(),
+        effect_observations=(object(),),
+    )
+    checkpoint = object()
+    state = SimpleNamespace(active_requirements=[])
+    ctx = object()
+    captured: list[tuple[Any, ...]] = []
+
+    def _capture(*owners: Any) -> ExcursionResult:
+        captured.append(owners)
+        return ExcursionResult(reverted=[])
+
+    monkeypatch.setattr(_attempt_verification, "investigate_excursion", _capture)
+
+    result = _attempt_verification.resolve_excursion(
+        _AttemptResult(trial=None, excursion_attempt=executed),
+        state,
+        ctx,
+        checkpoint,
+    )
+
+    assert captured == [(executed, checkpoint, state, ctx)]
+    assert result.executed is not executed
+    assert result.executed.effect_observations == ()
+    assert released == [True]
+
+
+def test_replay_uses_checkpoint_work_with_live_state_overlay(monkeypatch):
+    work, fork, _pre, post, pre_key, cfg, steerable = _excursion_inputs()
+    live_work = work.fork()
+    live_overlay: list[PilotRung] = []
+    owners = _excursion_owners(
+        work,
+        fork,
+        post,
+        pre_key,
+        cfg,
+        steerable,
+        (("Command", True),),
+        resting={"Command": False},
+        edge_tags={"Command"},
+        live_work=live_work,
+        pilot_rungs=live_overlay,
+    )
+    replay_sources: list[tuple[PLC, Any]] = []
+    real_fork = _investigation_replay.fork_with_pilot_rungs
+
+    def _record_source(source: PLC, pilot_rungs: Any) -> PLC:
+        replay_sources.append((source, pilot_rungs))
+        return real_fork(source, pilot_rungs)
+
+    monkeypatch.setattr(_investigation_replay, "fork_with_pilot_rungs", _record_source)
+
+    result = investigate_excursion(*owners)
+
+    assert result.correction is not None
+    assert replay_sources == [(work, live_overlay)]
+    assert replay_sources[0][0] is not live_work
+
+
 class TestInvestigateExcursion:
     """investigate_excursion: state-key diagnosis and hold-based replay."""
 
@@ -1149,39 +1275,35 @@ class TestInvestigateExcursion:
         assert post_pulse_snap["Out"] is True
         assert fork.state.tags["Out"] is False
 
-        result = investigate_excursion(
+        owners = _excursion_owners(
             work,
             fork,
-            pre_snap,
             post_pulse_snap,
             pre_key,
-            [("Command", True)],
-            cfg=cfg,
-            steerable=steerable,
-            pilot_rungs=[],
+            cfg,
+            steerable,
+            (("Command", True),),
             resting={"Command": False},
             edge_tags={"Command"},
-            scan_budget=50,
         )
+        result = investigate_excursion(*owners)
         assert result.reverted == ["Out"]
 
     def test_confirmed_correction_fixes_revert(self):
         work, fork, pre_snap, post_pulse_snap, pre_key, cfg, steerable = _excursion_inputs()
 
-        result = investigate_excursion(
+        owners = _excursion_owners(
             work,
             fork,
-            pre_snap,
             post_pulse_snap,
             pre_key,
-            [("Command", True)],
-            cfg=cfg,
-            steerable=steerable,
-            pilot_rungs=[],
+            cfg,
+            steerable,
+            (("Command", True),),
             resting={"Command": False},
             edge_tags={"Command"},
-            scan_budget=50,
         )
+        result = investigate_excursion(*owners)
         # Sealing Hold=True keeps Out latched across the edge release — the
         # replay key differs from the (reverted) pre key, so the hold is kept.
         assert result.correction is not None
@@ -1321,22 +1443,20 @@ class TestGeneralizedAntagonistExcursion:
         assert post["State"] == 5  # pulse established the value
         assert fork.state.tags["State"] == 0  # then it was clobbered back
 
-        result = investigate_excursion(
+        owners = _excursion_owners(
             work,
             fork,
-            pre,
             post,
             pre_key,
-            [("Command", True)],
-            cfg=cfg,
-            steerable=steerable,
-            pilot_rungs=[],
+            cfg,
+            steerable,
+            (("Command", True),),
             resting=resting,
             edge_tags={"Command"},
-            scan_budget=50,
             pdg=pdg,
             program=prog,
         )
+        result = investigate_excursion(*owners)
         assert result.reverted == ["State"]
         assert result.correction is not None
         assert ("Mode", 1) in tuple(
@@ -1361,22 +1481,20 @@ class TestGeneralizedAntagonistExcursion:
         assert post["State"] == 5
         assert fork.state.tags["State"] == 0
 
-        result = investigate_excursion(
+        owners = _excursion_owners(
             work,
             fork,
-            pre,
             post,
             pre_key,
-            [("Command", True)],
-            cfg=cfg,
-            steerable=steerable,
-            pilot_rungs=[],
+            cfg,
+            steerable,
+            (("Command", True),),
             resting=resting,
             edge_tags={"Command"},
-            scan_budget=50,
             pdg=pdg,
             program=prog,
         )
+        result = investigate_excursion(*owners)
         assert result.reverted == ["State"]
         assert result.correction is not None
         assert ("Sel", False) in tuple(

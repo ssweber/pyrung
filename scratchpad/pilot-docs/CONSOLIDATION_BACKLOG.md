@@ -222,7 +222,7 @@ execution they came from.
 
 ### 12. Give excursion replay its existing owners
 
-**Status:** later, higher risk
+**Status:** done
 
 `investigation_replay.investigate_excursion` has a broad signature largely
 unpacked from the executed attempt, causal checkpoint, state, and context.

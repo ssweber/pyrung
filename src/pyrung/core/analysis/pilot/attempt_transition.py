@@ -216,7 +216,6 @@ def transition_once(
     if resolve_excursion and attempt.excursion_attempt is not None:
         attempt = _attempt_verification.resolve_excursion(
             attempt,
-            frame,
             state,
             ctx,
             attempt_source_checkpoint,

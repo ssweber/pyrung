@@ -40,7 +40,13 @@ from pyrung.core.analysis.pilot.overlay import (
 )
 from pyrung.core.analysis.pilot.pulse import _apply_pulse
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
-from pyrung.core.analysis.pilot.types import _IterationFrame
+from pyrung.core.analysis.pilot.types import (
+    _ExecutedAttempt,
+    _IterationFrame,
+    _PilotContext,
+    _PilotState,
+)
+from pyrung.core.analysis.pilot.world import _CausalCheckpoint
 from pyrung.core.analysis.pilot.world_key import _pilot_state_key
 from pyrung.core.analysis.pilot.writer_selection import _can_produce
 from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag
@@ -378,25 +384,28 @@ class ExcursionResult:
 
 
 def investigate_excursion(
-    work: PLC,
-    fork: PLC,
-    pre_snap: dict[str, Any],
-    post_pulse_snap: dict[str, Any],
-    pre_key: tuple[Any, ...],
-    applied_actions: Sequence[ActionPair],
-    *,
-    cfg: Any,
-    steerable: frozenset[str],
-    pilot_rungs: Sequence[Any],
-    resting: dict[str, Any],
-    edge_tags: set[str],
-    scan_budget: int,
-    pdg: Any = None,
-    program: Any = None,
-    ctx: Any = None,
+    executed: _ExecutedAttempt,
+    source_checkpoint: _CausalCheckpoint,
+    state: _PilotState,
+    ctx: _PilotContext,
 ) -> ExcursionResult:
-    """Diagnose an excursion and replay-validate candidate holds."""
+    """Diagnose an executed excursion from its exact source and live owners."""
     from pyrung.core.analysis.pdg import resolve_rung
+
+    pulse = executed.pulse
+    fork = pulse.fork
+    post_pulse_snap = pulse.post_pulse_snap
+    applied_actions = executed.bearing.act.policy.applied
+    # Replay begins in the causal world that existed before execution added
+    # this Bearing's prerequisites.  The live state remains the authority for
+    # the effective overlay and remaining budget; the two are deliberately not
+    # interchangeable after rollback or WorkingTheory composition.
+    work = source_checkpoint.world.work
+    pre_snap = dict(work.state.tags)
+    pre_key = source_checkpoint.key
+    cfg = state.key_config
+    assert pre_key is not None
+    assert cfg is not None
 
     reverted: list[str] = []
     for i, name in enumerate(cfg.stateful_names):
@@ -408,12 +417,12 @@ def investigate_excursion(
     candidate_holds: list[ActionPair] = []
     seen: set[ActionPair] = set()
 
-    if pdg is not None and program is not None:
+    if ctx.pdg is not None and ctx.program is not None:
         settled_snap = dict(fork.state.tags)
         mini_ctx = SimpleNamespace(
-            pdg=pdg,
-            program=program,
-            steerable=steerable,
+            pdg=ctx.pdg,
+            program=ctx.program,
+            steerable=ctx.steerable,
             opaque_loop=frozenset(),
             pipeline_internal_tags=frozenset(),
             route=None,
@@ -422,9 +431,9 @@ def investigate_excursion(
         )
         for tag in reverted:
             desired = post_pulse_snap.get(tag)
-            for ni in _implicated_writers(fork, tag, pdg):
-                node = pdg.rung_nodes[ni]
-                ro = resolve_rung(program, node)
+            for ni in _implicated_writers(fork, tag, ctx.pdg):
+                node = ctx.pdg.rung_nodes[ni]
+                ro = resolve_rung(ctx.program, node)
                 if ro is None:
                     continue
                 if _can_produce(_written_value_for_tag(ro, tag), desired):
@@ -437,9 +446,9 @@ def investigate_excursion(
                         desired,
                         node,
                         applied_actions,
-                        pdg,
-                        steerable,
-                        pilot_rungs,
+                        ctx.pdg,
+                        ctx.steerable,
+                        state.pilot_rungs,
                     )
                 for hold in holds or ():
                     if hold not in seen:
@@ -448,7 +457,7 @@ def investigate_excursion(
 
     if not candidate_holds:
         for tag in reverted:
-            _, holds = chase_cause_roots(fork, tag, steerable)
+            _, holds = chase_cause_roots(fork, tag, ctx.steerable)
             for hold in holds:
                 if hold not in seen:
                     seen.add(hold)
@@ -462,7 +471,7 @@ def investigate_excursion(
                 continue
             for step in chain.steps:
                 for enabler in step.enablers:
-                    if enabler.tag_name not in steerable:
+                    if enabler.tag_name not in ctx.steerable:
                         continue
                     if not isinstance(enabler.value, bool):
                         continue
@@ -473,13 +482,12 @@ def investigate_excursion(
 
     action_tags = {tag for tag, _ in applied_actions}
     candidate_holds = [(tag, value) for tag, value in candidate_holds if tag not in action_tags]
-    if ctx is not None:
-        candidate_holds = [hold for hold in candidate_holds if _hold_allowed(ctx, hold)]
+    candidate_holds = [hold for hold in candidate_holds if _hold_allowed(ctx, hold)]
     if not candidate_holds:
         return ExcursionResult(reverted=reverted)
 
-    replay_fork = fork_with_pilot_rungs(work, pilot_rungs)
-    replay_pilot_rungs = list(pilot_rungs)
+    replay_fork = fork_with_pilot_rungs(work, state.pilot_rungs)
+    replay_pilot_rungs = list(state.pilot_rungs)
     from pyrung.core.analysis.pilot.coast import CoastSession
     from pyrung.core.condition import CompareEq
 
@@ -496,14 +504,18 @@ def investigate_excursion(
         if tag not in {action_tag for action_tag, _ in applied_actions}
     )
     session = CoastSession(replay_fork, kind="excursion-replay")
-    if program is not None:
+    if ctx.program is not None:
         session.arm_pens(
             owner.profile.done.name
-            for owner in iter_advance_owners(program)
+            for owner in iter_advance_owners(ctx.program)
             if owner.profile.done is not None
         )
-    _apply_pulse(replay_fork, kickoff, resting, edge_tags, session=session)
-    _settle_delayed_effects(replay_fork, scan_budget=scan_budget, session=session)
+    _apply_pulse(replay_fork, kickoff, ctx.resting, ctx.edge_tags, session=session)
+    _settle_delayed_effects(
+        replay_fork,
+        scan_budget=state.remaining_search_scans(ctx.max_scans),
+        session=session,
+    )
     replay_snap = dict(replay_fork.state.tags)
     replay_key = _pilot_state_key(replay_snap, cfg)
 

@@ -35,38 +35,24 @@ from pyrung.core.analysis.sp_values import _values_match
 
 def resolve_excursion(
     attempt: _AttemptResult,
-    frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    source_checkpoint: _CausalCheckpoint | None = None,
+    source_checkpoint: _CausalCheckpoint,
 ) -> _AttemptResult:
     """Turn exact excursion evidence into a requirement for ordinary retry."""
-    executed = attempt.excursion_attempt
-    if executed is None:
+    excursion_attempt = attempt.excursion_attempt
+    if excursion_attempt is None:
         return attempt
-    executed = replace(executed, effect_observations=())
+    executed = replace(excursion_attempt, effect_observations=())
     attempt = replace(attempt, excursion_attempt=executed)
 
-    key_config = state.key_config
-    assert key_config is not None
-    pulse = executed.pulse
+    pulse = excursion_attempt.pulse
     try:
         result = investigate_excursion(
-            state.work,
-            pulse.fork,
-            frame.snap,
-            pulse.post_pulse_snap,
-            frame.key,
-            executed.bearing.act.policy.applied,
-            cfg=key_config,
-            steerable=ctx.steerable,
-            pilot_rungs=state.pilot_rungs,
-            resting=ctx.resting,
-            edge_tags=ctx.edge_tags,
-            scan_budget=state.remaining_search_scans(ctx.max_scans),
-            pdg=ctx.pdg,
-            program=ctx.program,
-            ctx=ctx,
+            excursion_attempt,
+            source_checkpoint,
+            state,
+            ctx,
         )
         requirement = (
             _confirmed_correction_requirement_from_excursion(
@@ -77,7 +63,7 @@ def resolve_excursion(
                 source_checkpoint,
                 tuple(result.reverted),
             )
-            if result.correction is not None and source_checkpoint is not None
+            if result.correction is not None
             else None
         )
         _retain_active_requirement(state, requirement)
