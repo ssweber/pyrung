@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pilot.effect_observation import changed_replay_scan_ids
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -155,13 +156,31 @@ def _program_written_changes(
     """
     if not relevant:
         return frozenset()
+    exact_scan_ids = tuple(range(start_scan + 1, end_scan + 1))
+    candidate_scan_ids = changed_replay_scan_ids(
+        plc,
+        exact_scan_ids,
+        relevant,
+    )
+    if not candidate_scan_ids:
+        return frozenset()
     try:
-        states = plc.history.range(start_scan, end_scan + 1)
+        if candidate_scan_ids == exact_scan_ids:
+            states = plc.history.range(start_scan, end_scan + 1)
+            state_pairs = tuple(zip(states, states[1:], strict=False))
+        else:
+            # Retained writer timelines nominate the sparse scans first.  A
+            # retention gap returns the complete interval above, preserving
+            # the bulk historical fallback and its fail-closed semantics.
+            state_pairs = tuple(
+                (plc.history.at(scan_id - 1), plc.history.at(scan_id))
+                for scan_id in candidate_scan_ids
+            )
     except Exception:  # noqa: BLE001
         return frozenset()
     written: set[str] = set()
     log = plc._scan_log.snapshot()
-    for prev, cur in zip(states, states[1:], strict=False):
+    for prev, cur in state_pairs:
         for tag in relevant:
             if tag in written or _values_match(prev.tags.get(tag), cur.tags.get(tag)):
                 continue

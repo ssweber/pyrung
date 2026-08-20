@@ -2315,6 +2315,29 @@ def test_refinement_can_authorize_an_exact_earlier_temporal_source() -> None:
 def test_theory_view_is_absent_without_an_open_theory() -> None:
     assert theory_view(TheoryState()) is None
 
+
+def test_theory_view_is_reused_until_the_immutable_state_changes() -> None:
+    state, theory_id, version_id = _opened()
+
+    first = theory_view(state)
+    assert first is not None
+    assert theory_view(state) is first
+
+    updated = reduce_theory(
+        state,
+        _attempt(
+            theory_id,
+            version_id,
+            transition="cached-view-boundary",
+            actions=(("Reconnect", True),),
+        ),
+    )
+    updated_view = theory_view(updated)
+
+    assert updated_view is not None
+    assert updated_view is not first
+    assert theory_view(updated) is updated_view
+
     state, theory_id, version_id = _opened()
     state = reduce_theory(
         state,

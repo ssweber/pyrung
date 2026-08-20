@@ -1268,12 +1268,6 @@ def _precise_causes(
     program = getattr(ctx, "program", None)
     if pdg is None or program is None:
         return []
-    empirical_writes = empirical_program_writes(
-        plc,
-        steerable,
-        start_scan=incident.anchor_scan,
-        end_scan=incident.end_scan,
-    )
     hypotheses: list[CorrectionHypothesis] = []
 
     # The channel departure is the incident's causal effect. Bearing aliases
@@ -1302,6 +1296,19 @@ def _precise_causes(
         chain = _shared_cause(plc, departure.tag, departure.scan)
         if chain is None:
             continue
+
+        # The empirical veto can only affect tags this exact causal chain may
+        # treat as terminal levers.  Asking about every statically steerable
+        # tag turns a local question into ``history width * program width``;
+        # busy but unrelated timers then nominate nearly every scan.  Keep the
+        # query chain-local before consulting the committed-change index.
+        chain_steerable = frozenset(steerable).intersection(chain.tags())
+        empirical_writes = empirical_program_writes(
+            plc,
+            chain_steerable,
+            start_scan=incident.anchor_scan,
+            end_scan=incident.end_scan,
+        )
 
         steps_by_tag: dict[str, list[Any]] = {}
         for step in chain.steps:

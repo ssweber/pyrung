@@ -23,6 +23,7 @@ from pyrung import (
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot import corrections
 from pyrung.core.analysis.pilot.avoid import _hold_allowed
 from pyrung.core.analysis.pilot.coast import CoastSession, CoastTriggerEvent, _coast_holding_state
 from pyrung.core.analysis.pilot.correction_candidates import (
@@ -325,7 +326,7 @@ class TestPreciseCauses:
             (LintDoor.name, True),
         }
 
-    def test_newly_conductive_enablers_break_actual_writer(self):
+    def test_newly_conductive_enablers_break_actual_writer(self, monkeypatch):
         Enter = Bool("Precise_EnterExecute", external=True)
         Door = Bool("Precise_DoorClosed", external=True)
         LintDoor = Bool("Precise_LintDoorClosed", external=True)
@@ -376,9 +377,34 @@ class TestPreciseCauses:
             channel_tag="Precise_State",
         )
 
-        hypotheses = _precise_causes(plc, incident, _make_ctx(prog, plc))
+        ctx = _make_ctx(
+            prog,
+            plc,
+            steerable=_make_ctx(prog, plc).steerable | {Unrelated.name},
+        )
+        empirical_candidates: list[frozenset[str]] = []
+
+        def _record_empirical_candidates(
+            _plc,
+            candidates,
+            *,
+            start_scan,
+            end_scan,
+        ):
+            empirical_candidates.append(candidates)
+            return frozenset()
+
+        monkeypatch.setattr(
+            corrections,
+            "empirical_program_writes",
+            _record_empirical_candidates,
+        )
+
+        hypotheses = _precise_causes(plc, incident, ctx)
 
         assert hypotheses
+        assert empirical_candidates
+        assert all(Unrelated.name not in candidates for candidates in empirical_candidates)
         hypothesis = hypotheses[0]
         assert hypothesis.kind == "precise-cause"
         assert {(hold.dest, hold.value) for hold in hypothesis.holds} == {

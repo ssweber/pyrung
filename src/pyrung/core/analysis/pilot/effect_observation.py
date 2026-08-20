@@ -822,6 +822,44 @@ def write_replay_scan_ids(
     return tuple(sorted(selected))
 
 
+def changed_replay_scan_ids(
+    fork: Any,
+    exact_scan_ids: Iterable[int],
+    tags: Iterable[str],
+    *,
+    mandatory_scan_ids: Iterable[int] = (),
+) -> tuple[int, ...]:
+    """Nominate scans where a selected tag changed its committed value.
+
+    The committed-tag timeline is recorded after program execution, synthesis,
+    patches, and forces have settled.  Unlike the broader writer index, a
+    steady write does not nominate every scan.  An ownership gap falls back to
+    the complete exact window.
+    """
+
+    exact = tuple(sorted(set(exact_scan_ids)))
+    if not exact:
+        return ()
+    segments = _owned_scan_segments(fork, exact)
+    if segments is None:
+        return exact
+
+    selected_tags = frozenset(tags)
+    exact_set = set(exact)
+    selected = {scan_id for scan_id in mandatory_scan_ids if scan_id in exact_set}
+    for owner, owned_scans in segments:
+        timelines = owner.committed_tag_timelines
+        for tag in selected_tags:
+            selected.update(
+                timelines.write_scans(
+                    frozenset((tag,)),
+                    tag,
+                    owned_scans,
+                )
+            )
+    return tuple(sorted(selected))
+
+
 def terminal_target_replay_scan_ids(
     expectation: EffectExpectation,
     fork: Any,

@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, is_dataclass
 from enum import StrEnum
+from functools import cached_property
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, TypeAlias
 
@@ -814,6 +815,12 @@ class TheoryState:
     ledger: TheoryLedger = TheoryLedger()
     active_theory_id: TheoryId | None = None
 
+    @cached_property
+    def view(self) -> TheoryView | None:
+        """Build and validate this immutable state's detached view once."""
+
+        return _build_theory_view(self)
+
 
 def active_theory(state: TheoryState) -> WorkingTheory | None:
     """Return the exact active case, or ``None`` when no case is open."""
@@ -947,6 +954,12 @@ def active_theory_pilot_rung_identities(
 
 def theory_view(state: TheoryState) -> TheoryView | None:
     """Return the exact active navigation view, or ``None`` when no theory is open."""
+
+    return state.view
+
+
+def _build_theory_view(state: TheoryState) -> TheoryView | None:
+    """Project one immutable state for :attr:`TheoryState.view`."""
 
     theory = active_theory(state)
     if theory is None:

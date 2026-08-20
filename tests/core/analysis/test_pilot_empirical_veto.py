@@ -70,6 +70,32 @@ def test_veto_is_fail_safe_without_evidence() -> None:
     )
 
 
+def test_veto_prefilters_quiet_history_before_state_comparison(monkeypatch) -> None:
+    logic = _mover_program()
+    plc = PLC(logic, record_all_tags=True)
+    plc.run(20)
+    observed: list[tuple[int, ...]] = []
+
+    from pyrung.core.analysis.pilot import causal
+
+    original_filter = causal.changed_replay_scan_ids
+
+    def recorded_filter(*args, **kwargs):
+        result = original_filter(*args, **kwargs)
+        observed.append(result)
+        return result
+
+    monkeypatch.setattr(causal, "changed_replay_scan_ids", recorded_filter)
+
+    assert empirical_program_writes(
+        plc,
+        frozenset({"Status"}),
+        start_scan=0,
+        end_scan=plc.state.scan_id,
+    ) == frozenset()
+    assert observed == [()]
+
+
 def test_veto_excludes_exact_recorded_pilot_write() -> None:
     status = Int("PilotWrittenStatus")
     seen = Bool("PilotWrittenSeen")
