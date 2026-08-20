@@ -365,7 +365,7 @@ its ambiguity rejection independently of checkpoint admission.
 
 ### 18. Name the occurrence-identity modes
 
-**Status:** later, characterize first
+**Status:** characterized — preserve the mode boundaries
 
 Occurrence comparisons in `theory_evidence`, `requirements`, `conductivity`,
 and `theory_orientation` use several deliberate projections but express them
@@ -377,6 +377,41 @@ as bespoke tuple/equality code.
   value, and enabled-state changes.
 - Name only the proven modes; do not collapse replay selectors into them and do
   not introduce a generic occurrence/owner framework.
+
+The current projections have this field matrix. "Include" means a change to
+that field changes identity; "ignore" means it deliberately does not.
+
+| Mode / use | Scan | Ordinal | Run order | Call invocation | Value | Enabled | Epoch / checkpoint owner |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Historical theory occurrence | include | include | include | include | include | include | owned by the enclosing requirement/receipt, not the occurrence projection |
+| Scheduled-retry occurrence | ignore | include | include | include | ignore | ignore | ignore |
+| Cross-attempt stopping writer | ignore | ignore | ignore | ignore | ignore | ignore | ignore |
+| Cross-attempt produced front | ignore | ignore | ignore | ignore | include final produced value | ignore | ignore |
+| Cross-attempt stopping read / requirement bridge | ignore | ignore | ignore | include | ignore | ignore | ignore |
+
+Historical requirement identity separately includes both `EpochRef` and
+`CheckpointRef`, while navigation identity deliberately drops them. Thus a
+retry can be the same schedule without impersonating the earlier historical
+receipt. The cross-attempt rows are a policy family, not one projection: stop
+comparison asks whether the same structural writer stopped progress, front
+comparison additionally asks whether the same value entered the flow, and
+requirement-drift correlation retains dynamic call invocation to select the
+same stopping read.
+
+Replay `EffectOccurrenceSelector` identity must remain separate. It ignores
+absolute scan, ordinal, run order, value, enabled state, and owners like some
+cross-attempt projections, but additionally identifies a relocatable static
+branch/instruction path and access index while retaining call invocation. It
+answers where to replay an access, not whether two historical or cross-attempt
+observations are the same.
+
+No behavioral contradiction was found. The only vocabulary drift is the broad
+phrase "structural identity": it currently covers three intentionally
+different conductivity projections. A later naming-only cleanup is justified
+only where bespoke code exactly duplicates one proven row (notably the
+scheduled occurrence triple in `theory_orientation` and the historical tuple
+decoded by conductivity). Do not introduce one generic occurrence identity or
+merge the three conductivity projections.
 
 ### 19. Split theory_orientation by behavior, not authority
 
