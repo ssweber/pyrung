@@ -36,6 +36,7 @@ from pyrung.core.analysis.pilot.candidate_admission import (
 from pyrung.core.analysis.pilot.candidate_policy import (
     _action_allowed,
 )
+from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     expectation_from_selected_path,
@@ -55,7 +56,6 @@ from pyrung.core.analysis.pilot.route_options import (
     _compass_route_actions,
     _compass_route_plan,
     _general_chart_completion_plan,
-    _learned_edge_allowed,
     _live_chart_completion_edge,
 )
 from pyrung.core.analysis.pilot.wait_options import (
@@ -371,14 +371,17 @@ def _read_learned_fallback(
             *,
             tag: str = node.tag,
         ) -> bool:
-            return _learned_edge_allowed(
+            return NavigationEvidence.learned_cause_allowed(
                 tag,
                 source,
                 cause,
                 destination,
-                frame,
-                ctx,
-                key_nogoods,
+                world_key=frame.key,
+                snapshot=frame.snap,
+                knowledge=ctx.compass.knowledge,
+                context=ctx,
+                blocked_actions=ctx.blocked_actions,
+                pair_nogoods=key_nogoods,
             )
 
         path = ctx.compass.knowledge.find_path(
@@ -421,13 +424,10 @@ def _read_learned_fallback(
             )
         if is_composite_action(first_step):
             members = cast("tuple[_ActionPair, ...]", tuple(first_step))
-            if all(pair not in key_nogoods and _action_allowed(ctx, pair) for pair in members):
-                return _candidate_read._LearnedBatch(
-                    _candidate_read.LearnedBatchRead(members, learned_expectation)
-                )
-            continue
-        if first_step not in key_nogoods and _action_allowed(ctx, first_step):
-            return _candidate_read._LearnedAction(first_step, learned_expectation)
+            return _candidate_read._LearnedBatch(
+                _candidate_read.LearnedBatchRead(members, learned_expectation)
+            )
+        return _candidate_read._LearnedAction(first_step, learned_expectation)
     return None
 
 

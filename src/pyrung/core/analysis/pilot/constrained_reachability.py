@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -13,7 +13,9 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     NavigationConstraints,
     OrientationWorld,
     TargetSpec,
+    _ActionPair,
     is_action,
+    is_composite_action,
     pulse_identity,
 )
 from pyrung.core.analysis.pilot.pipeline_graph import _best_static_path
@@ -123,15 +125,19 @@ def _learned_reachable(
         for (from_value, cause), destination in live.items():
             if not _values_match(from_value, state):
                 continue
-            if is_action(cause):
-                if cause in constraints.blocked_actions or cause in pair_nogoods:
-                    continue
-                if _avoid_forces(world.context, [cause], world.snapshot):
-                    continue
-            else:
-                identity = wait_edge_nogood(target.tag, from_value, destination)
-                if identity in pair_nogoods:
-                    continue
+            if not NavigationEvidence.learned_cause_allowed(
+                target.tag,
+                from_value,
+                cause,
+                destination,
+                world_key=world.world_key,
+                snapshot=world.snapshot,
+                knowledge=knowledge,
+                context=world.context,
+                blocked_actions=constraints.blocked_actions,
+                pair_nogoods=pair_nogoods,
+            ):
+                continue
             if _values_match(destination, target.value):
                 return True
             key = repr(destination)
@@ -143,6 +149,41 @@ def _learned_reachable(
 
 class NavigationEvidence:
     """Shared constrained evidence layer for orientation and verification."""
+
+    @staticmethod
+    def learned_cause_allowed(
+        tag: str,
+        source: Any,
+        cause: Any,
+        destination: Any,
+        *,
+        world_key: tuple[Any, ...] | None,
+        snapshot: dict[str, Any],
+        knowledge: NavigationKnowledge,
+        context: Any,
+        blocked_actions: frozenset[_ActionPair] = frozenset(),
+        pair_nogoods: set[Any] | frozenset[Any] | None = None,
+    ) -> bool:
+        """Whether one complete learned cause may enter a current-world path."""
+
+        if pair_nogoods is None:
+            current_nogoods = (
+                knowledge.nogood_pairs(world_key) if world_key is not None else frozenset()
+            )
+        else:
+            current_nogoods = frozenset(pair_nogoods)
+        if not is_action(cause):
+            return wait_edge_nogood(tag, source, destination) not in current_nogoods
+
+        members = cast(tuple[_ActionPair, ...], cause) if is_composite_action(cause) else (cause,)
+        return (
+            all(pair not in blocked_actions and pair not in current_nogoods for pair in members)
+            and not _avoid_forces(context, members, snapshot)
+            and not (
+                world_key is not None
+                and knowledge.act_is_nogood(world_key, pulse_identity(members))
+            )
+        )
 
     @staticmethod
     def static_edge_admission(

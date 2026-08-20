@@ -9,17 +9,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
-from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.candidate_policy import _action_allowed
 from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence
 from pyrung.core.analysis.pilot.navigation_contracts import (
     EvidenceScope,
     _ActionPair,
-    is_action,
-    is_composite_action,
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotOverlayExecution,
@@ -30,34 +27,11 @@ from pyrung.core.analysis.pilot.overlay import (
     _until_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.trace import trace_back
-from pyrung.core.analysis.pilot.world_key import wait_edge_nogood
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.pipeline_graph import StaticPath
     from pyrung.core.analysis.pilot.trace_tree import TraceAction
-
-
-def _learned_edge_allowed(
-    tag: str,
-    source: Any,
-    cause: Any,
-    destination: Any,
-    frame: Any,
-    ctx: Any,
-    key_nogoods: set[_ActionPair],
-) -> bool:
-    """Apply every live constraint before a learned edge enters any path query."""
-
-    if is_action(cause):
-        members = cast(tuple[_ActionPair, ...], cause) if is_composite_action(cause) else (cause,)
-        return all(
-            pair not in key_nogoods
-            and _action_allowed(ctx, pair)
-            and not _avoid_forces(ctx, (pair,), frame.snap)
-            for pair in members
-        )
-    return wait_edge_nogood(tag, source, destination) not in key_nogoods
 
 
 def _edge_commands_effective(

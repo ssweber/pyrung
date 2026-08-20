@@ -107,7 +107,7 @@ before consolidating the implementation.
 
 ### 5. Unify learned-cause admission
 
-**Status:** characterize first
+**Status:** done
 
 Learned transition admission differs among
 `route_options._learned_edge_allowed`,
