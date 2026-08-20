@@ -376,6 +376,10 @@ class TheoryAttemptReceipt:
     program_transaction: ProgramTransaction | None = None
     configurations: tuple[ScanEntryConfiguration, ...] = ()
 
+    def __post_init__(self) -> None:
+        if self.observation_boundary is None:
+            object.__setattr__(self, "observation_boundary", self.source)
+
 
 @dataclass(frozen=True)
 class TheoryFirstEdgeExclusion:

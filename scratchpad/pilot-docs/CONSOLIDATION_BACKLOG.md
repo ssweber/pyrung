@@ -263,7 +263,7 @@ still invoke the boundary check independently.
 
 ### 14. Carry the exact TheoryAttemptReceipt through RecordTheoryAttempt
 
-**Status:** ready, behavior-preserving object carry
+**Status:** done
 
 The execution boundary creates `_TheoryTransitionEvidence`, lifecycle fact
 construction copies nearly the same fields into `RecordTheoryAttempt`, and the
@@ -276,6 +276,12 @@ reducer reconstructs `TheoryAttemptReceipt` for the ledger.
 - Focused tests: idempotent replay, conflicting replay, default observation
   boundary, stale source/version rejection, and stored receipt identity.
 - Do not build a generic receipt pipeline or base receipt hierarchy.
+
+Implemented as a receipt-only lifecycle fact. The exact frozen receipt now
+normalizes its default observation boundary when constructed, crosses the
+reducer boundary unchanged, and is stored by object identity after the reducer
+independently revalidates version, source, execution, and investigation
+ownership. Interpretation and refinement remain separate lifecycle facts.
 
 ### 15. Let controlled setup carry its stored attempt receipt
 

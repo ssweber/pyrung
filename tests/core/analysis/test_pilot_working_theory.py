@@ -61,6 +61,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     IntrascanTracebackFrontier,
     ProgramTransaction,
     TheoryAttemptDisposition,
+    TheoryAttemptReceipt,
     TheoryBoundaryIdentity,
     TheoryClaim,
     TheoryFirstEdgeExclusion,
@@ -227,20 +228,31 @@ def _attempt(
     execution_ref = _execution_ref(f"attempt-{transition}")
     occurrence = ("attempt-occurrence", transition)
     return RecordTheoryAttempt(
-        theory_id=theory_id,
-        version_id=version_id,
-        attempt_identity=(transition, execution_ref, occurrence),
-        source=source,
-        execution_ref=execution_ref,
-        occurrence_evidence=occurrence,
-        act_identity=actions,
-        act_pairs=actions,
-        selected_act_pairs=actions,
-        pilot_rung_identities=(),
-        disposition=disposition,
-        evidence=(("scan", 1),),
-        first_edge_identity=first_edge_identity,
+        TheoryAttemptReceipt(
+            theory_id=theory_id,
+            version_id=version_id,
+            attempt_id=(transition, execution_ref, occurrence),
+            source=source,
+            execution_ref=execution_ref,
+            occurrence_evidence=occurrence,
+            act_identity=actions,
+            act_pairs=actions,
+            selected_act_pairs=actions,
+            pilot_rung_identities=(),
+            disposition=disposition,
+            evidence=(("scan", 1),),
+            first_edge_identity=first_edge_identity,
+        )
     )
+
+
+def _replace_attempt(
+    fact: RecordTheoryAttempt,
+    **changes: Any,
+) -> RecordTheoryAttempt:
+    if "source" in changes and "observation_boundary" not in changes:
+        changes["observation_boundary"] = changes["source"]
+    return replace(fact, receipt=replace(fact.receipt, **changes))
 
 
 def test_open_creates_one_active_theory_and_initial_version() -> None:
@@ -292,7 +304,7 @@ def test_research_finding_records_exact_evidence_without_advancing_the_world() -
         required_shape=(("SequenceStep", 40),),
         boundary=("consumer", 11),
     )
-    later = replace(
+    later = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -316,11 +328,11 @@ def test_research_finding_records_exact_evidence_without_advancing_the_world() -
         source=source,
         comparison_identity=(
             "conductivity-comparison",
-            earlier.attempt_identity,
-            later.attempt_identity,
+            earlier.receipt.attempt_id,
+            later.receipt.attempt_id,
             "same-stop",
         ),
-        compared_attempt_ids=(earlier.attempt_identity, later.attempt_identity),
+        compared_attempt_ids=(earlier.receipt.attempt_id, later.receipt.attempt_id),
         displacement=displacement,
         enabling_reads=(stopping_read,),
         requirement_drift_identities=(("requirement-drift", "preset", 10, 20),),
@@ -451,7 +463,7 @@ def test_correction_install_promotes_tentative_pilot_rung() -> None:
     assert composed is not None
     assert composed.pending_overlay_identities == frozenset((correction,))
 
-    accepted = replace(
+    accepted = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -469,12 +481,12 @@ def test_correction_install_promotes_tentative_pilot_rung() -> None:
             version_id=version_id,
             source=source,
             boundary=_boundary("installed", 1),
-            accepted_attempt_id=accepted.attempt_identity,
+            accepted_attempt_id=accepted.receipt.attempt_id,
             advance_identity=("advance", "installed-sail-on"),
             phase_receipts=(
                 TheoryPhaseReceipt(
                     kind=TheoryPhaseKind.CORRECTION_INSTALL,
-                    evidence_identity=accepted.attempt_identity,
+                    evidence_identity=accepted.receipt.attempt_id,
                     pilot_rung_identities=(correction,),
                 ),
             ),
@@ -709,7 +721,7 @@ def test_open_intrascan_traceback_frontier_is_retained_without_scan_authority() 
     assert not view.has_traceback_finding(request_identity)
     assert reduce_theory(recorded, fact) is recorded
 
-    selected_attempt = replace(
+    selected_attempt = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -720,11 +732,11 @@ def test_open_intrascan_traceback_frontier_is_retained_without_scan_authority() 
         producer_goal_id=goal.identity,
     )
     selected = reduce_theory(recorded, selected_attempt)
-    selected_receipt = selected.ledger.attempts[selected_attempt.attempt_identity]
+    selected_receipt = selected.ledger.attempts[selected_attempt.receipt.attempt_id]
     assert selected_receipt.investigation_frontier_id == frontier.identity
     assert selected_receipt.producer_goal_id == goal.identity
 
-    accepted_attempt = replace(
+    accepted_attempt = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -742,7 +754,7 @@ def test_open_intrascan_traceback_frontier_is_retained_without_scan_authority() 
         AdvanceTheory(
             theory_id=theory_id,
             version_id=version_id,
-            accepted_attempt_id=accepted_attempt.attempt_identity,
+            accepted_attempt_id=accepted_attempt.receipt.attempt_id,
             source=source,
             boundary=advanced_source,
             advance_identity=("advance-accepted-frontier-goal",),
@@ -750,11 +762,11 @@ def test_open_intrascan_traceback_frontier_is_retained_without_scan_authority() 
     )
     advanced_view = theory_view(advanced)
     assert advanced_view is not None
-    assert advanced_view.current_progress_attempt_id == accepted_attempt.attempt_identity
+    assert advanced_view.current_progress_attempt_id == accepted_attempt.receipt.attempt_id
     assert advanced_view.realized_traceback_frontier() == (
         frontier,
         goal,
-        advanced.ledger.attempts[accepted_attempt.attempt_identity],
+        advanced.ledger.attempts[accepted_attempt.receipt.attempt_id],
     )
     realized_finding = IntrascanTracebackFinding(
         theory_id=theory_id,
@@ -774,7 +786,7 @@ def test_open_intrascan_traceback_frontier_is_retained_without_scan_authority() 
         ),
         parent_frontier_id=frontier.identity,
         parent_producer_goal_id=goal.identity,
-        parent_attempt_id=accepted_attempt.attempt_identity,
+        parent_attempt_id=accepted_attempt.receipt.attempt_id,
     )
     realized = reduce_theory(advanced, RecordIntrascanTraceback(realized_finding))
     assert realized.ledger.traceback_findings[realized_finding.identity] is realized_finding
@@ -785,9 +797,9 @@ def test_open_intrascan_traceback_frontier_is_retained_without_scan_authority() 
     with pytest.raises(TheoryInvariantError, match="does not belong"):
         reduce_theory(
             recorded,
-            replace(
+            _replace_attempt(
                 selected_attempt,
-                attempt_identity=("wrong-goal", "owner", "occurrence"),
+                attempt_id=("wrong-goal", "owner", "occurrence"),
                 producer_goal_id=("intrascan-producer-goal", "other"),
             ),
         )
@@ -821,7 +833,7 @@ def test_open_intrascan_traceback_frontier_is_retained_without_scan_authority() 
         requirement_identities=(("requirement", "later-displacement"),),
         parent_frontier_id=frontier.identity,
         parent_producer_goal_id=goal.identity,
-        parent_attempt_id=selected_attempt.attempt_identity,
+        parent_attempt_id=selected_attempt.receipt.attempt_id,
     )
     chained = reduce_theory(refined, RecordIntrascanTracebackFrontier(child))
     assert chained.ledger.traceback_frontiers[child.identity] is child
@@ -857,16 +869,19 @@ def test_world_rebase_retains_only_theory_owned_overlay_at_same_physical_boundar
     version_id = state.ledger.theories[theory_id].current_version_id
     correction = ("Link", False, "guard")
     accepted = RecordTheoryAttempt(
-        theory_id=theory_id,
-        version_id=version_id,
-        attempt_identity=("accepted", "owner", "occurrence"),
-        source=source,
-        execution_ref=_execution_ref("attempt-owner"),
-        occurrence_evidence=("attempt-occurrence",),
-        act_identity=(("Reset", True),),
-        pilot_rung_identities=(correction,),
-        disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
-        evidence=(("scan", 1),),
+        TheoryAttemptReceipt(
+            theory_id=theory_id,
+            version_id=version_id,
+            attempt_id=("accepted", "owner", "occurrence"),
+            source=source,
+            execution_ref=_execution_ref("attempt-owner"),
+            occurrence_evidence=("attempt-occurrence",),
+            act_identity=(("Reset", True),),
+            pilot_rung_identities=(correction,),
+            disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+            evidence=(("scan", 1),),
+            observation_boundary=source,
+        )
     )
     state = reduce_theory(state, accepted)
     execution_boundary = replace(
@@ -882,7 +897,7 @@ def test_world_rebase_retains_only_theory_owned_overlay_at_same_physical_boundar
             version_id=version_id,
             source=source,
             boundary=execution_boundary,
-            accepted_attempt_id=accepted.attempt_identity,
+            accepted_attempt_id=accepted.receipt.attempt_id,
             advance_identity=("advance", "link-low"),
             phase_receipts=(
                 TheoryPhaseReceipt(
@@ -997,10 +1012,15 @@ def test_multiple_attempts_share_one_version_and_duplicate_is_idempotent() -> No
     after_first = reduce_theory(state, first)
     after_second = reduce_theory(after_first, second)
 
+    assert after_first.ledger.attempts[first.receipt.attempt_id] is first.receipt
+    assert first.receipt.observation_boundary == first.receipt.source
     assert len(after_second.ledger.versions) == 1
     assert len(after_second.ledger.attempts) == 2
     assert {attempt.version_id for attempt in after_second.ledger.attempts.values()} == {version_id}
-    assert reduce_theory(after_second, second) is after_second
+    replay = RecordTheoryAttempt(replace(second.receipt))
+    assert replay.receipt is not second.receipt
+    assert reduce_theory(after_second, replay) is after_second
+    assert after_second.ledger.attempts[second.receipt.attempt_id] is second.receipt
 
 
 def test_duplicate_transition_identity_with_different_fact_fails_closed() -> None:
@@ -1012,18 +1032,7 @@ def test_duplicate_transition_identity_with_different_fact_fails_closed() -> Non
         actions=(("producer", True),),
     )
     state = reduce_theory(state, first)
-    conflict = RecordTheoryAttempt(
-        theory_id=theory_id,
-        version_id=version_id,
-        attempt_identity=first.attempt_identity,
-        source=first.source,
-        execution_ref=first.execution_ref,
-        occurrence_evidence=first.occurrence_evidence,
-        act_identity=(("producer", False),),
-        pilot_rung_identities=(),
-        disposition=first.disposition,
-        evidence=first.evidence,
-    )
+    conflict = RecordTheoryAttempt(replace(first.receipt, act_identity=(("producer", False),)))
 
     with pytest.raises(TheoryInvariantError):
         reduce_theory(state, conflict)
@@ -1039,7 +1048,7 @@ def test_attempt_preserves_exact_execution_owner_and_occurrence_evidence() -> No
     )
 
     state = reduce_theory(state, attempt)
-    receipt = state.ledger.attempts[attempt.attempt_identity]
+    receipt = state.ledger.attempts[attempt.receipt.attempt_id]
 
     assert receipt.execution_ref == _execution_ref("attempt-owner-occurrence")
     assert receipt.occurrence_evidence == ("attempt-occurrence", "owner-occurrence")
@@ -1066,7 +1075,7 @@ def test_attempt_passes_immutable_conductivity_observation_through_to_view() -> 
         ),
         detail="exact ordered projection",
     )
-    attempt = replace(
+    attempt = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -1077,7 +1086,7 @@ def test_attempt_passes_immutable_conductivity_observation_through_to_view() -> 
     )
 
     state = reduce_theory(state, attempt)
-    receipt = state.ledger.attempts[attempt.attempt_identity]
+    receipt = state.ledger.attempts[attempt.receipt.attempt_id]
     view = theory_view(state)
 
     assert receipt.conductivity_observations == (observation,)
@@ -1094,7 +1103,7 @@ def test_attempt_passes_immutable_conductivity_observation_through_to_view() -> 
 
 def test_attempt_rejects_live_conductivity_evidence() -> None:
     state, theory_id, version_id = _opened()
-    attempt = replace(
+    attempt = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -1206,7 +1215,7 @@ def test_compass_derives_one_consumer_front_from_split_neutral_receipts() -> Non
         appeared=appeared,
         displacement=displacement,
     )
-    attempt = replace(
+    attempt = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -1252,7 +1261,7 @@ def test_conductivity_front_uses_occurrence_order_not_scan_zero() -> None:
     )
     state = reduce_theory(
         state,
-        replace(
+        _replace_attempt(
             _attempt(
                 theory_id,
                 version_id,
@@ -1309,7 +1318,7 @@ def test_conductivity_comparison_ignores_entry_state_and_consumer_annotation() -
     for index, current in enumerate((observation(4, 98, (None, 4, ())), observation(5, 10, None))):
         state = reduce_theory(
             state,
-            replace(
+            _replace_attempt(
                 _attempt(
                     theory_id,
                     version_id,
@@ -1363,7 +1372,7 @@ def test_conductivity_comparison_changes_when_the_produced_front_advances() -> N
     for index, current in enumerate((observation(4, 40, 2), observation(5, 41, 4))):
         state = reduce_theory(
             state,
-            replace(
+            _replace_attempt(
                 _attempt(
                     theory_id,
                     version_id,
@@ -1403,7 +1412,7 @@ def test_theory_view_retains_conductivity_history_across_refinement() -> None:
             boundary=None,
         ),
     )
-    first = replace(
+    first = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -1418,16 +1427,16 @@ def test_theory_view_retains_conductivity_history_across_refinement() -> None:
         RefineTheory(
             theory_id=theory_id,
             parent_version_id=version_id,
-            source=first.source,
-            refined_source=first.source,
+            source=first.receipt.source,
+            refined_source=first.receipt.source,
             requirements=(_requirement("first"),),
             refinement_identity=("first-refinement",),
             temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
-            trigger_attempt_id=first.attempt_identity,
+            trigger_attempt_id=first.receipt.attempt_id,
         ),
     )
     refined_version = state.ledger.theories[theory_id].current_version_id
-    second = replace(
+    second = _replace_attempt(
         _attempt(
             theory_id,
             refined_version,
@@ -1442,15 +1451,15 @@ def test_theory_view_retains_conductivity_history_across_refinement() -> None:
     front = Compass().conductivity_front(view)
 
     assert view is not None
-    assert tuple(item.attempt_id for item in view.attempts) == (second.attempt_identity,)
+    assert tuple(item.attempt_id for item in view.attempts) == (second.receipt.attempt_id,)
     assert tuple(item.attempt_id for item in view.conductivity_attempts) == (
-        first.attempt_identity,
-        second.attempt_identity,
+        first.receipt.attempt_id,
+        second.receipt.attempt_id,
     )
     assert front is not None
     assert tuple(item.attempt_id for item in front.attempts) == (
-        first.attempt_identity,
-        second.attempt_identity,
+        first.receipt.attempt_id,
+        second.receipt.attempt_id,
     )
 
 
@@ -1498,7 +1507,7 @@ def test_compass_research_joins_an_enclosing_guard_to_a_nested_stopping_writer()
             displacement_enabling_reads=(watchdog_done, branch_selector),
         )
 
-    first = replace(
+    first = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -1533,16 +1542,16 @@ def test_compass_research_joins_an_enclosing_guard_to_a_nested_stopping_writer()
         RefineTheory(
             theory_id=theory_id,
             parent_version_id=version_id,
-            source=first.source,
-            refined_source=first.source,
+            source=first.receipt.source,
+            refined_source=first.receipt.source,
             requirements=(requirement_10,),
             refinement_identity=("watchdog-refine-10",),
             temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
-            trigger_attempt_id=first.attempt_identity,
+            trigger_attempt_id=first.receipt.attempt_id,
         ),
     )
     second_version = state.ledger.theories[theory_id].current_version_id
-    second = replace(
+    second = _replace_attempt(
         _attempt(
             theory_id,
             second_version,
@@ -1578,12 +1587,12 @@ def test_compass_research_joins_an_enclosing_guard_to_a_nested_stopping_writer()
         RefineTheory(
             theory_id=theory_id,
             parent_version_id=second_version,
-            source=second.source,
-            refined_source=second.source,
+            source=second.receipt.source,
+            refined_source=second.receipt.source,
             requirements=(requirement_20,),
             refinement_identity=("watchdog-refine-20",),
             temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
-            trigger_attempt_id=second.attempt_identity,
+            trigger_attempt_id=second.receipt.attempt_id,
         ),
     )
 
@@ -1666,22 +1675,22 @@ def test_theory_view_projects_only_the_active_version_and_exact_source() -> None
     assert root_view.root == _boundary("source", 0)
     assert root_view.claim == _claim(target="stepper-complete")
     assert tuple(item.attempt_id for item in root_view.attempts) == (
-        rejected.attempt_identity,
-        accepted.attempt_identity,
+        rejected.receipt.attempt_id,
+        accepted.receipt.attempt_id,
     )
     assert root_view.first_edge_exclusions == (
         TheoryFirstEdgeExclusion(
             theory_id,
             version_id,
-            rejected.source,
-            rejected.first_edge_identity,
-            rejected.attempt_identity,
+            rejected.receipt.source,
+            rejected.receipt.first_edge_identity,
+            rejected.receipt.attempt_id,
             TheoryAttemptDisposition.REJECTED_EXACT,
         ),
     )
-    assert rejected.first_edge_identity is not None
-    assert root_view.excludes_first_edge(rejected.first_edge_identity)
-    assert not root_view.excludes_first_edge(accepted.act_identity)
+    assert rejected.receipt.first_edge_identity is not None
+    assert root_view.excludes_first_edge(rejected.receipt.first_edge_identity)
+    assert not root_view.excludes_first_edge(accepted.receipt.act_identity)
 
     landing = _boundary("landing", 1)
     state = reduce_theory(
@@ -1689,8 +1698,8 @@ def test_theory_view_projects_only_the_active_version_and_exact_source() -> None
         AdvanceTheory(
             theory_id=theory_id,
             version_id=version_id,
-            accepted_attempt_id=accepted.attempt_identity,
-            source=accepted.source,
+            accepted_attempt_id=accepted.receipt.attempt_id,
+            source=accepted.receipt.source,
             boundary=landing,
             advance_identity=("advance-to-landing",),
         ),
@@ -1718,8 +1727,8 @@ def test_theory_view_scopes_failures_to_the_current_version() -> None:
         RefineTheory(
             theory_id=theory_id,
             parent_version_id=version_id,
-            source=rejected.source,
-            refined_source=rejected.source,
+            source=rejected.receipt.source,
+            refined_source=rejected.receipt.source,
             requirements=(_requirement("consumer"),),
             refinement_identity=("refine-after-rejection",),
         ),
@@ -1743,7 +1752,7 @@ def test_refined_retry_intent_projects_its_exact_trigger_and_requirements() -> N
     )
     state = reduce_theory(state, rejected)
     refined_source = replace(
-        rejected.source,
+        rejected.receipt.source,
         world_key=("world", "source", ("requirement", "same-scan")),
         occurrence_identity=("requirements", "same-scan"),
     )
@@ -1752,12 +1761,12 @@ def test_refined_retry_intent_projects_its_exact_trigger_and_requirements() -> N
         RefineTheory(
             theory_id=theory_id,
             parent_version_id=version_id,
-            source=rejected.source,
+            source=rejected.receipt.source,
             refined_source=refined_source,
             requirements=(_requirement("same-scan"),),
             refinement_identity=("retry-together",),
             temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
-            trigger_attempt_id=rejected.attempt_identity,
+            trigger_attempt_id=rejected.receipt.attempt_id,
         ),
     )
 
@@ -1766,7 +1775,7 @@ def test_refined_retry_intent_projects_its_exact_trigger_and_requirements() -> N
     assert temporal.intent is TheoryTemporalIntent.RETRY_TOGETHER
     # Lowering executes at the rejected attempt's exact source; the refined
     # version source describes learned evidence, not a replay landing.
-    assert temporal.source == rejected.source
+    assert temporal.source == rejected.receipt.source
     assert temporal.requirements == (_requirement("same-scan"),)
 
 
@@ -1779,19 +1788,19 @@ def test_refined_setup_intent_projects_need_without_an_action_artifact() -> None
         actions=(("original", True),),
     )
     state = reduce_theory(state, rejected)
-    live_landing = replace(rejected.source, world_key=("failed", "landing"), scan_id=1)
+    live_landing = replace(rejected.receipt.source, world_key=("failed", "landing"), scan_id=1)
     requirement = _requirement("prior")
     state = reduce_theory(
         state,
         RefineTheory(
             theory_id=theory_id,
             parent_version_id=version_id,
-            source=rejected.source,
+            source=rejected.receipt.source,
             refined_source=live_landing,
             requirements=(requirement,),
             refinement_identity=("setup-first",),
             temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
-            trigger_attempt_id=rejected.attempt_identity,
+            trigger_attempt_id=rejected.receipt.attempt_id,
         ),
     )
 
@@ -1799,8 +1808,8 @@ def test_refined_setup_intent_projects_need_without_an_action_artifact() -> None
 
     assert request is not None
     assert request.intent is TheoryTemporalIntent.SETUP_FIRST
-    assert request.source == rejected.source
-    assert request.trigger_act_identity == rejected.act_identity
+    assert request.source == rejected.receipt.source
+    assert request.trigger_act_identity == rejected.receipt.act_identity
     assert request.requirements == (requirement,)
 
 
@@ -1818,13 +1827,13 @@ def test_temporal_request_follows_an_accepted_setup_progress_boundary() -> None:
         RefineTheory(
             theory_id=theory_id,
             parent_version_id=version_id,
-            source=rejected.source,
-            refined_source=rejected.source,
+            source=rejected.receipt.source,
+            refined_source=rejected.receipt.source,
             requirements=(_requirement("prior"),),
             refinement_identity=("setup-before-progress",),
             temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
-            trigger_attempt_id=rejected.attempt_identity,
-            temporal_source=rejected.source,
+            trigger_attempt_id=rejected.receipt.attempt_id,
+            temporal_source=rejected.receipt.source,
         ),
     )
     version_id = state.ledger.theories[theory_id].current_version_id
@@ -1844,8 +1853,8 @@ def test_temporal_request_follows_an_accepted_setup_progress_boundary() -> None:
         AdvanceTheory(
             theory_id=theory_id,
             version_id=version_id,
-            accepted_attempt_id=accepted.attempt_identity,
-            source=accepted.source,
+            accepted_attempt_id=accepted.receipt.attempt_id,
+            source=accepted.receipt.source,
             boundary=landing,
             advance_identity=("accepted-setup-progress",),
         ),
@@ -1877,12 +1886,12 @@ def test_successor_temporal_request_excludes_accumulated_requirement_history() -
         RefineTheory(
             theory_id=theory_id,
             parent_version_id=v1,
-            source=first_rejection.source,
-            refined_source=first_rejection.source,
+            source=first_rejection.receipt.source,
+            refined_source=first_rejection.receipt.source,
             requirements=(first,),
             refinement_identity=("first-setup",),
             temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
-            trigger_attempt_id=first_rejection.attempt_identity,
+            trigger_attempt_id=first_rejection.receipt.attempt_id,
         ),
     )
 
@@ -1900,12 +1909,12 @@ def test_successor_temporal_request_excludes_accumulated_requirement_history() -
         RefineTheory(
             theory_id=theory_id,
             parent_version_id=v2,
-            source=successor_rejection.source,
-            refined_source=successor_rejection.source,
+            source=successor_rejection.receipt.source,
+            refined_source=successor_rejection.receipt.source,
             requirements=(successor,),
             refinement_identity=("successor-setup",),
             temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
-            trigger_attempt_id=successor_rejection.attempt_identity,
+            trigger_attempt_id=successor_rejection.receipt.attempt_id,
         ),
     )
 
@@ -1934,8 +1943,8 @@ def test_adjacent_monitor_receipt_can_rewind_to_the_parent_progress_boundary() -
         AdvanceTheory(
             theory_id=theory_id,
             version_id=version_id,
-            accepted_attempt_id=accepted.attempt_identity,
-            source=accepted.source,
+            accepted_attempt_id=accepted.receipt.attempt_id,
+            source=accepted.receipt.source,
             boundary=landing,
             advance_identity=("accept-adjacent-scan",),
         ),
@@ -1954,13 +1963,13 @@ def test_adjacent_monitor_receipt_can_rewind_to_the_parent_progress_boundary() -
         RefineTheory(
             theory_id=theory_id,
             parent_version_id=version_id,
-            source=successor.source,
-            refined_source=successor.source,
+            source=successor.receipt.source,
+            refined_source=successor.receipt.source,
             requirements=(requirement,),
             refinement_identity=("rewind-for-successor",),
             temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
-            trigger_attempt_id=successor.attempt_identity,
-            temporal_source=successor.source,
+            trigger_attempt_id=successor.receipt.attempt_id,
+            temporal_source=successor.receipt.source,
         ),
     )
 
@@ -1968,16 +1977,16 @@ def test_adjacent_monitor_receipt_can_rewind_to_the_parent_progress_boundary() -
     request = temporal_need_request(state)
 
     assert view is not None
-    assert view.source == accepted.source
+    assert view.source == accepted.receipt.source
     assert request is not None
-    assert request.source == accepted.source
+    assert request.source == accepted.receipt.source
     assert request.requirements == (requirement,)
 
 
 def test_adjacent_monitor_receipt_can_rewind_to_its_structural_overlay_source() -> None:
     state, theory_id, version_id = _opened()
     boundary = _consumer_boundary()
-    accepted = replace(
+    accepted = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -1995,24 +2004,24 @@ def test_adjacent_monitor_receipt_can_rewind_to_its_structural_overlay_source() 
         AdvanceTheory(
             theory_id=theory_id,
             version_id=version_id,
-            accepted_attempt_id=accepted.attempt_identity,
-            source=accepted.source,
+            accepted_attempt_id=accepted.receipt.attempt_id,
+            source=accepted.receipt.source,
             boundary=_boundary("overlay-landing", 1),
             advance_identity=("accept-overlay-scan",),
             execution_source=overlay_source,
             phase_receipts=(
                 TheoryPhaseReceipt(
                     kind=TheoryPhaseKind.TRANSACTION_ATTEMPT,
-                    evidence_identity=accepted.attempt_identity,
+                    evidence_identity=accepted.receipt.attempt_id,
                     execution_source=overlay_source,
                 ),
                 TheoryPhaseReceipt(
                     kind=TheoryPhaseKind.CONSUMER_BOUNDARY,
-                    evidence_identity=accepted.attempt_identity,
+                    evidence_identity=accepted.receipt.attempt_id,
                 ),
                 TheoryPhaseReceipt(
                     kind=TheoryPhaseKind.CONSUMER_STOP,
-                    evidence_identity=accepted.attempt_identity,
+                    evidence_identity=accepted.receipt.attempt_id,
                     execution_tip=_boundary("overlay-landing", 1),
                 ),
             ),
@@ -2024,10 +2033,10 @@ def test_adjacent_monitor_receipt_can_rewind_to_its_structural_overlay_source() 
     assert scoped_view.investigation_scope is not None
     assert scoped_view.investigation_scope.execution_source == overlay_source
     assert scoped_view.investigation_scope.frontier == landing
-    assert scoped_view.investigation_scope.accepted_attempt_id == accepted.attempt_identity
+    assert scoped_view.investigation_scope.accepted_attempt_id == accepted.receipt.attempt_id
     assert scoped_view.investigation_scope.consumer_boundary is boundary
 
-    successor = replace(
+    successor = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -2038,7 +2047,7 @@ def test_adjacent_monitor_receipt_can_rewind_to_its_structural_overlay_source() 
         observation_boundary=landing,
     )
     state = reduce_theory(state, successor)
-    assert state.ledger.attempts[successor.attempt_identity].observation_boundary == landing
+    assert state.ledger.attempts[successor.receipt.attempt_id].observation_boundary == landing
     requirement = _requirement("successor-at-overlay-source")
     state = reduce_theory(
         state,
@@ -2050,7 +2059,7 @@ def test_adjacent_monitor_receipt_can_rewind_to_its_structural_overlay_source() 
             requirements=(requirement,),
             refinement_identity=("rewind-to-overlay-source",),
             temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
-            trigger_attempt_id=successor.attempt_identity,
+            trigger_attempt_id=successor.receipt.attempt_id,
             temporal_source=overlay_source,
         ),
     )
@@ -2063,7 +2072,7 @@ def test_adjacent_monitor_receipt_can_rewind_to_its_structural_overlay_source() 
     retried_view = theory_view(state)
     assert retried_view is not None
     assert retried_view.investigation_scope is not None
-    assert retried_view.investigation_scope.retry_act_identity == accepted.act_identity
+    assert retried_view.investigation_scope.retry_act_identity == accepted.receipt.act_identity
     assert retried_view.investigation_scope.transaction_act_pairs == (("setup", True),)
     assert retried_view.investigation_scope.transaction_selected_pairs == (("setup", True),)
     assert retried_view.investigation_scope.consumer_boundary is boundary
@@ -2073,7 +2082,7 @@ def test_adjacent_monitor_receipt_can_rewind_to_its_structural_overlay_source() 
 def test_child_consumer_boundary_advances_without_replacing_transaction_owner() -> None:
     state, theory_id, version_id = _opened()
     transaction_boundary = _consumer_boundary()
-    transaction = replace(
+    transaction = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -2091,23 +2100,23 @@ def test_child_consumer_boundary_advances_without_replacing_transaction_owner() 
         AdvanceTheory(
             theory_id=theory_id,
             version_id=version_id,
-            accepted_attempt_id=transaction.attempt_identity,
-            source=transaction.source,
+            accepted_attempt_id=transaction.receipt.attempt_id,
+            source=transaction.receipt.source,
             boundary=transaction_landing,
             advance_identity=("accept-context-transaction",),
-            execution_source=transaction.execution_source,
+            execution_source=transaction.receipt.execution_source,
             phase_receipts=(
                 TheoryPhaseReceipt(
                     TheoryPhaseKind.TRANSACTION_ATTEMPT,
-                    transaction.attempt_identity,
-                    execution_source=transaction.execution_source,
+                    transaction.receipt.attempt_id,
+                    execution_source=transaction.receipt.execution_source,
                 ),
             ),
         ),
     )
 
     child_boundary = _consumer_boundary(source_scan=1)
-    child = replace(
+    child = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -2125,7 +2134,7 @@ def test_child_consumer_boundary_advances_without_replacing_transaction_owner() 
         AdvanceTheory(
             theory_id=theory_id,
             version_id=version_id,
-            accepted_attempt_id=child.attempt_identity,
+            accepted_attempt_id=child.receipt.attempt_id,
             source=transaction_landing,
             boundary=_boundary("child-landing", 2),
             advance_identity=("accept-child-consumer",),
@@ -2133,13 +2142,13 @@ def test_child_consumer_boundary_advances_without_replacing_transaction_owner() 
             phase_receipts=(
                 TheoryPhaseReceipt(
                     TheoryPhaseKind.CONSUMER_BOUNDARY,
-                    child.attempt_identity,
+                    child.receipt.attempt_id,
                 ),
             ),
         ),
     )
     child_landing = _boundary("child-landing", 2)
-    continuation = replace(
+    continuation = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -2156,7 +2165,7 @@ def test_child_consumer_boundary_advances_without_replacing_transaction_owner() 
         AdvanceTheory(
             theory_id=theory_id,
             version_id=version_id,
-            accepted_attempt_id=continuation.attempt_identity,
+            accepted_attempt_id=continuation.receipt.attempt_id,
             source=child_landing,
             boundary=horizon_tip,
             advance_identity=("extend-consumer-horizon",),
@@ -2164,7 +2173,7 @@ def test_child_consumer_boundary_advances_without_replacing_transaction_owner() 
             phase_receipts=(
                 TheoryPhaseReceipt(
                     TheoryPhaseKind.CONSUMER_STOP,
-                    continuation.attempt_identity,
+                    continuation.receipt.attempt_id,
                     execution_tip=horizon_tip,
                 ),
             ),
@@ -2174,30 +2183,30 @@ def test_child_consumer_boundary_advances_without_replacing_transaction_owner() 
     view = theory_view(state)
     assert view is not None
     assert view.investigation_scope is not None
-    assert view.investigation_scope.transaction_attempt_id == transaction.attempt_identity
+    assert view.investigation_scope.transaction_attempt_id == transaction.receipt.attempt_id
     assert view.investigation_scope.transaction_act_pairs == (("Context", True),)
-    assert view.investigation_scope.execution_source == transaction.execution_source
+    assert view.investigation_scope.execution_source == transaction.receipt.execution_source
     assert view.investigation_scope.consumer_boundary is child_boundary
-    assert view.investigation_scope.consumer_boundary_attempt_id == child.attempt_identity
+    assert view.investigation_scope.consumer_boundary_attempt_id == child.receipt.attempt_id
     assert view.investigation_scope.consumer_stop == horizon_tip
 
-    later_failure = replace(
+    later_failure = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
             transition="failure-at-consumer-horizon",
             actions=(),
         ),
-        source=transaction.execution_source,
+        source=transaction.receipt.execution_source,
         observation_boundary=horizon_tip,
     )
     state = reduce_theory(state, later_failure)
-    assert later_failure.attempt_identity in state.ledger.attempts
+    assert later_failure.receipt.attempt_id in state.ledger.attempts
 
 
 def test_transaction_phase_can_supersede_an_exact_earlier_overlay() -> None:
     state, theory_id, version_id = _opened()
-    setup = replace(
+    setup = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -2214,21 +2223,21 @@ def test_transaction_phase_can_supersede_an_exact_earlier_overlay() -> None:
         AdvanceTheory(
             theory_id=theory_id,
             version_id=version_id,
-            accepted_attempt_id=setup.attempt_identity,
-            source=setup.source,
+            accepted_attempt_id=setup.receipt.attempt_id,
+            source=setup.receipt.source,
             boundary=landing,
             advance_identity=("accept-setup",),
-            execution_source=setup.source,
+            execution_source=setup.receipt.source,
             phase_receipts=(
                 TheoryPhaseReceipt(
                     TheoryPhaseKind.TEMPORAL_SETUP,
-                    setup.attempt_identity,
-                    pilot_rung_identities=setup.pilot_rung_identities,
+                    setup.receipt.attempt_id,
+                    pilot_rung_identities=setup.receipt.pilot_rung_identities,
                 ),
             ),
         ),
     )
-    transaction = replace(
+    transaction = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -2245,7 +2254,7 @@ def test_transaction_phase_can_supersede_an_exact_earlier_overlay() -> None:
         AdvanceTheory(
             theory_id=theory_id,
             version_id=version_id,
-            accepted_attempt_id=transaction.attempt_identity,
+            accepted_attempt_id=transaction.receipt.attempt_id,
             source=landing,
             boundary=_boundary("transaction-landing", 2),
             advance_identity=("accept-mode-transaction",),
@@ -2253,8 +2262,8 @@ def test_transaction_phase_can_supersede_an_exact_earlier_overlay() -> None:
             phase_receipts=(
                 TheoryPhaseReceipt(
                     TheoryPhaseKind.TRANSACTION_ATTEMPT,
-                    transaction.attempt_identity,
-                    superseded_pilot_rung_identities=setup.pilot_rung_identities,
+                    transaction.receipt.attempt_id,
+                    superseded_pilot_rung_identities=setup.receipt.pilot_rung_identities,
                     execution_source=landing,
                 ),
             ),
@@ -2263,7 +2272,7 @@ def test_transaction_phase_can_supersede_an_exact_earlier_overlay() -> None:
 
     assert active_theory_pilot_rung_identities(state) == frozenset()
     assert active_theory_superseded_pilot_rung_identities(state) == frozenset(
-        setup.pilot_rung_identities
+        setup.receipt.pilot_rung_identities
     )
 
 
@@ -2283,14 +2292,14 @@ def test_attempt_cannot_pair_a_retained_execution_source_with_an_unowned_observa
         AdvanceTheory(
             theory_id=theory_id,
             version_id=version_id,
-            accepted_attempt_id=accepted.attempt_identity,
-            source=accepted.source,
+            accepted_attempt_id=accepted.receipt.attempt_id,
+            source=accepted.receipt.source,
             boundary=_boundary("owned-frontier", 1),
             advance_identity=("accept-owned-scan",),
             execution_source=execution_source,
         ),
     )
-    mismatched = replace(
+    mismatched = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -2298,7 +2307,7 @@ def test_attempt_cannot_pair_a_retained_execution_source_with_an_unowned_observa
             actions=(("successor", True),),
         ),
         source=execution_source,
-        observation_boundary=accepted.source,
+        observation_boundary=accepted.receipt.source,
     )
 
     with pytest.raises(
@@ -2318,7 +2327,7 @@ def test_refinement_can_authorize_an_exact_earlier_temporal_source() -> None:
     )
     state = reduce_theory(state, rejected)
     earlier = replace(
-        rejected.source,
+        rejected.receipt.source,
         world_key=("world", "earlier"),
         scan_id=0,
         owner_ref=CheckpointRef(1_000_001),
@@ -2334,12 +2343,12 @@ def test_refinement_can_authorize_an_exact_earlier_temporal_source() -> None:
         RefineTheory(
             theory_id=theory_id,
             parent_version_id=version_id,
-            source=rejected.source,
+            source=rejected.receipt.source,
             refined_source=earlier,
             requirements=(requirement,),
             refinement_identity=("rewind-to-exact-source",),
             temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
-            trigger_attempt_id=rejected.attempt_identity,
+            trigger_attempt_id=rejected.receipt.attempt_id,
             temporal_source=earlier,
         ),
     )
@@ -2402,9 +2411,9 @@ def test_attempt_fails_closed_without_exact_execution_evidence(missing: str) -> 
         actions=(("producer", True),),
     )
     if missing == "owner":
-        attempt = replace(attempt, execution_ref=None)  # type: ignore[arg-type]
+        attempt = _replace_attempt(attempt, execution_ref=None)  # type: ignore[arg-type]
     else:
-        attempt = replace(attempt, occurrence_evidence=())
+        attempt = _replace_attempt(attempt, occurrence_evidence=())
 
     with pytest.raises(TheoryInvariantError, match="evidence is missing"):
         reduce_theory(state, attempt)
@@ -2412,7 +2421,7 @@ def test_attempt_fails_closed_without_exact_execution_evidence(missing: str) -> 
 
 def test_attempt_rejects_a_source_outside_the_active_boundary_chain() -> None:
     state, theory_id, version_id = _opened()
-    attempt = replace(
+    attempt = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -2424,6 +2433,37 @@ def test_attempt_rejects_a_source_outside_the_active_boundary_chain() -> None:
 
     with pytest.raises(TheoryInvariantError, match="active root, version, or progress"):
         reduce_theory(state, attempt)
+
+
+def test_attempt_rejects_a_stale_theory_version() -> None:
+    state, theory_id, version_id = _opened()
+    trigger = _attempt(
+        theory_id,
+        version_id,
+        transition="refinement-trigger",
+        actions=(("producer", True),),
+    )
+    state = reduce_theory(state, trigger)
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=version_id,
+            source=trigger.receipt.source,
+            refined_source=trigger.receipt.source,
+            requirements=(_requirement("new-version"),),
+            refinement_identity=("new-version",),
+        ),
+    )
+    stale = _attempt(
+        theory_id,
+        version_id,
+        transition="stale-version",
+        actions=(("producer", False),),
+    )
+
+    with pytest.raises(TheoryInvariantError, match="stale theory version"):
+        reduce_theory(state, stale)
 
 
 def test_advance_appends_progress_under_one_parent_chain() -> None:
@@ -2439,14 +2479,14 @@ def test_advance_appends_progress_under_one_parent_chain() -> None:
     first = AdvanceTheory(
         theory_id=theory_id,
         version_id=version_id,
-        accepted_attempt_id=accepted_1.attempt_identity,
-        source=accepted_1.source,
+        accepted_attempt_id=accepted_1.receipt.attempt_id,
+        source=accepted_1.receipt.source,
         boundary=_boundary("landing-1", 1),
         advance_identity=("advance-1",),
         remaining_budget=7,
     )
     state = reduce_theory(state, first)
-    accepted_2 = replace(
+    accepted_2 = _replace_attempt(
         _attempt(
             theory_id,
             version_id,
@@ -2460,8 +2500,8 @@ def test_advance_appends_progress_under_one_parent_chain() -> None:
     second = AdvanceTheory(
         theory_id=theory_id,
         version_id=version_id,
-        accepted_attempt_id=accepted_2.attempt_identity,
-        source=accepted_2.source,
+        accepted_attempt_id=accepted_2.receipt.attempt_id,
+        source=accepted_2.receipt.source,
         boundary=_boundary("landing-2", 2),
         advance_identity=("advance-2",),
         remaining_budget=6,
@@ -2476,7 +2516,7 @@ def test_advance_appends_progress_under_one_parent_chain() -> None:
     middle = by_id[last.parent_progress_id]
     assert middle.parent_progress_id is not None
     assert {item.theory_id for item in progress} == {theory_id}
-    assert last.accepted_attempt_id == accepted_2.attempt_identity
+    assert last.accepted_attempt_id == accepted_2.receipt.attempt_id
 
 
 def test_advance_requires_an_accepted_attempt_and_monotonic_exact_source() -> None:
@@ -2491,8 +2531,8 @@ def test_advance_requires_an_accepted_attempt_and_monotonic_exact_source() -> No
     base = AdvanceTheory(
         theory_id=theory_id,
         version_id=version_id,
-        accepted_attempt_id=rejected.attempt_identity,
-        source=rejected.source,
+        accepted_attempt_id=rejected.receipt.attempt_id,
+        source=rejected.receipt.source,
         boundary=_boundary("landing", 1),
         advance_identity=("advance-rejected",),
     )
@@ -2522,7 +2562,7 @@ def test_advance_requires_an_accepted_attempt_and_monotonic_exact_source() -> No
             state,
             replace(
                 base,
-                accepted_attempt_id=accepted.attempt_identity,
+                accepted_attempt_id=accepted.receipt.attempt_id,
                 source=_boundary("foreign", 0),
                 advance_identity=("advance-foreign",),
             ),
@@ -2532,8 +2572,8 @@ def test_advance_requires_an_accepted_attempt_and_monotonic_exact_source() -> No
             state,
             replace(
                 base,
-                accepted_attempt_id=accepted.attempt_identity,
-                boundary=accepted.source,
+                accepted_attempt_id=accepted.receipt.attempt_id,
+                boundary=accepted.receipt.source,
                 advance_identity=("advance-static",),
             ),
         )
@@ -2682,8 +2722,8 @@ def test_advance_accepts_attempt_from_direct_parent_version_after_refinement() -
         RefineTheory(
             theory_id=theory_id,
             parent_version_id=v1,
-            source=accepted.source,
-            refined_source=accepted.source,
+            source=accepted.receipt.source,
+            refined_source=accepted.receipt.source,
             requirements=(_requirement("producer"),),
             refinement_identity=("refine-after-attempt",),
         ),
@@ -2695,15 +2735,15 @@ def test_advance_accepts_attempt_from_direct_parent_version_after_refinement() -
         AdvanceTheory(
             theory_id=theory_id,
             version_id=v2,
-            accepted_attempt_id=accepted.attempt_identity,
-            source=accepted.source,
+            accepted_attempt_id=accepted.receipt.attempt_id,
+            source=accepted.receipt.source,
             boundary=_boundary("landing-after-refine", 1),
             advance_identity=("advance-after-refine",),
         ),
     )
 
     progress = state.ledger.progress[state.ledger.theories[theory_id].current_progress_id]
-    assert progress.accepted_attempt_id == accepted.attempt_identity
+    assert progress.accepted_attempt_id == accepted.receipt.attempt_id
 
 
 def test_prove_closes_theory_and_retains_detached_fact() -> None:
@@ -2753,8 +2793,8 @@ def test_identical_fact_streams_produce_identical_ledgers_and_ids() -> None:
             AdvanceTheory(
                 theory_id=theory_id,
                 version_id=version_id,
-                accepted_attempt_id=attempt.attempt_identity,
-                source=attempt.source,
+                accepted_attempt_id=attempt.receipt.attempt_id,
+                source=attempt.receipt.source,
                 boundary=_boundary("landing", 1),
                 advance_identity=("advance",),
                 remaining_budget=7,
@@ -2835,8 +2875,8 @@ def test_populated_closed_ledger_retains_no_navigation_or_executable_future() ->
         AdvanceTheory(
             theory_id=theory_id,
             version_id=version_id,
-            accepted_attempt_id=accepted.attempt_identity,
-            source=accepted.source,
+            accepted_attempt_id=accepted.receipt.attempt_id,
+            source=accepted.receipt.source,
             boundary=_boundary("landing", 1),
             advance_identity=("advance",),
             remaining_budget=7,

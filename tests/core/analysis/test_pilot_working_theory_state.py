@@ -15,6 +15,7 @@ from pyrung.core.analysis.pilot.theory_reducer import (
 from pyrung.core.analysis.pilot.types import _PilotState
 from pyrung.core.analysis.pilot.working_theory import (
     TheoryAttemptDisposition,
+    TheoryAttemptReceipt,
     TheoryBoundaryIdentity,
     TheoryClaim,
     TheoryObjectiveSnapshot,
@@ -104,15 +105,18 @@ def test_disposable_requirement_clone_cannot_mutate_source_theory_state() -> Non
     clone.theory_state = reduce_theory(
         clone.theory_state,
         RecordTheoryAttempt(
-            theory_id=theory_id,
-            version_id=version_id,
-            attempt_identity=("clone-attempt",),
-            source=_boundary("source"),
-            execution_ref=_execution_ref("clone"),
-            occurrence_evidence=("occurrence", "clone"),
-            act_identity=(("producer", True),),
-            pilot_rung_identities=(),
-            disposition=TheoryAttemptDisposition.REJECTED_EXACT,
+            TheoryAttemptReceipt(
+                theory_id=theory_id,
+                version_id=version_id,
+                attempt_id=("clone-attempt",),
+                source=_boundary("source"),
+                execution_ref=_execution_ref("clone"),
+                occurrence_evidence=("occurrence", "clone"),
+                act_identity=(("producer", True),),
+                pilot_rung_identities=(),
+                disposition=TheoryAttemptDisposition.REJECTED_EXACT,
+                observation_boundary=_boundary("source"),
+            )
         ),
     )
 

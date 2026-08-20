@@ -13,14 +13,12 @@ from typing import Any, TypeAlias
 
 from pyrsistent import PMap
 
-from pyrung.core.analysis.pilot.effects import ConsumerBoundary, EffectObservationSnapshot
 from pyrung.core.analysis.pilot.execution import ScanEntryConfiguration
 from pyrung.core.analysis.pilot.working_theory import (
     ConductivityResearchFinding,
     IntrascanOrdinarySteerFinding,
     IntrascanTracebackFinding,
     IntrascanTracebackFrontier,
-    ProgramTransaction,
     TheoryAttemptDisposition,
     TheoryAttemptReceipt,
     TheoryBoundaryIdentity,
@@ -58,27 +56,7 @@ class OpenTheory:
 
 @dataclass(frozen=True)
 class RecordTheoryAttempt:
-    theory_id: TheoryId
-    version_id: TheoryVersionId
-    attempt_identity: tuple[Any, ...]
-    source: TheoryBoundaryIdentity
-    execution_ref: EpochRef
-    occurrence_evidence: tuple[Any, ...]
-    act_identity: tuple[Any, ...]
-    pilot_rung_identities: tuple[tuple[Any, ...], ...]
-    disposition: TheoryAttemptDisposition
-    act_pairs: tuple[tuple[str, Any], ...] = ()
-    selected_act_pairs: tuple[tuple[str, Any], ...] = ()
-    evidence: tuple[Any, ...] = ()
-    first_edge_identity: tuple[Any, ...] | None = None
-    conductivity_observations: tuple[EffectObservationSnapshot, ...] = ()
-    consumer_boundary: ConsumerBoundary | None = None
-    execution_source: TheoryBoundaryIdentity | None = None
-    investigation_frontier_id: tuple[Any, ...] | None = None
-    producer_goal_id: tuple[Any, ...] | None = None
-    observation_boundary: TheoryBoundaryIdentity | None = None
-    program_transaction: ProgramTransaction | None = None
-    configurations: tuple[ScanEntryConfiguration, ...] = ()
+    receipt: TheoryAttemptReceipt
 
 
 @dataclass(frozen=True)
@@ -351,7 +329,7 @@ def _fact_identity(fact: TheoryFact) -> tuple[Any, ...]:
     if isinstance(fact, OpenTheory):
         return ("open", fact.opening_identity)
     if isinstance(fact, RecordTheoryAttempt):
-        return ("attempt", fact.attempt_identity)
+        return ("attempt", fact.receipt.attempt_id)
     if isinstance(fact, RecordConductivityResearch):
         return ("conductivity-research", fact.finding.identity)
     if isinstance(fact, RecordIntrascanTraceback):
@@ -397,50 +375,56 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
     if isinstance(fact, OpenTheory):
         return _open(state, fact.claim, fact.opening_identity, fact.remaining_budget)
     if isinstance(fact, RecordTheoryAttempt):
-        theory = _active(state, fact.theory_id)
-        if fact.version_id != theory.current_version_id:
+        receipt = fact.receipt
+        theory = _active(state, receipt.theory_id)
+        if receipt.version_id != theory.current_version_id:
             raise TheoryInvariantError("attempt addresses a stale theory version")
-        _require_allowed_source(state, theory, fact.source)
-        observation_boundary = fact.observation_boundary or fact.source
+        _require_allowed_source(state, theory, receipt.source)
+        observation_boundary = receipt.observation_boundary
+        if observation_boundary is None:
+            raise TheoryInvariantError("attempt observation boundary is missing")
         _require_allowed_source(state, theory, observation_boundary)
-        if observation_boundary != fact.source:
+        if observation_boundary != receipt.source:
             progress = state.ledger.progress[theory.current_progress_id]
             if (
-                _transaction_execution_source(state, theory, progress) != fact.source
+                _transaction_execution_source(state, theory, progress) != receipt.source
                 or progress.provisional_tip != observation_boundary
                 or progress.accepted_attempt_id is None
             ):
                 raise TheoryInvariantError(
                     "attempt observation is outside its active investigation scope"
                 )
-        if not isinstance(fact.execution_ref, EpochRef):
+        if not isinstance(receipt.execution_ref, EpochRef):
             raise TheoryInvariantError("attempt execution owner evidence is missing")
-        if not fact.occurrence_evidence:
+        if not receipt.occurrence_evidence:
             raise TheoryInvariantError("attempt occurrence evidence is missing")
-        if fact.execution_source is not None and (
-            fact.execution_source.scan_id != fact.source.scan_id
-            or (fact.execution_source.scan_id > 0 and fact.execution_source.execution_ref is None)
+        if receipt.execution_source is not None and (
+            receipt.execution_source.scan_id != receipt.source.scan_id
+            or (
+                receipt.execution_source.scan_id > 0
+                and receipt.execution_source.execution_ref is None
+            )
         ):
             raise TheoryInvariantError("attempt execution source evidence is inconsistent")
-        if (fact.investigation_frontier_id is None) != (fact.producer_goal_id is None):
+        if (receipt.investigation_frontier_id is None) != (receipt.producer_goal_id is None):
             raise TheoryInvariantError("attempt investigation ownership is incomplete")
-        if fact.investigation_frontier_id is not None:
-            frontier = state.ledger.traceback_frontiers.get(fact.investigation_frontier_id)
+        if receipt.investigation_frontier_id is not None:
+            frontier = state.ledger.traceback_frontiers.get(receipt.investigation_frontier_id)
             if (
                 frontier is None
-                or frontier.theory_id != fact.theory_id
+                or frontier.theory_id != receipt.theory_id
                 or frontier.identity not in theory.traceback_frontier_ids
                 or frontier.source != observation_boundary
                 or not _version_descends_from(
                     state.ledger,
-                    fact.version_id,
+                    receipt.version_id,
                     frontier.version_id,
                 )
             ):
                 raise TheoryInvariantError(
                     "attempt investigation frontier is not current theory work"
                 )
-            version = state.ledger.versions[fact.version_id]
+            version = state.ledger.versions[receipt.version_id]
             owned_requirements = frozenset(
                 requirement.semantic_identity for requirement in version.requirements
             )
@@ -448,41 +432,18 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
                 raise TheoryInvariantError(
                     "attempt investigation frontier lost requirement ownership"
                 )
-            if fact.producer_goal_id not in tuple(
+            if receipt.producer_goal_id not in tuple(
                 goal.identity for goal in frontier.producer_goals
             ):
                 raise TheoryInvariantError("attempt producer goal does not belong to its frontier")
-        receipt = TheoryAttemptReceipt(
-            theory_id=fact.theory_id,
-            version_id=fact.version_id,
-            attempt_id=fact.attempt_identity,
-            source=fact.source,
-            execution_ref=fact.execution_ref,
-            occurrence_evidence=fact.occurrence_evidence,
-            act_identity=fact.act_identity,
-            pilot_rung_identities=fact.pilot_rung_identities,
-            disposition=fact.disposition,
-            act_pairs=fact.act_pairs,
-            selected_act_pairs=fact.selected_act_pairs,
-            evidence=fact.evidence,
-            first_edge_identity=fact.first_edge_identity,
-            conductivity_observations=fact.conductivity_observations,
-            consumer_boundary=fact.consumer_boundary,
-            execution_source=fact.execution_source,
-            investigation_frontier_id=fact.investigation_frontier_id,
-            producer_goal_id=fact.producer_goal_id,
-            observation_boundary=observation_boundary,
-            program_transaction=fact.program_transaction,
-            configurations=fact.configurations,
-        )
-        attempts = _put_unique(state.ledger.attempts, fact.attempt_identity, receipt, "attempt")
+        attempts = _put_unique(state.ledger.attempts, receipt.attempt_id, receipt, "attempt")
         if attempts is state.ledger.attempts:
             return state
-        updated_theory = replace(theory, attempt_ids=(*theory.attempt_ids, fact.attempt_identity))
+        updated_theory = replace(theory, attempt_ids=(*theory.attempt_ids, receipt.attempt_id))
         ledger = replace(
             state.ledger,
             attempts=attempts,
-            theories=state.ledger.theories.set(fact.theory_id, updated_theory),
+            theories=state.ledger.theories.set(receipt.theory_id, updated_theory),
         )
         return replace(state, ledger=ledger)
     if isinstance(fact, RecordConductivityResearch):
