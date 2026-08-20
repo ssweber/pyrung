@@ -32,7 +32,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
     Coast,
     ComposeCorrection,
-    EvidenceScope,
     ExpectationExemption,
     IntrascanPulse,
     IntrascanTracebackRequest,
@@ -47,6 +46,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Pulse,
     TargetSpec,
     _ActionPair,
+    _proof_rejection_identity,
     act_identity,
     pulse_identity,
 )
@@ -63,12 +63,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     ProgramTransaction,
     TheoryTemporalIntent,
 )
-from pyrung.core.analysis.pilot.world_key import (
-    _pilot_world_key,
-    _rung_identity,
-    _semantic_key,
-    _StateKeyConfig,
-)
+from pyrung.core.analysis.pilot.world_key import _rung_identity, _semantic_key, _StateKeyConfig
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.context import RungId
 from pyrung.core.crossing import Cmp
@@ -79,18 +74,13 @@ from pyrung.core.intrascan_counterfactual import CounterfactualPatch, Occurrence
 def _act_preserves_requirements(world: OrientationWorld, act: Any) -> bool:
     """Admit only acts whose declared atomic inputs preserve live constraints."""
 
-    proof_world_key = (
-        _pilot_world_key(
-            world.snapshot,
-            world.key_config,
-            world.state.pilot_rungs,
-            (),
-        )
-        if world.key_config is not None
-        else world.world_key
-    )
-    proof_scope = EvidenceScope.capture(proof_world_key, world.snapshot.items())
-    if (proof_scope, act_identity(act)) in getattr(world.state, "proof_rejected_acts", ()):
+    if _proof_rejection_identity(
+        world.world_key,
+        world.snapshot,
+        world.key_config,
+        world.state.pilot_rungs,
+        act,
+    ) in getattr(world.state, "proof_rejected_acts", ()):
         return False
     policy = getattr(act, "policy", None)
     if policy is None:

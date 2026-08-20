@@ -18,7 +18,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Bearing,
     Coast,
-    EvidenceScope,
     IntrascanPulse,
     NavigationConstraints,
     ObserveScan,
@@ -27,6 +26,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ProgramScan,
     Pulse,
     TargetSpec,
+    _proof_rejection_identity,
     act_identity,
 )
 from pyrung.core.analysis.pilot.requirement_evidence import (
@@ -48,7 +48,6 @@ from pyrung.core.analysis.pilot.types import (
     _PilotState,
 )
 from pyrung.core.analysis.pilot.world import _CausalCheckpoint, _Checkpoint
-from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 
 logger = logging.getLogger(__name__)
 
@@ -323,18 +322,15 @@ def transition_once(
             # this world once the condition is composed into the scan.
             pass
         elif attempt.proof_rejection:
-            proof_world_key = (
-                _pilot_world_key(
+            state.proof_rejected_acts.add(
+                _proof_rejection_identity(
+                    frame.key,
                     frame.snap,
                     state.key_config,
                     state.pilot_rungs,
-                    (),
+                    act,
                 )
-                if state.key_config is not None
-                else frame.key
             )
-            proof_scope = EvidenceScope.capture(proof_world_key, frame.snap.items())
-            state.proof_rejected_acts.add((proof_scope, act_identity(act)))
         else:
             ctx.compass, _ = ctx.compass.apply(
                 (ActionNogoodObservation(result.world_key, act_identity(act)),)

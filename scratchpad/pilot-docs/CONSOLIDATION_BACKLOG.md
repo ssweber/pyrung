@@ -69,7 +69,7 @@ Bearing through `orientation_reading._bearing`.
 
 ### 3. Give proof-rejection scope one identity owner
 
-**Status:** ready
+**Status:** done
 
 `attempt_transition.transition_once` and
 `theory_orientation._act_preserves_requirements` independently reconstruct the

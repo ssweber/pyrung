@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.navigation_contracts import (
         ActPolicy,
         Bearing,
+        EvidenceScope,
         TargetSpec,
         _ActionPair,
     )
@@ -393,7 +394,7 @@ class _PilotState:
     # Their EvidenceScope includes the complete pre-action input context, so a
     # corrective level change admits the act anew while an unchanged replay
     # remains suppressed.
-    proof_rejected_acts: set[tuple[Any, tuple[Any, ...]]] = field(default_factory=set)
+    proof_rejected_acts: set[tuple[EvidenceScope, tuple[Any, ...]]] = field(default_factory=set)
     # Invocation-local knowledge: reverting a handled transition must not
     # authorize the same source/action/evidence occurrence for another lap.
     consumed_revisits: set[RevisitCredential] = field(default_factory=set)

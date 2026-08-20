@@ -18,7 +18,12 @@ from pyrung.core.analysis.pilot.execution import (
     ScanEntryConfiguration,
     StopCondition,
 )
-from pyrung.core.analysis.pilot.world_key import _semantic_key, _StateKey
+from pyrung.core.analysis.pilot.world_key import (
+    _pilot_world_key,
+    _semantic_key,
+    _StateKey,
+    _StateKeyConfig,
+)
 from pyrung.core.analysis.sp_values import _values_match
 
 _ActionPair = tuple[str, Any]
@@ -747,3 +752,29 @@ def act_identity(act: NavigationAct) -> tuple[Any, ...]:
             _semantic_key(act.evidence_identity),
         )
     return ("dwell", _applied_identity(act.policy.applied))
+
+
+def _proof_rejection_identity(
+    world_key: _StateKey,
+    snapshot: dict[str, Any],
+    key_config: _StateKeyConfig | None,
+    pilot_rungs: Iterable[PilotRung],
+    act: NavigationAct,
+) -> tuple[EvidenceScope, tuple[Any, ...]]:
+    """Identity of one act rejected only by current-world proof.
+
+    Active requirements are deliberately omitted from the configured world
+    key: changing only the requirement schedule does not make a disproved act
+    physically different.  Without key configuration, retain the caller's
+    already-established world identity exactly.
+    """
+
+    proof_world_key = (
+        _pilot_world_key(snapshot, key_config, pilot_rungs, ())
+        if key_config is not None
+        else world_key
+    )
+    proof_scope = EvidenceScope.capture(proof_world_key, snapshot.items())
+    if proof_scope is None:  # The supplied world key is always concrete.
+        raise RuntimeError("proof rejection requires a concrete world key")
+    return proof_scope, act_identity(act)

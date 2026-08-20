@@ -1743,7 +1743,7 @@ def _world(compass: Compass) -> OrientationWorld:
 
 
 def test_proof_rejection_is_scoped_to_the_exact_input_context() -> None:
-    from pyrung.core.analysis.pilot.navigation_contracts import EvidenceScope
+    from pyrung.core.analysis.pilot.navigation_contracts import _proof_rejection_identity
     from pyrung.core.analysis.pilot.theory_orientation import _act_preserves_requirements
 
     world = _world(Compass())
@@ -1756,13 +1756,74 @@ def test_proof_rejection_is_scoped_to_the_exact_input_context() -> None:
             expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
         )
     )
-    rejected_scope = EvidenceScope.capture(world.world_key, world.snapshot.items())
-    world.state.proof_rejected_acts = {(rejected_scope, act_identity(act))}
+    rejected_identity = _proof_rejection_identity(
+        world.world_key,
+        world.snapshot,
+        world.key_config,
+        world.state.pilot_rungs,
+        act,
+    )
+    assert rejected_identity[0].world_key == world.world_key
+    world.state.proof_rejected_acts = {rejected_identity}
 
     assert not _act_preserves_requirements(world, act)
 
     corrected = replace(world, snapshot={**world.snapshot, "Guard": True})
     assert _act_preserves_requirements(corrected, act)
+
+
+def test_proof_rejection_identity_omits_active_requirements_when_configured() -> None:
+    from pyrung.core.analysis.pilot.navigation_contracts import _proof_rejection_identity
+    from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
+
+    snapshot = {"Target": False, "Guard": False}
+    config = _StateKeyConfig(
+        stateful_names=("Target",),
+        done_specs=(),
+        threshold_vector_specs=(),
+        acc_indices=frozenset(),
+    )
+    first_requirement = SimpleNamespace(identity=("requirement", "first"))
+    second_requirement = SimpleNamespace(identity=("requirement", "second"))
+    first_requirement_key = _pilot_world_key(snapshot, config, (), (first_requirement,))
+    second_requirement_key = _pilot_world_key(snapshot, config, (), (second_requirement,))
+    act = Pulse(
+        ActPolicy(
+            source=ActSource.TRACE,
+            action_pairs=(("Command", True),),
+            applied=(("Command", True),),
+            expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+        )
+    )
+
+    first_identity = _proof_rejection_identity(
+        first_requirement_key,
+        snapshot,
+        config,
+        (),
+        act,
+    )
+    second_identity = _proof_rejection_identity(
+        second_requirement_key,
+        snapshot,
+        config,
+        (),
+        act,
+    )
+
+    assert first_requirement_key != second_requirement_key
+    assert first_identity == second_identity
+    assert first_identity[0].world_key == _pilot_world_key(snapshot, config, (), ())
+    assert (
+        _proof_rejection_identity(
+            first_requirement_key,
+            {**snapshot, "Guard": True},
+            config,
+            (),
+            act,
+        )
+        != first_identity
+    )
 
 
 def test_nonpromising_executable_policies_have_typed_exemptions() -> None:
