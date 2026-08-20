@@ -15,6 +15,7 @@ from pyrung.core.analysis.pilot.bootstrap import (
     BootstrapExecutionSnapshot,
     _BootstrapExecution,
 )
+from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.types import PilotEvent
 from pyrung.core.runner import _compile_avoid
 from tests.fixtures.pilot_alarm_presets import aborted_on_first_scan as first_scan
@@ -337,6 +338,32 @@ def test_prescanned_world_imports_the_adjacent_scan_without_executing_another() 
     assert (imported.source_scan, imported.landing_scan) == (0, 1)
     assert observed.scan == 1
     assert isinstance(observed.data["execution"], BootstrapExecutionSnapshot)
+
+
+def test_entry_route_binding_alone_defers_program_input_receipts(monkeypatch) -> None:
+    deferred: list[bool] = []
+    original_orient = Compass.orient
+
+    def capture_constraint(self, world, target, constraints):
+        deferred.append(constraints.defer_program_input_receipts)
+        return original_orient(self, world, target, constraints)
+
+    monkeypatch.setattr(Compass, "orient", capture_constraint)
+    events = pilot_events(
+        PLC(first_scan.logic, dt=0.010),
+        first_scan.ProcessStep == first_scan.AT_TARGET,
+        max_scans=100,
+    )
+    try:
+        observed_entry = False
+        for event in events:
+            observed_entry |= event.kind == "entry_scan_observed"
+            if observed_entry and event.kind == "iteration":
+                break
+    finally:
+        events.close()
+
+    assert deferred[:3] == [False, True, False]
 
 
 def test_alarmed_action_scan_retains_complete_then_watchdog_overwrite() -> None:

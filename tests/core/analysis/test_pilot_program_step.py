@@ -30,10 +30,11 @@ from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.program_step import (
     ProgramStepStatus,
     _first_advance,
+    _input_receipts,
     read_program_step,
 )
 from pyrung.core.analysis.pilot.trace_read import WorldView
-from pyrung.core.analysis.pilot.trace_tree import TraceNode
+from pyrung.core.analysis.pilot.trace_tree import TraceAction, TraceNode
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.crossing import Cmp, Eq
 from pyrung.core.instruction.advance import AdvanceStep
@@ -95,6 +96,67 @@ def test_first_advance_preserves_depth_first_trace_order() -> None:
     )
 
     assert _first_advance(tree) is heat
+
+
+def test_input_receipts_probe_each_physical_pair_once(monkeypatch) -> None:
+    """Trace-path provenance must not repeat an identical PLC experiment."""
+
+    program, run, _command, _timer = _timer_producer_program()
+    plc = PLC(program, dt=0.010)
+    plc.step()
+    world = _world(program, plc)
+    producer = _producer(world)
+    traces = 0
+
+    import pyrung.core.analysis.pilot.program_step as program_step
+
+    original_trace_exact = program_step._trace_exact
+
+    def counted_trace_exact(*args, **kwargs):
+        nonlocal traces
+        traces += 1
+        return original_trace_exact(*args, **kwargs)
+
+    monkeypatch.setattr(program_step, "_trace_exact", counted_trace_exact)
+    first = TraceAction(run.name, True, provenance=("first",))
+    duplicate = TraceAction(run.name, True, provenance=("second",))
+
+    handoffs, direct = _input_receipts(
+        (first, duplicate),
+        (),
+        world,
+        producer,
+        plc,
+        (),
+    )
+
+    assert traces == 1
+    assert len(handoffs) == 1
+    assert handoffs[0].action == first.pair
+    assert direct == frozenset()
+
+
+def test_disposable_program_step_defers_input_receipt_experiments(monkeypatch) -> None:
+    program, run, _command, _timer = _timer_producer_program()
+    plc = PLC(program, dt=0.010)
+    plc.step()
+    world = _world(program, plc)
+
+    import pyrung.core.analysis.pilot.program_step as program_step
+
+    def unexpected_receipts(*_args, **_kwargs):
+        raise AssertionError("disposable entry orientation probed program inputs")
+
+    monkeypatch.setattr(program_step, "_input_receipts", unexpected_receipts)
+
+    result = read_program_step(
+        world,
+        _producer(world),
+        plc,
+        probe_inputs=False,
+    )
+
+    assert tuple(action.pair for action in result.required_inputs) == ((run.name, True),)
 
 
 def test_running_timer_proves_progress_at_the_immediate_boundary() -> None:

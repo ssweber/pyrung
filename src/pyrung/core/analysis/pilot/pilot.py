@@ -632,6 +632,10 @@ def _pilot_loop_events(
                 if temporal_source_checkpoint is not None
                 else None
             ),
+            defer_program_input_receipts=bool(
+                state.bootstrap_execution is not None
+                and not state.bootstrap_execution.route_bound
+            ),
         )
         result = ctx.compass.orient(raw_world, target, constraints)
         orientation_read = result.orientation

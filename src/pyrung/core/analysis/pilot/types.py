@@ -265,6 +265,10 @@ class _PilotContext:
     # this narrow set lets evidence readers extend only the new obstruction.
     temporal_trigger_requirements: tuple[ActiveRequirement, ...] = ()
     temporal_source_anchor: tuple[Any, Any] | None = None
+    # True only while selecting the route used to bind an adjacent entry scan.
+    # The result is invalidated immediately after binding, so exact per-input
+    # ProgramStep receipts belong to the following fresh orientation.
+    defer_program_input_receipts: bool = False
 
 
 @dataclass(frozen=True)

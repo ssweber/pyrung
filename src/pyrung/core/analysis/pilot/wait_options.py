@@ -458,6 +458,7 @@ def _prescribe_wait(
             state.pilot_rungs,
             resting=ctx.resting,
             structural_channels=(edge.role.channel_tag,),
+            probe_inputs=not getattr(ctx, "defer_program_input_receipts", False),
         )
         route_writer = ctx.pdg.rung_nodes[edge.route.writer_node]
         route_writer_reads = (

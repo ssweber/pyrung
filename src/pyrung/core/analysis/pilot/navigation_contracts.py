@@ -101,6 +101,12 @@ class NavigationConstraints:
     # Exact (checkpoint owner, world key) selected as this read's executable
     # edge. Requirement evidence may come from several later diagnostics.
     temporal_source_anchor: tuple[Any, Any] | None = None
+    # An unbound adjacent entry execution invalidates the first selected
+    # orientation after its route is attached.  That disposable read still
+    # needs structural producer tracing, but not one counterfactual scan per
+    # repeated program input; the fresh post-binding orientation owns those
+    # current-world receipt experiments.
+    defer_program_input_receipts: bool = False
 
 
 @dataclass(frozen=True)

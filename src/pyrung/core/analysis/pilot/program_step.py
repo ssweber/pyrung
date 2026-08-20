@@ -240,10 +240,16 @@ def _input_receipts(
     index = build_advance_index(ctx.program, getattr(plc, "_harness", None))
     handoffs: list[ProgramInputHandoff] = []
     direct: set[tuple[str, Any]] = set()
-    for action in required:
+    # Alternative trace paths can carry the same physical input with distinct
+    # provenance.  This receipt experiment consumes only the patched pair and
+    # runs against the same deterministic world, so repeat pairs cannot add a
+    # new direct-writer or handoff result.  Keep the original ``required``
+    # sequence intact for downstream provenance; de-duplicate only its probes.
+    unique_required = tuple(dict.fromkeys(action.pair for action in required))
+    for tag, value in unique_required:
         fork = fork_with_pilot_rungs(plc, pilot_rungs)
         patch = dict(context_actions)
-        patch[action.tag] = action.value
+        patch[tag] = value
         fork.patch(patch)
         fork.step()
         runs = fork._replay_rung_runs_at(fork.state.scan_id)
@@ -255,7 +261,7 @@ def _input_receipts(
             producer.command_value,
             runs,
         ):
-            direct.add(action.pair)
+            direct.add((tag, value))
         trace = _trace_exact(
             ctx,
             producer,
@@ -268,7 +274,7 @@ def _input_receipts(
             continue
         handoffs.append(
             ProgramInputHandoff(
-                action=action.pair,
+                action=(tag, value),
                 boundary=boundary,
                 channel=boundary.tag,
             )
@@ -285,6 +291,7 @@ def read_program_step(
     resting: Mapping[str, Any] | None = None,
     projection_scans: int = 4,
     structural_channels: Sequence[str] = (),
+    probe_inputs: bool = True,
 ) -> ProgramStep:
     """Project an unchanged controlled world and read the exact producer.
 
@@ -327,13 +334,17 @@ def read_program_step(
     advance = _first_advance(trace)
     boundary = advance.until if advance is not None else None
     required, context_actions = _input_split(trace, trace_snapshot, resting or {})
-    input_handoffs, directly_reaching_pairs = _input_receipts(
-        required,
-        context_actions,
-        ctx,
-        producer,
-        plc,
-        pilot_rungs,
+    input_handoffs, directly_reaching_pairs = (
+        _input_receipts(
+            required,
+            context_actions,
+            ctx,
+            producer,
+            plc,
+            pilot_rungs,
+        )
+        if probe_inputs
+        else ((), frozenset())
     )
     handoff_pairs = frozenset(handoff.action for handoff in input_handoffs)
     admitted_pairs = handoff_pairs | directly_reaching_pairs

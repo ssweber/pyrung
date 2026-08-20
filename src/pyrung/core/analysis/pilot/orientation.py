@@ -613,6 +613,10 @@ def orient(
         context_changes["temporal_trigger_requirements"] = constraints.temporal_trigger_requirements
     if hasattr(world.context, "temporal_source_anchor"):
         context_changes["temporal_source_anchor"] = constraints.temporal_source_anchor
+    if hasattr(world.context, "defer_program_input_receipts"):
+        context_changes["defer_program_input_receipts"] = (
+            constraints.defer_program_input_receipts
+        )
     read_context = replace(world.context, **context_changes)
     seed = replace(world, context=read_context)
     worlds = (seed,) if seed.frame is not None else _orientation_reading._read_worlds(seed, target, constraints)
