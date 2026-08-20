@@ -60,7 +60,6 @@ from pyrung.core.analysis.pilot.types import (
     _PilotContext,
     _PilotState,
 )
-from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     pass
@@ -309,25 +308,9 @@ def _handle_channel_departure(
     observation, settled_work = observe_departure(
         state,
         ctx,
-        bearing.objective,
+        trial,
         chan,
         classification_source,
-        execution.before_snap,
-        occurrence_scan=next(
-            (
-                event.scan
-                for event in execution.timeline
-                if any(
-                    tag == chan
-                    and _values_match(before, classification_source)
-                    and not _values_match(after, classification_source)
-                    for tag, before, after in event.transitions
-                )
-            ),
-            state.work.state.scan_id,
-        ),
-        landing_receipt=execution.coast_receipt,
-        execution=execution,
     )
     departure = classify_departure(observation)
     if fulfilled_expectation and earned_work_is_useful_motion(trial.earned_work_receipt):

@@ -43,7 +43,7 @@ from pyrung.core.analysis.pilot.execution import (
     ExecutionReceipt,
     capture_execution_spans,
 )
-from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective, EvidenceScope
+from pyrung.core.analysis.pilot.navigation_contracts import EvidenceScope
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key
@@ -51,6 +51,7 @@ from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.types import (
+        _AcceptedTrial,
         _PilotContext,
         _PilotState,
     )
@@ -475,21 +476,42 @@ def _departure_reading(
 def observe_departure(
     state: _PilotState,
     ctx: _PilotContext,
-    objective: BearingObjective,
+    trial: _AcceptedTrial,
     channel_tag: str,
     from_value: Any,
-    source_snap: Any,
-    *,
-    occurrence_scan: int | None = None,
-    landing_receipt: CoastReceipt | None = None,
-    execution: ExecutionReceipt | None = None,
 ) -> tuple[DepartureObservation, PLC]:
-    """Settle and observe the channel departure paused in ``state.work``."""
+    """Observe one accepted trial's exact channel-departure receipt."""
+    objective = trial.attempt.bearing.objective
+    execution = trial.execution
+    source_snap = execution.before_snap
+    landing_receipt = execution.coast_receipt
+    matching_occurrences = tuple(
+        event
+        for event in execution.timeline
+        for tag, before, after in event.transitions
+        if tag == channel_tag
+        and _values_match(before, from_value)
+        and not _values_match(after, from_value)
+    )
+    receipt_owned_occurrences = tuple(
+        event
+        for event in matching_occurrences
+        if landing_receipt is not None
+        and event.kind == "departure"
+        and event.name in landing_receipt.fired
+    )
+    selected_occurrences = (
+        receipt_owned_occurrences if receipt_owned_occurrences else matching_occurrences
+    )
+    occurrence_scan = selected_occurrences[0].scan if len(selected_occurrences) == 1 else None
+    occurrence_ambiguous = len(selected_occurrences) > 1
     work = getattr(state, "work", None)
     cause_scan = (
         occurrence_scan
         if occurrence_scan is not None
-        else getattr(getattr(work, "state", None), "scan_id", None)
+        else (
+            None if occurrence_ambiguous else getattr(getattr(work, "state", None), "scan_id", None)
+        )
     )
     # Execution's pen timeline already names the exact occurrence scan.  Use
     # its predecessor for the earned-work receipt before asking for a deep
@@ -613,7 +635,9 @@ def observe_departure(
 
     def _reading(*, explain: bool) -> DepartureReading:
         chain = (
-            _shared_cause(work, channel_tag, cause_scan) if explain and work is not None else None
+            _shared_cause(work, channel_tag, cause_scan)
+            if explain and work is not None and cause_scan is not None
+            else None
         )
         return _departure_reading(
             chain,

@@ -32,6 +32,7 @@ from pyrung.core.analysis.pilot.coast import (
     CoastReceipt,
     CoastSession,
     CoastTrigger,
+    CoastTriggerEvent,
     _settle_delayed_effects,
     departure_trigger,
     predicate_trigger,
@@ -1311,6 +1312,127 @@ class TestSettleLandingFolds:
 
 
 class TestClassifyDepartureRefusal:
+    @pytest.mark.parametrize(
+        ("timeline", "expected_occurrence"),
+        [
+            ((CoastTriggerEvent("departure", "pen", 3, (("Chan", 1, 2),)),), 3),
+            (
+                (
+                    CoastTriggerEvent("first", "pen", 3, (("Chan", 1, 2),)),
+                    CoastTriggerEvent("second", "pen", 4, (("Chan", 1, 3),)),
+                ),
+                None,
+            ),
+            (
+                (
+                    CoastTriggerEvent("departure", "departure", 3, (("Chan", 1, 2),)),
+                    CoastTriggerEvent("pen", "pen", 3, (("Chan", 1, 2),)),
+                ),
+                3,
+            ),
+        ],
+    )
+    def test_accepted_trial_owns_departure_inputs_and_ambiguous_occurrences_fail_closed(
+        self,
+        monkeypatch,
+        timeline,
+        expected_occurrence,
+    ):
+        from pyrung.core.analysis.pilot import departure
+        from pyrung.core.analysis.pilot.constrained_reachability import Reachable
+        from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
+        from pyrung.core.analysis.pilot.execution import ChannelMotion, ExecutionReceipt
+        from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective, TargetSpec
+
+        accepted_coast = CoastReceipt(
+            kind="bearing",
+            start_scan=1,
+            end_scan=4,
+            stop_reason="departed",
+            fired=("departure",),
+            events=timeline,
+            budget=3,
+        )
+        accepted_execution = ExecutionReceipt(
+            before_snap={"Chan": 1, "Progress": 10},
+            after_snap={"Chan": 2, "Progress": 10},
+            channel_motion=ChannelMotion("Chan", 9, stop_reason="departed"),
+            coast_receipt=accepted_coast,
+            timeline=timeline,
+        )
+        objective = BearingObjective(TargetSpec("Chan", 9))
+        trial = SimpleNamespace(
+            attempt=SimpleNamespace(bearing=SimpleNamespace(objective=objective)),
+            execution=accepted_execution,
+        )
+        work = SimpleNamespace(
+            state=SimpleNamespace(tags={"Chan": 2, "Progress": 10}, scan_id=4),
+            history=SimpleNamespace(oldest_scan_id=4),
+        )
+        receipt_sources = []
+        earned_work = SimpleNamespace(
+            components=(SimpleNamespace(tag="Progress", resets=(), direction=1),),
+            receipt=lambda source, _landing: (
+                receipt_sources.append(dict(source)) or EarnedWorkReceipt()
+            ),
+        )
+        edge = SimpleNamespace(from_value=1, to_value=2, action=None)
+        graph = SimpleNamespace(
+            role=SimpleNamespace(channel_tag="Chan"),
+            edges=(edge,),
+        )
+        state = SimpleNamespace(
+            work=work,
+            earned_work=earned_work,
+            committed_acts=(),
+            key_config=None,
+            pilot_rungs=(),
+            active_requirements=(),
+        )
+        ctx = SimpleNamespace(
+            compass=SimpleNamespace(graphs=(graph,), chart_graphs=()),
+            blocked_actions=frozenset(),
+        )
+        observed_goals = []
+
+        def _continuation(_charts, _channel, _value, goals, **_kwargs):
+            observed_goals.append(goals)
+            return Reachable(("accepted-objective",))
+
+        monkeypatch.setattr(
+            departure,
+            "_continuation_safety",
+            lambda *_args, **_kwargs: SimpleNamespace(allowed=True),
+        )
+        monkeypatch.setattr(
+            departure.NavigationEvidence,
+            "channel_continuation",
+            _continuation,
+        )
+        monkeypatch.setattr(
+            departure,
+            "_settle_departure",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("the accepted coast already owns the exact landing")
+            ),
+        )
+
+        observation, settled_work = departure.observe_departure(
+            state,
+            ctx,
+            trial,
+            "Chan",
+            from_value=1,
+        )
+
+        assert settled_work is work
+        assert observation.execution is accepted_execution
+        assert observation.landing_receipt is accepted_coast
+        assert observation.reading.occurrence_scan == expected_occurrence
+        assert receipt_sources == [dict(accepted_execution.before_snap)]
+        assert observed_goals == [(9,)]
+        assert observation.continuation.channel_status.provenance == ("accepted-objective",)
+
     def test_non_quiescent_receipt_is_refused_as_unknown(self, monkeypatch):
         # Constructing a full _PilotState/_PilotContext is heavy, so exercise
         # the refusal at the seam: a timeout receipt from _settle_departure is
@@ -1348,13 +1470,28 @@ class TestClassifyDepartureRefusal:
             ),
         )
 
+        accepted_execution = ExecutionReceipt(
+            before_snap={"Chan": 1},
+            after_snap={"Chan": 7},
+            channel_motion=ChannelMotion("Chan", 7, stop_reason="departed"),
+            coast_receipt=None,
+            timeline=(),
+        )
+        trial = SimpleNamespace(
+            attempt=SimpleNamespace(
+                bearing=SimpleNamespace(
+                    objective=BearingObjective(TargetSpec("Target", True)),
+                ),
+            ),
+            execution=accepted_execution,
+        )
+
         observation, settled_work = departure.observe_departure(
             SimpleNamespace(),  # state — consumed only by the (mocked) settle
             SimpleNamespace(),  # ctx — untouched on the refusal arm
-            BearingObjective(TargetSpec("Target", True)),
+            trial,
             "Chan",
             from_value=1,
-            source_snap={"Chan": 1},
         )
         verdict = departure.classify_departure(observation)
 

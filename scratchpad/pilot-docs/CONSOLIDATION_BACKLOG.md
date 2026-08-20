@@ -209,7 +209,7 @@ for the helper to assemble `_PilotContext`.
 
 ### 11. Pass the accepted trial to departure observation
 
-**Status:** later
+**Status:** done
 
 `progress.py` unpacks an accepted trial's objective, source snapshot, timeline
 occurrence, coast receipt, and execution, then passes those pieces beside the

@@ -1564,9 +1564,16 @@ class TestLetrunEjection:
         classified = False
         investigated = False
 
-        def _observe(*_args, **_kwargs):
+        ctx = SimpleNamespace(target=TargetSpec("State", 17))
+
+        def _observe(observed_state, observed_ctx, accepted, channel_tag, source):
             nonlocal observed
             observed = True
+            assert observed_state is state
+            assert observed_ctx is ctx
+            assert accepted is trial
+            assert channel_tag == "State"
+            assert source == 6
             departure = _departure_result(
                 trial.attempt.pulse.fork,
                 reason="no clean continuation",
@@ -1608,7 +1615,7 @@ class TestLetrunEjection:
             trial,
             _frame(),
             state,
-            SimpleNamespace(target=TargetSpec("State", 17)),
+            ctx,
             trial.verification,
         )
         assert next(events).kind == "letrun_ejection"
