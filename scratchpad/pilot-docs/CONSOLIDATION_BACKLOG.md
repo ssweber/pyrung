@@ -224,6 +224,138 @@ unpacked from the executed attempt, causal checkpoint, state, and context.
   overlay.
 - Do not substitute live `state.work` for the checkpoint world.
 
+## Ownership and transition vocabulary
+
+Tasks 7-12 and the deferred buckets already cover the overlapping
+`OrientationRead`, `OrientationWorld`, constraints, `DriveSetup`, accepted
+trial, replay, phase-projection, `ExecutionReceipt`, and executed-source-key
+work. The tasks below record only the remaining seams; they must not recreate
+those broader migrations under new names.
+
+### 13. Name physical source identity once
+
+**Status:** ready, narrow behavior-preserving vocabulary
+
+`theory_evidence` and `theory_orientation` independently derive the
+requirement-free/physical source key and compare its overlay delta around
+`TheoryBoundaryIdentity`.
+
+- Put the exact physical-key and overlay-delta operations beside the existing
+  world-key/boundary identity policy, then reuse them at those call sites.
+- Preserve separate navigable, proof, historical, and exact-world identities;
+  this is not a generic `Owner` protocol.
+- Keep drive formation and reducer admission as independent defensive checks.
+- Focused tests: a requirement-only change preserves physical identity;
+  state, rung, Epoch, or occurrence changes do not; overlay delta remains
+  exact.
+
+### 14. Carry the exact TheoryAttemptReceipt through RecordTheoryAttempt
+
+**Status:** ready, behavior-preserving object carry
+
+The execution boundary creates `_TheoryTransitionEvidence`, lifecycle fact
+construction copies nearly the same fields into `RecordTheoryAttempt`, and the
+reducer reconstructs `TheoryAttemptReceipt` for the ledger.
+
+- Construct the exact `TheoryAttemptReceipt` at the execution/evidence seam and
+  let `RecordTheoryAttempt` carry it to reducer validation and storage.
+- Keep interpretation/refinement facts distinct and keep reducer validation at
+  the mutation boundary.
+- Focused tests: idempotent replay, conflicting replay, default observation
+  boundary, stale source/version rejection, and stored receipt identity.
+- Do not build a generic receipt pipeline or base receipt hierarchy.
+
+### 15. Let controlled setup carry its stored attempt receipt
+
+**Status:** later, depends on Task 14
+
+`_record_controlled_setup_attempt` records an attempt and then copies the same
+identity/evidence fields into `_ControlledSetupAttempt` for completion.
+
+- Carry the exact ledger-stored `TheoryAttemptReceipt` plus only genuinely
+  setup-local completion values.
+- Preserve the distinction between recording and completion admission.
+- Do not introduce a setup session/controller or bypass reducer ownership.
+
+### 16. Reuse the existing retention owners
+
+**Status:** ready, narrow behavior-preserving deletion
+
+Recovery manually repeats the policy already owned by
+`_retain_active_requirement`, while failed-effect receipts are appended with
+the same exact-retention rule at multiple sites.
+
+- Route active-requirement retention through its existing owner.
+- Add one narrow `_retain_failed_effect_receipt` only if both current consumers
+  can use it without changing ordering or equality semantics.
+- Focused tests: duplicate retry, navigation-equal but distinct requirements,
+  and equal versus distinct exact failed-effect receipts.
+- Do not generalize this into a collection, ledger, or ownership API.
+
+### 17. Characterize temporal-checkpoint admission identity
+
+**Status:** characterize first
+
+Temporal checkpoint admission currently mixes owner identity, object identity,
+detached boundary equality, and later `CheckpointRef` resolution across
+recovery, evidence, drive, and recording paths.
+
+- Lock the intended admission matrix before selecting one canonical predicate
+  or contract.
+- Required cases: same owner with a refreshed world, distinct owner with the
+  same boundary, same scan with an overlay change, rollback into a new Epoch,
+  and ambiguous live resolution.
+- Preserve execution-time resolution back to current live requirements; do not
+  cache or carry a detached requirement as executable authority.
+
+### 18. Name the occurrence-identity modes
+
+**Status:** later, characterize first
+
+Occurrence comparisons in `theory_evidence`, `requirements`, `conductivity`,
+and `theory_orientation` use several deliberate projections but express them
+as bespoke tuple/equality code.
+
+- First characterize the modes: historical exact identity, scheduled-retry
+  identity, and cross-attempt structural identity.
+- Required cases include scan, ordinal, run order, call invocation, Epoch,
+  value, and enabled-state changes.
+- Name only the proven modes; do not collapse replay selectors into them and do
+  not introduce a generic occurrence/owner framework.
+
+### 19. Split theory_orientation by behavior, not authority
+
+**Status:** later, after Tasks 7-9
+
+Once the read/world/constraints boundaries are stable, move cohesive policy
+families out of `theory_orientation.py` without changing decision ownership:
+
+- candidate-admission preservation policy, including
+  `_act_preserves_requirements`;
+- temporal retry, rearm, scheduling, and correction composition;
+- intrascan stage/frontier/boundary/traceback behavior;
+- the small pending-configuration/overlay reader.
+
+`theory_orientation.py` must remain the precedence and orchestration owner.
+Move one behavior family per change with focused parity tests. Do not create a
+WorkingTheory manager/facade, a stateful session, or a style-only file split.
+
+## Defensive boundaries to preserve
+
+Some repetition is intentional boundary revalidation, not consolidation debt:
+
+- `assert_temporal_need_current` validates a detached request;
+- snapshot resolution materializes current live requirements;
+- live composition/setup rechecks the mutable world before execution;
+- the reducer independently revalidates source, version, ownership, and Epoch
+  at the mutation boundary.
+
+Likewise, Epoch ownership, execution-receipt authority, requirement freshness,
+expectation matching, and speculative-world identity are related vocabulary,
+not one interchangeable concept. No task above authorizes a generic `Owner`
+protocol, a generic receipt pipeline, cached live-requirement resolution, a
+central WorkingTheory manager, or line-count/style-only restructuring.
+
 ## Deferred buckets
 
 Reassess these only after the earlier tasks reduce the surrounding call chains:
