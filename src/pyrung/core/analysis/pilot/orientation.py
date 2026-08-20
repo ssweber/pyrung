@@ -7,7 +7,6 @@ from typing import Any
 
 import pyrung.core.analysis.pilot.orientation_reading as _orientation_reading
 import pyrung.core.analysis.pilot.theory_orientation as _theory_orientation
-from pyrung.core.analysis.pilot.candidate_read import CandidateRead
 from pyrung.core.analysis.pilot.execution import (
     MotionKind,
 )
@@ -49,7 +48,7 @@ def _orient_read(
     target: TargetSpec,
     *,
     _allow_theory: bool = True,
-    _candidate_read: CandidateRead | None = None,
+    _orientation_read: OrientationRead | None = None,
 ) -> OrientationResult:
     """Materialize one alternative in act-precedence order.
 
@@ -61,7 +60,16 @@ def _orient_read(
 
     if world.frame is None:
         raise ValueError("single-alternative orientation requires a complete frame")
-    candidates = _candidate_read if _candidate_read is not None else read_candidates(world)
+    read = (
+        _orientation_read
+        if _orientation_read is not None
+        else OrientationRead(
+            world_key=world.world_key,
+            world=world,
+            candidates=read_candidates(world),
+        )
+    )
+    candidates = read.candidates
 
     # Boundary zero has no executed program scan to read yet.  Make that one
     # observation an ordinary Compass-selected bearing; its landing is always
@@ -72,9 +80,8 @@ def _orient_read(
         and getattr(world.state, "bootstrap_execution", None) is None
     ):
         return _orientation_reading._bearing(
-            world,
+            read,
             ObserveScan(),
-            candidates,
             target=target,
             rationale="observe exactly one entry scan",
         )
@@ -82,8 +89,7 @@ def _orient_read(
     view = getattr(world.context, "theory_view", None)
     if _allow_theory:
         boundary_realization = _theory_orientation._theory_intrascan_boundary_realization(
-            world,
-            candidates,
+            read,
         )
         if boundary_realization is not None:
             return boundary_realization
@@ -102,11 +108,10 @@ def _orient_read(
                     world,
                     target,
                     _allow_theory=False,
-                    _candidate_read=candidates,
+                    _orientation_read=read,
                 )
                 retry = _theory_orientation._theory_temporal_retry_bearing(
-                    world,
-                    candidates,
+                    read,
                     target,
                     ordinary=ordinary if isinstance(ordinary, Bearing) else None,
                 )
@@ -117,17 +122,13 @@ def _orient_read(
                 world,
                 research,
             ):
-                frontier = _orientation_reading._frontier(world, candidates)
+                frontier = _orientation_reading._frontier(read)
                 return NeedResearch(
                     world_key=world.world_key,
                     frontier=frontier,
                     request=research,
                     rationale=research.reason,
-                    orientation=OrientationRead(
-                        world_key=world.world_key,
-                        world=world,
-                        candidates=candidates,
-                    ),
+                    orientation=read,
                 )
             completed_research = (
                 compass.completed_conductivity_research(view)
@@ -135,8 +136,7 @@ def _orient_read(
                 else None
             )
             composition = _theory_orientation._theory_correction_composition(
-                world,
-                candidates,
+                read,
                 target,
                 research_finding_identity=(
                     completed_research.identity if completed_research is not None else None
@@ -145,14 +145,12 @@ def _orient_read(
             if composition is not None:
                 return composition
             continuation_traceback = _theory_orientation._theory_intrascan_continuation_traceback(
-                world,
-                candidates,
+                read,
             )
             if continuation_traceback is not None:
                 return continuation_traceback
             stage = _theory_orientation._theory_intrascan_bearing(
-                world,
-                candidates,
+                read,
                 target,
             )
             if stage is not None:
@@ -169,57 +167,51 @@ def _orient_read(
                 world,
                 target,
                 _allow_theory=False,
-                _candidate_read=candidates,
+                _orientation_read=read,
             )
             composed = _theory_orientation._theory_temporal_retry_bearing(
-                world,
-                candidates,
+                read,
                 target,
                 ordinary=ordinary if isinstance(ordinary, Bearing) else None,
             )
             if composed is not None:
                 return composed
             configured_scan = _theory_orientation._theory_pending_configuration_bearing(
-                world,
-                candidates,
+                read,
                 target,
             )
             if configured_scan is not None:
                 return configured_scan
             return _orientation_reading._probe_or_stuck(
                 compass,
-                world,
-                candidates,
+                read,
                 "temporal_retry_unresolved",
             )
 
         setup_first = view is not None and view.temporal_intent is TheoryTemporalIntent.SETUP_FIRST
         prescription = candidates.wait.prescription if candidates.wait is not None else None
         if setup_first and prescription is None:
-            rearm = _theory_orientation._theory_rearm_bearing(world, candidates, target)
+            rearm = _theory_orientation._theory_rearm_bearing(read, target)
             if rearm is not None:
                 return rearm
 
         if setup_first:
             composition = _theory_orientation._theory_correction_composition(
-                world,
-                candidates,
+                read,
                 target,
             )
             if composition is not None:
                 return composition
             configured_scan = _theory_orientation._theory_pending_configuration_bearing(
-                world,
-                candidates,
+                read,
                 target,
             )
             if configured_scan is not None:
                 return configured_scan
 
-        theory_setup = _theory_orientation._theory_setup_bearing(world, candidates, target)
+        theory_setup = _theory_orientation._theory_setup_bearing(read, target)
         continuation_traceback = _theory_orientation._theory_intrascan_continuation_traceback(
-            world,
-            candidates,
+            read,
         )
         if continuation_traceback is not None:
             return continuation_traceback
@@ -231,7 +223,7 @@ def _orient_read(
             # original trigger is now a legitimate next transaction even
             # though its action identity is unchanged; the provisional tip is
             # what makes it new work rather than replay at the old source.
-            stage = _theory_orientation._theory_intrascan_bearing(world, candidates, target)
+            stage = _theory_orientation._theory_intrascan_bearing(read, target)
             if stage is not None:
                 return stage
             frontier_stage = _theory_orientation._theory_intrascan_frontier_bearing(
@@ -246,19 +238,17 @@ def _orient_read(
                 world,
                 target,
                 _allow_theory=False,
-                _candidate_read=candidates,
+                _orientation_read=read,
             )
             ordinary = ordinary_result if isinstance(ordinary_result, Bearing) else None
             traceback = _theory_orientation._theory_setup_traceback(
-                world,
-                candidates,
+                read,
                 ordinary,
             )
             if traceback is not None:
                 return traceback
             retry = _theory_orientation._theory_temporal_retry_bearing(
-                world,
-                candidates,
+                read,
                 target,
                 ordinary=ordinary,
             )
@@ -266,8 +256,7 @@ def _orient_read(
                 return retry
             return _orientation_reading._probe_or_stuck(
                 compass,
-                world,
-                candidates,
+                read,
                 "temporal_setup_unresolved",
             )
 
@@ -286,9 +275,8 @@ def _orient_read(
             world, act
         ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             return _orientation_reading._bearing(
-                world,
+                read,
                 act,
-                candidates,
                 target=target,
                 rationale=option.awaited_action_note or "program-awaited action",
             )
@@ -340,9 +328,8 @@ def _orient_read(
             and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act))
         ):
             return _orientation_reading._bearing(
-                world,
+                read,
                 act,
-                candidates,
                 target=target,
                 rationale=prescription.reason or "charted completion edge",
             )
@@ -365,9 +352,8 @@ def _orient_read(
             world, act
         ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             return _orientation_reading._bearing(
-                world,
+                read,
                 act,
-                candidates,
                 target=target,
                 rationale="learned joint transition",
             )
@@ -394,9 +380,8 @@ def _orient_read(
             world, act
         ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             return _orientation_reading._bearing(
-                world,
+                read,
                 act,
-                candidates,
                 target=target,
                 rationale=(
                     branch.reason or "verify crossing proposal"
@@ -415,9 +400,8 @@ def _orient_read(
         ) or compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             continue
         return _orientation_reading._bearing(
-            world,
+            read,
             act,
-            candidates,
             target=target,
             rationale=(
                 option.awaited_action_note
@@ -457,9 +441,8 @@ def _orient_read(
             world, act
         ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             return _orientation_reading._bearing(
-                world,
+                read,
                 act,
-                candidates,
                 target=target,
                 rationale=f"widen trace context to {width} atomic actions",
             )
@@ -467,8 +450,7 @@ def _orient_read(
     if candidates.diagnosis is not None:
         return _orientation_reading._probe_or_stuck(
             compass,
-            world,
-            candidates,
+            read,
             candidates.diagnosis.reason,
         )
 
@@ -496,14 +478,13 @@ def _orient_read(
         world, terminal
     ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(terminal)):
         return _orientation_reading._bearing(
-            world,
+            read,
             terminal,
-            candidates,
             target=target,
             rationale=rationale,
         )
 
-    return _orientation_reading._probe_or_stuck(compass, world, candidates, "all_rejected")
+    return _orientation_reading._probe_or_stuck(compass, read, "all_rejected")
 
 
 def _is_maintenance(result: OrientationResult) -> bool:

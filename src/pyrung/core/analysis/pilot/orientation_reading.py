@@ -299,11 +299,10 @@ def _read_worlds(
     return tuple(_assemble_world(seed, route, tree, key_config) for route, tree in route_trees)
 
 
-def _frontier(
-    world: OrientationWorld,
-    candidates: CandidateRead,
-) -> tuple[tuple[str, Any], ...]:
+def _frontier(read: OrientationRead) -> tuple[tuple[str, Any], ...]:
     """One complete target-relative frontier for every Orientation result."""
+    world = read.world
+    candidates = read.candidates
     completion_frontier = candidates.wait.frontier if candidates.wait is not None else ()
     pairs = tuple(completion_frontier) + tuple(frontier_pairs(world.frame.tree, world.snapshot))
     result: list[tuple[str, Any]] = []
@@ -315,18 +314,13 @@ def _frontier(
 
 def _probe_or_stuck(
     compass: Any,
-    world: OrientationWorld,
-    candidates: CandidateRead,
+    read: OrientationRead,
     reason: str,
 ) -> NeedProbe | Stuck:
-    frontier = _frontier(world, candidates)
+    world = read.world
+    frontier = _frontier(read)
     count = compass.knowledge.probe_count(world.world_key)
     exclusions = tuple(compass.knowledge.nogood_identities(world.world_key))
-    orientation_read = OrientationRead(
-        world_key=world.world_key,
-        world=world,
-        candidates=candidates,
-    )
     if count < _PROBE_BUDGET:
         request = ProbeRequest(frontier=frontier, reason=reason)
         return NeedProbe(
@@ -335,7 +329,7 @@ def _probe_or_stuck(
             request=request,
             rationale=f"static navigation evidence is unresolved: {reason}",
             provenance=("trace", "static-path", "learned-path"),
-            orientation=orientation_read,
+            orientation=read,
         )
     evidence = (f"probe budget {count}",)
     rationale = f"no admissible bearing remains after {count} probe round(s)"
@@ -346,14 +340,13 @@ def _probe_or_stuck(
         exclusions=exclusions,
         evidence=evidence,
         rationale=rationale,
-        orientation=orientation_read,
+        orientation=read,
     )
 
 
 def _bearing(
-    world: OrientationWorld,
+    read: OrientationRead,
     act: Any,
-    candidates: CandidateRead,
     *,
     target: TargetSpec,
     rationale: str,
@@ -366,14 +359,11 @@ def _bearing(
     unchanged inside :class:`BearingObjective` through execution and
     verification; recovery consumes that receipt.
     """
+    world = read.world
+    candidates = read.candidates
     policy = getattr(act, "policy", None)
     if policy is None or (policy.expectation is None and policy.expectation_exemption is None):
         raise ValueError("an executable bearing must promise or explicitly exempt an effect")
-    orientation_read = OrientationRead(
-        world_key=world.world_key,
-        world=world,
-        candidates=candidates,
-    )
     # Single program scans must execute the already-established World. Route
     # prerequisites are hypotheses from the current static read; installing
     # them would turn observation/staging into an intervention and corrupt the
@@ -420,12 +410,12 @@ def _bearing(
     return Bearing(
         world_key=world.world_key,
         act=act,
-        objective=BearingObjective(target=target, frontier=_frontier(world, candidates)),
+        objective=BearingObjective(target=target, frontier=_frontier(read)),
         prerequisites=merged_prerequisites,
         entry_configurations=entry_configurations,
         stop_condition=stop_condition,
         rationale=rationale,
-        orientation=orientation_read,
+        orientation=read,
         investigation_selection=investigation_selection,
     )
 

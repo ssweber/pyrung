@@ -148,7 +148,7 @@ Two structural actions with one nogood can therefore produce different answers.
 
 ### 7. Make one OrientationRead per completed read
 
-**Status:** later, after the narrow deletions
+**Status:** done
 
 `OrientationWorld` and `CandidateRead` are threaded as a pair and
 `OrientationRead` is reconstructed at several result sites.

@@ -148,6 +148,10 @@ def _options(
     )
 
 
+def _read(world: OrientationWorld, candidates: CandidateRead) -> OrientationRead:
+    return OrientationRead(world.world_key, world, candidates)
+
+
 def test_orientation_threads_one_expectation_for_batch_crossing_widening_and_coast(
     monkeypatch,
 ) -> None:
@@ -306,8 +310,7 @@ def test_temporal_retry_augments_fresh_trigger_instead_of_requirement_candidate(
     )
 
     retry = orientation._theory_temporal_retry_bearing(
-        world,
-        candidates,
+        _read(world, candidates),
         TargetSpec("Target", True),
         ordinary=ordinary,
     )
@@ -353,8 +356,7 @@ def test_retry_through_deadline_persists_one_companion_before_fresh_steer(
         lambda *_args: iter((SimpleNamespace(assignments=(), pilot_rungs=()),)),
     )
     result = orientation._theory_temporal_retry_bearing(
-        world,
-        candidates,
+        _read(world, candidates),
         TargetSpec("Target", True),
     )
 
@@ -402,8 +404,7 @@ def test_retry_through_deadline_carries_the_transaction_consumer_boundary(
     )
 
     result = orientation._theory_temporal_retry_bearing(
-        world,
-        candidates,
+        _read(world, candidates),
         TargetSpec("Target", True),
     )
 
@@ -483,8 +484,7 @@ def test_pending_configuration_retries_only_the_horizon_owned_transaction(
     )
 
     result = orientation._theory_temporal_retry_bearing(
-        world,
-        candidates,
+        _read(world, candidates),
         TargetSpec("Target", True),
         ordinary=ordinary,
     )
@@ -553,8 +553,7 @@ def test_pending_configuration_retries_the_fresh_actionless_program_transaction(
     )
 
     result = orientation._theory_temporal_retry_bearing(
-        world,
-        candidates,
+        _read(world, candidates),
         TargetSpec("Target", True),
     )
 
@@ -602,8 +601,7 @@ def test_temporal_retry_lazily_adds_current_trace_sibling_without_assigning_inte
     )
 
     retry = orientation._theory_temporal_retry_bearing(
-        world,
-        candidates,
+        _read(world, candidates),
         TargetSpec("Target", True),
     )
 
@@ -659,8 +657,7 @@ def test_temporal_retry_continues_past_an_accepted_trace_companion(
     )
 
     retry = orientation._theory_temporal_retry_bearing(
-        world,
-        candidates,
+        _read(world, candidates),
         TargetSpec("Target", True),
         ordinary=ordinary,
     )
@@ -737,8 +734,7 @@ def test_retry_together_keeps_an_owned_unchanged_transaction_pair(
     )
 
     retry = orientation._theory_temporal_retry_bearing(
-        world,
-        candidates,
+        _read(world, candidates),
         TargetSpec("Target", True),
         ordinary=ordinary,
     )
@@ -806,8 +802,7 @@ def test_temporal_retry_does_not_widen_through_an_avoided_trace_sibling(
     )
 
     retry = orientation._theory_temporal_retry_bearing(
-        world,
-        candidates,
+        _read(world, candidates),
         TargetSpec("Target", True),
     )
 
@@ -931,8 +926,7 @@ def test_conducted_boolean_parent_requests_occurrence_traceback_for_lowered_leaf
     )
 
     result = orientation._theory_correction_composition(
-        world,
-        _options(),
+        _read(world, _options()),
         TargetSpec("Target", True),
     )
 
@@ -956,8 +950,7 @@ def test_conducted_boolean_parent_requests_occurrence_traceback_for_lowered_leaf
     )
     assert (
         orientation._theory_correction_composition(
-            researched_world,
-            _options(),
+            _read(researched_world, _options()),
             TargetSpec("Target", True),
         )
         is None
@@ -1015,8 +1008,7 @@ def test_program_owned_setup_requests_exact_branch_traceback_from_fresh_bearing(
     )
 
     result = orientation._theory_setup_traceback(
-        world,
-        _options(_candidate("Link")),
+        _read(world, _options(_candidate("Link"))),
         ordinary,
     )
 
@@ -1077,8 +1069,7 @@ def test_traceback_finding_selects_only_one_exact_program_stage_scan() -> None:
     )
 
     result = orientation._theory_intrascan_bearing(
-        world,
-        _options(),
+        _read(world, _options()),
         TargetSpec("Target", True),
     )
 
@@ -1106,8 +1097,7 @@ def test_traceback_finding_selects_only_one_exact_program_stage_scan() -> None:
     )
     assert (
         orientation._theory_intrascan_bearing(
-            landed,
-            _options(),
+            _read(landed, _options()),
             TargetSpec("Target", True),
         )
         is None
@@ -1152,8 +1142,7 @@ def test_direct_traceback_finding_selects_only_its_fresh_scan_start_steer() -> N
     )
 
     result = orientation._theory_intrascan_bearing(
-        world,
-        _options(),
+        _read(world, _options()),
         TargetSpec("Target", True),
     )
 
@@ -1557,8 +1546,7 @@ def test_rejected_frontier_bearing_requests_one_program_owned_traceback_hop() ->
     )
 
     result = orientation._theory_intrascan_continuation_traceback(
-        world,
-        _options(),
+        _read(world, _options()),
     )
 
     assert isinstance(result, NeedIntrascanTraceback)
@@ -1591,8 +1579,7 @@ def test_temporal_rearm_declares_one_assertion_scan() -> None:
     )
 
     result = orientation._theory_rearm_bearing(
-        world,
-        _options(),
+        _read(world, _options()),
         TargetSpec("Target", True),
     )
 
@@ -1637,8 +1624,7 @@ def test_corrected_frontier_rearms_the_exact_selected_transaction_pair() -> None
     )
 
     result = orientation._theory_rearm_bearing(
-        world,
-        _options(),
+        _read(world, _options()),
         TargetSpec("Target", True),
     )
 
@@ -1667,8 +1653,7 @@ def test_temporal_rearm_preserves_the_original_level_command() -> None:
     )
 
     result = orientation._theory_rearm_bearing(
-        world,
-        _options(),
+        _read(world, _options()),
         TargetSpec("Target", True),
     )
 
@@ -1709,8 +1694,7 @@ def test_temporal_rearm_releases_an_asserted_competing_command(monkeypatch) -> N
     )
 
     result = orientation._theory_rearm_bearing(
-        world,
-        _options(),
+        _read(world, _options()),
         TargetSpec("Target", True),
     )
 
@@ -1967,6 +1951,78 @@ def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
     assert result.orientation.world.frame is world.frame
     assert result.orientation.candidates.options == (first,)
     assert not hasattr(result.orientation, "readings")
+
+
+def test_completed_read_is_shared_by_theory_and_ordinary_lowering(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
+
+    compass = Compass()
+    world = _world(compass)
+    candidates = _options(_candidate("First"))
+    policy_reads: list[OrientationRead] = []
+
+    monkeypatch.setattr(orientation, "read_candidates", lambda *_args: candidates)
+    monkeypatch.setattr(
+        theory_orientation,
+        "_theory_intrascan_boundary_realization",
+        lambda read: policy_reads.append(read),
+    )
+    monkeypatch.setattr(
+        theory_orientation,
+        "_theory_setup_bearing",
+        lambda read, _target: policy_reads.append(read),
+    )
+    monkeypatch.setattr(
+        theory_orientation,
+        "_theory_intrascan_continuation_traceback",
+        lambda read: policy_reads.append(read),
+    )
+    monkeypatch.setattr(
+        theory_orientation,
+        "_current_candidate_applied",
+        lambda option, _candidates, _world: (option.pair,),
+    )
+
+    result = orientation._orient_read(compass, world, TargetSpec("Target", True))
+
+    assert isinstance(result, Bearing)
+    assert result.orientation is not None
+    assert policy_reads
+    assert all(read is result.orientation for read in policy_reads)
+    assert result.orientation.world is world
+    assert result.orientation.candidates is candidates
+
+
+def test_root_alternatives_own_distinct_completed_reads(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
+
+    compass = Compass()
+    first = _world(compass)
+    second = replace(first, world_key=("second-world",))
+    reads = {
+        first.world_key: _options(),
+        second.world_key: _options(_candidate("Second")),
+    }
+    monkeypatch.setattr(orientation, "read_candidates", lambda world: reads[world.world_key])
+    monkeypatch.setattr(
+        theory_orientation,
+        "_current_candidate_applied",
+        lambda option, _candidates, _world: (option.pair,),
+    )
+
+    selected, results = orientation._read_group(
+        compass,
+        (first, second),
+        TargetSpec("Target", True),
+    )
+
+    assert selected is results[1]
+    assert all(isinstance(result, Bearing) for result in results)
+    assert results[0].orientation is not results[1].orientation
+    assert results[0].orientation.world is first
+    assert results[1].orientation.world is second
 
 
 def test_learned_batch_materializes_the_common_policy_once(monkeypatch) -> None:

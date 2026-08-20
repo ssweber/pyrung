@@ -317,13 +317,14 @@ def _owned_consumer_boundary(
 
 
 def _theory_temporal_retry_bearing(
-    world: OrientationWorld,
-    candidates: CandidateRead,
+    read: OrientationRead,
     target: TargetSpec,
     ordinary: Bearing | None = None,
 ) -> Bearing | None:
     """Lazily compose a fresh ordinary pulse with its exact temporal need."""
 
+    world = read.world
+    candidates = read.candidates
     requirements = tuple(getattr(world.context, "temporal_requirements", ()))
     if not requirements:
         raise ValueError("retry-together theory has no resolved live requirements")
@@ -345,7 +346,7 @@ def _theory_temporal_retry_bearing(
         and not getattr(scope, "transaction_rearmed", False)
     )
     if prescription is None or rearm_retained_transaction:
-        rearm = _theory_rearm_bearing(world, candidates, target)
+        rearm = _theory_rearm_bearing(read, target)
         if rearm is not None:
             return rearm
     if (
@@ -391,9 +392,8 @@ def _theory_temporal_retry_bearing(
             act = replace(ordinary.act, policy=policy)
             if _act_preserves_requirements(world, act):
                 return _orientation_reading._bearing(
-                    world,
+                    read,
                     act,
-                    candidates,
                     target=target,
                     rationale="working theory: activate the installed exact correction",
                 )
@@ -536,9 +536,8 @@ def _theory_temporal_retry_bearing(
                     pulse_horizon=PulseHorizon.ASSERTION_SCAN,
                 )
                 return _orientation_reading._bearing(
-                    world,
+                    read,
                     replace(coast, policy=policy),
-                    candidates,
                     target=target,
                     prerequisites=tuple(schedule.pilot_rungs),
                     rationale="working theory: continue the freshly read program transaction",
@@ -614,9 +613,8 @@ def _theory_temporal_retry_bearing(
                             )
                         ):
                             return _orientation_reading._bearing(
-                                world,
+                                read,
                                 act,
-                                candidates,
                                 target=target,
                                 rationale=(
                                     "working theory: persist one corrective, then steer again"
@@ -731,9 +729,8 @@ def _theory_temporal_retry_bearing(
                     )
                 ):
                     return _orientation_reading._bearing(
-                        world,
+                        read,
                         act,
-                        candidates,
                         target=target,
                         prerequisites=tuple(schedule.pilot_rungs),
                         rationale=("working theory: retry fresh bearing with exact same-scan need"),
@@ -780,9 +777,8 @@ def _theory_temporal_retry_bearing(
                     else BatchPulse(policy, crossing=getattr(ordinary.act, "crossing", None))
                 )
                 return _orientation_reading._bearing(
-                    world,
+                    read,
                     act,
-                    candidates,
                     target=target,
                     prerequisites=tuple(schedule.pilot_rungs),
                     rationale="working theory: continue the receipt-owned transaction",
@@ -802,9 +798,8 @@ def _theory_temporal_retry_bearing(
             )
             act = replace(ordinary.act, policy=policy)
             return _orientation_reading._bearing(
-                world,
+                read,
                 act,
-                candidates,
                 target=target,
                 prerequisites=tuple(schedule.pilot_rungs),
                 rationale="working theory: continue after one composed correction",
@@ -835,9 +830,8 @@ def _theory_temporal_retry_bearing(
                 act_identity(act),
             ):
                 return _orientation_reading._bearing(
-                    world,
+                    read,
                     act,
-                    candidates,
                     target=target,
                     prerequisites=tuple(schedule.pilot_rungs),
                     rationale="working theory: establish next requirement from current tip",
@@ -846,12 +840,12 @@ def _theory_temporal_retry_bearing(
 
 
 def _theory_rearm_bearing(
-    world: OrientationWorld,
-    candidates: CandidateRead,
+    read: OrientationRead,
     target: TargetSpec,
 ) -> Bearing | None:
     """Release spent edge inputs before rereading the temporal retry at its tip."""
 
+    world = read.world
     view = world.context.theory_view
     scope = getattr(view, "investigation_scope", None)
     retained_transaction = bool(
@@ -942,9 +936,8 @@ def _theory_rearm_bearing(
     if world.context.compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
         return None
     return _orientation_reading._bearing(
-        world,
+        read,
         act,
-        candidates,
         target=target,
         rationale="working theory: rearm exact spent edge from provisional tip",
     )
@@ -1034,14 +1027,14 @@ def _temporal_requirement_bindings(
 
 
 def _theory_correction_composition(
-    world: OrientationWorld,
-    candidates: CandidateRead,
+    read: OrientationRead,
     target: TargetSpec,
     *,
     research_finding_identity: tuple[Any, ...] | None = None,
 ) -> ComposeCorrection | NeedIntrascanTraceback | None:
     """Choose one persistent correction without executing a program scan."""
 
+    world = read.world
     view = getattr(world.context, "theory_view", None)
     if view is None or view.temporal_intent not in {
         TheoryTemporalIntent.SETUP_FIRST,
@@ -1075,18 +1068,14 @@ def _theory_correction_composition(
         ):
             return ComposeCorrection(
                 world_key=world.world_key,
-                frontier=_orientation_reading._frontier(world, candidates),
+                frontier=_orientation_reading._frontier(read),
                 requirements=exact_requirements,
                 rationale=(
                     "working theory: compose the exact corrective rung, then read Compass again"
                 ),
                 pilot_rungs=pending_rungs,
                 research_finding_identity=research_finding_identity,
-                orientation=OrientationRead(
-                    world_key=world.world_key,
-                    world=world,
-                    candidates=candidates,
-                ),
+                orientation=read,
             )
         # Exact regression requirements already retain their executable form.
         # Once that form is composed, the next question is whether its pending
@@ -1111,12 +1100,7 @@ def _theory_correction_composition(
                 for requirement in sources
                 if getattr(getattr(requirement, "condition", None), "tag", None) == rung.dest
             )
-            frontier = _orientation_reading._frontier(world, candidates)
-            orientation_read = OrientationRead(
-                world_key=world.world_key,
-                world=world,
-                candidates=candidates,
-            )
+            frontier = _orientation_reading._frontier(read)
             if not owned:
                 conducted = tuple(
                     (parent, _theory_conducted_occurrence(world.context.compass, view, parent))
@@ -1168,7 +1152,7 @@ def _theory_correction_composition(
                         "working theory: test the conducted consumer handoff, then "
                         "trace its preconditions backward"
                     ),
-                    orientation=orientation_read,
+                    orientation=read,
                 )
             return ComposeCorrection(
                 world_key=world.world_key,
@@ -1177,14 +1161,13 @@ def _theory_correction_composition(
                 requirements=owned,
                 rationale="working theory: compose one correction, then read Compass again",
                 research_finding_identity=research_finding_identity,
-                orientation=orientation_read,
+                orientation=read,
             )
     return None
 
 
 def _theory_intrascan_bearing(
-    world: OrientationWorld,
-    candidates: CandidateRead,
+    read: OrientationRead,
     target: TargetSpec,
 ) -> Bearing | None:
     """Select only the next ordinary scan proved by a traceback finding.
@@ -1195,6 +1178,7 @@ def _theory_intrascan_bearing(
     assignment remains unselected until the landing World is read afresh.
     """
 
+    world = read.world
     view = getattr(world.context, "theory_view", None)
     if view is None:
         return None
@@ -1252,9 +1236,8 @@ def _theory_intrascan_bearing(
                 )
             ):
                 return _orientation_reading._bearing(
-                    world,
+                    read,
                     act,
-                    candidates,
                     target=target,
                     rationale="working theory: steer one exact intrascan consumer scan",
                 )
@@ -1283,12 +1266,11 @@ def _theory_intrascan_bearing(
         ):
             continue
         return _orientation_reading._bearing(
-            world,
+            read,
             ProgramScan(
                 expected_write=stage_write,
                 evidence_identity=finding.identity,
             ),
-            candidates,
             target=target,
             rationale="working theory: execute one exact intrascan staging scan",
         )
@@ -1519,11 +1501,11 @@ def _theory_intrascan_frontier_bearing(
 
 
 def _theory_intrascan_boundary_realization(
-    world: OrientationWorld,
-    candidates: CandidateRead,
+    read: OrientationRead,
 ) -> NeedIntrascanBoundaryRealization | None:
     """Request one fresh proof after an owned producer advanced the World."""
 
+    world = read.world
     view = getattr(world.context, "theory_view", None)
     reader = getattr(view, "realized_traceback_frontier", None)
     resolved = reader() if reader is not None else None
@@ -1541,7 +1523,7 @@ def _theory_intrascan_boundary_realization(
         return None
     return NeedIntrascanBoundaryRealization(
         world_key=world.world_key,
-        frontier=_orientation_reading._frontier(world, candidates),
+        frontier=_orientation_reading._frontier(read),
         traceback_frontier=frontier,
         producer_goal=goal,
         producer_attempt_id=attempt.attempt_id,
@@ -1549,11 +1531,7 @@ def _theory_intrascan_boundary_realization(
             "working theory: the exact producer stage advanced; reprove its "
             "retained consumer at this fresh World"
         ),
-        orientation=OrientationRead(
-            world_key=world.world_key,
-            world=world,
-            candidates=candidates,
-        ),
+        orientation=read,
     )
 
 
@@ -1666,8 +1644,7 @@ def _uses_ordinary_correction_validation(requirement: Any) -> bool:
 
 
 def _theory_setup_bearing(
-    world: OrientationWorld,
-    candidates: CandidateRead,
+    read: OrientationRead,
     target: TargetSpec,
 ) -> Bearing | None:
     """Nominate one direct scalar setup through the ordinary Bearing seam.
@@ -1678,6 +1655,7 @@ def _theory_setup_bearing(
     execution. Broader producer/availability reads extend this seam.
     """
 
+    world = read.world
     view = getattr(world.context, "theory_view", None)
     if view is None or view.temporal_intent is not TheoryTemporalIntent.SETUP_FIRST:
         return None
@@ -1724,9 +1702,8 @@ def _theory_setup_bearing(
             act_identity(act),
         ):
             return _orientation_reading._bearing(
-                world,
+                read,
                 act,
-                candidates,
                 target=target,
                 prerequisites=tuple(schedule.pilot_rungs),
                 rationale="working theory: establish exact temporal setup",
@@ -1738,12 +1715,12 @@ def _theory_setup_bearing(
 
 
 def _theory_setup_traceback(
-    world: OrientationWorld,
-    candidates: CandidateRead,
+    read: OrientationRead,
     ordinary: Bearing | None,
 ) -> NeedIntrascanTraceback | None:
     """Request one exact backward proof for a program-owned setup leaf."""
 
+    world = read.world
     view = getattr(world.context, "theory_view", None)
     if (
         view is None
@@ -1804,17 +1781,13 @@ def _theory_setup_traceback(
                 continue
             return NeedIntrascanTraceback(
                 world_key=world.world_key,
-                frontier=_orientation_reading._frontier(world, candidates),
+                frontier=_orientation_reading._frontier(read),
                 request=request,
                 rationale=(
                     "working theory: trace one program-owned setup occurrence "
                     "back to a real earlier writer"
                 ),
-                orientation=OrientationRead(
-                    world_key=world.world_key,
-                    world=world,
-                    candidates=candidates,
-                ),
+                orientation=read,
             )
     return None
 
@@ -1846,8 +1819,7 @@ def _traceback_hop_ancestry(
 
 
 def _theory_intrascan_continuation_traceback(
-    world: OrientationWorld,
-    candidates: CandidateRead,
+    read: OrientationRead,
 ) -> NeedIntrascanTraceback | None:
     """Extend one retained backward chain through its newly exposed writer.
 
@@ -1859,6 +1831,7 @@ def _theory_intrascan_continuation_traceback(
     with ordinary composition/navigation.
     """
 
+    world = read.world
     view = getattr(world.context, "theory_view", None)
     if view is None or view.temporal_intent not in {
         TheoryTemporalIntent.SETUP_FIRST,
@@ -1980,17 +1953,13 @@ def _theory_intrascan_continuation_traceback(
             continue
         return NeedIntrascanTraceback(
             world_key=world.world_key,
-            frontier=_orientation_reading._frontier(world, candidates),
+            frontier=_orientation_reading._frontier(read),
             request=request,
             rationale=(
                 "working theory: extend the retained intrascan traceback "
                 "through one newly exposed program writer"
             ),
-            orientation=OrientationRead(
-                world_key=world.world_key,
-                world=world,
-                candidates=candidates,
-            ),
+            orientation=read,
         )
     return None
 
@@ -2011,12 +1980,12 @@ def _counterfactual_guard(tag: Any, condition: Cmp) -> Any | None:
 
 
 def _theory_pending_configuration_bearing(
-    world: OrientationWorld,
-    candidates: CandidateRead,
+    read: OrientationRead,
     target: TargetSpec,
 ) -> Bearing | None:
     """Execute one newly composed configuration or PilotRung correction."""
 
+    world = read.world
     view = getattr(world.context, "theory_view", None)
     pending = getattr(view, "pending_configuration_identities", frozenset())
     configurations = tuple(
@@ -2070,9 +2039,8 @@ def _theory_pending_configuration_bearing(
     ):
         return None
     return _orientation_reading._bearing(
-        world,
+        read,
         act,
-        candidates,
         target=target,
         rationale="working theory: execute one correction, then read Compass again",
     )
