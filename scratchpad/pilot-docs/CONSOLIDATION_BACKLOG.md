@@ -53,7 +53,7 @@ beside the accepted trial and records both as if they were independent.
 
 ### 2. Preserve the ordinary Bearing instead of rebuilding it
 
-**Status:** ready
+**Status:** done
 
 `theory_orientation._theory_intrascan_frontier_bearing` obtains an ordinary
 Bearing, extracts its candidate reading, and reconstructs nearly the same

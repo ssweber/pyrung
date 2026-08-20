@@ -25,6 +25,7 @@ from pyrung.core.analysis.pilot.execution import (
     MotionKind,
     PulseHorizon,
     ScanEntryConfiguration,
+    StopCondition,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
@@ -44,6 +45,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     NeedIntrascanTraceback,
     NeedProbe,
     NeedResearch,
+    OrientationRead,
     OrientationWorld,
     ProgramScan,
     Pulse,
@@ -60,6 +62,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     ProgramTransaction,
     TheoryTemporalIntent,
 )
+from pyrung.core.analysis.simplified import Atom
 from pyrung.core.context import RungId
 from pyrung.core.crossing import Cmp
 
@@ -1160,6 +1163,161 @@ def test_direct_traceback_finding_selects_only_its_fresh_scan_start_steer() -> N
     assert result.act.expected_write is consumer_write
     assert result.act.policy.local_progress is LocalProgressKind.INTRASCAN_DIRECT
     assert result.act.policy.pulse_horizon is PulseHorizon.ASSERTION_SCAN
+
+
+def test_intrascan_frontier_handoff_preserves_the_ordinary_bearing(
+    monkeypatch,
+) -> None:
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
+
+    compass = Compass()
+    source = SimpleNamespace(world_key=("world",), scan_id=7)
+    producer_goal = SimpleNamespace(
+        tag="Produced",
+        value=True,
+        node_index=0,
+        rung_id=RungId(None, 0),
+        branch_path=(),
+        guard_alternatives=((Atom("ProducerGuard", "xic"),),),
+        observed_values=(),
+        identity=("producer-goal", "Produced"),
+    )
+    frontier = SimpleNamespace(
+        theory_id=("theory", 1),
+        source=source,
+        identity=("frontier", "Produced"),
+        consumer_assignments=(("Consumer", True),),
+        producer_goals=(producer_goal,),
+        witness=SimpleNamespace(
+            traceback_step=SimpleNamespace(
+                useful_write=SimpleNamespace(
+                    boundary=SimpleNamespace(
+                        rung_id=RungId("ConsumerRoutine", 1),
+                        branch_path=(),
+                    )
+                )
+            )
+        ),
+    )
+    node = SimpleNamespace(subroutine=None, rung_index=0, branch_path=())
+    world = _world(compass)
+    world.snapshot["ProducerGuard"] = False
+    world = replace(
+        world,
+        key_config=object(),
+        context=replace(
+            world.context,
+            pdg=SimpleNamespace(
+                rung_nodes=(node,),
+                writers_of={"Produced": frozenset((0,))},
+            ),
+            steerable=frozenset(("ProducerGuard",)),
+            theory_view=SimpleNamespace(
+                theory_id=frontier.theory_id,
+                source=source,
+                current_traceback_frontiers=lambda: (frontier,),
+            ),
+        ),
+    )
+    producer_world = replace(world, world_key=("producer-world",), frame=object())
+    candidates = _options(_candidate("ProducerGuard"))
+    orientation_read = OrientationRead(
+        world_key=producer_world.world_key,
+        world=producer_world,
+        candidates=candidates,
+    )
+    policy = ActPolicy(
+        source=ActSource.TRACE,
+        action_pairs=(("ProducerGuard", True),),
+        applied=(("ProducerGuard", True),),
+        expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+    )
+    prerequisite = PilotRung("Setup", True, Cmp("ProducerGuard", "==", False))
+    configuration = ScanEntryConfiguration((("Preset", 7),))
+    stop_condition = StopCondition(PulseHorizon.ASSERTION_SCAN, reason="ordinary stop")
+    claim = object()
+    ordinary = Bearing(
+        world_key=producer_world.world_key,
+        act=Pulse(policy),
+        objective=BearingObjective(
+            TargetSpec("ProducerGuard", True),
+            frontier=(("Unresolved", 9),),
+        ),
+        prerequisites=(prerequisite,),
+        entry_configurations=(configuration,),
+        stop_condition=stop_condition,
+        rationale="ordinary rationale",
+        orientation=orientation_read,
+        claim=claim,
+        first_edge_identity=("ordinary-edge",),
+    )
+    selected = [ordinary]
+
+    monkeypatch.setattr(
+        orientation._orientation_reading,
+        "_trace_for_route",
+        lambda *_args: object(),
+    )
+    monkeypatch.setattr(
+        orientation._orientation_reading,
+        "_assemble_world",
+        lambda *_args: producer_world,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.sp_values.writer_value_facts",
+        lambda *_args: {},
+    )
+
+    def orient_read(_compass, read_world, concrete_target, *, _allow_theory):
+        assert read_world is producer_world
+        assert concrete_target == TargetSpec("ProducerGuard", True)
+        assert _allow_theory is False
+        return selected[0]
+
+    target = TargetSpec("Target", True)
+    result = orientation._theory_intrascan_frontier_bearing(
+        world,
+        target,
+        orient_read=orient_read,
+    )
+
+    assert isinstance(result, Bearing)
+    assert result is not ordinary
+    assert result.world_key is ordinary.world_key
+    assert result.act is ordinary.act
+    assert result.orientation is orientation_read
+    assert result.prerequisites is ordinary.prerequisites
+    assert result.entry_configurations is ordinary.entry_configurations
+    assert result.stop_condition is stop_condition
+    assert result.claim is claim
+    assert result.first_edge_identity is ordinary.first_edge_identity
+    assert result.objective.target is target
+    assert result.objective.frontier is ordinary.objective.frontier
+    assert result.rationale == (
+        "working theory: follow one ordinary bearing toward the missing intrascan producer guard"
+    )
+    assert result.investigation_selection is not None
+    assert result.investigation_selection.frontier_id == frontier.identity
+    assert result.investigation_selection.producer_goal_id == producer_goal.identity
+
+    selected[0] = replace(
+        ordinary,
+        act=Pulse(
+            replace(
+                policy,
+                action_pairs=(("Consumer", True),),
+                applied=(("Consumer", True),),
+            )
+        ),
+    )
+    assert (
+        orientation._theory_intrascan_frontier_bearing(
+            world,
+            target,
+            orient_read=orient_read,
+        )
+        is None
+    )
 
 
 def test_parent_requirement_is_conducted_inside_appeared_to_displacement_interval(

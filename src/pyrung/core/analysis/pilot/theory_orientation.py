@@ -1424,16 +1424,12 @@ def _theory_intrascan_frontier_bearing(
                 )
                 if not isinstance(ordinary, Bearing) or ordinary.orientation is None:
                     return None
-                producer_candidates = ordinary.orientation.candidates
                 applied = frozenset(getattr(ordinary.act.policy, "applied", ()))
                 if applied & consumer:
                     return None
-                return _orientation_reading._bearing(
-                    producer_world,
-                    ordinary.act,
-                    producer_candidates,
-                    target=target,
-                    prerequisites=ordinary.prerequisites,
+                return replace(
+                    ordinary,
+                    objective=replace(ordinary.objective, target=target),
                     rationale=(
                         "working theory: follow one ordinary bearing toward the "
                         "missing intrascan producer guard"
