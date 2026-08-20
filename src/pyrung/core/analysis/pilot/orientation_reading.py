@@ -1,7 +1,8 @@
 """Generic current-world construction used by Pilot orientation.
 
-This module reads trace routes, assembles complete worlds, and constructs
-typed bearings. It does not interpret or advance WorkingTheory.
+This module reads trace routes, assembles complete worlds, lowers admitted
+candidates into executable overlays, and constructs typed bearings. It does
+not interpret or advance WorkingTheory.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from pyrung.core.analysis.pilot.candidate_read import CandidateRead
+from pyrung.core.analysis.pilot.candidate_read import CandidateRead, _Candidate
 from pyrung.core.analysis.pilot.execution import (
     PulseHorizon,
     StopCondition,
@@ -32,6 +33,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ProgramScan,
     Stuck,
     TargetSpec,
+    _ActionPair,
 )
 from pyrung.core.analysis.pilot.overlay import (
     _pilot_rung_execution_receipt,
@@ -430,6 +432,59 @@ def _bearing(
         orientation=orientation_read,
         investigation_selection=investigation_selection,
     )
+
+
+def _candidate_applied(
+    candidate: _Candidate,
+    candidates: CandidateRead,
+    context: Any,
+) -> tuple[_ActionPair, ...]:
+    """Lower one admitted candidate into its complete executable overlay."""
+
+    pair = candidate.pair
+    actions: list[_ActionPair] = [pair]
+    seen: set[str] = {pair[0]}
+
+    # A route-prescribed command carries its co-actions (the one-shot edge
+    # gate); they must fire in the same scan or the command rung never executes.
+    route = candidates.route
+    if candidate.source is ActSource.ROUTE and route is not None:
+        for co_action in route.co_actions:
+            if co_action[0] not in seen:
+                actions.append(co_action)
+                seen.add(co_action[0])
+
+    if candidate.source is ActSource.PROGRAM:
+        for co_action in candidate.program_context_actions:
+            # A pulse's own release/assert sequence is handled by execution;
+            # only independent context belongs in the atomic action set.
+            if co_action[0] not in seen:
+                actions.append(co_action)
+                seen.add(co_action[0])
+
+    # A trace-selected convergence command may need the other conjuncts from
+    # that same trace artifact. A ROUTE bearing is already a closed executable
+    # artifact: its exact edge owns co-actions above and admitted prerequisites
+    # below, so target-wide trace leaves must not hitchhike on it.
+    if (
+        candidate.source is not ActSource.ROUTE
+        and candidate.tag in context.compass.action_tags
+        and candidates.trace.active_actions
+    ):
+        for trace_action in candidates.trace.active_actions:
+            if trace_action[0] not in seen:
+                actions.append(trace_action)
+                seen.add(trace_action[0])
+
+    # Prerequisite holds execute on the fork but are absent from trace actions;
+    # retain them so execution and scan-log identity describe the same overlay.
+    for rung in candidates.prerequisites.pilot_rungs:
+        tag, value = rung.dest, rung.value
+        if tag not in seen:
+            actions.append((tag, value))
+            seen.add(tag)
+
+    return tuple(actions)
 
 
 def _pulse_policy(

@@ -464,7 +464,9 @@ this table only locates the owner.
   `CandidateRead` as ordinary orientation. The ledger survives rollback but
   owns no executable future.
 - Navigation act policy: `orientation.py::_orient_read` materializes one
-  `navigation_contracts.ActPolicy`; `steer.execute` applies it
+  `navigation_contracts.ActPolicy`; `orientation_reading.py::_candidate_applied`
+  lowers one admitted candidate into its complete executable overlay, and
+  `steer.execute` applies it
 - Requirement and expectation receipt contracts plus exact receipt matching:
   `requirements.py`; failed-effect, guard, overwrite, and advance selection:
   `requirement_derivation.py`; strictly decreasing exact same-scan source walks:
@@ -650,7 +652,9 @@ Static reading and orientation:
 - `pipeline_graph.py` — static transition graphs and path search
 - `static_expressions.py` — static-expression helpers
 - `compass.py` — navigation facade, durable knowledge
-- `orientation.py` — current-world read, result synthesis
+- `orientation.py` — current-world read and result synthesis; the Compass
+  facade points inward here, while readers and WorkingTheory policy never
+  import the facade
 - `options.py` — candidate-read orchestration and ranking
 - `candidate_policy.py` — pure action admission and static hold-conflict proof
 - `candidate_admission.py` — trace/wait admission, exact operation batching,
@@ -663,7 +667,8 @@ Static reading and orientation:
   route readings consumed by orientation policy
 - `theory_orientation.py` — WorkingTheory-specific lowering into one next act
 - `constrained_reachability.py` — constrained reachability evidence
-- `awaited_actions.py` — program-awaited actions and producer families
+- `awaited_actions.py` — program-awaited actions, caller-constrained unique
+  admission, and producer families
 - `advance.py` — instruction-owned channels and boundaries
 - `program_step.py` — one-producer counterfactual proof
 - `bootstrap.py` — conservative cold-start designation, factual projection
@@ -700,8 +705,8 @@ Static reading and orientation:
   optional and controlling WorkingTheory lifecycle facts
 - `theory_drive.py` — temporal-need resolution, exact-source restoration and
   rebasing, correction composition, and controlled-setup completion
-- `navigation_contracts.py` — immutable navigation contracts and the plain
-  action-pair value shared by their consumers
+- `navigation_contracts.py` — immutable navigation contracts, exact evidence
+  scope, and action-shape values shared by their consumers
 
 Execution and observation:
 

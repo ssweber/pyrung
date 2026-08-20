@@ -13,13 +13,13 @@ from typing import TYPE_CHECKING, Any, cast
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.candidate_policy import _action_allowed
-from pyrung.core.analysis.pilot.compass import (
+from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence
+from pyrung.core.analysis.pilot.navigation_contracts import (
     EvidenceScope,
+    _ActionPair,
     is_action,
     is_composite_action,
 )
-from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence
-from pyrung.core.analysis.pilot.navigation_contracts import _ActionPair
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     _atom_condition,

@@ -38,7 +38,7 @@ from pyrung.core.analysis.pilot.coast import (
     predicate_trigger,
     value_trigger,
 )
-from pyrung.core.analysis.pilot.compass import WAIT, ActionPair, CompassObservation, is_action
+from pyrung.core.analysis.pilot.compass import WAIT, ActionPair, CompassObservation
 from pyrung.core.analysis.pilot.effect_observation import (
     effect_reached_consumer,
     observe_execution_window,
@@ -71,6 +71,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ProgramScan,
     Pulse,
     _ActionPair,
+    is_action,
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,

@@ -1589,7 +1589,7 @@ def _world(compass: Compass) -> OrientationWorld:
 
 
 def test_proof_rejection_is_scoped_to_the_exact_input_context() -> None:
-    from pyrung.core.analysis.pilot.compass import EvidenceScope
+    from pyrung.core.analysis.pilot.navigation_contracts import EvidenceScope
     from pyrung.core.analysis.pilot.theory_orientation import _act_preserves_requirements
 
     world = _world(Compass())
@@ -1726,8 +1726,8 @@ def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
     monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options(first))
     monkeypatch.setattr(
         theory_orientation,
-        "_candidate_applied",
-        lambda option, _options, _context: (option.pair,),
+        "_current_candidate_applied",
+        lambda option, _options, _world: (option.pair,),
     )
 
     world = _world(compass)
@@ -2045,8 +2045,8 @@ def test_bearing_preserves_downstream_channel_goal(monkeypatch) -> None:
     monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options(first))
     monkeypatch.setattr(
         theory_orientation,
-        "_candidate_applied",
-        lambda option, _options, _context: (option.pair,),
+        "_current_candidate_applied",
+        lambda option, _options, _world: (option.pair,),
     )
     state_goal = TraceNode(
         "State",
@@ -2242,8 +2242,8 @@ def test_rejected_act_knowledge_forces_fresh_next_orientation(monkeypatch) -> No
     )
     monkeypatch.setattr(
         theory_orientation,
-        "_candidate_applied",
-        lambda option, _options, _context: (option.pair,),
+        "_current_candidate_applied",
+        lambda option, _options, _world: (option.pair,),
     )
     compass = Compass()
     result = compass.orient(
@@ -2362,6 +2362,32 @@ def test_driver_has_no_direct_option_builder_or_probe_policy() -> None:
     assert "_build_candidates" not in source
     assert "_orient_escalate_skiff" not in source
     assert "from pyrung.core.analysis.pilot.options" not in source
+
+
+def test_candidate_orientation_dependencies_point_away_from_compass() -> None:
+    """Readers and theory policy consume lower contracts, never their facade."""
+
+    from pathlib import Path
+
+    import pyrung.core.analysis.pilot as pilot_package
+
+    package_dir = Path(pilot_package.__file__).parent
+    sources = {
+        name: (package_dir / f"{name}.py").read_text(encoding="utf-8")
+        for name in (
+            "constrained_reachability",
+            "options",
+            "orientation_reading",
+            "route_options",
+            "theory_orientation",
+        )
+    }
+
+    for name in ("constrained_reachability", "options", "route_options", "theory_orientation"):
+        assert "from pyrung.core.analysis.pilot.compass import" not in sources[name]
+    assert "from pyrung.core.analysis.pilot.options import" not in sources["theory_orientation"]
+    assert "def _candidate_applied(" not in sources["options"]
+    assert "def _candidate_applied(" in sources["orientation_reading"]
 
 
 def test_production_pilot_forks_only_through_rung_aware_helper() -> None:

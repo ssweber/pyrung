@@ -14,13 +14,13 @@ from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     CoastObservation,
     CompassObservation,
-    EvidenceScope,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Bearing,
     BearingObjective,
     Coast,
+    EvidenceScope,
     IntrascanPulse,
     NavigationConstraints,
     ObserveScan,

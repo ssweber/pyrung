@@ -1,17 +1,19 @@
 """Read program-awaited actions from the current machine state.
 
 ``awaited_actions`` recognizes channel transitions that are presently waiting
-on operator actions. The module also classifies sibling
-producer families so an automatic producer is not erased when an equivalent
-operator action is disallowed.
+on operator actions. ``unique_legal_awaited_action`` applies caller-supplied
+legality to that structural evidence and admits only one unambiguous reading.
+The module also classifies sibling producer families so an automatic producer
+is not erased when an equivalent operator action is disallowed.
 
 These capabilities consume ``WalkContext`` and program structure only. They
-return structural evidence without applying avoid, ambiguity, or precedence
-policy, and they never execute the program or retain a route.
+never execute the program or retain a route; callers continue to own avoid and
+precedence policy through the predicates they supply.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -52,6 +54,41 @@ class AwaitedAction:
     target_tag: str = ""
     writer_node: int = -1
     required_shape: tuple[tuple[str, Any], ...] = ()
+
+
+def unique_legal_awaited_action(
+    world: Any,
+    channel_tag: str,
+    pipeline_roles: Any,
+    *,
+    action_avoided: Callable[[tuple[str, Any]], bool],
+    action_allowed: Callable[[tuple[str, Any]], bool] = lambda _action: True,
+    awaits_operator: bool = False,
+) -> AwaitedAction | None:
+    """Return the one legal awaited action under the caller's stated policy."""
+
+    def _awaits_operator(reading: AwaitedAction) -> bool:
+        signature = reading.command_writes or ((reading.command_tag, reading.command_value),)
+        automatic_owners = []
+        for tag, value in signature:
+            family = sibling_producer_family(world, tag, value)
+            automatic_owners.append(
+                family is not None
+                and any(producer.kind != "operator" for producer in family.producers)
+            )
+        # A shared request strobe may have automatic writers while the command
+        # discriminator remains operator-only. The automatic path subsumes the
+        # push only when it owns every supplied command-gate component.
+        return not automatic_owners or not all(automatic_owners)
+
+    legal = tuple(
+        reading
+        for reading in awaited_actions(world, channel_tag, pipeline_roles)
+        if action_allowed(reading.action)
+        and not action_avoided(reading.action)
+        and (not awaits_operator or _awaits_operator(reading))
+    )
+    return legal[0] if len(legal) == 1 else None
 
 
 def _rung_condition(ctx: WalkContext, rung_idx: int) -> Any:

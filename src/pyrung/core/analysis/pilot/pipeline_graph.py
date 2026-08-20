@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute, expand_routes
+from pyrung.core.analysis.pilot.navigation_contracts import _context_value_key
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -34,27 +35,6 @@ logger = logging.getLogger(__name__)
 ActionPair = tuple[str, Any]
 ActionLookup = dict[tuple[str, str], tuple[ActionPair, ...]]
 ANY_FROM = object()
-
-
-def _context_value_key(value: Any) -> Any:
-    """Hashable exact identity for one observed snapshot value."""
-    if value is None or isinstance(value, bool | int | float | str | bytes):
-        return int(value) if isinstance(value, bool) else value
-    if isinstance(value, tuple | list):
-        return tuple(_context_value_key(item) for item in value)
-    if isinstance(value, set | frozenset):
-        return tuple(sorted((_context_value_key(item) for item in value), key=repr))
-    if isinstance(value, dict):
-        return tuple(
-            sorted(
-                (
-                    (_context_value_key(key), _context_value_key(member))
-                    for key, member in value.items()
-                ),
-                key=repr,
-            )
-        )
-    return (type(value).__module__, type(value).__qualname__, repr(value))
 
 
 def _canonical_applied(applied: Iterable[ActionPair]) -> tuple[ActionPair, ...]:

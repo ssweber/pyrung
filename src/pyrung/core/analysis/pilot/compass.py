@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pyrsistent import PMap, PRecord, pmap
 from pyrsistent import field as _precord_field
 
 from pyrung.core.analysis.pilot.navigation_contracts import (
+    EvidenceScope,
     NavigationConstraints,
     OrientationResult,
     OrientationWorld,
     TargetSpec,
+    is_action,
+    is_composite_action,
 )
 from pyrung.core.analysis.pilot.pipeline_graph import (
     ANY_FROM,
@@ -24,7 +27,6 @@ from pyrung.core.analysis.pilot.pipeline_graph import (
     StaticTransitionGraph,
     _applied_key,
     _canonical_applied,
-    _context_value_key,
 )
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -46,55 +48,11 @@ __all__ = [
     "CompassKnowledge",
     "CompassEntry",
     "CompassObservation",
-    "EvidenceScope",
     "NavigationCatalog",
     "Provenance",
     "TransitionCause",
     "WaitCause",
-    "is_action",
-    "is_composite_action",
-    "unique_legal_awaited_action",
 ]
-
-
-def unique_legal_awaited_action(
-    world: Any,
-    channel_tag: str,
-    pipeline_roles: Any,
-    *,
-    action_avoided: Callable[[ActionPair], bool],
-    action_allowed: Callable[[ActionPair], bool] = lambda _action: True,
-    awaits_operator: bool = False,
-) -> Any:
-    """Return the one legal awaited action under the caller's stated policy."""
-
-    from pyrung.core.analysis.pilot.awaited_actions import (
-        awaited_actions,
-        sibling_producer_family,
-    )
-
-    def _awaits_operator(reading: Any) -> bool:
-        signature = reading.command_writes or ((reading.command_tag, reading.command_value),)
-        automatic_owners = []
-        for tag, value in signature:
-            family = sibling_producer_family(world, tag, value)
-            automatic_owners.append(
-                family is not None
-                and any(producer.kind != "operator" for producer in family.producers)
-            )
-        # A shared request strobe may have automatic writers while the command
-        # discriminator remains operator-only. The automatic path subsumes the
-        # push only when it owns every supplied command-gate component.
-        return not automatic_owners or not all(automatic_owners)
-
-    legal = tuple(
-        reading
-        for reading in awaited_actions(world, channel_tag, pipeline_roles)
-        if action_allowed(reading.action)
-        and not action_avoided(reading.action)
-        and (not awaits_operator or _awaits_operator(reading))
-    )
-    return legal[0] if len(legal) == 1 else None
 
 
 # ===========================================================================
@@ -112,35 +70,6 @@ class WaitCause:
 
 WAIT = WaitCause()
 TransitionCause = ActionPair | WaitCause
-
-
-def is_action(cause: TransitionCause) -> TypeGuard[ActionPair]:
-    return isinstance(cause, tuple)
-
-
-@dataclass(frozen=True)
-class EvidenceScope:
-    """Canonical identity of the exact world that proved an observation."""
-
-    world_key: tuple[Any, ...]
-    context_key: tuple[tuple[str, Any], ...] | None
-
-    @classmethod
-    def capture(
-        cls,
-        world_key: tuple[Any, ...] | None,
-        context: Iterable[ActionPair] | None = None,
-    ) -> EvidenceScope | None:
-        """Capture one exact evidence scope; ``None`` denotes global evidence."""
-
-        if world_key is None:
-            return None
-        context_key = (
-            None
-            if context is None
-            else tuple(sorted((tag, _context_value_key(value)) for tag, value in context))
-        )
-        return cls(world_key=world_key, context_key=context_key)
 
 
 @dataclass(frozen=True)
@@ -302,19 +231,6 @@ class CompassEntry(PRecord):
     @property
     def is_live(self) -> bool:
         return self.provenance in _LIVE_PROVENANCE
-
-
-def is_composite_action(cause: Any) -> bool:
-    """A skiff-learned *joint* cause: a tuple of action pairs that must fire in
-    one window (``((tag, val), (tag, val))``), as opposed to a single
-    ``(tag, val)`` action.  Both satisfy :func:`is_action`; this distinguishes
-    the shape so consumers can propose the members as one batch."""
-    return (
-        isinstance(cause, tuple)
-        and len(cause) > 0
-        and all(isinstance(m, tuple) and len(m) == 2 and isinstance(m[0], str) for m in cause)
-        and not isinstance(cause[0], str)
-    )
 
 
 def _action_sort_key(action: Any) -> tuple[tuple[str, str], ...]:

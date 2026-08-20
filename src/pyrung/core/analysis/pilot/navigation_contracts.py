@@ -7,9 +7,10 @@ and ``steer.py`` / ``skiff.py`` execute the declared work.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
 from pyrung.core.analysis.pilot.execution import (
     MotionKind,
@@ -21,6 +22,74 @@ from pyrung.core.analysis.pilot.world_key import _semantic_key, _StateKey
 from pyrung.core.analysis.sp_values import _values_match
 
 _ActionPair = tuple[str, Any]
+
+
+def _context_value_key(value: Any) -> Any:
+    """Hashable exact identity for one observed navigation-context value."""
+
+    if value is None or isinstance(value, bool | int | float | str | bytes):
+        return int(value) if isinstance(value, bool) else value
+    if isinstance(value, tuple | list):
+        return tuple(_context_value_key(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return tuple(sorted((_context_value_key(item) for item in value), key=repr))
+    if isinstance(value, dict):
+        return tuple(
+            sorted(
+                (
+                    (_context_value_key(key), _context_value_key(member))
+                    for key, member in value.items()
+                ),
+                key=repr,
+            )
+        )
+    return (type(value).__module__, type(value).__qualname__, repr(value))
+
+
+def is_action(cause: Any) -> TypeGuard[_ActionPair]:
+    """Whether one navigation cause uses the tuple-shaped action contract."""
+
+    return isinstance(cause, tuple)
+
+
+def is_composite_action(cause: Any) -> bool:
+    """Whether one action is a joint tuple of pairs rather than one flat pair."""
+
+    return (
+        isinstance(cause, tuple)
+        and len(cause) > 0
+        and all(
+            isinstance(member, tuple) and len(member) == 2 and isinstance(member[0], str)
+            for member in cause
+        )
+        and not isinstance(cause[0], str)
+    )
+
+
+@dataclass(frozen=True)
+class EvidenceScope:
+    """Canonical identity of the exact world that proved an observation."""
+
+    world_key: tuple[Any, ...]
+    context_key: tuple[tuple[str, Any], ...] | None
+
+    @classmethod
+    def capture(
+        cls,
+        world_key: tuple[Any, ...] | None,
+        context: Iterable[_ActionPair] | None = None,
+    ) -> EvidenceScope | None:
+        """Capture one exact evidence scope; ``None`` denotes global evidence."""
+
+        if world_key is None:
+            return None
+        context_key = (
+            None
+            if context is None
+            else tuple(sorted((tag, _context_value_key(value)) for tag, value in context))
+        )
+        return cls(world_key=world_key, context_key=context_key)
+
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.candidate_read import CandidateRead

@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pyrung.core.analysis.pilot.candidate_read as _candidate_read
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
-from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction
+from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction, unique_legal_awaited_action
 from pyrung.core.analysis.pilot.candidate_admission import (
     _admit_trace_details,
     _admit_wait_read,
@@ -34,11 +34,6 @@ from pyrung.core.analysis.pilot.candidate_admission import (
 )
 from pyrung.core.analysis.pilot.candidate_policy import (
     _action_allowed,
-)
-from pyrung.core.analysis.pilot.compass import (
-    is_action,
-    is_composite_action,
-    unique_legal_awaited_action,
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
@@ -51,6 +46,8 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ChannelHeading,
     RouteEdgeContext,
     _ActionPair,
+    is_action,
+    is_composite_action,
 )
 from pyrung.core.analysis.pilot.route_options import (
     _compass_route_actions,
@@ -1040,66 +1037,3 @@ def _build_candidates(
         key_nogoods,
         state=state,
     )
-
-
-# ---------------------------------------------------------------------------
-# Pulse-action helpers
-# ---------------------------------------------------------------------------
-
-
-def _candidate_applied(
-    candidate: _candidate_read._Candidate,
-    candidates: _candidate_read.CandidateRead,
-    ctx: Any,
-) -> tuple[_ActionPair, ...]:
-    pair = candidate.pair
-    actions: list[_ActionPair] = [pair]
-    seen: set[str] = {pair[0]}
-
-    # A route-prescribed command carries its co-actions (the one-shot edge gate);
-    # they must fire in the same scan or the command rung never executes.
-    route = candidates.route
-    if candidate.source is ActSource.ROUTE and route is not None:
-        for co in route.co_actions:
-            if co[0] not in seen:
-                actions.append(co)
-                seen.add(co[0])
-
-    if candidate.source is ActSource.PROGRAM:
-        for co in candidate.program_context_actions:
-            # A pulse's own release/assert sequence is handled by _apply_pulse;
-            # only independent context belongs in the atomic action set.
-            if co[0] not in seen:
-                actions.append(co)
-                seen.add(co[0])
-
-    # A trace-selected convergence command may need the other conjuncts from
-    # that same trace artifact.  A ROUTE bearing is already a closed executable
-    # artifact: its exact edge owns ``co_actions`` above and its admitted steady
-    # prerequisites below.  Folding target-wide trace leaves into it would let
-    # an unavailable downstream writer hitchhike on a current state command
-    # (for example, production/heat inputs riding on PackML Clear).
-    if (
-        candidate.source is not ActSource.ROUTE
-        and candidate.tag in ctx.compass.action_tags
-        and candidates.trace.active_actions
-    ):
-        # A pair rejected as a standalone act remains valid context for a
-        # different atomic act.  Fresh orientation therefore keeps it out of
-        # the candidate queue while still allowing the joint pulse to be
-        # judged under its own Bearing identity.
-        for ta in candidates.trace.active_actions:
-            if ta[0] not in seen:
-                actions.append(ta)
-                seen.add(ta[0])
-
-    # Prerequisite holds (trace actions split into rungs for a bearing coast)
-    # are applied to the fork but were removed from trace_actions — record them
-    # so the scan_log faithfully captures everything the fork sees.
-    for rung in candidates.prerequisites.pilot_rungs:
-        tag, value = rung.dest, rung.value
-        if tag not in seen:
-            actions.append((tag, value))
-            seen.add(tag)
-
-    return tuple(actions)

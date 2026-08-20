@@ -9,7 +9,11 @@ import pyrung.core.analysis.pilot.options as options_module
 from pyrung import PLC, Bool, Int, Program, copy, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
-from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction, Producer
+from pyrung.core.analysis.pilot.awaited_actions import (
+    AwaitedAction,
+    Producer,
+    unique_legal_awaited_action,
+)
 from pyrung.core.analysis.pilot.candidate_admission import (
     _admit_trace_details,
     _admit_wait_read,
@@ -34,7 +38,6 @@ from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     Compass,
     CompassObservation,
-    EvidenceScope,
     NavigationCatalog,
 )
 from pyrung.core.analysis.pilot.constrained_reachability import (
@@ -51,6 +54,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     ChannelHeading,
     CrossingFidelity,
+    EvidenceScope,
     LandingReceiptAuthority,
     NavigationConstraints,
     OrientationWorld,
@@ -61,12 +65,12 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 from pyrung.core.analysis.pilot.options import (
     _assemble_candidate_read,
     _build_candidates,
-    _candidate_applied,
     _read_learned_fallback,
     _read_route_and_wait,
     _select_wait,
     _unique_learned_expectation,
 )
+from pyrung.core.analysis.pilot.orientation_reading import _candidate_applied
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.pipeline_graph import (
     StaticPath,
@@ -1665,8 +1669,6 @@ def test_awaited_same_action_multiple_writers_is_order_independent_ambiguity(
     monkeypatch,
 ) -> None:
     import pyrung.core.analysis.pilot.awaited_actions as awaited
-    from pyrung.core.analysis.pilot.compass import unique_legal_awaited_action
-
     first = awaited._Transition(12, {"Command": frozenset({1})}, "RequestA", 7)
     second = awaited._Transition(13, {"Command": frozenset({1})}, "RequestB", 3)
     world = SimpleNamespace(

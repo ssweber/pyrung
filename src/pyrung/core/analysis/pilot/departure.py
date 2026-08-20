@@ -18,7 +18,10 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
-from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction
+from pyrung.core.analysis.pilot.awaited_actions import (
+    AwaitedAction,
+    unique_legal_awaited_action,
+)
 from pyrung.core.analysis.pilot.causal import (
     _shared_cause,
     occurrence_external_supports,
@@ -26,8 +29,6 @@ from pyrung.core.analysis.pilot.causal import (
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
 from pyrung.core.analysis.pilot.compass import (
     CompassKnowledge,
-    EvidenceScope,
-    unique_legal_awaited_action,
 )
 from pyrung.core.analysis.pilot.constrained_reachability import (
     FrontierStatus,
@@ -42,7 +43,7 @@ from pyrung.core.analysis.pilot.execution import (
     ExecutionReceipt,
     capture_execution_spans,
 )
-from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective
+from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective, EvidenceScope
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key

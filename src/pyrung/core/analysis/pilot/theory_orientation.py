@@ -14,7 +14,6 @@ import pyrung.core.analysis.pilot.orientation_reading as _orientation_reading
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.awaited_actions import _button_writes
 from pyrung.core.analysis.pilot.candidate_read import CandidateRead
-from pyrung.core.analysis.pilot.compass import EvidenceScope
 from pyrung.core.analysis.pilot.earned_work import earned_work_is_useful_motion
 from pyrung.core.analysis.pilot.execution import (
     MotionKind,
@@ -33,6 +32,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
     Coast,
     ComposeCorrection,
+    EvidenceScope,
     ExpectationExemption,
     IntrascanPulse,
     IntrascanTracebackRequest,
@@ -50,7 +50,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     act_identity,
     pulse_identity,
 )
-from pyrung.core.analysis.pilot.options import _build_candidates, _candidate_applied
 from pyrung.core.analysis.pilot.overlay import (
     _target_unresolved_condition,
 )
@@ -1418,20 +1417,15 @@ def _theory_intrascan_frontier_bearing(
                     tree,
                     key_config,
                 )
-                producer_candidates = _build_candidates(
-                    producer_world.frame,
-                    producer_world.state,
-                    producer_world.context,
-                )
                 ordinary = orient_read(
                     ctx.compass,
                     producer_world,
                     concrete_target,
                     _allow_theory=False,
-                    _candidate_read=producer_candidates,
                 )
-                if not isinstance(ordinary, Bearing):
+                if not isinstance(ordinary, Bearing) or ordinary.orientation is None:
                     return None
+                producer_candidates = ordinary.orientation.candidates
                 applied = frozenset(getattr(ordinary.act.policy, "applied", ()))
                 if applied & consumer:
                     return None
@@ -2236,7 +2230,9 @@ def _current_candidate_applied(
     pending = _pending_theory_pairs(world)
     return tuple(
         pair
-        for pair in _candidate_applied(candidate, candidates, world.context)
+        for pair in _orientation_reading._candidate_applied(
+            candidate, candidates, world.context
+        )
         if not _pair_matches_any(pair, pending)
     )
 

@@ -419,7 +419,7 @@ def test_confirmed_provenance_only_from_outcome_factory():
 
 def test_is_composite_action_shapes():
     """Single action pairs vs skiff-learned joint causes."""
-    from pyrung.core.analysis.pilot.compass import is_composite_action
+    from pyrung.core.analysis.pilot.navigation_contracts import is_composite_action
 
     assert not is_composite_action(("Cmd", True))
     assert not is_composite_action(("Cmd", 3))

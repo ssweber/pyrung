@@ -20,7 +20,6 @@ from pyrung import (
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     Compass,
-    EvidenceScope,
     NavigationCatalog,
 )
 from pyrung.core.analysis.pilot.departure import (
@@ -28,7 +27,7 @@ from pyrung.core.analysis.pilot.departure import (
     _continuation_safety,
 )
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
-from pyrung.core.analysis.pilot.navigation_contracts import pulse_identity
+from pyrung.core.analysis.pilot.navigation_contracts import EvidenceScope, pulse_identity
 from pyrung.core.analysis.pilot.pipeline_graph import StaticTransitionGraph
 from pyrung.core.analysis.pilot.world_key import wait_edge_nogood
 

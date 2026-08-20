@@ -5,19 +5,15 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
-from pyrung.core.analysis.pilot.compass import (
-    WAIT,
-    CompassKnowledge,
-    EvidenceScope,
-    is_action,
-)
 from pyrung.core.analysis.pilot.navigation_contracts import (
+    EvidenceScope,
     NavigationConstraints,
     OrientationWorld,
     TargetSpec,
+    is_action,
     pulse_identity,
 )
 from pyrung.core.analysis.pilot.pipeline_graph import _best_static_path
@@ -82,11 +78,34 @@ class StaticEdgeAdmission:
         return not self.exclusions
 
 
+class NavigationKnowledge(Protocol):
+    """Read-only Compass knowledge consumed by constrained evidence queries."""
+
+    def live_edges(
+        self,
+        tag: str,
+        *,
+        world_key: tuple[Any, ...],
+        snapshot: dict[str, Any],
+    ) -> dict[Any, Any]: ...
+
+    def nogood_pairs(self, world_key: tuple[Any, ...]) -> frozenset[Any]: ...
+
+    def static_edge_status(
+        self,
+        edge: Any,
+        *,
+        evidence_scope: EvidenceScope | None,
+    ) -> str | None: ...
+
+    def act_is_nogood(self, world_key: tuple[Any, ...], identity: tuple[Any, ...]) -> bool: ...
+
+
 def _learned_reachable(
     world: OrientationWorld,
     target: TargetSpec,
     constraints: NavigationConstraints,
-    knowledge: CompassKnowledge,
+    knowledge: NavigationKnowledge,
 ) -> bool:
     current = world.snapshot.get(target.tag)
     if _values_match(current, target.value):
@@ -109,7 +128,7 @@ def _learned_reachable(
                     continue
                 if _avoid_forces(world.context, [cause], world.snapshot):
                     continue
-            elif cause is WAIT:
+            else:
                 identity = wait_edge_nogood(target.tag, from_value, destination)
                 if identity in pair_nogoods:
                     continue
@@ -131,7 +150,7 @@ class NavigationEvidence:
         *,
         world_key: tuple[Any, ...] | None,
         snapshot: dict[str, Any],
-        knowledge: CompassKnowledge,
+        knowledge: NavigationKnowledge,
         context: Any,
         evidence_scope: EvidenceScope | None,
         blocked_actions: frozenset[tuple[str, Any]] = frozenset(),
@@ -221,7 +240,7 @@ class NavigationEvidence:
         world: OrientationWorld,
         target: TargetSpec,
         constraints: NavigationConstraints,
-        knowledge: CompassKnowledge,
+        knowledge: NavigationKnowledge,
     ) -> FrontierStatus:
         compass = world.context.compass
         evidence_scope = EvidenceScope.capture(
