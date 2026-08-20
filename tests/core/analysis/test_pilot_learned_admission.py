@@ -68,20 +68,18 @@ def _read_and_reach(
         avoid_pred=avoid,
     )
     admission = _TraceAdmission((), (), (), {}, (), False)
-    learned = _read_learned_fallback(
-        _RouteAndCompletionRead(admission, None, None),
-        _PrerequisiteSeparation(admission, PrerequisiteRead(), None),
-        frame,
-        SimpleNamespace(),
-        context,
-        set(compass.knowledge.nogood_pairs(_WORLD)),
-    )
     world = OrientationWorld(
         world_key=_WORLD,
         snapshot=snapshot,
         frame=frame,
         state=SimpleNamespace(),
         context=context,
+    )
+    learned = _read_learned_fallback(
+        _RouteAndCompletionRead(admission, None, None),
+        _PrerequisiteSeparation(admission, PrerequisiteRead(), None),
+        world,
+        set(compass.knowledge.nogood_pairs(_WORLD)),
     )
     reachable = isinstance(
         NavigationEvidence.frontier_status(

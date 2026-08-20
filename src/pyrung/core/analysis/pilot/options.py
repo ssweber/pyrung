@@ -182,13 +182,14 @@ def _awaited_action_bearing(
 
 
 def _read_route_and_wait(
-    frame: Any,
-    state: Any,
-    ctx: Any,
+    world: OrientationWorld,
     key_nogoods: set[_ActionPair],
 ) -> _candidate_read._RouteAndCompletionRead:
     """Read the current trace, static route, and charted completion together."""
 
+    frame = world.frame
+    state = world.state
+    ctx = world.context
     admission = _admit_trace_details(
         tuple(frame.raw_trace_action_details),
         frame,
@@ -326,13 +327,14 @@ def _read_route_and_wait(
 def _read_learned_fallback(
     route_and_wait: _candidate_read._RouteAndCompletionRead,
     separated: _candidate_read._PrerequisiteSeparation,
-    frame: Any,
-    state: Any,
-    ctx: Any,
+    world: OrientationWorld,
     key_nogoods: set[_ActionPair],
 ) -> _candidate_read._LearnedFallback | None:
     """Read exactly one learned wait, action, or batch fallback."""
 
+    frame = world.frame
+    state = world.state
+    ctx = world.context
     route = route_and_wait.route
     route_plan = route.plan if route is not None else None
     route_candidates = route.candidates if route is not None else ()
@@ -523,14 +525,14 @@ def _assemble_candidate_read(
     separated: _candidate_read._PrerequisiteSeparation,
     learned: _candidate_read._LearnedFallback | None,
     awaited_action: AwaitedAction | None,
-    frame: Any,
-    ctx: Any,
+    world: OrientationWorld,
     key_nogoods: set[_ActionPair],
-    *,
-    state: Any = None,
 ) -> _candidate_read.CandidateRead:
     """Compose the final durable candidate read from explicit phase receipts."""
 
+    frame = world.frame
+    state = world.state
+    ctx = world.context
     trace = separated.trace
     route = route_and_wait.route
     route_plan = route.plan if route is not None else None
@@ -1015,21 +1017,20 @@ def _assemble_candidate_read(
 
 
 def _build_candidates(
-    frame: Any,
-    state: Any,
-    ctx: Any,
+    world: OrientationWorld,
 ) -> _candidate_read.CandidateRead:
     """Build one candidate read through explicit evidence-owning phases."""
 
+    frame = world.frame
+    state = world.state
+    ctx = world.context
     key_nogoods = set(ctx.compass.knowledge.nogood_pairs(frame.key))
-    route_and_wait = _read_route_and_wait(frame, state, ctx, key_nogoods)
+    route_and_wait = _read_route_and_wait(world, key_nogoods)
     separated = _separate_prerequisites(route_and_wait, frame, state, ctx)
     learned = _read_learned_fallback(
         route_and_wait,
         separated,
-        frame,
-        state,
-        ctx,
+        world,
         key_nogoods,
     )
     awaited_action = _awaited_action_bearing(frame, ctx, key_nogoods)
@@ -1038,10 +1039,8 @@ def _build_candidates(
         separated,
         learned,
         awaited_action,
-        frame,
-        ctx,
+        world,
         key_nogoods,
-        state=state,
     )
 
 
@@ -1050,4 +1049,4 @@ def read_candidates(world: OrientationWorld) -> _candidate_read.CandidateRead:
 
     if world.frame is None:
         raise ValueError("candidate reading requires a complete orientation frame")
-    return _build_candidates(world.frame, world.state, world.context)
+    return _build_candidates(world)

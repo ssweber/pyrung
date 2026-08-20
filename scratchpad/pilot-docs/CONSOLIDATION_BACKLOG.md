@@ -161,7 +161,7 @@ Two structural actions with one nogood can therefore produce different answers.
 
 ### 8. Carry OrientationWorld farther through candidate orchestration
 
-**Status:** later
+**Status:** done
 
 The typed candidate-reader boundary immediately unpacks `world` back into
 `frame/state/context`, which are then threaded through the private orchestration

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -101,6 +102,16 @@ from pyrung.core.analysis.pilot.wait_options import _prescribe_wait
 from pyrung.core.crossing import Eq
 
 
+def _candidate_world(frame: Any, context: Any, state: Any = None) -> OrientationWorld:
+    return OrientationWorld(
+        world_key=getattr(frame, "key", ()),
+        snapshot=frame.snap,
+        frame=frame,
+        state=state,
+        context=context,
+    )
+
+
 def _route(from_value: int, to_value: int) -> TransitionRoute:
     return TransitionRoute(
         destination_tag="State",
@@ -131,6 +142,69 @@ def _action_route(from_value: int, to_value: int, action: str) -> TransitionRout
         call_site_gates=(),
         from_values=(from_value,),
     )
+
+
+def test_candidate_orchestration_carries_the_exact_orientation_world(monkeypatch) -> None:
+    frame = SimpleNamespace(key=("current",), snap={"Target": False})
+    state = SimpleNamespace()
+    context = SimpleNamespace(
+        compass=SimpleNamespace(
+            knowledge=SimpleNamespace(nogood_pairs=lambda _key: frozenset({("Blocked", True)}))
+        )
+    )
+    world = _candidate_world(frame, context, state)
+    route_read = object()
+    separated = object()
+    result = object()
+
+    def read_route(received, key_nogoods):
+        assert received is world
+        assert key_nogoods == {("Blocked", True)}
+        return route_read
+
+    def separate(received_route, received_frame, received_state, received_context):
+        assert received_route is route_read
+        assert received_frame is frame
+        assert received_state is state
+        assert received_context is context
+        return separated
+
+    def read_learned(received_route, received_separated, received, key_nogoods):
+        assert received_route is route_read
+        assert received_separated is separated
+        assert received is world
+        assert key_nogoods == {("Blocked", True)}
+        return None
+
+    def read_awaited(received_frame, received_context, key_nogoods):
+        assert received_frame is frame
+        assert received_context is context
+        assert key_nogoods == {("Blocked", True)}
+        return None
+
+    def assemble(
+        received_route,
+        received_separated,
+        learned,
+        awaited,
+        received,
+        key_nogoods,
+    ):
+        assert received_route is route_read
+        assert received_separated is separated
+        assert learned is None
+        assert awaited is None
+        assert received is world
+        assert key_nogoods == {("Blocked", True)}
+        return result
+
+    monkeypatch.setattr(options_module, "_read_route_and_wait", read_route)
+    monkeypatch.setattr(options_module, "_separate_prerequisites", separate)
+    monkeypatch.setattr(options_module, "_read_learned_fallback", read_learned)
+    monkeypatch.setattr(options_module, "_awaited_action_bearing", read_awaited)
+    monkeypatch.setattr(options_module, "_assemble_candidate_read", assemble)
+
+    assert read_candidates(world) is result
 
 
 def _wildcard_action_route(to_value: int, action: str) -> TransitionRoute:
@@ -581,7 +655,7 @@ def test_general_chart_does_not_promote_an_unowned_action() -> None:
         pdg=SimpleNamespace(downstream_slice=lambda *_args, **_kwargs: ()),
     )
 
-    first = _read_route_and_wait(frame, state, ctx, set())
+    first = _read_route_and_wait(_candidate_world(frame, ctx, state), set())
     assert first.route is None
     assert compass.knowledge.nogood_identities(frame.key) == frozenset()
 
@@ -778,7 +852,7 @@ def test_general_chart_only_competes_with_a_distinct_first_transition(
         compass=SimpleNamespace(),
     )
 
-    read = _read_route_and_wait(frame, state, ctx, set())
+    read = _read_route_and_wait(_candidate_world(frame, ctx, state), set())
 
     assert read.route is not None
     assert read.route.plan.first_edge.to_value == expected_destination
@@ -833,7 +907,7 @@ def test_unbanked_broad_trace_keeps_ownership_over_a_shadow_chart() -> None:
         ),
     )
 
-    read = _read_route_and_wait(frame, state, ctx, set())
+    read = _read_route_and_wait(_candidate_world(frame, ctx, state), set())
 
     assert read.trace.actions == (
         ("Broad", True),
@@ -865,7 +939,7 @@ def test_current_non_broad_trace_keeps_ownership_over_a_chart() -> None:
         pdg=SimpleNamespace(downstream_slice=lambda *_args, **_kwargs: ()),
     )
 
-    read = _read_route_and_wait(frame, state, ctx, set())
+    read = _read_route_and_wait(_candidate_world(frame, ctx, state), set())
 
     assert read.trace.actions == (("Focused", True),)
     assert read.route is None
@@ -1636,8 +1710,7 @@ def test_candidate_assembly_consumes_awaited_action_without_rereading(
         separated,
         None,
         awaited_action,
-        frame,
-        ctx,
+        _candidate_world(frame, ctx),
         set(),
     )
 
@@ -1852,8 +1925,10 @@ def test_route_request_candidate_owns_route_writer_not_same_pair_trace() -> None
         separated,
         None,
         None,
-        SimpleNamespace(snap={action.name: False}, tree=TraceNode("State", 17)),
-        _collision_context(program, pdg),
+        _candidate_world(
+            SimpleNamespace(snap={action.name: False}, tree=TraceNode("State", 17)),
+            _collision_context(program, pdg),
+        ),
         set(),
     )
 
@@ -1919,8 +1994,10 @@ def test_awaited_candidate_owns_awaited_writer_not_same_pair_trace() -> None:
         _PrerequisiteSeparation(admission, PrerequisiteRead(), None),
         None,
         awaited,
-        SimpleNamespace(snap={action.name: False}, tree=TraceNode("State", 17)),
-        _collision_context(program, pdg),
+        _candidate_world(
+            SimpleNamespace(snap={action.name: False}, tree=TraceNode("State", 17)),
+            _collision_context(program, pdg),
+        ),
         set(),
     )
 
@@ -1967,8 +2044,10 @@ def test_program_input_candidate_owns_required_input_path_and_broad_paths_surviv
         _PrerequisiteSeparation(admission, PrerequisiteRead(), None),
         None,
         None,
-        SimpleNamespace(snap={action.name: False}, tree=TraceNode("State", 17)),
-        _collision_context(program, pdg),
+        _candidate_world(
+            SimpleNamespace(snap={action.name: False}, tree=TraceNode("State", 17)),
+            _collision_context(program, pdg),
+        ),
         set(),
     )
     obligation = read.options[0].expectation.obligations[0]
@@ -2003,8 +2082,7 @@ def test_program_input_candidate_owns_required_input_path_and_broad_paths_surviv
         _PrerequisiteSeparation(broad_admission, PrerequisiteRead(), None),
         None,
         None,
-        SimpleNamespace(snap={}, tree=TraceNode("Target", True)),
-        broad_ctx,
+        _candidate_world(SimpleNamespace(snap={}, tree=TraceNode("Target", True)), broad_ctx),
         set(),
     )
     broad_options = [option for option in broad_read.options if option.pair == broad]
@@ -2067,11 +2145,13 @@ def test_current_program_input_precedes_unavailable_outer_trace_leaf() -> None:
         _PrerequisiteSeparation(admission, PrerequisiteRead(), None),
         None,
         None,
-        SimpleNamespace(
-            snap={current.name: False, later.name: False},
-            tree=TraceNode(later_effect.name, 2),
+        _candidate_world(
+            SimpleNamespace(
+                snap={current.name: False, later.name: False},
+                tree=TraceNode(later_effect.name, 2),
+            ),
+            _collision_context(program, pdg),
         ),
-        _collision_context(program, pdg),
         set(),
     )
 
@@ -2176,8 +2256,10 @@ def test_widening_expectation_is_scoped_to_exact_artifact_primary_path() -> None
             _PrerequisiteSeparation(admission, PrerequisiteRead(), None),
             None,
             None,
-            SimpleNamespace(snap={}, tree=TraceNode("Target", True)),
-            _collision_context(program, pdg),
+            _candidate_world(
+                SimpleNamespace(snap={}, tree=TraceNode("Target", True)),
+                _collision_context(program, pdg),
+            ),
             set(),
         )
 
@@ -2246,9 +2328,7 @@ def test_two_hop_learned_path_retains_first_edge_expectation() -> None:
     learned = _read_learned_fallback(
         _RouteAndCompletionRead(admission, None, None),
         _PrerequisiteSeparation(admission, PrerequisiteRead(), None),
-        frame,
-        SimpleNamespace(),
-        ctx,
+        _candidate_world(frame, ctx, SimpleNamespace()),
         set(),
     )
 
@@ -2643,8 +2723,7 @@ def test_crossing_batch_bypasses_pair_nogood_but_honors_explicit_block() -> None
         separated,
         None,
         None,
-        frame,
-        base_ctx,
+        _candidate_world(frame, base_ctx),
         {("A", 1)},
     )
     blocked = _assemble_candidate_read(
@@ -2652,8 +2731,10 @@ def test_crossing_batch_bypasses_pair_nogood_but_honors_explicit_block() -> None
         separated,
         None,
         None,
-        frame,
-        SimpleNamespace(**{**vars(base_ctx), "blocked_actions": frozenset({("A", 1)})}),
+        _candidate_world(
+            frame,
+            SimpleNamespace(**{**vars(base_ctx), "blocked_actions": frozenset({("A", 1)})}),
+        ),
         set(),
     )
     invalidating_branch = replace(
@@ -2668,11 +2749,13 @@ def test_crossing_batch_bypasses_pair_nogood_but_honors_explicit_block() -> None
         separated,
         None,
         None,
-        SimpleNamespace(
-            snap=frame.snap,
-            tree=replace(frame.tree, crossing_branches=(invalidating_branch,)),
+        _candidate_world(
+            SimpleNamespace(
+                snap=frame.snap,
+                tree=replace(frame.tree, crossing_branches=(invalidating_branch,)),
+            ),
+            base_ctx,
         ),
-        base_ctx,
         set(),
     )
 
