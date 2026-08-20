@@ -912,7 +912,6 @@ def _verified_progress_landing(
 
 def _retain_expectation_receipt(
     trial: _AcceptedTrial,
-    act: Any,
     state: _PilotState,
     checkpoint: _CausalCheckpoint | None,
 ) -> None:
@@ -927,6 +926,7 @@ def _retain_expectation_receipt(
 
     if checkpoint is None:
         return
+    act = trial.attempt.bearing.act
     progress_landing = (
         _verified_progress_landing(trial) if trial.attempt.landing_expectation is None else None
     )

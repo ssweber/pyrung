@@ -34,7 +34,7 @@ test surface.
 
 ### 1. Remove the second act authority from attempt recording
 
-**Status:** next
+**Status:** done
 
 `attempt_transition.record_attempt` receives `objective` and `act` even though
 the exact act belongs to the attempt's Bearing. The objective is unused.

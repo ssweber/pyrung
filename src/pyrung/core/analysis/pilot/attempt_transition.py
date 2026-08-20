@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from typing import Any
 
 import pyrung.core.analysis.pilot.attempt_verification as _attempt_verification
 import pyrung.core.analysis.pilot.entry_execution as _entry_execution
@@ -18,7 +17,6 @@ from pyrung.core.analysis.pilot.compass import (
 from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Bearing,
-    BearingObjective,
     Coast,
     EvidenceScope,
     IntrascanPulse,
@@ -73,12 +71,10 @@ class AttemptTransition:
 
 
 def record_attempt(
-    attempt: Any,
+    attempt: _AttemptResult,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    objective: BearingObjective,
-    act: Any = None,
 ) -> None:
     """Commit knowledge from an attempt, whether accepted or rejected.
 
@@ -90,7 +86,10 @@ def record_attempt(
     # assignment replaces the context's compass (a value, never a shared
     # mutable advanced behind readers' backs).
     observations = attempt.observations
-    if attempt.trial is not None and isinstance(act, (Pulse, BatchPulse)):
+    if attempt.trial is not None and isinstance(
+        attempt.trial.attempt.bearing.act,
+        (Pulse, BatchPulse),
+    ):
         # A verified pulse already carries its complete before/after/timeline
         # receipt into the committed execution.  Retain the positive causal
         # edges Compass can navigate immediately; do not eagerly materialize
@@ -292,7 +291,7 @@ def transition_once(
             )
     except Exception:  # noqa: BLE001 - optional theory conversion cannot change the drive
         logger.debug("pilot: working theory observation failed", exc_info=True)
-    record_attempt(attempt, frame, state, ctx, result.objective, act)
+    record_attempt(attempt, frame, state, ctx)
 
     if isinstance(act, Coast) and act.mode == "terminal":
         stop_reason = (
@@ -371,7 +370,6 @@ def transition_once(
         )
     _retain_expectation_receipt(
         trial,
-        act,
         state,
         receipt_checkpoint,
     )
@@ -399,7 +397,6 @@ def adopt_deferred_transition(
     trial = _trial_commit.adopt_trial(transition.trial, transition.frame, state, ctx)
     _retain_expectation_receipt(
         trial,
-        transition.result.act,
         state,
         transition.adoption_checkpoint,
     )

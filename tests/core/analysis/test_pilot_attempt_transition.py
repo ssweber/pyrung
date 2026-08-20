@@ -44,8 +44,14 @@ def _record(*, accepted: bool) -> tuple[Any, ...]:
             (action,),
         ),
     )
+    act = Pulse(ActPolicy(ActSource.TRACE, (action,), (action,)))
+    trial = (
+        SimpleNamespace(attempt=SimpleNamespace(bearing=SimpleNamespace(act=act)))
+        if accepted
+        else None
+    )
     attempt = SimpleNamespace(
-        trial=object() if accepted else None,
+        trial=trial,
         observations=observations,
         nogood_pairs=frozenset(),
         avoid_names=(),
@@ -56,8 +62,6 @@ def _record(*, accepted: bool) -> tuple[Any, ...]:
         SimpleNamespace(key=("world",)),
         SimpleNamespace(avoid_names=set()),
         SimpleNamespace(compass=compass),
-        SimpleNamespace(),
-        Pulse(ActPolicy(ActSource.TRACE, (action,), (action,))),
     )
     return compass.applied
 
