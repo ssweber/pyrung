@@ -42,7 +42,7 @@ from pyrung.core.analysis.pilot.compass import WAIT, ActionPair, CompassObservat
 from pyrung.core.analysis.pilot.effect_observation import (
     effect_reached_consumer,
     observe_execution_window,
-    route_landing_replay_scan_ids,
+    value_or_varied_replay_scan_ids,
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
@@ -432,12 +432,15 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
                 if pulse.scan_before < scan_id <= pulse.fork.state.scan_id
                 and (action_scan is None or scan_id >= action_scan)
             )
-            if action_scan is not None:
-                mandatory_scan_ids = (action_scan,) if action_scan in exact_scan_ids else ()
-            elif exact_scan_ids:
-                mandatory_scan_ids = (exact_scan_ids[0], exact_scan_ids[-1])
-            else:
-                mandatory_scan_ids = ()
+            # Route attribution also interprets the terminal boundary.  A
+            # selected value may appear earlier and be consumed or displaced
+            # at the landing without another selected-value write there, so
+            # value/varied nomination alone cannot discard the final scan.
+            mandatory_scan_ids = (
+                tuple(dict.fromkeys((exact_scan_ids[0], exact_scan_ids[-1])))
+                if exact_scan_ids
+                else ()
+            )
             route_designations = bootstrap_designations(
                 world.frame.tree,
                 ctx.pdg,
@@ -453,7 +456,7 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
                 )
                 for tag in unexplained_landing
             }
-            replay_scan_ids = route_landing_replay_scan_ids(
+            replay_scan_ids = value_or_varied_replay_scan_ids(
                 pulse.fork,
                 exact_scan_ids,
                 route_values,

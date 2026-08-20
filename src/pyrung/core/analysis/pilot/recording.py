@@ -161,12 +161,19 @@ def _channel_position(
     while preserving inferred carrier order for nested state machines.
     """
 
+    roles = (
+        *getattr(ctx, "pipeline_roles", ()),
+        *getattr(ctx, "chart_roles", ()),
+    )
+    target = getattr(ctx, "target", None)
     tags = tuple(
         dict.fromkeys(
-            (
-                *(role.channel_tag for role in (*ctx.pipeline_roles, *ctx.chart_roles)),
-                ctx.target.tag,
+            tag
+            for tag in (
+                *(role.channel_tag for role in roles),
+                getattr(target, "tag", None),
             )
+            if tag is not None
         )
     )
     return tuple((tag, snapshot[tag]) for tag in tags if tag in snapshot)

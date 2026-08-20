@@ -715,20 +715,20 @@ def _owned_scan_segments(
     return tuple(segments) if consumed == len(exact_scan_ids) else None
 
 
-def route_landing_replay_scan_ids(
+def value_or_varied_replay_scan_ids(
     fork: Any,
     exact_scan_ids: Iterable[int],
-    route_values: Mapping[str, Iterable[Any]],
+    candidate_values: Mapping[str, Iterable[Any]],
     *,
     mandatory_scan_ids: Iterable[int] = (),
 ) -> tuple[int, ...]:
-    """Nominate scans that can attribute an unexplained route landing.
+    """Nominate scans where a retained tag may have assumed a selected value.
 
-    Route-landing selection needs exact projections only where one of the
-    unexplained channel tags may have assumed a selected-route value. Retained
-    final-value and ``varied`` columns can answer that cheaper question before
-    reconstruction, including target-then-reset within one scan. Boundary
-    scans may be carried for the subsequent observation pass and its cache.
+    Exact attribution needs projections only where one of the selected tags
+    may have assumed one of its candidate values. Retained final-value and
+    ``varied`` columns can answer that cheaper question before reconstruction,
+    including target-then-reset within one scan. Boundary scans may be carried
+    for a subsequent observation pass and its cache.
 
     Any ownership gap or incomplete recording-time retention certificate
     disables pruning for the complete window.
@@ -743,7 +743,7 @@ def route_landing_replay_scan_ids(
 
     values_by_tag = {
         tag: candidates
-        for tag, values in route_values.items()
+        for tag, values in candidate_values.items()
         if (candidates := tuple(values))
     }
     tags = frozenset(values_by_tag)
@@ -772,6 +772,53 @@ def route_landing_replay_scan_ids(
                                 owned_scans,
                             )
                         )
+    return tuple(sorted(selected))
+
+
+def write_replay_scan_ids(
+    fork: Any,
+    exact_scan_ids: Iterable[int],
+    tags: Iterable[str],
+    *,
+    mandatory_scan_ids: Iterable[int] = (),
+) -> tuple[int, ...]:
+    """Nominate scans where any retained writer attempted a selected tag.
+
+    This is the deliberately broader sibling of
+    :func:`value_or_varied_replay_scan_ids`.  It is suitable for departure and
+    predicate-crossing searches whose destination value is not known in
+    advance.  Ownership gaps or incomplete recording-time retention disable
+    pruning for the complete window.
+    """
+
+    exact = tuple(sorted(set(exact_scan_ids)))
+    if not exact:
+        return ()
+    segments = _owned_scan_segments(fork, exact)
+    if segments is None:
+        return exact
+
+    selected_tags = frozenset(tags)
+    owners = tuple(owner for owner, _owned_scans in segments)
+    if any(
+        owner.firing_retained_tags is not None
+        and not selected_tags.issubset(owner.firing_retained_tags)
+        for owner in owners
+    ):
+        return exact
+
+    exact_set = set(exact)
+    selected = {scan_id for scan_id in mandatory_scan_ids if scan_id in exact_set}
+    for owner, owned_scans in segments:
+        for tag in selected_tags:
+            for timelines in (owner.rung_firing_timelines, owner.node_firing_timelines):
+                selected.update(
+                    timelines.write_scans(
+                        timelines.observed_writers_of(tag),
+                        tag,
+                        owned_scans,
+                    )
+                )
     return tuple(sorted(selected))
 
 

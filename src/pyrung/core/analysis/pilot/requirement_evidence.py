@@ -19,6 +19,8 @@ from pyrung.core.analysis.pilot.effect_observation import (
     fulfilled_expectation_observations,
     observe_execution_window,
     terminal_target_replay_scan_ids,
+    value_or_varied_replay_scan_ids,
+    write_replay_scan_ids,
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
@@ -398,12 +400,19 @@ def _derive_charted_intrascan_front(
 
     candidates: list[tuple[Any, Any]] = []
     current_writes: list[Any] = []
-    for scan_id in executed.pulse.kernel_scan_ids:
-        if not (executed.pulse.scan_before < scan_id <= executed.pulse.fork.state.scan_id):
-            continue
+    pulse = executed.pulse
+    exact_scan_ids = tuple(
+        scan_id
+        for scan_id in pulse.kernel_scan_ids
+        if pulse.scan_before < scan_id <= pulse.fork.state.scan_id
+    )
+    projected_scans: set[int] = set()
+
+    def inspect_scan(scan_id: int) -> None:
+        projected_scans.add(scan_id)
         projection = executed.projection_at(scan_id)
         if projection is None:
-            continue
+            return
         writes = tuple(
             write
             for write in projection.writes
@@ -419,8 +428,24 @@ def _derive_charted_intrascan_front(
                 for item in later
             ):
                 candidates.append((projection, write))
+
+    reachable_scan_ids = value_or_varied_replay_scan_ids(
+        pulse.fork,
+        exact_scan_ids,
+        {ctx.target.tag: reachable},
+    )
+    for scan_id in reachable_scan_ids:
+        inspect_scan(scan_id)
+    if not candidates:
+        for scan_id in write_replay_scan_ids(
+            pulse.fork,
+            exact_scan_ids,
+            (ctx.target.tag,),
+        ):
+            if scan_id not in projected_scans:
+                inspect_scan(scan_id)
     if not candidates and current_writes:
-        source_scan = executed.pulse.scan_before
+        source_scan = pulse.scan_before
         source_projection = checkpoint.world.work._replay_pilot_rung_write_projection_at(
             source_scan
         )
@@ -822,19 +847,34 @@ def _verified_progress_landing(
         return None
     tag = heading.channel_tag
     value = attempt.pulse.snap.get(tag)
-    candidates = tuple(
-        write
-        for scan_id in attempt.pulse.kernel_scan_ids
+    pulse = attempt.pulse
+    exact_scan_ids = tuple(
+        scan_id
+        for scan_id in pulse.kernel_scan_ids
         if progress.source_scan < scan_id <= progress.landing_scan
-        if (projection := attempt.projection_at(scan_id)) is not None
-        for write in projection.writes
-        if write.run.enabled
-        and write.transition.tag_name == tag
-        and _values_match(write.transition.to_value, value)
     )
-    if not candidates:
+    replay_scan_ids = value_or_varied_replay_scan_ids(
+        pulse.fork,
+        exact_scan_ids,
+        {tag: (value,)},
+    )
+    landing_write = None
+    for scan_id in reversed(replay_scan_ids):
+        projection = attempt.projection_at(scan_id)
+        if projection is None:
+            continue
+        matching = tuple(
+            write
+            for write in projection.writes
+            if write.run.enabled
+            and write.transition.tag_name == tag
+            and _values_match(write.transition.to_value, value)
+        )
+        if matching:
+            landing_write = matching[-1]
+            break
+    if landing_write is None:
         return None
-    landing_write = candidates[-1]
     orientation = attempt.bearing.orientation
     if orientation is None:
         return None
@@ -858,7 +898,6 @@ def _verified_progress_landing(
     )
     if expectation is None:
         return None
-    pulse = attempt.pulse
     observations = observe_execution_window(
         expectation,
         pulse.fork,

@@ -137,6 +137,7 @@ def test_exact_excursion_evidence_becomes_an_inert_working_theory_requirement() 
     )
     projection = executed.projection_at(2)
     assert projection is not None
+    assert pulse.projection_replay_count == 1
     assert work._causal_lineage.owner_at(2) is not None
     assert correction.identity == correction_identity((corrective,))
     assert (
@@ -171,6 +172,7 @@ def test_exact_excursion_evidence_becomes_an_inert_working_theory_requirement() 
     assert requirement.obstruction_occurrence.scan_id == 2
     assert requirement.obstruction_occurrence.tag == preserved.name
     assert requirement.corrective_pilot_rungs == (corrective,)
+    assert pulse.projection_replay_count == 1
     assert checkpoint.world.pilot_rungs == pvector()
     assert (
         _confirmed_correction_requirement_from_excursion(

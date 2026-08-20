@@ -26,6 +26,8 @@ from pyrung.core.analysis.pilot.departure_state import (
 )
 from pyrung.core.analysis.pilot.effect_observation import (
     fulfilled_expectation_observations,
+    value_or_varied_replay_scan_ids,
+    write_replay_scan_ids,
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectObservation,
@@ -456,6 +458,28 @@ def _investigate_and_revert(
     cp_key, cp_world, cp_trend = checkpoint.key, checkpoint.world, checkpoint.trend
     cp_fork = cp_world.work
     end_scan = state.work.state.scan_id
+
+    def replay_projections(
+        start_scan: int,
+        tag: str,
+        candidate_values: tuple[Any, ...] | None,
+    ) -> tuple[Any, ...]:
+        exact_scan_ids = tuple(range(start_scan, end_scan + 1))
+        replay_scan_ids = (
+            write_replay_scan_ids(state.work, exact_scan_ids, (tag,))
+            if candidate_values is None
+            else value_or_varied_replay_scan_ids(
+                state.work,
+                exact_scan_ids,
+                {tag: candidate_values},
+            )
+        )
+        return tuple(
+            projection
+            for scan_id in replay_scan_ids
+            if (projection := state.work._replay_rung_write_projection_at(scan_id)) is not None
+        )
+
     legacy_unrepresentable = False
     investigation_payload: dict[str, Any] = {}
     if policy.chase_regression_causes:
@@ -566,10 +590,11 @@ def _investigate_and_revert(
             frontier = consumed_frontiers[0]
             consumer = frontier.consumer_read
             assert consumer is not None
-            projections = tuple(
-                projection
-                for scan_id in range(consumer.scan_id, end_scan + 1)
-                if (projection := state.work._replay_rung_write_projection_at(scan_id)) is not None
+            landing_value = execution.after_snap.get(frontier.obligation.tag)
+            projections = replay_projections(
+                consumer.scan_id,
+                frontier.obligation.tag,
+                (landing_value,),
             )
             # The consumed frontier may legitimately hand the channel back to
             # its route source before the eventual bad landing (41 -> 40 ->
@@ -582,7 +607,7 @@ def _investigate_and_revert(
                 after=consumer,
                 tag=frontier.obligation.tag,
                 target_value=frontier.obligation.value,
-                landing_value=execution.after_snap.get(frontier.obligation.tag),
+                landing_value=landing_value,
             )
             if departure_write is not None:
                 projection, write = departure_write
@@ -612,10 +637,14 @@ def _investigate_and_revert(
                 continue
             start_scan = consumer.scan_id if consumer is not None else appeared.scan_id
             landing_value = execution.after_snap.get(observation.obligation.tag)
-            projections = tuple(
-                projection
-                for scan_id in range(start_scan, end_scan + 1)
-                if (projection := state.work._replay_rung_write_projection_at(scan_id)) is not None
+            projections = replay_projections(
+                start_scan,
+                observation.obligation.tag,
+                (
+                    None
+                    if consumer is not None and observation is not bridged_frontier
+                    else (landing_value,)
+                ),
             )
             landing = (
                 exact_last_landing_write(

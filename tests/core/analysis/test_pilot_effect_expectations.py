@@ -19,8 +19,9 @@ from pyrung.core.analysis.pilot.coast import (
 from pyrung.core.analysis.pilot.effect_observation import (
     observe_execution_window,
     observe_expectation,
-    route_landing_replay_scan_ids,
     terminal_target_replay_scan_ids,
+    value_or_varied_replay_scan_ids,
+    write_replay_scan_ids,
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
@@ -30,7 +31,11 @@ from pyrung.core.analysis.pilot.effects import (
     promote_terminal_target_observation,
     required_shape,
 )
-from pyrung.core.analysis.pilot.execution import ChannelMotion, ExecutionReceipt
+from pyrung.core.analysis.pilot.execution import (
+    ChannelMotion,
+    ExecutionReceipt,
+    ScanProgressReceipt,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -46,7 +51,8 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.orientation_reading import _pulse_policy
 from pyrung.core.analysis.pilot.recording import _accepted_payload, _candidate_payload
-from pyrung.core.analysis.pilot.skiff import _skiff_expectation, run_pinned_scan
+from pyrung.core.analysis.pilot.requirement_evidence import _verified_progress_landing
+from pyrung.core.analysis.pilot.skiff import SkiffResult, _skiff_expectation, run_pinned_scan
 from pyrung.core.analysis.pilot.steer import (
     _compass_observations,
     _executed_attempt,
@@ -104,7 +110,7 @@ def test_terminal_target_replay_nomination_uses_same_scan_varied_evidence() -> N
     assert terminal_target_replay_scan_ids(expectation, plc, (1, 2)) == (2,)
 
 
-def test_route_landing_replay_nomination_uses_value_and_varied_scans() -> None:
+def test_value_or_varied_replay_nomination_uses_value_and_varied_scans() -> None:
     select_write = Bool("SelectSparseRouteLandingWrite", external=True)
     effect = Int("SparseRouteLandingEffect")
     with Program() as program:
@@ -118,7 +124,7 @@ def test_route_landing_replay_nomination_uses_value_and_varied_scans() -> None:
         plc.patch({select_write.name: selected})
         plc.step()
 
-    assert route_landing_replay_scan_ids(
+    assert value_or_varied_replay_scan_ids(
         plc,
         range(1, 7),
         {effect.name: (7,), "UnretainedNonCandidate": ()},
@@ -126,7 +132,7 @@ def test_route_landing_replay_nomination_uses_value_and_varied_scans() -> None:
     ) == (1, 2, 5, 6)
 
 
-def test_route_landing_replay_nomination_fails_closed_without_retention() -> None:
+def test_value_or_varied_replay_nomination_fails_closed_without_retention() -> None:
     effect = Int("UnretainedRouteLandingEffect")
     with Program() as program:
         with rung():
@@ -135,12 +141,122 @@ def test_route_landing_replay_nomination_fails_closed_without_retention() -> Non
     for _ in range(4):
         plc.step()
 
-    assert route_landing_replay_scan_ids(plc, range(1, 5), {effect.name: (7,)}) == (
+    assert value_or_varied_replay_scan_ids(plc, range(1, 5), {effect.name: (7,)}) == (
         1,
         2,
         3,
         4,
     )
+
+
+def test_write_replay_nomination_selects_any_value_and_fails_closed() -> None:
+    select_write = Bool("SelectSparseAnyWrite", external=True)
+    effect = Int("SparseAnyWriteEffect")
+    with Program() as program:
+        with rung(select_write):
+            copy(7, effect)
+
+    retained = PLC(program, record_all_tags=True)
+    for selected in (False, True, False, True):
+        retained.patch({select_write.name: selected})
+        retained.step()
+    assert write_replay_scan_ids(
+        retained,
+        range(1, 5),
+        (effect.name,),
+        mandatory_scan_ids=(1,),
+    ) == (1, 2, 4)
+
+    unretained = PLC(program)
+    for selected in (False, True, False, True):
+        unretained.patch({select_write.name: selected})
+        unretained.step()
+    assert write_replay_scan_ids(unretained, range(1, 5), (effect.name,)) == (1, 2, 3, 4)
+
+
+def test_replay_nomination_includes_subroutine_writers() -> None:
+    command = Bool("SparseSubroutineCommand", external=True)
+    effect = Bool("SparseSubroutineEffect")
+
+    @subroutine("SparseSubroutineWriter")
+    def writer() -> None:
+        with rung(command):
+            out(effect)
+
+    with Program() as program:
+        with rung():
+            call(writer)
+    plc = PLC(program, record_all_tags=True)
+    for selected in (False, True, False):
+        plc.patch({command.name: selected})
+        plc.step()
+
+    assert value_or_varied_replay_scan_ids(
+        plc,
+        range(1, 4),
+        {effect.name: (True,)},
+    ) == (2,)
+    # ``out`` attempts False when its rung is disabled, so an any-write query
+    # correctly retains all three scans even though only scan 2 attempted True.
+    assert write_replay_scan_ids(plc, range(1, 4), (effect.name,)) == (1, 2, 3)
+
+
+def test_verified_progress_landing_projects_only_matching_value_scans() -> None:
+    select_write = Bool("SelectVerifiedProgressWrite", external=True)
+    effect = Int("VerifiedProgressEffect")
+    with Program() as program:
+        with rung(select_write):
+            copy(7, effect)
+        with rung(~select_write):
+            copy(3, effect)
+    plc = PLC(program, record_all_tags=True)
+    for selected in (False, True, False, False, True, True):
+        plc.patch({select_write.name: selected})
+        plc.step()
+
+    projected: list[int] = []
+    matching_write = SimpleNamespace(
+        run=SimpleNamespace(enabled=True),
+        transition=SimpleNamespace(tag_name=effect.name, to_value=7),
+    )
+
+    def projection_at(scan_id: int):
+        projected.append(scan_id)
+        return SimpleNamespace(writes=(matching_write,)) if scan_id == 6 else None
+
+    pulse = SimpleNamespace(
+        fork=plc,
+        kernel_scan_ids=tuple(range(1, 7)),
+        snap={effect.name: 7},
+        projection_at=projection_at,
+    )
+    attempt = SimpleNamespace(
+        pulse=pulse,
+        projection_at=pulse.projection_at,
+        bearing=SimpleNamespace(
+            orientation=None,
+            act=SimpleNamespace(
+                policy=SimpleNamespace(
+                    heading=SimpleNamespace(channel_tag=effect.name),
+                )
+            ),
+        ),
+    )
+    trial = SimpleNamespace(
+        execution=SimpleNamespace(
+            scan_progress=ScanProgressReceipt(
+                source_scan=0,
+                productive_scan=2,
+                landing_scan=6,
+                kind="selected-producer",
+                selected_act=("test", ()),
+            )
+        ),
+        attempt=attempt,
+    )
+
+    assert _verified_progress_landing(trial) is None
+    assert projected == [6]
 
 
 def test_required_shape_preserves_repeated_ordered_handoffs() -> None:
@@ -460,6 +576,46 @@ def test_skiff_result_captures_only_a_unique_exact_writer() -> None:
         )
         is None
     )
+
+
+def test_skiff_expectation_projects_only_matching_value_scans() -> None:
+    action = Bool("SparseSkiffAction", external=True)
+    effect = Int("SparseSkiffEffect")
+    with Program() as program:
+        with rung(action):
+            copy(1, effect)
+        with rung(~action):
+            copy(3, effect)
+    pdg = build_program_graph(program)
+    plc = PLC(program, record_all_tags=True)
+    for selected in (False, True, False, False):
+        plc.patch({action.name: selected})
+        plc.step()
+
+    projected: list[int] = []
+
+    class TrackingWork:
+        _causal_lineage = plc._causal_lineage
+
+        def _replay_rung_write_projection_at(self, scan_id: int):
+            projected.append(scan_id)
+            return plc._replay_rung_write_projection_at(scan_id)
+
+    result = SkiffResult(
+        allowed_tags=frozenset(),
+        forced_tags=frozenset(),
+        actions=(),
+        scan_before=0,
+        scan_after=4,
+        before={},
+        after={},
+        participating_changes=(),
+        suppressed_changes=(),
+        work=TrackingWork(),
+    )
+
+    assert _skiff_expectation(result, SimpleNamespace(pdg=pdg, program=program), effect.name, 1)
+    assert projected == [2]
 
 
 def test_expectation_is_same_object_through_candidate_policy_bearing_and_execution() -> None:

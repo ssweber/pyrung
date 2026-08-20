@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pyrung.core.analysis.pdg import resolve_rung
+from pyrung.core.analysis.pilot.effect_observation import write_replay_scan_ids
 from pyrung.core.analysis.pilot.execution import (
     IntrascanActReceipt,
     InvestigationProducerReceipt,
@@ -29,6 +30,7 @@ from pyrung.core.analysis.pilot.overlay import (
     _pilot_rung_execution_receipt,
     project_pilot_overlay,
 )
+from pyrung.core.analysis.pilot.static_expressions import simplified_expr_tags
 from pyrung.core.analysis.pilot.types import _ExecutedAttempt
 from pyrung.core.analysis.pilot.world_key import _rung_identity, _semantic_key
 from pyrung.core.analysis.pilot.writer_selection import _can_produce
@@ -320,6 +322,12 @@ def _route_blocker_crossings(
         return ()
     result: list[_RouteBlockerCrossing] = []
     selected_writer = frame.tree.writer_rung
+    pulse = attempt.pulse
+    exact_scan_ids = tuple(
+        scan_id
+        for scan_id in pulse.kernel_scan_ids
+        if pulse.scan_before < scan_id <= pulse.fork.state.scan_id
+    )
     for rung_index in sorted(ctx.pdg.writers_of.get(ctx.target.tag, frozenset())):
         if rung_index == selected_writer:
             continue
@@ -345,9 +353,13 @@ def _route_blocker_crossings(
         if _eval_expr_from_state(predicate, prospective_landing) is not True:
             continue
         crossings: list[_RouteBlockerCrossing] = []
-        for scan_id in attempt.pulse.kernel_scan_ids:
-            if not (attempt.pulse.scan_before < scan_id <= attempt.pulse.fork.state.scan_id):
-                continue
+        predicate_tags = simplified_expr_tags(predicate) - {ctx.target.tag}
+        replay_scan_ids = write_replay_scan_ids(
+            pulse.fork,
+            exact_scan_ids,
+            predicate_tags,
+        )
+        for scan_id in replay_scan_ids:
             projection = attempt.projection_at(scan_id)
             if projection is None:
                 continue

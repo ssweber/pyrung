@@ -20,6 +20,7 @@ from pyrung.core.analysis.pilot.advance import (
 from pyrung.core.analysis.pilot.constrained_reachability import NoRoute
 from pyrung.core.analysis.pilot.correction_records import _ConfirmedCorrection
 from pyrung.core.analysis.pilot.corrections import derive_correction_hypotheses
+from pyrung.core.analysis.pilot.effect_observation import write_replay_scan_ids
 from pyrung.core.analysis.pilot.effects import EffectObservation, occurrence_snapshot
 from pyrung.core.analysis.pilot.execution import execution_owner
 from pyrung.core.analysis.pilot.incidents import DeviationIncident
@@ -702,9 +703,15 @@ def _confirmed_correction_requirement_from_excursion(
     desired = pulse.post_pulse_snap.get(preserved_tag)
     first_scan = None
     harmful: tuple[Any, ...] = ()
-    for scan_id in pulse.kernel_scan_ids:
-        if scan_id <= pulse.scan_before:
-            continue
+    exact_scan_ids = tuple(
+        scan_id for scan_id in pulse.kernel_scan_ids if scan_id > pulse.scan_before
+    )
+    replay_scan_ids = write_replay_scan_ids(
+        pulse.fork,
+        exact_scan_ids,
+        (preserved_tag,),
+    )
+    for scan_id in replay_scan_ids:
         projection = executed.projection_at(scan_id)
         if projection is None:
             continue

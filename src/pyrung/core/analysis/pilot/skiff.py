@@ -23,6 +23,7 @@ from pyrung.core.analysis.pilot.compass import (
     NavigationObservation,
     _action_sort_key,
 )
+from pyrung.core.analysis.pilot.effect_observation import value_or_varied_replay_scan_ids
 from pyrung.core.analysis.pilot.effects import expectation_from_writer
 from pyrung.core.analysis.pilot.recovery import assert_recovery_inactive
 from pyrung.core.analysis.sp_values import _values_match
@@ -444,7 +445,13 @@ def _skiff_expectation(result: SkiffResult, ctx: Any, tag: str, value: Any) -> A
     """Retain a probe effect only when its exact scan window names one writer."""
 
     writer_ids: set[int] = set()
-    for scan_id in range(result.scan_before + 1, result.scan_after + 1):
+    exact_scan_ids = tuple(range(result.scan_before + 1, result.scan_after + 1))
+    replay_scan_ids = value_or_varied_replay_scan_ids(
+        result.work,
+        exact_scan_ids,
+        {tag: (value,)},
+    )
+    for scan_id in replay_scan_ids:
         projection = result.work._replay_rung_write_projection_at(scan_id)
         if projection is None:
             continue
