@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pyrung.core.analysis.pilot.attempt_interpretation import (
     AttemptInterpretationKind,
@@ -19,17 +19,14 @@ from pyrung.core.analysis.pilot.attempt_interpretation import (
     interpret_failed_requirements,
 )
 from pyrung.core.analysis.pilot.bootstrap import _BootstrapExecution
-from pyrung.core.analysis.pilot.effects import ConsumerBoundary
 from pyrung.core.analysis.pilot.execution import (
     PulseHorizon,
-    ScanEntryConfiguration,
     execution_owner,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
     BearingObjective,
     LocalProgressKind,
-    _ActionPair,
     act_identity,
 )
 from pyrung.core.analysis.pilot.requirement_evidence import _exact_failed_source
@@ -69,7 +66,6 @@ from pyrung.core.analysis.pilot.working_theory import (
     TemporalNeedRequest,
     TheoryAttemptDisposition,
     TheoryAttemptReceipt,
-    TheoryBoundaryIdentity,
     TheoryClaim,
     TheoryPhaseKind,
     TheoryPhaseReceipt,
@@ -81,9 +77,6 @@ from pyrung.core.analysis.pilot.working_theory import (
 )
 from pyrung.core.analysis.pilot.world import _CausalCheckpoint
 from pyrung.core.analysis.pilot.world_key import _rung_identity, _semantic_key
-
-if TYPE_CHECKING:
-    from pyrung.core.runner import EpochRef
 
 logger = logging.getLogger(__name__)
 
@@ -694,19 +687,11 @@ def _records_controlling_need(observation: _TheoryTransitionEvidence | None) -> 
 @dataclass(frozen=True)
 class _ControlledSetupAttempt:
     request: TemporalNeedRequest
-    attempt_id: tuple[Any, ...]
-    execution_ref: EpochRef
-    occurrence_evidence: tuple[Any, ...]
-    act_identity: tuple[Any, ...]
-    pilot_rung_identities: tuple[tuple[Any, ...], ...]
+    receipt: TheoryAttemptReceipt
     local_requirement_identities: tuple[tuple[Any, ...], ...]
-    setup_pairs: tuple[_ActionPair, ...]
     executed_pending_overlay_identities: tuple[tuple[Any, ...], ...]
-    configurations: tuple[ScanEntryConfiguration, ...]
     phase: str
     objective: BearingObjective
-    execution_source: TheoryBoundaryIdentity
-    consumer_boundary: ConsumerBoundary | None = None
     consumer_boundary_reached: bool | None = None
 
 
@@ -785,55 +770,49 @@ def _record_controlled_setup_attempt(
         if attempt.proof_rejection
         else TheoryAttemptDisposition.REJECTED_EMPIRICAL
     )
-    _record_controlling_theory_fact(
-        state,
-        RecordTheoryAttempt(
-            TheoryAttemptReceipt(
-                theory_id=request.theory_id,
-                version_id=request.version_id,
-                attempt_id=attempt_id,
-                source=request.source,
-                execution_ref=execution_ref,
-                occurrence_evidence=occurrence_evidence,
-                act_identity=action_identity,
-                act_pairs=tuple(bearing.act.policy.applied),
-                selected_act_pairs=tuple(bearing.act.policy.action_pairs),
-                pilot_rung_identities=rung_identities,
-                disposition=disposition,
-                evidence=(
-                    (
-                        "temporal-phase",
-                        phase,
-                        tuple(item.semantic_identity for item in request.requirements),
-                    ),
-                ),
-                consumer_boundary=_execution_consumer_boundary(execution),
-                execution_source=execution_source,
-                observation_boundary=request.source,
-                program_transaction=ProgramTransaction.from_heading(
-                    bearing.act.policy.heading,
-                    dict(source_checkpoint.world.work.state.tags),
-                ),
-                configurations=execution_receipt.applied_configurations,
+    receipt = TheoryAttemptReceipt(
+        theory_id=request.theory_id,
+        version_id=request.version_id,
+        attempt_id=attempt_id,
+        source=request.source,
+        execution_ref=execution_ref,
+        occurrence_evidence=occurrence_evidence,
+        act_identity=action_identity,
+        act_pairs=tuple(bearing.act.policy.applied),
+        selected_act_pairs=tuple(bearing.act.policy.action_pairs),
+        pilot_rung_identities=rung_identities,
+        disposition=disposition,
+        evidence=(
+            (
+                "temporal-phase",
+                phase,
+                tuple(item.semantic_identity for item in request.requirements),
             ),
         ),
+        consumer_boundary=_execution_consumer_boundary(execution),
+        execution_source=execution_source,
+        observation_boundary=request.source,
+        program_transaction=ProgramTransaction.from_heading(
+            bearing.act.policy.heading,
+            dict(source_checkpoint.world.work.state.tags),
+        ),
+        configurations=execution_receipt.applied_configurations,
     )
+    _record_controlling_theory_fact(
+        state,
+        RecordTheoryAttempt(receipt),
+    )
+    stored_receipt = state.theory_state.ledger.attempts.get(attempt_id)
+    if stored_receipt is None:
+        raise ValueError("recorded setup attempt is missing from the theory ledger")
     return _ControlledSetupAttempt(
-        request,
-        attempt_id,
-        execution_ref,
-        occurrence_evidence,
-        action_identity,
-        rung_identities,
-        local_requirement_identities,
-        tuple(bearing.act.policy.applied),
-        executed_pending,
-        execution_receipt.applied_configurations,
-        phase,
-        bearing.objective,
-        execution_source,
-        _execution_consumer_boundary(execution),
-        execution_receipt.consumer_boundary_reached,
+        request=request,
+        receipt=stored_receipt,
+        local_requirement_identities=local_requirement_identities,
+        executed_pending_overlay_identities=executed_pending,
+        phase=phase,
+        objective=bearing.objective,
+        consumer_boundary_reached=execution_receipt.consumer_boundary_reached,
     )
 
 

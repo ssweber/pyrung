@@ -30,6 +30,7 @@ from pyrung.core.analysis.pilot.theory_reducer import (
     RefineTheory,
 )
 from pyrung.core.analysis.pilot.working_theory import (
+    TheoryAttemptDisposition,
     active_theory_configurations,
     theory_view,
 )
@@ -174,13 +175,28 @@ def test_bootstrap_overwrite_retry_records_controlling_theory_evidence(
             copy(9, stepper, oneshot=True)
 
     facts: list[Any] = []
-    original = theory_recording_module._record_controlling_theory_fact
+    controlled_receipts: list[tuple[Any, bool]] = []
+    original_record = theory_recording_module._record_controlling_theory_fact
+    original_setup = theory_recording_module._record_controlled_setup_attempt
 
     def record(state: Any, fact: Any) -> None:
         facts.append(fact)
-        original(state, fact)
+        original_record(state, fact)
+
+    def record_setup(*args: Any, **kwargs: Any) -> Any:
+        controlled = original_setup(*args, **kwargs)
+        state = args[0]
+        controlled_receipts.append(
+            (
+                controlled.receipt,
+                state.theory_state.ledger.attempts[controlled.receipt.attempt_id]
+                is controlled.receipt,
+            )
+        )
+        return controlled
 
     monkeypatch.setattr(theory_recording_module, "_record_controlling_theory_fact", record)
+    monkeypatch.setattr(theory_recording_module, "_record_controlled_setup_attempt", record_setup)
     events: list[Any] = []
     result = PLC(logic).how(stepper == 1, max_scans=20, on_event=events.append)
 
@@ -199,6 +215,32 @@ def test_bootstrap_overwrite_retry_records_controlling_theory_evidence(
         )
     )
     assert lifecycle, "the bootstrap retry must record its controlling theory lifecycle"
+    assert controlled_receipts
+    assert all(stored_by_identity for _receipt, stored_by_identity in controlled_receipts)
+    setup_receipts = tuple(
+        fact.receipt
+        for fact in facts
+        if isinstance(fact, RecordTheoryAttempt)
+        and fact.receipt.attempt_id[0] == "working-theory-setup"
+    )
+    assert len(setup_receipts) == len(controlled_receipts)
+    assert all(
+        carried is recorded
+        for (carried, _stored_by_identity), recorded in zip(
+            controlled_receipts,
+            setup_receipts,
+            strict=True,
+        )
+    )
+    completed_attempt_ids = {
+        fact.accepted_attempt_id for fact in facts if isinstance(fact, AdvanceTheory | ProveTheory)
+    }
+    assert completed_attempt_ids
+    assert all(
+        (receipt.attempt_id in completed_attempt_ids)
+        == (receipt.disposition is TheoryAttemptDisposition.ACCEPTED_PROVISIONAL)
+        for receipt, _stored_by_identity in controlled_receipts
+    )
 
 
 def test_requirement_event_preserves_exact_scan_call_and_deadline() -> None:

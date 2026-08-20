@@ -285,7 +285,7 @@ ownership. Interpretation and refinement remain separate lifecycle facts.
 
 ### 15. Let controlled setup carry its stored attempt receipt
 
-**Status:** later, depends on Task 14
+**Status:** done
 
 `_record_controlled_setup_attempt` records an attempt and then copies the same
 identity/evidence fields into `_ControlledSetupAttempt` for completion.
@@ -294,6 +294,14 @@ identity/evidence fields into `_ControlledSetupAttempt` for completion.
   setup-local completion values.
 - Preserve the distinction between recording and completion admission.
 - Do not introduce a setup session/controller or bypass reducer ownership.
+
+Implemented as a narrow carrier cleanup after Task 14. Controlled setup now
+fetches and carries the exact receipt stored by the reducer; completion reads
+its attempt identity, action pairs, configurations, consumer boundary, and
+execution source from that receipt. Only the temporal request and genuinely
+setup-local completion observations remain beside it. Recording still precedes
+admission, and the reducer still independently validates both the attempt and
+every later completion fact.
 
 ### 16. Reuse the existing retention owners
 

@@ -524,6 +524,10 @@ def _complete_controlled_setup(
     """Advance and promote one accepted temporal phase, unless it found another need."""
 
     request = controlled.request
+    receipt = controlled.receipt
+    execution_source = receipt.execution_source
+    if execution_source is None:
+        raise ValueError("recorded setup attempt lost its execution source")
     current_view = theory_view(state.theory_state)
     current_scope = current_view.investigation_scope if current_view is not None else None
     prior_transaction_pairs = tuple(getattr(current_scope, "transaction_act_pairs", ()))
@@ -535,14 +539,14 @@ def _complete_controlled_setup(
         and all(
             any(
                 tag == candidate_tag and _values_match(value, candidate_value)
-                for candidate_tag, candidate_value in controlled.setup_pairs
+                for candidate_tag, candidate_value in receipt.act_pairs
             )
             for tag, value in prior_transaction_pairs
         )
     )
     starts_transaction = bool(controlled.phase == "transaction" and not continues_transaction)
     observes_consumer = bool(
-        controlled.phase == "transaction" and controlled.consumer_boundary is not None
+        controlled.phase == "transaction" and receipt.consumer_boundary is not None
     )
     extends_consumer_horizon = bool(
         controlled.phase == "transaction"
@@ -561,7 +565,7 @@ def _complete_controlled_setup(
         owned = active_theory_pilot_rung_identities(state.theory_state)
         stable_pairs = tuple(
             (tag, value)
-            for tag, value in controlled.setup_pairs
+            for tag, value in receipt.act_pairs
             if tag not in ctx.edge_tags and tag not in ctx.clear_only
         )
         superseded_rungs = tuple(
@@ -596,7 +600,7 @@ def _complete_controlled_setup(
             for rung in state.pilot_rungs
             if any(
                 rung.dest == tag and _values_match(rung.value, value)
-                for tag, value in controlled.setup_pairs
+                for tag, value in receipt.act_pairs
             )
         )
         setup_rung_identities = tuple(
@@ -610,14 +614,14 @@ def _complete_controlled_setup(
         _theory_recording._record_controlling_theory_fact(
             state,
             AdvanceTheory(
-                theory_id=request.theory_id,
-                version_id=request.version_id,
-                accepted_attempt_id=controlled.attempt_id,
-                source=request.source,
+                theory_id=receipt.theory_id,
+                version_id=receipt.version_id,
+                accepted_attempt_id=receipt.attempt_id,
+                source=receipt.source,
                 boundary=boundary,
                 advance_identity=(
                     "working-theory-setup-accepted",
-                    controlled.attempt_id,
+                    receipt.attempt_id,
                     boundary,
                 ),
                 phase_receipts=(
@@ -631,13 +635,13 @@ def _complete_controlled_setup(
                                     if controlled.phase == "correction"
                                     else TheoryPhaseKind.TEMPORAL_SETUP
                                 ),
-                                evidence_identity=controlled.attempt_id,
+                                evidence_identity=receipt.attempt_id,
                                 requirement_identities=(controlled.local_requirement_identities),
                                 pilot_rung_identities=setup_rung_identities,
                                 superseded_pilot_rung_identities=tuple(
                                     _rung_identity(rung) for rung in superseded_rungs
                                 ),
-                                configurations=controlled.configurations,
+                                configurations=receipt.configurations,
                             ),
                         )
                         if controlled.phase != "transaction"
@@ -647,14 +651,14 @@ def _complete_controlled_setup(
                         (
                             TheoryPhaseReceipt(
                                 kind=TheoryPhaseKind.TRANSACTION_ATTEMPT,
-                                evidence_identity=controlled.attempt_id,
+                                evidence_identity=receipt.attempt_id,
                                 requirement_identities=(controlled.local_requirement_identities),
                                 pilot_rung_identities=setup_rung_identities,
                                 superseded_pilot_rung_identities=tuple(
                                     _rung_identity(rung) for rung in superseded_rungs
                                 ),
-                                configurations=controlled.configurations,
-                                execution_source=controlled.execution_source,
+                                configurations=receipt.configurations,
+                                execution_source=execution_source,
                             ),
                         )
                         if starts_transaction
@@ -664,7 +668,7 @@ def _complete_controlled_setup(
                         (
                             TheoryPhaseReceipt(
                                 kind=TheoryPhaseKind.CONSUMER_BOUNDARY,
-                                evidence_identity=controlled.attempt_id,
+                                evidence_identity=receipt.attempt_id,
                             ),
                         )
                         if observes_consumer
@@ -674,9 +678,9 @@ def _complete_controlled_setup(
                         (
                             TheoryPhaseReceipt(
                                 kind=TheoryPhaseKind.CONSUMER_STOP,
-                                evidence_identity=controlled.attempt_id,
+                                evidence_identity=receipt.attempt_id,
                                 pilot_rung_identities=setup_rung_identities,
-                                configurations=controlled.configurations,
+                                configurations=receipt.configurations,
                                 execution_tip=boundary,
                             ),
                         )
@@ -688,7 +692,7 @@ def _complete_controlled_setup(
                     progress.remaining_budget,
                     state.remaining_search_scans(ctx.max_scans),
                 ),
-                execution_source=controlled.execution_source,
+                execution_source=execution_source,
             ),
         )
         checkpoint = _CausalCheckpoint(
@@ -759,10 +763,10 @@ def _complete_controlled_setup(
         _theory_recording._record_controlling_theory_fact(
             state,
             ProveTheory(
-                theory_id=request.theory_id,
-                version_id=request.version_id,
-                proof_identity=("working-theory-setup-proved", controlled.attempt_id, boundary),
-                accepted_attempt_id=controlled.attempt_id,
+                theory_id=receipt.theory_id,
+                version_id=receipt.version_id,
+                proof_identity=("working-theory-setup-proved", receipt.attempt_id, boundary),
+                accepted_attempt_id=receipt.attempt_id,
             ),
         )
         return
@@ -789,14 +793,14 @@ def _complete_controlled_setup(
         _theory_requirement_snapshot(requirement) for requirement in remaining
     )
     continuation_source = (
-        request.source
+        receipt.source
         if remaining_snapshots and request.intent is TheoryTemporalIntent.RETRY_TOGETHER
         else boundary
     )
     _theory_recording._record_controlling_theory_fact(
         state,
         RefineTheory(
-            theory_id=request.theory_id,
+            theory_id=receipt.theory_id,
             parent_version_id=theory.current_version_id,
             source=continuation_source,
             refined_source=boundary,
@@ -805,7 +809,7 @@ def _complete_controlled_setup(
                 "working-theory-phase-continue"
                 if remaining_snapshots
                 else "working-theory-phase-yield",
-                controlled.attempt_id,
+                receipt.attempt_id,
                 tuple(item.semantic_identity for item in remaining_snapshots),
             ),
             temporal_intent=request.intent if remaining_snapshots else None,

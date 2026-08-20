@@ -1110,7 +1110,7 @@ def _pilot_loop_events(
                     theory = active_theory(state.theory_state)
                     if theory is None:
                         raise ValueError("rejected temporal attempt lost its theory")
-                    rejected_attempt_id = controlled_setup_attempt.attempt_id
+                    rejected_attempt_id = controlled_setup_attempt.receipt.attempt_id
                     _theory_recording._record_controlling_theory_fact(
                         state,
                         AbandonTheory(
