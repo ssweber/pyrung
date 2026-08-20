@@ -20,6 +20,7 @@ from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.advance import estimate_owned_boundary_scans
 from pyrung.core.analysis.pilot.avoid import _avoid_violations
 from pyrung.core.analysis.pilot.bootstrap import (
+    bootstrap_designations,
     selected_route_landing_expectation,
     unexplained_route_landing_tags,
 )
@@ -41,6 +42,7 @@ from pyrung.core.analysis.pilot.compass import WAIT, ActionPair, CompassObservat
 from pyrung.core.analysis.pilot.effect_observation import (
     effect_reached_consumer,
     observe_execution_window,
+    route_landing_replay_scan_ids,
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
@@ -430,12 +432,39 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
                 if pulse.scan_before < scan_id <= pulse.fork.state.scan_id
                 and (action_scan is None or scan_id >= action_scan)
             )
+            if action_scan is not None:
+                mandatory_scan_ids = (action_scan,) if action_scan in exact_scan_ids else ()
+            elif exact_scan_ids:
+                mandatory_scan_ids = (exact_scan_ids[0], exact_scan_ids[-1])
+            else:
+                mandatory_scan_ids = ()
+            route_designations = bootstrap_designations(
+                world.frame.tree,
+                ctx.pdg,
+                ctx.program,
+                steerable=ctx.steerable,
+                channel_tags=channel_tags,
+            )
+            route_values = {
+                tag: tuple(
+                    designation.value
+                    for designation in route_designations
+                    if designation.tag == tag
+                )
+                for tag in unexplained_landing
+            }
+            replay_scan_ids = route_landing_replay_scan_ids(
+                pulse.fork,
+                exact_scan_ids,
+                route_values,
+                mandatory_scan_ids=mandatory_scan_ids,
+            )
             projections = tuple(
                 projection
-                for scan_id in exact_scan_ids
+                for scan_id in replay_scan_ids
                 if (projection := pulse.projection_at(scan_id)) is not None
             )
-        if unexplained_landing and len(projections) == len(exact_scan_ids):
+        if unexplained_landing and len(projections) == len(replay_scan_ids):
             # A literal-looking register can be discovered as a chart role and
             # still be an opaque indirection or a same-scan handoff that
             # provably returns to rest.  Both remain exact execution evidence,

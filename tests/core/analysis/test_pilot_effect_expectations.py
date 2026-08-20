@@ -19,6 +19,7 @@ from pyrung.core.analysis.pilot.coast import (
 from pyrung.core.analysis.pilot.effect_observation import (
     observe_execution_window,
     observe_expectation,
+    route_landing_replay_scan_ids,
     terminal_target_replay_scan_ids,
 )
 from pyrung.core.analysis.pilot.effects import (
@@ -101,6 +102,45 @@ def test_terminal_target_replay_nomination_uses_same_scan_varied_evidence() -> N
 
     assert terminal_target_replay_scan_ids(expectation, plc, (1,)) == ()
     assert terminal_target_replay_scan_ids(expectation, plc, (1, 2)) == (2,)
+
+
+def test_route_landing_replay_nomination_uses_value_and_varied_scans() -> None:
+    select_write = Bool("SelectSparseRouteLandingWrite", external=True)
+    effect = Int("SparseRouteLandingEffect")
+    with Program() as program:
+        with rung(select_write):
+            copy(7, effect)
+            copy(3, effect)
+        with rung(~select_write):
+            copy(3, effect)
+    plc = PLC(program, record_all_tags=True)
+    for selected in (False, True, False, False, True, False):
+        plc.patch({select_write.name: selected})
+        plc.step()
+
+    assert route_landing_replay_scan_ids(
+        plc,
+        range(1, 7),
+        {effect.name: (7,), "UnretainedNonCandidate": ()},
+        mandatory_scan_ids=(1, 6),
+    ) == (1, 2, 5, 6)
+
+
+def test_route_landing_replay_nomination_fails_closed_without_retention() -> None:
+    effect = Int("UnretainedRouteLandingEffect")
+    with Program() as program:
+        with rung():
+            copy(7, effect)
+    plc = PLC(program)
+    for _ in range(4):
+        plc.step()
+
+    assert route_landing_replay_scan_ids(plc, range(1, 5), {effect.name: (7,)}) == (
+        1,
+        2,
+        3,
+        4,
+    )
 
 
 def test_required_shape_preserves_repeated_ordered_handoffs() -> None:

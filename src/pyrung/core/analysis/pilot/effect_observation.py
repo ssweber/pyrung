@@ -8,7 +8,7 @@ consumer crossings; it never selects a producer, required shape, or route.
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
@@ -691,6 +691,90 @@ def _effect_projection_scan_ids(
     return tuple(sorted(selected))
 
 
+def _owned_scan_segments(
+    fork: Any,
+    exact_scan_ids: tuple[int, ...],
+) -> tuple[tuple[Any, tuple[int, ...]], ...] | None:
+    """Partition an ordered exact stream by retained epoch ownership."""
+
+    if not exact_scan_ids:
+        return ()
+    lineage = fork._causal_lineage
+    segments: list[tuple[Any, tuple[int, ...]]] = []
+    consumed = 0
+    for epoch, first_scan, last_scan in lineage.epochs_covering(
+        exact_scan_ids[0], exact_scan_ids[-1]
+    ):
+        lo = bisect_left(exact_scan_ids, first_scan, consumed)
+        hi = bisect_right(exact_scan_ids, last_scan, lo)
+        if lo != consumed:
+            return None
+        if lo < hi:
+            segments.append((lineage._query_for(epoch), exact_scan_ids[lo:hi]))
+            consumed = hi
+    return tuple(segments) if consumed == len(exact_scan_ids) else None
+
+
+def route_landing_replay_scan_ids(
+    fork: Any,
+    exact_scan_ids: Iterable[int],
+    route_values: Mapping[str, Iterable[Any]],
+    *,
+    mandatory_scan_ids: Iterable[int] = (),
+) -> tuple[int, ...]:
+    """Nominate scans that can attribute an unexplained route landing.
+
+    Route-landing selection needs exact projections only where one of the
+    unexplained channel tags may have assumed a selected-route value. Retained
+    final-value and ``varied`` columns can answer that cheaper question before
+    reconstruction, including target-then-reset within one scan. Boundary
+    scans may be carried for the subsequent observation pass and its cache.
+
+    Any ownership gap or incomplete recording-time retention certificate
+    disables pruning for the complete window.
+    """
+
+    exact = tuple(sorted(set(exact_scan_ids)))
+    if not exact:
+        return ()
+    segments = _owned_scan_segments(fork, exact)
+    if segments is None:
+        return exact
+
+    values_by_tag = {
+        tag: candidates
+        for tag, values in route_values.items()
+        if (candidates := tuple(values))
+    }
+    tags = frozenset(values_by_tag)
+    owners = tuple(owner for owner, _owned_scans in segments)
+    if any(
+        owner.firing_retained_tags is not None
+        and not tags.issubset(owner.firing_retained_tags)
+        for owner in owners
+    ):
+        return exact
+
+    exact_set = set(exact)
+    selected = {scan_id for scan_id in mandatory_scan_ids if scan_id in exact_set}
+    for owner, owned_scans in segments:
+        for tag in tags:
+            rung_timelines = owner.rung_firing_timelines
+            node_timelines = owner.node_firing_timelines
+            for timelines in (rung_timelines, node_timelines):
+                for writer in timelines.observed_writers_of(tag):
+                    for value in values_by_tag[tag]:
+                        selected.update(
+                            timelines.value_or_varied_scans(
+                                writer,
+                                tag,
+                                value,
+                                owned_scans,
+                            )
+                        )
+    return tuple(sorted(selected))
+
+
 def terminal_target_replay_scan_ids(
     expectation: EffectExpectation,
     fork: Any,
@@ -714,18 +798,8 @@ def terminal_target_replay_scan_ids(
     if not exact:
         return ()
 
-    lineage = fork._causal_lineage
-    segments: list[tuple[Any, tuple[int, ...]]] = []
-    consumed = 0
-    for epoch, first_scan, last_scan in lineage.epochs_covering(exact[0], exact[-1]):
-        lo = bisect_left(exact, first_scan, consumed)
-        hi = bisect_right(exact, last_scan, lo)
-        if lo != consumed:
-            break
-        if lo < hi:
-            segments.append((lineage._query_for(epoch), exact[lo:hi]))
-            consumed = hi
-    if consumed != len(exact):
+    segments = _owned_scan_segments(fork, exact)
+    if segments is None:
         return exact
 
     exact_owners = tuple(owner for owner, _owned_scans in segments)
