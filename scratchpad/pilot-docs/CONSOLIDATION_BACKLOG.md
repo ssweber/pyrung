@@ -305,7 +305,7 @@ every later completion fact.
 
 ### 16. Reuse the existing retention owners
 
-**Status:** ready, narrow behavior-preserving deletion
+**Status:** done
 
 Recovery manually repeats the policy already owned by
 `_retain_active_requirement`, while failed-effect receipts are appended with
@@ -317,6 +317,11 @@ the same exact-retention rule at multiple sites.
 - Focused tests: duplicate retry, navigation-equal but distinct requirements,
   and equal versus distinct exact failed-effect receipts.
 - Do not generalize this into a collection, ledger, or ownership API.
+
+Recovery now admits active requirements through `_retain_active_requirement`.
+Both failed-effect consumers share `_retain_failed_effect_receipt`, retaining
+the first exact identity in observation order while preserving distinct exact
+receipts. Recording still precedes retention in both recovery paths.
 
 ### 17. Characterize temporal-checkpoint admission identity
 

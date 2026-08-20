@@ -197,6 +197,18 @@ def _retain_active_requirement(
     return True
 
 
+def _retain_failed_effect_receipt(
+    state: _PilotState,
+    receipt: FailedEffectReceipt,
+) -> bool:
+    """Append one exact failed-effect receipt once in observation order."""
+
+    if any(current.identity == receipt.identity for current in state.failed_effect_receipts):
+        return False
+    state.failed_effect_receipts.append(receipt)
+    return True
+
+
 def _derive_bootstrap_requirements(
     state: _PilotState,
     ctx: _PilotContext,
@@ -700,8 +712,7 @@ def _retain_intrascan_findings(
             expectation=receipt_expectation,
             expectation_role=expectation_role,
         )
-        if not any(current.identity == failed.identity for current in state.failed_effect_receipts):
-            state.failed_effect_receipts.append(failed)
+        _retain_failed_effect_receipt(state, failed)
         _retain_active_requirement(state, derivation.requirement)
 
 

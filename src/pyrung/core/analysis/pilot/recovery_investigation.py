@@ -55,6 +55,10 @@ from pyrung.core.analysis.pilot.regression_requirements import (
     _exact_regression_corrections,
     _ordinary_correction_order,
 )
+from pyrung.core.analysis.pilot.requirement_evidence import (
+    _retain_active_requirement,
+    _retain_failed_effect_receipt,
+)
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
     ExpectationReceipt,
@@ -244,11 +248,7 @@ def _activate_regression_theory_requirement(
     )
     if transition is None:
         return None
-    if not any(
-        current.navigation_identity == requirement.navigation_identity
-        for current in state.active_requirements
-    ):
-        state.active_requirements.append(requirement)
+    _retain_active_requirement(state, requirement)
     incident_scan = state.work.state.scan_id
     state.load_world(source.world)
     if all(current.owner is not source.owner for current in state.temporal_checkpoints):
@@ -351,15 +351,8 @@ def _activate_delayed_regression_requirement(
     )
     if transition is None:
         return None
-    if not any(
-        current.identity == failed_receipt.identity for current in state.failed_effect_receipts
-    ):
-        state.failed_effect_receipts.append(failed_receipt)
-    if not any(
-        current.navigation_identity == requirement.navigation_identity
-        for current in state.active_requirements
-    ):
-        state.active_requirements.append(requirement)
+    _retain_failed_effect_receipt(state, failed_receipt)
+    _retain_active_requirement(state, requirement)
     incident_scan = state.work.state.scan_id
     state.load_world(recovery_source.world)
     if all(current.owner is not recovery_source.owner for current in state.temporal_checkpoints):
