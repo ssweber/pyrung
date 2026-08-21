@@ -131,6 +131,9 @@ class TagMap:
         self._structure_by_name: dict[str, StructuredImport] = {}
         self._structure_warnings: tuple[str, ...] = ()
         self._named_array_spans: dict[str, tuple[str, int, int]] = {}
+        self._source_unmapped_defaults: dict[tuple[str, int], object] = {}
+        self._source_unmapped_retentive: dict[tuple[str, int], bool] = {}
+        self._source_unmapped_comments: dict[tuple[str, int], str] = {}
 
         used_hardware: dict[int, str] = {}
         used_hardware_logical: dict[int, str] = {}

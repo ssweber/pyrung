@@ -270,6 +270,9 @@ class _OperandCollection:
     has_modbus_rtu_target: bool = False
     has_modbus_address: bool = False
     has_system_operands: bool = False
+    unmapped_defaults: dict[tuple[str, int], object] = field(default_factory=dict)
+    unmapped_retentive: dict[tuple[str, int], bool] = field(default_factory=dict)
+    unmapped_comments: dict[tuple[str, int], str] = field(default_factory=dict)
     range_aliases: dict[str, str] = field(default_factory=dict)
     plain_blocks: list[_PlainBlockDecl] = field(default_factory=list)
     structures: list[_StructureDecl] = field(default_factory=list)

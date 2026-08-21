@@ -180,6 +180,9 @@ def tag_map_from_nickname_file(
     named_array_spans: dict[str, tuple[str, int, int]] = {}
     seen_names: dict[str, tuple[str, int]] = {}
     covered_rows: set[int] = set()
+    unmapped_defaults: dict[tuple[str, int], object] = {}
+    unmapped_retentive: dict[tuple[str, int], bool] = {}
+    unmapped_comments: dict[tuple[str, int], str] = {}
     seen_semantic_block_names: set[str] = set()
     udt_groups: dict[str, list[tuple[_BlockImportSpec, str]]] = defaultdict(list)
     physical_defs: dict[str, Physical] = {}
@@ -783,9 +786,19 @@ def tag_map_from_nickname_file(
     for idx, row in enumerate(rows):
         if idx in covered_rows:
             continue
-        if row.nickname == "":
-            continue
         if get_addr_key(row.memory_type, row.address) in reserved_system_hardware_keys:
+            continue
+        if row.nickname == "":
+            if not row.has_content:
+                continue
+            key = (row.memory_type, row.address)
+            if row.comment != "":
+                unmapped_comments[key] = row.comment
+            if not row.is_default_retentive:
+                unmapped_retentive[key] = row.retentive
+            if not row.retentive and not row.is_default_initial_value:
+                logical_type = _tag_type_for_memory_type(row.memory_type)
+                unmapped_defaults[key] = _parse_default(row.initial_value, logical_type)
             continue
 
         register_logical_name(row.nickname, memory_type=row.memory_type, address=row.address)
@@ -823,6 +836,9 @@ def tag_map_from_nickname_file(
     mapping._structure_by_name = {structure.name: structure for structure in structures}
     mapping._structure_warnings = tuple(structure_warnings)
     mapping._named_array_spans = named_array_spans
+    mapping._source_unmapped_defaults = unmapped_defaults
+    mapping._source_unmapped_retentive = unmapped_retentive
+    mapping._source_unmapped_comments = unmapped_comments
     return mapping
 
 

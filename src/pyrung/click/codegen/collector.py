@@ -699,6 +699,33 @@ def _enrich_with_ownership(
         collection.used_types.add(tag_type)
         collection.used_blocks.add(block_var)
 
+    # Unnamed CSV rows are not logical TagMap entries, but user-defined slot
+    # configuration must survive codegen. Preserve it for indirect reads and
+    # later export without inventing a nickname.
+    for (memory_type, index), default in structured_map._source_unmapped_defaults.items():
+        parsed = _parse_operand_prefix(format_address_display(memory_type, index))
+        if parsed is None:
+            continue
+        _, _tag_type, block_var, _index = parsed
+        collection.unmapped_defaults[(block_var, index)] = default
+        collection.used_blocks.add(block_var)
+
+    for (memory_type, index), retentive in structured_map._source_unmapped_retentive.items():
+        parsed = _parse_operand_prefix(format_address_display(memory_type, index))
+        if parsed is None:
+            continue
+        _, _tag_type, block_var, _index = parsed
+        collection.unmapped_retentive[(block_var, index)] = retentive
+        collection.used_blocks.add(block_var)
+
+    for (memory_type, index), comment in structured_map._source_unmapped_comments.items():
+        parsed = _parse_operand_prefix(format_address_display(memory_type, index))
+        if parsed is None:
+            continue
+        _, _tag_type, block_var, _index = parsed
+        collection.unmapped_comments[(block_var, index)] = comment
+        collection.used_blocks.add(block_var)
+
 
 def _build_partial_range_comment(
     start_owner: OwnerInfo,

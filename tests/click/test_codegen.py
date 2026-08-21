@@ -4819,6 +4819,111 @@ class TestStructuredCodegen:
         assert "ds.slot(2, name='StepCount', default=10)" in code
         assert "StepCount = ds[2]" in code
 
+    def test_unnamed_row_configuration_is_emitted_for_indirect_read(self, tmp_path: Path):
+        """An unnamed configured CSV cell remains available through indirect addressing."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        from pyrung import PLC
+
+        Pointer = Int("Pointer")
+        Result = Int("Result")
+
+        with Program(strict=False) as logic:
+            with rung():
+                copy(ds[Pointer], Result)
+
+        mapping = TagMap({Pointer: ds[1], Result: ds[2]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 1): AddressRecord(
+                    memory_type="DS",
+                    address=1,
+                    nickname="Pointer",
+                    comment="",
+                    initial_value="820",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 2): AddressRecord(
+                    memory_type="DS",
+                    address=2,
+                    nickname="Result",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 820): AddressRecord(
+                    memory_type="DS",
+                    address=820,
+                    nickname="",
+                    comment="",
+                    initial_value="25",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 821): AddressRecord(
+                    memory_type="DS",
+                    address=821,
+                    nickname="",
+                    comment="",
+                    initial_value="99",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 822): AddressRecord(
+                    memory_type="DS",
+                    address=822,
+                    nickname="",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 823): AddressRecord(
+                    memory_type="DS",
+                    address=823,
+                    nickname="",
+                    comment="Indirect table note",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 824): AddressRecord(
+                    memory_type="DS",
+                    address=824,
+                    nickname="",
+                    comment="",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "ds.slot(820, retentive=False, default=25)" in code
+        assert "ds.slot(821, default=99)" not in code
+        assert "ds.slot(822, retentive=False)" in code
+        assert "ds.slot(822, retentive=False, default=0)" not in code
+        assert "ds.slot(823, comment='Indirect table note')" in code
+        assert "ds.slot(824" not in code
+        assert "DS820 =" not in code
+
+        namespace = exec_with_source(code)
+        assert namespace["ds"].slot(820).retentive is False
+        assert namespace["ds"].slot(823).comment == "Indirect table note"
+        plc = PLC(namespace["logic"])
+        plc.step()
+        assert plc.current_state.tags[namespace["Result"].name] == 25
+
     def test_retentive_block_slot_suppresses_initial_value(self, tmp_path: Path):
         """Retentive block slots use type default, not CSV initial_value."""
         from pyclickplc.addresses import AddressRecord, get_addr_key

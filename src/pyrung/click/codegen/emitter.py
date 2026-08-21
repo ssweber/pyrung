@@ -403,7 +403,12 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
 
 def _has_flat_tags(collection: _OperandCollection) -> bool:
     """True when at least one standalone tag declaration will be emitted."""
-    return any(
+    has_unmapped_slots = bool(
+        collection.unmapped_defaults
+        or collection.unmapped_retentive
+        or collection.unmapped_comments
+    )
+    return has_unmapped_slots or any(
         op not in collection.semantic_operands and op not in collection.timer_counter_operands
         for op in collection.tags
     )
@@ -422,6 +427,26 @@ def _emit_slot_aliases(
     Pass 2: ``VarName = block[addr]`` alias assignments.
     """
     block_order = {bv: i for i, (_, _, bv) in enumerate(_OPERAND_PREFIXES)}
+    unmapped_slots = (
+        collection.unmapped_defaults.keys()
+        | collection.unmapped_retentive.keys()
+        | collection.unmapped_comments.keys()
+    )
+    for block_var, index in sorted(
+        unmapped_slots,
+        key=lambda item: (block_order.get(item[0], 99), item[1]),
+    ):
+        kwargs: list[str] = []
+        if (block_var, index) in collection.unmapped_retentive:
+            kwargs.append(f"retentive={collection.unmapped_retentive[(block_var, index)]}")
+        if (block_var, index) in collection.unmapped_defaults:
+            kwargs.append(
+                f"default={_format_literal(collection.unmapped_defaults[(block_var, index)])}"
+            )
+        if (block_var, index) in collection.unmapped_comments:
+            kwargs.append(f"comment={collection.unmapped_comments[(block_var, index)]!r}")
+        lines.append(f"{block_var}.slot({index}, {', '.join(kwargs)})")
+
     sorted_tags = [
         decl
         for decl in sorted(
