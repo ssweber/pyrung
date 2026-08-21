@@ -632,6 +632,89 @@ class TestDroppedContactValidation:
             assert par is not None
             assert sorted(_leaf_labels(c) for c in par.children) == [["X001"], ["X002"]]
 
+    def test_equivalent_conditions_merged_across_outputs_are_not_dropped(self):
+        """Factoring equal labels may merge occurrences at different positions."""
+        from pyrung.click.codegen.models import _RawRung
+
+        row0 = _make_row(
+            "R",
+            _fill_dashes({0: "rise(C221)", 1: "T:C999"}, 2, 31),
+            af="copy(0,DS22,oneshot=1)",
+        )
+        row1 = _make_row(
+            "",
+            _fill_dashes({1: "C999"}, 2, 31),
+            af="reset(C930..C932)",
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            analyzed = _analyze_rungs(
+                [_RawRung(comment_lines=[], rows=[row0, row1])],
+                validate=True,
+            )
+
+        assert _leaf_labels(analyzed[0].condition_tree) == ["rise(C221)", "C999"]
+        assert [instruction.af_token for instruction in analyzed[0].instructions] == [
+            "copy(0,DS22,oneshot=1)",
+            "reset(C930..C932)",
+        ]
+        assert all(instruction.branch_tree is None for instruction in analyzed[0].instructions)
+
+    @pytest.mark.parametrize("source_kind", ["bundle", "directory"])
+    def test_subroutine_error_identifies_subroutine_and_one_indexed_rung(
+        self, tmp_path: Path, source_kind: str
+    ):
+        """Public imports locate a malformed rung in either supported source form."""
+        from pyrung.click.ladder.types import LadderBundle
+
+        header = tuple(["marker", *[f"col_{i}" for i in range(31)], "AF"])
+        main_rung = _make_row(
+            "R",
+            _fill_dashes({0: "X001"}, 1, 31),
+            af='call("Problem Sub")',
+        )
+        valid_sub_rung = _make_row(
+            "R",
+            _fill_dashes({0: "X002"}, 1, 31),
+            af="out(Y001)",
+        )
+        dropped_row = _make_row(
+            "R",
+            _fill_dashes({0: "X003"}, 1, 31),
+            af="out(Y002)",
+        )
+        dangling_row = _make_row("", {0: "C999"})
+        bundle = LadderBundle(
+            main_rows=(header, tuple(main_rung)),
+            subroutine_rows=(
+                (
+                    "problem_sub",
+                    (
+                        header,
+                        tuple(valid_sub_rung),
+                        tuple(dropped_row),
+                        tuple(dangling_row),
+                    ),
+                ),
+            ),
+        )
+
+        if source_kind == "directory":
+            bundle.write(tmp_path)
+            source = tmp_path
+        else:
+            source = bundle
+
+        match = (
+            r'^Subroutine "Problem Sub", rung 2: Rung drops condition\(s\) present '
+            r"in the source but not connected into any output: C999 \(row 1\)\."
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match=match):
+                ladder_to_pyrung(source)
+
 
 class TestGraphWalkEdgeCases:
     """Synthetic grids exercising SP graph reduction from the Phase 2 spec."""

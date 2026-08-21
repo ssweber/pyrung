@@ -761,13 +761,28 @@ def _analyze_rungs(
     raw_rungs: list[_RawRung],
     *,
     validate: bool = False,
+    source_name: str | None = None,
 ) -> list[_AnalyzedRung]:
     """Analyze topology of each rung.
 
     When *validate* is True, a source contact that reaches no output raises
     ``ValueError`` instead of only warning (see ``_analyze_single_rung``).
+    When *source_name* is provided, analysis errors identify that source and
+    the 1-indexed raw rung number.
     """
     analyzed: list[_AnalyzedRung] = []
+
+    def analyze_one(rung_index: int, *, role: RungRole = RungRole.NORMAL) -> _AnalyzedRung:
+        try:
+            return _analyze_single_rung(
+                raw_rungs[rung_index],
+                role=role,
+                validate=validate,
+            )
+        except ValueError as exc:
+            if source_name is None:
+                raise
+            raise ValueError(f"{source_name}, rung {rung_index + 1}: {exc}") from None
 
     # Strip trailing end() rung (auto-appended by pyrung_to_ladder, not part of user logic).
     if raw_rungs:
@@ -784,28 +799,20 @@ def _analyze_rungs(
 
         if af0.startswith("for("):
             # for/next block
-            analyzed.append(
-                _analyze_single_rung(rung, role=RungRole.FORLOOP_START, validate=validate)
-            )
+            analyzed.append(analyze_one(i, role=RungRole.FORLOOP_START))
             i += 1
             # Collect body rungs until next()
             while i < len(raw_rungs):
                 body_rung = raw_rungs[i]
                 body_af = body_rung.rows[0][-1] if body_rung.rows else ""
                 if body_af == "next()":
-                    analyzed.append(
-                        _analyze_single_rung(
-                            body_rung, role=RungRole.FORLOOP_NEXT, validate=validate
-                        )
-                    )
+                    analyzed.append(analyze_one(i, role=RungRole.FORLOOP_NEXT))
                     i += 1
                     break
-                analyzed.append(
-                    _analyze_single_rung(body_rung, role=RungRole.FORLOOP_BODY, validate=validate)
-                )
+                analyzed.append(analyze_one(i, role=RungRole.FORLOOP_BODY))
                 i += 1
         else:
-            analyzed.extend(_split_continued(_analyze_single_rung(rung, validate=validate)))
+            analyzed.extend(_split_continued(analyze_one(i)))
             i += 1
 
     return analyzed
@@ -877,6 +884,22 @@ def _analyze_single_rung(
     # Output Grouping
     condition_tree, instructions, af_rows = _group_outputs(output_trees)
 
+    if validate:
+        retained_instruction_rows = set(af_rows)
+        missing_instructions = [
+            (af_token, af_row)
+            for _tree, af_token, af_row in output_trees
+            if af_row not in retained_instruction_rows
+        ]
+        if missing_instructions:
+            detail = ", ".join(
+                f"{af_token} (row {af_row})" for af_token, af_row in missing_instructions
+            )
+            raise ValueError(
+                "Rung drops output instruction(s) present in the source during grouping: "
+                f"{detail}."
+            )
+
     # Exporter pins immediately follow their owning AF row. Walk the raw rows
     # in order so malformed layouts fail loudly instead of silently attaching
     # to the wrong instruction.
@@ -920,18 +943,19 @@ def _analyze_single_rung(
 
             current_instruction = None
 
-    # Dropped-contact detection: every content edge's Leaf should appear in one
-    # of the produced trees. Positions absent from all of them were pruned as
-    # dead-end edges (unwired contacts) and silently omitted from the logic.
+    # Dropped-condition detection: every content edge's Leaf should reach at
+    # least one output or pin tree before output grouping. Grouping may safely
+    # merge equal conditions from different source positions, so checking its
+    # factored trees would mistake that merge for a dropped source occurrence.
+    # Positions absent from every pre-group tree were pruned as dead-end edges
+    # (unwired conditions) and silently omitted from the logic.
     present: set[tuple[int, int]] = set()
-    for leaf in _walk_tree_leaves(condition_tree):
-        present.add((leaf.row, leaf.col))
-    for instr in instructions:
-        for leaf in _walk_tree_leaves(instr.branch_tree):
+    for tree, _af_token, _af_row in output_trees:
+        for leaf in _walk_tree_leaves(tree):
             present.add((leaf.row, leaf.col))
-        for pin in instr.pins:
-            for leaf in _walk_tree_leaves(pin.condition_tree):
-                present.add((leaf.row, leaf.col))
+    for tree in pin_trees.values():
+        for leaf in _walk_tree_leaves(tree):
+            present.add((leaf.row, leaf.col))
 
     dropped = [
         (str(e.tree.label), e.tree.row)

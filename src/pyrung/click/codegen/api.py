@@ -142,7 +142,7 @@ def _prepare_codegen(
             f"source must be a path (str/Path) or LadderBundle, got {type(source).__name__}"
         )
 
-    analyzed = _analyze_rungs(raw_rungs, validate=validate)
+    analyzed = _analyze_rungs(raw_rungs, validate=validate, source_name="Main program")
 
     all_analyzed = list(analyzed)
     for sub in subroutines:
@@ -229,7 +229,11 @@ def _parse_subroutines_from_bundle(
         slug = _slugify(subroutine_name)
         name = call_names.get(slug, subroutine_name)
         raw = _parse_rows(rows)
-        analyzed = _analyze_rungs(raw, validate=validate)
+        analyzed = _analyze_rungs(
+            raw,
+            validate=validate,
+            source_name=f'Subroutine "{name}"',
+        )
         subs.append(_SubroutineInfo(name=name, analyzed=analyzed))
     return subs
 

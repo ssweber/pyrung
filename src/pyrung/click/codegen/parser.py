@@ -140,7 +140,11 @@ def _parse_subroutines(
     for sub_path, stem in sub_entries:
         name = call_names.get(_slugify(stem), stem)
         raw = _parse_csv(sub_path)
-        analyzed = _analyze_rungs(raw, validate=validate)
+        analyzed = _analyze_rungs(
+            raw,
+            validate=validate,
+            source_name=f'Subroutine "{name}"',
+        )
         subs.append(_SubroutineInfo(name=name, analyzed=analyzed))
 
     return subs
