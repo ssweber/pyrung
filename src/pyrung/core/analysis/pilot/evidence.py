@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.pilot.static_expressions import (
     _channel_from_values,
     caller_guard_context,
+    index_values,
 )
 from pyrung.core.analysis.pilot.tide_tables import _read_table, table_operand_from_copy
 
@@ -229,6 +230,21 @@ def expand_routes(
             )
 
         elif isinstance(written, Affine):
+            direct_routes.extend(
+                _constant_feedback_lookup_routes(
+                    target_tag,
+                    written,
+                    node_idx,
+                    node,
+                    cond_values,
+                    pdg,
+                    program,
+                    steerable,
+                    source_tags,
+                    source_aliases,
+                    evidence,
+                )
+            )
             request_tags.add(written.source)
             affine_transforms.setdefault(written.source, []).append(written)
             transfer_nodes.setdefault(written.source, []).append(node_idx)
@@ -364,6 +380,134 @@ def expand_routes(
             len(pipeline_routes),
         )
     return all_routes
+
+
+def _constant_feedback_lookup_routes(
+    target_tag: str,
+    transfer: Any,
+    transfer_node_idx: int,
+    transfer_node: Any,
+    transfer_conditions: dict[str, frozenset[Any]],
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    source_tags: set[str],
+    source_aliases: dict[tuple[str, Any], tuple[str, Any]],
+    evidence: TransitionEvidence | None,
+) -> list[TransitionRoute]:
+    """Ground ``channel <- table[channel]`` transfers as chart edges.
+
+    Generated step controls commonly calculate ``Next = table[Channel]`` every
+    scan, then conditionally copy ``Next`` back into ``Channel`` on an operator
+    command. Generic request-pipeline expansion sees the feedback but loses the
+    table values because the request writer is indirect. The table model can
+    recover those values when each addressed slot is constant.
+
+    These routes are suggestions, not reachability proofs: normal execution and
+    verification still judge every edge. Writable addressed slots are excluded
+    because their value is not a static table fact.
+    """
+
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.crossing import UNKNOWN, evaluate_forward
+
+    request_tag = transfer.source
+    request_writers = tuple(sorted(pdg.writers_of.get(request_tag, frozenset())))
+    if len(request_writers) != 1:
+        return []
+    request_rung = resolve_rung(program, pdg.rung_nodes[request_writers[0]])
+    if request_rung is None:
+        return []
+    table = table_operand_from_copy(
+        request_rung,
+        request_tag,
+        {},
+        pdg,
+        program,
+        evidence=evidence,
+        single_mutable_index=False,
+        live_snapshot=False,
+        strict_hop_budget=False,
+    )
+    if table is None or table.index_tag != target_tag:
+        return []
+
+    defaults = {name: getattr(tag, "default", None) for name, tag in pdg.tags.items()}
+    pending = index_values(target_tag, defaults, pdg, program)
+    source_values: list[int] = []
+    routes: list[TransitionRoute] = []
+    call_gates = _call_site_conditions(transfer_node, pdg, program)
+
+    # Close over table destinations so a value present only in the lookup table
+    # (for example 30 between literal-written 25 and 35) becomes another source
+    # edge. The cap is a search guardrail; omitted edges remain an honest punt.
+    while pending and len(source_values) < 64:
+        source_value = pending.pop(0)
+        if source_value in source_values:
+            continue
+        source_values.append(source_value)
+        try:
+            address = table.eval_addr(source_value)
+            table.block._validate_address(address)
+        except (IndexError, TypeError, ValueError, ZeroDivisionError):
+            continue
+        slot_name = table.block._effective_slot_name(address)
+        if pdg.writers_of.get(slot_name):
+            continue
+        request_value = _read_table(
+            table,
+            source_value,
+            defaults,
+            coerce_index=True,
+            invalid=_MISSING,
+        )
+        if request_value is _MISSING:
+            continue
+        destination_value = evaluate_forward(transfer, {request_tag: request_value})
+        if destination_value is UNKNOWN:
+            continue
+
+        route_conditions = {
+            tag: frozenset(values)
+            for tag, values in _merge_condition_values(
+                transfer_conditions,
+                call_gates,
+            ).items()
+        }
+        constrained = route_conditions.get(target_tag)
+        if constrained is not None and source_value not in constrained:
+            continue
+        route_conditions[target_tag] = frozenset((source_value,))
+        source_c, enabler_c, action_t = _partition_conditions(
+            route_conditions,
+            source_tags,
+            steerable,
+            source_aliases,
+        )
+        routes.append(
+            TransitionRoute(
+                destination_tag=target_tag,
+                destination_value=destination_value,
+                request_tag=None,
+                request_value=None,
+                source_constraints=source_c,
+                enablers=enabler_c,
+                action_tags=action_t,
+                writer_node=transfer_node_idx,
+                writer_subroutine=transfer_node.subroutine,
+                call_site_gates=call_gates,
+                from_values=(source_value,),
+                edge_gates=_route_edge_gates(transfer_node, pdg, program, steerable),
+            )
+        )
+        if (
+            isinstance(destination_value, int)
+            and not isinstance(destination_value, bool)
+            and destination_value not in source_values
+            and destination_value not in pending
+        ):
+            pending.append(destination_value)
+    return routes
 
 
 def _static_request_value(written: Any, pdg: ProgramGraph) -> tuple[bool, Any]:

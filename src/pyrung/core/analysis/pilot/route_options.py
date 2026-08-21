@@ -11,9 +11,12 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
+from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.candidate_policy import _action_allowed
 from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence
+from pyrung.core.analysis.pilot.guard_forcing import break_guard_holds
 from pyrung.core.analysis.pilot.navigation_contracts import (
     EvidenceScope,
     _ActionPair,
@@ -49,6 +52,15 @@ def _edge_commands_effective(
     )
 
 
+def _edge_requires_pulse(edge: Any, ctx: Any) -> bool:
+    """Whether an edge command must be released before another firing."""
+
+    commanded = () if edge.action is None else (edge.action, *edge.co_actions)
+    return edge.identity in getattr(ctx, "oneshot_edges", frozenset()) or any(
+        tag in getattr(ctx, "edge_tags", ()) for tag, _value in commanded
+    )
+
+
 def _compass_route_plan(
     frame: Any,
     ctx: Any,
@@ -56,6 +68,7 @@ def _compass_route_plan(
     unavailable_producer_edges: frozenset[tuple[Any, ...]] = frozenset(),
     *,
     state: Any = None,
+    prefer_first_edge_coast: bool = False,
 ) -> StaticPath | None:
     graphs = ctx.compass.graphs
     if not graphs:
@@ -98,6 +111,11 @@ def _compass_route_plan(
         ):
             return False
         already_effective = _edge_commands_effective(edge, frame.snap, overlay)
+        if _edge_requires_pulse(edge, ctx):
+            # A high edge/one-shot trigger is spent, not reusable context.  Keep
+            # the action edge selectable; pulse execution will supply the
+            # release scan before asserting it again.
+            already_effective = False
         # An already-effective command is not another candidate.  It admits
         # precisely one chart coast only when the selected writer's complete
         # live guard proves that the program can consume it in this world.
@@ -113,6 +131,27 @@ def _compass_route_plan(
             is not None
         )
 
+    def _edge_available_now(edge: Any) -> bool:
+        """Whether this edge's stable non-channel context holds in this world."""
+
+        if not _first_edge_open(edge):
+            return False
+        commanded = frozenset(() if edge.action is None else (edge.action, *edge.co_actions))
+        return all(
+            tag == edge.role.channel_tag
+            or (tag, value) in commanded
+            or (
+                ((owner := overlay.owner(tag)) is not None and _values_match(owner.value, value))
+                or _values_match(frame.snap.get(tag), value)
+            )
+            for tag, value in (*edge.source_constraints, *edge.enablers)
+        )
+
+    def _first_edge_actionable(edge: Any) -> bool:
+        """Prefer an explicit action over an unready actionless shortcut."""
+
+        return edge.action is not None and _first_edge_open(edge)
+
     plans: list[StaticPath] = []
     for n in frame.tree.iter_nodes():
         if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
@@ -121,14 +160,52 @@ def _compass_route_plan(
             continue
         if _values_match(frame.snap.get(n.tag), n.value):
             continue
-        plan = _best_static_path(
-            n.tag,
-            n.value,
-            frame.snap,
-            graphs,
-            edge_allowed=_edge_open,
-            first_edge_allowed=_first_edge_open,
-        )
+        plan = None
+        if prefer_first_edge_coast:
+            plan = _best_static_path(
+                n.tag,
+                n.value,
+                frame.snap,
+                graphs,
+                edge_allowed=_edge_open,
+                first_edge_allowed=lambda edge: edge.action is None and _first_edge_open(edge),
+            )
+        if plan is None:
+            plan = _best_static_path(
+                n.tag,
+                n.value,
+                frame.snap,
+                graphs,
+                edge_allowed=_edge_available_now,
+                first_edge_allowed=_edge_available_now,
+            )
+        if plan is None:
+            plan = _best_static_path(
+                n.tag,
+                n.value,
+                frame.snap,
+                graphs,
+                edge_allowed=_edge_open,
+                first_edge_allowed=_edge_available_now,
+            )
+        if plan is None:
+            plan = _best_static_path(
+                n.tag,
+                n.value,
+                frame.snap,
+                graphs,
+                edge_allowed=_edge_open,
+                first_edge_allowed=_first_edge_actionable,
+            )
+        if plan is None:
+            plan = _best_static_path(
+                n.tag,
+                n.value,
+                frame.snap,
+                graphs,
+                edge_allowed=_edge_open,
+                first_edge_allowed=_first_edge_open,
+            )
         if plan is not None:
             plans.append(plan)
 
@@ -176,6 +253,100 @@ def _chart_edge_writer_trace(edge: Any, frame: Any, state: Any, ctx: Any) -> Any
         writer_locks={(effect_tag, effect_value): edge.route.writer_node},
     )
     return tree if tree.writer_rung == edge.route.writer_node else None
+
+
+def _route_context_actions(
+    edge: Any,
+    frame: Any,
+    state: Any,
+    ctx: Any,
+    key_nogoods: set[_ActionPair],
+) -> tuple[_ActionPair, ...]:
+    """Lower exact first-edge level prerequisites into its atomic overlay.
+
+    A chart edge can name a derived guard rather than the external input that
+    establishes it.  The edge's writer-locked Trace artifact is the authority
+    for that missing context: retain only presently unsatisfied, directly
+    steerable levels.  Temporal operations and edge inputs keep their own
+    release/assert contracts and cannot hitchhike here.
+    """
+
+    selected = _chart_edge_writer_trace(edge, frame, state, ctx)
+    if selected is None:
+        return ()
+
+    commanded = frozenset(pair for pair in (edge.action, *edge.co_actions) if pair is not None)
+    context: list[_ActionPair] = []
+    seen = set(commanded)
+
+    def _admit(pair: _ActionPair) -> None:
+        tag, value = pair
+        if (
+            pair in seen
+            or pair in key_nogoods
+            or tag in getattr(ctx, "edge_tags", frozenset())
+            or tag in getattr(ctx, "clear_only", frozenset())
+            or tag not in getattr(ctx, "steerable", frozenset())
+            or _values_match(frame.snap.get(tag), value)
+            or not _action_allowed(ctx, pair)
+            or _avoid_forces(ctx, [pair], frame.snap)
+        ):
+            return
+        context.append(pair)
+        seen.add(pair)
+
+    for detail in selected.ordered_action_details():
+        pair = detail.pair
+        if (
+            pair in seen
+            or pair in key_nogoods
+            or detail.availability > _WriterAvailability.AFTER_PREREQ
+            or detail.establish
+            or detail.heuristic
+            or detail.until is not None
+            or detail.operation is not None
+        ):
+            continue
+        _admit(pair)
+
+    # ``out(Tag)`` owns both polarities but False is an absence effect: ordinary
+    # backward trace correctly has no firing writer to follow.  For a required
+    # false Boolean enabler, prove the complement directly from every OTE rung
+    # by finding stable inputs that force those guards off.  These are exact
+    # writer guards, not free guesses; the forked scan still verifies whether
+    # producer/consumer ordering realizes the composed edge.
+    pdg = getattr(ctx, "pdg", None)
+    program = getattr(ctx, "program", None)
+    fixed = dict(edge.source_constraints)
+    fixed.update(commanded)
+    if pdg is not None and program is not None:
+        for tag, value in edge.enablers:
+            if not _values_match(value, False) or _values_match(frame.snap.get(tag), value):
+                continue
+            writers = tuple(pdg.writers_of.get(tag, frozenset()))
+            if not writers or not all(tag in pdg.rung_nodes[index].ote_writes for index in writers):
+                continue
+            derived: list[_ActionPair] = []
+            for index in writers:
+                rung = resolve_rung(program, pdg.rung_nodes[index])
+                holds = (
+                    break_guard_holds(
+                        rung,
+                        frame.snap,
+                        ctx,
+                        fixed=fixed,
+                        steerable=getattr(ctx, "steerable", frozenset()),
+                    )
+                    if rung is not None
+                    else None
+                )
+                if holds is None:
+                    derived = []
+                    break
+                derived.extend(holds)
+            for pair in derived:
+                _admit(pair)
+    return tuple(context)
 
 
 def _live_general_chart_completion_edge(
@@ -361,6 +532,12 @@ def _live_chart_completion_edge(
     """
 
     if edge.action is None:
+        return None
+    if _edge_requires_pulse(edge, ctx):
+        # A consumed edge cannot become an actionless completion merely because
+        # its input level and rung guard remain true. It must be released and
+        # asserted again so rise/fall state or instruction one-shot memory can
+        # rearm through ordinary execution.
         return None
     execution = (
         overlay

@@ -27,6 +27,7 @@ from pyrung.core.analysis.graph import (
 )
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
 from pyrung.core.analysis.pilot.compass import (
+    ActionNogoodObservation,
     ProbeExhaustedObservation,
 )
 from pyrung.core.analysis.pilot.departure_state import (
@@ -75,6 +76,7 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
     _derive_settled_target_requirements,
     _release_attempt_projections,
 )
+from pyrung.core.analysis.pilot.requirements import RequirementStatus
 from pyrung.core.analysis.pilot.route_judgment import route_forced_names
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.theory_evidence import (
@@ -116,6 +118,7 @@ from pyrung.core.analysis.pilot.working_theory import (
 )
 from pyrung.core.analysis.pilot.world import _CausalCheckpoint, _World
 from pyrung.core.analysis.pilot.world_key import (
+    _physical_world_key,
     _pilot_world_key,
 )
 from pyrung.core.analysis.sp_values import _values_match
@@ -188,6 +191,68 @@ def _with_avoid_reason(
 def _stopped_reason() -> str:
     """Translate internal orientation taxonomy into an honest public stop."""
     return "No productive next action was found"
+
+
+def _retire_temporal_hypothesis(
+    state: _PilotState,
+    ctx: _PilotContext,
+    temporal_request: Any,
+    *,
+    world_key: tuple[Any, ...],
+    requirements: tuple[Any, ...],
+    retirement_identity: tuple[Any, ...],
+) -> None:
+    """Close one dead temporal hypothesis and expose other current-world routes.
+
+    A counterfactual traceback can prove a same-scan hop whose program-owned
+    prerequisite has no ordinary realization.  That disproves only the
+    triggering act in this physical World; it does not prove the target or the
+    other freshly read candidates unreachable.  Retire the exact theory-owned
+    requirements and suppress its trigger before Compass reads again.
+    """
+
+    requirement_identities = frozenset(
+        requirement.semantic_identity
+        if hasattr(requirement, "semantic_identity")
+        else _theory_requirement_snapshot(requirement).semantic_identity
+        for requirement in requirements
+    )
+    for index, requirement in enumerate(state.active_requirements):
+        if (
+            requirement.status is RequirementStatus.ACTIVE
+            and _theory_requirement_snapshot(requirement).semantic_identity
+            in requirement_identities
+        ):
+            state.active_requirements[index] = replace(
+                requirement,
+                status=RequirementStatus.INVALIDATED,
+            )
+
+    theory = active_theory(state.theory_state)
+    if theory is None:
+        raise ValueError("unrealizable traceback lost its active theory")
+    _theory_recording._record_controlling_theory_fact(
+        state,
+        AbandonTheory(
+            theory_id=theory.theory_id,
+            version_id=theory.current_version_id,
+            termination=TheoryTermination.STUCK,
+            abandonment_identity=(
+                "working-theory-retired",
+                theory.theory_id,
+                theory.current_version_id,
+                retirement_identity,
+            ),
+        ),
+    )
+    ctx.compass, _ = ctx.compass.apply(
+        (
+            ActionNogoodObservation(
+                _physical_world_key(world_key),
+                temporal_request.trigger_act_identity,
+            ),
+        )
+    )
 
 
 def _avoid_route_names(frame: _IterationFrame, ctx: _PilotContext) -> tuple[str, ...]:
@@ -520,21 +585,30 @@ def _pilot_loop_events(
     last_frame: _IterationFrame | None = None
     last_frontier: tuple[_ActionPair, ...] = ()
     while state.search_scans < ctx.max_scans:
-        requirements_before_rebase = len(state.active_requirements)
+        requirements_before_rebase = tuple(state.active_requirements)
         rebased_requirements = _requirement_repair.derive_program_guard_rebases(state, ctx)
         if rebased_requirements:
+            recorded_rebase = False
             if active_theory(state.theory_state) is None:
-                _theory_recording._open_theory_from_program_guard_rebases(
+                recorded_rebase = _theory_recording._open_theory_from_program_guard_rebases(
                     state,
                     rebased_requirements,
                     remaining_budget=state.remaining_search_scans(ctx.max_scans),
                 )
             else:
-                _theory_recording._refine_active_theory_from_program_guard_rebases(
-                    state,
-                    rebased_requirements,
+                recorded_rebase = (
+                    _theory_recording._refine_active_theory_from_program_guard_rebases(
+                        state,
+                        rebased_requirements,
+                    )
                 )
-        for active in state.active_requirements[requirements_before_rebase:]:
+            if not recorded_rebase:
+                # Derivation tentatively appends the replacement and discharges
+                # its parent.  Neither mutation has control authority unless
+                # WorkingTheory accepts the corresponding lifecycle fact.
+                state.active_requirements[:] = requirements_before_rebase
+                rebased_requirements = ()
+        for active in state.active_requirements[len(requirements_before_rebase) :]:
             yield PilotEvent(
                 "requirement_activated",
                 active.deadline.scan_id,
@@ -964,36 +1038,18 @@ def _pilot_loop_events(
                 # Compass must reread before selecting a stage scan or tracing
                 # one open producer goal from this same physical boundary.
                 continue
-            terminal_reason = (
-                "Working theory derived one intrascan traceback hop, but no ordinary "
-                "scan-boundary realization was proved"
-                if witness.traceback_step is not None
-                else "Working theory found an exact consumer edge which must be rearmed"
-                if witness.blocked_edges
-                else "Working theory proved an occurrence-local counterfactual handoff; "
-                "no useful downstream program write was identified"
-                if witness.applied_exactly_once
-                else "Working theory could not relocate its exact intrascan consumer"
-            )
-            diagnosis = Stuck(
-                world_key=result.world_key,
-                reason_code="intrascan_traceback_pending",
-                frontier=result.frontier,
-                evidence=(witness,),
-                rationale=terminal_reason,
-                orientation=result.orientation,
-            )
-            yield from _stopped_events(
+            _retire_temporal_hypothesis(
                 state,
                 ctx,
-                frame,
-                terminal_reason,
-                journal_channel_tags,
-                journal_acc_names,
-                candidate_count=len(candidates.options) if candidates is not None else 0,
-                diagnosis=diagnosis,
+                temporal_request,
+                world_key=result.world_key,
+                requirements=result.request.requirements,
+                retirement_identity=("intrascan-unrealizable", result.request.identity),
             )
-            return
+            # The failed occurrence-local hypothesis rejects its exact trigger,
+            # not the target.  Return to a fresh current-world read so another
+            # writer or action can still be selected.
+            continue
 
         if isinstance(result, NeedProbe):
             observations = probe_live_guard_frontiers(frame, state, ctx)
@@ -1014,6 +1070,27 @@ def _pilot_loop_events(
             continue
 
         if isinstance(result, Stuck):
+            view = theory_view(state.theory_state)
+            ordinary_steer_exhausted = view is not None and any(
+                isinstance(finding, IntrascanOrdinarySteerFinding)
+                for finding in view.traceback_findings
+            )
+            if temporal_request is not None and ordinary_steer_exhausted:
+                _retire_temporal_hypothesis(
+                    state,
+                    ctx,
+                    temporal_request,
+                    world_key=result.world_key,
+                    requirements=temporal_request.requirements,
+                    retirement_identity=(
+                        "orientation-stuck",
+                        result.reason_code,
+                        result.frontier,
+                    ),
+                )
+                # A dead repair theory exhausts its trigger, not the target.
+                # Compass may still have another writer in this same World.
+                continue
             mandatory_blocker = _requirement_repair.mandatory_guard_blocker(
                 tuple(state.active_requirements),
                 state.work.state.tags,

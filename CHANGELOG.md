@@ -86,6 +86,7 @@
 
 ### Fixes
 
+- `how()` now drives indirect step tables without false coasts or route loops: repeated one-shot commands receive a real release scan, derived stable mode guards are composed with their command, unavailable automatic shortcuts cannot outrank an executable manual route, and an observed actionless continuation remains forward progress.
 - Click codegen now preserves unnamed nickname CSV rows with comments, non-default retentive policy, or non-default non-retentive initial values as backing `slot(...)` declarations, so indirect register tables survive round-trip without synthetic tag names while blank or numeric-zero initial values alone remain omitted.
 - `how()` no longer proposes a command that belongs to the world *after* a boundary the program advances by itself. Reading an automatic sequencer step mid-crossing could report the next step's operator command as this step's unmet input — on the tumbler, a factory-reset command surfaced while the program was already advancing its own step. Such a reading now coasts to the crossing's landing and re-reads the settled world, so the plan follows the program's own progress instead of acting on a requirement it has already left behind.
 - Conditions now `repr()` as the pyrung source that built them (`Step == 0`, `~Door`, `And(Or(State == 4, State == 3), Step == 101)`) instead of an object address, so a guard is readable wherever one is shown — logs, exceptions, and `how()` plan output. Equality and hashing are unchanged: conditions still compare by identity, and an equal `repr()` is not equality.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -39,6 +40,8 @@ def _record_replay_steps(
     edge_tags: set[str],
     *,
     edge_inputs: dict[str, Any] | None = None,
+    rearm_tags: set[str] | frozenset[str] = frozenset(),
+    source_snapshot: Mapping[str, Any] | None = None,
 ) -> tuple[PLC, tuple[_Step, ...]]:
     """Record a step (or release+pulse pair) and swap the work fork.
 
@@ -57,7 +60,13 @@ def _record_replay_steps(
     edge_release = {
         t: resting.get(t, False)
         for t in pulsed_inputs
-        if t in edge_tags and not _values_match(pulsed_inputs[t], resting.get(t, False))
+        if t in edge_tags
+        and not _values_match(pulsed_inputs[t], resting.get(t, False))
+        and (
+            t not in rearm_tags
+            or source_snapshot is None
+            or not _values_match(source_snapshot.get(t), resting.get(t, False))
+        )
     }
     if edge_release:
         steps = (
@@ -203,6 +212,15 @@ def commit_trial(
         ctx.resting,
         ctx.edge_tags,
         edge_inputs=dict(policy.applied),
+        rearm_tags={
+            tag
+            for tag, _value in (
+                policy.heading.route.rearm_actions
+                if policy.heading is not None and policy.heading.route is not None
+                else ()
+            )
+        },
+        source_snapshot=execution.before_snap,
     )
     act = _CommittedAct(steps=steps, context=_build_step_context(trial, frame, state))
     # Adopt the physical fork and its replay evidence in one persistent-world

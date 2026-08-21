@@ -53,13 +53,23 @@ def _route_edge(
     )
 
 
-def _completion_context(monkeypatch) -> SimpleNamespace:
+def _completion_context(
+    monkeypatch,
+    *,
+    edge_tags: frozenset[str] = frozenset(),
+    oneshot_edges: frozenset[tuple[object, ...]] = frozenset(),
+) -> SimpleNamespace:
     monkeypatch.setattr(
         evidence_module,
         "selected_chart_producer_guard_rungs",
         lambda *_args: (_ProducerGuard(),),
     )
-    return SimpleNamespace(pdg=object(), program=object())
+    return SimpleNamespace(
+        pdg=object(),
+        program=object(),
+        edge_tags=edge_tags,
+        oneshot_edges=oneshot_edges,
+    )
 
 
 def _effective_overlay(*pairs: tuple[str, object]) -> PilotOverlayExecution:
@@ -154,6 +164,22 @@ def test_chart_completion_requires_true_producer_guards(monkeypatch) -> None:
             edge,
             SimpleNamespace(snap={**effective, "ProducerGuard": False}),
             state,
+            ctx,
+        )
+        is None
+    )
+
+
+def test_chart_completion_rejects_a_spent_pulse_command(monkeypatch) -> None:
+    edge = _route_edge()
+    frame = SimpleNamespace(snap={"State": 0, "Command": True, "ProducerGuard": True})
+    ctx = _completion_context(monkeypatch, oneshot_edges=frozenset((edge.identity,)))
+
+    assert (
+        _live_chart_completion_edge(
+            edge,
+            frame,
+            SimpleNamespace(pilot_rungs=()),
             ctx,
         )
         is None

@@ -57,6 +57,7 @@ from pyrung.core.analysis.pilot.route_options import (
     _compass_route_plan,
     _general_chart_completion_plan,
     _live_chart_completion_edge,
+    _route_context_actions,
 )
 from pyrung.core.analysis.pilot.wait_options import (
     _boundary_heading,
@@ -204,16 +205,23 @@ def _read_route_and_wait(
         for detail in (admission.detail_by_pair.get(pair),)
         if detail is not None and detail.availability <= _WriterAvailability.AFTER_PREREQ
     )
-    banked_trace_work = bool(
-        admission.actions and earned_work is not None and earned_work.has_banked_work(frame.snap)
-    )
-    route_blocked = bool(
+    banked_program_work = bool(earned_work is not None and earned_work.has_banked_work(frame.snap))
+    banked_trace_work = bool(admission.actions and banked_program_work)
+    trace_blocks_route = bool(
         current_trace_actions
         or banked_trace_work
         or (getattr(state, "pending_departure", None) is not None and admission.active_actions)
     )
     route_plan = (
-        None if route_blocked else _compass_route_plan(frame, ctx, key_nogoods, state=state)
+        None
+        if trace_blocks_route
+        else _compass_route_plan(
+            frame,
+            ctx,
+            key_nogoods,
+            state=state,
+            prefer_first_edge_coast=banked_program_work,
+        )
     )
     admitted_completion: _candidate_read._AdmittedWait | None = None
     if route_plan is not None and route_plan.first_edge.action is not None:
@@ -242,12 +250,13 @@ def _read_route_and_wait(
             if general_admitted.viable or not general.first_edge.program_producers:
                 route_plan = general
                 admitted_completion = general_admitted
-    if route_plan is None and not route_blocked:
+    if route_plan is None and not trace_blocks_route:
         route_plan = _general_chart_completion_plan(
             frame,
             ctx,
             key_nogoods,
             state=state,
+            allow_conservative_nomination=banked_program_work,
         )
     if route_plan is not None:
         completion_edge = _live_chart_completion_edge(
@@ -291,6 +300,7 @@ def _read_route_and_wait(
             key_nogoods,
             frozenset(unavailable_producer_edges),
             state=state,
+            prefer_first_edge_coast=banked_program_work,
         )
         if alternate is None:
             break
@@ -306,7 +316,16 @@ def _read_route_and_wait(
         else _compass_route_actions(route_plan, frame, ctx, key_nogoods)
     )
     route_co_actions = (
-        tuple(route_plan.first_edge.co_actions)
+        (
+            *route_plan.first_edge.co_actions,
+            *_route_context_actions(
+                route_plan.first_edge,
+                frame,
+                state,
+                ctx,
+                key_nogoods,
+            ),
+        )
         if route_candidates and route_plan is not None
         else ()
     )
@@ -680,7 +699,10 @@ def _assemble_candidate_read(
                     ctx.pdg,
                     ctx.program,
                     boundary=(prescribed_edge.role.channel_tag, prescribed_edge.to_value),
-                    selected_pairs=(pair, *prescribed_edge.co_actions),
+                    selected_pairs=(
+                        pair,
+                        *(route.co_actions if route is not None else ()),
+                    ),
                     snapshot=frame.snap,
                     steerable=getattr(ctx, "steerable", frozenset()),
                 )
@@ -704,6 +726,13 @@ def _assemble_candidate_read(
                 prescribed_edge.to_value,
                 effect_tag,
                 effect_value,
+                tuple(
+                    pair
+                    for pair in (prescribed_edge.action, *prescribed_edge.co_actions)
+                    if pair is not None
+                    and pair[0] not in getattr(ctx, "edge_tags", set())
+                    and prescribed_edge.identity in getattr(ctx, "oneshot_edges", frozenset())
+                ),
             )
         program_handoff = (
             program_step.handoff_by_action.get(pair)

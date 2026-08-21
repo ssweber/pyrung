@@ -510,7 +510,16 @@ def investigate_excursion(
             for owner in iter_advance_owners(ctx.program)
             if owner.profile.done is not None
         )
-    _apply_pulse(replay_fork, kickoff, ctx.resting, ctx.edge_tags, session=session)
+    heading = getattr(executed.bearing.act.policy, "heading", None)
+    rearm_actions = heading.route.rearm_actions if heading is not None and heading.route else ()
+    _apply_pulse(
+        replay_fork,
+        kickoff,
+        ctx.resting,
+        ctx.edge_tags,
+        session=session,
+        rearm_tags={tag for tag, _value in rearm_actions},
+    )
     _settle_delayed_effects(
         replay_fork,
         scan_budget=state.remaining_search_scans(ctx.max_scans),

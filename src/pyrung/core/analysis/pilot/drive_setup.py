@@ -16,6 +16,7 @@ from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.pipeline_graph import (
     detect_opaque_loop,
     detect_opaque_pipelines,
+    oneshot_rearm_edges,
 )
 from pyrung.core.analysis.pilot.program_facts import (
     compute_edge_tags,
@@ -99,25 +100,32 @@ def _make_pilot_context(
         tag for role in pipeline_roles for tag in role.trace_internal_tags
     )
     prior_compass = setup.compass if compass is None else compass
+    graphs = _build_static_transition_graphs(
+        pipeline_roles,
+        setup.pdg,
+        setup.program,
+        setup.steerable,
+        setup.opaque_loop,
+        setup.evidence,
+    )
+    chart_graphs = _build_static_transition_graphs(
+        chart_roles,
+        setup.pdg,
+        setup.program,
+        setup.steerable,
+        setup.opaque_loop,
+        setup.evidence,
+    )
+    route_oneshot_edges = oneshot_rearm_edges(
+        (*graphs, *chart_graphs),
+        setup.pdg,
+        setup.program,
+    )
     compass = Compass(
         catalog=NavigationCatalog(
             slices=prior_compass.catalog.slices,
-            graphs=_build_static_transition_graphs(
-                pipeline_roles,
-                setup.pdg,
-                setup.program,
-                setup.steerable,
-                setup.opaque_loop,
-                setup.evidence,
-            ),
-            chart_graphs=_build_static_transition_graphs(
-                chart_roles,
-                setup.pdg,
-                setup.program,
-                setup.steerable,
-                setup.opaque_loop,
-                setup.evidence,
-            ),
+            graphs=graphs,
+            chart_graphs=chart_graphs,
         ),
         knowledge=prior_compass.knowledge,
     )
@@ -142,6 +150,7 @@ def _make_pilot_context(
         program=setup.program,
         steerable=setup.steerable,
         edge_tags=setup.edge_tags,
+        oneshot_edges=route_oneshot_edges,
         clear_only=clear_only,
         resting=setup.resting,
         nd_domains=setup.nd_domains,

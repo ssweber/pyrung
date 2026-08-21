@@ -3471,6 +3471,143 @@ def test_grounded_action_plan_always_materializes_its_first_action() -> None:
     assert _compass_route_actions(plan, frame, ctx, set()) == (("Complete", True),)
 
 
+def test_actionable_route_outranks_a_shorter_unready_actionless_edge() -> None:
+    role = PipelineRoles("State")
+    shortcut = replace(_route(6, 17), enablers=(("StartWindow", True),))
+    actionable = replace(
+        _action_route(6, 16, "ManualNext"),
+        enablers=(("ManualNext", True), ("ManualMode", True)),
+    )
+    graph = StaticTransitionGraph(role, (shortcut, actionable, _route(16, 17)))
+    frame = SimpleNamespace(
+        key=("state", 6),
+        snap={
+            "State": 6,
+            "StartWindow": False,
+            "ManualNext": False,
+            "ManualMode": False,
+        },
+        tree=TraceNode(
+            "State",
+            17,
+            children=[TraceNode("UnreadableGuard", 1, satisfied=False, is_steerable=False)],
+        ),
+    )
+    ctx = SimpleNamespace(
+        compass=Compass(NavigationCatalog(graphs=(graph,))),
+        blocked_actions=frozenset(),
+        avoid_pred=None,
+        opaque_loop=frozenset(),
+        target=TargetSpec("State", 17),
+    )
+
+    plan = _compass_route_plan(frame, ctx, set())
+
+    assert plan is not None
+    assert plan.first_edge.action == ("ManualNext", True)
+
+
+def test_ready_route_outranks_reverse_step_toward_unready_shortcut() -> None:
+    role = PipelineRoles("State")
+    reverse = _action_route(70, 65, "ManualPrevious")
+    unavailable_shortcut = replace(_route(65, 100), enablers=(("AutomaticMode", True),))
+    forward = _action_route(70, 75, "ManualNext")
+    onward = _action_route(75, 80, "ManualNext")
+    finish = _route(80, 100)
+    graph = StaticTransitionGraph(
+        role,
+        (reverse, unavailable_shortcut, forward, onward, finish),
+    )
+    frame = SimpleNamespace(
+        key=("state", 70),
+        snap={
+            "State": 70,
+            "AutomaticMode": False,
+            "ManualPrevious": False,
+            "ManualNext": False,
+        },
+        tree=TraceNode(
+            "State",
+            100,
+            children=[TraceNode("UnreadableGuard", 1, satisfied=False, is_steerable=False)],
+        ),
+    )
+    ctx = SimpleNamespace(
+        compass=Compass(NavigationCatalog(graphs=(graph,))),
+        blocked_actions=frozenset(),
+        avoid_pred=None,
+        opaque_loop=frozenset(),
+        target=TargetSpec("State", 100),
+    )
+
+    plan = _compass_route_plan(frame, ctx, set())
+
+    assert plan is not None
+    assert plan.first_edge.action == ("ManualNext", True)
+
+
+def test_banked_work_constrains_the_first_route_edge_to_program_coast() -> None:
+    role = PipelineRoles("State")
+    coast = replace(_route(12, 6), enablers=(("CompletionReady", True),))
+    stop = _action_route(12, 7, "Stop")
+    graph = StaticTransitionGraph(
+        role,
+        (coast, _route(6, 17), stop, _route(7, 17)),
+    )
+    frame = SimpleNamespace(
+        key=("state", 12),
+        snap={"State": 12, "CompletionReady": False, "Stop": False},
+        tree=TraceNode(
+            "State",
+            17,
+            children=[TraceNode("UnreadableGuard", 1, satisfied=False, is_steerable=False)],
+        ),
+    )
+    ctx = SimpleNamespace(
+        compass=Compass(NavigationCatalog(graphs=(graph,))),
+        blocked_actions=frozenset(),
+        avoid_pred=None,
+        opaque_loop=frozenset(),
+        target=TargetSpec("State", 17),
+    )
+
+    unconstrained = _compass_route_plan(frame, ctx, set())
+    coast_preferred = _compass_route_plan(
+        frame,
+        ctx,
+        set(),
+        prefer_first_edge_coast=True,
+    )
+
+    assert unconstrained is not None
+    assert unconstrained.first_edge.action == ("Stop", True)
+    assert coast_preferred is not None
+    assert coast_preferred.first_edge.action is None
+    assert coast_preferred.first_edge.to_value == 6
+
+    unhold_graph = StaticTransitionGraph(
+        role,
+        (_action_route(11, 12, "Unhold"), _route(12, 17)),
+    )
+    unhold_frame = SimpleNamespace(
+        key=("state", 11),
+        snap={"State": 11, "Unhold": False},
+        tree=frame.tree,
+    )
+    unhold_ctx = SimpleNamespace(**vars(ctx))
+    unhold_ctx.compass = Compass(NavigationCatalog(graphs=(unhold_graph,)))
+
+    unhold = _compass_route_plan(
+        unhold_frame,
+        unhold_ctx,
+        set(),
+        prefer_first_edge_coast=True,
+    )
+
+    assert unhold is not None
+    assert unhold.first_edge.action == ("Unhold", True)
+
+
 def test_apply_reports_changed_and_returns_self_when_nothing_new():
     """Compass.apply's no-new-knowledge contract: (compass, changed).
 

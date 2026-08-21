@@ -156,6 +156,69 @@ def _selected_route_landing_tree(
     return tree
 
 
+def _selected_effect_continues_on_route(
+    attempt: _ExecutedAttempt,
+    ctx: Any,
+    boundary: tuple[str, Any],
+) -> bool:
+    """Whether an observed boundary was overwritten by its next charted hop.
+
+    This is deliberately stronger than broad chart reachability: the selected
+    heading must own this exact channel edge, the physical execution timeline
+    must record the boundary-to-landing transition, and that landing must still
+    lie on the same graph's route to the user's target.
+    """
+
+    policy = attempt.bearing.act.policy
+    heading = policy.heading
+    route = heading.route if heading is not None else None
+    channel_tag, boundary_value = boundary
+    if (
+        route is None
+        or route.channel_tag != channel_tag
+        or not _values_match(route.target_value, boundary_value)
+        or ctx.target.tag != channel_tag
+    ):
+        return False
+    landing_value = attempt.pulse.snap.get(channel_tag)
+    if _values_match(landing_value, boundary_value):
+        return False
+    timeline = (
+        attempt.execution.timeline if attempt.execution is not None else attempt.pulse.timeline
+    )
+    if not any(
+        tag == channel_tag
+        and _values_match(before, boundary_value)
+        and _values_match(after, landing_value)
+        for event in timeline
+        for tag, before, after in event.transitions
+    ):
+        return False
+    for graph in ctx.compass.graphs:
+        if graph.role.channel_tag != channel_tag:
+            continue
+        selected_edge = any(
+            _values_match(edge.from_value, route.from_value)
+            and _values_match(edge.to_value, boundary_value)
+            for edge in graph.edges
+        )
+        continuation_edge = any(
+            edge.action is None
+            and not edge.enablers
+            and not edge.completion
+            and all(tag == channel_tag for tag, _value in edge.source_constraints)
+            and _values_match(edge.from_value, boundary_value)
+            and _values_match(edge.to_value, landing_value)
+            for edge in graph.edges
+        )
+        if not selected_edge or not continuation_edge:
+            continue
+        targets = graph.target_values_for_need(ctx.target.tag, ctx.target.value)
+        if graph.find_path(landing_value, targets) is not None:
+            return True
+    return False
+
+
 def _accepted_trial(
     attempt: _ExecutedAttempt,
     frame: Any,
@@ -526,6 +589,29 @@ def _verify_gates(
         trial,
         trial.channel_motion if trial.channel_motion.active else declared_motion,
     )
+    continued_route_boundary = (
+        (channel_motion.channel_tag, channel_motion.target_value)
+        if channel_motion.departed
+        and channel_motion.channel_tag is not None
+        and _selected_effect_continues_on_route(
+            attempt,
+            ctx,
+            (channel_motion.channel_tag, channel_motion.target_value),
+        )
+        else None
+    )
+    if continued_route_boundary is not None:
+        # Endpoint comparison calls this a departure because the look-ahead
+        # lands beyond the requested value.  The exact execution and chart say
+        # otherwise: the requested boundary occurred, then its actionless
+        # successor fired.  Normalize that occurrence before every generic
+        # gate so it cannot be reclassified as regression.
+        channel_motion = ChannelMotion(
+            continued_route_boundary[0],
+            continued_route_boundary[1],
+            continued_route_boundary,
+            stop_reason="reached",
+        )
     gate_events: list[PilotGateEvent] = []
     collected_nogoods: list[_ActionPair] = []
     avoid_violations: list[str] = []
@@ -1138,7 +1224,24 @@ def _verify_gates(
             and not _values_match(trial.snap.get(boundaries[0][0]), boundaries[0][1])
             else None
         )
-        if departed_boundary is not None:
+        route_continues = departed_boundary is not None and _selected_effect_continues_on_route(
+            attempt,
+            ctx,
+            departed_boundary,
+        )
+        if departed_boundary is not None and route_continues:
+            # The exact boundary occurred and the same route's next
+            # program-owned edge consumed it.  Preserve occurrence success on
+            # the requested heading; leaving the executor's final-value
+            # ``departed`` receipt in place would send this accepted
+            # continuation through 100-scan ejection settlement.
+            channel_motion = ChannelMotion(
+                departed_boundary[0],
+                departed_boundary[1],
+                departed_boundary,
+                stop_reason="reached",
+            )
+        elif departed_boundary is not None:
             channel_motion = ChannelMotion(
                 departed_boundary[0],
                 departed_boundary[1],
@@ -1151,7 +1254,11 @@ def _verify_gates(
                 BearingEffect.DEPARTED if channel_motion.departed else BearingEffect.SATISFIED
             ),
             progress=(
-                ProgressEffect.BACKWARD if channel_motion.departed else ProgressEffect.UNCHANGED
+                ProgressEffect.BACKWARD
+                if channel_motion.departed
+                else ProgressEffect.FORWARD
+                if route_continues
+                else ProgressEffect.UNCHANGED
             ),
             new_frontier=False,
             accepted=True,

@@ -318,6 +318,92 @@ def build_static_transition_graphs(
     return tuple(graphs)
 
 
+def oneshot_rearm_edges(
+    graphs: tuple[StaticTransitionGraph, ...],
+    pdg: Any,
+    program: Any,
+) -> frozenset[tuple[Any, ...]]:
+    """Return one-shot chart edges whose writer stays enabled after landing.
+
+    A one-shot instruction rearms when its *rung* goes false. Most ordinary
+    state transitions do that themselves: writing ``State=next`` falsifies a
+    guard such as ``State==current``. Broadly classifying their input actions as
+    pulses inserts spurious release scans. Only retain an exact edge when its
+    complete local guard surface cannot be proved false at the charted landing.
+    """
+
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.analysis.pilot.availability import _partial_eval_guard
+    from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+    from pyrung.core.analysis.simplified import Const, _sp_to_expr
+    from pyrung.core.analysis.write_sites import instruction_writes_tag
+
+    def _instructions(items: Iterable[Any]) -> Iterable[Any]:
+        for instruction in items:
+            yield instruction
+            yield from _instructions(getattr(instruction, "instructions", ()))
+
+    def _guard_surfaces(node: Any) -> tuple[Any, ...]:
+        rungs = (
+            program.rungs
+            if node.subroutine is None
+            else program.subroutines.get(node.subroutine, ())
+        )
+        if node.rung_index >= len(rungs):
+            return ()
+        current = rungs[node.rung_index]
+        surfaces = [current]
+        for branch_index in node.branch_path:
+            if branch_index >= len(current._branches):
+                return ()
+            current = current._branches[branch_index]
+            surfaces.append(current)
+        return tuple(surfaces)
+
+    def _surface_false_after(edge: StaticTransitionEdge, node: Any) -> bool:
+        known = {
+            edge.role.channel_tag: edge.to_value,
+            **dict(edge.enablers),
+            **dict(edge.co_actions),
+        }
+        if edge.action is not None:
+            known[edge.action[0]] = edge.action[1]
+        effect_tag, effect_value = edge.route.writer_effect
+        known[effect_tag] = effect_value
+        for surface in _guard_surfaces(node):
+            sp = surface.sp_tree()
+            if sp is None:
+                continue
+            expr = _sp_to_expr(sp)
+            reduced = _partial_eval_guard(expr, known)
+            if isinstance(reduced, Const) and reduced.value is False:
+                return True
+            if _eval_expr_from_state(expr, known) is False:
+                return True
+        return False
+
+    result: set[tuple[Any, ...]] = set()
+    for graph in graphs:
+        for edge in graph.edges:
+            if edge.action is None:
+                continue
+            node = pdg.rung_nodes[edge.route.writer_node]
+            rung = resolve_rung(program, node)
+            if rung is None:
+                continue
+            effect_tag, _effect_value = edge.route.writer_effect
+            writers = tuple(
+                instruction
+                for instruction in _instructions(getattr(rung, "_instructions", ()))
+                if instruction_writes_tag(instruction, effect_tag)
+            )
+            if not writers or not all(bool(getattr(item, "oneshot", False)) for item in writers):
+                continue
+            if not _surface_false_after(edge, node):
+                result.add(edge.identity)
+    return frozenset(result)
+
+
 def _best_static_path(
     needed_tag: str,
     needed_value: Any,
@@ -556,9 +642,12 @@ def _edge(
 
 
 def _plan_score(plan: StaticPath) -> tuple[int, int, str]:
-    # Direct channel needs win ties over request-owned needs.
+    # A graph that owns the needed channel outranks a graph which merely lists
+    # that tag as one of its request inputs. Otherwise a short observation or
+    # indirect-table projection can hijack navigation of the structural carrier
+    # before route_options has a chance to rank target ownership.
     direct = 0 if plan.needed_tag == plan.role.channel_tag else 1
-    return (len(plan.edges), direct, plan.role.channel_tag)
+    return (direct, len(plan.edges), plan.role.channel_tag)
 
 
 def _dedupe_values(values: list[Any]) -> tuple[Any, ...]:
