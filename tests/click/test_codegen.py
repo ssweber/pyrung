@@ -574,11 +574,10 @@ def _wheatstone_grid(draw):
 class TestDroppedContactValidation:
     """A source contact wired to no output must not vanish silently.
 
-    Motivating shape (real, from AlmHistorian.csv / WarnTimestamp.csv): a
-    second contact stacked in condition column 0 on a continuation row,
-    intended as an OR-branch, but lacking the tee/down wiring a Click OR needs
-    — so its right side dangles and the reachable-subgraph filter in
-    ``_sp_reduce`` prunes it. See the analyzer's dropped-contact detection.
+    A second contact stacked in condition column 0 on a continuation row can
+    resemble an OR branch while lacking the required tee/down wiring. Its right
+    side then dangles, and the reachable-subgraph filter in ``_sp_reduce``
+    prunes it. See the analyzer's dropped-contact detection.
     """
 
     @staticmethod
@@ -638,13 +637,13 @@ class TestDroppedContactValidation:
 
         row0 = _make_row(
             "R",
-            _fill_dashes({0: "rise(C221)", 1: "T:C999"}, 2, 31),
-            af="copy(0,DS22,oneshot=1)",
+            _fill_dashes({0: "rise(X001)", 1: "T:C001"}, 2, 31),
+            af="copy(0,DS001,oneshot=1)",
         )
         row1 = _make_row(
             "",
-            _fill_dashes({1: "C999"}, 2, 31),
-            af="reset(C930..C932)",
+            _fill_dashes({1: "C001"}, 2, 31),
+            af="reset(C010..C012)",
         )
 
         with warnings.catch_warnings():
@@ -654,10 +653,10 @@ class TestDroppedContactValidation:
                 validate=True,
             )
 
-        assert _leaf_labels(analyzed[0].condition_tree) == ["rise(C221)", "C999"]
+        assert _leaf_labels(analyzed[0].condition_tree) == ["rise(X001)", "C001"]
         assert [instruction.af_token for instruction in analyzed[0].instructions] == [
-            "copy(0,DS22,oneshot=1)",
-            "reset(C930..C932)",
+            "copy(0,DS001,oneshot=1)",
+            "reset(C010..C012)",
         ]
         assert all(instruction.branch_tree is None for instruction in analyzed[0].instructions)
 
@@ -672,7 +671,7 @@ class TestDroppedContactValidation:
         main_rung = _make_row(
             "R",
             _fill_dashes({0: "X001"}, 1, 31),
-            af='call("Problem Sub")',
+            af='call("Worker")',
         )
         valid_sub_rung = _make_row(
             "R",
@@ -684,12 +683,12 @@ class TestDroppedContactValidation:
             _fill_dashes({0: "X003"}, 1, 31),
             af="out(Y002)",
         )
-        dangling_row = _make_row("", {0: "C999"})
+        dangling_row = _make_row("", {0: "X004"})
         bundle = LadderBundle(
             main_rows=(header, tuple(main_rung)),
             subroutine_rows=(
                 (
-                    "problem_sub",
+                    "worker",
                     (
                         header,
                         tuple(valid_sub_rung),
@@ -707,8 +706,8 @@ class TestDroppedContactValidation:
             source = bundle
 
         match = (
-            r'^Subroutine "Problem Sub", rung 2: Rung drops condition\(s\) present '
-            r"in the source but not connected into any output: C999 \(row 1\)\."
+            r'^Subroutine "Worker", rung 2: Rung drops condition\(s\) present '
+            r"in the source but not connected into any output: X004 \(row 1\)\."
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -1446,7 +1445,7 @@ class TestRoundTrip:
                 out(Y1)
             """,
             """
-            comment("Start motor")
+            comment('Start motor')
             with rung(X001):
                 out(Y001)
             """,
@@ -1471,20 +1470,50 @@ class TestRoundTrip:
 
     def test_multiline_comment_with_triple_quotes(self):
         """Multi-line comment containing triple-double-quotes must not break syntax."""
-        _assert_codegen_program_body(
-            '''
-            comment('Has """triple""" quotes\\nin comment text')
-            with rung(X1):
-                out(Y1)
-            ''',
-            '''
-            comment("""\\
-                Has \\\"\\\"\\\"triple\\\"\\\"\\\" quotes
-                in comment text""")
-            with rung(X001):
-                out(Y001)
-            ''',
-        )
+        source = '''
+        comment('First line contains """\\nSecond line')
+        with rung(X1):
+            out(Y1)
+        '''
+        logic, mapping = build_program(source)
+
+        code = ladder_to_pyrung(pyrung_to_ladder(logic, mapping))
+        namespace: dict = {}
+        exec_with_source(code, namespace)
+
+        assert "comment('''" in code
+        assert namespace["logic"].rungs[0].comment == 'First line contains """\nSecond line'
+
+    def test_multiline_comment_ending_in_double_quote_compiles(self):
+        """A trailing quote must not combine with the triple-quote delimiter."""
+        source = """
+        comment('First line\\nSecond line ends with "')
+        with rung(X1):
+            out(Y1)
+        """
+        logic, mapping = build_program(source)
+
+        code = ladder_to_pyrung(pyrung_to_ladder(logic, mapping))
+        namespace: dict = {}
+        exec_with_source(code, namespace)
+
+        assert "comment('''" in code
+        assert namespace["logic"].rungs[0].comment == 'First line\nSecond line ends with "'
+
+    def test_multiline_comment_uses_repr_when_no_triple_delimiter_is_safe(self):
+        """Both delimiters plus a backslash take the universal repr fallback."""
+        from pyrung.click.codegen.emitter import _emit_comment
+
+        text = 'Contains """ and ' + "'''" + " delimiters\nContains \\ separator"
+        lines: list[str] = []
+        _emit_comment(lines, text, 0)
+        generated = "\n".join(lines)
+        captured: list[str] = []
+
+        exec_with_source(generated, {"comment": captured.append})
+
+        assert generated.startswith("comment(\n")
+        assert captured == [text]
 
     def test_comparison_condition(self):
         """Comparison: DS1 == 5 → out(Y001)."""
@@ -4917,7 +4946,7 @@ class TestNop:
                 out(Y1)
             """,
             """
-            comment("Section header")
+            comment('Section header')
             with rung():
                 pass
 
@@ -4937,7 +4966,7 @@ class TestNop:
                 out(Y1)
             """,
             """
-            comment("Explicit NOP")
+            comment('Explicit NOP')
             with rung():
                 pass
 

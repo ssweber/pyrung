@@ -1265,21 +1265,40 @@ def _render_pin(
     return f".{pin.name}()"
 
 
+def _comment_triple_delimiter(comment: str) -> str | None:
+    """Choose a safe readable delimiter, or defer to repr literals."""
+    if "\\" in comment or any(not char.isprintable() and char != "\n" for char in comment):
+        return None
+
+    delimiters = sorted(('"""', "'''"), key=lambda delimiter: comment.count(delimiter[0]))
+    for delimiter in delimiters:
+        quote = delimiter[0]
+        if delimiter not in comment and not comment.endswith(quote):
+            return delimiter
+    return None
+
+
 def _emit_comment(lines: list[str], comment: str, indent: int) -> None:
     """Emit a comment() call above the rung."""
     pad = "    " * indent
-    if "\n" in comment:
-        # Multi-line → triple-quoted string
-        escaped = comment.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
-        parts = escaped.split("\n")
+    delimiter = _comment_triple_delimiter(comment) if "\n" in comment else None
+    if delimiter is not None:
+        parts = comment.split("\n")
         content_pad = "    " * (indent + 1)
-        lines.append(f'{pad}comment("""\\')
+        lines.append(f"{pad}comment({delimiter}\\")
         for part in parts[:-1]:
             lines.append(f"{content_pad}{part}" if part else "")
-        lines.append(f'{content_pad}{parts[-1]}""")')
+        lines.append(f"{content_pad}{parts[-1]}{delimiter})")
+    elif "\n" in comment or "\r" in comment:
+        # repr() is the failsafe for ambiguous delimiters, backslashes, and
+        # control characters; adjacent literals preserve readable line breaks.
+        content_pad = "    " * (indent + 1)
+        lines.append(f"{pad}comment(")
+        for part in comment.splitlines(keepends=True):
+            lines.append(f"{content_pad}{part!r}")
+        lines.append(f"{pad})")
     else:
-        escaped = comment.replace("\\", "\\\\").replace('"', '\\"')
-        lines.append(f'{pad}comment("{escaped}")')
+        lines.append(f"{pad}comment({comment!r})")
 
 
 def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
