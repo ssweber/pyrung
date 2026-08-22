@@ -57,7 +57,6 @@ def _completion_context(
     monkeypatch,
     *,
     edge_tags: frozenset[str] = frozenset(),
-    oneshot_edges: frozenset[tuple[object, ...]] = frozenset(),
 ) -> SimpleNamespace:
     monkeypatch.setattr(
         evidence_module,
@@ -68,7 +67,6 @@ def _completion_context(
         pdg=object(),
         program=object(),
         edge_tags=edge_tags,
-        oneshot_edges=oneshot_edges,
     )
 
 
@@ -173,7 +171,12 @@ def test_chart_completion_requires_true_producer_guards(monkeypatch) -> None:
 def test_chart_completion_rejects_a_spent_pulse_command(monkeypatch) -> None:
     edge = _route_edge()
     frame = SimpleNamespace(snap={"State": 0, "Command": True, "ProducerGuard": True})
-    ctx = _completion_context(monkeypatch, oneshot_edges=frozenset((edge.identity,)))
+    ctx = _completion_context(monkeypatch)
+    monkeypatch.setattr(
+        route_options_module,
+        "_edge_write_activation",
+        lambda *_args: SimpleNamespace(needs_rearm=True),
+    )
 
     assert (
         _live_chart_completion_edge(

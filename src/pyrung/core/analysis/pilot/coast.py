@@ -66,10 +66,12 @@ class CoastTrigger:
 
     ``predicate`` is authoritative.  ``condition`` (a compiled ``Condition``)
     is fold metadata only: its comparison atoms become crossing targets and
-    its reads become fold-protected tags.  ``watched`` names the tags whose
-    transitions the receipt records when this trigger fires. ``terminal`` triggers
-    end the seek; nonterminal triggers record an event and re-arm (``one_shot``
-    disarms after the first firing instead).
+    its reads become fold-protected tags. ``predicate_reads`` is the exact read
+    declaration for a predicate whose condition cannot be compiled; leaving it
+    ``None`` keeps an opaque callable out of sterile-cycle proofs. ``watched``
+    names the tags whose transitions the receipt records when this trigger
+    fires. ``terminal`` triggers end the seek; nonterminal triggers record an
+    event and re-arm (``one_shot`` disarms after the first firing instead).
     """
 
     name: str
@@ -77,6 +79,7 @@ class CoastTrigger:
     predicate: Callable[[Any], bool]
     condition: Any | None = None
     watched: tuple[str, ...] = ()
+    predicate_reads: tuple[str, ...] | None = None
     terminal: bool = True
     one_shot: bool = False
 
@@ -170,8 +173,9 @@ def _fold_metadata(
     frozenset[str],
     frozenset[str],
     frozenset[str],
+    frozenset[str] | None,
 ]:
-    """Merge crossing thresholds + protected reads from every compiled condition.
+    """Merge crossings, protected reads, and exact predicate declarations.
 
     Watched tags are always protected even without a condition — a receipt
     cannot record a transition the fold skipped.
@@ -181,18 +185,33 @@ def _fold_metadata(
 
     crossings: dict[str, tuple[tuple[str, Any], ...]] = {}
     reads: set[str] = set()
+    predicate_reads: set[str] = set()
+    predicates_declared = True
     for trigger in triggers:
         reads.update(trigger.watched)
         if trigger.condition is None:
+            if trigger.predicate_reads is None:
+                predicates_declared = False
+            else:
+                reads.update(trigger.predicate_reads)
+                predicate_reads.update(trigger.predicate_reads)
             continue
         for tag, cmps in _extract_condition_crossings(trigger.condition).items():
             crossings[tag] = crossings.get(tag, ()) + cmps
-        reads |= _extract_condition_reads(trigger.condition)
+        condition_reads = _extract_condition_reads(trigger.condition)
+        reads |= condition_reads
+        predicate_reads |= condition_reads
 
     clock_reads = frozenset(reads) & frozenset(_CLOCK_HALF_PERIODS)
     scan_derived = frozenset(reads) & frozenset(_SCAN_DERIVED_NAMES)
     protected = frozenset(reads) - clock_reads - scan_derived
-    return (crossings or None), protected, clock_reads, scan_derived
+    return (
+        crossings or None,
+        protected,
+        clock_reads,
+        scan_derived,
+        frozenset(predicate_reads) if predicates_declared else None,
+    )
 
 
 @dataclass
@@ -360,6 +379,7 @@ class CoastSession:
             predicate=_pred,
             condition=condition,
             watched=tuple(pens),
+            predicate_reads=tuple(pens),
             terminal=False,
         )
 
@@ -417,16 +437,16 @@ class CoastSession:
                 live = [
                     self._pen_trigger() if trigger.kind == PEN else trigger for trigger in armed
                 ]
-                crossings, protected, clock_reads, scan_derived = _fold_metadata(live)
+                (
+                    crossings,
+                    protected,
+                    clock_reads,
+                    scan_derived,
+                    declared_predicate_reads,
+                ) = _fold_metadata(live)
 
                 def _any_pred(s: Any, _live: list[CoastTrigger] = live) -> bool:
                     return any(trigger.predicate(s) for trigger in _live)
-
-                declared_predicate_reads = (
-                    protected | clock_reads
-                    if all(trigger.condition is not None for trigger in live)
-                    else None
-                )
 
                 # A seek always advances at least one scan before judging: a
                 # trigger already true at arm time lands after one scan, not zero.
@@ -713,6 +733,7 @@ def value_trigger(
         predicate=_pred,
         condition=condition,
         watched=(tag_name,),
+        predicate_reads=(tag_name,),
         terminal=terminal,
     )
 
@@ -750,6 +771,7 @@ def departure_trigger(
         predicate=_pred,
         condition=condition,
         watched=tuple(holds),
+        predicate_reads=tuple(holds),
         terminal=terminal,
     )
 

@@ -259,9 +259,10 @@ class RouteEdgeContext:
     # the same tag.
     effect_tag: str | None = None
     effect_value: Any = None
-    # Exact non-edge inputs that must go to rest before this one-shot writer can
-    # fire again. This is selected-edge evidence, not a global tag property.
-    rearm_actions: tuple[_ActionPair, ...] = ()
+    # Exact resting assignments needed before the selected action can become
+    # effective: spent one-shot inputs and live competing selector inputs. This
+    # is selected-edge evidence, not a global tag property.
+    setup_releases: tuple[_ActionPair, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -744,7 +745,7 @@ def act_identity(act: NavigationAct) -> tuple[Any, ...]:
                 _semantic_key(route.target_value),
                 route.effect_tag,
                 _semantic_key(route.effect_value),
-                tuple((tag, _semantic_key(value)) for tag, value in route.rearm_actions),
+                tuple((tag, _semantic_key(value)) for tag, value in route.setup_releases),
             )
         return identity
     if isinstance(act, ObserveScan):

@@ -153,3 +153,4 @@ def test_clobber_solves() -> None:
     plc = PLC(prog, dt=0.010)
     path = pilot_how(plc, Target, max_scans=200)
     assert path.reachable
+    assert _replay(path).state.tags["Target"] is True

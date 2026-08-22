@@ -16,7 +16,6 @@ from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.pipeline_graph import (
     detect_opaque_loop,
     detect_opaque_pipelines,
-    oneshot_rearm_edges,
 )
 from pyrung.core.analysis.pilot.program_facts import (
     compute_edge_tags,
@@ -116,11 +115,6 @@ def _make_pilot_context(
         setup.opaque_loop,
         setup.evidence,
     )
-    route_oneshot_edges = oneshot_rearm_edges(
-        (*graphs, *chart_graphs),
-        setup.pdg,
-        setup.program,
-    )
     compass = Compass(
         catalog=NavigationCatalog(
             slices=prior_compass.catalog.slices,
@@ -150,7 +144,6 @@ def _make_pilot_context(
         program=setup.program,
         steerable=setup.steerable,
         edge_tags=setup.edge_tags,
-        oneshot_edges=route_oneshot_edges,
         clear_only=clear_only,
         resting=setup.resting,
         nd_domains=setup.nd_domains,

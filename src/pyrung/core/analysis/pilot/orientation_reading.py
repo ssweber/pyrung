@@ -18,6 +18,7 @@ from pyrung.core.analysis.pilot.execution import (
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
+    BatchPulse,
     Bearing,
     BearingObjective,
     ChannelHeading,
@@ -31,6 +32,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationWorld,
     ProbeRequest,
     ProgramScan,
+    Pulse,
     Stuck,
     TargetSpec,
     _ActionPair,
@@ -525,6 +527,59 @@ def _pulse_policy(
             else None
         ),
     )
+
+
+def _activation_setup_act(act: Any, world: OrientationWorld) -> Any | None:
+    """Return one predecessor/rearm Bearing act required before *act*.
+
+    An edge transition or spent one-shot is a real program scan, not hidden
+    pulse preparation.  This function lowers only that immediate setup phase;
+    after it commits, the ordinary Pilot loop asks Compass again and rebuilds
+    the originally intended act from the resulting World if it is still
+    relevant.
+    """
+
+    if not isinstance(act, (Pulse, BatchPulse)):
+        return None
+    policy = act.policy
+    snapshot = world.snapshot
+    setup: list[_ActionPair] = []
+
+    # Explicit rise/fall inputs need the opposite level established at a scan
+    # boundary before the selected assertion.  The selected action's Boolean
+    # value carries the direction: True is a rise assertion, False a fall.
+    for tag, value in policy.applied:
+        if tag not in world.context.edge_tags or type(value) is not bool:
+            continue
+        predecessor = not value
+        if not _values_match(snapshot.get(tag), predecessor):
+            setup.append((tag, predecessor))
+
+    # Exact writer semantics can independently say that an instruction's
+    # private one-shot bit is spent while its rung remains conductive.  Drop
+    # the selected command inputs to their resting levels for one scan.
+    heading = policy.heading
+    route = heading.route if heading is not None else None
+    if route is not None:
+        for tag, rest in route.setup_releases:
+            if not _values_match(snapshot.get(tag), rest):
+                setup.append((tag, rest))
+
+    actions = tuple(dict.fromkeys(setup))
+    if not actions:
+        return None
+    setup_policy = ActPolicy(
+        source=policy.source,
+        action_pairs=actions,
+        applied=actions,
+        nogood_pair=actions[0] if len(actions) == 1 else None,
+        provenance=(*policy.provenance, "ladder activation setup"),
+        note="establish ladder activation predecessor and reread",
+        expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+        local_progress=LocalProgressKind.REARM,
+        pulse_horizon=PulseHorizon.ASSERTION_SCAN,
+    )
+    return Pulse(setup_policy) if len(actions) == 1 else BatchPulse(setup_policy)
 
 
 def _is_stable_setup(

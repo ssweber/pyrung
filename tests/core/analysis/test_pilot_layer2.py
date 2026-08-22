@@ -135,7 +135,7 @@ def _no_hold_excursion_program():
     return prog, y_Motor, y_Stage
 
 
-def test_no_hold_excursion_not_nogooded() -> None:
+def test_no_hold_excursion_not_nogooded(monkeypatch) -> None:
     """Excursion without steerable hold — action must NOT be nogooded.
 
     The action x_Start=True does change the key transiently (y_Motor goes
@@ -143,10 +143,26 @@ def test_no_hold_excursion_not_nogooded() -> None:
     true SPIN.  y_Stage==1 is genuinely unreachable because the reset rung
     fires before the copy rung in scan order.  PILOT should exhaust budget.
     """
+    from pyrung.core.analysis.pilot import cyclefold
+
+    coast_stats: list[dict[str, int]] = []
+    cycle_fold_until = cyclefold.cycle_fold_until
+
+    def capture_coast_stats(*args, **kwargs):
+        result = cycle_fold_until(*args, **kwargs)
+        coast_stats.append(dict(kwargs["stats"]))
+        return result
+
+    monkeypatch.setattr(cyclefold, "cycle_fold_until", capture_coast_stats)
+
     prog, _y_Motor, y_Stage = _no_hold_excursion_program()
     plc = PLC(prog, dt=0.010)
     path = pilot_how(plc, y_Stage == 1, max_scans=200)
     assert not path.reachable
+    assert any(
+        stats.get("sterile_cycle") == 1 and stats["kernel_scans"] < 100
+        for stats in coast_stats
+    )
 
 
 # ---------------------------------------------------------------------------

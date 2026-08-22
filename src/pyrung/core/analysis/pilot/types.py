@@ -235,10 +235,6 @@ class _PilotContext:
     # Relative count of new PILOT search scans allowed for this invocation.
     # Accepted productive dwell does not consume it.
     max_scans: int
-    # Exact route edges whose one-shot writer guard remains enabled after its
-    # landing. Unlike explicit rise/fall tags, these need a release scan only
-    # when the selected action's current level is already spent.
-    oneshot_edges: frozenset[tuple[Any, ...]] = frozenset()
     key_config: _StateKeyConfig | None = None
     avoid_pred: Any = None
     # A disposable retained-composition continuation observes only whether it

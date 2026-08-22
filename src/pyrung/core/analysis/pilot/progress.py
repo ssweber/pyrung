@@ -46,6 +46,7 @@ from pyrung.core.analysis.pilot.earned_work import (
 from pyrung.core.analysis.pilot.effect_observation import (
     fulfilled_expectation_observations,
 )
+from pyrung.core.analysis.pilot.navigation_contracts import LocalProgressKind
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
@@ -95,6 +96,31 @@ def _monitor_trend(
             return
 
     if isinstance(verified, TargetReached):
+        return
+
+    # REARM is a setup Bearing, not an attempt to improve the target's trace
+    # coordinate.  Verification has already proved that its requested resting
+    # level reached the scan boundary, and commit has adopted that exact scan.
+    # Make that resulting World the new local baseline, then let the ordinary
+    # loop ask Compass again.  Comparing later work with the pre-setup target
+    # checkpoint could roll the setup back and request it forever without ever
+    # exposing the action it prepared.
+    if policy.local_progress is LocalProgressKind.REARM:
+        assert state.best_trend is not None
+        previous = state.best_trend
+        state.checkpoints.append(_trial_checkpoint(trial, state))
+        state.best_trend = verified.trend
+        yield PilotEvent(
+            "trend_checkpoint",
+            state.work.state.scan_id,
+            {
+                "trend": verified.trend,
+                "key": verified.new_key,
+                "checkpoint_count": len(state.checkpoints),
+                "baseline_trend": previous,
+                "setup": True,
+            },
+        )
         return
 
     assert state.best_trend is not None

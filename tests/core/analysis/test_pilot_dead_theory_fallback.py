@@ -1,13 +1,13 @@
 """A failed temporal hypothesis must not hide another current-world route."""
 
+from pyrung.core.analysis.activation import read_activation
 from pyrung.core.analysis.graph import PlanStatus
-from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pdg import build_program_graph, resolve_rung
 from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
 from pyrung.core.analysis.pilot.pipeline_graph import (
     _best_static_path,
     build_static_transition_graphs,
     detect_opaque_loop,
-    oneshot_rearm_edges,
 )
 from pyrung.core.analysis.steerable import compute_steerable
 from tests.fixtures import pilot_indirect_sequence_controls as fixture
@@ -30,7 +30,7 @@ def test_manual_next_pulse_advances_exactly_one_table_entry() -> None:
     assert plc.current_state.tags[fixture.NextState.name] == 30
 
 
-def test_manual_next_is_a_rearmable_oneshot_trigger() -> None:
+def test_manual_next_activation_reads_spent_oneshot_memory() -> None:
     plc = fixture.watch_plc(sequence_state=25)
     pdg = build_program_graph(fixture.logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, fixture.logic)
@@ -52,12 +52,21 @@ def test_manual_next_is_a_rearmable_oneshot_trigger() -> None:
         None,
     )
 
-    rearm_edges = oneshot_rearm_edges(graphs, pdg, fixture.logic)
-    assert any(
-        edge.identity in rearm_edges and edge.action == (fixture.NextStep.name, True)
+    edge = next(
+        edge
         for graph in graphs
         for edge in graph.edges
+        if edge.action == (fixture.NextStep.name, True) and edge.from_value == 25
     )
+    effect_tag, _effect_value = edge.route.writer_effect
+    rung = resolve_rung(fixture.logic, pdg.rung_nodes[edge.route.writer_node])
+    assert rung is not None
+    assert not read_activation(rung, effect_tag, plc.state.memory).needs_rearm
+
+    plc.force(fixture.NextStep.name, True)
+    plc.step()
+
+    assert read_activation(rung, effect_tag, plc.state.memory).needs_rearm
 
 
 def test_static_indirect_table_builds_complete_manual_route() -> None:
@@ -104,6 +113,7 @@ def test_pilot_rearms_oneshot_across_the_complete_indirect_route() -> None:
     )
 
     assert plan.status is PlanStatus.REACHED
+    assert plan.replay().state.tags[fixture.SequenceState.name] == fixture.TARGET
     accepted_next = tuple(
         event
         for event in events
@@ -111,6 +121,25 @@ def test_pilot_rearms_oneshot_across_the_complete_indirect_route() -> None:
         and event.data["applied"] == ((fixture.NextStep.name, True),)
     )
     assert len(accepted_next) == 14
+    accepted_rearms = tuple(
+        event
+        for event in events
+        if event.kind == "candidate_accepted"
+        and event.data["applied"] == ((fixture.NextStep.name, False),)
+    )
+    assert len(accepted_rearms) == 13
+    for rearm in accepted_rearms:
+        rearm_index = events.index(rearm)
+        next_assertion = next(
+            index
+            for index, event in enumerate(events[rearm_index + 1 :], rearm_index + 1)
+            if event.kind == "candidate_try"
+            and event.data.get("applied") == ((fixture.NextStep.name, True),)
+        )
+        assert any(
+            event.kind == "candidates_built"
+            for event in events[rearm_index + 1 : next_assertion]
+        )
     assert not any(
         event.kind == "candidate_try"
         and event.data["applied"] == ((fixture.AdvancePermit.name, True),)

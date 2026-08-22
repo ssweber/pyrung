@@ -639,7 +639,6 @@ def _apply_actions(
     horizon: PulseHorizon = PulseHorizon.ASSERTION_SCAN,
     consumer_boundary: Any = None,
     stop_condition: StopCondition | None = None,
-    rearm_actions: tuple[_ActionPair, ...] = (),
 ) -> _PulseState:
     key_config = state.key_config
     assert key_config is not None
@@ -659,28 +658,6 @@ def _apply_actions(
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
     patch = {t: v for t, v in actions}
-    rearm_tags = {tag for tag, _value in rearm_actions}
-
-    def _needs_release(tag: str, value: Any) -> bool:
-        resting = ctx.resting.get(tag, False)
-        return bool(
-            (tag in ctx.edge_tags or tag in rearm_tags)
-            and not _values_match(value, resting)
-            and (tag not in rearm_tags or not _values_match(source_snap.get(tag), resting))
-        )
-
-    needs_edge = any(_needs_release(tag, value) for tag, value in patch.items())
-
-    if needs_edge:
-        release = {
-            tag: ctx.resting.get(tag, False)
-            for tag, value in patch.items()
-            if _needs_release(tag, value)
-        }
-        if release:
-            fork.patch(release)
-            session.step_kernel()
-            session.note_pens()
 
     fork.patch(patch)
     session.step_kernel()
@@ -943,11 +920,6 @@ def _try_action_batch(
         horizon=policy.pulse_horizon,
         consumer_boundary=policy.consumer_boundary,
         stop_condition=bearing.stop_condition,
-        rearm_actions=(
-            policy.heading.route.rearm_actions
-            if policy.heading is not None and policy.heading.route is not None
-            else ()
-        ),
     )
     key_config = state.key_config
     assert key_config is not None

@@ -56,14 +56,6 @@ def test_context_factory_carries_drive_setup_receipts_exactly(monkeypatch: Any) 
     monkeypatch.setattr(drive_setup, "_build_static_transition_graphs", build_graphs)
     monkeypatch.setattr(
         drive_setup,
-        "oneshot_rearm_edges",
-        lambda graphs, pdg, program: (
-            calls.append(("oneshot", graphs, pdg, program)),
-            frozenset(),
-        )[1],
-    )
-    monkeypatch.setattr(
-        drive_setup,
         "compute_clear_only",
         lambda pdg, known_tags, program: (
             calls.append(("clear", pdg, known_tags, program)),
@@ -85,7 +77,6 @@ def test_context_factory_carries_drive_setup_receipts_exactly(monkeypatch: Any) 
     assert ctx.program is setup.program
     assert ctx.steerable is setup.steerable
     assert ctx.edge_tags is setup.edge_tags
-    assert ctx.oneshot_edges == frozenset()
     assert ctx.resting is setup.resting
     assert ctx.nd_domains is setup.nd_domains
     assert ctx.evidence is setup.evidence
@@ -120,7 +111,6 @@ def test_context_factory_carries_drive_setup_receipts_exactly(monkeypatch: Any) 
     assert ("pipeline", *shared_owners) in calls
     assert ("chart", *shared_owners) in calls
     assert ("clear", setup.pdg, setup.work._known_tags_by_name, setup.program) in calls
-    assert ("oneshot", (*pipeline_graphs, *chart_graphs), setup.pdg, setup.program) in calls
 
 
 def test_prepare_target_context_preserves_work_and_compass_defaults_and_overrides(

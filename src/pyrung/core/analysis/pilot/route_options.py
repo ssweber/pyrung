@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.activation import read_activation
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
@@ -52,13 +53,92 @@ def _edge_commands_effective(
     )
 
 
-def _edge_requires_pulse(edge: Any, ctx: Any) -> bool:
-    """Whether an edge command must be released before another firing."""
+def _edge_write_activation(edge: Any, state: Any, ctx: Any) -> Any:
+    """Read the selected writer's exact one-shot state in this World."""
+
+    if state is None:
+        return None
+    effect_tag, _effect_value = edge.route.writer_effect
+    nodes = getattr(getattr(ctx, "pdg", None), "rung_nodes", ())
+    if edge.route.writer_node >= len(nodes):
+        return None
+    node = nodes[edge.route.writer_node]
+    rung = resolve_rung(getattr(ctx, "program", None), node)
+    execution_state = getattr(getattr(state, "work", None), "state", None)
+    if rung is None or execution_state is None:
+        return None
+    return read_activation(
+        rung,
+        effect_tag,
+        getattr(execution_state, "memory", None),
+    )
+
+
+def _edge_requires_setup(edge: Any, state: Any, ctx: Any) -> bool:
+    """Whether the selected occurrence needs a predecessor/rearm Bearing."""
 
     commanded = () if edge.action is None else (edge.action, *edge.co_actions)
-    return edge.identity in getattr(ctx, "oneshot_edges", frozenset()) or any(
-        tag in getattr(ctx, "edge_tags", ()) for tag, _value in commanded
-    )
+    if any(tag in getattr(ctx, "edge_tags", ()) for tag, _value in commanded):
+        return True
+    activation = _edge_write_activation(edge, state, ctx)
+    return bool(activation is not None and activation.needs_rearm)
+
+
+def _edge_setup_releases(edge: Any, state: Any, ctx: Any) -> tuple[_ActionPair, ...]:
+    """Resting assignments needed to make the selected edge effective.
+
+    Besides an exact spent one-shot, a selected command can be masked by a
+    still-asserted alternative writer of one of its declared enablers.  Static
+    selector graphs provide that relationship: release only live alternative
+    actions for the same derived selector, then let Orientation expose the
+    release as one setup Bearing.
+    """
+
+    execution_state = getattr(getattr(state, "work", None), "state", None)
+    if execution_state is None:
+        return ()
+    snapshot = execution_state.tags
+    resting = getattr(ctx, "resting", {})
+    edge_tags = getattr(ctx, "edge_tags", set())
+    commanded = tuple(pair for pair in (edge.action, *edge.co_actions) if pair is not None)
+    commanded_tags = frozenset(tag for tag, _value in commanded)
+    releases: dict[str, Any] = {}
+
+    activation = _edge_write_activation(edge, state, ctx)
+    if activation is not None and activation.needs_rearm:
+        for tag, _value in commanded:
+            rest = resting.get(tag, False)
+            if tag not in edge_tags and not _values_match(snapshot.get(tag), rest):
+                releases[tag] = rest
+
+    compass = getattr(ctx, "compass", None)
+    graphs = tuple(getattr(compass, "graphs", ()))
+    chart_graphs = tuple(getattr(getattr(compass, "catalog", None), "chart_graphs", ()))
+    for selector_tag, selector_value in edge.enablers:
+        for graph in (*graphs, *chart_graphs):
+            if graph.role.channel_tag != selector_tag:
+                continue
+            selected = any(
+                candidate.action == edge.action
+                and _values_match(candidate.to_value, selector_value)
+                for candidate in graph.edges
+            )
+            if not selected:
+                continue
+            for alternative in graph.edges:
+                pair = alternative.action
+                if (
+                    pair is None
+                    or pair[0] in commanded_tags
+                    or _values_match(alternative.to_value, selector_value)
+                    or not _values_match(snapshot.get(pair[0]), pair[1])
+                ):
+                    continue
+                rest = resting.get(pair[0], False)
+                if not _values_match(snapshot.get(pair[0]), rest):
+                    releases[pair[0]] = rest
+
+    return tuple(releases.items())
 
 
 def _compass_route_plan(
@@ -111,10 +191,10 @@ def _compass_route_plan(
         ):
             return False
         already_effective = _edge_commands_effective(edge, frame.snap, overlay)
-        if _edge_requires_pulse(edge, ctx):
+        if _edge_requires_setup(edge, state, ctx):
             # A high edge/one-shot trigger is spent, not reusable context.  Keep
-            # the action edge selectable; pulse execution will supply the
-            # release scan before asserting it again.
+            # the action edge selectable; Orientation will first materialize
+            # its predecessor/rearm scan as a separate setup Bearing.
             already_effective = False
         # An already-effective command is not another candidate.  It admits
         # precisely one chart coast only when the selected writer's complete
@@ -533,11 +613,11 @@ def _live_chart_completion_edge(
 
     if edge.action is None:
         return None
-    if _edge_requires_pulse(edge, ctx):
+    if _edge_requires_setup(edge, state, ctx):
         # A consumed edge cannot become an actionless completion merely because
         # its input level and rung guard remain true. It must be released and
-        # asserted again so rise/fall state or instruction one-shot memory can
-        # rearm through ordinary execution.
+        # asserted again through separately oriented Bearings so rise/fall
+        # state or instruction one-shot memory can rearm through execution.
         return None
     execution = (
         overlay

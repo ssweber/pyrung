@@ -55,6 +55,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 from pyrung.core.analysis.pilot.route_options import (
     _compass_route_actions,
     _compass_route_plan,
+    _edge_setup_releases,
     _general_chart_completion_plan,
     _live_chart_completion_edge,
     _route_context_actions,
@@ -726,13 +727,7 @@ def _assemble_candidate_read(
                 prescribed_edge.to_value,
                 effect_tag,
                 effect_value,
-                tuple(
-                    pair
-                    for pair in (prescribed_edge.action, *prescribed_edge.co_actions)
-                    if pair is not None
-                    and pair[0] not in getattr(ctx, "edge_tags", set())
-                    and prescribed_edge.identity in getattr(ctx, "oneshot_edges", frozenset())
-                ),
+                _edge_setup_releases(prescribed_edge, state, ctx),
             )
         program_handoff = (
             program_step.handoff_by_action.get(pair)

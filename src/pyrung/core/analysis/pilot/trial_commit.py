@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -36,55 +35,20 @@ def _record_replay_steps(
     fork: PLC,
     inputs: dict[str, Any],
     scan_before: int,
-    resting: dict[str, Any],
-    edge_tags: set[str],
-    *,
-    edge_inputs: dict[str, Any] | None = None,
-    rearm_tags: set[str] | frozenset[str] = frozenset(),
-    source_snapshot: Mapping[str, Any] | None = None,
 ) -> tuple[PLC, tuple[_Step, ...]]:
-    """Record a step (or release+pulse pair) and swap the work fork.
+    """Record the exact scans authorized by one committed Bearing.
 
-    ``inputs`` is the policy's full ``ActPolicy.applied`` set, not only its
-    primary candidate. A ``rise()``/``fall()`` gate needs an edge — a transition
-    — but a recorded ``_Step`` holds its ``inputs`` constant across the step's
-    scans and the patch persists into the next step, so the naive replay
-    (``patch(inputs); step``) cannot recreate the transition once the edge is
-    already at the pulsed level (the consecutive-command case).  PILOT's live
-    pulse drops the edge to resting for one scan before raising it
-    (``_apply_actions``); mirror that here by recording an explicit 1-scan release
-    step whenever the inputs drive an edge tag *off* resting, so the replay
-    reproduces the same edge.
+    Edge predecessor and one-shot rearm scans are separate setup Bearings;
+    replay therefore records this operation directly and never synthesizes a
+    hidden release before it.
     """
-    pulsed_inputs = inputs if edge_inputs is None else edge_inputs
-    edge_release = {
-        t: resting.get(t, False)
-        for t in pulsed_inputs
-        if t in edge_tags
-        and not _values_match(pulsed_inputs[t], resting.get(t, False))
-        and (
-            t not in rearm_tags
-            or source_snapshot is None
-            or not _values_match(source_snapshot.get(t), resting.get(t, False))
-        )
-    }
-    if edge_release:
-        steps = (
-            _Step(inputs=edge_release, scan_before=scan_before, scan_after=scan_before + 1),
-            _Step(
-                inputs=dict(inputs),
-                scan_before=scan_before + 1,
-                scan_after=fork.state.scan_id,
-            ),
-        )
-    else:
-        steps = (
-            _Step(
-                inputs=dict(inputs),
-                scan_before=scan_before,
-                scan_after=fork.state.scan_id,
-            ),
-        )
+    steps = (
+        _Step(
+            inputs=dict(inputs),
+            scan_before=scan_before,
+            scan_after=fork.state.scan_id,
+        ),
+    )
     return fork, steps
 
 
@@ -209,18 +173,6 @@ def commit_trial(
         pulse.fork,
         step_inputs,
         pulse.scan_before,
-        ctx.resting,
-        ctx.edge_tags,
-        edge_inputs=dict(policy.applied),
-        rearm_tags={
-            tag
-            for tag, _value in (
-                policy.heading.route.rearm_actions
-                if policy.heading is not None and policy.heading.route is not None
-                else ()
-            )
-        },
-        source_snapshot=execution.before_snap,
     )
     act = _CommittedAct(steps=steps, context=_build_step_context(trial, frame, state))
     # Adopt the physical fork and its replay evidence in one persistent-world

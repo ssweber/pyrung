@@ -71,6 +71,12 @@ def _orient_read(
     )
     candidates = read.candidates
 
+    def _activation_phase(act: Any, rationale: str) -> tuple[Any, str]:
+        setup = _orientation_reading._activation_setup_act(act, world)
+        if setup is None:
+            return act, rationale
+        return setup, "establish selected ladder activation before rereading Compass"
+
     # Boundary zero has no executed program scan to read yet.  Make that one
     # observation an ordinary Compass-selected bearing; its landing is always
     # reread before any target-relative judgment is made.
@@ -270,7 +276,10 @@ def _orient_read(
         if _theory_orientation._candidate_is_pending_configuration(option, world):
             continue
         applied = _theory_orientation._current_candidate_applied(option, candidates, world)
-        act = Pulse(_orientation_reading._pulse_policy(option, applied, world))
+        act, rationale = _activation_phase(
+            Pulse(_orientation_reading._pulse_policy(option, applied, world)),
+            option.awaited_action_note or "program-awaited action",
+        )
         if _theory_orientation._act_preserves_requirements(
             world, act
         ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
@@ -278,7 +287,7 @@ def _orient_read(
                 read,
                 act,
                 target=target,
-                rationale=option.awaited_action_note or "program-awaited action",
+                rationale=rationale,
             )
 
     prescription = candidates.wait.prescription if candidates.wait is not None else None
@@ -348,6 +357,7 @@ def _orient_read(
                 ),
             )
         )
+        act, rationale = _activation_phase(act, "learned joint transition")
         if _theory_orientation._act_preserves_requirements(
             world, act
         ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
@@ -355,7 +365,7 @@ def _orient_read(
                 read,
                 act,
                 target=target,
-                rationale="learned joint transition",
+                rationale=rationale,
             )
 
     for branch in candidates.crossing_batches:
@@ -376,6 +386,12 @@ def _orient_read(
             if len(branch.actions) == 1
             else BatchPulse(policy, crossing=fidelity)
         )
+        branch_rationale = (
+            branch.reason or "verify crossing proposal"
+            if branch.proposed
+            else "follow grouped reverse crossing"
+        )
+        act, branch_rationale = _activation_phase(act, branch_rationale)
         if _theory_orientation._act_preserves_requirements(
             world, act
         ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
@@ -383,18 +399,24 @@ def _orient_read(
                 read,
                 act,
                 target=target,
-                rationale=(
-                    branch.reason or "verify crossing proposal"
-                    if branch.proposed
-                    else "follow grouped reverse crossing"
-                ),
+                rationale=branch_rationale,
             )
 
     for option in candidates.options:
         if _theory_orientation._candidate_is_pending_configuration(option, world):
             continue
         applied = _theory_orientation._current_candidate_applied(option, candidates, world)
-        act = Pulse(_orientation_reading._pulse_policy(option, applied, world))
+        option_rationale = (
+            option.awaited_action_note
+            or getattr(option, "program_note", None)
+            or ("static route edge" if option.source is ActSource.ROUTE else "")
+            or ("learned transition" if option.source is ActSource.LEARNED_ACTION else "")
+            or "ranked trace action"
+        )
+        act, option_rationale = _activation_phase(
+            Pulse(_orientation_reading._pulse_policy(option, applied, world)),
+            option_rationale,
+        )
         if not _theory_orientation._act_preserves_requirements(
             world, act
         ) or compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
@@ -403,13 +425,7 @@ def _orient_read(
             read,
             act,
             target=target,
-            rationale=(
-                option.awaited_action_note
-                or getattr(option, "program_note", None)
-                or ("static route edge" if option.source is ActSource.ROUTE else "")
-                or ("learned transition" if option.source is ActSource.LEARNED_ACTION else "")
-                or "ranked trace action"
-            ),
+            rationale=option_rationale,
         )
 
     # Widening remains an atomic act, but no sequence of widths survives an
@@ -437,6 +453,8 @@ def _orient_read(
                 ),
             )
         )
+        widening_rationale = f"widen trace context to {width} atomic actions"
+        act, widening_rationale = _activation_phase(act, widening_rationale)
         if _theory_orientation._act_preserves_requirements(
             world, act
         ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
@@ -444,7 +462,7 @@ def _orient_read(
                 read,
                 act,
                 target=target,
-                rationale=f"widen trace context to {width} atomic actions",
+                rationale=widening_rationale,
             )
 
     if candidates.diagnosis is not None:

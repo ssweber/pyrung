@@ -24,8 +24,7 @@ writer-local build state.
 
 from __future__ import annotations
 
-import typing
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from itertools import product
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
@@ -76,7 +75,6 @@ from pyrung.core.analysis.sp_values import (
     _values_match,
     _written_value_for_tag,
 )
-from pyrung.core.analysis.write_sites import instruction_writes_tag
 from pyrung.core.crossing import (
     Affine,
     AffineCmp,
@@ -1892,40 +1890,6 @@ def _trace_back(
     return node
 
 
-def _rung_write_is_spent_oneshot(
-    rung: Any,
-    tag: str,
-    memory: Mapping[str, Any] | None,
-) -> bool:
-    """Whether every exact writer of *tag* in this rung is currently spent.
-
-    The executor owns one-shot state.  This reader merely consumes its immutable
-    memory receipt at the current boundary.  Mixed or structurally opaque write
-    sites fail closed: one armed/non-one-shot writer keeps the antagonist live.
-    """
-
-    if memory is None:
-        return False
-
-    def _walk(instructions: typing.Iterable[Any]) -> Iterator[Any]:
-        for instruction in instructions:
-            yield instruction
-            children = getattr(instruction, "instructions", None)
-            if children is not None:
-                yield from _walk(children)
-
-    writers = tuple(
-        instruction
-        for instruction in _walk(getattr(rung, "_instructions", ()))
-        if instruction_writes_tag(instruction, tag)
-    )
-    return bool(writers) and all(
-        bool(getattr(instruction, "oneshot", False))
-        and memory.get(instruction.memory_key("_oneshot")) is True
-        for instruction in writers
-    )
-
-
 def _preserve_children(
     env: _TraceEnv,
     tag: str,
@@ -1991,9 +1955,13 @@ def _preserve_children(
         if sp is None:
             continue
         guard = _sp_to_expr(sp)
-        if _eval_expr_from_state(guard, env.snapshot) is True and _rung_write_is_spent_oneshot(
-            ro, tag, env.execution_memory
-        ):
+        if _eval_expr_from_state(guard, env.snapshot) is True:
+            from pyrung.core.analysis.activation import read_activation
+
+            spent = read_activation(ro, tag, env.execution_memory).needs_rearm
+        else:
+            spent = False
+        if spent:
             # Keeping the guard conductive keeps the instruction spent. If a
             # later bearing changes that condition, the committed scan updates
             # executor memory and the next ordinary trace read sees it rearmed.
