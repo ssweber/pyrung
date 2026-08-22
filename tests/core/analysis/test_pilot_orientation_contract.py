@@ -9,6 +9,8 @@ from pyrung import Int
 from pyrung.core.analysis.pilot.candidate_read import (
     CandidateDiagnosis,
     CandidateRead,
+    ContinuationKind,
+    ContinuationRead,
     CrossingBatchRead,
     LearnedBatchRead,
     PrerequisiteRead,
@@ -119,6 +121,7 @@ def _options(
     crossing_batches=(),
     batch_expectation=None,
     widening_expectation=None,
+    continuation=None,
 ):
     return CandidateRead(
         trace=_TraceAdmission(
@@ -139,6 +142,7 @@ def _options(
             else None
         ),
         crossing_batches=crossing_batches,
+        continuation=continuation,
         diagnosis=CandidateDiagnosis(stuck_reason) if stuck_reason is not None else None,
         widening_expectations=(
             ((active_trace_actions[:2], widening_expectation),)
@@ -217,18 +221,42 @@ def test_orientation_threads_one_expectation_for_batch_crossing_widening_and_coa
     assert coast.act.policy.expectation is expectation
 
 
-def test_terminal_orientation_is_explicit_ambient_non_promise(monkeypatch) -> None:
+def test_positive_continuation_read_authorizes_legacy_terminal_coast(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
 
     compass = Compass()
     world = _world(compass)
-    monkeypatch.setattr(orientation, "read_candidates", lambda *_args: _options())
+    continuation = ContinuationRead(
+        ContinuationKind.SELF_ADVANCING,
+        "timer frontier is advancing",
+        ("trace", "advance"),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "read_candidates",
+        lambda *_args: _options(continuation=continuation),
+    )
 
     terminal = orientation._orient_read(compass, world, TargetSpec("Target", True))
 
     assert isinstance(terminal, Bearing)
     assert terminal.act.policy.expectation is None
     assert terminal.act.policy.expectation_exemption == "ambient_terminal"
+    assert terminal.act.policy.provenance == ("trace", "advance")
+    assert terminal.rationale == "timer frontier is advancing"
+
+
+def test_absence_of_diagnosis_does_not_authorize_terminal_coast(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    world = _world(compass)
+    monkeypatch.setattr(orientation, "read_candidates", lambda *_args: _options())
+
+    result = orientation._orient_read(compass, world, TargetSpec("Target", True))
+
+    assert isinstance(result, NeedProbe)
+    assert result.request.reason == "all_rejected"
 
 
 def test_unresolved_executable_policies_are_explicitly_exempt(monkeypatch) -> None:
@@ -2002,7 +2030,12 @@ def test_root_alternatives_own_distinct_completed_reads(monkeypatch) -> None:
     first = _world(compass)
     second = replace(first, world_key=("second-world",))
     reads = {
-        first.world_key: _options(),
+        first.world_key: _options(
+            continuation=ContinuationRead(
+                ContinuationKind.TRACE_READY,
+                "first alternative awaits its ready writer",
+            )
+        ),
         second.world_key: _options(_candidate("Second")),
     }
     monkeypatch.setattr(orientation, "read_candidates", lambda world: reads[world.world_key])
@@ -2536,6 +2569,49 @@ def test_rejected_act_knowledge_forces_fresh_next_orientation(monkeypatch) -> No
     )
     assert isinstance(next_result, Bearing)
     assert next_result.act.action == second.pair
+
+
+def test_rejected_candidate_can_fall_through_to_positive_continuation(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
+
+    candidate = _candidate("First")
+    continuation = ContinuationRead(
+        ContinuationKind.PREREQUISITE,
+        "establish trace prerequisites",
+        ("trace", "prerequisite"),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "read_candidates",
+        lambda *_args: _options(candidate, continuation=continuation),
+    )
+    monkeypatch.setattr(
+        theory_orientation,
+        "_current_candidate_applied",
+        lambda option, _candidates, _world: (option.pair,),
+    )
+    compass = Compass()
+    first = compass.orient(
+        _world(compass),
+        TargetSpec("Target", True),
+        NavigationConstraints(),
+    )
+    assert isinstance(first, Bearing)
+    compass, changed = compass.apply(
+        (ActionNogoodObservation(("world",), act_identity(first.act)),)
+    )
+    assert changed
+
+    continued = compass.orient(
+        _world(compass),
+        TargetSpec("Target", True),
+        NavigationConstraints(),
+    )
+
+    assert isinstance(continued, Bearing)
+    assert isinstance(continued.act, Coast)
+    assert continued.rationale == "establish trace prerequisites"
 
 
 def test_trace_rejections_require_exact_singleton_pulse_artifact() -> None:

@@ -1,7 +1,15 @@
-"""Orchestrate generic current-world reading and WorkingTheory policy."""
+"""Consider current-world readings and select one typed disposition.
+
+Candidate instruments read the world once. WorkingTheory may first declare an
+exact causal question; ordinary instruments then nominate acts through the
+declared ``_ORDINARY_PROPOSERS`` precedence and one shared admission gate. An
+actionless program scan requires a positive continuation reading. Otherwise
+Orientation requests bounded evidence or returns ``Stuck``.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from typing import Any
 
@@ -41,6 +49,247 @@ from pyrung.core.analysis.pilot.world_key import (
     wait_edge_nogood,
 )
 
+_ActProposal = tuple[Any, str]
+_ActProposer = Callable[[Any, OrientationRead], Iterator[_ActProposal]]
+
+
+def _awaited_action_proposals(_compass: Any, read: OrientationRead) -> Iterator[_ActProposal]:
+    """Yield structural program handshakes before inferred program motion."""
+
+    world = read.world
+    candidates = read.candidates
+    for option in candidates.options:
+        if option.source is not ActSource.AWAITED_ACTION:
+            continue
+        if _theory_orientation._candidate_is_pending_configuration(option, world):
+            continue
+        applied = _theory_orientation._current_candidate_applied(option, candidates, world)
+        yield (
+            Pulse(_orientation_reading._pulse_policy(option, applied, world)),
+            option.awaited_action_note or "program-awaited action",
+        )
+
+
+def _wait_proposals(compass: Any, read: OrientationRead) -> Iterator[_ActProposal]:
+    """Yield the one selected chart/program wait when its edge remains open."""
+
+    world = read.world
+    candidates = read.candidates
+    prescription = candidates.wait.prescription if candidates.wait is not None else None
+    if prescription is None:
+        return
+    heading = prescription.heading
+    route = heading.route if heading is not None else None
+    wait_channel = (
+        route.channel_tag
+        if route is not None
+        else (heading.channel_tag if heading is not None else None)
+    )
+    wait_nogood = (
+        wait_edge_nogood(
+            wait_channel,
+            route.from_value if route is not None else world.snapshot.get(wait_channel),
+            route.target_value
+            if route is not None
+            else heading.target_value
+            if heading is not None
+            else None,
+        )
+        if wait_channel is not None
+        else None
+    )
+    if wait_nogood is not None and wait_nogood in compass.knowledge.nogood_pairs(world.world_key):
+        return
+    expectation = prescription.expectation
+    yield (
+        Coast(
+            "bearing",
+            ActPolicy(
+                source=ActSource.ROUTE if route is not None else ActSource.PROGRAM,
+                nogood_pair=wait_nogood,
+                heading=heading,
+                motion=MotionKind.COAST_TO_BEARING,
+                expectation=expectation,
+                expectation_exemption=(
+                    ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
+                ),
+                landing_receipt_authority=prescription.landing_receipt_authority,
+            ),
+        ),
+        prescription.reason or "charted completion edge",
+    )
+
+
+def _learned_batch_proposals(_compass: Any, read: OrientationRead) -> Iterator[_ActProposal]:
+    candidate = read.candidates.learned_batch
+    if candidate is None:
+        return
+    expectation = candidate.expectation
+    yield (
+        BatchPulse(
+            ActPolicy(
+                source=ActSource.LEARNED_BATCH,
+                action_pairs=candidate.actions,
+                applied=candidate.actions,
+                expectation=expectation,
+                expectation_exemption=(
+                    ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
+                ),
+            )
+        ),
+        "learned joint transition",
+    )
+
+
+def _crossing_proposals(_compass: Any, read: OrientationRead) -> Iterator[_ActProposal]:
+    for branch in read.candidates.crossing_batches:
+        expectation = branch.expectation
+        policy = ActPolicy(
+            source=ActSource.CROSSING,
+            action_pairs=branch.actions,
+            applied=branch.actions,
+            note=branch.reason,
+            expectation=expectation,
+            expectation_exemption=(
+                ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
+            ),
+        )
+        fidelity = branch.fidelity
+        act = (
+            Pulse(policy, crossing=fidelity)
+            if len(branch.actions) == 1
+            else BatchPulse(policy, crossing=fidelity)
+        )
+        yield (
+            act,
+            branch.reason or "verify crossing proposal"
+            if branch.proposed
+            else "follow grouped reverse crossing",
+        )
+
+
+def _scalar_proposals(_compass: Any, read: OrientationRead) -> Iterator[_ActProposal]:
+    world = read.world
+    candidates = read.candidates
+    for option in candidates.options:
+        # Structural awaited actions already own the first precedence slot.
+        if option.source is ActSource.AWAITED_ACTION:
+            continue
+        if _theory_orientation._candidate_is_pending_configuration(option, world):
+            continue
+        applied = _theory_orientation._current_candidate_applied(option, candidates, world)
+        yield (
+            Pulse(_orientation_reading._pulse_policy(option, applied, world)),
+            option.awaited_action_note
+            or getattr(option, "program_note", None)
+            or ("static route edge" if option.source is ActSource.ROUTE else "")
+            or ("learned transition" if option.source is ActSource.LEARNED_ACTION else "")
+            or "ranked trace action",
+        )
+
+
+def _widening_proposals(_compass: Any, read: OrientationRead) -> Iterator[_ActProposal]:
+    candidates = read.candidates
+    active = candidates.trace.active_actions
+    for width in range(2, len(active) + 1):
+        actions = active[:width]
+        expectation = next(
+            (
+                promised
+                for artifact, promised in candidates.widening_expectations
+                if artifact == actions
+            ),
+            None,
+        )
+        yield (
+            BatchPulse(
+                ActPolicy(
+                    source=ActSource.WIDENING,
+                    action_pairs=actions,
+                    applied=actions,
+                    expectation=expectation,
+                    expectation_exemption=(
+                        ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
+                    ),
+                )
+            ),
+            f"widen trace context to {width} atomic actions",
+        )
+
+
+def _continuation_proposals(compass: Any, read: OrientationRead) -> Iterator[_ActProposal]:
+    """Lower only a positively-read program continuation to legacy Coast/Dwell."""
+
+    continuation = read.candidates.continuation
+    if continuation is None:
+        return
+    world = read.world
+    if compass.knowledge.coast_receipt(world.world_key) is None:
+        act: Coast | Dwell = Coast(
+            "terminal",
+            ActPolicy(
+                source=ActSource.TERMINAL,
+                motion=MotionKind.COAST_HOLDING_WORLD,
+                provenance=continuation.provenance,
+                expectation_exemption=ExpectationExemption.AMBIENT_TERMINAL,
+            ),
+        )
+        rationale = continuation.reason
+    else:
+        act = Dwell(
+            ActPolicy(
+                source=ActSource.TERMINAL,
+                motion=MotionKind.COAST_HOLDING_WORLD,
+                provenance=continuation.provenance,
+                expectation_exemption=ExpectationExemption.AMBIENT_TERMINAL,
+            )
+        )
+        rationale = f"{continuation.reason}; the first coast was already observed"
+    yield act, rationale
+
+
+_ORDINARY_PROPOSERS: tuple[_ActProposer, ...] = (
+    _awaited_action_proposals,
+    _wait_proposals,
+    _learned_batch_proposals,
+    _crossing_proposals,
+    _scalar_proposals,
+    _widening_proposals,
+    _continuation_proposals,
+)
+
+
+def _ordinary_proposals(compass: Any, read: OrientationRead) -> Iterator[_ActProposal]:
+    """Consider each current-world act source in one declared precedence."""
+
+    for proposer in _ORDINARY_PROPOSERS:
+        yield from proposer(compass, read)
+
+
+def _admit_ordinary_proposal(
+    compass: Any,
+    read: OrientationRead,
+    target: TargetSpec,
+    proposal: _ActProposal,
+) -> Bearing | None:
+    """Apply ordinary setup, requirement, and whole-act admission exactly once."""
+
+    act, rationale = proposal
+    setup = _orientation_reading._activation_setup_act(act, read.world)
+    if setup is not None:
+        act = setup
+        rationale = "establish selected ladder activation before rereading Compass"
+    if not _theory_orientation._act_preserves_requirements(read.world, act):
+        return None
+    if compass.knowledge.act_is_nogood(read.world_key, act_identity(act)):
+        return None
+    return _orientation_reading._bearing(
+        read,
+        act,
+        target=target,
+        rationale=rationale,
+    )
+
 
 def _orient_read(
     compass: Any,
@@ -70,12 +319,6 @@ def _orient_read(
         )
     )
     candidates = read.candidates
-
-    def _activation_phase(act: Any, rationale: str) -> tuple[Any, str]:
-        setup = _orientation_reading._activation_setup_act(act, world)
-        if setup is None:
-            return act, rationale
-        return setup, "establish selected ladder activation before rereading Compass"
 
     # Boundary zero has no executed program scan to read yet.  Make that one
     # observation an ordinary Compass-selected bearing; its landing is always
@@ -266,243 +509,15 @@ def _orient_read(
                 "temporal_setup_unresolved",
             )
 
-    # A structural awaited-action reading is the program telling us what input
-    # it needs in this exact world. It outranks an inferred coast prediction:
-    # the coast may be stale by the time its producer is read, while the
-    # handshake is executable now and will be verified like every other Pulse.
-    for option in candidates.options:
-        if option.source is not ActSource.AWAITED_ACTION:
-            continue
-        if _theory_orientation._candidate_is_pending_configuration(option, world):
-            continue
-        applied = _theory_orientation._current_candidate_applied(option, candidates, world)
-        act, rationale = _activation_phase(
-            Pulse(_orientation_reading._pulse_policy(option, applied, world)),
-            option.awaited_action_note or "program-awaited action",
-        )
-        if _theory_orientation._act_preserves_requirements(
-            world, act
-        ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
-            return _orientation_reading._bearing(
-                read,
-                act,
-                target=target,
-                rationale=rationale,
-            )
+    # Ordinary instruments nominate acts in one declared order. Every proposal
+    # then crosses the same activation/requirement/nogood gate exactly once.
+    for proposal in _ordinary_proposals(compass, read):
+        bearing = _admit_ordinary_proposal(compass, read, target, proposal)
+        if bearing is not None:
+            return bearing
 
-    prescription = candidates.wait.prescription if candidates.wait is not None else None
-    if prescription is not None:
-        heading = prescription.heading
-        route = heading.route if heading is not None else None
-        wait_channel = (
-            route.channel_tag
-            if route is not None
-            else (heading.channel_tag if heading is not None else None)
-        )
-        wait_nogood = (
-            wait_edge_nogood(
-                wait_channel,
-                route.from_value if route is not None else world.snapshot.get(wait_channel),
-                route.target_value
-                if route is not None
-                else heading.target_value
-                if heading is not None
-                else None,
-            )
-            if wait_channel is not None
-            else None
-        )
-        expectation = prescription.expectation
-        act = Coast(
-            "bearing",
-            ActPolicy(
-                source=ActSource.ROUTE if route is not None else ActSource.PROGRAM,
-                nogood_pair=wait_nogood,
-                heading=heading,
-                motion=MotionKind.COAST_TO_BEARING,
-                expectation=expectation,
-                expectation_exemption=(
-                    ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
-                ),
-                landing_receipt_authority=prescription.landing_receipt_authority,
-            ),
-        )
-        wait_edge_rejected = bool(
-            wait_nogood is not None
-            and wait_nogood in compass.knowledge.nogood_pairs(world.world_key)
-        )
-        if (
-            _theory_orientation._act_preserves_requirements(world, act)
-            and not wait_edge_rejected
-            and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act))
-        ):
-            return _orientation_reading._bearing(
-                read,
-                act,
-                target=target,
-                rationale=prescription.reason or "charted completion edge",
-            )
-
-    if candidates.learned_batch is not None:
-        actions = candidates.learned_batch.actions
-        expectation = candidates.learned_batch.expectation
-        act = BatchPulse(
-            ActPolicy(
-                source=ActSource.LEARNED_BATCH,
-                action_pairs=actions,
-                applied=actions,
-                expectation=expectation,
-                expectation_exemption=(
-                    ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
-                ),
-            )
-        )
-        act, rationale = _activation_phase(act, "learned joint transition")
-        if _theory_orientation._act_preserves_requirements(
-            world, act
-        ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
-            return _orientation_reading._bearing(
-                read,
-                act,
-                target=target,
-                rationale=rationale,
-            )
-
-    for branch in candidates.crossing_batches:
-        expectation = branch.expectation
-        policy = ActPolicy(
-            source=ActSource.CROSSING,
-            action_pairs=branch.actions,
-            applied=branch.actions,
-            note=branch.reason,
-            expectation=expectation,
-            expectation_exemption=(
-                ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
-            ),
-        )
-        fidelity = branch.fidelity
-        act = (
-            Pulse(policy, crossing=fidelity)
-            if len(branch.actions) == 1
-            else BatchPulse(policy, crossing=fidelity)
-        )
-        branch_rationale = (
-            branch.reason or "verify crossing proposal"
-            if branch.proposed
-            else "follow grouped reverse crossing"
-        )
-        act, branch_rationale = _activation_phase(act, branch_rationale)
-        if _theory_orientation._act_preserves_requirements(
-            world, act
-        ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
-            return _orientation_reading._bearing(
-                read,
-                act,
-                target=target,
-                rationale=branch_rationale,
-            )
-
-    for option in candidates.options:
-        if _theory_orientation._candidate_is_pending_configuration(option, world):
-            continue
-        applied = _theory_orientation._current_candidate_applied(option, candidates, world)
-        option_rationale = (
-            option.awaited_action_note
-            or getattr(option, "program_note", None)
-            or ("static route edge" if option.source is ActSource.ROUTE else "")
-            or ("learned transition" if option.source is ActSource.LEARNED_ACTION else "")
-            or "ranked trace action"
-        )
-        act, option_rationale = _activation_phase(
-            Pulse(_orientation_reading._pulse_policy(option, applied, world)),
-            option_rationale,
-        )
-        if not _theory_orientation._act_preserves_requirements(
-            world, act
-        ) or compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
-            continue
-        return _orientation_reading._bearing(
-            read,
-            act,
-            target=target,
-            rationale=option_rationale,
-        )
-
-    # Widening remains an atomic act, but no sequence of widths survives an
-    # observation.  Each rejected width is world-keyed knowledge and the next
-    # call recomputes before considering another width.
-    active = candidates.trace.active_actions
-    for width in range(2, len(active) + 1):
-        actions = active[:width]
-        expectation = next(
-            (
-                promised
-                for artifact, promised in candidates.widening_expectations
-                if artifact == actions
-            ),
-            None,
-        )
-        act = BatchPulse(
-            ActPolicy(
-                source=ActSource.WIDENING,
-                action_pairs=actions,
-                applied=actions,
-                expectation=expectation,
-                expectation_exemption=(
-                    ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
-                ),
-            )
-        )
-        widening_rationale = f"widen trace context to {width} atomic actions"
-        act, widening_rationale = _activation_phase(act, widening_rationale)
-        if _theory_orientation._act_preserves_requirements(
-            world, act
-        ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
-            return _orientation_reading._bearing(
-                read,
-                act,
-                target=target,
-                rationale=widening_rationale,
-            )
-
-    if candidates.diagnosis is not None:
-        return _orientation_reading._probe_or_stuck(
-            compass,
-            read,
-            candidates.diagnosis.reason,
-        )
-
-    terminal: Coast | Dwell
-    if compass.knowledge.coast_receipt(world.world_key) is None:
-        terminal = Coast(
-            "terminal",
-            ActPolicy(
-                source=ActSource.TERMINAL,
-                motion=MotionKind.COAST_HOLDING_WORLD,
-                expectation_exemption=ExpectationExemption.AMBIENT_TERMINAL,
-            ),
-        )
-        rationale = "hold the current macro-state and allow program motion"
-    else:
-        terminal = Dwell(
-            ActPolicy(
-                source=ActSource.TERMINAL,
-                motion=MotionKind.COAST_HOLDING_WORLD,
-                expectation_exemption=ExpectationExemption.AMBIENT_TERMINAL,
-            )
-        )
-        rationale = "terminal coast already observed; run one verified dwell"
-    if _theory_orientation._act_preserves_requirements(
-        world, terminal
-    ) and not compass.knowledge.act_is_nogood(world.world_key, act_identity(terminal)):
-        return _orientation_reading._bearing(
-            read,
-            terminal,
-            target=target,
-            rationale=rationale,
-        )
-
-    return _orientation_reading._probe_or_stuck(compass, read, "all_rejected")
+    reason = candidates.diagnosis.reason if candidates.diagnosis is not None else "all_rejected"
+    return _orientation_reading._probe_or_stuck(compass, read, reason)
 
 
 def _is_maintenance(result: OrientationResult) -> bool:

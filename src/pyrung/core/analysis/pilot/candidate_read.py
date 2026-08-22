@@ -1,13 +1,15 @@
 """Immutable candidate readings produced for one Pilot orientation.
 
-These records carry completed route, wait, prerequisite, and action reads.
-Candidate construction and precedence policy remain in options.py.
+These records carry completed route, wait, prerequisite, continuation, and
+action reads. Candidate construction belongs to options.py; Orientation owns
+the declared precedence among the resulting proposals.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
@@ -286,6 +288,29 @@ class CandidateDiagnosis:
     reason: str
 
 
+class ContinuationKind(StrEnum):
+    """Positive current-world evidence that authorizes program motion."""
+
+    PREREQUISITE = "prerequisite"
+    SELF_ADVANCING = "self_advancing"
+    READY_WRITER = "ready_writer"
+    TRACE_READY = "trace_ready"
+
+
+@dataclass(frozen=True)
+class ContinuationRead:
+    """Why an actionless current world is expected to advance on its own.
+
+    This is positive continuation evidence, not the absence of a stuck
+    diagnosis. Orientation may lower it to a bounded Coast/Dwell while that
+    legacy execution primitive remains in use.
+    """
+
+    kind: ContinuationKind
+    reason: str
+    provenance: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class CandidateRead:
     """Owned current-world readings composed for Orientation."""
@@ -298,11 +323,18 @@ class CandidateRead:
     prerequisites: PrerequisiteRead = PrerequisiteRead()
     learned_batch: LearnedBatchRead | None = None
     crossing_batches: tuple[CrossingBatchRead, ...] = ()
+    continuation: ContinuationRead | None = None
     diagnosis: CandidateDiagnosis | None = None
     # Exact widening artifact -> the sole selected primary-path promise.
     # Missing entries are deliberately unresolved, never an invitation to
     # borrow another active action's path.
     widening_expectations: tuple[tuple[tuple[_ActionPair, ...], EffectExpectation], ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.continuation is not None and self.diagnosis is not None:
+            raise ValueError(
+                "a candidate read cannot both authorize continuation and diagnose stuck"
+            )
 
 
 @dataclass(frozen=True)

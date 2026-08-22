@@ -22,7 +22,10 @@ from pyrung.core.analysis.pilot.candidate_admission import (
     _separate_prerequisites,
 )
 from pyrung.core.analysis.pilot.candidate_read import (
+    CandidateDiagnosis,
     CandidateRead,
+    ContinuationKind,
+    ContinuationRead,
     PrerequisiteRead,
     RouteRead,
     WaitPrescription,
@@ -68,6 +71,7 @@ from pyrung.core.analysis.pilot.options import (
     _assemble_candidate_read,
     _read_learned_fallback,
     _read_route_and_wait,
+    _read_trace_disposition,
     _select_wait,
     _unique_learned_expectation,
     read_candidates,
@@ -110,6 +114,43 @@ def _candidate_world(frame: Any, context: Any, state: Any = None) -> Orientation
         state=state,
         context=context,
     )
+
+
+@pytest.mark.parametrize(
+    ("leaf", "expected_kind"),
+    (
+        (TraceNode("TimerAcc", 10, advance=object()), ContinuationKind.SELF_ADVANCING),
+        (TraceNode("Ready", True, writer_rung=3), ContinuationKind.READY_WRITER),
+        (TraceNode("Satisfied", True, satisfied=True), ContinuationKind.TRACE_READY),
+    ),
+)
+def test_actionless_trace_requires_positive_continuation_evidence(
+    leaf: TraceNode,
+    expected_kind: ContinuationKind,
+) -> None:
+    frame = SimpleNamespace(tree=TraceNode("Target", True, children=[leaf]))
+    ctx = SimpleNamespace(pdg=SimpleNamespace(writers_of={}))
+
+    disposition = _read_trace_disposition(frame, ctx)
+
+    assert isinstance(disposition, ContinuationRead)
+    assert disposition.kind is expected_kind
+
+
+def test_filtered_steerable_trace_is_rejected_work_not_continuation() -> None:
+    frame = SimpleNamespace(
+        tree=TraceNode(
+            "Target",
+            True,
+            children=[TraceNode("Rejected", True, is_steerable=True)],
+        )
+    )
+    ctx = SimpleNamespace(pdg=SimpleNamespace(writers_of={}))
+
+    disposition = _read_trace_disposition(frame, ctx)
+
+    assert isinstance(disposition, CandidateDiagnosis)
+    assert disposition.reason == "all_rejected"
 
 
 def _route(from_value: int, to_value: int) -> TransitionRoute:

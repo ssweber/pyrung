@@ -100,6 +100,22 @@ must not manufacture action authority. Conversely, an action proposed by
 static or learned evidence still needs physical execution and the same
 verification gates.
 
+Trace is the common happy-path instrument, not the fallback owner. One
+`CandidateRead` collects the applicable cheap current-world readings; ordinary
+act proposers are considered in one declared precedence and every nominated
+act crosses the same activation, requirement, and nogood gate. WorkingTheory
+may instead declare an exact causal question, and fork-consuming instruments
+remain typed, bounded requests.
+
+An actionless read authorizes program motion only through a positive
+`ContinuationRead`, currently an exact prerequisite, self-advancing frontier,
+ready writer, or satisfied trace awaiting its writer. Absence of a diagnosis
+does not authorize Coast. The remaining terminal Coast/Dwell execution is a
+legacy lowering of that positive receipt; the intended endpoint is for each
+continuation to use its named program-owned execution path, while a genuinely
+unresolved read returns an evidence request or `Stuck` for an external
+guidance layer.
+
 ## World, knowledge, and rollback
 
 `_PilotState` deliberately separates two kinds of state.

@@ -498,6 +498,15 @@ def _candidates_built_payload(
             for rung in prerequisites
             if lever_notes and rung.dest in lever_notes
         },
+        "continuation": (
+            {
+                "kind": candidates.continuation.kind.value,
+                "reason": candidates.continuation.reason,
+                "provenance": candidates.continuation.provenance,
+            }
+            if candidates.continuation is not None
+            else None
+        ),
         "stuck_reason": candidates.diagnosis.reason if candidates.diagnosis is not None else None,
         "completion_frontier": wait.frontier if wait is not None else (),
         "program_step": _program_step_payload(wait.program_step if wait is not None else None),

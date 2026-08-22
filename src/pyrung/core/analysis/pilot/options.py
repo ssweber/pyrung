@@ -86,30 +86,40 @@ _STUCK_TRACE_EMPTY = "trace_empty"
 _STUCK_TRACE_GUARD = "trace_guard"
 
 
-def _diagnose_stuck_reason(
+def _read_trace_disposition(
     frame: Any,
     ctx: Any,
-) -> str | None:
-    """Classify *why* the instruments can't produce a bearing.
+) -> _candidate_read.ContinuationRead | _candidate_read.CandidateDiagnosis:
+    """Explain an actionless trace as positive continuation or exhaustion.
 
-    Returns ``None`` when the tree has steerable leaves (not stuck).
+    An executable Coast must have a positive reading. A steerable leaf that
+    disappeared during admission is rejected work, not permission to let the
+    program run and hope that a later world becomes easier to read.
     """
     tree = frame.tree
     leaves = list(tree.leaves())
     steerable = [n for n in leaves if n.is_steerable and not n.satisfied]
     if steerable:
-        return None
+        return _candidate_read.CandidateDiagnosis("all_rejected")
 
     # A self-advancing (coast) leaf means let-run, not trace, owns the bearing —
     # a converging frontier (timer/counter Acc, or a harness-linked ramp toward a
     # threshold).  Not stuck: escalate to the terminal let-run rather than bail at
     # a dead-end.  This is the trace -> let-run rung of the compass escalation.
     if any(getattr(n, "advance", None) is not None and not n.satisfied for n in leaves):
-        return None
+        return _candidate_read.ContinuationRead(
+            _candidate_read.ContinuationKind.SELF_ADVANCING,
+            "the selected trace has a self-advancing program frontier",
+            ("trace", "advance"),
+        )
 
     satisfied = [n for n in leaves if n.satisfied]
     if len(satisfied) == len(leaves) and leaves:
-        return None
+        return _candidate_read.ContinuationRead(
+            _candidate_read.ContinuationKind.TRACE_READY,
+            "the selected trace is satisfied and awaits its program writer",
+            ("trace", "satisfied"),
+        )
 
     # Writer found, all conditions satisfied (empty children) — the output
     # instruction just hasn't fired yet. This readiness has the same meaning at
@@ -122,7 +132,11 @@ def _diagnose_stuck_reason(
         and not node.is_steerable
         for node in tree.iter_nodes()
     ):
-        return None
+        return _candidate_read.ContinuationRead(
+            _candidate_read.ContinuationKind.READY_WRITER,
+            "an exact program writer is ready to execute on the next scan",
+            ("trace", "ready-writer"),
+        )
 
     dead_ends = [
         n
@@ -132,14 +146,14 @@ def _diagnose_stuck_reason(
     if not dead_ends:
         has_writers = any(ctx.pdg.writers_of.get(n.tag) for n in leaves if not n.satisfied)
         if not has_writers:
-            return _STUCK_TRACE_EMPTY
-        return _STUCK_TRACE_GUARD
+            return _candidate_read.CandidateDiagnosis(_STUCK_TRACE_EMPTY)
+        return _candidate_read.CandidateDiagnosis(_STUCK_TRACE_GUARD)
 
     for n in dead_ends:
         if ctx.pdg.writers_of.get(n.tag):
-            return _STUCK_TRACE_OPAQUE
+            return _candidate_read.CandidateDiagnosis(_STUCK_TRACE_OPAQUE)
 
-    return _STUCK_TRACE_EMPTY
+    return _candidate_read.CandidateDiagnosis(_STUCK_TRACE_EMPTY)
 
 
 # ---------------------------------------------------------------------------
@@ -988,15 +1002,29 @@ def _assemble_candidate_read(
         has_candidates=bool(candidates or crossing_batches),
     )
     learned_batch = learned.read if isinstance(learned, _candidate_read._LearnedBatch) else None
-    stuck_reason: str | None = None
-    if (
+    continuation: _candidate_read.ContinuationRead | None = None
+    diagnosis: _candidate_read.CandidateDiagnosis | None = None
+    if separated.prerequisites.pilot_rungs:
+        # Prerequisites are a complete positive alternative, not metadata owned
+        # by whichever candidate happens to be considered first. If that act is
+        # rejected, establishing the exact trace holds still gives the program
+        # authorized work before the next fresh read.
+        continuation = _candidate_read.ContinuationRead(
+            _candidate_read.ContinuationKind.PREREQUISITE,
+            "establish exact trace prerequisites before rereading the program",
+            ("trace", "prerequisite"),
+        )
+    elif (
         not candidates
-        and not separated.prerequisites.pilot_rungs
         and (wait is None or wait.prescription is None)
         and learned_batch is None
         and not crossing_batches
     ):
-        stuck_reason = _diagnose_stuck_reason(frame, ctx)
+        disposition = _read_trace_disposition(frame, ctx)
+        if isinstance(disposition, _candidate_read.ContinuationRead):
+            continuation = disposition
+        else:
+            diagnosis = disposition
 
     final_trace = replace(trace, actions=trace_actions)
     widening_expectations: list[tuple[tuple[_ActionPair, ...], EffectExpectation]] = []
@@ -1033,9 +1061,8 @@ def _assemble_candidate_read(
         prerequisites=separated.prerequisites,
         learned_batch=learned_batch,
         crossing_batches=crossing_batches,
-        diagnosis=_candidate_read.CandidateDiagnosis(stuck_reason)
-        if stuck_reason is not None
-        else None,
+        continuation=continuation,
+        diagnosis=diagnosis,
         widening_expectations=tuple(widening_expectations),
     )
 

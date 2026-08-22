@@ -63,7 +63,10 @@ def _edge_write_activation(edge: Any, state: Any, ctx: Any) -> Any:
     if edge.route.writer_node >= len(nodes):
         return None
     node = nodes[edge.route.writer_node]
-    rung = resolve_rung(getattr(ctx, "program", None), node)
+    program = getattr(ctx, "program", None)
+    if program is None:
+        return None
+    rung = resolve_rung(program, node)
     execution_state = getattr(getattr(state, "work", None), "state", None)
     if rung is None or execution_state is None:
         return None
