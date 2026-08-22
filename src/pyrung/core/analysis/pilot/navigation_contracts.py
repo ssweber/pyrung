@@ -438,6 +438,20 @@ class Dwell:
 
 
 @dataclass(frozen=True)
+class ProgramContinuation:
+    """One positively-read, bounded opportunity for the program to advance.
+
+    ``seek`` owns the first ejection-guarded continuation window. ``settle``
+    owns the one bounded follow-up after Compass has retained that window's
+    stop receipt. The act names program motion explicitly; it is neither an
+    inferred intervention nor an ambient terminal fallback.
+    """
+
+    mode: Literal["seek", "settle"]
+    policy: ActPolicy
+
+
+@dataclass(frozen=True)
 class ObserveScan:
     """One program-owned scan used to establish an observed entry edge.
 
@@ -475,7 +489,16 @@ class ProgramScan:
     )
 
 
-NavigationAct = Pulse | BatchPulse | IntrascanPulse | Coast | Dwell | ObserveScan | ProgramScan
+NavigationAct = (
+    Pulse
+    | BatchPulse
+    | IntrascanPulse
+    | Coast
+    | Dwell
+    | ProgramContinuation
+    | ObserveScan
+    | ProgramScan
+)
 
 
 @dataclass(frozen=True)
@@ -748,6 +771,12 @@ def act_identity(act: NavigationAct) -> tuple[Any, ...]:
                 tuple((tag, _semantic_key(value)) for tag, value in route.setup_releases),
             )
         return identity
+    if isinstance(act, ProgramContinuation):
+        return (
+            "program-continuation",
+            act.mode,
+            _applied_identity(act.policy.applied),
+        )
     if isinstance(act, ObserveScan):
         return ("observe-scan",)
     if isinstance(act, ProgramScan):

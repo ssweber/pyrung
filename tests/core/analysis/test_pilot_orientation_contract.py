@@ -49,6 +49,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     NeedResearch,
     OrientationRead,
     OrientationWorld,
+    ProgramContinuation,
     ProgramScan,
     Pulse,
     RouteEdgeContext,
@@ -221,7 +222,7 @@ def test_orientation_threads_one_expectation_for_batch_crossing_widening_and_coa
     assert coast.act.policy.expectation is expectation
 
 
-def test_positive_continuation_read_authorizes_legacy_terminal_coast(monkeypatch) -> None:
+def test_positive_continuation_read_authorizes_named_program_motion(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
 
     compass = Compass()
@@ -240,13 +241,16 @@ def test_positive_continuation_read_authorizes_legacy_terminal_coast(monkeypatch
     terminal = orientation._orient_read(compass, world, TargetSpec("Target", True))
 
     assert isinstance(terminal, Bearing)
+    assert isinstance(terminal.act, ProgramContinuation)
+    assert terminal.act.mode == "seek"
+    assert terminal.act.policy.source is ActSource.PROGRAM
     assert terminal.act.policy.expectation is None
-    assert terminal.act.policy.expectation_exemption == "ambient_terminal"
+    assert terminal.act.policy.expectation_exemption is ExpectationExemption.UNRESOLVED_EFFECT
     assert terminal.act.policy.provenance == ("trace", "advance")
     assert terminal.rationale == "timer frontier is advancing"
 
 
-def test_absence_of_diagnosis_does_not_authorize_terminal_coast(monkeypatch) -> None:
+def test_absence_of_diagnosis_does_not_authorize_program_continuation(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
 
     compass = Compass()
@@ -2022,6 +2026,78 @@ def test_completed_read_is_shared_by_theory_and_ordinary_lowering(monkeypatch) -
     assert result.orientation.candidates is candidates
 
 
+def test_working_theory_reuses_one_current_world_ordinary_disposition(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
+
+    compass = Compass()
+    view = SimpleNamespace(
+        temporal_intent=TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
+        investigation_scope=SimpleNamespace(transaction_rearmed=True),
+        research_findings=(),
+    )
+    world = _world(compass)
+    world = replace(world, context=replace(world.context, theory_view=view))
+    candidates = _options(stuck_reason="all_rejected")
+    candidate_reads = 0
+    ordinary_reads = 0
+    original_ordinary = orientation._ordinary_disposition
+
+    def read_once(*_args):
+        nonlocal candidate_reads
+        candidate_reads += 1
+        return candidates
+
+    def ordinary_once(*args):
+        nonlocal ordinary_reads
+        ordinary_reads += 1
+        return original_ordinary(*args)
+
+    monkeypatch.setattr(orientation, "read_candidates", read_once)
+    monkeypatch.setattr(orientation, "_ordinary_disposition", ordinary_once)
+    monkeypatch.setattr(Compass, "conductivity_research", lambda *_args: None)
+    monkeypatch.setattr(
+        theory_orientation,
+        "_theory_intrascan_boundary_realization",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        theory_orientation,
+        "_theory_temporal_retry_bearing",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        theory_orientation,
+        "_theory_correction_composition",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        theory_orientation,
+        "_theory_intrascan_continuation_traceback",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        theory_orientation,
+        "_theory_intrascan_bearing",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        theory_orientation,
+        "_theory_intrascan_frontier_bearing",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        theory_orientation,
+        "_theory_pending_configuration_bearing",
+        lambda *_args: None,
+    )
+
+    orientation._orient_read(compass, world, TargetSpec("Target", True))
+
+    assert candidate_reads == 1
+    assert ordinary_reads == 1
+
+
 def test_root_alternatives_own_distinct_completed_reads(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
     import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
@@ -2610,7 +2686,8 @@ def test_rejected_candidate_can_fall_through_to_positive_continuation(monkeypatc
     )
 
     assert isinstance(continued, Bearing)
-    assert isinstance(continued.act, Coast)
+    assert isinstance(continued.act, ProgramContinuation)
+    assert continued.act.mode == "seek"
     assert continued.rationale == "establish trace prerequisites"
 
 

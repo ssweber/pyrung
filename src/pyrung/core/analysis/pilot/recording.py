@@ -20,6 +20,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Dwell,
     IntrascanPulse,
     ObserveScan,
+    ProgramContinuation,
     ProgramScan,
     Pulse,
 )
@@ -892,6 +893,36 @@ def _act_event(
             "candidate_accepted",
             scan,
             _accepted_payload(act.policy, trial, frame, state, seen_keys),
+        )
+
+    if isinstance(act, ProgramContinuation):
+        payload = {
+            "reason": rationale,
+            "mode": act.mode,
+            "provenance": act.policy.provenance,
+            "prerequisite_pilot_rungs": prerequisites,
+        }
+        if phase == "try":
+            return PilotEvent("program_continuation", scan, payload)
+        if phase == "rejected":
+            assert attempt is not None
+            return PilotEvent(
+                "program_continuation_rejected",
+                scan,
+                {
+                    **payload,
+                    "gates": attempt.gate_events,
+                    "effect_observations": _rejected_effect_observations(attempt),
+                },
+            )
+        assert trial is not None
+        return PilotEvent(
+            "program_continuation_accepted",
+            scan,
+            {
+                **payload,
+                **_bearing_coast_accepted_payload(trial),
+            },
         )
 
     if isinstance(act, ProgramScan):

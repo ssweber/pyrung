@@ -3,7 +3,7 @@
 Coverage targets:
 - _settle_watched_tags: dwell control, fixpoint detection
 - _coast_to_bearing: channel-register coast, ejection guard, settle fallback
-- _try_terminal_letrun: terminal stall evidence
+- _try_program_continuation_seek: bounded continuation stall evidence
 - _compass_observations: transition, contradiction, and causal filtering
 """
 
@@ -27,7 +27,7 @@ from pyrung.core.analysis.pilot.steer import (
     _coast_to_bearing,
     _compass_observations,
     _settle_watched_tags,
-    _try_terminal_letrun,
+    _try_program_continuation_seek,
 )
 from pyrung.core.analysis.pilot.trace_tree import TraceNode
 from pyrung.core.analysis.pilot.types import _IterationFrame
@@ -254,7 +254,7 @@ class TestTerminalLetrun:
             BearingObjective(target),
         )
 
-        result = _try_terminal_letrun(bearing, frame, state, ctx)
+        result = _try_program_continuation_seek(bearing, frame, state, ctx)
 
         assert result.trial is None
         assert result.gate_events[0].event == "dead-end"

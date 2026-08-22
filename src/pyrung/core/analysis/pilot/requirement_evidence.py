@@ -38,6 +38,7 @@ from pyrung.core.analysis.pilot.intrascan import (
 from pyrung.core.analysis.pilot.navigation_contracts import (
     Coast,
     LocalProgressKind,
+    ProgramContinuation,
     TargetSpec,
     act_identity,
 )
@@ -271,7 +272,10 @@ def _attempt_productive_scan(executed: _ExecutedAttempt) -> int:
     """Return S1, the first physical scan owned by this ordinary bearing."""
 
     action_scan = executed.pulse.action_scan
-    if action_scan is not None and not isinstance(executed.bearing.act, Coast):
+    if action_scan is not None and not isinstance(
+        executed.bearing.act,
+        (Coast, ProgramContinuation),
+    ):
         return action_scan
     first_scan = next(
         (

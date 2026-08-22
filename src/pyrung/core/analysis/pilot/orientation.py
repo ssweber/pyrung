@@ -25,7 +25,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
     Coast,
     ComposeCorrection,
-    Dwell,
     ExpectationExemption,
     NavigationConstraints,
     NeedIntrascanBoundaryRealization,
@@ -36,6 +35,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationRead,
     OrientationResult,
     OrientationWorld,
+    ProgramContinuation,
     Pulse,
     Stuck,
     TargetSpec,
@@ -218,33 +218,27 @@ def _widening_proposals(_compass: Any, read: OrientationRead) -> Iterator[_ActPr
 
 
 def _continuation_proposals(compass: Any, read: OrientationRead) -> Iterator[_ActProposal]:
-    """Lower only a positively-read program continuation to legacy Coast/Dwell."""
+    """Lower only positively-read program motion to its named bounded act."""
 
     continuation = read.candidates.continuation
     if continuation is None:
         return
     world = read.world
     if compass.knowledge.coast_receipt(world.world_key) is None:
-        act: Coast | Dwell = Coast(
-            "terminal",
-            ActPolicy(
-                source=ActSource.TERMINAL,
-                motion=MotionKind.COAST_HOLDING_WORLD,
-                provenance=continuation.provenance,
-                expectation_exemption=ExpectationExemption.AMBIENT_TERMINAL,
-            ),
-        )
+        mode = "seek"
         rationale = continuation.reason
     else:
-        act = Dwell(
-            ActPolicy(
-                source=ActSource.TERMINAL,
-                motion=MotionKind.COAST_HOLDING_WORLD,
-                provenance=continuation.provenance,
-                expectation_exemption=ExpectationExemption.AMBIENT_TERMINAL,
-            )
-        )
+        mode = "settle"
         rationale = f"{continuation.reason}; the first coast was already observed"
+    act = ProgramContinuation(
+        mode,
+        ActPolicy(
+            source=ActSource.PROGRAM,
+            motion=MotionKind.COAST_HOLDING_WORLD,
+            provenance=continuation.provenance,
+            expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+        ),
+    )
     yield act, rationale
 
 
@@ -291,32 +285,43 @@ def _admit_ordinary_proposal(
     )
 
 
+def _ordinary_disposition(
+    compass: Any,
+    read: OrientationRead,
+    target: TargetSpec,
+) -> OrientationResult:
+    """Consider the current world's ordinary readings exactly once."""
+
+    for proposal in _ordinary_proposals(compass, read):
+        bearing = _admit_ordinary_proposal(compass, read, target, proposal)
+        if bearing is not None:
+            return bearing
+    diagnosis = read.candidates.diagnosis
+    reason = diagnosis.reason if diagnosis is not None else "all_rejected"
+    return _orientation_reading._probe_or_stuck(compass, read, reason)
+
+
 def _orient_read(
     compass: Any,
     world: OrientationWorld,
     target: TargetSpec,
     *,
     _allow_theory: bool = True,
-    _orientation_read: OrientationRead | None = None,
 ) -> OrientationResult:
     """Materialize one alternative in act-precedence order.
 
     A selected wait is considered before learned batches and individual action
-    options; widening, diagnosis, and terminal continuation follow. Each exact
+    options; widening, diagnosis, and positive continuation follow. Each exact
     act is checked against the current world's nogoods before it becomes a
     bearing.
     """
 
     if world.frame is None:
         raise ValueError("single-alternative orientation requires a complete frame")
-    read = (
-        _orientation_read
-        if _orientation_read is not None
-        else OrientationRead(
-            world_key=world.world_key,
-            world=world,
-            candidates=read_candidates(world),
-        )
+    read = OrientationRead(
+        world_key=world.world_key,
+        world=world,
+        candidates=read_candidates(world),
     )
     candidates = read.candidates
 
@@ -335,6 +340,17 @@ def _orient_read(
             rationale="observe exactly one entry scan",
         )
 
+    if not _allow_theory:
+        return _ordinary_disposition(compass, read, target)
+
+    ordinary_cache: OrientationResult | None = None
+
+    def ordinary_result() -> OrientationResult:
+        nonlocal ordinary_cache
+        if ordinary_cache is None:
+            ordinary_cache = _ordinary_disposition(compass, read, target)
+        return ordinary_cache
+
     view = getattr(world.context, "theory_view", None)
     if _allow_theory:
         boundary_realization = _theory_orientation._theory_intrascan_boundary_realization(
@@ -352,13 +368,7 @@ def _orient_read(
                 and scope is not None
                 and getattr(scope, "transaction_rearmed", False)
             ):
-                ordinary = _orient_read(
-                    compass,
-                    world,
-                    target,
-                    _allow_theory=False,
-                    _orientation_read=read,
-                )
+                ordinary = ordinary_result()
                 retry = _theory_orientation._theory_temporal_retry_bearing(
                     read,
                     target,
@@ -411,13 +421,7 @@ def _orient_read(
             )
             if frontier_stage is not None:
                 return frontier_stage
-            ordinary = _orient_read(
-                compass,
-                world,
-                target,
-                _allow_theory=False,
-                _orientation_read=read,
-            )
+            ordinary = ordinary_result()
             composed = _theory_orientation._theory_temporal_retry_bearing(
                 read,
                 target,
@@ -482,14 +486,8 @@ def _orient_read(
             )
             if frontier_stage is not None:
                 return frontier_stage
-            ordinary_result = _orient_read(
-                compass,
-                world,
-                target,
-                _allow_theory=False,
-                _orientation_read=read,
-            )
-            ordinary = ordinary_result if isinstance(ordinary_result, Bearing) else None
+            ordinary_disposition = ordinary_result()
+            ordinary = ordinary_disposition if isinstance(ordinary_disposition, Bearing) else None
             traceback = _theory_orientation._theory_setup_traceback(
                 read,
                 ordinary,
@@ -509,25 +507,13 @@ def _orient_read(
                 "temporal_setup_unresolved",
             )
 
-    # Ordinary instruments nominate acts in one declared order. Every proposal
-    # then crosses the same activation/requirement/nogood gate exactly once.
-    for proposal in _ordinary_proposals(compass, read):
-        bearing = _admit_ordinary_proposal(compass, read, target, proposal)
-        if bearing is not None:
-            return bearing
-
-    reason = candidates.diagnosis.reason if candidates.diagnosis is not None else "all_rejected"
-    return _orientation_reading._probe_or_stuck(compass, read, reason)
+    return ordinary_result()
 
 
 def _is_maintenance(result: OrientationResult) -> bool:
     """Whether a read has no concrete continuation and can only let time pass."""
 
-    return isinstance(result, Bearing) and (
-        isinstance(result.act, Dwell)
-        or isinstance(result.act, Coast)
-        and result.act.mode == "terminal"
-    )
+    return isinstance(result, Bearing) and isinstance(result.act, ProgramContinuation)
 
 
 def _read_group(
@@ -542,8 +528,8 @@ def _read_group(
     Alternative order remains the trace reader's deterministic order. There is
     no cross-alternative score and no retained cursor. With
     ``maintenance_owns=True``, an open operation's first bearing wins even when
-    it is terminal coast or dwell maintenance. Fresh alternatives instead look
-    past maintenance for a concrete bearing and use the first maintenance
+    it is bounded program-continuation maintenance. Fresh alternatives instead
+    look past maintenance for a concrete bearing and use the first maintenance
     result only as their fallback.
     """
 

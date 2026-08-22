@@ -50,6 +50,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     IntrascanPulse,
     LocalProgressKind,
     ObserveScan,
+    ProgramContinuation,
     ProgramScan,
     _ActionPair,
     act_identity,
@@ -318,7 +319,10 @@ def _accepted_trial(
         )
         if selected_receipts
         else pulse.action_scan
-        if not isinstance(attempt.bearing.act, (Coast, Dwell, ObserveScan, ProgramScan))
+        if not isinstance(
+            attempt.bearing.act,
+            (Coast, Dwell, ProgramContinuation, ObserveScan, ProgramScan),
+        )
         and pulse.action_scan is not None
         else pulse.fork.state.scan_id
     )

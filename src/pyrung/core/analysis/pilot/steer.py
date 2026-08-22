@@ -68,6 +68,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     LandingReceiptAuthority,
     ObserveScan,
     OrientationWorld,
+    ProgramContinuation,
     ProgramScan,
     Pulse,
     _ActionPair,
@@ -317,7 +318,10 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
 
     action_scan = (
         None
-        if isinstance(bearing.act, (Coast, Dwell, ObserveScan, ProgramScan))
+        if isinstance(
+            bearing.act,
+            (Coast, Dwell, ProgramContinuation, ObserveScan, ProgramScan),
+        )
         else pulse.action_scan
     )
     immediate = observe_execution_window(
@@ -339,7 +343,7 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
         and orientation is not None
         and not isinstance(
             bearing.act,
-            (ObserveScan, ProgramScan, IntrascanPulse),
+            (ProgramContinuation, ObserveScan, ProgramScan, IntrascanPulse),
         )
     ):
         world = orientation.world
@@ -1039,19 +1043,23 @@ def execute(
                 state,
                 ctx,
             )
-        return _try_terminal_letrun(
+        return _try_program_continuation_seek(
             bearing,
             frame,
             state,
             ctx,
         )
     if isinstance(act, Dwell):
-        return _try_terminal_dwell(
+        return _try_program_continuation_settle(
             bearing,
             frame,
             state,
             ctx,
         )
+    if isinstance(act, ProgramContinuation):
+        if act.mode == "seek":
+            return _try_program_continuation_seek(bearing, frame, state, ctx)
+        return _try_program_continuation_settle(bearing, frame, state, ctx)
     if isinstance(act, (ObserveScan, ProgramScan)):
         return _try_single_program_scan(bearing, frame, state, ctx)
     raise TypeError(f"unsupported navigation act {type(act).__name__}")
@@ -1279,18 +1287,17 @@ def _try_bearing_coast(
     return replace(result, observations=tuple(observations))
 
 
-def _try_terminal_letrun(
+def _try_program_continuation_seek(
     bearing: Bearing,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
 ) -> _AttemptResult:
-    """Generalized terminal let-run — the bottom-of-loop fallback.
+    """Seek one positively-read program continuation through a bounded window.
 
-    Reached here when no route bearing coast, command candidate, or widening made
-    progress, yet the watched tags are still live (things pending). The only move left is
-    to hold the current macro-state and coast toward the global target, letting
-    the program's self-advancing sub-processes (timers, step-counters) complete.
+    Orientation reaches this path only when a current-world instrument reports
+    why the program can advance without another input. It holds the current
+    macro-state and lets that named program work proceed toward the target.
 
     Nothing about intermediate bearings is assumed: the heading is the global
     target, and the ejection guard is the recognized state-machine roles held at
@@ -1484,15 +1491,15 @@ def _try_terminal_letrun(
     return replace(result, observations=observations)
 
 
-def _try_terminal_dwell(
+def _try_program_continuation_settle(
     bearing: Bearing,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
 ) -> _AttemptResult:
-    """Run one bounded repeated dwell through the shared trial gates.
+    """Settle one previously-observed continuation through the shared trial gates.
 
-    Reached only when Compass knowledge carries a terminal-coast receipt for
+    Reached only when Compass knowledge carries a program-continuation receipt for
     this world key. The coast is deterministic under the held inputs,
     so repeating the full ejection-guarded let-run would reproduce the same
     departure.

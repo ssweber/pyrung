@@ -23,6 +23,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ObserveScan,
     OrientationResult,
     OrientationWorld,
+    ProgramContinuation,
     ProgramScan,
     Pulse,
     TargetSpec,
@@ -291,7 +292,11 @@ def transition_once(
         logger.debug("pilot: working theory observation failed", exc_info=True)
     record_attempt(attempt, frame, state, ctx)
 
-    if isinstance(act, Coast) and act.mode == "terminal":
+    if (
+        (isinstance(act, ProgramContinuation) and act.mode == "seek")
+        or isinstance(act, Coast)
+        and act.mode == "terminal"
+    ):
         stop_reason = (
             attempt.stall_receipt.stop_reason
             if attempt.stall_receipt is not None

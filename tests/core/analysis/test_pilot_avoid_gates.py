@@ -330,7 +330,7 @@ def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
         Dwell(),
         BearingObjective(TargetSpec("Target", True)),
     )
-    steer._try_terminal_dwell(bearing, frame, state, ctx)
+    steer._try_program_continuation_settle(bearing, frame, state, ctx)
 
     assert any(snap["Mid"] is True for snap in captured["wait_snaps"])
     assert captured["wait_snaps"][-1]["Target"] is True

@@ -302,8 +302,8 @@ class ContinuationRead:
     """Why an actionless current world is expected to advance on its own.
 
     This is positive continuation evidence, not the absence of a stuck
-    diagnosis. Orientation may lower it to a bounded Coast/Dwell while that
-    legacy execution primitive remains in use.
+    diagnosis. Orientation may lower it to a bounded ProgramContinuation while
+    that evidence remains current.
     """
 
     kind: ContinuationKind

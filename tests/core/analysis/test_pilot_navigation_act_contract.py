@@ -9,7 +9,7 @@ import pytest
 
 from pyrung import PLC, Int, Program, Rung, copy
 from pyrung.core.analysis.pilot import navigation_contracts, steer
-from pyrung.core.analysis.pilot.execution import PulseHorizon, ScanEntryConfiguration
+from pyrung.core.analysis.pilot.execution import MotionKind, PulseHorizon, ScanEntryConfiguration
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -18,13 +18,16 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     BearingObjective,
     Coast,
     Dwell,
+    ExpectationExemption,
     IntrascanPulse,
     NavigationAct,
     ObserveScan,
     OrientationWorld,
+    ProgramContinuation,
     ProgramScan,
     Pulse,
     TargetSpec,
+    act_identity,
 )
 from pyrung.core.condition import CompareEq
 
@@ -50,11 +53,27 @@ def test_navigation_act_cannot_name_a_historical_replay() -> None:
         IntrascanPulse,
         Coast,
         Dwell,
+        ProgramContinuation,
         ObserveScan,
         ProgramScan,
     )
     assert not hasattr(navigation_contracts, "RetainedReplay")
     assert not hasattr(navigation_contracts, "RetainedOccurrence")
+
+
+def test_program_continuation_identity_is_execution_not_diagnostic_provenance() -> None:
+    def continuation(provenance: tuple[str, ...]) -> ProgramContinuation:
+        return ProgramContinuation(
+            "seek",
+            ActPolicy(
+                source=ActSource.PROGRAM,
+                motion=MotionKind.COAST_HOLDING_WORLD,
+                provenance=provenance,
+                expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+            ),
+        )
+
+    assert act_identity(continuation(("trace",))) == act_identity(continuation(("program-step",)))
 
 
 def test_execution_rejects_a_historical_replay_shaped_act(monkeypatch) -> None:
