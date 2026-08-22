@@ -16,8 +16,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
     BatchPulse,
-    Coast,
-    Dwell,
+    BearingCoast,
     IntrascanPulse,
     ObserveScan,
     ProgramContinuation,
@@ -954,10 +953,10 @@ def _act_event(
             },
         )
 
-    if isinstance(act, (Coast, Dwell, ObserveScan)):
+    if isinstance(act, (BearingCoast, ObserveScan)):
         if phase == "try":
             channel_tag = target_tag
-            if isinstance(act, Coast) and act.mode == "bearing":
+            if isinstance(act, BearingCoast):
                 heading = act.policy.heading
                 route = heading.route if heading is not None else None
                 if heading is not None:

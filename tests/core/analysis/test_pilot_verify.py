@@ -31,9 +31,9 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
     Bearing,
+    BearingCoast,
     BearingObjective,
     ChannelHeading,
-    Coast,
     Pulse,
     RouteEdgeContext,
     TargetSpec,
@@ -346,7 +346,7 @@ def test_wrong_channel_landing_cannot_mint_a_frontier_progress_receipt():
         pulse,
         Bearing(
             ("source",),
-            Coast("bearing", policy),
+            BearingCoast(policy),
             BearingObjective(TargetSpec("Target", True)),
         ),
     )
@@ -404,7 +404,7 @@ def test_chart_reachability_cannot_mint_selected_producer_landing() -> None:
         pulse,
         Bearing(
             ("source",),
-            Coast("bearing", policy),
+            BearingCoast(policy),
             BearingObjective(TargetSpec("Target", True)),
             orientation=SimpleNamespace(
                 world=SimpleNamespace(

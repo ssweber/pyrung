@@ -15,9 +15,8 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     BatchPulse,
     Bearing,
+    BearingCoast,
     BearingObjective,
-    Coast,
-    Dwell,
     ExpectationExemption,
     IntrascanPulse,
     NavigationAct,
@@ -51,14 +50,17 @@ def test_navigation_act_cannot_name_a_historical_replay() -> None:
         Pulse,
         BatchPulse,
         IntrascanPulse,
-        Coast,
-        Dwell,
+        BearingCoast,
         ProgramContinuation,
         ObserveScan,
         ProgramScan,
     )
     assert not hasattr(navigation_contracts, "RetainedReplay")
     assert not hasattr(navigation_contracts, "RetainedOccurrence")
+    assert not hasattr(navigation_contracts, "Coast")
+    assert not hasattr(navigation_contracts, "Dwell")
+    assert not hasattr(ActSource, "TERMINAL")
+    assert not hasattr(ExpectationExemption, "AMBIENT_TERMINAL")
 
 
 def test_program_continuation_identity_is_execution_not_diagnostic_provenance() -> None:

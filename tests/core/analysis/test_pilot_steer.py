@@ -19,7 +19,8 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     Bearing,
     BearingObjective,
-    Coast,
+    ExpectationExemption,
+    ProgramContinuation,
     TargetSpec,
 )
 from pyrung.core.analysis.pilot.steer import (
@@ -203,8 +204,8 @@ class TestBearingCoast:
         assert receipt.logical_scans < 9
 
 
-class TestTerminalLetrun:
-    """_try_terminal_letrun: generalized bottom-of-loop fallback."""
+class TestProgramContinuation:
+    """A positively-read continuation can still report a bounded stall."""
 
     def test_stall_is_dead_end(self):
         program = _follow_program()
@@ -244,11 +245,12 @@ class TestTerminalLetrun:
         )
         bearing = Bearing(
             key,
-            Coast(
-                "terminal",
+            ProgramContinuation(
+                "seek",
                 ActPolicy(
-                    ActSource.TERMINAL,
+                    ActSource.PROGRAM,
                     motion=MotionKind.COAST_HOLDING_WORLD,
+                    expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
                 ),
             ),
             BearingObjective(target),
@@ -258,7 +260,7 @@ class TestTerminalLetrun:
 
         assert result.trial is None
         assert result.gate_events[0].event == "dead-end"
-        assert result.gate_events[0].detail == "terminal stall, no ejection"
+        assert result.gate_events[0].detail == "program continuation stalled without ejection"
         assert result.stall_receipt is not None
         assert result.stall_receipt.stop_reason == "timeout"
         assert result.stall_pending is False

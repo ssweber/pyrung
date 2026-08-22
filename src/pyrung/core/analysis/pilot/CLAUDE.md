@@ -119,6 +119,11 @@ mechanics and ordinary verification gates without representing the decision as
 an ambient terminal fallback. A genuinely unresolved read returns an evidence
 request or `Stuck` for an external guidance layer.
 
+`BearingCoast` and `ProgramContinuation` are distinct navigation decisions.
+`CoastReceipt` is lower-level physical execution evidence shared by both; its
+name does not grant navigation authority. Compass retains only the typed
+`ProgramContinuationObservation` needed to select `settle` after `seek`.
+
 ## World, knowledge, and rollback
 
 `_PilotState` deliberately separates two kinds of state.
@@ -283,8 +288,9 @@ file-by-file ownership index here.
 - **Bearing** — one next direction bound to a current-world read.
 - **Compass** — immutable navigation facade over static references and durable
   navigation knowledge; Orientation makes the selection.
-- **coast** — hold declared inputs while program scans pass toward a boundary.
-- **dwell** — allow program-owned motion without declaring an input action.
+- **BearingCoast** — route-owned motion toward one declared channel boundary.
+- **ProgramContinuation** — positively authorized, bounded program-owned
+  motion without a new input action.
 - **frontier** — unresolved non-steerable needs in the selected trace.
 - **world key** — executable-state and active-overlay identity used to scope
   observations and nogoods.

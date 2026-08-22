@@ -92,7 +92,7 @@ def _read_trace_disposition(
 ) -> _candidate_read.ContinuationRead | _candidate_read.CandidateDiagnosis:
     """Explain an actionless trace as positive continuation or exhaustion.
 
-    An executable Coast must have a positive reading. A steerable leaf that
+    An executable ProgramContinuation must have a positive reading. A steerable leaf that
     disappeared during admission is rejected work, not permission to let the
     program run and hope that a later world becomes easier to read.
     """

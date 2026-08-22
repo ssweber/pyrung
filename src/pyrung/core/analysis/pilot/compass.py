@@ -131,8 +131,8 @@ class ProbeExhaustedObservation:
 
 
 @dataclass(frozen=True)
-class CoastObservation:
-    """A terminal coast/dwell receipt that affects future orientation."""
+class ProgramContinuationObservation:
+    """A bounded program-continuation receipt affecting future orientation."""
 
     world_key: tuple[Any, ...]
     stop_reason: str
@@ -157,7 +157,7 @@ NavigationObservation = (
     CompassObservation
     | ActionNogoodObservation
     | ProbeExhaustedObservation
-    | CoastObservation
+    | ProgramContinuationObservation
     | StaticEdgeObservation
 )
 
@@ -429,7 +429,7 @@ class CompassKnowledge:
     entries: PMap = field(default_factory=pmap)
     act_nogoods: PMap = field(default_factory=pmap)
     probe_counts: PMap = field(default_factory=pmap)
-    coast_receipts: PMap = field(default_factory=pmap)
+    continuation_receipts: PMap = field(default_factory=pmap)
     static_overlays: PMap = field(default_factory=pmap)
 
     def nogood_identities(self, world_key: tuple[Any, ...]) -> frozenset[tuple[Any, ...]]:
@@ -459,14 +459,14 @@ class CompassKnowledge:
     def probe_count(self, world_key: tuple[Any, ...]) -> int:
         return int(self.probe_counts.get(world_key, 0))
 
-    def coast_receipt(self, world_key: tuple[Any, ...]) -> str | None:
-        return self.coast_receipts.get(world_key)
+    def continuation_receipt(self, world_key: tuple[Any, ...]) -> str | None:
+        return self.continuation_receipts.get(world_key)
 
     def after_stable_context_change(self, world_key: tuple[Any, ...]) -> CompassKnowledge:
         """Expire empirical negatives scoped to a pre-setup input context.
 
         Runtime transition entries retain their full snapshot context. Act
-        nogoods, probe counts, and terminal-coast receipts deliberately use the
+        nogoods, probe counts, and continuation receipts deliberately use the
         projected world key, which omits steerable values; an accepted stable
         setup therefore makes only those negative receipts stale.
         """
@@ -483,10 +483,10 @@ class CompassKnowledge:
                 if world_key in self.probe_counts
                 else self.probe_counts
             ),
-            coast_receipts=(
-                self.coast_receipts.remove(world_key)
-                if world_key in self.coast_receipts
-                else self.coast_receipts
+            continuation_receipts=(
+                self.continuation_receipts.remove(world_key)
+                if world_key in self.continuation_receipts
+                else self.continuation_receipts
             ),
         )
 
@@ -741,7 +741,7 @@ class CompassKnowledge:
         table = self.entries
         act_nogoods = self.act_nogoods
         probe_counts = self.probe_counts
-        coast_receipts = self.coast_receipts
+        continuation_receipts = self.continuation_receipts
         static_overlays = self.static_overlays
         changed = False
         for observation in observations:
@@ -757,9 +757,9 @@ class CompassKnowledge:
                 count = int(probe_counts.get(observation.world_key, 0))
                 probe_counts = probe_counts.set(observation.world_key, count + 1)
                 changed = True
-            elif isinstance(observation, CoastObservation):
-                if coast_receipts.get(observation.world_key) != observation.stop_reason:
-                    coast_receipts = coast_receipts.set(
+            elif isinstance(observation, ProgramContinuationObservation):
+                if continuation_receipts.get(observation.world_key) != observation.stop_reason:
+                    continuation_receipts = continuation_receipts.set(
                         observation.world_key,
                         observation.stop_reason,
                     )
@@ -848,7 +848,7 @@ class CompassKnowledge:
                 entries=table,
                 act_nogoods=act_nogoods,
                 probe_counts=probe_counts,
-                coast_receipts=coast_receipts,
+                continuation_receipts=continuation_receipts,
                 static_overlays=static_overlays,
             ),
             True,

@@ -1,4 +1,4 @@
-"""WorkingTheory persistence across a pulse and an actionless Coast."""
+"""WorkingTheory persistence across a pulse and program continuation."""
 
 from __future__ import annotations
 

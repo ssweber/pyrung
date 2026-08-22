@@ -11,13 +11,12 @@ import pyrung.core.analysis.pilot.theory_recording as _theory_recording
 import pyrung.core.analysis.pilot.trial_commit as _trial_commit
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
-    CoastObservation,
     CompassObservation,
+    ProgramContinuationObservation,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Bearing,
-    Coast,
     IntrascanPulse,
     NavigationConstraints,
     ObserveScan,
@@ -292,21 +291,19 @@ def transition_once(
         logger.debug("pilot: working theory observation failed", exc_info=True)
     record_attempt(attempt, frame, state, ctx)
 
-    if (
-        (isinstance(act, ProgramContinuation) and act.mode == "seek")
-        or isinstance(act, Coast)
-        and act.mode == "terminal"
-    ):
+    if isinstance(act, ProgramContinuation) and act.mode == "seek":
         stop_reason = (
             attempt.stall_receipt.stop_reason
             if attempt.stall_receipt is not None
             else (
                 attempt.trial.execution.coast_receipt.stop_reason
                 if (attempt.trial is not None and attempt.trial.execution.coast_receipt is not None)
-                else "terminal-coast"
+                else "program-continuation"
             )
         )
-        ctx.compass, _ = ctx.compass.apply((CoastObservation(frame.key, stop_reason),))
+        ctx.compass, _ = ctx.compass.apply(
+            (ProgramContinuationObservation(frame.key, stop_reason),)
+        )
 
     if attempt.trial is None:
         if attempt.avoid_names:

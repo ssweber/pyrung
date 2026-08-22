@@ -1678,14 +1678,17 @@ class TestBuildDeviationIncident:
 
 
 # ---------------------------------------------------------------------------
-# Terminal coast receipts are ordinary durable Compass knowledge.
+# Program continuation receipts are ordinary durable Compass knowledge.
 # ---------------------------------------------------------------------------
 
 
-def test_terminal_coast_receipt_is_typed_navigation_knowledge() -> None:
-    from pyrung.core.analysis.pilot.compass import CoastObservation, Compass
+def test_program_continuation_receipt_is_typed_navigation_knowledge() -> None:
+    import pyrung.core.analysis.pilot.compass as compass_module
+    from pyrung.core.analysis.pilot.compass import Compass, ProgramContinuationObservation
 
     key = ("world-key",)
-    compass, changed = Compass().apply((CoastObservation(key, "quiescent"),))
+    compass, changed = Compass().apply((ProgramContinuationObservation(key, "quiescent"),))
     assert changed
-    assert compass.knowledge.coast_receipt(key) == "quiescent"
+    assert compass.knowledge.continuation_receipt(key) == "quiescent"
+    assert not hasattr(compass_module, "CoastObservation")
+    assert not hasattr(compass.knowledge, "coast_receipts")

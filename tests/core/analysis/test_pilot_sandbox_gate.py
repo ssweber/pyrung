@@ -327,10 +327,10 @@ def test_compass_apply_identity_on_no_new_knowledge():
     """
     from pyrung.core.analysis.pilot.compass import (
         ActionNogoodObservation,
-        CoastObservation,
         Compass,
         CompassObservation,
         ProbeExhaustedObservation,
+        ProgramContinuationObservation,
         StaticEdgeObservation,
     )
 
@@ -359,7 +359,7 @@ def test_compass_apply_identity_on_no_new_knowledge():
             applied=(("Stop", True),),
         ),
         ActionNogoodObservation(wk, ("act", "Cmd", True)),
-        CoastObservation(wk, "budget"),
+        ProgramContinuationObservation(wk, "budget"),
         StaticEdgeObservation(("edge-id",), "confirmed"),
     )
 

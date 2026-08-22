@@ -34,11 +34,10 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     BatchPulse,
     Bearing,
+    BearingCoast,
     BearingObjective,
     ChannelHeading,
-    Coast,
     CrossingFidelity,
-    Dwell,
     ExpectationExemption,
     IntrascanPulse,
     LandingReceiptAuthority,
@@ -218,7 +217,7 @@ def test_orientation_threads_one_expectation_for_batch_crossing_widening_and_coa
     )
     coast = orientation._orient_read(compass, world, TargetSpec("Target", True))
     assert isinstance(coast, Bearing)
-    assert isinstance(coast.act, Coast)
+    assert isinstance(coast.act, BearingCoast)
     assert coast.act.policy.expectation is expectation
 
 
@@ -531,20 +530,19 @@ def test_pending_configuration_retries_only_the_horizon_owned_transaction(
 def test_pending_configuration_retries_the_fresh_actionless_program_transaction(
     monkeypatch,
 ) -> None:
-    """A Coast is reread from ProgramStep; its failed receipt is identity only."""
+    """A BearingCoast is reread; its failed receipt is identity only."""
 
     import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     heading = ChannelHeading("SequenceStep", 60)
     prescription = WaitPrescription(heading, "continue the autonomous sequence")
-    coast = Coast(
-        "bearing",
+    coast = BearingCoast(
         ActPolicy(
             source=ActSource.PROGRAM,
             heading=heading,
             motion=MotionKind.COAST_TO_BEARING,
             expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
-        ),
+        )
     )
     world = _world(Compass())
     world = replace(
@@ -590,8 +588,7 @@ def test_pending_configuration_retries_the_fresh_actionless_program_transaction(
     )
 
     assert isinstance(result, Bearing)
-    assert isinstance(result.act, Coast)
-    assert result.act.mode == "bearing"
+    assert isinstance(result.act, BearingCoast)
     assert result.act.policy.heading is heading
     assert result.act.policy.applied == ()
     assert result.act.policy.local_progress is LocalProgressKind.TEMPORAL_EDGE
@@ -1843,8 +1840,15 @@ def test_proof_rejection_identity_omits_active_requirements_when_configured() ->
 
 
 def test_nonpromising_executable_policies_have_typed_exemptions() -> None:
-    assert Dwell().policy.expectation is None
-    assert Dwell().policy.expectation_exemption is ExpectationExemption.AMBIENT_TERMINAL
+    continuation = ProgramContinuation(
+        "settle",
+        ActPolicy(
+            ActSource.PROGRAM,
+            expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+        ),
+    )
+    assert continuation.policy.expectation is None
+    assert continuation.policy.expectation_exemption is ExpectationExemption.UNRESOLVED_EFFECT
 
 
 def test_candidate_read_exposes_only_owned_receipts() -> None:
@@ -2280,10 +2284,9 @@ def test_crossing_batch_nogood_identity_is_canonical_and_falls_back(monkeypatch)
     assert compass.knowledge.nogood_pairs(("world",)) == frozenset()
 
 
-def test_coast_identity_is_operational_and_order_insensitive() -> None:
+def test_bearing_coast_identity_is_operational_and_order_insensitive() -> None:
     def _coast(from_value, target_value, applied):
-        return Coast(
-            "bearing",
+        return BearingCoast(
             ActPolicy(
                 source=ActSource.ROUTE,
                 applied=applied,
@@ -2292,7 +2295,7 @@ def test_coast_identity_is_operational_and_order_insensitive() -> None:
                     4,
                     route=RouteEdgeContext("Outer", from_value, target_value),
                 ),
-            ),
+            )
         )
 
     baseline = act_identity(_coast(1, 7, (("B", 2), ("A", 1))))
@@ -2300,9 +2303,15 @@ def test_coast_identity_is_operational_and_order_insensitive() -> None:
     assert baseline != act_identity(_coast(1, 8, (("A", 1), ("B", 2))))
 
 
-def test_dwell_identity_normalizes_applied_overlay_order() -> None:
-    first = Dwell(ActPolicy(ActSource.TERMINAL, applied=(("B", 2), ("A", 1))))
-    second = Dwell(ActPolicy(ActSource.TERMINAL, applied=(("A", 1), ("B", 2))))
+def test_program_continuation_identity_normalizes_applied_overlay_order() -> None:
+    first = ProgramContinuation(
+        "settle",
+        ActPolicy(ActSource.PROGRAM, applied=(("B", 2), ("A", 1))),
+    )
+    second = ProgramContinuation(
+        "settle",
+        ActPolicy(ActSource.PROGRAM, applied=(("A", 1), ("B", 2))),
+    )
 
     assert act_identity(first) == act_identity(second)
 
@@ -2382,7 +2391,13 @@ def test_open_operation_maintenance_owns_before_a_sibling_intervention(
     second = SimpleNamespace(name="sibling")
     maintain = Bearing(
         ("world",),
-        Dwell(),
+        ProgramContinuation(
+            "settle",
+            ActPolicy(
+                ActSource.PROGRAM,
+                expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+            ),
+        ),
         BearingObjective(target),
     )
     destroy = Bearing(
@@ -2449,13 +2464,12 @@ def test_bearing_preserves_downstream_channel_goal(monkeypatch) -> None:
     assert result.objective.channel_goals("State") == (17,)
 
 
-def test_coast_act_carries_only_immediate_heading() -> None:
-    act = Coast(
-        "bearing",
+def test_bearing_coast_act_carries_only_immediate_heading() -> None:
+    act = BearingCoast(
         ActPolicy(
             source=ActSource.ROUTE,
             heading=ChannelHeading("State", 2),
-        ),
+        )
     )
 
     assert act.policy.heading is not None
@@ -2468,7 +2482,7 @@ def test_coast_act_carries_only_immediate_heading() -> None:
         "route_channel_tag",
         "route_from_value",
         "route_target_value",
-    }.isdisjoint(vars(Coast))
+    }.isdisjoint(vars(BearingCoast))
     assert not hasattr(act, "option")
     assert not hasattr(act, "path")
 
@@ -2501,7 +2515,7 @@ def test_orient_carries_wait_heading_and_outer_route_context_whole(monkeypatch) 
     )
 
     assert isinstance(result, Bearing)
-    assert isinstance(result.act, Coast)
+    assert isinstance(result.act, BearingCoast)
     assert result.act.policy.heading is heading
     assert result.act.policy.heading.channel_tag == "InnerAcc"
     assert result.act.policy.heading.route is not None

@@ -62,8 +62,7 @@ from pyrung.core.analysis.pilot.execution import (
 from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Bearing,
-    Coast,
-    Dwell,
+    BearingCoast,
     IntrascanPulse,
     LandingReceiptAuthority,
     ObserveScan,
@@ -320,7 +319,7 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
         None
         if isinstance(
             bearing.act,
-            (Coast, Dwell, ProgramContinuation, ObserveScan, ProgramScan),
+            (BearingCoast, ProgramContinuation, ObserveScan, ProgramScan),
         )
         else pulse.action_scan
     )
@@ -1035,22 +1034,8 @@ def execute(
             state,
             ctx,
         )
-    if isinstance(act, Coast):
-        if act.mode == "bearing":
-            return _try_bearing_coast(
-                bearing,
-                frame,
-                state,
-                ctx,
-            )
-        return _try_program_continuation_seek(
-            bearing,
-            frame,
-            state,
-            ctx,
-        )
-    if isinstance(act, Dwell):
-        return _try_program_continuation_settle(
+    if isinstance(act, BearingCoast):
+        return _try_bearing_coast(
             bearing,
             frame,
             state,
@@ -1161,7 +1146,7 @@ def _try_bearing_coast(
     corrective holds.
     """
     coast = bearing.act
-    assert isinstance(coast, Coast)
+    assert isinstance(coast, BearingCoast)
     heading = coast.policy.heading
     route = heading.route if heading is not None else None
     channel_tag = heading.channel_tag if heading is not None else None
@@ -1175,7 +1160,7 @@ def _try_bearing_coast(
     snap_before = launch.entry_snap
 
     # Confirmed conditional holds (oscillation correctives) animate during the
-    # channel coast, same as the terminal let-run — fork_with_pilot_rungs installs
+    # channel coast, same as program continuation — fork_with_pilot_rungs installs
     # only the steady half.
     session = CoastSession(
         fork,
@@ -1439,7 +1424,7 @@ def _try_program_continuation_seek(
                 replace(
                     first,
                     event="dead-end",
-                    detail="terminal stall, no ejection",
+                    detail="program continuation stalled without ejection",
                 ),
                 *gate_events[1:],
             )
@@ -1505,15 +1490,15 @@ def _try_program_continuation_settle(
     departure.
 
     Perform one deterministic watched-tag settle on a fork and route it through the
-    same :func:`verify_gates` target gate as terminal let-run:
+    same :func:`verify_gates` target gate as the initial continuation seek:
 
       - a self-advancing frontier that crosses the target during the dwell is
         CONFIRMED through the shared target gate (verify stays the sole source);
-      - anything else is a legible terminal stall (dead-end reject), handed back
+      - anything else is a legible continuation stall (dead-end reject), handed back
         to the caller's skiff / stuck exit.
 
     No ejection is committed and no investigation re-runs, so the loop cannot spin
-    re-ejecting: a non-completing dwell terminates at the stuck exit rather than
+    re-ejecting: a non-completing settle terminates at the stuck exit rather than
     repeatedly spending the invocation's remaining search budget.
     """
     launch = _fork_for_execution(state, bearing.entry_configurations)
@@ -1573,11 +1558,13 @@ def _try_program_continuation_settle(
 
     if not _reached(snap_after):
         # No new input is possible here and the watched tags quiesced without crossing the
-        # target: a true terminal stall.  Do not classify a self-ejection as an
+        # target: a true continuation stall. Do not classify a self-ejection as an
         # advance — return dead-end so the caller routes to the skiff / stuck exit.
         return _AttemptResult(
             trial=None,
-            gate_events=(PilotGateEvent("dead-end", "terminal dwell settled short of target"),),
+            gate_events=(
+                PilotGateEvent("dead-end", "program continuation settled short of target"),
+            ),
             observations=observations,
         )
 

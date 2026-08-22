@@ -45,8 +45,7 @@ from pyrung.core.analysis.pilot.execution import (
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
-    Coast,
-    Dwell,
+    BearingCoast,
     IntrascanPulse,
     LocalProgressKind,
     ObserveScan,
@@ -289,7 +288,7 @@ def _accepted_trial(
     elif (
         exact_frontier_advanced or verification.assessment.progress is ProgressEffect.FORWARD
     ) and (
-        not (isinstance(attempt.bearing.act, Coast) and attempt.bearing.act.mode == "bearing")
+        not isinstance(attempt.bearing.act, BearingCoast)
         or not channel_motion.active
         or channel_motion.reached
     ):
@@ -321,7 +320,7 @@ def _accepted_trial(
         else pulse.action_scan
         if not isinstance(
             attempt.bearing.act,
-            (Coast, Dwell, ProgramContinuation, ObserveScan, ProgramScan),
+            (BearingCoast, ProgramContinuation, ObserveScan, ProgramScan),
         )
         and pulse.action_scan is not None
         else pulse.fork.state.scan_id

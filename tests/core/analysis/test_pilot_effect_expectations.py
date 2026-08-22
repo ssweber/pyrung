@@ -41,9 +41,9 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     BatchPulse,
     Bearing,
+    BearingCoast,
     BearingObjective,
     ChannelHeading,
-    Coast,
     LandingReceiptAuthority,
     Pulse,
     TargetSpec,
@@ -357,13 +357,12 @@ def test_route_and_program_coast_observe_the_execution_corridor_not_scan_before(
         plc.step()
         bearing = Bearing(
             (),
-            Coast(
-                "bearing",
+            BearingCoast(
                 ActPolicy(
                     source,
                     heading=ChannelHeading(effect.name, 1),
                     expectation=expectation,
-                ),
+                )
             ),
             BearingObjective(TargetSpec(effect.name, 1)),
         )
@@ -406,13 +405,12 @@ def test_program_handoff_does_not_replay_scans_for_an_unused_chart_landing() -> 
     heading = ChannelHeading("GenericState", 16)
     bearing = Bearing(
         (),
-        Coast(
-            "program handoff",
+        BearingCoast(
             ActPolicy(
                 ActSource.ROUTE,
                 heading=heading,
                 landing_receipt_authority=LandingReceiptAuthority.PROGRAM_STEP,
-            ),
+            )
         ),
         BearingObjective(TargetSpec("GenericTarget", True)),
         orientation=SimpleNamespace(

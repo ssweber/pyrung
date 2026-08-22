@@ -36,7 +36,7 @@ from pyrung.core.analysis.pilot.intrascan import (
     derive_recorded_observations,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
-    Coast,
+    BearingCoast,
     LocalProgressKind,
     ProgramContinuation,
     TargetSpec,
@@ -274,7 +274,7 @@ def _attempt_productive_scan(executed: _ExecutedAttempt) -> int:
     action_scan = executed.pulse.action_scan
     if action_scan is not None and not isinstance(
         executed.bearing.act,
-        (Coast, ProgramContinuation),
+        (BearingCoast, ProgramContinuation),
     ):
         return action_scan
     first_scan = next(

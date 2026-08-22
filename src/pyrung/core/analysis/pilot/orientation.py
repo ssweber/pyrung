@@ -23,7 +23,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     BatchPulse,
     Bearing,
-    Coast,
+    BearingCoast,
     ComposeCorrection,
     ExpectationExemption,
     NavigationConstraints,
@@ -102,8 +102,7 @@ def _wait_proposals(compass: Any, read: OrientationRead) -> Iterator[_ActProposa
         return
     expectation = prescription.expectation
     yield (
-        Coast(
-            "bearing",
+        BearingCoast(
             ActPolicy(
                 source=ActSource.ROUTE if route is not None else ActSource.PROGRAM,
                 nogood_pair=wait_nogood,
@@ -114,7 +113,7 @@ def _wait_proposals(compass: Any, read: OrientationRead) -> Iterator[_ActProposa
                     ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
                 ),
                 landing_receipt_authority=prescription.landing_receipt_authority,
-            ),
+            )
         ),
         prescription.reason or "charted completion edge",
     )
@@ -224,7 +223,7 @@ def _continuation_proposals(compass: Any, read: OrientationRead) -> Iterator[_Ac
     if continuation is None:
         return
     world = read.world
-    if compass.knowledge.coast_receipt(world.world_key) is None:
+    if compass.knowledge.continuation_receipt(world.world_key) is None:
         mode = "seek"
         rationale = continuation.reason
     else:

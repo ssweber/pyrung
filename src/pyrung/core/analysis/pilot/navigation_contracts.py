@@ -216,13 +216,11 @@ class ActSource(StrEnum):
     LEARNED_BATCH = "learned_batch"
     CROSSING = "crossing"
     WIDENING = "widening"
-    TERMINAL = "terminal"
 
 
 class ExpectationExemption(StrEnum):
     """Why an act deliberately makes no producer promise."""
 
-    AMBIENT_TERMINAL = "ambient_terminal"
     UNRESOLVED_EFFECT = "unresolved_effect"
 
 
@@ -419,22 +417,10 @@ class IntrascanPulse:
 
 
 @dataclass(frozen=True)
-class Coast:
-    """One coast act consuming navigation's complete typed heading."""
+class BearingCoast:
+    """One route-bearing coast consuming navigation's complete typed heading."""
 
-    mode: Literal["bearing", "terminal"]
     policy: ActPolicy
-
-
-@dataclass(frozen=True)
-class Dwell:
-    """One bounded verified dwell after a terminal coast receipt."""
-
-    policy: ActPolicy = ActPolicy(
-        ActSource.TERMINAL,
-        motion=MotionKind.COAST_HOLDING_WORLD,
-        expectation_exemption=ExpectationExemption.AMBIENT_TERMINAL,
-    )
 
 
 @dataclass(frozen=True)
@@ -493,8 +479,7 @@ NavigationAct = (
     Pulse
     | BatchPulse
     | IntrascanPulse
-    | Coast
-    | Dwell
+    | BearingCoast
     | ProgramContinuation
     | ObserveScan
     | ProgramScan
@@ -750,12 +735,11 @@ def act_identity(act: NavigationAct) -> tuple[Any, ...]:
             _semantic_key(act.expected_write),
             _semantic_key(act.evidence_identity),
         )
-    if isinstance(act, Coast):
+    if isinstance(act, BearingCoast):
         heading = act.policy.heading
         route = heading.route if heading is not None else None
         identity = (
-            "coast",
-            act.mode,
+            "bearing-coast",
             _applied_identity(act.policy.applied),
             heading.channel_tag if heading is not None else None,
             _semantic_key(heading.target_value if heading is not None else None),

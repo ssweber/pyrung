@@ -261,13 +261,16 @@ def test_edge_sensitive_avoid_is_rejected_clearly() -> None:
         PLC(prog, dt=0.010).how(target, avoid=rise(trigger), max_scans=2000)
 
 
-def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
+def test_program_continuation_preserves_its_settle_trajectory(monkeypatch) -> None:
     """The scan gate receives every real settle snapshot, not only its endpoint."""
     from pyrung.core.analysis.pilot import steer
     from pyrung.core.analysis.pilot.navigation_contracts import (
+        ActPolicy,
+        ActSource,
         Bearing,
         BearingObjective,
-        Dwell,
+        ExpectationExemption,
+        ProgramContinuation,
         TargetSpec,
     )
     from pyrung.core.analysis.pilot.types import _AttemptResult
@@ -327,7 +330,13 @@ def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
 
     bearing = Bearing(
         frame.key,
-        Dwell(),
+        ProgramContinuation(
+            "settle",
+            ActPolicy(
+                ActSource.PROGRAM,
+                expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+            ),
+        ),
         BearingObjective(TargetSpec("Target", True)),
     )
     steer._try_program_continuation_settle(bearing, frame, state, ctx)

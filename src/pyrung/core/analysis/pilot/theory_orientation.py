@@ -30,7 +30,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     BatchPulse,
     Bearing,
-    Coast,
+    BearingCoast,
     ComposeCorrection,
     ExpectationExemption,
     IntrascanPulse,
@@ -42,6 +42,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     NeedIntrascanTraceback,
     OrientationRead,
     OrientationWorld,
+    ProgramContinuation,
     ProgramScan,
     Pulse,
     TargetSpec,
@@ -478,7 +479,7 @@ def _theory_temporal_retry_bearing(
         # program-owned work is ready to cross the next scan. Lowering the
         # requirement assignment itself is then the physical intervention;
         # the program continuation is evidence for that one scan, not a stored
-        # Coast suffix.
+        # Bearing-coast suffix.
         expectation = prescription.expectation
         alternatives.append(
             (
@@ -503,9 +504,9 @@ def _theory_temporal_retry_bearing(
         )
         if prescription is not None and pending_configuration:
             # An autonomous program transaction has no pulse pairs to rebuild.
-            # Its prior Coast receipt is identity only; executable authority
+            # Its prior BearingCoast receipt is identity only; executable authority
             # comes from this read's fresh ProgramStep prescription.  Continue
-            # only when that newly read Coast is the exact transaction which
+            # only when that newly read BearingCoast is the exact transaction which
             # exposed the temporal need.
             heading = prescription.heading
             route = heading.route if heading is not None else None
@@ -520,7 +521,7 @@ def _theory_temporal_retry_bearing(
                 ),
                 landing_receipt_authority=prescription.landing_receipt_authority,
             )
-            coast = Coast("bearing", coast_policy)
+            coast = BearingCoast(coast_policy)
             trigger_transaction = getattr(
                 world.context.theory_view,
                 "trigger_program_transaction",
@@ -2018,8 +2019,8 @@ def _theory_pending_configuration_bearing(
     )
     if not requirements:
         return None
-    act = Coast(
-        "terminal",
+    act = ProgramContinuation(
+        "seek",
         ActPolicy(
             source=ActSource.WIDENING,
             motion=MotionKind.COAST_HOLDING_WORLD,
