@@ -896,8 +896,7 @@ def _analyze_single_rung(
                 f"{af_token} (row {af_row})" for af_token, af_row in missing_instructions
             )
             raise ValueError(
-                "Rung drops output instruction(s) present in the source during grouping: "
-                f"{detail}."
+                f"Rung drops output instruction(s) present in the source during grouping: {detail}."
             )
 
     # Exporter pins immediately follow their owning AF row. Walk the raw rows

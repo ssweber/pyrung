@@ -511,9 +511,7 @@ def investigate_excursion(
             if owner.profile.done is not None
         )
     heading = getattr(executed.bearing.act.policy, "heading", None)
-    setup_releases = (
-        heading.route.setup_releases if heading is not None and heading.route else ()
-    )
+    setup_releases = heading.route.setup_releases if heading is not None and heading.route else ()
     _apply_pulse(
         replay_fork,
         kickoff,

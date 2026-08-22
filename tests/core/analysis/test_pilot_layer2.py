@@ -160,8 +160,7 @@ def test_no_hold_excursion_not_nogooded(monkeypatch) -> None:
     path = pilot_how(plc, y_Stage == 1, max_scans=200)
     assert not path.reachable
     assert any(
-        stats.get("sterile_cycle") == 1 and stats["kernel_scans"] < 100
-        for stats in coast_stats
+        stats.get("sterile_cycle") == 1 and stats["kernel_scans"] < 100 for stats in coast_stats
     )
 
 

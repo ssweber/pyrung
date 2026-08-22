@@ -137,8 +137,7 @@ def test_pilot_rearms_oneshot_across_the_complete_indirect_route() -> None:
             and event.data.get("applied") == ((fixture.NextStep.name, True),)
         )
         assert any(
-            event.kind == "candidates_built"
-            for event in events[rearm_index + 1 : next_assertion]
+            event.kind == "candidates_built" for event in events[rearm_index + 1 : next_assertion]
         )
     assert not any(
         event.kind == "candidate_try"
