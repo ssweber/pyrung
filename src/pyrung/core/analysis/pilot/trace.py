@@ -95,6 +95,19 @@ _TraceChoicePayload = TypeVar("_TraceChoicePayload")
 
 
 @dataclass(frozen=True)
+class _WriterRankReceipt:
+    """Reusable state-dependent writer classification for one frozen trace."""
+
+    ranked: tuple[int, ...]
+    availability: tuple[tuple[int, _availability._WriterAvailability], ...]
+    ranking: tuple[_WriterRank, ...]
+    reverses: tuple[tuple[int, ReverseResult], ...]
+
+
+_WriterRankMemo = dict[tuple[Any, ...], _WriterRankReceipt]
+
+
+@dataclass(frozen=True)
 class _TraceEnv:
     """Invariant context threaded through one backward trace.
 
@@ -142,6 +155,11 @@ class _TraceEnv:
     # verdict is deterministic in ``(rung id, fire-pins, guard route key)`` and can
     # be cached for the whole recursion.  Fresh dict per :func:`_env_for` call.
     guard_memo: dict[Any, str] = field(default_factory=dict)
+    # Writer ranking is likewise pure within this frozen read. Alternative
+    # branches often revisit the same demand and ancestry after cloning the
+    # visited set; retain the classified receipt instead of re-projecting every
+    # writer against the same snapshot.
+    writer_rank_memo: _WriterRankMemo = field(default_factory=dict)
     # One coherent call-site route per subroutine for this trace.  A subroutine
     # writer can be reached repeatedly through different ancestry/visited
     # contexts; choosing its caller independently at every occurrence unions
@@ -169,6 +187,7 @@ def _env_for(
     max_depth: int = 15,
     harness: Any = None,
     execution_memory: Mapping[str, Any] | None = None,
+    writer_rank_memo: _WriterRankMemo | None = None,
 ) -> _TraceEnv:
     """Build a trace env, resolving a ``TraceChoice`` route to its lock maps once."""
     from pyrung.core.analysis.pilot.advance import build_advance_index
@@ -193,6 +212,7 @@ def _env_for(
         harness=harness,
         execution_memory=execution_memory,
         advance_index=build_advance_index(program, harness),
+        writer_rank_memo=writer_rank_memo if writer_rank_memo is not None else {},
     )
 
 
@@ -206,6 +226,7 @@ def _env_from_constraints(
     writer_locks: dict[tuple[str, Any], int] | None = None,
     or_locks: dict[tuple[str, str], int] | None = None,
     max_depth: int = 15,
+    writer_rank_memo: _WriterRankMemo | None = None,
 ) -> _TraceEnv:
     """Lower a caller-owned trace request to the recursion engine's environment."""
 
@@ -226,6 +247,7 @@ def _env_from_constraints(
         max_depth=max_depth,
         harness=read.harness,
         execution_memory=read.execution_memory,
+        writer_rank_memo=writer_rank_memo,
     )
 
 
@@ -961,12 +983,20 @@ def _route_actions_rejected(nodes: list[TraceNode], env: _TraceEnv) -> bool:
     a joint artifact and remains live until that exact joint act is tested.
     """
 
-    actions = tuple(
-        dict.fromkeys(detail.pair for node in nodes for detail in node.ordered_action_details())
-    )
-    # Multiple leaves describe a different, still-untested joint artifact.
-    # Independent singleton failures cannot be composed into its rejection.
-    return len(actions) == 1 and actions[0] in env.rejected_actions
+    action: tuple[str, Any] | None = None
+    for root in nodes:
+        for node in root.iter_nodes():
+            if not node.is_steerable:
+                continue
+            pair = (node.tag, node.value)
+            if action is None:
+                action = pair
+            elif pair != action:
+                # Multiple leaves describe a different, still-untested joint
+                # artifact. Independent singleton failures cannot be composed
+                # into its rejection.
+                return False
+    return action is not None and action in env.rejected_actions
 
 
 @dataclass(frozen=True)
@@ -1423,6 +1453,7 @@ def trace_back(
     _visited: set[tuple[str, Any]] | None = None,
     _ancestry: tuple[tuple[str, Any], ...] = (),
     _depth: int = 0,
+    _writer_rank_memo: _WriterRankMemo | None = None,
 ) -> TraceNode:
     """Recursive backward trace from ``(tag, value)``.
 
@@ -1452,6 +1483,7 @@ def trace_back(
         writer_locks=writer_locks,
         or_locks=or_locks,
         max_depth=max_depth,
+        writer_rank_memo=_writer_rank_memo,
     )
     return _trace_back(env, tag, value, _visited=_visited, _ancestry=_ancestry, _depth=_depth)
 
@@ -1542,25 +1574,43 @@ def _trace_back(
 
     node = TraceNode(tag=tag, value=value)
 
-    writer_availability: dict[int, _availability._WriterAvailability] = {}
-    writer_ranking: list[_WriterRank] = []
-    writer_reverses: dict[int, ReverseResult] = {}
-    ranked_writers = _rank_writers(
-        writers,
-        env.pdg,
-        env.program,
-        tag,
-        value,
-        env.snapshot,
-        env.opaque_loop,
-        env.clear_only,
-        steerable=env.steerable,
-        ancestry=_ancestry,
-        codemands=_codemands,
-        availability_out=writer_availability,
-        ranking_out=writer_ranking,
-        reverse_out=writer_reverses,
+    rank_key = (
+        vkey,
+        tuple(_visit_key(item_tag, item_value) for item_tag, item_value in _ancestry),
+        tuple(_visit_key(item_tag, item_value) for item_tag, item_value in _codemands),
     )
+    rank_receipt = env.writer_rank_memo.get(rank_key)
+    if rank_receipt is None:
+        writer_availability: dict[int, _availability._WriterAvailability] = {}
+        writer_ranking: list[_WriterRank] = []
+        writer_reverses: dict[int, ReverseResult] = {}
+        ranked_writers = _rank_writers(
+            writers,
+            env.pdg,
+            env.program,
+            tag,
+            value,
+            env.snapshot,
+            env.opaque_loop,
+            env.clear_only,
+            steerable=env.steerable,
+            ancestry=_ancestry,
+            codemands=_codemands,
+            availability_out=writer_availability,
+            ranking_out=writer_ranking,
+            reverse_out=writer_reverses,
+        )
+        rank_receipt = _WriterRankReceipt(
+            ranked=tuple(ranked_writers),
+            availability=tuple(writer_availability.items()),
+            ranking=tuple(writer_ranking),
+            reverses=tuple(writer_reverses.items()),
+        )
+        env.writer_rank_memo[rank_key] = rank_receipt
+    ranked_writers = list(rank_receipt.ranked)
+    writer_availability = dict(rank_receipt.availability)
+    writer_ranking = list(rank_receipt.ranking)
+    writer_reverses = dict(rank_receipt.reverses)
     # Recording only: the full ranking (winner + losers) that chose this frontier's
     # writer, and the writers the loop below actively skips before settling.
     node.writer_ranking = tuple(writer_ranking)

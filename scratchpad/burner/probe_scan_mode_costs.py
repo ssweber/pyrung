@@ -90,6 +90,10 @@ class ProbeStats:
     cycle_surface: Timing = field(default_factory=Timing)
     cycle_snapshot_samples: list[CycleSnapshotSample] = field(default_factory=list)
     cycle_kernel_scans: int = 0
+    cycle_logical_scans: int = 0
+    cycle_skipped_scans: int = 0
+    cycle_macro_folds: int = 0
+    cycle_calls: list[dict[str, int]] = field(default_factory=list)
     trace_trees: Timing = field(default_factory=Timing)
     trace_roots: Counter[tuple[str, str]] = field(default_factory=Counter)
     trace_contexts: Counter[tuple[int, str, str]] = field(default_factory=Counter)
@@ -100,9 +104,7 @@ class ProbeStats:
 def _scan_mode(plc: PLC) -> str:
     if plc._replay_mode:
         return "interpreted replay commit"
-    if plc._causal_parent is not None:
-        return "PILOT fork commit"
-    return "root runner commit"
+    return "PILOT fork commit"
 
 
 def _print_timing(label: str, timing: Timing, total_cpu: float) -> None:
@@ -151,7 +153,7 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
     original_node_views = PLC._replay_node_views_at
     original_rung_runs = PLC._replay_rung_runs_at
     original_node_reads = PLC._replay_node_reads_at
-    original_prover_context = pilot_module._build_prover_context
+    original_prover_context = getattr(pilot_module, "_build_prover_context", None)
     original_program_written_changes = causal_module._program_written_changes
     original_cycle_fold = cyclefold_module.cycle_fold_until
     original_detect_cycle = cyclefold_module.detect_cycle
@@ -180,11 +182,16 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
         finally:
             stats.modes[mode].prepare.add(started)
 
-    def observed_commit(self: PLC, ctx: ScanContext, dt: float) -> None:
+    def observed_commit(
+        self: PLC,
+        ctx: ScanContext,
+        dt: float,
+        **kwargs: Any,
+    ) -> None:
         mode = current_mode()
         started = time.process_time_ns()
         try:
-            return original_commit(self, ctx, dt)
+            return original_commit(self, ctx, dt, **kwargs)
         finally:
             stats.modes[mode].commit.add(started)
 
@@ -202,8 +209,8 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
 
     def observed_capture(self: PLC, target_scan_id: int):
         stats.replay_capture_calls += 1
-        cached = self._cached_replay_capture
-        if cached is not None and cached[0] == target_scan_id:
+        cached = self._cached_replay_captures.get(target_scan_id)
+        if cached is not None:
             stats.replay_capture_hits += 1
         else:
             stats.replay_capture_misses += 1
@@ -264,8 +271,8 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
         target_scan_id: int,
     ):
         stats.replay_consumer_calls[name] += 1
-        cached = self._cached_replay_capture
-        if cached is None or cached[0] != target_scan_id:
+        cached = self._cached_replay_captures.get(target_scan_id)
+        if cached is None:
             stats.replay_consumer_misses[name] += 1
         return original(self, target_scan_id)
 
@@ -294,6 +301,7 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
         )
 
     def observed_prover_context(*args: Any, **kwargs: Any):
+        assert original_prover_context is not None
         return timed_call(stats.prover_context, original_prover_context, *args, **kwargs)
 
     def observed_program_written_changes(
@@ -348,6 +356,10 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
             stats.cycle_fold_scan_ns += committed_scan_ns() - scans_before
             if isinstance(call_stats, dict):
                 stats.cycle_kernel_scans += call_stats.get("kernel_scans", 0)
+                stats.cycle_logical_scans += call_stats.get("logical_scans", 0)
+                stats.cycle_skipped_scans += call_stats.get("skipped_scans", 0)
+                stats.cycle_macro_folds += call_stats.get("macro_folds", 0)
+                stats.cycle_calls.append(dict(call_stats))
             if fold_ctx is not None:
                 ignore = (
                     fold_ctx.frozen_writes
@@ -406,7 +418,8 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
     PLC._replay_node_views_at = observed_node_views
     PLC._replay_rung_runs_at = observed_rung_runs
     PLC._replay_node_reads_at = observed_node_reads
-    pilot_module._build_prover_context = observed_prover_context
+    if original_prover_context is not None:
+        pilot_module._build_prover_context = observed_prover_context
     causal_module._program_written_changes = observed_program_written_changes
     cyclefold_module.cycle_fold_until = observed_cycle_fold
     cyclefold_module.detect_cycle = observed_detect_cycle
@@ -443,7 +456,8 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
         PLC._replay_node_views_at = original_node_views
         PLC._replay_rung_runs_at = original_rung_runs
         PLC._replay_node_reads_at = original_node_reads
-        pilot_module._build_prover_context = original_prover_context
+        if original_prover_context is not None:
+            pilot_module._build_prover_context = original_prover_context
         causal_module._program_written_changes = original_program_written_changes
         cyclefold_module.cycle_fold_until = original_cycle_fold
         cyclefold_module.detect_cycle = original_detect_cycle
@@ -549,8 +563,23 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
     print(
         f"  remaining loop/snapshot control: "
         f"{cycle_fold_exclusive - known_cycle_control:.3f}s over "
-        f"{stats.cycle_kernel_scans:,} kernel scans"
+        f"{stats.cycle_kernel_scans:,} kernel scans / "
+        f"{stats.cycle_logical_scans:,} logical scans / "
+        f"{stats.cycle_skipped_scans:,} skipped in "
+        f"{stats.cycle_macro_folds:,} folds"
     )
+    for index, call in enumerate(
+        sorted(stats.cycle_calls, key=lambda item: item.get("logical_scans", 0), reverse=True)[:8],
+        start=1,
+    ):
+        print(
+            f"    {index}. logical={call.get('logical_scans', 0):,} "
+            f"kernel={call.get('kernel_scans', 0):,} "
+            f"skipped={call.get('skipped_scans', 0):,} "
+            f"folds={call.get('macro_folds', 0):,} "
+            f"ordinary={call.get('ordinary_folds', 0):,} "
+            f"cycle={call.get('cycle_folds', 0):,}"
+        )
 
     if stats.program_write_calls:
         print("\nempirical program-write call shapes")

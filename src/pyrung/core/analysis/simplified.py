@@ -8,6 +8,7 @@ it as a human-readable formula.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
@@ -288,6 +289,7 @@ def _condition_to_expr(condition: Any) -> Expr:
     return Atom(cls_name, "xic", unsupported=condition)
 
 
+@lru_cache(maxsize=4096)
 def _sp_to_expr(node: SPNode) -> Expr:
     """Convert an SP tree to an Expr."""
     if isinstance(node, SPLeaf):

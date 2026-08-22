@@ -334,6 +334,7 @@ def rank_trace_choices(
         clear_only=read.clear_only,
     )
     traced: list[tuple[_trace_read.TraceChoice, TraceNode]] = []
+    writer_rank_memo: dict[Any, Any] = {}
     for choice in choices:
         tree = _trace.trace_back(
             tag,
@@ -343,6 +344,7 @@ def rank_trace_choices(
             program,
             steerable,
             constraints=replace(read, route=choice, avoid_pred=None),
+            _writer_rank_memo=writer_rank_memo,
         )
         if read.avoid_pred is not None and _route_judgment.route_forces(
             [tree], snapshot, read.avoid_pred

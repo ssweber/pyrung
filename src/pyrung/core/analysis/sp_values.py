@@ -190,20 +190,44 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> Any:
     from pyrung.core.analysis import crossings as _crossings
     from pyrung.core.crossing import UNKNOWN, CrossingContext
 
+    cache = getattr(rung_obj, "_written_value_cache", None)
+    if cache is not None and tag_name in cache:
+        return cache[tag_name]
     instr = _writer_for_tag(rung_obj, tag_name)
     if instr is None:
-        return UNKNOWN
-    return _crossings.forward(instr, tag_name, CrossingContext())
+        result = UNKNOWN
+    else:
+        result = _crossings.forward(instr, tag_name, CrossingContext())
+    if cache is None:
+        cache = {}
+        try:
+            rung_obj._written_value_cache = cache
+        except (AttributeError, TypeError):
+            return result
+    cache[tag_name] = result
+    return result
 
 
 def _writer_for_tag(rung_obj: Any, tag_name: str) -> Any | None:
     """The first instruction with an exact static write to *tag_name*."""
     if rung_obj is None:
         return None
+    cache = getattr(rung_obj, "_writer_by_tag_cache", None)
+    if cache is not None and tag_name in cache:
+        return cache[tag_name]
+    result = None
     for instr in getattr(rung_obj, "_instructions", ()):
         if instruction_writes_tag(instr, tag_name):
-            return instr
-    return None
+            result = instr
+            break
+    if cache is None:
+        cache = {}
+        try:
+            rung_obj._writer_by_tag_cache = cache
+        except (AttributeError, TypeError):
+            return result
+    cache[tag_name] = result
+    return result
 
 
 # ---------------------------------------------------------------------------

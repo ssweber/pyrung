@@ -6,7 +6,7 @@ They evaluate within a ScanContext for batched updates.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from pyrung.core._source import _capture_call_end_line
 from pyrung.core.condition import (
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from pyrung.core.instruction import Instruction
 
 _EMPTY_BRANCH_MAP: dict[int, bool] = {}
+_ANALYSIS_CACHE_MISS = object()
 
 
 class Rung:
@@ -48,6 +49,13 @@ class Rung:
         """
         self._conditions: list[Condition] = []
         self._instructions: list[Instruction] = []
+        # Analysis asks these two static questions repeatedly while walking
+        # alternate producer routes.  Keep the caches rung-local so their
+        # lifetime follows the program and invalidate them while the rung is
+        # still being assembled.
+        self._writer_by_tag_cache: dict[str, Instruction | None] | None = None
+        self._written_value_cache: dict[str, object] | None = None
+        self._sp_tree_cache: SPNode | None | object = _ANALYSIS_CACHE_MISS
         self._branches: list[Rung] = []  # Nested branches (parallel paths)
         self._execution_items: list[Instruction | Rung] = []  # Source-order execution sequence
         self._execution_plan: list[tuple[int, Instruction | Rung]] = []
@@ -81,6 +89,7 @@ class Rung:
             if end_line is not None:
                 instruction.end_line = end_line
         self._instructions.append(instruction)
+        self._invalidate_analysis_caches()
         self._execution_items.append(instruction)
         self._execution_plan.append((instruction._executor_kind, instruction))
         if instruction.is_terminal():
@@ -103,9 +112,20 @@ class Rung:
 
         Returns ``None`` for unconditional rungs (no conditions).
         """
+        if self._sp_tree_cache is not _ANALYSIS_CACHE_MISS:
+            return cast("SPNode | None", self._sp_tree_cache)
+
         from pyrung.core.analysis.sp_tree import conditions_to_sp
 
-        return conditions_to_sp(self._conditions)
+        self._sp_tree_cache = conditions_to_sp(self._conditions)
+        return cast("SPNode | None", self._sp_tree_cache)
+
+    def _invalidate_analysis_caches(self) -> None:
+        """Clear facts derived from this rung while it is being assembled."""
+
+        self._writer_by_tag_cache = None
+        self._written_value_cache = None
+        self._sp_tree_cache = _ANALYSIS_CACHE_MISS
 
     def _get_combined_condition(self) -> Condition | None:
         """Get a single condition representing all rung conditions ANDed together.
