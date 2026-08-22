@@ -32,6 +32,7 @@ from pyrung.core.analysis.pilot.execution import (
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
+    AdmissionBasis,
     BatchPulse,
     Bearing,
     BearingCoast,
@@ -39,6 +40,9 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ChannelHeading,
     CrossingFidelity,
     ExpectationExemption,
+    ExploratoryTrialRequest,
+    GuidanceCandidate,
+    GuidanceRequest,
     IntrascanPulse,
     LandingReceiptAuthority,
     LocalProgressKind,
@@ -48,6 +52,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     NeedResearch,
     OrientationRead,
     OrientationWorld,
+    ProbeRequest,
     ProgramContinuation,
     ProgramScan,
     Pulse,
@@ -106,10 +111,19 @@ def _candidate(tag: str) -> SimpleNamespace:
         program_note="",
         bearing_channel_tag=None,
         bearing_channel_value=None,
+        bearing_boundary=None,
+        route_context=None,
         provenance=(),
         downstream_reach=None,
         program_context_actions=(),
     )
+
+
+def _headed_candidate(tag: str, channel: str = "State", value: object = 2) -> SimpleNamespace:
+    candidate = _candidate(tag)
+    candidate.bearing_channel_tag = channel
+    candidate.bearing_channel_value = value
+    return candidate
 
 
 def _options(
@@ -262,37 +276,122 @@ def test_absence_of_diagnosis_does_not_authorize_program_continuation(monkeypatc
     assert result.request.reason == "all_rejected"
 
 
-def test_unresolved_executable_policies_are_explicitly_exempt(monkeypatch) -> None:
+def test_unresolved_effect_is_orthogonal_to_proposal_admission(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
 
     compass = Compass()
+    for _ in range(2):
+        compass, _changed = compass.apply((ProbeExhaustedObservation(("world",)),))
     world = _world(compass)
     reads = (
-        _options(_candidate("A")),
-        _options(prescribed_batch=(("A", True), ("B", True))),
-        _options(
-            crossing_batches=(
-                CrossingBatchRead(
-                    (("A", True), ("B", True)),
-                    CrossingFidelity((), "cross", True, True, False),
-                    None,
-                ),
-            )
+        (_options(_candidate("A")), AdmissionBasis.EXPLORATORY),
+        (
+            _options(prescribed_batch=(("A", True), ("B", True))),
+            AdmissionBasis.LEARNED_TRANSITION,
         ),
-        _options(active_trace_actions=(("A", True), ("B", True))),
-        _options(wait=WaitRead(WaitPrescription(ChannelHeading("State", 2)))),
+        (
+            _options(
+                crossing_batches=(
+                    CrossingBatchRead(
+                        (("A", True), ("B", True)),
+                        CrossingFidelity((), "cross", True, True, False),
+                        None,
+                    ),
+                ),
+            ),
+            AdmissionBasis.CROSSING_FIDELITY,
+        ),
+        (_options(active_trace_actions=(("A", True), ("B", True))), AdmissionBasis.EXPLORATORY),
+        (
+            _options(wait=WaitRead(WaitPrescription(ChannelHeading("State", 2)))),
+            AdmissionBasis.CHANNEL_HEADING,
+        ),
     )
-
-    for candidate_read in reads:
+    for candidate_read, basis in reads:
         monkeypatch.setattr(
             orientation,
             "read_candidates",
             lambda *_args, _read=candidate_read: _read,
         )
-        bearing = orientation._orient_read(compass, world, TargetSpec("Target", True))
-        assert isinstance(bearing, Bearing)
-        assert bearing.act.policy.expectation is None
-        assert bearing.act.policy.expectation_exemption is ExpectationExemption.UNRESOLVED_EFFECT
+        result = orientation._orient_read(compass, world, TargetSpec("Target", True))
+        if basis is AdmissionBasis.EXPLORATORY:
+            assert isinstance(result, GuidanceRequest)
+            assert len(result.candidates) == 1
+            assert result.candidates[0].actions
+        else:
+            assert isinstance(result, Bearing)
+            assert result.act.policy.expectation is None
+            assert result.act.policy.expectation_exemption is ExpectationExemption.UNRESOLVED_EFFECT
+            assert result.act.policy.admission_basis is basis
+
+
+def test_exploratory_proposals_request_bounded_evidence_before_guidance(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    candidate_read = _options(_candidate("Guess"))
+    monkeypatch.setattr(orientation, "read_candidates", lambda *_args: candidate_read)
+    compass = Compass()
+
+    first = orientation._orient_read(compass, _world(compass), TargetSpec("Target", True))
+
+    assert isinstance(first, NeedProbe)
+    assert isinstance(first.request, ExploratoryTrialRequest)
+    assert first.request.reason == "exploratory_hypotheses"
+    assert first.request.bearing.act.policy.admission_basis is AdmissionBasis.EXPLORATORY
+
+    for _ in range(2):
+        compass, _changed = compass.apply((ProbeExhaustedObservation(("world",)),))
+    final = orientation._orient_read(compass, _world(compass), TargetSpec("Target", True))
+
+    assert isinstance(final, GuidanceRequest)
+    assert final.candidates[0].actions == (("Guess", True),)
+
+
+def test_exploratory_trace_does_not_hide_a_later_evidence_backed_proposal(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
+
+    exploratory = _candidate("Guess")
+    learned = _candidate("Known")
+    learned.source = ActSource.LEARNED_ACTION
+    monkeypatch.setattr(
+        orientation,
+        "read_candidates",
+        lambda *_args: _options(exploratory, learned),
+    )
+    monkeypatch.setattr(
+        theory_orientation,
+        "_current_candidate_applied",
+        lambda option, _candidates, _world: (option.pair,),
+    )
+
+    compass = Compass()
+    for _ in range(2):
+        compass, _changed = compass.apply((ProbeExhaustedObservation(("world",)),))
+    result = orientation._orient_read(compass, _world(compass), TargetSpec("Target", True))
+
+    assert isinstance(result, Bearing)
+    assert result.act.policy.applied == (("Known", True),)
+    assert result.act.policy.admission_basis is AdmissionBasis.LEARNED_TRANSITION
+
+
+def test_direct_target_assignment_is_not_misclassified_as_exploratory(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
+
+    compass = Compass()
+    target = _candidate("Target")
+    monkeypatch.setattr(orientation, "read_candidates", lambda *_args: _options(target))
+    monkeypatch.setattr(
+        theory_orientation,
+        "_current_candidate_applied",
+        lambda option, _candidates, _world: (option.pair,),
+    )
+
+    result = orientation._orient_read(compass, _world(compass), TargetSpec("Target", True))
+
+    assert isinstance(result, Bearing)
+    assert result.act.policy.admission_basis is AdmissionBasis.TARGET_SATISFACTION
 
 
 def test_temporal_retry_augments_fresh_trigger_instead_of_requirement_candidate(
@@ -1957,7 +2056,7 @@ def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
 
     compass = Compass()
-    first = _candidate("First")
+    first = _headed_candidate("First")
     monkeypatch.setattr(orientation, "read_candidates", lambda *_args: _options(first))
     monkeypatch.setattr(
         theory_orientation,
@@ -1995,7 +2094,7 @@ def test_completed_read_is_shared_by_theory_and_ordinary_lowering(monkeypatch) -
 
     compass = Compass()
     world = _world(compass)
-    candidates = _options(_candidate("First"))
+    candidates = _options(_headed_candidate("First"))
     policy_reads: list[OrientationRead] = []
 
     monkeypatch.setattr(orientation, "read_candidates", lambda *_args: candidates)
@@ -2116,7 +2215,7 @@ def test_root_alternatives_own_distinct_completed_reads(monkeypatch) -> None:
                 "first alternative awaits its ready writer",
             )
         ),
-        second.world_key: _options(_candidate("Second")),
+        second.world_key: _options(_headed_candidate("Second")),
     }
     monkeypatch.setattr(orientation, "read_candidates", lambda world: reads[world.world_key])
     monkeypatch.setattr(
@@ -2436,7 +2535,7 @@ def test_bearing_preserves_downstream_channel_goal(monkeypatch) -> None:
     from pyrung.core.analysis.pilot.trace_tree import TraceNode
 
     compass = Compass()
-    first = _candidate("First")
+    first = _headed_candidate("First", "State", 17)
     monkeypatch.setattr(orientation, "read_candidates", lambda *_args: _options(first))
     monkeypatch.setattr(
         theory_orientation,
@@ -2549,6 +2648,35 @@ def test_combined_nonbearing_assembles_every_alternative_frontier() -> None:
     assert result.frontier == (("FirstLever", True), ("SecondLever", 2))
 
 
+def test_combined_nonbearing_requests_remaining_evidence_before_guidance() -> None:
+    from pyrung.core.analysis.pilot.orientation import _combined_nonbearing
+
+    guidance = GuidanceRequest(
+        world_key=("first",),
+        frontier=(("FirstLever", True),),
+        candidates=(
+            GuidanceCandidate(
+                identity=("pulse", (("Guess", True),)),
+                source=ActSource.TRACE,
+                actions=(("Guess", True),),
+                rationale="unproved guess",
+            ),
+        ),
+        rationale="guidance required",
+    )
+    probe = NeedProbe(
+        world_key=("second",),
+        frontier=(("SecondLever", True),),
+        request=ProbeRequest((("SecondLever", True),), "unread frontier"),
+        rationale="probe another alternative",
+    )
+
+    result = _combined_nonbearing((guidance, probe))
+
+    assert isinstance(result, NeedProbe)
+    assert result.frontier == (("FirstLever", True), ("SecondLever", True))
+
+
 def test_orient_returns_need_probe_then_stuck_after_budget(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
 
@@ -2627,8 +2755,8 @@ def test_rejected_act_knowledge_forces_fresh_next_orientation(monkeypatch) -> No
     import pyrung.core.analysis.pilot.orientation as orientation
     import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
 
-    first = _candidate("First")
-    second = _candidate("Second")
+    first = _headed_candidate("First")
+    second = _headed_candidate("Second")
     monkeypatch.setattr(
         orientation,
         "read_candidates",
@@ -2665,7 +2793,7 @@ def test_rejected_candidate_can_fall_through_to_positive_continuation(monkeypatc
     import pyrung.core.analysis.pilot.orientation as orientation
     import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
 
-    candidate = _candidate("First")
+    candidate = _headed_candidate("First")
     continuation = ContinuationRead(
         ContinuationKind.PREREQUISITE,
         "establish trace prerequisites",

@@ -1739,24 +1739,13 @@
   "wait_reason": "let-run Sts_StateCurrent: 3->6"
  },
  {
-  "channel_tag": "y_BurnerLoop",
-  "kind": "bearing_coast",
-  "prescribed": true,
+  "kind": "program_continuation",
   "reason": "working theory: execute one correction, then read Compass again"
  },
  {
-  "accepted": true,
-  "agency": "pilot",
-  "bearing": "satisfied",
-  "bearing_coast_actual_value": null,
-  "bearing_coast_channel_tag": null,
-  "bearing_coast_target_value": null,
-  "bearing_stop_reason": null,
-  "ejected": false,
-  "kind": "bearing_coast_accepted",
-  "new_frontier": false,
+  "kind": "program_continuation_accepted",
   "observe_label": "width",
-  "progress": "unchanged",
+  "reason": "",
   "trend": 27
  },
  {
@@ -2410,24 +2399,13 @@
   "wait_reason": "let-run Heat_xCall: 0->1; the owner reports progress through its operation witness"
  },
  {
-  "channel_tag": "y_BurnerLoop",
-  "kind": "bearing_coast",
-  "prescribed": true,
+  "kind": "program_continuation",
   "reason": "working theory: execute one correction, then read Compass again"
  },
  {
-  "accepted": true,
-  "agency": "pilot",
-  "bearing": "satisfied",
-  "bearing_coast_actual_value": null,
-  "bearing_coast_channel_tag": null,
-  "bearing_coast_target_value": null,
-  "bearing_stop_reason": null,
-  "ejected": false,
-  "kind": "bearing_coast_accepted",
-  "new_frontier": false,
+  "kind": "program_continuation_accepted",
   "observe_label": "width",
-  "progress": "unchanged",
+  "reason": "",
   "trend": 10
  },
  {
@@ -2702,24 +2680,13 @@
   "wait_reason": null
  },
  {
-  "channel_tag": "y_BurnerLoop",
-  "kind": "bearing_coast",
-  "prescribed": true,
+  "kind": "program_continuation",
   "reason": "working theory: activate the installed exact correction"
  },
  {
-  "accepted": null,
-  "agency": null,
-  "bearing": null,
-  "bearing_coast_actual_value": null,
-  "bearing_coast_channel_tag": null,
-  "bearing_coast_target_value": null,
-  "bearing_stop_reason": null,
-  "ejected": false,
-  "kind": "bearing_coast_accepted",
-  "new_frontier": null,
+  "kind": "program_continuation_accepted",
   "observe_label": "width-target",
-  "progress": null,
+  "reason": "",
   "trend": null
  },
  {

@@ -18,11 +18,13 @@ from pyrung.core.analysis.pilot.execution import (
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
+    AdmissionBasis,
     BatchPulse,
     Bearing,
     BearingObjective,
     ChannelHeading,
     ExpectationExemption,
+    IntrascanPulse,
     InvestigationSelection,
     LocalProgressKind,
     NavigationConstraints,
@@ -31,6 +33,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationRead,
     OrientationWorld,
     ProbeRequest,
+    ProgramContinuation,
     ProgramScan,
     Pulse,
     Stuck,
@@ -41,6 +44,7 @@ from pyrung.core.analysis.pilot.overlay import (
     _pilot_rung_execution_receipt,
 )
 from pyrung.core.analysis.pilot.trace import (
+    target_reached,
     trace_back,
     trace_relational,
 )
@@ -354,6 +358,7 @@ def _bearing(
     rationale: str,
     prerequisites: tuple[Any, ...] = (),
     investigation_selection: InvestigationSelection | None = None,
+    allow_exploratory_probe: bool = False,
 ) -> Bearing:
     """Assemble one Bearing with its target-relative objective.
 
@@ -409,6 +414,9 @@ def _bearing(
             else "observe one lookahead scan"
         ),
     )
+    act = _classify_admission(read, act, target)
+    if act.policy.admission_basis is AdmissionBasis.EXPLORATORY and not allow_exploratory_probe:
+        raise ValueError("an exploratory proposal cannot become an executable Bearing")
     return Bearing(
         world_key=world.world_key,
         act=act,
@@ -420,6 +428,105 @@ def _bearing(
         orientation=read,
         investigation_selection=investigation_selection,
     )
+
+
+_THEORY_PROGRESS = {
+    LocalProgressKind.TEMPORAL_SETUP,
+    LocalProgressKind.THEORY_CORRECTIVE,
+    LocalProgressKind.TEMPORAL_EDGE,
+    LocalProgressKind.INTRASCAN_STAGE,
+    LocalProgressKind.INTRASCAN_DIRECT,
+}
+
+
+def _classify_admission(read: OrientationRead, act: Any, target: TargetSpec) -> Any:
+    """Attach the one evidence basis which authorizes a proposed act.
+
+    This classification consumes existing proposal receipts; it performs no
+    new trace, projection, or execution.  ``TRACE_SETUP`` is intentionally not
+    sufficient by itself: successfully assigning a guessed stable input does
+    not establish that the guess is worth a PLC scan.
+    """
+
+    policy = act.policy
+    if policy.admission_basis is not None:
+        _validate_admission_basis(read, act, target)
+        return act
+    if policy.expectation is not None:
+        basis = AdmissionBasis.PRODUCER_EFFECT
+    elif getattr(act, "crossing", None) is not None:
+        basis = AdmissionBasis.CROSSING_FIDELITY
+    elif policy.heading is not None:
+        basis = AdmissionBasis.CHANNEL_HEADING
+    elif isinstance(act, IntrascanPulse | ProgramScan):
+        basis = AdmissionBasis.INTRASCAN_EVIDENCE
+    elif isinstance(act, ObserveScan):
+        basis = AdmissionBasis.ENTRY_OBSERVATION
+    elif isinstance(act, ProgramContinuation):
+        basis = (
+            AdmissionBasis.THEORY_REQUIREMENT
+            if policy.source is ActSource.WIDENING or policy.local_progress in _THEORY_PROGRESS
+            else AdmissionBasis.PROGRAM_CONTINUATION
+        )
+    elif policy.local_progress is LocalProgressKind.REARM:
+        basis = AdmissionBasis.ACTIVATION_PREDECESSOR
+    elif policy.local_progress in _THEORY_PROGRESS:
+        basis = AdmissionBasis.THEORY_REQUIREMENT
+    elif policy.applied and target_reached(
+        {**read.world.snapshot, **dict(policy.applied)},
+        target.tag,
+        target.value,
+        target.predicate,
+    ):
+        basis = AdmissionBasis.TARGET_SATISFACTION
+    elif policy.source in {ActSource.LEARNED_ACTION, ActSource.LEARNED_BATCH}:
+        basis = AdmissionBasis.LEARNED_TRANSITION
+    elif policy.source in {ActSource.AWAITED_ACTION, ActSource.PROGRAM}:
+        basis = AdmissionBasis.PROGRAM_INPUT
+    else:
+        basis = AdmissionBasis.EXPLORATORY
+    return replace(act, policy=replace(policy, admission_basis=basis))
+
+
+def _validate_admission_basis(read: OrientationRead, act: Any, target: TargetSpec) -> None:
+    """Fail loud when a named admission basis lacks its required receipt."""
+
+    policy = act.policy
+    basis = policy.admission_basis
+    if basis is AdmissionBasis.PRODUCER_EFFECT:
+        valid = policy.expectation is not None
+    elif basis is AdmissionBasis.CHANNEL_HEADING:
+        valid = policy.heading is not None
+    elif basis is AdmissionBasis.CROSSING_FIDELITY:
+        valid = getattr(act, "crossing", None) is not None
+    elif basis is AdmissionBasis.TARGET_SATISFACTION:
+        valid = bool(
+            policy.applied
+            and target_reached(
+                {**read.world.snapshot, **dict(policy.applied)},
+                target.tag,
+                target.value,
+                target.predicate,
+            )
+        )
+    elif basis is AdmissionBasis.LEARNED_TRANSITION:
+        valid = policy.source in {ActSource.LEARNED_ACTION, ActSource.LEARNED_BATCH}
+    elif basis is AdmissionBasis.PROGRAM_INPUT:
+        valid = policy.source in {ActSource.AWAITED_ACTION, ActSource.PROGRAM}
+    elif basis is AdmissionBasis.PROGRAM_CONTINUATION:
+        valid = isinstance(act, ProgramContinuation)
+    elif basis is AdmissionBasis.ACTIVATION_PREDECESSOR:
+        valid = policy.local_progress is LocalProgressKind.REARM
+    elif basis is AdmissionBasis.ENTRY_OBSERVATION:
+        valid = isinstance(act, ObserveScan)
+    elif basis is AdmissionBasis.INTRASCAN_EVIDENCE:
+        valid = isinstance(act, IntrascanPulse | ProgramScan)
+    elif basis is AdmissionBasis.THEORY_REQUIREMENT:
+        valid = policy.local_progress in _THEORY_PROGRESS
+    else:
+        valid = basis is AdmissionBasis.EXPLORATORY
+    if not valid:
+        raise ValueError(f"admission basis {basis!r} lacks its required evidence")
 
 
 def _candidate_applied(

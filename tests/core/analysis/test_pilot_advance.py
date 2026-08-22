@@ -153,10 +153,15 @@ class TestSequencerAdvance:
             with Rung(data):
                 shift(bits.select(1, 3)).clock(clock).reset(reset)
 
-        path = PLC(prog).how(bits[3], max_scans=400)
+        events = []
+        path = PLC(prog).how(bits[3], max_scans=400, on_event=events.append)
 
         assert path.reachable, path.reason
         assert path.replay().state.tags[bits[3].name] is True
+        probes = [event for event in events if event.kind == "skiff"]
+        assert len(probes) == 3
+        assert all(event.data["probe_kind"] == "exploratory_trial" for event in probes)
+        assert not any(event.kind == "candidate_try" for event in events)
 
 
 class TestDoneBoundaryHypotheses:

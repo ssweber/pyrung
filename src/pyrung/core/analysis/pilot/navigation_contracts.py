@@ -224,6 +224,31 @@ class ExpectationExemption(StrEnum):
     UNRESOLVED_EFFECT = "unresolved_effect"
 
 
+class AdmissionBasis(StrEnum):
+    """The evidence which makes one proposed act worth executing.
+
+    Effect accountability and execution authority are deliberately separate.
+    An act may make no producer promise while an exact program boundary,
+    crossing receipt, or WorkingTheory obligation still authorizes it.
+    ``EXPLORATORY`` is the only basis which does not authorize ordinary
+    execution; a separate bounded request may still test it on a disposable
+    World for evidence.
+    """
+
+    PRODUCER_EFFECT = "producer_effect"
+    CHANNEL_HEADING = "channel_heading"
+    CROSSING_FIDELITY = "crossing_fidelity"
+    TARGET_SATISFACTION = "target_satisfaction"
+    LEARNED_TRANSITION = "learned_transition"
+    PROGRAM_INPUT = "program_input"
+    PROGRAM_CONTINUATION = "program_continuation"
+    ACTIVATION_PREDECESSOR = "activation_predecessor"
+    ENTRY_OBSERVATION = "entry_observation"
+    INTRASCAN_EVIDENCE = "intrascan_evidence"
+    THEORY_REQUIREMENT = "theory_requirement"
+    EXPLORATORY = "exploratory"
+
+
 class LandingReceiptAuthority(StrEnum):
     """Which current-world reader owns supplemental landing interpretation."""
 
@@ -295,6 +320,10 @@ class ActPolicy:
     context_actions: tuple[_ActionPair, ...] = ()
     expectation: EffectExpectation | None = None
     expectation_exemption: ExpectationExemption | None = None
+    # Why Orientation may spend one physical execution on this proposal.
+    # ``None`` is allowed while readers assemble a proposal; every returned
+    # Bearing is classified before it crosses the execution boundary.
+    admission_basis: AdmissionBasis | None = None
     # Navigation provenance and landing-evidence ownership are orthogonal. A
     # route coast can still be owned by the ProgramStep which read its exact
     # present-tense producer and input handoffs.
@@ -450,6 +479,7 @@ class ObserveScan:
         ActSource.PROGRAM,
         motion=MotionKind.COAST_HOLDING_WORLD,
         expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+        admission_basis=AdmissionBasis.ENTRY_OBSERVATION,
         local_progress=LocalProgressKind.OBSERVE_ENTRY,
     )
 
@@ -471,6 +501,7 @@ class ProgramScan:
         ActSource.PROGRAM,
         motion=MotionKind.COAST_HOLDING_WORLD,
         expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+        admission_basis=AdmissionBasis.INTRASCAN_EVIDENCE,
         local_progress=LocalProgressKind.INTRASCAN_STAGE,
     )
 
@@ -571,12 +602,26 @@ class ProbeRequest:
 
 
 @dataclass(frozen=True)
+class ExploratoryTrialRequest:
+    """Run one proposal for evidence on a disposable World, never adopt it."""
+
+    frontier: tuple[_ActionPair, ...]
+    candidate: GuidanceCandidate
+    bearing: Bearing
+    reason: str
+
+    def __post_init__(self) -> None:
+        if self.bearing.act.policy.admission_basis is not AdmissionBasis.EXPLORATORY:
+            raise ValueError("an exploratory trial request requires an exploratory Bearing")
+
+
+@dataclass(frozen=True)
 class NeedProbe:
     """Compass cannot orient until an isolated probe adds evidence."""
 
     world_key: _StateKey
     frontier: tuple[_ActionPair, ...]
-    request: ProbeRequest
+    request: ProbeRequest | ExploratoryTrialRequest
     rationale: str
     provenance: tuple[str, ...] = ()
     orientation: OrientationRead | None = None
@@ -589,6 +634,28 @@ class NeedResearch:
     world_key: _StateKey
     frontier: tuple[_ActionPair, ...]
     request: ConductivityResearchRequest
+    rationale: str
+    orientation: OrientationRead | None = None
+
+
+@dataclass(frozen=True)
+class GuidanceCandidate:
+    """Detached exploratory proposal which Compass declined to execute."""
+
+    identity: tuple[Any, ...]
+    source: ActSource
+    actions: tuple[_ActionPair, ...]
+    rationale: str
+    provenance: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GuidanceRequest:
+    """Compass found hypotheses, but no evidence-backed executable Bearing."""
+
+    world_key: _StateKey
+    frontier: tuple[_ActionPair, ...]
+    candidates: tuple[GuidanceCandidate, ...]
     rationale: str
     orientation: OrientationRead | None = None
 
@@ -699,6 +766,7 @@ OrientationResult = (
     | ComposeCorrection
     | NeedProbe
     | NeedResearch
+    | GuidanceRequest
     | NeedIntrascanTraceback
     | NeedIntrascanBoundaryRealization
     | Stuck

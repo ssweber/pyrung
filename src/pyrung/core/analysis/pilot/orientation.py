@@ -3,14 +3,16 @@
 Candidate instruments read the world once. WorkingTheory may first declare an
 exact causal question; ordinary instruments then nominate acts through the
 declared ``_ORDINARY_PROPOSERS`` precedence and one shared admission gate. An
-actionless program scan requires a positive continuation reading. Otherwise
-Orientation requests bounded evidence or returns ``Stuck``.
+actionless program scan requires a positive continuation reading. Exploratory
+proposals may request a bounded disposable trial but are never admitted as
+ordinary Bearings. Otherwise Orientation surfaces them as a
+``GuidanceRequest`` or returns ``Stuck``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 import pyrung.core.analysis.pilot.orientation_reading as _orientation_reading
@@ -21,11 +23,15 @@ from pyrung.core.analysis.pilot.execution import (
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
+    AdmissionBasis,
     BatchPulse,
     Bearing,
     BearingCoast,
     ComposeCorrection,
     ExpectationExemption,
+    ExploratoryTrialRequest,
+    GuidanceCandidate,
+    GuidanceRequest,
     NavigationConstraints,
     NeedIntrascanBoundaryRealization,
     NeedIntrascanTraceback,
@@ -51,6 +57,14 @@ from pyrung.core.analysis.pilot.world_key import (
 
 _ActProposal = tuple[Any, str]
 _ActProposer = Callable[[Any, OrientationRead], Iterator[_ActProposal]]
+
+
+@dataclass(frozen=True)
+class _ExploratoryProposal:
+    """One declined ordinary proposal plus its bounded trial artifact."""
+
+    candidate: GuidanceCandidate
+    bearing: Bearing
 
 
 def _awaited_action_proposals(_compass: Any, read: OrientationRead) -> Iterator[_ActProposal]:
@@ -264,10 +278,33 @@ def _admit_ordinary_proposal(
     read: OrientationRead,
     target: TargetSpec,
     proposal: _ActProposal,
-) -> Bearing | None:
+) -> Bearing | _ExploratoryProposal | None:
     """Apply ordinary setup, requirement, and whole-act admission exactly once."""
 
     act, rationale = proposal
+    act = _orientation_reading._classify_admission(read, act, target)
+    if not _theory_orientation._act_preserves_requirements(read.world, act):
+        return None
+    if compass.knowledge.act_is_nogood(read.world_key, act_identity(act)):
+        return None
+    if act.policy.admission_basis is AdmissionBasis.EXPLORATORY:
+        candidate = GuidanceCandidate(
+            identity=act_identity(act),
+            source=act.policy.source,
+            actions=tuple(act.policy.applied),
+            rationale=rationale,
+            provenance=act.policy.provenance,
+        )
+        return _ExploratoryProposal(
+            candidate=candidate,
+            bearing=_orientation_reading._bearing(
+                read,
+                act,
+                target=target,
+                rationale=rationale,
+                allow_exploratory_probe=True,
+            ),
+        )
     setup = _orientation_reading._activation_setup_act(act, read.world)
     if setup is not None:
         act = setup
@@ -291,10 +328,38 @@ def _ordinary_disposition(
 ) -> OrientationResult:
     """Consider the current world's ordinary readings exactly once."""
 
+    guidance: list[GuidanceCandidate] = []
     for proposal in _ordinary_proposals(compass, read):
-        bearing = _admit_ordinary_proposal(compass, read, target, proposal)
-        if bearing is not None:
-            return bearing
+        admitted = _admit_ordinary_proposal(compass, read, target, proposal)
+        if isinstance(admitted, Bearing):
+            return admitted
+        if isinstance(admitted, _ExploratoryProposal):
+            probe = _orientation_reading._probe_or_stuck(
+                compass,
+                read,
+                "exploratory_hypotheses",
+            )
+            if isinstance(probe, NeedProbe):
+                return replace(
+                    probe,
+                    request=ExploratoryTrialRequest(
+                        frontier=probe.frontier,
+                        candidate=admitted.candidate,
+                        bearing=admitted.bearing,
+                        reason="exploratory_hypotheses",
+                    ),
+                    rationale="Compass needs one bounded exploratory trial before acting",
+                )
+            if admitted.candidate.identity not in {candidate.identity for candidate in guidance}:
+                guidance.append(admitted.candidate)
+    if guidance:
+        return GuidanceRequest(
+            world_key=read.world_key,
+            frontier=_orientation_reading._frontier(read),
+            candidates=tuple(guidance),
+            rationale="only exploratory input hypotheses remain",
+            orientation=read,
+        )
     diagnosis = read.candidates.diagnosis
     reason = diagnosis.reason if diagnosis is not None else "all_rejected"
     return _orientation_reading._probe_or_stuck(compass, read, reason)
@@ -558,6 +623,20 @@ def _combined_nonbearing(results: tuple[OrientationResult, ...]) -> OrientationR
     frontier = tuple(
         dict.fromkeys(pair for result in results for pair in getattr(result, "frontier", ()))
     )
+    guidance_items: list[GuidanceCandidate] = []
+    guidance_identities: set[tuple[Any, ...]] = set()
+    for result in results:
+        if not isinstance(result, GuidanceRequest):
+            continue
+        for candidate in result.candidates:
+            if candidate.identity not in guidance_identities:
+                guidance_items.append(candidate)
+                guidance_identities.add(candidate.identity)
+    guidance = tuple(guidance_items)
+    guidance_result = next(
+        (result for result in results if isinstance(result, GuidanceRequest)),
+        None,
+    )
     probe = next((result for result in results if isinstance(result, NeedProbe)), None)
     if probe is not None:
         return replace(
@@ -565,6 +644,8 @@ def _combined_nonbearing(results: tuple[OrientationResult, ...]) -> OrientationR
             frontier=frontier,
             request=replace(probe.request, frontier=frontier),
         )
+    if guidance_result is not None:
+        return replace(guidance_result, frontier=frontier, candidates=guidance)
     stuck = next((result for result in results if isinstance(result, Stuck)), None)
     if stuck is None:
         raise RuntimeError("current-world alternatives produced no disposition")

@@ -580,6 +580,9 @@ def _candidate_payload(policy: ActPolicy) -> dict[str, Any]:
         "downstream_reach": policy.downstream_reach,
         "prescribed": policy.source is not ActSource.TRACE,
         "effect_expectation": expectation_snapshot(policy.expectation),
+        "admission_basis": (
+            policy.admission_basis.value if policy.admission_basis is not None else None
+        ),
     }
 
 

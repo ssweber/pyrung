@@ -818,6 +818,15 @@ class _PilotProgressFormatter:
             self._after_correction = True
             return f"  Working theory{where}: {verb} {setting} before retrying{need}.\n"
 
+        if kind == "guidance_requested":
+            proposals = []
+            for candidate in data.get("candidates", ()):
+                actions = tuple(candidate.get("actions", ()))
+                if actions:
+                    proposals.append(_pilot_assignments(actions))
+            detail = f": {'; '.join(proposals)}" if proposals else ""
+            return f"\nGuidance required before trying exploratory inputs{detail}.\n"
+
         if kind == "stuck":
             reason = str(data.get("reason") or "No productive next action was found.")
             reason = reason.removeprefix("pilot: ").removeprefix("stuck: ")

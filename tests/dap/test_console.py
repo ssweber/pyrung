@@ -843,6 +843,29 @@ class TestCausalVerbs:
             "reset(ProgressTest_RevokeGo).\n"
         )
 
+    def test_how_progress_surfaces_exploratory_inputs_as_guidance(self):
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        progress = _PilotProgressFormatter()
+        result = progress.format(
+            PilotEvent(
+                "guidance_requested",
+                10,
+                {
+                    "candidates": (
+                        {"actions": (("PossibleStart", True),)},
+                        {"actions": (("PossibleReset", True), ("Mode", 2))},
+                    )
+                },
+            )
+        )
+
+        assert result == (
+            "\nGuidance required before trying exploratory inputs: "
+            "PossibleStart=True; Mode=2, PossibleReset=True.\n"
+        )
+
     def test_how_progress_describes_observed_motion(self):
         from pyrung.core.analysis.pilot.types import PilotEvent
         from pyrung.dap.console import _format_pilot_progress

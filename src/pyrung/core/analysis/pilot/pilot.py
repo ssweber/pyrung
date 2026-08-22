@@ -46,6 +46,8 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
     BearingObjective,
     ComposeCorrection,
+    ExploratoryTrialRequest,
+    GuidanceRequest,
     IntrascanPulse,
     NavigationConstraints,
     NeedIntrascanBoundaryRealization,
@@ -74,6 +76,7 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
     _attempt_productive_scan,
     _configured_input_names,
     _derive_settled_target_requirements,
+    _disposable_requirement_state,
     _release_attempt_projections,
 )
 from pyrung.core.analysis.pilot.requirements import RequirementStatus
@@ -1052,8 +1055,37 @@ def _pilot_loop_events(
             continue
 
         if isinstance(result, NeedProbe):
-            observations = probe_live_guard_frontiers(frame, state, ctx)
-            ctx.compass, changed = ctx.compass.apply(observations)
+            request = result.request
+            if isinstance(request, ExploratoryTrialRequest):
+                checkpoint = _CausalCheckpoint(
+                    key=frame.key,
+                    world=state.snapshot_world(),
+                    objective=request.bearing.objective,
+                    configured_inputs=(ctx.configured_inputs | _configured_input_names(state.work)),
+                )
+                probe_state = _disposable_requirement_state(state, checkpoint)
+                transition = _attempt_transition.transition_once(
+                    probe_state,
+                    ctx,
+                    target,
+                    constraints,
+                    oriented=request.bearing,
+                    resolve_excursion=False,
+                    derive_requirements=False,
+                    defer_adoption=True,
+                    record_rejection=False,
+                )
+                observations = (
+                    transition.attempt.observations if transition.attempt is not None else ()
+                )
+                changed = bool(observations)
+                probe_kind = "exploratory_trial"
+                probe_actions = request.candidate.actions
+            else:
+                observations = probe_live_guard_frontiers(frame, state, ctx)
+                ctx.compass, changed = ctx.compass.apply(observations)
+                probe_kind = "frontier"
+                probe_actions = ()
             ctx.compass, _ = ctx.compass.apply((ProbeExhaustedObservation(frame.key),))
             yield PilotEvent(
                 "skiff",
@@ -1062,12 +1094,57 @@ def _pilot_loop_events(
                     "observations": len(observations),
                     "reason": result.request.reason,
                     "changed": changed,
+                    "probe_kind": probe_kind,
+                    "actions": probe_actions,
                 },
             )
             # The bounded probe-count receipt always changes navigation
             # knowledge, even when no new live-guard observation was found.
             # Re-read until Orientation returns the complete-world Stuck.
             continue
+
+        if isinstance(result, GuidanceRequest):
+            terminal_reason = (
+                "Compass found only exploratory input hypotheses; external guidance "
+                "is required before executing them"
+            )
+            yield PilotEvent(
+                "guidance_requested",
+                state.work.state.scan_id,
+                {
+                    "candidates": tuple(
+                        {
+                            "identity": candidate.identity,
+                            "source": candidate.source.value,
+                            "actions": candidate.actions,
+                            "rationale": candidate.rationale,
+                            "provenance": candidate.provenance,
+                        }
+                        for candidate in result.candidates
+                    ),
+                    "frontier": result.frontier,
+                    "reason": result.rationale,
+                },
+            )
+            diagnosis = Stuck(
+                world_key=result.world_key,
+                reason_code="guidance_required",
+                frontier=result.frontier,
+                evidence=result.candidates,
+                rationale=terminal_reason,
+                orientation=result.orientation,
+            )
+            yield from _stopped_events(
+                state,
+                ctx,
+                frame,
+                terminal_reason,
+                journal_channel_tags,
+                journal_acc_names,
+                candidate_count=len(result.candidates),
+                diagnosis=diagnosis,
+            )
+            return
 
         if isinstance(result, Stuck):
             view = theory_view(state.theory_state)

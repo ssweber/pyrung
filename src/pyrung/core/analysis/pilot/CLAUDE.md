@@ -100,6 +100,30 @@ must not manufacture action authority. Conversely, an action proposed by
 static or learned evidence still needs physical execution and the same
 verification gates.
 
+Effect accountability and proposal admission are orthogonal. An
+`EffectExpectation` says what producer result the act promises;
+`ExpectationExemption.UNRESOLVED_EFFECT` only says that no such promise is
+available. Every executable Bearing also carries an `AdmissionBasis` naming
+why the execution is worth attempting: a producer expectation, channel
+heading, crossing fidelity, direct target satisfaction, learned transition,
+program input/continuation, activation predecessor, entry/intrascan evidence,
+or an exact WorkingTheory requirement. `EXPLORATORY` proposals are never
+admitted as ordinary Bearings. At their declared precedence slot, Compass may
+first return one bounded `ExploratoryTrialRequest`: the kernel runs its Bearing
+on a cloned World, commits only navigation observations, and cannot adopt or
+recover that fork. A later fresh read may turn those observations into an
+evidence-backed Bearing. Once that world's probe budget is exhausted, Compass
+continues considering lower-precedence evidence-backed proposals and otherwise
+returns a detached `GuidanceRequest` for an external guidance layer.
+
+The first external guidance strategy should be a bounded breadth-first survey
+of current-scan assignments over the declared steerable set: start with single
+assignments, then the smallest combinations, and ask what can change a
+target- or frontier-relevant program fact. Keep it cheap with finite declared
+domains and strict width/fork budgets. This is still an evidence request, not a
+candidate plan or permission to adopt a fork; its useful observations return
+to Compass for a fresh read and normal Bearing admission.
+
 Trace is the common happy-path instrument, not the fallback owner. One
 `CandidateRead` collects the applicable cheap current-world readings; ordinary
 act proposers are considered in one declared precedence and every nominated
