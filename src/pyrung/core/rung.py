@@ -118,7 +118,7 @@ class Rung:
         from pyrung.core.analysis.sp_tree import conditions_to_sp
 
         self._sp_tree_cache = conditions_to_sp(self._conditions)
-        return cast("SPNode | None", self._sp_tree_cache)
+        return self._sp_tree_cache
 
     def _invalidate_analysis_caches(self) -> None:
         """Clear facts derived from this rung while it is being assembled."""

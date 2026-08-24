@@ -1315,6 +1315,147 @@ def _collect_structural_domains(
     return domains
 
 
+def _collect_produced_value_domains(
+    program: Program,
+    graph: ProgramGraph,
+) -> dict[str, tuple[Any, ...]]:
+    """Finite values justified solely by program producers.
+
+    Unlike :func:`_collect_structural_domains`, this deliberately does not use
+    comparison boundaries to construct a search domain.  It is therefore safe
+    for diagnostics that ask whether a literal comparison has any producer in
+    the program: accepting the comparison literal itself as domain evidence
+    would make that question circular.
+
+    A domain is returned only when every writer of the tag is understood.  The
+    fixed point covers literal and named copies, bounded calculations, and
+    constant/finite indirect-table reads through the same write-domain helpers
+    used by prover classification.  Unknown sources, self-fed calculations, and
+    over-cap indirect destinations cause a conservative punt.
+    """
+    from pyrung.core.analysis.sp_values import _expr_tag_names
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import (
+        BlockCopyInstruction,
+        CopyInstruction,
+        FillInstruction,
+    )
+    from pyrung.core.memory_block import IndirectRef
+    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
+
+    by_target: dict[str, list[Any]] = {}
+    for instr in walk_instructions(program):
+        for target_name, _itype in _all_write_targets(instr):
+            by_target.setdefault(target_name, []).append(instr)
+
+    # An over-cap indirect destination is intentionally absent from the normal
+    # static target list.  Any materialized slot in that block may still be its
+    # runtime target, so none of those slots can carry a complete producer set.
+    opaque_dest_blocks = {ref.block for ref in graph.indirect_writes}
+    opaque_targets = {
+        name
+        for name, tag in graph.tags.items()
+        if getattr(tag, "_pyrung_block", None) in opaque_dest_blocks
+    }
+    incomplete_targets = opaque_targets | {
+        name
+        for name, tag in graph.tags.items()
+        if graph.writers_of.get(name)
+        and (tag.external or tag.readonly or graph.is_physical_input(name))
+    }
+
+    known: dict[str, tuple[Any, ...]] = {}
+    for name, tag in graph.tags.items():
+        if name in incomplete_targets:
+            continue
+        writers = graph.writers_of.get(name)
+        if tag.readonly:
+            known[name] = (tag.default,)
+        elif not writers:
+            declared = _declared_domain(tag)
+            if tag.external or graph.is_physical_input(name):
+                if declared is not None:
+                    known[name] = declared
+            else:
+                known[name] = (tag.default,)
+
+    def dependencies_are_known(instr: Any, target_name: str) -> bool:
+        """Prevent write helpers from falling back to comparison-derived bounds."""
+        raw: Any | None = None
+        if isinstance(instr, CopyInstruction):
+            raw = instr.source
+        elif isinstance(instr, FillInstruction):
+            raw = instr.value
+
+        if raw is not None:
+            source_name = _tag_name_from_value(raw)
+            if source_name is not None:
+                # An identity self-copy only retains the already-accounted-for
+                # value; it is not an unknown producer.
+                return source_name == target_name or source_name in known
+            if isinstance(raw, IndirectRef):
+                pointer_name = getattr(raw.pointer, "name", None)
+                return pointer_name is not None and pointer_name in known
+            # A literal has no dependency.  Other indirect/expression forms punt.
+            return _literal_value_from_value(raw) is not None
+
+        if isinstance(instr, CalcInstruction):
+            refs = _expr_tag_names(instr.expression)
+            return refs is not None and target_name not in refs and refs <= known.keys()
+
+        if isinstance(instr, BlockCopyInstruction):
+            sources = _resolve_tag_names(instr.source)
+            return bool(sources) and set(sources) <= known.keys()
+
+        # Drums, searches, and converting copies have intrinsic finite domains;
+        # unsupported instruction types will return None below.
+        return True
+
+    changed = True
+    while changed:
+        changed = False
+        for target_name, writers in by_target.items():
+            if target_name in incomplete_targets or target_name in known:
+                continue
+            target = graph.tags.get(target_name)
+            if target is None:
+                continue
+
+            candidate_values: set[Any] = {target.default}
+            complete = True
+            for instr in writers:
+                if not dependencies_are_known(instr, target_name):
+                    complete = False
+                    break
+                # A self-copy contributes no new value beyond retention.
+                if isinstance(instr, (CopyInstruction, FillInstruction)):
+                    raw = instr.source if isinstance(instr, CopyInstruction) else instr.value
+                    if _tag_name_from_value(raw) == target_name:
+                        continue
+                domain = _domain_from_write_instruction(
+                    instr,
+                    target_name,
+                    target,
+                    graph,
+                    [],
+                    known,
+                    {},
+                )
+                if domain is None:
+                    complete = False
+                    break
+                candidate_values.update(domain)
+
+            if not complete:
+                continue
+            merged = _merge_structural_domain_values(target, (), candidate_values)
+            if merged is not None:
+                known[target_name] = merged
+                changed = True
+
+    return known
+
+
 def _extract_forward_affine(instr: Any) -> tuple[str, int, int | float] | None:
     """Extract ``(source_tag_name, scale, offset)`` from a write instruction.
 

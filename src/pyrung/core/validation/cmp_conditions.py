@@ -1,6 +1,6 @@
-"""Comparison-semantics validators: monotone/reset/order/zero operands.
+"""Comparison-semantics validators: monotone/reset/order/zero/stepper operands.
 
-Five rules, one pass over every comparison in every rung condition (main +
+Six rules, one pass over every comparison in every rung condition (main +
 subroutines + branches, both the ``Compare*`` leaf family and the expression-tree
 ``ExprCompare``):
 
@@ -34,6 +34,11 @@ subroutines + branches, both the ``Compare*`` leaf family and the expression-tre
 * ``CMP_PRESET_STAYS_ZERO`` — the same high-confidence check for a tag-valued
   timer/counter preset.  Literal zero remains an intentional, supported elapsed-
   accumulator idiom and is exempt.  **warning**.
+
+* ``CMP_STEPPER_VALUE_NOT_SET`` — a discrete stepping tag is tested for
+  equality with a numeric value that none of its fully understood direct or
+  indirect producers can establish.  Unknown writer paths punt rather than
+  speculate.  **warning**.
 
 "Dynamic" (belongs on the left) is any program-written tag, self-advancing register,
 or inline computed expression; "static" is a literal, an ``S.`` constant, or any
@@ -98,6 +103,7 @@ CMP_TRUE_AT_RESET = "CMP_TRUE_AT_RESET"
 CMP_STATIC_ON_LEFT = "CMP_STATIC_ON_LEFT"
 CMP_OPERAND_STAYS_ZERO = "CMP_OPERAND_STAYS_ZERO"
 CMP_PRESET_STAYS_ZERO = "CMP_PRESET_STAYS_ZERO"
+CMP_STEPPER_VALUE_NOT_SET = "CMP_STEPPER_VALUE_NOT_SET"
 
 _NUMERIC_TAG_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.REAL, TagType.WORD})
 
@@ -420,6 +426,66 @@ def _zero_operand_display(cmp: _Compare, operand: _Operand, tag: Tag) -> Finding
     )
 
 
+def _stepper_value_display(
+    cmp: _Compare,
+    tag_operand: _Operand,
+    literal_operand: _Operand,
+    domain: tuple[Any, ...],
+) -> FindingDisplay:
+    if len(domain) <= 8:
+        values = ", ".join(str(value) for value in domain)
+    else:
+        shown = (*domain[:5], "…", *domain[-2:])
+        values = f"{', '.join(str(value) for value in shown)} ({len(domain)} values)"
+    header = with_rung_line(cmp.rung_conds)
+    literal = _render(literal_operand)
+    span = caret_of(header, literal)
+    frame = Frame(
+        location=cmp.loc,
+        lines=(header,),
+        caret=(0, span[0], span[1]) if span else None,
+        caret_label=f"{_render(tag_operand)} never set to {literal}" if span else "",
+    )
+    return FindingDisplay(
+        code=CMP_STEPPER_VALUE_NOT_SET,
+        severity="warning",
+        frames=(frame,),
+        hint=(
+            f"{_render(tag_operand)} is established as: {values}; "
+            "check the comparison or add the missing copy"
+        ),
+    )
+
+
+def _unset_stepper_value(
+    cmp: _Compare,
+    stepping: frozenset[str],
+    produced_domains: dict[str, tuple[Any, ...]],
+) -> tuple[_Operand, _Operand, tuple[Any, ...]] | None:
+    """Return a fully evidenced missing equality value, otherwise punt.
+
+    Ordered comparisons are intentionally excluded: ``State >= 3`` can be
+    useful even when a discrete state register jumps from 2 to 4.  ``!=`` is
+    also excluded because defensive exclusions are commonly intentional and a
+    warning there would be more pedantic than useful.
+    """
+    if cmp.op != "==":
+        return None
+    for tag_operand, literal_operand in ((cmp.left, cmp.right), (cmp.right, cmp.left)):
+        if (
+            tag_operand.kind != "tag"
+            or tag_operand.name not in stepping
+            or literal_operand.kind != "literal"
+            or isinstance(literal_operand.value, bool)
+            or not isinstance(literal_operand.value, (int, float))
+        ):
+            continue
+        domain = produced_domains.get(tag_operand.name)
+        if domain is not None and literal_operand.value not in domain:
+            return tag_operand, literal_operand, domain
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Findings
 # ---------------------------------------------------------------------------
@@ -640,11 +706,17 @@ def validate_cmp_conditions(program: Program) -> CmpConditionReport:
     twice.
     """
     from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.classify import (
+        _collect_produced_value_domains,
+        _compute_stepping_tags,
+    )
 
     acc = _acc_index(program)
     written = _written_names(program)
     calc = _calc_derived_names(program)
     graph = build_program_graph(program)
+    stepping = _compute_stepping_tags(program, graph)
+    produced_domains = _collect_produced_value_domains(program, graph)
 
     compares = list(_iter_compares(program))
     claimed: set[int] = set()
@@ -708,7 +780,26 @@ def validate_cmp_conditions(program: Program) -> CmpConditionReport:
             )
         claimed.add(id(cmp.cond))
 
-    # 3. True-at-reset completion check (warning), either operand order.
+    # 3. A stepping tag compared for equality with a value no complete producer
+    #    path can establish.  This owns the comparison before stylistic checks.
+    for cmp in compares:
+        if id(cmp.cond) in claimed:
+            continue
+        missing = _unset_stepper_value(cmp, stepping, produced_domains)
+        if missing is None:
+            continue
+        tag_operand, literal_operand, domain = missing
+        findings.append(
+            CmpConditionFinding(
+                CMP_STEPPER_VALUE_NOT_SET,
+                tag_operand.name or cmp.loc,
+                _stepper_value_display(cmp, tag_operand, literal_operand, domain),
+                "warning",
+            )
+        )
+        claimed.add(id(cmp.cond))
+
+    # 4. True-at-reset completion check (warning), either operand order.
     for cmp in compares:
         if id(cmp.cond) in claimed or cmp.op not in ("<", "<=", ">", ">="):
             continue
@@ -717,7 +808,7 @@ def validate_cmp_conditions(program: Program) -> CmpConditionReport:
             findings.append(finding)
             claimed.add(id(cmp.cond))
 
-    # 4. Operand-order convention (info/warning) for whatever remains.
+    # 5. Operand-order convention (info/warning) for whatever remains.
     for cmp in compares:
         if id(cmp.cond) in claimed:
             continue

@@ -74,6 +74,13 @@ _SPECS: tuple[RuleSpec, ...] = (
         "cmp",
         "Timer/Counter Preset Stays Zero",
     ),
+    RuleSpec(
+        "CMP_STEPPER_VALUE_NOT_SET",
+        "CMP",
+        "warning",
+        "cmp",
+        "Stepper Equality Value Is Never Set",
+    ),
     RuleSpec("CMP_TRUE_AT_RESET", "CMP", "warning", "cmp", "Comparison True at Reset Value"),
     RuleSpec("CMP_STATIC_ON_LEFT", "CMP", "advisory", "cmp", "Static Operand on Left"),
     RuleSpec("STEP_NO_ESCAPE", "STEP", "warning", "wait", "Wait Step Can Hang Forever"),
