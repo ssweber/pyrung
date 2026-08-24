@@ -139,8 +139,15 @@ class TestProjectBasic:
         assert '"pyrung>=0.11.0"' in files["pyproject.toml"]
         assert files["CLAUDE.md"] == "@AGENTS.md\n"
         guidance = files["AGENTS.md"]
-        assert "`how()` is an experimental steering aid" in guidance
         normalized_guidance = " ".join(guidance.split())
+        assert "Click project as the repository" in normalized_guidance
+        assert "generated folder as its editable working branch" in normalized_guidance
+        assert "propose finished changes to the engineer" in normalized_guidance
+        assert "tag apply` stages tag changes and opens the Address Editor" in normalized_guidance
+        assert "rung apply` writes the ladder CSVs" in normalized_guidance
+        assert "rung preview` then opens the Rung Preview" in normalized_guidance
+        assert "engineer accepts the proposal" in normalized_guidance
+        assert "`how()` is an experimental steering aid" in normalized_guidance
         assert (
             "does not mean the program is broken or the target is unreachable"
             in normalized_guidance

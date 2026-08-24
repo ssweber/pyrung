@@ -635,6 +635,24 @@ def _generate_agents_md(
     sections: list[str] = []
     sections.append(f"# Machine: {machine_name}\n")
 
+    # --- Workspace model ---
+    sections.append("""\
+## Workspace model
+
+Think of the Click project as the repository and this generated folder as its
+editable working branch. Read, test, and change the Python files here.
+
+Use the apply workflows to propose finished changes to the engineer.
+`clicknick-cli tag apply` stages tag changes and opens the Address Editor.
+`clicknick-cli rung apply` writes the ladder CSVs; `clicknick-cli rung preview`
+then opens the Rung Preview for Copy/paste. The engineer accepts the proposal
+by Syncing or pasting it, then decides when to save in Click.
+
+A Click save regenerates this folder from the accepted project, like refreshing
+the working branch from the repository. Propose work you want accepted before
+the engineer saves.
+""")
+
     # --- Cheatsheet + program files ---
     sections.append("""\
 Read `click-cheatsheet.md` first. The program is ladder logic as Python — it
