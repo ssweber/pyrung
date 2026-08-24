@@ -677,24 +677,21 @@ differ: Set → `latch`, Math → `calc`.
     shape_lines.append(f"- Tags: {shape['tag_summary']}")
     sections.append("\n".join(shape_lines) + "\n")
 
-    # --- Tools ---
+    # --- Run and inspect ---
     sections.append("""\
-## Tools
+## Run and inspect
 
-Run `uv sync` first — it creates the project venv and installs pyrung, which
-both tools below need. Without it, `pyrung` and `clicknick-cli` aren't available.
+Run `uv sync` once to create the project environment and install the two CLIs:
 
-Two CLI tools. Chain commands with `;` to avoid repeated process launches.
+- **`pyrung live`** — simulate and analyze with patch, force, step, why, and how
+- **`clicknick-cli`** — inspect Click and propose tag or rung changes
 
-- **pyrung live** — simulation and analysis (patch, force, step, why, how)
-- **clicknick-cli** — push annotations and rung edits back to Click
+Chain commands with `;` to avoid repeated process launches.
 
-## Snapshot prerequisite
-
-For diagnosis to be useful, the simulation must be loaded with a snapshot from
-the faulted machine. If `why()` shows everything at defaults, ask the engineer
-to load a tag dump (Data > Read Data from PLC > All > Save in Click, then
-select in ClickNick before starting DAP).
+Structural commands such as `upstream` and `simplified` work without a snapshot.
+To diagnose the machine's actual state, start from a tag snapshot. If `why()`
+shows everything at defaults, ask the engineer to load one: Data > Read Data
+from PLC > All > Save in Click, then select it in ClickNick before starting DAP.
 
 Start with a few scans and a focused set of tags:
 
