@@ -752,12 +752,13 @@ clear path. No scans needed — these are structural.
 
 `how()` is an experimental steering aid. It reads the program backward, tries
 changes on a fork, and reports a replayable path when it finds one. Use `avoid`
-to exclude states from the path.
+to exclude states from the path. Treat its route as a lead, not a verdict; if
+the route looks irrelevant or implausible, set it aside.
 
 If `how()` does not find a path, that does not mean the program is broken or the
 target is unreachable. It means only that this bounded search did not find one
-for the current snapshot. Continue with `why()`, focused patch/step experiments,
-and direct ladder review.
+for the current snapshot. When its result is not useful, continue with `why()`,
+focused patch/step experiments, and direct ladder review.
 
 ## Add & annotate tags (edit tags.py, then `tag apply`)
 
