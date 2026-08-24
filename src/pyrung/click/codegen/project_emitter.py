@@ -653,21 +653,23 @@ the working branch from the repository. Propose work you want accepted before
 the engineer saves.
 """)
 
-    # --- Cheatsheet + program files ---
-    sections.append("""\
-Read `click-cheatsheet.md` first. The program is ladder logic as Python — it
-mirrors what the engineer sees in the Click GUI editor. Some names differ from
-Click: Set → `latch`, Math → `calc`.
-
-Then read the program:
-- `tags.py` — tag declarations, types, metadata, TagMap
-- `main.py` — main rungs and subroutine calls
-- `subroutines/` — individual subroutine files
-""")
-
-    # --- Program shape ---
+    # --- Project orientation ---
     shape_lines = [
-        "## Program shape\n",
+        """\
+## Read the project
+
+The program is ladder logic represented as Python. Read it in this order:
+
+1. `click-cheatsheet.md` — pyrung syntax and Click terminology
+2. `tags.py` — tag declarations, types, metadata, and TagMap
+3. `main.py` — scan order, main rungs, and subroutine calls
+4. Relevant files in `subroutines/` — the logic for each machine function
+
+The Python mirrors what the engineer sees in the Click GUI editor. A few names
+differ: Set → `latch`, Math → `calc`.
+
+### Program shape
+""",
         f"- Main: {shape['main_rungs']} rungs, {shape['sub_count']} subroutines",
     ]
     for s in shape["subs"]:
@@ -694,12 +696,7 @@ the faulted machine. If `why()` shows everything at defaults, ask the engineer
 to load a tag dump (Data > Read Data from PLC > All > Save in Click, then
 select in ClickNick before starting DAP).
 
-## Working with the program
-
-Read the code before running tools. `main.py` has the scan order and subroutine
-calls. Each `subroutines/*.py` file has the logic for one function — state
-machines, interlocks, alarms. Read the subroutines relevant to the problem,
-not all 30+.
+Start with a few scans and a focused set of tags:
 
     pyrung live "step 5"
     pyrung live "get StateCurrent Running FaultAlarm"
