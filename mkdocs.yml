@@ -164,6 +164,7 @@ exclude_docs: |
 
 not_in_nav: |
   reference/api/**
+  AGENTS.md
   CLAUDE.md
 
 markdown_extensions:

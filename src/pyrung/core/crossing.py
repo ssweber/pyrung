@@ -18,7 +18,7 @@ The same contract serves both reverse mechanisms; they differ only in how a
 - **Projected** — a :class:`Prior` is chased by recursing the planner on the
   prior-scan value (walk / prover seeding).
 
-Soundness (``prove/CLAUDE.md``): a reverse may **over**-approximate the allowed
+Soundness (``prove/AGENTS.md``): a reverse may **over**-approximate the allowed
 input domain (a superset is safe) but never **under**-approximate.  A crossing
 that cannot invert returns :data:`REVERSE_FALLTHROUGH` — "add no constraint,
 defer to the caller" — which is the sound direction.  A crossing that *can*

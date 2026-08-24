@@ -771,7 +771,7 @@ def _writer_projection(
     PROJECTED fire-time overlay, answering *"dead branch? + what prereqs remain?"*.
     Its ``counterfactual`` feeds #3 ``_writer_availability``'s ``is_counterfactual``;
     its non-pinned frontier tags resurface in #1 ``frontier_pairs`` one recursion
-    level down. See ``pilot/CLAUDE.md`` "Soundness and behavior invariants".
+    level down. See ``pilot/AGENTS.md`` "Soundness and behavior invariants".
     """
     built = projected_writer_overlay(ro, tag, value, snapshot, pdg, program, dict(pinned_overlay))
     if built is None:

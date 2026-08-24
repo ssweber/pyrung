@@ -5,7 +5,7 @@ constant-table enable flag, while ``S_StateRequested`` is a held enabler at the
 transfer scan. The deep ``cause()`` walk chases that enable/request chain to its
 establishing transition, then reaches the latched alarm and starved watchdog.
 
-Gate discipline (pilot/CLAUDE.md §Testing changes):
+Gate discipline (pilot/AGENTS.md §Testing changes):
 
 * ``test_watchdog_starve_ejects`` — hand-driveable ground truth: a starved
   watchdog latches the alarm which requests the state, bumping StateCurrent 6->8.

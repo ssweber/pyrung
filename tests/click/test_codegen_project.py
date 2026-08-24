@@ -120,7 +120,31 @@ class TestProjectBasic:
 
         assert "main.py" in files
         assert "tags.py" in files
+        assert files["CLAUDE.md"] == "@AGENTS.md\n"
+        assert "# Machine: PLC" in files["AGENTS.md"]
         assert "subroutines/__init__.py" not in files
+
+    def test_release_scaffolding_and_experimental_how_guidance(self, tmp_path: Path):
+        """Generated projects require this release and scope ``how()`` failures narrowly."""
+        Button = Bool("Button")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with rung(Button):
+                out(Light)
+
+        mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
+        files = _project_from_program(logic, mapping, tmp_path)
+
+        assert '"pyrung>=0.11.0"' in files["pyproject.toml"]
+        assert files["CLAUDE.md"] == "@AGENTS.md\n"
+        guidance = files["AGENTS.md"]
+        assert "`how()` is an experimental steering aid" in guidance
+        normalized_guidance = " ".join(guidance.split())
+        assert (
+            "does not mean the program is broken or the target is unreachable"
+            in normalized_guidance
+        )
 
     def test_export_file_passes_blocks_to_nickname_file(self, tmp_path: Path):
         """project_to_csv.py must pass the ``blocks`` set to to_nickname_file.

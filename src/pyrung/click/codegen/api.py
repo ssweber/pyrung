@@ -265,7 +265,7 @@ def ladder_to_pyrung_project(
         overwrite: When *False* (default), scaffolding files (pyproject.toml,
             README.md, .vscode/) are skipped if they already exist on disk.
             Logic files (tags.py, main.py, subroutines/) are always written.
-        machine_name: Human-readable machine name for CLAUDE.md
+        machine_name: Human-readable machine name for AGENTS.md
             header (e.g. from the .ckp filename).
         validate: When *True* (default), run codegen self-checks (see
             :func:`ladder_to_pyrung`): a structure-default identity check

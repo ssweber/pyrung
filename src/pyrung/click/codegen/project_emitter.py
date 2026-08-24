@@ -50,6 +50,7 @@ _SCAFFOLDING_FILES = frozenset(
         "README.md",
         ".vscode/launch.json",
         ".vscode/extensions.json",
+        "AGENTS.md",
         "CLAUDE.md",
         "click-cheatsheet.md",
         ".claude/settings.json",
@@ -137,7 +138,8 @@ def _generate_project(
 
     files["click-cheatsheet.md"] = _generate_cheatsheet()
 
-    files["CLAUDE.md"] = _generate_claude_md(rungs, collection, subroutines, machine_name)
+    files["AGENTS.md"] = _generate_agents_md(rungs, collection, subroutines, machine_name)
+    files["CLAUDE.md"] = "@AGENTS.md\n"
 
     files[".claude/settings.json"] = _generate_claude_settings()
 
@@ -160,7 +162,7 @@ name = "plc-logic"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "pyrung>=0.10.0",
+    "pyrung>=0.11.0",
 ]
 """
 
@@ -621,13 +623,13 @@ def _generate_cheatsheet() -> str:
     )
 
 
-def _generate_claude_md(
+def _generate_agents_md(
     rungs: list[_AnalyzedRung],
     collection: _OperandCollection,
     subroutines: list[_SubroutineInfo],
     machine_name: str,
 ) -> str:
-    """Generate CLAUDE.md with program-specific metadata."""
+    """Generate AGENTS.md with program-specific metadata."""
     shape = _build_program_shape(rungs, collection, subroutines)
 
     sections: list[str] = []
@@ -741,12 +743,14 @@ clear path. No scans needed — these are structural.
     pyrung live "how Running"
     pyrung live "how StateCurrent == 6 avoid StateCurrent == 3"
 
-`how()` drives the PLC to a target state the way an engineer would — it reads
-the program backward to find what needs to change, pulses a command, verifies
-what moved, and adapts when the program pushes back. It waits through timer
-dwells, navigates multi-step state machines, and reverts on regression. No
-annotations required — it auto-discovers domains from the program structure.
-Use `avoid` to exclude states from the path.
+`how()` is an experimental steering aid. It reads the program backward, tries
+changes on a fork, and reports a replayable path when it finds one. Use `avoid`
+to exclude states from the path.
+
+Treat a failed search narrowly: if `how()` does not find a path, that does not
+mean the program is broken or the target is unreachable. It can mean only that
+the bounded search ran out of safe, evidence-backed actions for this snapshot.
+Continue with `why()`, focused patch/step experiments, and direct ladder review.
 
 ## Add & annotate tags (edit tags.py, then `tag apply`)
 
@@ -802,9 +806,9 @@ Edit `main.py` or `subroutines/*.py` directly. Then:
 3. Engineer clicks Copy, pastes in Click, saves
 4. ScrWatcher detects save → auto-regenerates pyrung_project/
 
-Verify every logic change before preparing output — use `how()` to confirm the
-fix reaches the intended state, and force the failure scenario to confirm the
-fix blocks it.
+Verify every logic change with focused tests and direct patch/step scenarios,
+including the failure case. `how()` can provide additional evidence when it
+finds a path, but its failure to find one is not a failed verification.
 
 ## Reference
 
@@ -821,7 +825,7 @@ def _build_program_shape(
     collection: _OperandCollection,
     subroutines: list[_SubroutineInfo],
 ) -> dict:
-    """Extract program shape metadata for CLAUDE.md."""
+    """Extract program shape metadata for AGENTS.md."""
     # Tag type distribution (exclude system tags)
     type_counts: dict[str, int] = {}
     for decl in collection.tags.values():

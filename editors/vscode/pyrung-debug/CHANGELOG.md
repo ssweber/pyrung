@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.0 - 2026-08-24
+
 - **Tag flag badges** — `RO` and `P` badges next to tag names in the Data View
 - **Read-only lock/unlock** — readonly tags start locked (inputs and Force disabled); click the lock icon to unlock for debugging
 - **Public filter** — checkbox above the tag table filters to only `public=True` tags; disabled until the debugger starts, resets when the session ends

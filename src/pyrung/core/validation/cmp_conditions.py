@@ -435,7 +435,7 @@ def _stepper_value_display(
     if len(domain) <= 8:
         values = ", ".join(str(value) for value in domain)
     else:
-        shown = (*domain[:5], "…", *domain[-2:])
+        shown = (*domain[:5], "...", *domain[-2:])
         values = f"{', '.join(str(value) for value in shown)} ({len(domain)} values)"
     header = with_rung_line(cmp.rung_conds)
     literal = _render(literal_operand)
