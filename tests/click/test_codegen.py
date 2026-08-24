@@ -3442,11 +3442,11 @@ class TestStructuredCodegen:
 
         files = ladder_to_pyrung_project(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert "Physical" in files["tags.py"]
-        assert "Approach" in files["tags.py"]
+        assert "Physical" in files["src/plc/tags.py"]
+        assert "Approach" in files["src/plc/tags.py"]
         assert (
             "Pressure_physical = Physical('Pressure', profile=Approach(toward=100.0, rate=0.3))"
-            in files["tags.py"]
+            in files["src/plc/tags.py"]
         )
 
     def test_named_array_codegen(self, tmp_path: Path):
@@ -3700,7 +3700,7 @@ class TestStructuredCodegen:
         bundle.write(csv_dir)
         nick_path = self._make_nickname_csv(tmp_path, self._named_array_id_records(id_initials))
         files = ladder_to_pyrung_project(csv_dir, nickname_csv=nick_path)
-        return files["tags.py"]
+        return files["src/plc/tags.py"]
 
     def _reconstruct_ids(self, code, count):
         """Exec generated code and return the reconstructed Chan.id per-slot defaults."""
@@ -5237,7 +5237,7 @@ class TestIndexedMarkerImport:
             subroutine_rows=(),
         )
         files = ladder_to_pyrung_project(bundle, index=True)
-        main = files["main.py"]
+        main = files["src/plc/main.py"]
         assert "with rung(X001):  # R1" in main
         assert "with rung(X002):  # R2" in main
         assert "with rung():  # R3" in main
@@ -5253,4 +5253,4 @@ class TestIndexedMarkerImport:
             subroutine_rows=(),
         )
         files = ladder_to_pyrung_project(bundle, index=False)
-        assert "# R" not in files["main.py"]
+        assert "# R" not in files["src/plc/main.py"]

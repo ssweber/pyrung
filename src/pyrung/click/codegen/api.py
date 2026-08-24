@@ -251,8 +251,9 @@ def ladder_to_pyrung_project(
 ) -> dict[str, str]:
     """Convert Click ladder data to a multi-file pyrung project.
 
-    Generates a project layout with separate ``tags.py``, ``main.py``, and
-    ``subroutines/*.py`` files suitable for simulation, testing, or editing.
+    Generates an installable ``src/plc`` project with separate ``tags.py``,
+    ``main.py``, and ``subroutines/*.py`` files suitable for simulation,
+    testing, or editing.
 
     Args:
         source: A file path (to main.csv or a directory containing main.csv
@@ -264,7 +265,7 @@ def ladder_to_pyrung_project(
             If ``None``, files are returned as strings only.
         overwrite: When *False* (default), scaffolding files (pyproject.toml,
             README.md, .vscode/) are skipped if they already exist on disk.
-            Logic files (tags.py, main.py, subroutines/) are always written.
+            Logic files under src/plc/ are always written.
         machine_name: Human-readable machine name for AGENTS.md
             header (e.g. from the .ckp filename).
         validate: When *True* (default), run codegen self-checks (see
@@ -274,7 +275,7 @@ def ladder_to_pyrung_project(
 
     Returns:
         A dict mapping relative file paths to their content, e.g.
-        ``{"main.py": "...", "tags.py": "...", "subroutines/startup.py": "..."}``.
+        ``{"src/plc/main.py": "...", "src/plc/tags.py": "..."}``.
     """
     from pyrung.click.codegen.project_emitter import _SCAFFOLDING_FILES, _generate_project
 
