@@ -201,6 +201,11 @@ def _generate_readme() -> str:
     return """\
 # Setup
 
+> **Temporary workspace:** This folder exists inside CLICK's temporary project
+> directory. It survives CLICK saves, but closing the CLICK application deletes
+> the entire folder. Copy the whole folder elsewhere before closing CLICK if you
+> want to keep your tests, environment, or other work.
+
 1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you haven't already:
 
        powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
@@ -219,6 +224,10 @@ def _generate_readme() -> str:
 
 # Loading into Click Programming Software
 
+`csv/` is the regenerated snapshot of the ladder currently accepted in CLICK.
+Treat it as reference input. `csv_output/` is the proposed ladder export created
+from edits in `src/plc/`; this is the folder you load through Guided Paste.
+
 1. Re-export the project to Click ladder CSV (picks up any edits you've made):
 
        uv run python project_to_csv.py
@@ -227,7 +236,15 @@ def _generate_readme() -> str:
 
        uv tool install clicknick
 
-3. In Click Programming Software, go to **Ladder → Open in Guided Paste...**
+3. With CLICK and ClickNick open, confirm that ClickNick sees this project:
+
+       clicknick-cli rung list
+
+   This lists `main` and the available subroutine files. Use
+   `clicknick-cli rung list main` to list the main program's rung numbers and
+   comments.
+
+4. In Click Programming Software, go to **Ladder → Open in Guided Paste...**
    and point it at the `csv_output` folder.
 
    ClickNick walks you through pasting each rung and subroutine into Click
@@ -691,6 +708,12 @@ by Syncing or pasting it, then decides when to save in Click.
 A Click save regenerates this folder from the accepted project, like refreshing
 the working branch from the repository. Propose work you want accepted before
 the engineer saves.
+
+`tests/`, `pyproject.toml`, `uv.lock`, and `.venv/` survive regeneration while
+this CLICK project remains open. This workspace still lives in CLICK's temporary
+project folder: closing the CLICK application deletes the entire folder,
+including those preserved files. Copy the whole folder elsewhere before closing
+CLICK if you want to keep it.
 """)
 
     # --- Project orientation ---
@@ -724,10 +747,18 @@ differ: Set → `latch`, Math → `calc`.
 Run `uv sync` once to install the project, pyrung, and pytest. ClickNick provides
 the live connection used by these commands:
 
-- **`pyrung live`** — simulate and analyze with patch, force, step, why, and how
+- **`uv run pyrung live`** — simulate and analyze with patch, force, step, why, and how
 - **`clicknick-cli`** — inspect Click and propose tag or rung changes
 
 Chain commands with `;` to avoid repeated process launches.
+
+First confirm that ClickNick can see the generated program:
+
+    clicknick-cli rung list
+    clicknick-cli rung list main
+
+The first command lists the available program files. The second lists the main
+program's rung numbers and comments.
 
 Structural commands such as `upstream` and `simplified` work without a snapshot.
 To diagnose the machine's actual state, start from a tag snapshot. If `why()`
@@ -736,11 +767,12 @@ from PLC > All > Save in Click, then select it in ClickNick before starting DAP.
 
 Start with a few scans and a focused set of tags:
 
-    pyrung live "step 5"
-    pyrung live "get StateCurrent Running FaultAlarm"
+    uv run pyrung live "step 5"
+    uv run pyrung live "get ExampleState ExampleOutput ExampleFault"
 
 `step` runs scans. `get` reads tag values. Chain with `;` to patch-step-observe
-in one command.
+in one command. Names beginning with `Example` below are placeholders: replace
+them with relevant names from `src/plc/tags.py` before running the command.
 
 ## Test changes
 
@@ -752,9 +784,9 @@ change, especially interlocks, state transitions, alarms, and failure cases.
 
 ### Explore program structure
 
-    pyrung live "dataview i:"
-    pyrung live "upstream ConveyorMotor"
-    pyrung live "simplified ConveyorMotor"
+    uv run pyrung live "dataview i:"
+    uv run pyrung live "upstream ExampleOutput"
+    uv run pyrung live "simplified ExampleOutput"
 
 `dataview` discovers what exists (`i:` inputs, `t:` terminals, or search by
 name). `upstream`/`downstream` trace dependencies. `simplified` resolves
@@ -762,8 +794,8 @@ intermediate tags to a Boolean expression over root inputs.
 
 ### Explain the current state
 
-    pyrung live "why FaultAlarm"
-    pyrung live "why FaultAlarm MotorStall"
+    uv run pyrung live "why ExampleFault"
+    uv run pyrung live "why ExampleFault ExampleOutput"
 
 `why()` walks backward from a tag and explains how it reached its current value.
 Each rung shows its contacts; `*` marks blocked paths. Multiple tags merge into
@@ -773,20 +805,20 @@ one explanation.
 
 `patch` sets a value once. The program runs normally from there.
 
-    pyrung live "patch StartBtn true; step 1; why Running"
+    uv run pyrung live "patch ExampleInput true; step 1; why ExampleOutput"
 
 `force` pins the value across scans — simulates a stuck sensor or failed
 component:
 
-    pyrung live "force FlowSensor false; step 10; why FaultAlarm"
+    uv run pyrung live "force ExampleInput false; step 10; why ExampleFault"
 
 Use `get` or `why()` after stepping to inspect the result.
 
 ### Ask structural what-if questions
 
-    pyrung live "cause Running to=false"
-    pyrung live "effect StartBtn from=false"
-    pyrung live "recovers FaultLatch"
+    uv run pyrung live "cause ExampleOutput to=false"
+    uv run pyrung live "effect ExampleInput from=false"
+    uv run pyrung live "recovers ExampleLatch"
 
 `cause` finds what would need to change to reach a value. `effect` traces what
 a change would propagate to. `recovers` checks whether a latched bit has a
@@ -794,8 +826,8 @@ clear path. No scans needed — these are structural.
 
 ### Explore a route to a target
 
-    pyrung live "how StateCurrent == 6"
-    pyrung live "how StateCurrent == 6 avoid StateCurrent == 3"
+    uv run pyrung live "how ExampleState == 6"
+    uv run pyrung live "how ExampleState == 6 avoid ExampleState == 3"
 
 `how()` is an experimental steering aid. It reads the program backward, tries
 changes on a fork, and reports a replayable path when it finds one. Use `avoid`
@@ -816,7 +848,7 @@ Address Editor for the engineer to review and Sync.
 on an unused address, or annotate a slot with kwargs, then apply the whole diff:
 
     ds.slot(568, name='Heat_Limit_Ts', uom='degF')
-    ds.slot(30, name='StateCurrent', choices={0:'IDLE', 1:'FILLING', 3:'FAULTED'})
+    ds.slot(30, name='ExampleState', choices={0:'IDLE', 1:'FILLING', 3:'FAULTED'})
 
     clicknick-cli tag apply     # diff tags.py -> Address Editor, "Changed" filter
 
@@ -825,7 +857,7 @@ the tag counterpart of the rung Copy/paste step.
 
 **One-off `tag set-*`** — a single change without touching the file:
 
-    clicknick-cli "tag set-choices StateCurrent IDLE:0 FILLING:1 FAULTED:3"
+    clicknick-cli "tag set-choices ExampleState IDLE:0 FILLING:1 FAULTED:3"
 
 ### Save order
 
@@ -851,7 +883,7 @@ collide with an existing tag:
 Browse existing rungs:
 
     clicknick-cli rung list
-    clicknick-cli rung list init
+    clicknick-cli rung list main
     clicknick-cli rung preview --select r3
 
 Edit `src/plc/main.py` or `src/plc/subroutines/*.py` directly. Then:
@@ -869,8 +901,10 @@ finds a path, but its failure to find one is not a failed verification.
 
 - `src/plc/` — importable pyrung model of this machine's logic
 - `tests/` — smoke test and focused behavioral tests
+- `csv/` — regenerated reference snapshot of the ladder accepted in CLICK
+- `csv_output/` — proposed ladder export produced from edits in `src/plc/`
 - `click-cheatsheet.md` — pyrung DSL quick reference (read first)
-- `pyrung live help` — full command list
+- `uv run pyrung live help` — full command list
 """)
 
     return "\n".join(sections)
@@ -940,7 +974,7 @@ def _generate_claude_settings() -> str:
         "permissions": {
             "allow": [
                 "Bash(clicknick-cli *)",
-                "Bash(pyrung live *)",
+                "Bash(uv run pyrung live *)",
             ]
         }
     }

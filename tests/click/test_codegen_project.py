@@ -156,6 +156,22 @@ class TestProjectBasic:
         assert "rung apply` writes the ladder CSVs" in normalized_guidance
         assert "rung preview` then opens the Rung Preview" in normalized_guidance
         assert "engineer accepts the proposal" in normalized_guidance
+        assert (
+            "`tests/`, `pyproject.toml`, `uv.lock`, and `.venv/` survive regeneration"
+            in normalized_guidance
+        )
+        assert "closing the CLICK application deletes the entire folder" in normalized_guidance
+        assert "Copy the whole folder elsewhere before closing CLICK" in normalized_guidance
+        assert "Names beginning with `Example` below are placeholders" in normalized_guidance
+        assert "uv run pyrung live" in guidance
+        assert "clicknick-cli rung list main" in guidance
+        assert "`csv/` — regenerated reference snapshot" in guidance
+        assert "`csv_output/` — proposed ladder export" in guidance
+        readme = files["README.md"]
+        assert "closing the CLICK application deletes" in readme
+        assert "`csv/` is the regenerated snapshot" in readme
+        assert "`csv_output/` is the proposed ladder export" in readme
+        assert "clicknick-cli rung list main" in readme
         assert "`how()` is an experimental steering aid" in normalized_guidance
         assert (
             "does not mean the program is broken or the target is unreachable"
