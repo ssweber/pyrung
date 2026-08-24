@@ -701,15 +701,11 @@ Start with a few scans and a focused set of tags:
 `step` runs scans. `get` reads tag values. Chain with `;` to patch-step-observe
 in one command.
 
-## Analysis tools — escalation ladder
+## Choose an analysis tool
 
-Each level costs more but answers a harder question. Start at the top, escalate
-when the answer isn't enough.
-
-### 1. Understand the program (no snapshot needed)
+### Explore program structure
 
     pyrung live "dataview i:"
-    pyrung live "dataview fill"
     pyrung live "upstream ConveyorMotor"
     pyrung live "simplified ConveyorMotor"
 
@@ -717,16 +713,16 @@ when the answer isn't enough.
 name). `upstream`/`downstream` trace dependencies. `simplified` resolves
 intermediate tags to a Boolean expression over root inputs.
 
-### 2. Diagnose — why is this tag at this value?
+### Explain the current state
 
     pyrung live "why FaultAlarm"
     pyrung live "why FaultAlarm MotorStall"
 
 `why()` walks backward from a tag and explains how it reached its current value.
 Each rung shows its contacts; `*` marks blocked paths. Multiple tags merge into
-one unified explanation. This is your first tool on a service call.
+one explanation.
 
-### 3. Test a hypothesis — patch, step, observe
+### Test behavior
 
 `patch` sets a value once. The program runs normally from there.
 
@@ -737,9 +733,9 @@ component:
 
     pyrung live "force FlowSensor false; step 10; why FaultAlarm"
 
-Each `why()` shows what remains. Iterate until you understand the causal chain.
+Use `get` or `why()` after stepping to inspect the result.
 
-### 4. Projected queries — what-if without running scans
+### Ask structural what-if questions
 
     pyrung live "cause Running to=false"
     pyrung live "effect StartBtn from=false"
@@ -749,20 +745,19 @@ Each `why()` shows what remains. Iterate until you understand the causal chain.
 a change would propagate to. `recovers` checks whether a latched bit has a
 clear path. No scans needed — these are structural.
 
-### 5. Steer — how do I reach a target state?
+### Explore a route to a target
 
     pyrung live "how StateCurrent == 6"
-    pyrung live "how Running"
     pyrung live "how StateCurrent == 6 avoid StateCurrent == 3"
 
 `how()` is an experimental steering aid. It reads the program backward, tries
 changes on a fork, and reports a replayable path when it finds one. Use `avoid`
 to exclude states from the path.
 
-Treat a failed search narrowly: if `how()` does not find a path, that does not
-mean the program is broken or the target is unreachable. It can mean only that
-the bounded search ran out of safe, evidence-backed actions for this snapshot.
-Continue with `why()`, focused patch/step experiments, and direct ladder review.
+If `how()` does not find a path, that does not mean the program is broken or the
+target is unreachable. It means only that this bounded search did not find one
+for the current snapshot. Continue with `why()`, focused patch/step experiments,
+and direct ladder review.
 
 ## Add & annotate tags (edit tags.py, then `tag apply`)
 
