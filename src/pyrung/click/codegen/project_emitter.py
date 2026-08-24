@@ -206,6 +206,14 @@ def _generate_readme() -> str:
 > the entire folder. Copy the whole folder elsewhere before closing CLICK if you
 > want to keep your tests, environment, or other work.
 
+The copied folder is useful offline: `uv run pytest`, `uv run python run.py`,
+VS Code debugging, and `uv run python project_to_csv.py` continue to work.
+`clicknick-cli` is different: every command targets ClickNick's active temporary
+workspace, not whichever directory your terminal is in. To use `tag apply` or
+`rung apply` on copied work, first copy those source edits back into the active
+temporary folder. You can always export the copied project and load its
+`csv_output/` through Guided Paste instead.
+
 1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you haven't already:
 
        powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
@@ -714,6 +722,13 @@ this CLICK project remains open. This workspace still lives in CLICK's temporary
 project folder: closing the CLICK application deletes the entire folder,
 including those preserved files. Copy the whole folder elsewhere before closing
 CLICK if you want to keep it.
+
+A copied folder is an offline project, not the active ClickNick workspace. Its
+tests, `run.py`, VS Code debugger, and `project_to_csv.py` continue to work.
+Every `clicknick-cli` command is routed to ClickNick's active temporary folder,
+regardless of the terminal's current directory. Copy offline source edits back
+into the active folder before `tag apply` or `rung apply`, or export locally and
+load `csv_output/` through Guided Paste.
 """)
 
     # --- Project orientation ---
