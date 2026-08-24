@@ -103,7 +103,14 @@ def _build_starter_zip(out_dir: Path, version: str) -> Path:
             if mpy_cross.exists():
                 try:
                     subprocess.run(
-                        [str(mpy_cross), str(rt_py), "-o", str(lib_dir / "pyrung_rt.mpy")],
+                        [
+                            str(mpy_cross),
+                            "-s",
+                            "pyrung_rt.py",
+                            str(rt_py),
+                            "-o",
+                            str(lib_dir / "pyrung_rt.mpy"),
+                        ],
                         check=True,
                     )
                 except (subprocess.CalledProcessError, OSError) as exc:

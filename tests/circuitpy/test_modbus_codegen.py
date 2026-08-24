@@ -374,6 +374,60 @@ def test_service_modbus_server_keeps_idle_client(monkeypatch):
     assert clients[0] is client
 
 
+def test_service_modbus_server_releases_disconnected_wiznet_client(monkeypatch):
+    """A WIZnet socket with no data and a closed TCP state must free its slot."""
+    with Program(strict=False) as prog:
+        pass
+    result = _ctx_and_source(prog, TagMap())
+
+    class StubBase:
+        def rollCall(self, modules):
+            return None
+
+        def readDiscrete(self, slot):
+            return 0
+
+        def writeDiscrete(self, value, slot):
+            return None
+
+        def readAnalog(self, slot, ch):
+            return 0
+
+        def writeAnalog(self, value, slot, ch):
+            return None
+
+        def readTemperature(self, slot, ch):
+            return 0.0
+
+    namespace = _run_single_scan_source(
+        result.code, monkeypatch, StubBase(), runtime_source=result.runtime
+    )
+
+    class DisconnectedClient:
+        def __init__(self):
+            self.closed = False
+
+        @property
+        def _connected(self):
+            return False
+
+        def recv_into(self, buf):
+            return 0
+
+        def close(self):
+            self.closed = True
+
+    client = DisconnectedClient()
+    clients = namespace["_mb_clients"]
+    assert isinstance(clients, list)
+    clients[0] = client
+
+    namespace["service_modbus_server"]()
+
+    assert client.closed is True
+    assert clients[0] is None
+
+
 def test_pyclickplc_fixture_subset_matches_generated_server(monkeypatch):
     coil = Bool("Coil", default=True)
     reg = Int("Reg", default=7)
