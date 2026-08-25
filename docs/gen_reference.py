@@ -35,6 +35,7 @@ CLICK_HELPER_SYMBOLS: tuple[str, ...] = (
     "pyrung.click.TagMap",
     "pyrung.click.LadderBundle",
     "pyrung.click.LadderExportError",
+    "pyrung.click.CodegenIdentityError",
     "pyrung.click.ClickDataProvider",
     "pyrung.click.ModbusAddress",
     "pyrung.click.ModbusReceiveInstruction",
