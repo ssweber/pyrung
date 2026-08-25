@@ -10,6 +10,13 @@
 
 ## Unreleased
 
+## v0.11.1 (2026-08-25)
+
+### Fixes
+
+- Generated Click project exports now run validation and reject address-identity conflicts, while named hardware slots ending in digits resolve to their actual addresses instead of nickname-shaped operands.
+- Click ladder bundles now write `rung_sources.json`, mapping each exported rung back to its contributing Python source spans for semantic downstream previews.
+
 ## v0.11.0 (2026-08-24)
 
 ### Breaking Changes

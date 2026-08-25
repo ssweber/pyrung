@@ -12,7 +12,14 @@ from pyrung.core.rung import Rung
 from .instructions import _InstructionMixin
 from .layout import _HEADER, _LayoutMixin
 from .translator import _TranslatorMixin
-from .types import ExportSummary, LadderBundle, LadderExportError, _RenderError
+from .types import (
+    ExportSummary,
+    LadderBundle,
+    LadderExportError,
+    LadderRungSource,
+    LadderSourceSpan,
+    _RenderError,
+)
 from .validator import _RoundTripValidationMixin, _ValidationMixin
 
 if TYPE_CHECKING:
@@ -77,7 +84,7 @@ class _LadderExporter(
                 self._run_precheck()
 
             # Main scope always ends with an explicit end() rung.
-            rendered_main_rows = self._render_scope(
+            rendered_main_rows, main_sources = self._render_scope(
                 self._program.rungs, scope="main", subroutine_name=None
             )
             if validate:
@@ -91,11 +98,13 @@ class _LadderExporter(
             main_rows: list[tuple[str, ...]] = [tuple(_HEADER)]
             main_rows.extend(rendered_main_rows)
             main_rows.extend(self._end_rung())
+            main_sources.append(LadderRungSource(rung=len(main_sources) + 1))
 
             # Each subroutine matrix gets a deterministic return() tail.
             subroutine_rows: list[tuple[str, tuple[tuple[str, ...], ...]]] = []
+            subroutine_sources: list[tuple[str, tuple[LadderRungSource, ...]]] = []
             for subroutine_name in sorted(self._program.subroutines):
-                rendered_sub_rows = self._render_scope(
+                rendered_sub_rows, sources = self._render_scope(
                     self._program.subroutines[subroutine_name],
                     scope="subroutine",
                     subroutine_name=subroutine_name,
@@ -111,13 +120,18 @@ class _LadderExporter(
                 rows: list[tuple[str, ...]] = [tuple(_HEADER)]
                 rows.extend(rendered_sub_rows)
                 rows = self._ensure_subroutine_return_tail(rows, subroutine_name=subroutine_name)
+                while len(sources) < self._count_rendered_rungs(rows[1:]):
+                    sources.append(LadderRungSource(rung=len(sources) + 1))
                 subroutine_rows.append((subroutine_name, tuple(rows)))
+                subroutine_sources.append((subroutine_name, tuple(sources)))
 
             summary = self._build_summary()
             return LadderBundle(
                 main_rows=tuple(main_rows),
                 subroutine_rows=tuple(subroutine_rows),
                 export_summary=summary,
+                main_sources=tuple(main_sources),
+                subroutine_sources=tuple(subroutine_sources),
             )
         except _RenderError as exc:
             raise LadderExportError([exc.issue]) from None
@@ -128,17 +142,38 @@ class _LadderExporter(
         *,
         scope: str,
         subroutine_name: str | None,
-    ) -> list[tuple[str, ...]]:
+    ) -> tuple[list[tuple[str, ...]], list[LadderRungSource]]:
         self._reset_marker_counter()
         rows: list[tuple[str, ...]] = []
+        sources: list[LadderRungSource] = []
         for rung_index, rung in enumerate(rungs):
             base_path = (
                 f"subroutine[{subroutine_name}].rung[{rung_index}]"
                 if scope == "subroutine"
                 else f"main.rung[{rung_index}]"
             )
-            rows.extend(self._render_rung(rung, path=base_path))
-        return rows
+            rendered = self._render_rung(rung, path=base_path)
+            rows.extend(rendered)
+            source = LadderSourceSpan(
+                source_file=rung.source_file,
+                source_line=rung.source_line,
+                end_line=rung.end_line,
+            )
+            marker_count = self._count_rendered_rungs(rendered)
+            if marker_count:
+                for _ in range(marker_count):
+                    sources.append(LadderRungSource(rung=len(sources) + 1, sources=(source,)))
+            elif sources:
+                prior = sources[-1]
+                sources[-1] = LadderRungSource(
+                    rung=prior.rung,
+                    sources=(*prior.sources, source),
+                )
+        return rows, sources
+
+    @staticmethod
+    def _count_rendered_rungs(rows: list[tuple[str, ...]]) -> int:
+        return sum(bool(row and row[0].startswith("R")) for row in rows)
 
     @staticmethod
     def _comment_rows(rung: Rung) -> list[tuple[str, ...]]:

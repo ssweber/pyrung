@@ -606,12 +606,12 @@ class _TranslatorMixin:
         try:
             return self._tag_map.resolve(tag)
         except Exception:
-            if _parse_display_address(tag.name) is not None:
-                return tag.name
             block = getattr(tag, "_pyrung_block", None)
             if block is not None:
                 addr: int = tag._pyrung_block_addr  # ty: ignore[unresolved-attribute]
                 return block._format_tag_name(addr)
+            if _parse_display_address(tag.name) is not None:
+                return tag.name
             self._raise_issue(
                 path=path,
                 message=f"Tag {tag.name!r} is not mapped in TagMap.",
@@ -650,7 +650,10 @@ def _parse_display_address(value: str) -> tuple[str, int] | None:
     match = re.fullmatch(r"([A-Za-z]+)(\d+)", value)
     if match is None:
         return None
-    return match.group(1), int(match.group(2))
+    bank = match.group(1)
+    if bank.upper() not in _CLICK_BANK_NAMES:
+        return None
+    return bank, int(match.group(2))
 
 
 __all__ = [

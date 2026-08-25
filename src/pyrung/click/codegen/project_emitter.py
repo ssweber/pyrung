@@ -334,7 +334,7 @@ from plc.tags import mapping, blocks
 
 here = Path(__file__).parent
 output_dir = here / "csv_output"
-bundle = pyrung_to_ladder(logic, mapping, validate=False)
+bundle = pyrung_to_ladder(logic, mapping)
 bundle.write(output_dir)
 
 mapping.to_nickname_file(output_dir / "nicknames.csv", blocks=blocks)

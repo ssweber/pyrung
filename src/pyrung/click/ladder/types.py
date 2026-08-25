@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -85,6 +86,38 @@ class ExportSummary:
 
 # ---- Export payload ----
 @dataclass(frozen=True)
+class LadderSourceSpan:
+    """Python source span that contributed to an exported ladder rung."""
+
+    source_file: str | None
+    source_line: int | None
+    end_line: int | None
+
+    def as_dict(self) -> dict[str, str | int | None]:
+        """Return the stable JSON representation used by generated projects."""
+        return {
+            "source_file": self.source_file,
+            "source_line": self.source_line,
+            "end_line": self.end_line,
+        }
+
+
+@dataclass(frozen=True)
+class LadderRungSource:
+    """Source spans associated with one 1-based Click ladder rung."""
+
+    rung: int
+    sources: tuple[LadderSourceSpan, ...] = ()
+
+    def as_dict(self) -> dict[str, int | list[dict[str, str | int | None]]]:
+        """Return the stable JSON representation used by generated projects."""
+        return {
+            "rung": self.rung,
+            "sources": [source.as_dict() for source in self.sources],
+        }
+
+
+@dataclass(frozen=True)
 class LadderBundle:
     """Row-matrix CSV payload for Click ladder export."""
 
@@ -95,6 +128,8 @@ class LadderBundle:
             renames=(), added_next=0, added_return=0, added_end=False
         )
     )
+    main_sources: tuple[LadderRungSource, ...] = ()
+    subroutine_sources: tuple[tuple[str, tuple[LadderRungSource, ...]], ...] = ()
 
     def write(self, directory: str | Path) -> None:
         output_dir = Path(directory)
@@ -120,6 +155,18 @@ class LadderBundle:
                 ) as handle:
                     writer = csv.writer(handle)
                     writer.writerows(rows)
+
+        source_manifest = {
+            "version": 1,
+            "main": [source.as_dict() for source in self.main_sources],
+            "subroutines": {
+                name: [source.as_dict() for source in sources]
+                for name, sources in self.subroutine_sources
+            },
+        }
+        with (output_dir / "rung_sources.json").open("w", encoding="utf-8") as handle:
+            json.dump(source_manifest, handle, indent=2)
+            handle.write("\n")
 
         summary_text = self.export_summary.summary()
         if summary_text:
@@ -157,6 +204,8 @@ __all__ = [
     "Issue",
     "LadderBundle",
     "LadderExportError",
+    "LadderRungSource",
+    "LadderSourceSpan",
     "_ConditionRow",
     "_OutputSlot",
     "_RenderError",

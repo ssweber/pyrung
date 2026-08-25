@@ -99,6 +99,16 @@ def _resolve_direct_tag(tag: Tag, tag_map: TagMap) -> _ResolvedSlot | None:
     except (KeyError, TypeError, ValueError):
         pass
 
+    block = getattr(tag, "_pyrung_block", None)
+    if block is not None:
+        address = getattr(tag, "_pyrung_block_addr", None)
+        if isinstance(address, int):
+            try:
+                memory_type, parsed_address = parse_address(block._format_tag_name(address))
+                return _ResolvedSlot(memory_type=memory_type, address=parsed_address)
+            except (AttributeError, ValueError):
+                pass
+
     try:
         memory_type, address = parse_address(tag.name)
     except ValueError:

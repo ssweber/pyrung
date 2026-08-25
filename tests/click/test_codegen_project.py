@@ -210,6 +210,8 @@ class TestProjectBasic:
 
         export = files["project_to_csv.py"]
         assert "from plc.tags import mapping, blocks" in export
+        assert "pyrung_to_ladder(logic, mapping)" in export
+        assert "validate=False" not in export
         assert 'mapping.to_nickname_file(output_dir / "nicknames.csv", blocks=blocks)' in export
 
     def test_tags_file_has_declarations_and_mapping(self, tmp_path: Path):

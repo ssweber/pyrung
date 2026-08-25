@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pyrung.core.validation.walker import ProgramLocation, walk_program
 
 from .findings import (
+    CLK_ADDRESS_IDENTITY_CONFLICT,
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_UNRESOLVED,
     CLK_BANK_WRONG_ROLE,
@@ -56,6 +57,7 @@ from .hardware import (
 from .hardware import (
     _load_default_profile as _hardware_load_default_profile,
 )
+from .identity import _evaluate_address_identity_conflicts
 from .portability import (
     _evaluate_fact,
     _evaluate_immediate_usage,
@@ -143,6 +145,7 @@ def validate_click_program(
     instruction_sites = _iter_instruction_sites(program)
 
     findings: list[ClickFinding] = []
+    findings.extend(_evaluate_address_identity_conflicts(program, facts, tag_map, mode))
     for fact in facts.operands:
         findings.extend(_evaluate_fact(fact, tag_map, mode))
 
@@ -220,6 +223,7 @@ __all__ = [
     "CLK_CALC_FUNC_MODE_MISMATCH",
     "CLK_CALC_NESTING_DEPTH",
     "CLK_PROFILE_UNAVAILABLE",
+    "CLK_ADDRESS_IDENTITY_CONFLICT",
     "CLK_BANK_UNRESOLVED",
     "CLK_BANK_NOT_WRITABLE",
     "CLK_BANK_WRONG_ROLE",
