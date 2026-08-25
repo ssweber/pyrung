@@ -64,6 +64,7 @@ from .portability import (
     _evaluate_instruction_portability,
     _evaluate_status_bit_usage,
 )
+from .resolve import _ResolutionCache
 
 if TYPE_CHECKING:
     from pyrung.click.profile import HardwareProfile
@@ -143,13 +144,16 @@ def validate_click_program(
     """Validate a Program against Click portability rules."""
     facts = walk_program(program)
     instruction_sites = _iter_instruction_sites(program)
+    resolver = _ResolutionCache(tag_map)
 
     findings: list[ClickFinding] = []
     findings.extend(_evaluate_address_identity_conflicts(program, facts, tag_map, mode))
     for fact in facts.operands:
-        findings.extend(_evaluate_fact(fact, tag_map, mode))
+        findings.extend(_evaluate_fact(fact, tag_map, mode, resolver))
 
-    findings.extend(_evaluate_immediate_usage(facts.operands, instruction_sites, tag_map, mode))
+    findings.extend(
+        _evaluate_immediate_usage(facts.operands, instruction_sites, tag_map, mode, resolver)
+    )
     findings.extend(_evaluate_status_bit_usage(program, mode))
 
     for instruction, base_location in instruction_sites:
@@ -170,21 +174,25 @@ def validate_click_program(
     else:
         for instruction, base_location in instruction_sites:
             findings.extend(
-                _evaluate_write_targets(instruction, base_location, tag_map, active_profile, mode)
+                _evaluate_write_targets(
+                    instruction, base_location, tag_map, active_profile, mode, resolver
+                )
             )
             findings.extend(
                 _evaluate_role_assignments(
-                    instruction, base_location, tag_map, active_profile, mode
+                    instruction, base_location, tag_map, active_profile, mode, resolver
                 )
             )
             findings.extend(
                 _evaluate_copy_compatibility(
-                    instruction, base_location, tag_map, active_profile, mode
+                    instruction, base_location, tag_map, active_profile, mode, resolver
                 )
             )
-            findings.extend(_evaluate_pack_text(instruction, base_location, tag_map, mode))
             findings.extend(
-                _evaluate_drums(instruction, base_location, tag_map, active_profile, mode)
+                _evaluate_pack_text(instruction, base_location, tag_map, mode, resolver)
+            )
+            findings.extend(
+                _evaluate_drums(instruction, base_location, tag_map, active_profile, mode, resolver)
             )
 
     errors: list[ClickFinding] = []

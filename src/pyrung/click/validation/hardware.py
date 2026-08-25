@@ -28,7 +28,7 @@ from .resolve import (
     _bank_label,
     _format_location,
     _instruction_location,
-    _resolve_operand_slots,
+    _ResolutionCache,
     _unresolved_finding,
 )
 
@@ -110,6 +110,7 @@ def _evaluate_write_targets(
     tag_map: TagMap,
     profile: HardwareProfile,
     mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
@@ -119,7 +120,7 @@ def _evaluate_write_targets(
             continue
 
         location = _instruction_location(base_location, f"instruction.{field_name}")
-        resolution = _resolve_operand_slots(getattr(instruction, field_name), tag_map)
+        resolution = resolver.resolve_operand_slots(getattr(instruction, field_name))
 
         if resolution.unresolved:
             findings.append(_unresolved_finding(location, mode, "mapping missing or ambiguous"))
@@ -155,6 +156,7 @@ def _evaluate_role_assignments(
     tag_map: TagMap,
     profile: HardwareProfile,
     mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
@@ -168,7 +170,7 @@ def _evaluate_role_assignments(
             continue
 
         location = _instruction_location(base_location, f"instruction.{field_name}")
-        resolution = _resolve_operand_slots(value, tag_map)
+        resolution = resolver.resolve_operand_slots(value)
 
         if resolution.unresolved:
             findings.append(_unresolved_finding(location, mode, "mapping missing or ambiguous"))
@@ -198,6 +200,7 @@ def _evaluate_copy_compatibility(
     tag_map: TagMap,
     profile: HardwareProfile,
     mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
@@ -209,8 +212,8 @@ def _evaluate_copy_compatibility(
     source_location = _instruction_location(base_location, f"instruction.{source_field}")
     dest_location = _instruction_location(base_location, f"instruction.{dest_field}")
 
-    source_resolution = _resolve_operand_slots(getattr(instruction, source_field), tag_map)
-    dest_resolution = _resolve_operand_slots(getattr(instruction, dest_field), tag_map)
+    source_resolution = resolver.resolve_operand_slots(getattr(instruction, source_field))
+    dest_resolution = resolver.resolve_operand_slots(getattr(instruction, dest_field))
 
     if source_resolution.unresolved:
         findings.append(_unresolved_finding(source_location, mode, "source bank unresolved"))
@@ -293,6 +296,7 @@ def _evaluate_pack_text(
     base_location: ProgramLocation,
     tag_map: TagMap,
     mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     if type(instruction).__name__ != "PackTextInstruction":
         return []
@@ -301,8 +305,8 @@ def _evaluate_pack_text(
     source_location = _instruction_location(base_location, "instruction.source_range")
     dest_location = _instruction_location(base_location, "instruction.dest")
 
-    source_resolution = _resolve_operand_slots(instruction.source_range, tag_map)
-    dest_resolution = _resolve_operand_slots(instruction.dest, tag_map)
+    source_resolution = resolver.resolve_operand_slots(instruction.source_range)
+    dest_resolution = resolver.resolve_operand_slots(instruction.dest)
 
     if source_resolution.unresolved:
         findings.append(_unresolved_finding(source_location, mode, "source bank unresolved"))
@@ -374,6 +378,7 @@ def _evaluate_drums(
     tag_map: TagMap,
     profile: HardwareProfile,
     mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     instruction_type = type(instruction).__name__
     if instruction_type not in {"EventDrumInstruction", "TimeDrumInstruction"}:
@@ -387,7 +392,7 @@ def _evaluate_drums(
         location: ProgramLocation,
         unresolved_reason: str,
     ) -> None:
-        resolution = _resolve_operand_slots(value, tag_map)
+        resolution = resolver.resolve_operand_slots(value)
         if resolution.unresolved:
             findings.append(_unresolved_finding(location, mode, unresolved_reason))
             return
@@ -409,7 +414,7 @@ def _evaluate_drums(
     outputs = getattr(instruction, "outputs", ())
     for idx, output in enumerate(outputs):
         location = _instruction_location(base_location, f"instruction.outputs[{idx}]")
-        resolution = _resolve_operand_slots(output, tag_map)
+        resolution = resolver.resolve_operand_slots(output)
         if resolution.unresolved:
             findings.append(_unresolved_finding(location, mode, "drum output bank unresolved"))
             continue

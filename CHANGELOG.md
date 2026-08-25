@@ -20,7 +20,7 @@
 
 ### Performance
 
-- Click validation now reuses frozen tag-map slots, checks each unique memory-bank pair once, and collects address identities without building a full dependency graph, reducing strict-export latency for large programs.
+- Click validation now reuses frozen tag-map slots and operand resolutions, checks each unique memory-bank pair once, and collects address identities without building a full dependency graph, reducing strict-export latency for large programs.
 
 ## v0.11.0 (2026-08-24)
 

@@ -46,9 +46,7 @@ from .resolve import (
     _bank_label,
     _format_location,
     _instruction_location,
-    _resolve_block_memory_type,
-    _resolve_direct_tag,
-    _resolve_pointer_memory_type,
+    _ResolutionCache,
     _ResolvedSlot,
     _unique_slots,
     _unresolved_finding,
@@ -63,6 +61,7 @@ def _evaluate_fact(
     fact: OperandFact,
     tag_map: TagMap,
     mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     """Apply Stage 2 rules to a single OperandFact."""
     findings: list[ClickFinding] = []
@@ -90,12 +89,12 @@ def _evaluate_fact(
             pointer_name = str(fact.metadata.get("pointer_name", ""))
             pointer_block_name = fact.metadata.get("pointer_block_name")
             memory_type = (
-                _resolve_block_memory_type(pointer_block_name, tag_map)
+                resolver.resolve_block_memory_type(pointer_block_name)
                 if isinstance(pointer_block_name, str)
                 else None
             )
             if memory_type is None:
-                memory_type = _resolve_pointer_memory_type(pointer_name, tag_map)
+                memory_type = resolver.resolve_pointer_memory_type(pointer_name)
             if memory_type is None:
                 code = CLK_PTR_DS_UNVERIFIED
                 findings.append(
@@ -216,6 +215,7 @@ def _evaluate_immediate_coil_target(
     location: ProgramLocation,
     tag_map: TagMap,
     mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     wrapped = immediate_ref.value
     findings: list[ClickFinding] = []
@@ -223,7 +223,7 @@ def _evaluate_immediate_coil_target(
     slots: list[_ResolvedSlot] = []
 
     if isinstance(wrapped, Tag):
-        resolved = _resolve_direct_tag(wrapped, tag_map)
+        resolved = resolver.resolve_direct_tag(wrapped)
         if resolved is None:
             return [
                 _unresolved_finding(
@@ -235,7 +235,7 @@ def _evaluate_immediate_coil_target(
         slots = [resolved]
     elif isinstance(wrapped, BlockRange):
         for tag in wrapped.tags():
-            resolved = _resolve_direct_tag(tag, tag_map)
+            resolved = resolver.resolve_direct_tag(tag)
             if resolved is None:
                 return [
                     _unresolved_finding(
@@ -311,6 +311,7 @@ def _evaluate_immediate_usage(
     instruction_sites: list[tuple[Any, ProgramLocation]],
     tag_map: TagMap,
     mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     findings: list[ClickFinding] = []
     condition_types: dict[
@@ -377,7 +378,9 @@ def _evaluate_immediate_usage(
             instruction = instructions_by_site.get(site_key)
             target = getattr(instruction, "target", None)
             if isinstance(target, ImmediateRef):
-                findings.extend(_evaluate_immediate_coil_target(target, loc, tag_map, mode))
+                findings.extend(
+                    _evaluate_immediate_coil_target(target, loc, tag_map, mode, resolver)
+                )
             continue
 
         findings.append(

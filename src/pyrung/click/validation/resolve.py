@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pyclickplc.addresses import parse_address
@@ -49,6 +49,83 @@ class _ResolvedSlot:
 class _OperandResolution:
     slots: tuple[_ResolvedSlot, ...] = ()
     unresolved: bool = False
+
+
+@dataclass
+class _ResolutionCache:
+    """Invocation-local cache for one Click validation pass."""
+
+    tag_map: TagMap
+    _direct_tags: dict[int, _ResolvedSlot | None] = field(default_factory=dict)
+    _operands: dict[int, _OperandResolution] = field(default_factory=dict)
+    _pointer_memory_types: dict[str, str | None] = field(default_factory=dict)
+    _block_memory_types: dict[str, str | None] = field(default_factory=dict)
+
+    def resolve_pointer_memory_type(self, pointer_name: str) -> str | None:
+        if pointer_name not in self._pointer_memory_types:
+            self._pointer_memory_types[pointer_name] = _resolve_pointer_memory_type(
+                pointer_name, self.tag_map
+            )
+        return self._pointer_memory_types[pointer_name]
+
+    def resolve_direct_tag(self, tag: Tag) -> _ResolvedSlot | None:
+        key = id(tag)
+        if key not in self._direct_tags:
+            self._direct_tags[key] = _resolve_direct_tag(tag, self.tag_map)
+        return self._direct_tags[key]
+
+    def resolve_block_memory_type(self, block_name: str) -> str | None:
+        if block_name not in self._block_memory_types:
+            self._block_memory_types[block_name] = _resolve_block_memory_type(
+                block_name, self.tag_map
+            )
+        return self._block_memory_types[block_name]
+
+    def resolve_operand_slots(self, value: Any) -> _OperandResolution:
+        key = id(value)
+        cached = self._operands.get(key)
+        if cached is not None:
+            return cached
+
+        if isinstance(value, ImmediateRef):
+            resolution = self.resolve_operand_slots(value.value)
+        elif isinstance(value, CopyConverter):
+            resolution = _OperandResolution()
+        elif isinstance(value, Tag):
+            resolved = self.resolve_direct_tag(value)
+            resolution = (
+                _OperandResolution(unresolved=True)
+                if resolved is None
+                else _OperandResolution(slots=(resolved,))
+            )
+        elif isinstance(value, BlockRange):
+            slots: list[_ResolvedSlot] = []
+            unresolved = False
+            for tag in value.tags():
+                resolved = self.resolve_direct_tag(tag)
+                if resolved is None:
+                    unresolved = True
+                    continue
+                slots.append(resolved)
+            resolution = (
+                _OperandResolution(unresolved=True)
+                if unresolved
+                else _OperandResolution(slots=_unique_slots(slots))
+            )
+        elif isinstance(value, IndirectBlockRange | IndirectRef | IndirectExprRef):
+            memory_type = self.resolve_block_memory_type(value.block.name)
+            resolution = (
+                _OperandResolution(unresolved=True)
+                if memory_type is None
+                else _OperandResolution(
+                    slots=(_ResolvedSlot(memory_type=memory_type, address=None),)
+                )
+            )
+        else:
+            resolution = _OperandResolution()
+
+        self._operands[key] = resolution
+        return resolution
 
 
 def _format_location(loc: ProgramLocation) -> str:
@@ -150,44 +227,7 @@ def _unique_slots(slots: list[_ResolvedSlot]) -> tuple[_ResolvedSlot, ...]:
 
 
 def _resolve_operand_slots(value: Any, tag_map: TagMap) -> _OperandResolution:
-    if isinstance(value, ImmediateRef):
-        return _resolve_operand_slots(value.value, tag_map)
-
-    if isinstance(value, CopyConverter):
-        return _OperandResolution()
-
-    if isinstance(value, Tag):
-        resolved = _resolve_direct_tag(value, tag_map)
-        if resolved is None:
-            return _OperandResolution(unresolved=True)
-        return _OperandResolution(slots=(resolved,))
-
-    if isinstance(value, BlockRange):
-        slots: list[_ResolvedSlot] = []
-        unresolved = False
-        for tag in value.tags():
-            resolved = _resolve_direct_tag(tag, tag_map)
-            if resolved is None:
-                unresolved = True
-                continue
-            slots.append(resolved)
-        if unresolved:
-            return _OperandResolution(unresolved=True)
-        return _OperandResolution(slots=_unique_slots(slots))
-
-    if isinstance(value, IndirectBlockRange):
-        memory_type = _resolve_block_memory_type(value.block.name, tag_map)
-        if memory_type is None:
-            return _OperandResolution(unresolved=True)
-        return _OperandResolution(slots=(_ResolvedSlot(memory_type=memory_type, address=None),))
-
-    if isinstance(value, (IndirectRef, IndirectExprRef)):
-        memory_type = _resolve_block_memory_type(value.block.name, tag_map)
-        if memory_type is None:
-            return _OperandResolution(unresolved=True)
-        return _OperandResolution(slots=(_ResolvedSlot(memory_type=memory_type, address=None),))
-
-    return _OperandResolution()
+    return _ResolutionCache(tag_map).resolve_operand_slots(value)
 
 
 def _bank_label(slot: _ResolvedSlot) -> str:
