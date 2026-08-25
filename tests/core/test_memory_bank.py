@@ -308,24 +308,56 @@ class TestBlock:
         assert DS.slot(6).retentive is False
         assert DS.slot(6).default == 6
 
-    def test_slot_mutation_after_materialization_raises(self):
+    def test_slot_post_materialization_first_config_updates_tag(self):
         DS = Block("DS", TagType.INT, 1, 10)
+        tag = DS[2]
+        assert tag.name == "DS2"
+        assert tag.default == 0
+
+        DS.slot(2, name="Speed", default=42)
+        assert tag.name == "Speed"
+        assert tag.default == 42
+
+    def test_slot_idempotent_reapply_is_noop(self):
+        DS = Block("DS", TagType.INT, 1, 10)
+        DS.slot(2, name="Speed", default=42)
         _ = DS[2]
+        DS.slot(2, name="Speed", default=42)
 
-        with pytest.raises(ValueError, match="materialization"):
+    def test_slot_conflict_raises_at_second_claim(self):
+        DS = Block("DS", TagType.INT, 1, 10)
+        DS.slot(2, name="Speed")
+        with pytest.raises(ValueError, match="conflict"):
+            DS.slot(2, name="Velocity")
+
+    def test_slot_conflict_after_materialization_raises(self):
+        DS = Block("DS", TagType.INT, 1, 10)
+        DS.slot(2, name="Speed", default=42)
+        _ = DS[2]
+        with pytest.raises(ValueError, match="conflict"):
             DS.slot(2, name="Renamed")
-
-        with pytest.raises(ValueError, match="materialization"):
+        with pytest.raises(ValueError, match="conflict"):
             DS.slot(2, default=99)
 
-        with pytest.raises(ValueError, match="materialization"):
-            DS.slot(1, 3, retentive=True)
-
+    def test_slot_reset_after_materialization_raises(self):
+        DS = Block("DS", TagType.INT, 1, 10)
+        _ = DS[2]
         with pytest.raises(ValueError, match="materialization"):
             DS.slot(2).reset()
-
         with pytest.raises(ValueError, match="materialization"):
             DS.slot(1, 3).reset()
+
+    def test_block_reset_clears_cache_and_overrides(self):
+        DS = Block("DS", TagType.INT, 1, 10)
+        DS.slot(2, name="Speed", default=42)
+        tag1 = DS[2]
+        assert tag1.name == "Speed"
+
+        DS.reset()
+        tag2 = DS[2]
+        assert tag2.name == "DS2"
+        assert tag2.default == 0
+        assert tag2 is not tag1
 
     def test_input_output_block_slot_overrides_support_retentive_and_default(self):
         X = InputBlock("X", TagType.BOOL, 1, 2)
@@ -555,6 +587,49 @@ class TestIndirectSelect:
 
         with pytest.raises(ValueError, match="must be <="):
             indirect_block.resolve_ctx(ctx)
+
+
+class TestSelectOwnTagResolution:
+    """select() resolves own-block Tags to static addresses."""
+
+    def test_select_own_tags_returns_indirect(self):
+        """select(tag, tag) always returns IndirectBlockRange — no static resolution."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        first = DS[100]
+        last = DS[109]
+
+        result = DS.select(first, last)
+
+        assert isinstance(result, IndirectBlockRange)
+
+    def test_select_mixed_tag_and_int_returns_indirect(self):
+        """select(tag, int) returns IndirectBlockRange."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        first = DS[50]
+
+        result = DS.select(first, 60)
+
+        assert isinstance(result, IndirectBlockRange)
+
+    def test_select_mixed_int_and_tag_returns_indirect(self):
+        """select(int, tag) returns IndirectBlockRange."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        last = DS[60]
+
+        result = DS.select(50, last)
+
+        assert isinstance(result, IndirectBlockRange)
+
+    def test_select_foreign_tag_stays_indirect(self):
+        """select(tag, tag) returns IndirectBlockRange when tags belong to another block."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        OTHER = Block("OTHER", TagType.INT, 1, 100)
+        foreign_start = OTHER[10]
+        foreign_end = OTHER[20]
+
+        result = DS.select(foreign_start, foreign_end)
+
+        assert isinstance(result, IndirectBlockRange)
 
 
 class TestSparseSelect:
@@ -1068,5 +1143,5 @@ class TestEdgeCases:
         indirect1 = DS[Index]
         indirect2 = DS[Index]
 
-        assert indirect1.block == indirect2.block
-        assert indirect1.pointer == indirect2.pointer
+        assert indirect1.block is indirect2.block
+        assert indirect1.pointer is indirect2.pointer

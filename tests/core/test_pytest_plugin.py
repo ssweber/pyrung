@@ -82,7 +82,7 @@ class TestCoverageCollector:
         assert isinstance(collector.reports[0], CoverageReport)
 
     def test_collect_report_directly(self) -> None:
-        report = CoverageReport(cold_rungs=frozenset({0}))
+        report = CoverageReport(cold_rungs=frozenset({"0"}))
         collector = CoverageCollector()
         collector.collect_report(report)
         assert len(collector.reports) == 1
@@ -122,7 +122,7 @@ class TestCoverageCollector:
 
         assert merged is not None
         # Test 2 exercised the reset rung (rung 2) → not cold in merged
-        assert 2 not in merged.cold_rungs
+        assert "2" not in merged.cold_rungs
 
     def test_merge_stranded_intersection(self) -> None:
         """Stranded bits disappear when one test shows recovery."""
@@ -175,8 +175,18 @@ class TestWhitelist:
             encoding="utf-8",
         )
         wl = load_whitelist(p)
-        assert wl.cold_rungs == frozenset({22, 91, 104})
+        # Integer entries are coerced to string labels for back-compat.
+        assert wl.cold_rungs == frozenset({"22", "91", "104"})
         assert wl.stranded_tags == frozenset()
+
+    def test_load_cold_rungs_string_labels(self, tmp_path: Path) -> None:
+        p = tmp_path / "whitelist.toml"
+        p.write_text(
+            '[cold_rungs]\nallow = ["22", "MySub:3"]\n',
+            encoding="utf-8",
+        )
+        wl = load_whitelist(p)
+        assert wl.cold_rungs == frozenset({"22", "MySub:3"})
 
     def test_load_stranded_chains(self, tmp_path: Path) -> None:
         p = tmp_path / "whitelist.toml"
@@ -194,42 +204,42 @@ class TestWhitelist:
             encoding="utf-8",
         )
         wl = load_whitelist(p)
-        assert wl.cold_rungs == frozenset({5})
+        assert wl.cold_rungs == frozenset({"5"})
         assert wl.stranded_tags == frozenset({"Fault"})
 
     def test_check_whitelist_all_covered(self) -> None:
         report = CoverageReport(
-            cold_rungs=frozenset({22, 91}),
+            cold_rungs=frozenset({"22", "91"}),
             stranded_chains=frozenset({("Fault", ())}),
         )
-        wl = Whitelist(cold_rungs=frozenset({22, 91}), stranded_tags=frozenset({"Fault"}))
+        wl = Whitelist(cold_rungs=frozenset({"22", "91"}), stranded_tags=frozenset({"Fault"}))
         new_cold, new_stranded = check_whitelist(report, wl)
         assert new_cold == set()
         assert new_stranded == set()
 
     def test_check_whitelist_new_findings(self) -> None:
         report = CoverageReport(
-            cold_rungs=frozenset({22, 91, 200}),
+            cold_rungs=frozenset({"22", "91", "200"}),
             stranded_chains=frozenset({("Fault", ()), ("NewFault", ())}),
         )
-        wl = Whitelist(cold_rungs=frozenset({22, 91}), stranded_tags=frozenset({"Fault"}))
+        wl = Whitelist(cold_rungs=frozenset({"22", "91"}), stranded_tags=frozenset({"Fault"}))
         new_cold, new_stranded = check_whitelist(report, wl)
-        assert new_cold == {200}
+        assert new_cold == {"200"}
         assert new_stranded == {"NewFault"}
 
     def test_check_whitelist_empty(self) -> None:
         report = CoverageReport(
-            cold_rungs=frozenset({1, 2}),
+            cold_rungs=frozenset({"1", "2"}),
             stranded_chains=frozenset({("X", ())}),
         )
         wl = Whitelist()
         new_cold, new_stranded = check_whitelist(report, wl)
-        assert new_cold == {1, 2}
+        assert new_cold == {"1", "2"}
         assert new_stranded == {"X"}
 
     def test_check_whitelist_no_findings(self) -> None:
         report = CoverageReport()
-        wl = Whitelist(cold_rungs=frozenset({1}), stranded_tags=frozenset({"X"}))
+        wl = Whitelist(cold_rungs=frozenset({"1"}), stranded_tags=frozenset({"X"}))
         new_cold, new_stranded = check_whitelist(report, wl)
         assert new_cold == set()
         assert new_stranded == set()
@@ -463,4 +473,4 @@ class TestPluginIntegration:
 
         data = json.loads((pytester.path / "coverage.json").read_text(encoding="utf-8"))
         # test_trip_and_reset exercises the reset rung (rung 2) → not cold
-        assert 2 not in data["cold_rungs"]
+        assert "2" not in data["cold_rungs"]

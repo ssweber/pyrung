@@ -9,7 +9,9 @@ from pathlib import Path
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-from pyrung.click import TagMap, c, ct, ctd, pyrung_to_ladder, x, y
+from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.core import Bool, Counter, Or, Program, Rung
 from pyrung.core.program import And, branch, count_up, latch, out
 

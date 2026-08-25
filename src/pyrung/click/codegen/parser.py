@@ -112,6 +112,8 @@ def _find_call_names(raw_rungs: list[_RawRung]) -> dict[str, str]:
 def _parse_subroutines(
     dir_path: Path,
     call_names: dict[str, str],
+    *,
+    validate: bool = False,
 ) -> list[_SubroutineInfo]:
     """Parse ``subroutines/{slug}.csv`` files and match them to call() names."""
     subroutine_dir = dir_path / "subroutines"
@@ -138,7 +140,11 @@ def _parse_subroutines(
     for sub_path, stem in sub_entries:
         name = call_names.get(_slugify(stem), stem)
         raw = _parse_csv(sub_path)
-        analyzed = _analyze_rungs(raw)
+        analyzed = _analyze_rungs(
+            raw,
+            validate=validate,
+            source_name=f'Subroutine "{name}"',
+        )
         subs.append(_SubroutineInfo(name=name, analyzed=analyzed))
 
     return subs

@@ -15,6 +15,10 @@ from typing import Any
 
 from pyrung.dap import execution_flow
 
+# grammar.py reads this registry, but only from inside command_grammar() — so
+# importing it here at module level does not cycle.
+from pyrung.dap.grammar import Slot
+
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
 
@@ -26,12 +30,33 @@ class ConsoleResult:
     events: list[tuple[str, dict[str, Any] | None]] = field(default_factory=list)
 
 
-_REGISTRY: dict[str, tuple[Callable[..., ConsoleResult], str, str]] = {}
+@dataclass(frozen=True)
+class CommandEntry:
+    """One registered console command."""
+
+    handler: Callable[..., ConsoleResult]
+    usage: str = ""
+    group: str = ""
+    hint: str = ""
+    #: Declared argument grammar. ``None`` means "derive it from ``usage``" —
+    #: right for most commands. Declare it when the prose is ambiguous, and read
+    #: the result through :func:`pyrung.dap.grammar.command_grammar`.
+    slots: tuple[Slot, ...] | None = None
 
 
-def register(verb: str, *, usage: str = "", group: str = "") -> Callable[..., Any]:
+_REGISTRY: dict[str, CommandEntry] = {}
+
+
+def register(
+    verb: str,
+    *,
+    usage: str = "",
+    group: str = "",
+    hint: str = "",
+    slots: tuple[Slot, ...] | None = None,
+) -> Callable[..., Any]:
     def decorator(fn: Callable[..., ConsoleResult]) -> Callable[..., ConsoleResult]:
-        _REGISTRY[verb] = (fn, usage, group)
+        _REGISTRY[verb] = CommandEntry(fn, usage, group, hint, slots)
         return fn
 
     return decorator
@@ -61,15 +86,15 @@ _GROUP_LAYOUT: dict[str, list[str | None]] = {
 
 
 def _format_grouped_help() -> str:
-    groups: dict[str, list[str]] = {g: [] for g in _GROUP_ORDER}
-    for verb in sorted(_REGISTRY):
-        _fn, usage, group = _REGISTRY[verb]
-        groups.setdefault(group, []).append(usage or verb)
-    usage_by_verb = {v: (u or v) for v, (_f, u, _g) in _REGISTRY.items()}
+    verb_groups: dict[str, list[str]] = {g: [] for g in _GROUP_ORDER}
+    for verb, entry in sorted(_REGISTRY.items()):
+        verb_groups.setdefault(entry.group, []).append(verb)
+    usage_by_verb = {v: (e.usage or v) for v, e in _REGISTRY.items()}
+    hint_by_verb = {v: e.hint for v, e in _REGISTRY.items() if e.hint}
     lines: list[str] = []
     for group in _GROUP_ORDER:
-        entries = groups.get(group)
-        if not entries:
+        verbs = verb_groups.get(group)
+        if not verbs:
             continue
         if lines:
             lines.append("")
@@ -80,11 +105,19 @@ def _format_grouped_help() -> str:
                 if item is None:
                     lines.append("")
                 else:
-                    lines.append(f"  {usage_by_verb[item]}")
+                    lines.append(_format_verb_line(usage_by_verb[item], hint_by_verb.get(item)))
         else:
-            for entry in entries:
-                lines.append(f"  {entry}")
+            for verb in verbs:
+                lines.append(_format_verb_line(usage_by_verb[verb], hint_by_verb.get(verb)))
     return "\n".join(lines)
+
+
+def _format_verb_line(usage: str, hint: str | None) -> str:
+    base = f"  {usage}"
+    if not hint:
+        return base
+    pad = max(2, 56 - len(base))
+    return f"{base}{' ' * pad}{hint}"
 
 
 def dispatch(adapter: Any, expression: str, *, provenance: str = "console") -> ConsoleResult:
@@ -98,8 +131,7 @@ def dispatch(adapter: Any, expression: str, *, provenance: str = "console") -> C
         raise adapter.DAPAdapterError(
             f"Unknown command '{verb}'. Available: {known}. Use Watch for predicate expressions."
         )
-    handler, _usage, _group = entry
-    result = handler(adapter, expression)
+    result = entry.handler(adapter, expression)
 
     from pyrung.dap.capture import capture_hook
 
@@ -211,6 +243,15 @@ def _cmd_pause(adapter: Any, _expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError("Not running")
     adapter._pause_event.set()
     return ConsoleResult("Pausing after current scan")
+
+
+@register("stop", usage="stop", group="execution", hint="(cancels a running analysis)")
+def _cmd_stop(adapter: Any, _expression: str) -> ConsoleResult:
+    # Reaching this handler means we already hold ``_state_lock``, so by
+    # definition nothing long-running is in flight. ``pyrung live`` intercepts
+    # ``stop`` in LiveServer._handle, ahead of the lock, which is the path that
+    # can actually interrupt a command.
+    return ConsoleResult("Nothing running.")
 
 
 @register("step", usage="step [N]", group="execution")
@@ -405,13 +446,447 @@ def _cmd_why(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(str(chain))
 
 
-@register("how", usage="how <expression> [avoid <expression>]", group="analysis")
+def _pilot_value(value: Any) -> str:
+    if value is True:
+        return "True"
+    if value is False:
+        return "False"
+    return repr(value) if isinstance(value, str) and " " in value else str(value)
+
+
+def _pilot_assignments(actions: Any) -> str:
+    ordered = sorted(actions, key=lambda pair: pair[0])
+    return ", ".join(f"{tag}={_pilot_value(value)}" for tag, value in ordered)
+
+
+class _PilotProgressFormatter:
+    """Render Pilot events as a compact transcript, including live fragments.
+
+    A trial or investigation is deliberately an unfinished sentence while the
+    work is running.  The later event supplies ``done``, ``valid``, or the
+    confirmed correction on that same console line.
+    """
+
+    def __init__(self) -> None:
+        self._target: tuple[str, Any] | None = None
+        self._trial_open = False
+        self._retry_open = False
+        self._wait_open = False
+        self._wait_channel: str | None = None
+        self._resuming_open = False
+        self._movement_open = False
+        self._departure_open = False
+        self._investigation_open = False
+        self._after_correction = False
+        self._last_holds: tuple[tuple[str, Any], ...] = ()
+        self._position: tuple[tuple[str, Any], ...] = ()
+
+    def _position_text(self, position: Any = ()) -> str:
+        values = tuple(position) or self._position
+        if position:
+            self._position = tuple(position)
+        if not values:
+            return ""
+        tag, value = values[0]
+        return f"{tag}={_pilot_value(value)}"
+
+    def _render_theory_conditions(self, conditions: Any) -> str:
+        from pyrung.core.analysis.pilot.requirements import (
+            GuardLogic,
+            GuardRequirementAtom,
+            GuardRequirementExpr,
+        )
+        from pyrung.core.crossing import AffineCmp, Cmp, Eq
+
+        def render(condition: Any) -> str:
+            if isinstance(condition, GuardRequirementAtom):
+                return render(condition.condition)
+            if isinstance(condition, GuardRequirementExpr):
+                conjunction = " and " if condition.logic is GuardLogic.ALL else " or "
+                terms = tuple(filter(None, (render(term) for term in condition.terms)))
+                return conjunction.join(terms)
+            if isinstance(condition, Cmp):
+                bound = condition.bound if condition.bound_is_tag else _pilot_value(condition.bound)
+                return f"{condition.tag} {condition.op} {bound}"
+            if isinstance(condition, AffineCmp):
+                rhs = condition.bound_tag
+                if condition.scale != 1 or condition.offset != 0:
+                    rhs = f"{condition.scale} * {rhs} + {condition.offset}"
+                return f"{condition.tag} {condition.op} {rhs}"
+            if isinstance(condition, Eq):
+                values = tuple(sorted(condition.values, key=repr))
+                if len(values) == 1:
+                    return f"{condition.tag} == {_pilot_value(values[0])}"
+                joined = ", ".join(_pilot_value(value) for value in values)
+                return f"{condition.tag} in {{{joined}}}"
+            if isinstance(condition, tuple) and len(condition) == 3:
+                tag, operator, value = condition
+                return f"{tag} {operator} {_pilot_value(value)}"
+            return ""
+
+        rendered = []
+        for condition in conditions:
+            text = render(condition)
+            if text:
+                rendered.append(text)
+        # Requirements are ordered oldest-to-newest.  A refinement commonly
+        # retains the weaker earlier bound; naming the newest condition gives
+        # the technician the reason for *this* setting instead of a ledger dump.
+        return rendered[-1] if rendered else ""
+
+    def _confirmed_corrections(self, data: dict[str, Any]) -> list[str]:
+        from pyrung.core.analysis.graph import _format_synthesis_instruction
+        from pyrung.core.validation.render import render_condition
+
+        investigation = data.get("investigation", {})
+        confirmed = investigation.get("confirmed_detail", ())
+        if not confirmed:
+            requirement = investigation.get("requirement")
+            exact_rungs = (
+                requirement.get("corrective_pilot_rungs", ())
+                if isinstance(requirement, dict)
+                else getattr(requirement, "corrective_pilot_rungs", ())
+            )
+            if exact_rungs:
+                confirmed = ({"holds": exact_rungs},)
+        steady: list[str] = []
+        by_guard: dict[str, list[str]] = {}
+        for hypothesis in confirmed:
+            for proposal in hypothesis.get("holds", ()):
+                if hasattr(proposal, "dest"):
+                    guard = render_condition(proposal.guard)
+                    instruction = _format_synthesis_instruction(proposal)
+                    instructions = by_guard.setdefault(guard, [])
+                    if instruction not in instructions:
+                        instructions.append(instruction)
+                else:
+                    assignment = f"{proposal[0]}={_pilot_value(proposal[1])}"
+                    if assignment not in steady:
+                        steady.append(assignment)
+        corrections = [
+            f"with rung({guard}): {'; '.join(instructions)}"
+            for guard, instructions in by_guard.items()
+        ]
+        if steady:
+            corrections.insert(0, f"keep {', '.join(steady)}")
+        for tag, value in data.get("released_holds", ()):
+            corrections.append(f"release {tag}={_pilot_value(value)}")
+        return corrections
+
+    def _render_rungs(self, rungs: Any) -> list[str]:
+        """Render exact temporary logic as compact, source-shaped operations."""
+        from pyrung.core.analysis.graph import _format_synthesis_instruction
+        from pyrung.core.validation.render import render_condition
+
+        by_guard: dict[str, list[str]] = {}
+        for rung in rungs:
+            guard = render_condition(rung.guard)
+            instruction = _format_synthesis_instruction(rung)
+            instructions = by_guard.setdefault(guard, [])
+            if instruction not in instructions:
+                instructions.append(instruction)
+        return [
+            f"with rung({guard}): {'; '.join(instructions)}"
+            for guard, instructions in by_guard.items()
+        ]
+
+    def format(self, event: Any) -> str | None:
+        kind = event.kind
+        data = event.data
+
+        if kind == "started":
+            self._target = data["target"]
+            tag, value = self._target
+            return f"Finding a way to reach {tag}={_pilot_value(value)}...\n"
+
+        if kind == "candidates_built":
+            pilot_rungs = data.get("prerequisite_pilot_rungs", ())
+            holds = tuple(sorted((rung.dest, rung.value) for rung in pilot_rungs))
+            if not holds or holds == self._last_holds or self._after_correction:
+                return None
+            self._last_holds = holds
+            reasons = []
+            lever_notes = data.get("lever_notes", {})
+            if lever_notes:
+                from pyrung.core.analysis.graph import _lever_requirement
+
+                reasons = [
+                    _lever_requirement(lever_notes[tag])
+                    for tag, _value in holds
+                    if tag in lever_notes
+                ]
+            why = f" to satisfy {'; '.join(dict.fromkeys(reasons))}" if reasons else ""
+            return f"  Set {_pilot_assignments(holds)}{why}.\n"
+
+        if kind in {"candidate_try", "crossing_try"}:
+            # Exact same-scan operations use the crossing lifecycle, but they
+            # are still one atomic pulse from the operator's point of view.
+            actions = data.get("applied", data.get("actions", ()))
+            if not actions:
+                return None
+            prefix = ""
+            if self._departure_open:
+                self._departure_open = False
+                prefix = " valid.\n"
+            self._trial_open = not self._after_correction
+            self._retry_open = self._after_correction
+            self._after_correction = False
+            if self._retry_open:
+                return prefix + "\nRetrying..."
+            # Prerequisite rungs are already reported as sustained temporary
+            # logic.  Do not mislabel their witness values as momentary pulses.
+            pulsed = tuple(action for action in actions if action not in self._last_holds)
+            return prefix + f"\nPulse {_pilot_assignments(pulsed or actions)}..."
+
+        if kind in {
+            "candidate_rejected",
+            "crossing_rejected",
+            "batch_rejected",
+            "widening_rejected",
+        }:
+            if self._trial_open:
+                self._trial_open = False
+                return " no useful change.\n"
+            if self._retry_open:
+                self._retry_open = False
+                return " no useful change.\n"
+            return None
+
+        if kind in {
+            "candidate_accepted",
+            "crossing_accepted",
+            "batch_accepted",
+            "widening_accepted",
+        }:
+            if self._trial_open:
+                self._trial_open = False
+                return " done.\n"
+            # A retry stays open until its resulting motion is known.
+            return None
+
+        if kind == "requirement_locally_repaired":
+            requirement = data.get("requirement")
+            if getattr(requirement, "provenance", None) != "program-guard-rebase":
+                return None
+            # ``Resuming`` is reserved for continuing with correction rungs
+            # installed by investigation. A causal rebase instead restored an
+            # earlier executable world, applied one ordinary Bearing there,
+            # and is about to read the corrected landing from scratch.
+            self._after_correction = False
+            self._last_holds = ()
+            source_scan = getattr(requirement, "source_scan", None)
+            source = f"scan {source_scan}" if source_scan is not None else "retained history"
+            assignments = tuple(data.get("assignments", ()))
+            applied = f" and applied {_pilot_assignments(assignments)}" if assignments else ""
+            return f"  Rewound to {source}{applied}; re-orienting.\n"
+
+        if kind == "bearing_coast":
+            if self._retry_open:
+                return None
+            self._resuming_open = self._after_correction
+            prefix = "\n  Resuming..." if self._resuming_open else "  Waiting"
+            self._after_correction = False
+            if self._wait_open:
+                prefix = "\n" + prefix.lstrip("\n")
+            self._wait_open = True
+            channel = data.get("channel_tag")
+            self._wait_channel = channel
+            if self._resuming_open:
+                return prefix
+            return f"{prefix} for {channel}..." if channel else f"{prefix}..."
+
+        if kind == "bearing_coast_rejected":
+            if self._wait_open:
+                self._wait_open = False
+                self._wait_channel = None
+                self._resuming_open = False
+                return " not ready yet.\n"
+            return None
+
+        if kind == "bearing_coast_accepted":
+            scan_before = data.get("scan_before")
+            scan_after = data.get("scan_after", event.scan)
+            span = scan_after - scan_before if scan_before is not None else None
+            skipped = data.get("coast_skipped_scans")
+            kernel = data.get("coast_kernel_scans")
+            channel = data.get("bearing_coast_channel_tag")
+            before = data.get("bearing_coast_before_value")
+            after = data.get("bearing_coast_actual_value")
+            elapsed = f" after {span} scan{'s' if span != 1 else ''}" if span is not None else ""
+            if isinstance(skipped, int) and skipped > 0 and isinstance(kernel, int):
+                elapsed += f" ({skipped:,} folded; {kernel:,} kernel)"
+            prefix = " " if self._wait_open or self._retry_open else "  "
+            wait_channel = self._wait_channel
+            resuming = self._resuming_open
+            self._wait_open = False
+            self._wait_channel = None
+            self._resuming_open = False
+            self._retry_open = False
+            snapshot = data.get("snapshot", {})
+            if self._target is not None and snapshot.get(self._target[0]) == self._target[1]:
+                tag, value = self._target
+                outcome = f"{tag}={_pilot_value(value)}{elapsed}"
+            elif channel is not None and before != after:
+                tag = "" if channel == wait_channel and not resuming else f"{channel} "
+                if isinstance(before, bool) and isinstance(after, bool):
+                    outcome = f"{tag}-> {_pilot_value(after)}{elapsed}"
+                else:
+                    outcome = f"{tag}{_pilot_value(before)} -> {_pilot_value(after)}{elapsed}"
+            else:
+                outcome = f"advanced{elapsed}"
+            if data.get("ejected"):
+                self._movement_open = True
+                return prefix + outcome
+            return prefix + outcome + ".\n"
+
+        if kind == "letrun_ejection":
+            if self._movement_open:
+                self._movement_open = False
+                return "."
+            tag = data.get("channel_tag")
+            before = data.get("from_value")
+            after = data.get("to_value")
+            prefix = " " if self._retry_open else "  "
+            self._retry_open = False
+            self._movement_open = True
+            if tag is None:
+                return prefix + "The program moved away from the expected path"
+            return f"{prefix}{tag} jumped {_pilot_value(before)} -> {_pilot_value(after)}"
+
+        if kind == "departure_check_started":
+            self._movement_open = False
+            self._departure_open = True
+            return " Checking..."
+
+        if kind in {"pending_departure_started", "departure_investigated"}:
+            if self._departure_open:
+                self._departure_open = False
+                return " valid.\n"
+            return None
+
+        if kind == "investigation_started":
+            prefix = " unexpected.\n" if self._departure_open else "\n"
+            self._departure_open = False
+            self._investigation_open = True
+            return prefix + "  Preventable?"
+
+        if kind == "trend_regression":
+            position = self._position_text(data.get("position", ()))
+            corrections = self._confirmed_corrections(data)
+            revoked = self._render_rungs(data.get("revoked_pilot_rungs", ()))
+            transitions = data.get("channel_transitions", ())
+            was_investigating = self._investigation_open
+            self._investigation_open = False
+            self._after_correction = True
+            if was_investigating:
+                if revoked:
+                    lines = [" Yes.", f"  Remove temporary logic: {'; '.join(revoked)}."]
+                    if corrections:
+                        lines.append(f"  Replace with: {'; '.join(corrections)}.")
+                    return "\n".join(lines) + "\n"
+                if corrections:
+                    return f" Yes -- {'; '.join(corrections)}.\n"
+                where = f" -- returned to {position} to investigate" if position else ""
+                return f" Not yet{where}.\n"
+            moved = ", ".join(
+                f"{tag} {_pilot_value(before)} -> {_pilot_value(after)}"
+                for tag, before, after in transitions
+            )
+            after_move = f" after {moved}" if moved else ""
+            if corrections:
+                correction = "; ".join(corrections)
+                correction = correction[:1].upper() + correction[1:]
+                return f"\n  Returning to the last good state{after_move}. {correction}.\n"
+            return f"\n  Returning to the last good state{after_move}; no correction was found.\n"
+
+        if kind == "theory_correction_composed":
+            configuration = tuple(data.get("configuration", ()))
+            # Exact PilotRungs were already explained where the regression was
+            # observed.  Scan-entry configuration is the intrascan result that
+            # otherwise disappears from the technician's live narrative.
+            if not configuration:
+                return None
+            position = self._position_text(data.get("position", ()))
+            conditions = self._render_theory_conditions(
+                data.get("requirement_conditions", data.get("conditions", ()))
+            )
+            superseded = bool(data.get("superseded_configuration_identities", ()))
+            verb = "refine the setting to" if superseded else "set"
+            setting = _pilot_assignments(configuration)
+            where = f" at {position}" if position else ""
+            need = f" ({conditions})" if conditions else ""
+            self._after_correction = True
+            return f"  Working theory{where}: {verb} {setting} before retrying{need}.\n"
+
+        if kind == "guidance_requested":
+            proposals = []
+            for candidate in data.get("candidates", ()):
+                actions = tuple(candidate.get("actions", ()))
+                if actions:
+                    proposals.append(_pilot_assignments(actions))
+            detail = f": {'; '.join(proposals)}" if proposals else ""
+            return f"\nGuidance required before trying exploratory inputs{detail}.\n"
+
+        if kind == "stuck":
+            reason = str(data.get("reason") or "No productive next action was found.")
+            reason = reason.removeprefix("pilot: ").removeprefix("stuck: ")
+            prefix = (
+                "\n"
+                if any(
+                    (
+                        self._trial_open,
+                        self._retry_open,
+                        self._wait_open,
+                        self._departure_open,
+                        self._investigation_open,
+                    )
+                )
+                else ""
+            )
+            return f"{prefix}\nStopping: {reason}\n"
+
+        if kind == "finished":
+            return "\n"
+
+        return None
+
+
+def _format_pilot_progress(event: Any) -> str | None:
+    """Format one standalone event; command streams should reuse a formatter."""
+    return _PilotProgressFormatter().format(event)
+
+
+@register(
+    "how",
+    usage=("how <expression>[, <expression>...] [avoid <expression>[, <expression>...]]"),
+    group="analysis",
+    hint="(runs planner)",
+    # Declared, not derived: the usage prose can't say that `avoid` is a
+    # *keyword-introduced* clause, nor that targets and avoids are comma-separated
+    # conjuncts within a single slot. Completers need both facts.
+    slots=(
+        Slot(kind="expression", label="target", repeat=True, separator=","),
+        Slot(
+            kind="expression",
+            label="avoid",
+            required=False,
+            repeat=True,
+            separator=",",
+            keyword="avoid",
+        ),
+    ),
+)
 def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         raise adapter.DAPAdapterError(
-            "Usage: how <expression> [avoid <expression>]  "
-            "(e.g. how Running, how State == HELD avoid State == FAULTED)"
+            "Usage: how <expression>[, <expression>...] "
+            "[avoid <expression>[, <expression>...]]  "
+            "(e.g. how Running, how State == HELD avoid State == FAULTED, "
+            "how Burner avoid ProdMode, MaintFault).  "
+            "Comma-separated targets must all hold at the end of the path.  "
+            "Comma-separated avoid conditions are a union; each is avoided "
+            "independently."
         )
     expr_str = parts[1].strip()
     runner = adapter._require_runner_locked()
@@ -423,42 +898,60 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         parse as parse_expr,
     )
 
-    avoid_str = None
-    m = re.split(r"\bavoid\b", expr_str, maxsplit=1)
-    if len(m) == 2:
-        expr_str = m[0].strip()
-        avoid_str = m[1].strip()
-        if not expr_str:
-            raise adapter.DAPAdapterError("how: missing target expression before 'avoid'")
-        if not avoid_str:
-            raise adapter.DAPAdapterError("how: missing expression after 'avoid'")
+    # Split the target from the trailing `avoid` clause.
+    tokens = re.split(r"\b(avoid)\b", expr_str)
+    expr_str = tokens[0].strip()
+    clauses: dict[str, str] = {}
+    for i in range(1, len(tokens), 2):
+        keyword = tokens[i]
+        value = tokens[i + 1].strip() if i + 1 < len(tokens) else ""
+        if not value:
+            raise adapter.DAPAdapterError(f"how: missing expression after '{keyword}'")
+        clauses[keyword] = value
+    if not expr_str:
+        raise adapter.DAPAdapterError("how: missing target expression")
 
-    try:
-        expr = parse_expr(expr_str)
-    except ExpressionParseError as exc:
-        raise adapter.DAPAdapterError(f"how: {exc}") from exc
-    try:
-        conditions = to_conditions(expr, runner._known_tags_by_name)
-    except KeyError as exc:
-        raise adapter.DAPAdapterError(f"how: unknown tag {exc}") from exc
-
-    avoid = None
-    if avoid_str is not None:
+    def _resolve(label: str, text: str) -> Any:
         try:
-            avoid_expr = parse_expr(avoid_str)
+            parsed = parse_expr(text)
         except ExpressionParseError as exc:
-            raise adapter.DAPAdapterError(f"how avoid: {exc}") from exc
+            raise adapter.DAPAdapterError(f"how {label}: {exc}") from exc
         try:
-            avoid_conds = to_conditions(avoid_expr, runner._known_tags_by_name)
+            conds = to_conditions(parsed, runner._known_tags_by_name)
         except KeyError as exc:
-            raise adapter.DAPAdapterError(f"how avoid: unknown tag {exc}") from exc
-        avoid = avoid_conds if len(avoid_conds) != 1 else avoid_conds[0]
+            raise adapter.DAPAdapterError(f"how {label}: unknown tag {exc}") from exc
+        return conds
 
-    path = runner.how(*conditions, avoid=avoid)
+    conditions = _resolve("target", expr_str)
+
+    def _single(label: str) -> Any:
+        if label not in clauses:
+            return None
+        conds = _resolve(label, clauses[label])
+        return conds if len(conds) != 1 else conds[0]
+
+    progress = _PilotProgressFormatter()
+    cancel = getattr(adapter, "_cancel", None)
+
+    def _on_pilot_event(event: Any) -> None:
+        # Poll for `stop` before formatting: the planner drives this callback
+        # once per round, so this is the cancellation point for `how`.
+        if cancel is not None:
+            cancel.check("how")
+        fragment = progress.format(event)
+        if fragment is not None:
+            adapter._send_event("output", {"category": "console", "output": fragment})
+
+    path = runner.how(*conditions, avoid=_single("avoid"), on_event=_on_pilot_event)
     return ConsoleResult(str(path))
 
 
-@register("prove", usage="prove always|never <expression> [--settled] [--paced]", group="analysis")
+@register(
+    "prove",
+    usage="prove always|never <expression> [--settled] [--paced]",
+    group="analysis",
+    hint="(exhaustive, needs annotations)",
+)
 def _cmd_prove(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(maxsplit=2)
     if len(parts) < 2:
@@ -513,7 +1006,7 @@ def _cmd_prove(adapter: Any, expression: str) -> ConsoleResult:
     scope = sorted(referenced_tags(expr))
     predicate = compile_for_dict(expr, tags=runner._known_tags_by_name)
 
-    adapter._send_event("output", {"category": "console", "output": "Verifying…\n"})
+    adapter._send_event("output", {"category": "console", "output": "Verifying...\n"})
 
     from pyrung.core.analysis.prove import always as always_fn
 
@@ -951,7 +1444,7 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
                     elif new is None and old is not None:
                         entries.append(f"  unforce {tag}")
                     else:
-                        entries.append(f"  force {tag} {old!r} → {new!r}")
+                        entries.append(f"  force {tag} {old!r} -> {new!r}")
 
         cur_state = runner.history.at(scan_id)
         if prev_state is not None:
@@ -959,7 +1452,7 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
                 old_v = prev_state.tags.get(key)
                 new_v = cur_state.tags.get(key)
                 if old_v != new_v:
-                    entries.append(f"  {key}: {old_v!r} → {new_v!r}")
+                    entries.append(f"  {key}: {old_v!r} -> {new_v!r}")
         prev_state = cur_state
 
         if entries:

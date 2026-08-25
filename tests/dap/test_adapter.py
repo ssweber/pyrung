@@ -241,7 +241,7 @@ def _tag_hints_script() -> str:
 def _history_changes_script() -> str:
     return (
         "from enum import IntEnum\n"
-        "from pyrung.core import Bool, Int, PLC, Program, Rung, copy\n"
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, copy, latch, reset\n"
         "\n"
         "class ConveyorState(IntEnum):\n"
         "    IDLE = 0\n"
@@ -257,11 +257,11 @@ def _history_changes_script() -> str:
         "        copy(StepCount + 1, StepCount)\n"
         "    with Rung(StepCount == 1):\n"
         "        copy(1, State)\n"
-        "        copy(True, Running)\n"
+        "        latch(Running)\n"
         "    with Rung(StepCount == 3):\n"
         "        copy(2, State)\n"
         "    with Rung(StepCount == 5):\n"
-        "        copy(False, Running)\n"
+        "        reset(Running)\n"
         "\n"
         "runner = PLC(prog)\n"
     )
@@ -707,8 +707,9 @@ def test_launch_with_snapshot_seeds_initial_state(tmp_path: Path, monkeypatch: A
 
     # Write a tags.py that exposes a TagMap as `mapping`
     tags_script = (
-        "from pyrung.click import TagMap, c, ds\n"
+        "from pyrung.click import ClickBlocks, TagMap\n"
         "from pyrung.core import Bool, Tag, TagType\n"
+        "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()\n"
         "Sensor = Bool('Sensor')\n"
         "Level = Tag('Level', TagType.INT)\n"
         "mapping = TagMap({Sensor: c[1], Level: ds[1]})\n"
@@ -1499,7 +1500,8 @@ def test_next_trace_emits_right_pointer_condition_details(tmp_path: Path):
     traces = _trace_events(messages)
     assert traces
     condition = traces[0]["body"]["regions"][0]["conditions"][0]
-    assert condition["status"] == "true"
+    # DebugStep=5, Step[CurStep=1]=0 → 5 != 0 → false
+    assert condition["status"] == "false"
     assert condition["expression"] == "DebugStep == Step[CurStep]"
 
     details = {item["name"]: item["value"] for item in condition["details"]}
@@ -4522,10 +4524,10 @@ def test_pyrung_causal_how_multi_tag(tmp_path: Path):
         arguments={"query": "how:Running,Done"},
     )
     response = _single_response(messages)
-    assert response["success"] is True
+    assert response["success"] is True, response
     body = response["body"]
-    assert body["command"] == "how"
-    assert "path" in body
+    assert body["ok"] is True, body
+    assert "Running" in body["path"] and "Done" in body["path"], body
 
 
 def test_pyrung_causal_how_empty_tag_fails(tmp_path: Path):
@@ -4569,3 +4571,21 @@ def test_pyrung_causal_how_expression_comparison(tmp_path: Path):
     assert response["success"] is True
     body = response["body"]
     assert body["command"] == "how"
+
+
+def test_pyrung_causal_how_compound_comparisons(tmp_path: Path):
+    """Comma-separated comparison conjuncts are a multi-target conjunction."""
+    adapter, out_stream = _how_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "how:Running == true, Done == true"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True, response
+    body = response["body"]
+    assert body["ok"] is True, body
+    assert "Running" in body["path"] and "Done" in body["path"], body

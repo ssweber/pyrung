@@ -15,14 +15,18 @@ from pyrung.core import (
     OutputBlock,
     Physical,
     Program,
+    Ramp,
     Real,
     Rung,
     TagType,
     auto,
     build_program_graph,
+    call,
+    copy,
     latch,
     named_array,
     out,
+    subroutine,
     udt,
 )
 from pyrung.core.analysis import TagRole
@@ -245,6 +249,28 @@ class TestSlicing:
         assert "ConveyorMotor" in downstream
         assert "StatusLight" in downstream
 
+    def test_downstream_can_follow_subroutine_calls(self) -> None:
+        cmd = Bool("Cmd", external=True)
+        state = Int("State")
+        output = Bool("Output")
+
+        @subroutine("Init")
+        def init():
+            with Rung():
+                copy(1, state)
+
+        with Program() as prog:
+            with Rung(cmd):
+                call(init)
+            with Rung(state == 1):
+                out(output)
+
+        graph = build_program_graph(prog)
+        assert graph.downstream_slice("Cmd") == frozenset()
+        call_aware = graph.downstream_slice("Cmd", follow_calls=True)
+        assert "State" in call_aware
+        assert "Output" in call_aware
+
     def test_upstream_view_intersects(self, dv) -> None:
         result = dv.inputs().upstream("ConveyorMotor")
         assert "StartBtn" in result
@@ -336,7 +362,7 @@ class TestGraphEdges:
     def test_edges_consistent_with_rung_nodes(self, conveyor_graph) -> None:
         """Every edge endpoint references an existing tag or rung index."""
         edges = conveyor_graph.graph_edges()
-        all_tags = set(conveyor_graph.tag_roles.keys())
+        all_tags = set(conveyor_graph.tags.keys())
         max_rung_idx = len(conveyor_graph.rung_nodes) - 1
 
         for edge in edges:
@@ -475,7 +501,7 @@ class TestDetails:
             max=150,
             uom="degC",
             external=True,
-            physical=Physical("TempFb", profile="first_order"),
+            physical=Physical("TempFb", profile=Ramp(up=0.5, down=-0.1)),
             link="Enable",
         )
         enable = Bool("Enable")

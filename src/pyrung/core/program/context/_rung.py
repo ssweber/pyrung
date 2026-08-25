@@ -170,7 +170,7 @@ def comment(text: str) -> None:
     if prog is None:
         raise RuntimeError("comment() must be used inside a Program context")
     if prog._pending_comment is not None:
-        raise RuntimeError("comment() already set — missing a Rung after the previous comment()?")
+        raise RuntimeError("comment() already set; missing a Rung after the previous comment()?")
     text = textwrap.dedent(text).strip()
     if len(text) > _MAX_COMMENT_LENGTH:
         raise ValueError(f"Rung comment is {len(text)} chars, max is {_MAX_COMMENT_LENGTH}.")

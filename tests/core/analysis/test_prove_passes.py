@@ -24,6 +24,7 @@ from pyrung.core import (
     latch,
     on_delay,
     out,
+    reset,
     return_early,
     rise,
     subroutine,
@@ -52,8 +53,11 @@ from pyrung.core.analysis.prove.kernel import (
 from pyrung.core.analysis.prove.passes import (
     _DEFAULT_PRE_BFS_PASSES,
     _BFSConfig,
+    _OptConfig,
     _pass_build_graph,
+    _pass_classify_dimensions,
     _pass_diagnose_unwritten_tags,
+    _pass_find_threshold_absorptions,
     _PassContext,
     _run_pre_bfs_pipeline,
     _validate_pass_dag,
@@ -247,11 +251,9 @@ class TestPassManifest:
             "build_graph",
             "classify_dimensions",
             "validate_declared_bounds",
-            "heuristic_seed_domains",
             "apply_split_at",
             "diagnose_unwritten_tags",
             "elide_scan_local_state",
-            "heuristic_seed_post_elision",
             "detect_functional_dependencies",
             "detect_init_constants",
             "compile_kernel",
@@ -311,6 +313,44 @@ class TestDiagnoseUnwrittenTagsProgressInfo:
         ctx.nondeterministic_dims = {"Value": (False, True)}
         _pass_diagnose_unwritten_tags(ctx)
         assert any("Threshold" in m for m in messages)
+
+
+class TestPassReuse:
+    def test_classification_threads_atom_index_through_absorption_helpers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        ctx = _make_pass_context(_discovery_program())
+        _pass_build_graph(ctx)
+
+        def fail(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("absorption helpers should reuse the classification atom index")
+
+        monkeypatch.setattr("pyrung.core.analysis.prove.absorb._build_atom_index", fail)
+
+        _pass_classify_dimensions(ctx)
+
+        assert ctx.stateful_dims is not None
+
+    def test_find_threshold_absorptions_reuses_classification_result(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        ctx = _make_pass_context(_discovery_program())
+        _pass_build_graph(ctx)
+        _pass_classify_dimensions(ctx)
+        precomputed = ctx.threshold_absorptions
+        assert precomputed is not None
+
+        def fail(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("threshold absorptions should have been reused")
+
+        monkeypatch.setattr("pyrung.core.analysis.prove.passes._find_threshold_absorptions", fail)
+        monkeypatch.setattr("pyrung.core.analysis.prove.passes._find_comparison_absorptions", fail)
+
+        _pass_find_threshold_absorptions(ctx)
+
+        assert ctx.threshold_absorptions is precomputed
 
 
 class TestPassDisabling:
@@ -587,7 +627,7 @@ class TestScanLocalStateElision:
 
         with Program(strict=False) as logic:
             with Rung():
-                copy(False, tmp)
+                reset(tmp)
             with Rung(tmp):
                 out(seen)
 
@@ -783,6 +823,51 @@ class TestScanLocalStateElision:
         assert "Dest" in lock_ctx.stateful_dims
 
 
+class TestDomainsOnlyFunctionalDepAdvice:
+    """``domains_only`` admits slice-elided / ordering-violating scratch as
+    advice-grade functional-dep projections (the jump-table pointer idiom:
+    ``calc(Req + 2, Scratch); copy(table[Scratch], Dest)``) without
+    touching dims; default-opt behavior is unchanged."""
+
+    @staticmethod
+    def _jump_pointer_program() -> Program:
+        req = Int("Req")
+        scratch = Int("Scratch")
+        dest = Int("Dest")
+        adv = Bool("Adv", external=True)
+        table = Block("Table", TagType.INT, 1, 8)
+
+        with Program() as logic:
+            with Rung(adv):
+                copy(3, req)
+            with Rung():
+                calc(req + 2, scratch)
+            with Rung():
+                copy(table[scratch], dest)
+            with Rung(dest != 0):
+                copy(dest, req)  # rewrites Req AFTER Scratch's writer (loop shape)
+
+        return logic
+
+    def test_default_context_has_no_advice_projection(self) -> None:
+        context = _build_explore_context(self._jump_pointer_program(), allow_partial=True)
+        assert not isinstance(context, Intractable)
+        assert "Scratch" not in context.functional_dep_projections
+
+    def test_domains_only_records_advice_without_touching_dims(self) -> None:
+        context = _build_explore_context(
+            self._jump_pointer_program(),
+            _opt_config=replace(_OptConfig(), domains_only=True),
+            allow_partial=True,
+        )
+        assert not isinstance(context, Intractable)
+        assert context.functional_dep_projections.get("Scratch") == ("Req", 1, 2)
+        # Advice only: the scratch keeps its slice-elision classification
+        # and never enters (or re-enters) the state dims.
+        assert "Scratch" not in context.stateful_dims
+        assert context.elided_tags.get("Scratch") != "functional_dep"
+
+
 class TestDiagnoseUnwrittenTags:
     def test_fires_for_unwritten_tag(self) -> None:
         threshold = Int("Threshold")
@@ -938,7 +1023,7 @@ class TestJournal:
         seen = Bool("Seen")
         with Program() as logic:
             with Rung():
-                copy(False, tmp)
+                reset(tmp)
             with Rung(tmp):
                 out(seen)
 

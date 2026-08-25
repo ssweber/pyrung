@@ -178,7 +178,9 @@ Use case: define a template structure once, clone it for each subsystem.
 Named arrays can map their interleaved layout onto a hardware block range with `.map_to()`:
 
 ```python
-from pyrung.click import ds
+from pyrung.click import ClickBlocks
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 @named_array(Int, count=3, stride=2)
 class Channel:
@@ -215,8 +217,13 @@ ds[1].name   # "SpeedCommand"
 ds[2].name   # "SpeedFeedback"
 ds[3].name   # "DS3" (default)
 
-# Override retentive policy and default
-ds.slot(10, retentive=True, default=999)
+# Override the default value
+ds.slot(10, default=999)
+
+# Retentive takes precedence over any default: a retentive register keeps its
+# last value across power cycles, so codegen omits default= and simulation uses
+# the type zero (0), not the default.
+ds.slot(11, retentive=True)
 
 # Configure a range (retentive and default only)
 ds.slot(20, 30, retentive=True)
@@ -273,11 +280,11 @@ HmiSetpoint   = Int(external=True)   # written outside the ladder
 FilteredVal   = Int(final=True)      # exactly one writer
 ```
 
-**`readonly`** — the tag is initialized from its declared default and never written again. The `CORE_READONLY_WRITE` validator flags any write site. The stuck-bits validator skips readonly tags.
+**`readonly`** — the tag is initialized from its declared default and never written again. The `TAG_READONLY_WRITE` validator flags any write site. The stuck-bits validator skips readonly tags.
 
 **`external`** — something outside the ladder (HMI, SCADA, comms) is the writer. The stuck-bits validator treats the external source as satisfying the missing latch or reset side. `plc.recovers()` returns `'external'` instead of `False`.
 
-**`final`** — exactly one instruction in the ladder may write this tag. The `CORE_FINAL_MULTIPLE_WRITERS` validator flags any tag with more than one write site, regardless of mutual exclusivity.
+**`final`** — exactly one instruction in the ladder may write this tag. The `TAG_FINAL_MULTIPLE_WRITERS` validator flags any tag with more than one write site, regardless of mutual exclusivity.
 
 Mutual exclusivity: `readonly` + `final` and `readonly` + `external` raise `ValueError` at construction. `external` + `final` is allowed (one ladder writer plus external writers).
 

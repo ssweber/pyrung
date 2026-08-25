@@ -17,7 +17,7 @@ from pyrung.circuitpy.codegen import (
     compile_kernel,
     compile_rung,
 )
-from pyrung.click import TagMap, c
+from pyrung.click import ClickBlocks, TagMap
 from pyrung.core import (
     And,
     Block,
@@ -50,6 +50,7 @@ from pyrung.core import (
     pack_bits,
     pack_text,
     pack_words,
+    reset,
     return_early,
     run_enabled_function,
     run_function,
@@ -334,6 +335,7 @@ class TestGenerateCircuitPyAPI:
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         prog = Program(strict=False)
+        c = ClickBlocks().c
         mapping = TagMap({Bool("Mapped"): c[1]})
 
         source = generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map=mapping).code
@@ -343,6 +345,7 @@ class TestGenerateCircuitPyAPI:
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         prog = Program(strict=False)
+        c = ClickBlocks().c
         mapping = TagMap({Bool("Mapped"): c[1]}, include_system=False)
 
         source = generate_circuitpy(
@@ -358,6 +361,7 @@ class TestGenerateCircuitPyAPI:
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         prog = Program(strict=False)
+        c = ClickBlocks().c
         mapping = TagMap({Bool("Mapped"): c[1]}, include_system=False)
 
         source = generate_circuitpy(
@@ -721,6 +725,60 @@ class TestInstructionCoverage:
         assert namespace[acc_symbol] == 0
         assert namespace[out4_symbol] is True
 
+    def test_bank_mapped_block_shares_bank_storage(self):
+        """A block mapped onto a bank is a window into it, not a second array.
+
+        The block's registers and the bank's registers are the same memory, so an
+        indirect ``dh[idx]`` read must see the block's configured defaults.
+        """
+        blocks = ClickBlocks()
+        dh_bank = blocks.dh
+        cfg = Block("ModeCfg", TagType.WORD, 1, 3)
+        cfg.slot(1, name="Cfg_Prod", default=0x0000)
+        cfg.slot(2, name="Cfg_Maint", default=0x1BE4)
+        cfg.slot(3, name="Cfg_Manual", default=0x1FFF)
+        idx = Int("Idx", default=3)
+        picked = Int("Picked")
+        clear = Bool("Clear")
+
+        TagMap({cfg: dh_bank.select(201, 203)}, include_system=False)
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(dh_bank[idx + 200], picked)  # indirect, through the bank
+            with Rung(clear):
+                fill(0, cfg.select(1, 3))  # range, through the block
+
+        ctx = CodegenContext.for_kernel(prog)
+
+        # ModeCfg folds into the DH array — one storage, not two.
+        assert id(cfg) in ctx.block_alias
+        emitted = {b.logical_name for b in ctx.emitted_bindings()}
+        assert "ModeCfg" not in emitted
+        assert "DH" in emitted
+
+        # Both names resolve to the same cell of the same array.
+        assert ctx.symbol_for_tag(cfg[2]) == ctx.symbol_for_tag(dh_bank[202])
+
+    def test_bank_mapped_block_indirect_through_both_sides_is_rejected(self):
+        """Indirect through the block *and* its bank would split one memory in two."""
+        blocks = ClickBlocks()
+        ds_bank = blocks.ds
+        cfg = Block("Cfg", TagType.INT, 1, 8)
+        idx = Int("Idx", default=1)
+        a = Int("A")
+        b = Int("B")
+
+        TagMap({cfg: ds_bank.select(100, 107)}, include_system=False)
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(cfg[idx], a)
+                copy(ds_bank[idx], b)
+
+        with pytest.raises(ValueError, match="addressed indirectly"):
+            CodegenContext.for_kernel(prog)
+
     def test_compile_kernel_accepts_named_array_symbol_default(self):
         @named_array(Int, stride=2, readonly=True)
         class SortState:
@@ -1069,6 +1127,28 @@ class TestIOMappingAndBranching:
         b_idx = next(i for i, line in enumerate(lines) if f"{b_sym} = True" in line)
         c_idx = next(i for i, line in enumerate(lines) if f"{c_sym} = True" in line)
         assert branch_idx < a_idx < b_idx < c_idx
+
+    @pytest.mark.parametrize(
+        ("target", "expected"),
+        [
+            (Bool("ResetBool", default=True), "False"),
+            (Int("ResetInt", default=7), "0"),
+            (Real("ResetReal", default=2.5), "0.0"),
+            (Char("ResetChar", default="A"), repr("")),
+        ],
+    )
+    def test_reset_emits_type_zero_independent_of_default(self, target, expected):
+        enable = Bool("Enable")
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                reset(target)
+
+        ctx = _context_for_program(prog, hw)
+        lines = compile_rung(prog.rungs[0], "_run_main_rungs", ctx, indent=0)
+        target_sym = ctx.symbol_for_tag(target)
+        assert any(f"{target_sym} = {expected}" in line for line in lines)
 
 
 class TestBoardPeripheralsAndRunStop:
@@ -1542,8 +1622,11 @@ class TestRuntimeSplit:
         """Traffic-light-style Modbus program: runtime is non-empty and
         code.py is significantly smaller than the single-file baseline."""
         from pyrung.circuitpy import ModbusClientConfig, ModbusServerConfig
-        from pyrung.click import ModbusTcpTarget, TagMap, c, ds, receive, t, td, txt
+        from pyrung.click import ClickBlocks, ModbusTcpTarget, TagMap, receive
         from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
+
+        blocks = ClickBlocks()
+        c, ds, t, td, txt = blocks.c, blocks.ds, blocks.t, blocks.td, blocks.txt
 
         State = Char("State", default="r")
         RedTimer = Timer.clone("RedTimer")
@@ -1641,8 +1724,9 @@ class TestRuntimeSplit:
     def test_both_generated_files_compile(self):
         """Both code.py and pyrung_rt.py must be valid Python."""
         from pyrung.circuitpy import ModbusServerConfig
-        from pyrung.click import TagMap, c
+        from pyrung.click import ClickBlocks, TagMap
 
+        c = ClickBlocks().c
         flag = Bool("Flag", default=True)
         with Program(strict=False) as prog:
             with Rung(flag):

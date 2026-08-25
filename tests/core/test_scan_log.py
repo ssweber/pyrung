@@ -208,15 +208,29 @@ def test_snapshot_is_decoupled_from_subsequent_writes():
     assert live.patches_by_scan == {1: {"X": 1}, 2: {"Y": 2}}
 
 
-def test_fork_has_independent_fresh_scan_log():
+def test_fork_inherits_parent_log_independently():
     plc = _idle_plc()
     plc.patch({"X": 1})
     plc.step()
     plc.step()
 
     fork = plc.fork()
-    assert fork._scan_log.bytes_estimate() == 0
-    assert plc._scan_log.bytes_estimate() > 0
+    # A fork inherits the parent's recording (one continuous history), not a
+    # fresh empty log — so a chain of forks accumulates the whole drive.
+    assert fork._scan_log.bytes_estimate() == plc._scan_log.bytes_estimate()
+    assert fork._scan_log.snapshot().patches_by_scan == plc._scan_log.snapshot().patches_by_scan
+
+    # But the inherited log is an independent copy: extending the fork does not
+    # touch the parent's log.
+    parent_bytes = plc._scan_log.bytes_estimate()
+    fork.patch({"X": 2})
+    fork.step()
+    assert fork._scan_log.bytes_estimate() > parent_bytes
+    assert plc._scan_log.bytes_estimate() == parent_bytes
+
+    # And forking with inherit_log=False still yields the fresh empty log.
+    bare = plc.fork(inherit_log=False)
+    assert bare._scan_log.bytes_estimate() == 0
 
 
 def test_scan_log_direct_construction():
@@ -227,6 +241,47 @@ def test_scan_log_direct_construction():
     log = ScanLog(time_mode=TimeMode.REALTIME, base_scan=42)
     assert log.base_scan == 42
     assert log.records_dt is True
+
+
+def test_effective_input_changes_derive_from_patches_and_forces():
+    log = ScanLog(time_mode=TimeMode.FIXED_STEP)
+    log.record_patches(1, {"X": True})
+    log.record_patches(2, {"X": True})  # no effective change
+    log.record_force_changes(3, {"X": False})
+    log.record_patches(4, {"X": True})  # force wins
+    log.record_force_changes(5, {})  # force removal leaves value as-is
+    log.record_patches(6, {"X": True})
+
+    assert log.effective_input_changes("X", initial_value=False) == (
+        (1, False, True),
+        (3, True, False),
+        (6, False, True),
+    )
+    assert log.latest_effective_input_transition("X", initial_value=False) == (
+        6,
+        False,
+        True,
+    )
+    assert log.effective_input_transition_at("X", 3, initial_value=False) == (
+        3,
+        True,
+        False,
+    )
+    assert log.last_effective_input_change_before("X", 6, initial_value=False) == 3
+    assert log.effective_input_value_at("X", 4, initial_value=False) is False
+    assert log.effective_input_value_at("X", 6, initial_value=False) is True
+
+
+def test_effective_input_changes_respect_trimmed_base_scan():
+    log = ScanLog(time_mode=TimeMode.FIXED_STEP)
+    log.record_patches(1, {"X": True})
+    assert log.effective_input_changes("X", initial_value=False) == ((1, False, True),)
+
+    log.record_patches(3, {"X": False})
+    log.trim_before(2)
+
+    assert log.base_scan == 2
+    assert log.effective_input_changes("X", initial_value=True) == ((3, True, False),)
 
 
 # ---------------------------------------------------------------------------

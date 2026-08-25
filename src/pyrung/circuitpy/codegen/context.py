@@ -73,6 +73,30 @@ class BlockBinding:
 
 
 @dataclass(frozen=True)
+class StaticRangeLayout:
+    """The ordered semantic tags and backing addresses of one static range."""
+
+    tags: tuple[Tag, ...]
+    addresses: tuple[int, ...]
+    uses_backing_storage: bool
+
+
+def describe_static_range(range_value: BlockRange) -> StaticRangeLayout:
+    """Return the semantic elements and physical span of a static range."""
+
+    addresses = tuple(int(addr) for addr in range_value.addresses)
+    tags = tuple(range_value.tags())
+    uses_backing_storage = len(tags) == len(addresses) and all(
+        tag is range_value.block._get_tag(addr) for tag, addr in zip(tags, addresses, strict=True)
+    )
+    return StaticRangeLayout(
+        tags=tags,
+        addresses=addresses,
+        uses_backing_storage=uses_backing_storage,
+    )
+
+
+@dataclass(frozen=True)
 class ModbusClientSymbolSpec:
     symbol: str
     owner: str
@@ -135,6 +159,7 @@ class CodegenContext:
         )
         ctx._runtime_state_keys = True
         ctx.collect_program_references()
+        ctx.resolve_block_aliases()
         ctx.assign_symbols()
         ctx.build_compact_block_maps()
         return ctx
@@ -145,6 +170,7 @@ class CodegenContext:
     referenced_tags: dict[str, Tag] = field(default_factory=dict)
     retentive_tags: dict[str, Tag] = field(default_factory=dict)
     edge_prev_tags: set[str] = field(default_factory=set)
+    dict_backed_tag_names: set[str] = field(default_factory=set)
 
     subroutine_names: list[str] = field(default_factory=list)
     function_sources: dict[str, str] = field(default_factory=dict)
@@ -155,6 +181,9 @@ class CodegenContext:
     block_symbols: dict[int, str] = field(default_factory=dict)
     tag_block_addresses: dict[str, tuple[int, int]] = field(default_factory=dict)
     used_indirect_blocks: set[int] = field(default_factory=set)
+    # logical block id -> (bank block id, {logical addr: bank addr}). An aliased
+    # block is a named window onto the bank's array, not storage of its own.
+    block_alias: dict[int, tuple[int, dict[int, int]]] = field(default_factory=dict)
     function_symbols_by_obj: dict[int, str] = field(default_factory=dict)
     runstop: RunStopConfig | None = None
     board_tag_names: set[str] = field(default_factory=set)
@@ -172,6 +201,7 @@ class CodegenContext:
     modbus_client_specs_by_instruction: dict[int, ModbusClientJobSpec] = field(default_factory=dict)
     _helper_condition_snapshots: dict[int, dict[str, str | list[str]]] = field(default_factory=dict)
     compact_block_map: dict[int, dict[int, int]] = field(default_factory=dict)
+    _static_range_layouts: dict[int, StaticRangeLayout] = field(default_factory=dict)
 
     def collect_hw_bindings(self) -> None:
         self.slot_bindings.clear()
@@ -224,6 +254,8 @@ class CodegenContext:
     def collect_program_references(self) -> None:
         self.referenced_tags.clear()
         self.edge_prev_tags.clear()
+        self.dict_backed_tag_names.clear()
+        self._static_range_layouts.clear()
         self.subroutine_names = sorted(self.program.subroutines)
         seen_values: set[int] = set()
 
@@ -287,11 +319,22 @@ class CodegenContext:
                 return
 
             if isinstance(value, BlockRange):
-                self._ensure_block_binding(value.block)
-                for addr in value.addresses:
-                    tag = value.block._get_tag(addr)
-                    self.tag_block_addresses[tag.name] = (id(value.block), addr)
+                layout = self.static_range_layout(value)
+                if layout.uses_backing_storage:
+                    self._ensure_block_binding(value.block)
+                elif self.blockless:
+                    names = {tag.name for tag in layout.tags}
+                    self.dict_backed_tag_names.update(names)
+                    for name in names:
+                        self.tag_block_addresses.pop(name, None)
+                for tag in layout.tags:
                     self.referenced_tags.setdefault(tag.name, tag)
+                    if not layout.uses_backing_storage and not self.blockless:
+                        annotated_block = getattr(tag, "_pyrung_block", None)
+                        if annotated_block is not None:
+                            self._ensure_block_binding(annotated_block)
+                    if layout.uses_backing_storage or not self.blockless:
+                        self._associate_tag_with_known_block(tag)
                 return
 
             if isinstance(value, IndirectBlockRange):
@@ -347,6 +390,60 @@ class CodegenContext:
             if self.referenced_tags[name].retentive
         }
 
+    def resolve_block_aliases(self) -> None:
+        """Fold blocks mapped onto a hardware bank into the bank's storage.
+
+        ``Block.map_to`` makes the bank the owner of each mapped register, so the
+        logical block and the bank name the *same* tag.  Without this pass both
+        would be emitted as separate arrays and the tag would live in two cells —
+        the split that makes an indirect ``bank[expr]`` read a blank 0.
+
+        Only folds into a bank the program already uses as storage.  A P1AM build
+        maps logical blocks onto Click banks purely to name Modbus addresses — the
+        bank is an address space there, not memory, and must not be materialized.
+        A block used indirectly also keeps its own storage: redirecting it would
+        mean translating its pointer arithmetic into the bank's address space.
+        """
+        self.block_alias.clear()
+        for block_id in sorted(self.block_bindings):
+            binding = self.block_bindings[block_id]
+            alias = getattr(binding.block, "_hw_alias", None)
+            if not alias:
+                continue
+
+            bank_ids = {id(bank) for bank, _ in alias.values()}
+            if len(bank_ids) != 1:
+                continue
+            bank_id = next(iter(bank_ids))
+            if bank_id == block_id or bank_id not in self.block_bindings:
+                continue
+
+            if block_id in self.used_indirect_blocks:
+                bank = self.block_bindings[bank_id]
+                raise ValueError(
+                    f"Block {binding.logical_name!r} is mapped onto bank "
+                    f"{bank.logical_name!r} and both are addressed indirectly. "
+                    f"The mapped registers are one memory, but indirect access "
+                    f"through each would compile to separate arrays. Address them "
+                    f"indirectly through one of the two, not both."
+                )
+
+            self.block_alias[block_id] = (
+                bank_id,
+                {logical: hw for logical, (_bank, hw) in alias.items()},
+            )
+
+        # Every tag now lives at its bank address; retarget the logical claims so
+        # both access paths agree on one cell.
+        for tag_name, (block_id, addr) in list(self.tag_block_addresses.items()):
+            aliased = self.block_alias.get(block_id)
+            if aliased is None:
+                continue
+            bank_id, addr_map = aliased
+            hw_addr = addr_map.get(addr)
+            if hw_addr is not None:
+                self.tag_block_addresses[tag_name] = (bank_id, hw_addr)
+
     def assign_symbols(self) -> None:
         self.symbol_table.clear()
         self.block_symbols.clear()
@@ -358,13 +455,19 @@ class CodegenContext:
             key=lambda b: (b.logical_name, b.block_id),
         )
         for binding in block_items:
+            if binding.block_id in self.block_alias:
+                continue
             key = f"block:{binding.logical_name}:{binding.block_id}"
             symbol = _mangle_symbol(binding.logical_name, "_b_", used)
             self.symbol_table[key] = symbol
             self.block_symbols[binding.block_id] = symbol
 
+        # An aliased block borrows the bank's array symbol — same storage.
+        for block_id, (bank_id, _addr_map) in self.block_alias.items():
+            self.block_symbols[block_id] = self.block_symbols[bank_id]
+
         for tag_name in sorted(self.referenced_tags):
-            if tag_name in self.tag_block_addresses:
+            if tag_name in self.tag_block_addresses or tag_name in self.dict_backed_tag_names:
                 continue
             tag = self.referenced_tags[tag_name]
             symbol = _mangle_symbol(tag_name, "_t_", used)
@@ -387,11 +490,35 @@ class CodegenContext:
     def globals_for_function(self, fn_name: str) -> list[str]:
         return sorted(self.function_globals.get(fn_name, set()))
 
+    def emitted_bindings(self) -> list[BlockBinding]:
+        """Bindings that own storage — aliased blocks live in their bank's array."""
+        return [
+            binding
+            for binding in self.block_bindings.values()
+            if binding.block_id not in self.block_alias
+        ]
+
+    def static_range_layout(self, range_value: BlockRange) -> StaticRangeLayout:
+        """Describe a static range without confusing its address span with its tags.
+
+        Most ranges name every slot in one backing block.  Specialized ranges
+        may instead expose an ordered semantic tag list over that span (for
+        example, a named-array instance selection skips stride padding and
+        interleaves fields).  Code generation must preserve that tag identity.
+        """
+
+        range_id = id(range_value)
+        layout = self._static_range_layouts.get(range_id)
+        if layout is None:
+            layout = describe_static_range(range_value)
+            self._static_range_layouts[range_id] = layout
+        return layout
+
     def build_compact_block_maps(self) -> None:
         """Build compact index mappings for blocks with only static access."""
         self.compact_block_map = {}
         for block_id in self.block_bindings:
-            if block_id in self.used_indirect_blocks:
+            if block_id in self.used_indirect_blocks or block_id in self.block_alias:
                 continue
             addrs = sorted(
                 addr
@@ -401,6 +528,10 @@ class CodegenContext:
             self.compact_block_map[block_id] = {addr: i for i, addr in enumerate(addrs)}
 
     def block_index(self, block_id: int, addr: int) -> int:
+        aliased = self.block_alias.get(block_id)
+        if aliased is not None:
+            bank_id, addr_map = aliased
+            return self.block_index(bank_id, addr_map[addr])
         compact = self.compact_block_map.get(block_id)
         if compact is not None:
             return compact[addr]
@@ -582,7 +713,7 @@ class CodegenContext:
         return block_id
 
     def _associate_tag_with_known_block(self, tag: Tag) -> None:
-        if tag.name in self.tag_block_addresses:
+        if tag.name in self.tag_block_addresses or tag.name in self.dict_backed_tag_names:
             return
         if self.blockless:
             annotated_block = getattr(tag, "_pyrung_block", None)

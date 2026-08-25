@@ -2,34 +2,38 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
 from pyrung.core import (
     PLC,
     Bool,
     Counter,
+    Int,
+    Or,
     Program,
     Rung,
     Timer,
+    copy,
     count_up,
     latch,
     on_delay,
     out,
     rise,
 )
-from pyrung.core.analysis.graph import Path
+from pyrung.core.analysis.graph import Plan, PlanStep
+from pyrung.core.analysis.pilot.overlay import PilotRung
+from pyrung.core.condition import AllCondition
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _replay_path(program: Program, path: Path) -> PLC:
+def _replay_path(program: Program, path) -> PLC:
     """Replay a how() path on a concrete PLC and return the final state."""
-    plc = PLC(program, dt=0.010)
-    for step in path.steps:
-        plc.patch(step.action)
-        for _ in range(step.scans):
-            plc.step()
-    return plc
+    return path.replay()
 
 
 # ---------------------------------------------------------------------------
@@ -79,22 +83,282 @@ def _unreachable_program() -> tuple[Program, Bool, Bool]:
 # ---------------------------------------------------------------------------
 
 
-class TestPathDisplay:
+class TestPlanDisplay:
     def test_str_reachable(self):
         prog, Start, Running, Done = _simple_latch_program()
         plc = PLC(prog, dt=0.010)
-        path = plc.how(Running)
-        text = str(path)
-        assert "Path" in text
-        assert "Step 1" in text
+        plan = plc.how(Running)
+        text = str(plan)
+        assert "Reached" in text
+        assert "Running" in text
 
     def test_str_unreachable(self):
-        path = Path(reachable=False, steps=(), total_changes=0, total_scans=0, reason="nope")
-        assert "Unreachable" in str(path)
+        plan = Plan(reachable=False, target_tag="X", target_value=True, reason="nope")
+        assert str(plan) == "Cannot reach X=True.\n  Reason: nope."
+
+    def test_str_stopped(self):
+        from pyrung.core.analysis.graph import PlanStatus
+
+        plan = Plan(
+            reachable=False,
+            target_tag="X",
+            target_value=True,
+            reason="No productive next action was found; still waiting on Guard=True (have False)",
+            status=PlanStatus.STOPPED,
+        )
+        assert str(plan) == (
+            "Stopped before reaching X=True.\n"
+            "  Reason: No productive next action was found.\n"
+            "  Waiting for: Guard=True (have False)"
+        )
 
     def test_str_already_there(self):
-        path = Path(reachable=True, steps=(), total_changes=0, total_scans=0)
-        assert "Already" in str(path)
+        prog, Start, Running, Done = _simple_latch_program()
+        plc = PLC(prog, dt=0.010)
+        plc.force("Start", True)
+        plc.step()
+        plc.step()
+        plan = plc.how(Running)
+        assert "Reached Running=True in 0 scans." in str(plan)
+
+    def test_guarded_hold_renders_value_scope_and_source(self):
+        State = Int("Sts_StateCurrent")
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(
+                state=SimpleNamespace(scan_id=10),
+                _dt=0.010,
+            ),
+            journal=(
+                PlanStep(
+                    kind="force",
+                    scan=2,
+                    scans=0,
+                    inputs=(("DoorClosed", True),),
+                    label="DoorClosed",
+                    rungs=(PilotRung("DoorClosed", True, State != 6),),
+                    source="investigation",
+                ),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "with rung(Sts_StateCurrent != 6):" in text
+        assert "latch(DoorClosed)" in text
+        assert "(found during investigation)" in text
+        assert "force DoorClosed" not in text
+
+    def test_working_theory_owner_is_not_shown_as_plan_rationale(self):
+        State = Int("TheoryState")
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(
+                state=SimpleNamespace(scan_id=10),
+                _dt=0.010,
+            ),
+            journal=(
+                PlanStep(
+                    kind="force",
+                    scan=2,
+                    scans=0,
+                    inputs=(("DoorClosed", True),),
+                    label="DoorClosed",
+                    rungs=(PilotRung("DoorClosed", True, State == 6),),
+                    source="working-theory-composition",
+                ),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "Install temporary logic:" in text
+        assert "working-theory-composition" not in text
+
+    def test_guarded_pair_renders_as_oscillator(self):
+        State = Int("Sts_StateCurrent")
+        RotateSensor = Bool("RotateSensor", external=True)
+        pilot_rungs = (
+            PilotRung(
+                "RotateSensor",
+                True,
+                AllCondition(State == 6, RotateSensor != True),  # noqa: E712
+            ),
+            PilotRung(
+                "RotateSensor",
+                False,
+                AllCondition(State == 6, RotateSensor != False),  # noqa: E712
+            ),
+        )
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(
+                state=SimpleNamespace(scan_id=10),
+                _dt=0.010,
+            ),
+            journal=(
+                PlanStep(
+                    kind="force",
+                    scan=2,
+                    scans=0,
+                    inputs=(("RotateSensor", True), ("RotateSensor", False)),
+                    label="RotateSensor",
+                    rungs=pilot_rungs,
+                    source="investigation",
+                ),
+                PlanStep(
+                    kind="coast",
+                    scan=3,
+                    scans=5,
+                    inputs=(),
+                    label="",
+                    rungs=pilot_rungs,
+                ),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "with rung(And(Sts_StateCurrent == 6, ~RotateSensor)):" in text
+        assert "latch(RotateSensor)" in text
+        assert "with rung(And(Sts_StateCurrent == 6, RotateSensor)):" in text
+        assert "reset(RotateSensor)" in text
+        assert "Temporary logic in effect: step 1." in text
+        assert "holds: RotateSensor" not in text
+
+    def test_self_guarded_boolean_is_not_summarized_as_a_steady_hold(self):
+        WatchdogDone = Bool("WatchdogDone")
+        RotateSensor = Bool("RotateSensor", external=True)
+        rung = PilotRung(
+            "RotateSensor",
+            True,
+            AllCondition(WatchdogDone == False, RotateSensor != True),  # noqa: E712
+        )
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=10), _dt=0.010),
+            journal=(
+                PlanStep(
+                    kind="force",
+                    scan=2,
+                    scans=0,
+                    inputs=(),
+                    label="",
+                    rungs=(rung,),
+                ),
+                PlanStep(
+                    kind="coast",
+                    scan=3,
+                    scans=5,
+                    inputs=(),
+                    label="",
+                    rungs=(rung,),
+                ),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "with rung(And(~WatchdogDone, ~RotateSensor)):" in text
+        assert "latch(RotateSensor)" in text
+        assert "Temporary logic in effect: step 1." in text
+        assert "Keep: RotateSensor=True" not in text
+        assert "Oscillate: RotateSensor" not in text
+
+    def test_wait_references_every_installation_step_in_effect(self):
+        State = Int("State")
+        first = PilotRung("Door", True, State == 3)
+        second = PilotRung("Feedback", True, State != 6)
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=10), _dt=0.010),
+            journal=(
+                PlanStep("force", 1, 0, (), "", rungs=(first,)),
+                PlanStep("force", 2, 0, (), "", rungs=(second,)),
+                PlanStep("coast", 3, 5, (), "", rungs=(first, second)),
+                PlanStep("coast", 8, 2, (), "", rungs=(first, second)),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "Temporary logic in effect: steps 1 and 2." in text
+        assert "Temporary logic: (same)." in text
+
+    def test_revocation_names_the_removed_temporary_logic_and_installation_step(self):
+        State = Int("State")
+        old = PilotRung("Go", True, State == 6)
+        replacement = PilotRung("Go", False, State == 6)
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=10), _dt=0.010),
+            journal=(
+                PlanStep("force", 1, 0, (), "", rungs=(old,)),
+                PlanStep("revoke", 2, 0, (), "", rungs=(old,)),
+                PlanStep("force", 2, 0, (), "", rungs=(replacement,)),
+                PlanStep("coast", 3, 5, (), "", rungs=(replacement,)),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "2. Remove temporary logic from step 1:" in text
+        assert "with rung(State == 6):\n     latch(Go)" in text
+        assert "3. Install temporary logic" in text
+        assert "with rung(State == 6):\n     reset(Go)" in text
+        assert "Temporary logic in effect: step 3." in text
+
+    def test_wait_lists_the_manual_accumulator_edit_for_a_jump_ahead(self):
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=100), _dt=0.010),
+            journal=(
+                PlanStep(
+                    "coast",
+                    1,
+                    99,
+                    (),
+                    "",
+                    accelerators=(("Soak.Acc", 900),),
+                ),
+            ),
+        )
+
+        assert "Jump ahead: set Soak.Acc=900." in str(plan)
+
+    def test_pulse_keeps_its_observed_transition(self):
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=2), _dt=0.010),
+            journal=(
+                PlanStep(
+                    "pulse",
+                    1,
+                    1,
+                    (("CmdStart", True),),
+                    "CmdStart",
+                    transition="State 2 -> 3",
+                ),
+            ),
+        )
+
+        assert str(plan).endswith("1. Pulse CmdStart=True.\n   Observed: State 2 -> 3.")
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +385,26 @@ class TestPLCHow:
         plc = PLC(prog, dt=0.010)
         path = plc.how(Done, avoid=Ready)
         assert not path.reachable
+
+    def test_how_with_avoid_uses_non_avoided_route(self):
+        Manual = Bool("Manual", external=True)
+        Start = Bool("Start", external=True)
+        Auto = Bool("Auto")
+        Done = Bool("Done")
+        with Program() as prog:
+            with Rung(Start):
+                latch(Auto)
+            with Rung(Or(Manual, Auto)):
+                out(Done)
+
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Done, avoid=Manual)
+
+        assert path.reachable
+        replay = _replay_path(prog, path)
+        assert replay.state.tags["Done"] is True
+        assert replay.state.tags["Manual"] is False
+        assert replay.state.tags["Auto"] is True
 
     def test_how_without_explore_works(self):
         prog, Start, Running, Done = _simple_latch_program()
@@ -163,6 +447,55 @@ class TestPLCHow:
         assert result.state.tags["Ready"] is True
         assert result.state.tags["Done"] is True
 
+    def test_how_rejects_tag_valued_eq_target(self):
+        """how(tag == ConstTag) rejects a Tag RHS — the value must be a frozen
+        scalar (the trace would otherwise ride it as a TagExpr and crash the
+        crossings machinery).  Pass the literal / named-array .default instead."""
+        Start = Bool("Start", external=True)
+        State = Int("State")
+        K = Int("K", readonly=True, default=3)
+        with Program() as prog:
+            with Rung(Start):
+                copy(3, State)
+        plc = PLC(prog, dt=0.010)
+        with pytest.raises(ValueError, match="not a concrete value"):
+            plc.how(State == K)
+
+    def test_recording_captures_all_steered_inputs(self):
+        """The scan_log must record every input the fork was driven with.
+
+        Regression: prerequisite_holds (e.g. C_UnitModeChgRequest) were applied
+        to the fork via rungs but excluded from applied actions, so replay
+        couldn't reproduce the reached state.
+        """
+        Enable = Bool("Enable", external=True)
+        Gate = Bool("Gate", external=True)
+        Armed = Bool("Armed")
+        Output = Bool("Output")
+        with Program() as prog:
+            with Rung(Enable, Gate):
+                latch(Armed)
+            with Rung(Armed):
+                out(Output)
+
+        plc = PLC(prog, dt=0.010)
+        plan = plc.how(Output)
+        assert plan.reachable
+
+        recorded_tags = set()
+        snap = plan.fork._scan_log.snapshot()
+        for patches in snap.patches_by_scan.values():
+            recorded_tags.update(patches.keys())
+        for forces in snap.force_changes_by_scan.values():
+            recorded_tags.update(forces.keys())
+
+        assert "Enable" in recorded_tags or "Gate" in recorded_tags, (
+            "recording must capture the steered inputs, not just the decision"
+        )
+
+        result = plan.replay()
+        assert result.state.tags["Output"] is True
+
     def test_how_from_initial_state_override(self):
         """how() finds the correct source when initial_state has different
         external input values than the graph's representative snapshot."""
@@ -176,7 +509,7 @@ class TestPLCHow:
 
         path = plc.how(Running)
         assert path.reachable
-        assert path.steps == (), "should already be at target"
+        assert path.total_changes == 0, "should already be at target"
 
 
 # ---------------------------------------------------------------------------
@@ -229,5 +562,5 @@ class TestTimerCounterHow:
         plc = PLC(prog, dt=0.010)
         path = plc.how(Output)
         # BFS planner cannot yet solve rise()-gated counters (replay
-        # verification fails), so just confirm how() returns a Path.
-        assert isinstance(path, Path)
+        # verification fails), so just confirm how() returns a Plan.
+        assert isinstance(path, Plan)

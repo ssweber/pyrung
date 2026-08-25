@@ -6,7 +6,7 @@ They evaluate within a ScanContext for batched updates.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from pyrung.core._source import _capture_call_end_line
 from pyrung.core.condition import (
@@ -14,6 +14,7 @@ from pyrung.core.condition import (
     ConditionTerm,
     _as_condition,
 )
+from pyrung.core.instruction.base import _EXECUTOR_BRANCH
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.sp_tree import SPNode
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     from pyrung.core.instruction import Instruction
 
 _EMPTY_BRANCH_MAP: dict[int, bool] = {}
+_ANALYSIS_CACHE_MISS = object()
 
 
 class Rung:
@@ -47,8 +49,16 @@ class Rung:
         """
         self._conditions: list[Condition] = []
         self._instructions: list[Instruction] = []
+        # Analysis asks these two static questions repeatedly while walking
+        # alternate producer routes.  Keep the caches rung-local so their
+        # lifetime follows the program and invalidate them while the rung is
+        # still being assembled.
+        self._writer_by_tag_cache: dict[str, Instruction | None] | None = None
+        self._written_value_cache: dict[str, object] | None = None
+        self._sp_tree_cache: SPNode | None | object = _ANALYSIS_CACHE_MISS
         self._branches: list[Rung] = []  # Nested branches (parallel paths)
         self._execution_items: list[Instruction | Rung] = []  # Source-order execution sequence
+        self._execution_plan: list[tuple[int, Instruction | Rung]] = []
         self._terminal_instruction: Instruction | None = None
         # Branch rungs may include inherited parent conditions first.
         # This index marks where this rung's own local branch conditions begin.
@@ -79,7 +89,9 @@ class Rung:
             if end_line is not None:
                 instruction.end_line = end_line
         self._instructions.append(instruction)
+        self._invalidate_analysis_caches()
         self._execution_items.append(instruction)
+        self._execution_plan.append((instruction._executor_kind, instruction))
         if instruction.is_terminal():
             self._terminal_instruction = instruction
 
@@ -93,15 +105,27 @@ class Rung:
             )
         self._branches.append(branch)
         self._execution_items.append(branch)
+        self._execution_plan.append((_EXECUTOR_BRANCH, branch))
 
     def sp_tree(self) -> SPNode | None:
         """Return this rung's condition structure as an SP tree.
 
         Returns ``None`` for unconditional rungs (no conditions).
         """
+        if self._sp_tree_cache is not _ANALYSIS_CACHE_MISS:
+            return cast("SPNode | None", self._sp_tree_cache)
+
         from pyrung.core.analysis.sp_tree import conditions_to_sp
 
-        return conditions_to_sp(self._conditions)
+        self._sp_tree_cache = conditions_to_sp(self._conditions)
+        return self._sp_tree_cache
+
+    def _invalidate_analysis_caches(self) -> None:
+        """Clear facts derived from this rung while it is being assembled."""
+
+        self._writer_by_tag_cache = None
+        self._written_value_cache = None
+        self._sp_tree_cache = _ANALYSIS_CACHE_MISS
 
     def _get_combined_condition(self) -> Condition | None:
         """Get a single condition representing all rung conditions ANDed together.
@@ -113,18 +137,9 @@ class Rung:
             return None
         if len(self._conditions) == 1:
             return self._conditions[0]
-        # For multiple conditions, we need to create a combined condition
-        # Since there's no AndCondition class, we'll create a lambda-based condition
-        from pyrung.core.condition import Condition as ConditionBase
+        from pyrung.core.condition import AllCondition
 
-        class CombinedCondition(ConditionBase):
-            def __init__(self, conditions: list[Condition]):
-                self.conditions = conditions
-
-            def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-                return all(cond.evaluate(ctx) for cond in self.conditions)
-
-        return CombinedCondition(self._conditions)
+        return AllCondition(*self._conditions)
 
     def evaluate(self, ctx: ScanContext) -> None:
         """Evaluate this rung within a ScanContext.

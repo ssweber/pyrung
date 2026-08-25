@@ -24,7 +24,9 @@ from pyrung import (
     call, subroutine, forloop, return_early, # program control
     send, receive, ModbusTcpTarget,          # communication
 )
-from pyrung.click import x, y, c, ds, dd, dh, df, t, td, ct, ctd, sc, sd, txt, xd, yd, TagMap
+from pyrung.click import ClickBlocks, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 ```
 
 ## Memory banks

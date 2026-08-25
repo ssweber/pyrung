@@ -14,7 +14,7 @@ CircuitPython uses dynamic slot configuration::
     Light  = outputs[1]   # LiveOutputTag("Slot2.1", BOOL)
 """
 
-from typing import Any, cast
+from typing import Any
 
 from pyrung.circuitpy.catalog import (
     MODULE_CATALOG,
@@ -48,7 +48,7 @@ def _circuitpy_dialect_validator(program: Program, *, mode: str = "warn", **kwar
         raise TypeError("Program.validate('circuitpy', ...) expects hw=P1AM(...).")
     if mode not in {"warn", "strict"}:
         raise ValueError("Program.validate('circuitpy', ...) mode must be 'warn' or 'strict'.")
-    return validate_circuitpy_program(program, hw=hw, mode=cast(ValidationMode, mode))
+    return validate_circuitpy_program(program, hw=hw, mode=mode)
 
 
 Program.register_dialect("circuitpy", _circuitpy_dialect_validator)

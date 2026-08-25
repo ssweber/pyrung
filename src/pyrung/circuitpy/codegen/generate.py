@@ -150,6 +150,7 @@ def generate_circuitpy(
         raise ValueError("\n".join(lines))
 
     ctx.collect_retentive_tags()
+    ctx.resolve_block_aliases()
     ctx.assign_symbols()
 
     # Predict has_runtime from config — modbus requires a runtime module.

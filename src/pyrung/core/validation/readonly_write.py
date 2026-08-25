@@ -18,9 +18,11 @@ from pyrung.core.validation._common import (
     WriteSite,
     _build_tag_map,
     _collect_write_sites,
-    _format_site_location,
     _resolve_tag_names,
+    site_frame,
 )
+from pyrung.core.validation.display import FindingDisplay
+from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -29,7 +31,7 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-CORE_READONLY_WRITE = "CORE_READONLY_WRITE"
+TAG_READONLY_WRITE = "TAG_READONLY_WRITE"
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -43,7 +45,12 @@ class ReadonlyWriteFinding:
     code: str
     target_name: str
     sites: tuple[WriteSite, ...]
-    message: str
+    display: FindingDisplay
+    severity: Severity = "error"
+
+    @property
+    def message(self) -> str:
+        return self.display.as_text()
 
 
 @dataclass(frozen=True)
@@ -130,16 +137,19 @@ def validate_readonly_writes(program: Program) -> ReadonlyWriteReport:
         if tag is None or not tag.readonly:
             continue
         target_sites = sites_by_target[tag_name]
-        locs = [_format_site_location(s) for s in target_sites]
-        message = f"Tag '{tag_name}' is readonly but has write site(s):\n" + "\n".join(
-            f"  - {loc}" for loc in locs
+        display = FindingDisplay(
+            code=TAG_READONLY_WRITE,
+            severity="error",
+            frames=tuple(site_frame(s) for s in target_sites),
+            problem=f"{tag_name} is read-only.",
+            hint="don't write it, or remove readonly=True",
         )
         findings.append(
             ReadonlyWriteFinding(
-                code=CORE_READONLY_WRITE,
+                code=TAG_READONLY_WRITE,
                 target_name=tag_name,
                 sites=tuple(target_sites),
-                message=message,
+                display=display,
             )
         )
 

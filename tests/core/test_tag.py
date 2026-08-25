@@ -129,25 +129,29 @@ class TestTagEquality:
     """Test Tag equality and hashing."""
 
     def test_tags_equal_by_name(self):
-        """Tags with same name are equal."""
+        """Tags with same name share hash and identity traits."""
         from pyrung.core import Tag
 
         tag1 = Tag("X1")
         tag2 = Tag("X1")
 
-        assert tag1 == tag2
+        assert tag1.name == tag2.name
+        assert hash(tag1) == hash(tag2)
 
     def test_tags_hashable(self):
-        """Tags can be used in sets and as dict keys."""
+        """Tags hash by name for dict-key usage."""
         from pyrung.core import Tag
 
         tag1 = Tag("X1")
         tag2 = Tag("X1")
         tag3 = Tag("X2")
 
-        tag_set = {tag1, tag2, tag3}
-
-        assert len(tag_set) == 2  # X1 appears once
+        assert hash(tag1) == hash(tag2)
+        assert hash(tag1) != hash(tag3)
+        # Tag.__eq__ returns CompareEq (DSL overload), so Tags can't be
+        # deduplicated in sets — use tag.name as key instead.
+        d = {tag1.name: tag1, tag2.name: tag2, tag3.name: tag3}
+        assert len(d) == 2
 
 
 class TestWordHelper:

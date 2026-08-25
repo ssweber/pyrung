@@ -10,9 +10,13 @@ Covers:
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
-from pyrung.core import PLC, And, Bool, Or, Program, Rung, latch, out, reset
+from pyrung.core import PLC, And, Bool, Int, Or, Program, Rung, calc, copy, latch, out, reset
+from pyrung.core.analysis.causal.projected import projected_cause
+from pyrung.core.analysis.pdg import build_program_graph
 
 # ---------------------------------------------------------------------------
 # Worked example from spec (projected cause)
@@ -316,6 +320,287 @@ class TestProjectedCauseStranded:
         assert step.rung_index == 2
         proximate_tags = [p.tag_name for p in step.proximate_causes]
         assert "B2" in proximate_tags
+
+
+class TestProjectedCauseNumericConditions:
+    """Projected cause should keep numeric blockers numeric."""
+
+    def test_numeric_equality_blocker_keeps_target_value(self) -> None:
+        X = Bool("X")
+        Start = Bool("Start")
+        SeedMode = Bool("SeedMode")
+        Mode = Int("Mode")
+
+        with Program() as logic:
+            with Rung(Start):
+                latch(X)
+            with Rung(SeedMode):
+                copy(2, Mode)
+            with Rung(Mode == 4):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Start": True, "SeedMode": True})
+        runner.step()
+
+        chain = runner.cause("X", to=False)
+
+        assert chain.mode == "unreachable"
+        assert ("Mode", 4) in {(b.blocked_tag, b.needed_value) for b in chain.blockers}
+
+    def test_numeric_threshold_blocker_keeps_threshold_value(self) -> None:
+        X = Bool("X")
+        Start = Bool("Start")
+        LevelCmd = Bool("LevelCmd")
+        Level = Int("Level")
+
+        with Program() as logic:
+            with Rung(Start):
+                latch(X)
+            with Rung(LevelCmd):
+                copy(1, Level)
+            with Rung(Level >= 5):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Start": True, "LevelCmd": True})
+        runner.step()
+
+        chain = runner.cause("X", to=False)
+
+        assert chain.mode == "unreachable"
+        assert ("Level", 5) in {(b.blocked_tag, b.needed_value) for b in chain.blockers}
+
+    def test_expression_threshold_blocker_uses_current_snapshot_value(self) -> None:
+        X = Bool("X")
+        Start = Bool("Start")
+        Seed = Bool("Seed")
+        Level = Int("Level")
+        Limit = Int("Limit")
+
+        with Program() as logic:
+            with Rung(Start):
+                latch(X)
+            with Rung(Seed):
+                copy(10, Level)
+                copy(5, Limit)
+            with Rung(Level < Limit + 2):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Start": True, "Seed": True})
+        runner.step()
+
+        chain = runner.cause("X", to=False)
+
+        assert chain.mode == "unreachable"
+        assert ("Level", 6) in {(b.blocked_tag, b.needed_value) for b in chain.blockers}
+
+    def test_tag_rhs_inequality_blocker_carries_relation_moves(self) -> None:
+        X = Bool("X")
+        Start = Bool("Start")
+        Seed = Bool("Seed")
+        Level = Int("Level")
+        Limit = Int("Limit")
+
+        with Program() as logic:
+            with Rung(Start):
+                latch(X)
+            with Rung(Seed):
+                copy(10, Level)
+                copy(0, Limit)
+            with Rung(Level < Limit):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Start": True, "Seed": True})
+        runner.step()
+
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "X",
+            False,
+            build_program_graph(logic),
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            nd_domains={"Limit": (0, 20)},
+        )
+
+        relation = chain.blockers[0].relation
+        assert relation is not None
+        assert relation.lhs_tag == "Level"
+        assert relation.operator == "<"
+        assert relation.rhs_repr == "Limit"
+        assert ("Limit", 20) in {(m.tag, m.value) for m in relation.candidate_moves}
+
+    def test_expression_rhs_inequality_blocker_carries_relation_moves(self) -> None:
+        X = Bool("X")
+        Start = Bool("Start")
+        Seed = Bool("Seed")
+        Level = Int("Level")
+        Limit = Int("Limit")
+
+        with Program() as logic:
+            with Rung(Start):
+                latch(X)
+            with Rung(Seed):
+                copy(10, Level)
+                copy(0, Limit)
+            with Rung(Level < Limit + 2):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Start": True, "Seed": True})
+        runner.step()
+
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "X",
+            False,
+            build_program_graph(logic),
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            nd_domains={"Limit": (0, 20)},
+        )
+
+        relation = chain.blockers[0].relation
+        assert relation is not None
+        assert relation.rhs_repr == "Limit + 2"
+        assert relation.rhs_value == 2
+        assert "Limit" in relation.tags
+        assert ("Limit", 20) in {(m.tag, m.value) for m in relation.candidate_moves}
+
+    def test_affine_dependency_candidate_move_targets_source(self) -> None:
+        X = Bool("X")
+        Start = Bool("Start")
+        Seed = Bool("Seed")
+        PV = Int("PV")
+
+        with Program() as logic:
+            with Rung(Start):
+                latch(X)
+            with Rung(Seed):
+                copy(100, PV)
+            with Rung(PV < 50):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Start": True, "Seed": True})
+        runner.step()
+
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "X",
+            False,
+            build_program_graph(logic),
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            nd_domains={"Sensor": (0, 100)},
+            func_deps={"PV": ("Sensor", 1, 0)},
+        )
+
+        relation = chain.blockers[0].relation
+        assert relation is not None
+        assert ("Sensor", 0) in {(m.tag, m.value) for m in relation.candidate_moves}
+
+
+class TestProjectedOraclePinning:
+    """cause(to=) gains the projected-oracle writer selection (pilot upstream)."""
+
+    def test_even_step_counter_selects_transition_writer(self) -> None:
+        """A self-referential affine step counter resolves through the
+        transition rung, not the parity-gated even-step rung.
+
+        Mirrors the Blower SFC engine: both ``calc(CurStep+1, CurStep)`` writers
+        can produce ``CurStep+1``, but the even-step rung (gated
+        ``valstepisodd != 1``) is counterfactual for ``CurStep == 2`` — its
+        source ``CurStep == 1`` is odd.  The projected oracle pins the affine
+        source and its one-hop-derived parity and rejects the even-step rung.
+        """
+        CurStep = Int("CurStep")
+        valstepisodd = Int("valstepisodd")
+        Trans = Int("Trans")
+        xPause = Int("xPause")
+        x_TimerDone = Bool("x_TimerDone")
+        x_FB = Bool("x_FB")
+
+        with Program(strict=False) as logic:
+            with Rung(CurStep == 1, x_TimerDone, x_FB):  # transition trigger
+                copy(1, Trans)
+            with Rung():  # parity (derived from CurStep)
+                calc(CurStep % 2, valstepisodd)
+            with Rung(valstepisodd != 1, xPause == 0):  # even-step advance
+                calc(CurStep + 1, CurStep)
+            with Rung(Trans == 1):  # transition advance
+                calc(CurStep + 1, CurStep)
+
+        runner = PLC(logic)
+        runner.step()  # CurStep == 0
+
+        pdg = build_program_graph(logic)
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "CurStep",
+            2,
+            pdg,
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            structural=True,
+        )
+
+        assert chain.mode == "projected"
+        assert chain.steps, "expected a projected step for CurStep == 2"
+        chosen = chain.steps[0].rung_index
+        trans_rung = next(n.rung_index for n in pdg.rung_nodes if "Trans" in n.condition_reads)
+        assert chosen == trans_rung
+        prox_tags = {t.tag_name for t in chain.steps[0].triggers}
+        assert "Trans" in prox_tags
+        assert "valstepisodd" not in prox_tags
+
+    def test_pinned_rejects_counterfactual_one_hot(self) -> None:
+        """With the held one-hot state pinned, the writer gated by a
+        mutually-exclusive peer state is rejected for the live one."""
+        S_Starting = Bool("S_Starting", external=True)
+        S_Clearing = Bool("S_Clearing", external=True)
+        Blower__init = Int("Blower__init")
+        SCB = Bool("SCB")
+
+        with Program(strict=False) as logic:
+            with Rung(S_Clearing):  # counterfactual writer
+                copy(1, SCB)
+            with Rung(S_Starting, Blower__init == 1):  # live writer
+                copy(1, SCB)
+
+        runner = PLC(logic)
+        runner.patch({"S_Starting": True, "S_Clearing": False})
+        runner.step()
+
+        pdg = build_program_graph(logic)
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "SCB",
+            True,
+            pdg,
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            structural=True,
+            pinned=frozenset({"S_Starting", "S_Clearing"}),
+        )
+
+        assert chain.mode == "projected"
+        assert chain.steps
+        chosen = chain.steps[0].rung_index
+        starting_rung = next(
+            n.rung_index for n in pdg.rung_nodes if "S_Starting" in n.condition_reads
+        )
+        assert chosen == starting_rung
+        prox_tags = {t.tag_name for t in chain.steps[0].triggers}
+        assert "Blower__init" in prox_tags
 
 
 class TestProjectedCauseEdgeCases:
@@ -629,6 +914,116 @@ class TestProjectedCauseBlockedUpstream:
         d = chain.to_dict()
         assert d["mode"] == "unreachable"
         assert any(b["reason"] == "BLOCKED_UPSTREAM" for b in d["blockers"])
+
+
+class TestProjectedCauseCopyWriters:
+    """Writer rungs that copy from a tag (the PackML sm_copy_or_jump_state shape).
+
+    A state machine whose current-state register is written only by
+    ``copy(Requested, Current)`` defeats two things at once: the candidate
+    check (the rung only "produces" whatever Requested holds *right now*)
+    and, when the rung ends in ``return_early()``, the bare ``rung.execute``
+    used by that check.  Both bit on the live Tumbler/Dryer template
+    (probe14/15, burnerloop findings).
+    """
+
+    def _jump_state_program(self):
+        """Distilled sm_copy_or_jump_state: copy-from-tag + return_early."""
+        from pyrung.core import call, return_early, subroutine
+
+        Go = Bool("Go")
+        Req = Int("Req")
+        Cur = Int("Cur")
+        Tail = Int("Tail")
+
+        @subroutine("jump_state")
+        def jump_state():
+            with Rung(Req != 0):
+                copy(Req, Cur)
+                copy(0, Req)
+                return_early()
+            with Rung():
+                copy(1, Tail)
+
+        with Program() as logic:
+            with Rung(Go):
+                copy(4, Req)
+            with Rung(Req != 0):
+                call(jump_state)
+
+        return logic
+
+    def test_writer_rung_with_return_early_does_not_raise(self) -> None:
+        """cause(to=) must not leak SubroutineReturnSignal from a writer rung.
+
+        _rung_produces_value executes candidate writer rungs in isolation;
+        a rung containing return_early() raises the subroutine control-flow
+        signal, which must be contained (the writes captured before the
+        signal are exactly the real in-scan semantics).  Pre-fix this
+        poisoned walker recovery into false 'unsolvable' certificates.
+        """
+        runner = PLC(self._jump_state_program())
+        runner.step()
+
+        chain = runner.cause("Cur", to=4)  # must not raise
+        assert chain is not None
+        assert chain.mode in ("projected", "unreachable")
+
+    def test_copy_source_named_as_blocker(self) -> None:
+        """The copy-source requirement (Req=4) is the named blocker.
+
+        Req is internal (program-written), never observed at 4 → the chain
+        must surface (Req, 4) as BLOCKED_UPSTREAM instead of the generic
+        self-named no-candidate blocker, so recovery can mine it as a goal.
+        """
+        from pyrung.core.analysis.causal import BlockerReason
+
+        runner = PLC(self._jump_state_program())
+        runner.step()
+
+        chain = runner.cause("Cur", to=4)
+        assert chain.mode == "unreachable"
+        named = {(b.blocked_tag, b.needed_value) for b in chain.blockers}
+        assert ("Req", 4) in named
+        blocker = next(b for b in chain.blockers if b.blocked_tag == "Req")
+        assert blocker.reason == BlockerReason.BLOCKED_UPSTREAM
+
+    def test_copy_source_named_as_trigger_when_input(self) -> None:
+        """An external copy-source becomes a proximate trigger at the value.
+
+        copy(Src, Dst) with Src never written by the program: cause(Dst,
+        to=7) should be projected with Src→7 among the triggers (the
+        operator can set it), not unreachable-for-lack-of-candidates.
+        """
+        Gate = Bool("Gate")
+        Src = Int("Src")
+        Dst = Int("Dst")
+
+        with Program() as logic:
+            with Rung(Gate):
+                copy(Src, Dst)
+
+        runner = PLC(logic)
+        runner.step()
+
+        chain = runner.cause("Dst", to=7)
+        assert chain.mode == "projected"
+        triggers = {(t.tag_name, t.to_value) for s in chain.steps for t in s.triggers}
+        assert ("Src", 7) in triggers
+        assert ("Gate", True) in triggers
+
+    def test_impossible_stored_copy_target_is_not_a_projected_writer(self) -> None:
+        dest = Int("Dest")
+        with Program() as logic:
+            with Rung():
+                copy(40_000, dest)
+
+        runner = PLC(logic)
+        runner.step()
+
+        assert runner.current_state.tags[dest.name] == 32_767
+        chain = runner.cause(dest.name, to=40_000)
+        assert chain.mode == "unreachable"
 
 
 class TestProjectedEffectUnreachable:
@@ -991,6 +1386,99 @@ class TestProjectedCauseWithAssume:
             runner.cause("Sts_FaultTripped", assume={"Cmd_Reset": True})
 
 
+class TestProjectedCauseStructural:
+    """Structural projected cause names current blockers without archaeology."""
+
+    def _copy_source_program(self):
+        Ready = Bool("Ready")
+        TriggerGate = Bool("TriggerGate")
+        SeedSrc = Bool("SeedSrc")
+        Gate = Bool("Gate")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(TriggerGate):
+                out(Gate)
+            with Rung(SeedSrc):
+                copy(4, Src)
+            with Rung(Ready, Gate):
+                copy(Src, Dest)
+
+        return logic
+
+    def test_structural_assumes_unobserved_values_reachable(self) -> None:
+        logic = self._copy_source_program()
+        runner = PLC(logic)
+        runner.patch({"Ready": True})
+        runner.step()
+        pdg = build_program_graph(logic)
+
+        chain_no = projected_cause(
+            runner._logic,
+            runner._history,
+            "Dest",
+            4,
+            pdg,
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+        )
+        assert chain_no.mode == "unreachable"
+
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "Dest",
+            4,
+            pdg,
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            structural=True,
+        )
+
+        assert chain.mode == "projected"
+        step = chain.steps[0]
+        assert step.fidelity == "structural"
+        assert {(t.tag_name, t.to_value) for t in step.triggers} == {
+            ("Src", 4),
+            ("Gate", True),
+        }
+        assert {(e.tag_name, e.value) for e in step.enablers} == {("Ready", True)}
+        assert all(e.held_since_scan is None for e in step.enablers)
+
+    def test_structural_reads_only_latest_history_state(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        logic = self._copy_source_program()
+        runner = PLC(logic)
+        runner.patch({"Ready": True})
+        runner.step()
+        pdg = build_program_graph(logic)
+
+        calls: list[int] = []
+        original_at = runner._history.at
+
+        def counting_at(scan_id: int):
+            calls.append(scan_id)
+            return original_at(scan_id)
+
+        monkeypatch.setattr(runner._history, "at", counting_at)
+
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "Dest",
+            4,
+            pdg,
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            structural=True,
+        )
+
+        assert chain.mode == "projected"
+        assert calls == [runner._history.newest_scan_id]
+
+
 # ---------------------------------------------------------------------------
 # assume={} on projected effect
 # ---------------------------------------------------------------------------
@@ -1110,3 +1598,367 @@ class TestRecoversWithAssume:
 
         with pytest.raises(ValueError, match="readonly"):
             runner.cause("X", to=True, assume={"Sensor": True})
+
+
+# ---------------------------------------------------------------------------
+# Simulation primitive (_simulate_scan) and copy/calc awareness
+# ---------------------------------------------------------------------------
+
+
+class TestSimulateScan:
+    """Direct tests for the _simulate_scan primitive."""
+
+    def test_coil_writes_captured(self) -> None:
+        """Simulation captures Out instruction writes."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        A = Bool("A")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+
+        state = SystemState().with_tags({"A": True})
+        sim = _simulate_scan(logic.rungs, state)
+        assert dict(sim.rung_writes.get(0, {})).get("X") is True
+
+    def test_copy_captured(self) -> None:
+        """Simulation captures copy instruction writes."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        state = SystemState().with_tags({"Enable": True, "Src": 42})
+        sim = _simulate_scan(logic.rungs, state)
+        assert dict(sim.rung_writes.get(0, {})).get("Dest") == 42
+
+    def test_calc_captured(self) -> None:
+        """Simulation captures calc instruction writes."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        Enable = Bool("Enable")
+        A = Int("A")
+        B = Int("B")
+        Result = Int("Result")
+
+        with Program() as logic:
+            with Rung(Enable):
+                calc(A + B, Result)
+
+        state = SystemState().with_tags({"Enable": True, "A": 10, "B": 20})
+        sim = _simulate_scan(logic.rungs, state)
+        assert dict(sim.rung_writes.get(0, {})).get("Result") == 30
+
+    def test_disabled_rung_no_writes(self) -> None:
+        """Rung with False condition produces no writes for coils."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        A = Bool("A")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(A):
+                latch(X)
+
+        state = SystemState().with_tags({"A": False})
+        sim = _simulate_scan(logic.rungs, state)
+        assert 0 not in sim.rung_writes or "X" not in dict(sim.rung_writes.get(0, {}))
+
+    def test_state_after_reflects_writes(self) -> None:
+        """state_after contains committed tag values."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        state = SystemState().with_tags({"Enable": True, "Src": 99})
+        sim = _simulate_scan(logic.rungs, state)
+        assert sim.state_after.tags.get("Dest") == 99
+
+    def test_program_object_accepted(self) -> None:
+        """Simulation accepts a Program object (not just list[Rung])."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        A = Bool("A")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+
+        state = SystemState().with_tags({"A": True})
+        sim = _simulate_scan(logic, state)
+        assert dict(sim.rung_writes.get(0, {})).get("X") is True
+
+    def test_read_after_write_within_scan(self) -> None:
+        """Later rungs see values written by earlier rungs."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Mid = Int("Mid")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Mid)
+            with Rung(Enable):
+                copy(Mid, Dest)
+
+        state = SystemState().with_tags({"Enable": True, "Src": 7})
+        sim = _simulate_scan(logic.rungs, state)
+        assert sim.state_after.tags.get("Dest") == 7
+
+
+class TestRungProducesValue:
+    """Tests for _rung_produces_value (simulation-based candidate check)."""
+
+    def test_out_produces_true(self) -> None:
+        from pyrung.core.analysis.causal.projected import _rung_produces_value
+        from pyrung.core.state import SystemState
+
+        A = Bool("A")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+
+        state = SystemState()
+        assert _rung_produces_value(logic.rungs[0], 0, "X", True, state) is True
+
+    def test_copy_produces_value(self) -> None:
+        from pyrung.core.analysis.causal.projected import _rung_produces_value
+        from pyrung.core.state import SystemState
+
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        state = SystemState().with_tags({"Src": 42})
+        assert _rung_produces_value(logic.rungs[0], 0, "Dest", 42, state) is True
+        assert _rung_produces_value(logic.rungs[0], 0, "Dest", 99, state) is False
+
+    def test_calc_produces_value(self) -> None:
+        from pyrung.core.analysis.causal.projected import _rung_produces_value
+        from pyrung.core.state import SystemState
+
+        Gate = Bool("Gate")
+        A = Int("A")
+        Result = Int("Result")
+
+        with Program() as logic:
+            with Rung(Gate):
+                calc(A + 10, Result)
+
+        state = SystemState().with_tags({"A": 5})
+        assert _rung_produces_value(logic.rungs[0], 0, "Result", 15, state) is True
+        assert _rung_produces_value(logic.rungs[0], 0, "Result", 20, state) is False
+
+
+class TestProjectedCauseCopyCalc:
+    """projected_cause finds copy/calc rungs as candidates."""
+
+    def test_copy_rung_candidate(self) -> None:
+        """cause(to=) finds a copy rung that would produce the value."""
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        runner = PLC(logic)
+        runner.patch({"Src": 42})
+        runner.step()
+
+        # Dest is 0 (default), ask how to reach 42
+        chain = runner.cause("Dest", to=42)
+        assert chain.mode == "projected"
+        assert len(chain.steps) >= 1
+        assert chain.steps[0].rung_index == 0
+
+    @pytest.mark.parametrize("exact", [True, False])
+    def test_copy_step_preserves_crossing_exactness(self, monkeypatch, exact: bool) -> None:
+        from pyrung.core.analysis import crossings
+
+        Enable = Bool("FidelityEnable")
+        Src = Int("FidelitySrc")
+        Dest = Int("FidelityDest")
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        original_reverse = crossings.reverse
+
+        def reverse_with_fidelity(*args, **kwargs):
+            return replace(original_reverse(*args, **kwargs), exact=exact)
+
+        monkeypatch.setattr(crossings, "reverse", reverse_with_fidelity)
+        runner = PLC(logic)
+        runner.patch({Src.name: 42})
+        runner.step()
+
+        chain = runner.cause(Dest.name, to=42)
+
+        assert chain.mode == "projected"
+        assert chain.steps[0].crossing_exact is exact
+        assert chain.steps[0].to_dict()["crossing_exact"] is exact
+
+    def test_calc_rung_candidate(self) -> None:
+        """cause(to=) finds a calc rung that would produce the value."""
+        Gate = Bool("Gate")
+        A = Int("A")
+        Result = Int("Result")
+
+        with Program() as logic:
+            with Rung(Gate):
+                calc(A + 10, Result)
+
+        runner = PLC(logic)
+        runner.patch({"A": 5})
+        runner.step()
+
+        # Result is 0, want 15
+        chain = runner.cause("Result", to=15)
+        assert chain.mode == "projected"
+        assert len(chain.steps) >= 1
+
+    def test_copy_wrong_value_not_candidate(self) -> None:
+        """cause(to=) excludes a literal copy that can't produce the value.
+
+        A copy from a *tag* source is a candidate for any value (the source
+        reaching it becomes the named requirement — see
+        TestProjectedCauseCopyWriters); a copy of a *literal* stays excluded
+        when the literal differs.
+        """
+        Enable = Bool("Enable")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(42, Dest)
+
+        runner = PLC(logic)
+        runner.step()
+
+        # Dest is 0, ask how to reach 99 — the rung only ever writes 42
+        chain = runner.cause("Dest", to=99)
+        assert chain.mode == "unreachable"
+
+
+class TestProjectedEffectCopyCalc:
+    """projected_effect detects copy/calc downstream effects."""
+
+    def test_copy_downstream(self) -> None:
+        """effect() detects a copy instruction as downstream effect."""
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        runner = PLC(logic)
+        runner.patch({"Src": 42})
+        runner.step()
+
+        chain = runner.effect("Enable", from_=False)
+        assert chain.mode == "projected"
+        effect_tags = [s.transition.tag_name for s in chain.steps]
+        assert "Dest" in effect_tags
+
+    def test_copy_correct_value(self) -> None:
+        """Transition.to_value carries the actual computed value from copy."""
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        runner = PLC(logic)
+        runner.patch({"Src": 42})
+        runner.step()
+
+        chain = runner.effect("Enable", from_=False)
+        step = next(s for s in chain.steps if s.transition.tag_name == "Dest")
+        assert step.transition.to_value == 42
+
+    def test_calc_downstream(self) -> None:
+        """effect() detects a calc instruction as downstream effect."""
+        Enable = Bool("Enable")
+        A = Int("A")
+        Result = Int("Result")
+
+        with Program() as logic:
+            with Rung(Enable):
+                calc(A * 2, Result)
+
+        runner = PLC(logic)
+        runner.patch({"A": 5})
+        runner.step()
+
+        chain = runner.effect("Enable", from_=False)
+        assert chain.mode == "projected"
+        effect_tags = [s.transition.tag_name for s in chain.steps]
+        assert "Result" in effect_tags
+
+    def test_calc_correct_value(self) -> None:
+        """Transition.to_value carries the actual computed value from calc."""
+        Enable = Bool("Enable")
+        A = Int("A")
+        Result = Int("Result")
+
+        with Program() as logic:
+            with Rung(Enable):
+                calc(A * 2, Result)
+
+        runner = PLC(logic)
+        runner.patch({"A": 5})
+        runner.step()
+
+        chain = runner.effect("Enable", from_=False)
+        step = next(s for s in chain.steps if s.transition.tag_name == "Result")
+        assert step.transition.to_value == 10
+
+    def test_non_bool_with_to_value(self) -> None:
+        """effect() with explicit to_value works for non-Bool tags."""
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung():
+                copy(Src, Dest)
+
+        runner = PLC(logic)
+        runner.step()
+
+        chain = runner.effect("Src", from_=0, to_value=42)
+        assert chain.mode == "projected"

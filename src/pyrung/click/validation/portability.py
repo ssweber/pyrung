@@ -35,6 +35,7 @@ from .findings import (
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
     CLK_PTR_POINTER_MUST_BE_DS,
+    CLK_STATUS_BIT_NOT_PORTABLE,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     ClickFinding,
     ValidationMode,
@@ -507,6 +508,92 @@ def _walk_mode_violations(
         _walk_mode_violations(child, calc_mode, violations, seen)
 
 
+def _is_status_bit_tag(tag: Any) -> bool:
+    """Return True if tag belongs to a final field on a DoneAcc timer/counter structure."""
+    from pyrung.core.structure import _DoneAccRuntime
+
+    block = getattr(tag, "_pyrung_block", None)
+    if block is None:
+        return False
+    if not getattr(block, "_pyrung_field_final", False):
+        return False
+    runtime = getattr(block, "_pyrung_structure_runtime", None)
+    return isinstance(runtime, _DoneAccRuntime)
+
+
+def _collect_condition_tags(condition: Any) -> list[Any]:
+    """Recursively collect all Tag objects referenced by a condition tree."""
+    from pyrung.core.condition import Condition
+    from pyrung.core.tag import Tag
+
+    tags: list[Any] = []
+    if isinstance(condition, Tag):
+        tags.append(condition)
+    elif isinstance(condition, Condition):
+        for attr_name in ("tag", "target", "left", "right", "condition", "conditions"):
+            attr = getattr(condition, attr_name, None)
+            if attr is None:
+                continue
+            if isinstance(attr, Tag):
+                tags.append(attr)
+            elif isinstance(attr, (list, tuple)):
+                for item in attr:
+                    tags.extend(_collect_condition_tags(item))
+            elif isinstance(attr, Condition):
+                tags.extend(_collect_condition_tags(attr))
+    return tags
+
+
+def _evaluate_status_bit_usage(
+    program: Any,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    """Flag any reference to timer/counter status bits (EN, TT, CU, CD) in conditions."""
+    findings: list[ClickFinding] = []
+    seen: set[str] = set()
+
+    def _check_tag(tag: Any, location_str: str) -> None:
+        if not _is_status_bit_tag(tag):
+            return
+        name = tag.name
+        if name in seen:
+            return
+        seen.add(name)
+        findings.append(
+            ClickFinding(
+                code=CLK_STATUS_BIT_NOT_PORTABLE,
+                severity=_route_severity(CLK_STATUS_BIT_NOT_PORTABLE, mode),
+                message=(
+                    f"Tag '{name}' is a simulation-only status bit at {location_str}. "
+                    "Click hardware manages timer/counter status bits internally."
+                ),
+                location=location_str,
+                suggestion=(
+                    "Use the corresponding Done/Acc fields instead, or remove this "
+                    "reference from Click-targeted logic. Status bits (EN, TT, CU, CD) "
+                    "are available in the pyrung runner API (.when(), .monitor()) but "
+                    "cannot appear in Click ladder."
+                ),
+            )
+        )
+
+    def _walk_rung(rung: Any, location_str: str) -> None:
+        for cond in rung._conditions:
+            for tag in _collect_condition_tags(cond):
+                _check_tag(tag, location_str)
+        for branch in rung._branches:
+            _walk_rung(branch, location_str)
+
+    for rung_index, rung in enumerate(program.rungs):
+        _walk_rung(rung, f"main rung {rung_index}")
+
+    for sub_name in sorted(program.subroutines):
+        for rung_index, rung in enumerate(program.subroutines[sub_name]):
+            _walk_rung(rung, f"subroutine '{sub_name}' rung {rung_index}")
+
+    return findings
+
+
 def _evaluate_instruction_portability(
     instruction: Any, base_location: ProgramLocation, mode: ValidationMode
 ) -> list[ClickFinding]:
@@ -546,7 +633,7 @@ def _evaluate_instruction_portability(
                     location=location_text,
                     suggestion=(
                         "Click has no floor-division operator. "
-                        "Use calc(a / b, int_dest) instead — "
+                        "Use calc(a / b, int_dest) instead; "
                         "copying the result to an Int or Dint tag truncates toward zero automatically."
                     ),
                 )

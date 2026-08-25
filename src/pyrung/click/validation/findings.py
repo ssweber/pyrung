@@ -44,6 +44,7 @@ CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED = "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED
 CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y = "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y"
 CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS = "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS"
 CLK_TIMER_PRESET_OVERFLOW = "CLK_TIMER_PRESET_OVERFLOW"
+CLK_STATUS_BIT_NOT_PORTABLE = "CLK_STATUS_BIT_NOT_PORTABLE"
 
 
 @dataclass(frozen=True)
@@ -191,7 +192,7 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
 
     if code == CLK_CALC_FLOOR_DIV:
         return (
-            "Click has no floor-division operator. Use calc(a / b, int_dest) instead — "
+            "Click has no floor-division operator. Use calc(a / b, int_dest) instead; "
             "copying the result to an Int or Dint tag truncates toward zero automatically."
         )
 
@@ -226,6 +227,13 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
     if code == CLK_TIMER_PRESET_OVERFLOW:
         return "Use a larger time unit to keep the preset within INT range (max 32,767)."
 
+    if code == CLK_STATUS_BIT_NOT_PORTABLE:
+        return (
+            "Use the corresponding Done/Acc fields instead, or remove this reference "
+            "from Click-targeted logic. Status bits (EN, TT, CU, CD) are available in "
+            "the pyrung runner API (.when(), .monitor()) but cannot appear in Click ladder."
+        )
+
     return ""
 
 
@@ -259,6 +267,7 @@ __all__ = [
     "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
     "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
     "CLK_TIMER_PRESET_OVERFLOW",
+    "CLK_STATUS_BIT_NOT_PORTABLE",
     "ClickFinding",
     "ClickValidationReport",
 ]

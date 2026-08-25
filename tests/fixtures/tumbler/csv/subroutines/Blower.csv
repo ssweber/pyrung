@@ -1,0 +1,86 @@
+marker,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF
+#,Error List:
+#,
+#,1 = Not getting Feedback from Contactor (ie either contactor or thermal overload isn't getting power
+#,
+#,    # ==============================================================================#
+#,    # SECTION 1: SFC INITIALIZATION BOILERPLATE - DO NOT MODIFY
+#,    # ==============================================================================#
+#,
+R1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,latch(C1102)
+#,Shared Resets for Init and Reset
+R2,DS522==1,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS534)"
+,DS523==1,|,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,TD111)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,TD112)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"fill(1,DS531..DS532)"
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"fill(0,DS525..DS526)"
+#,Built-in timer for step timeout detection
+R3,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"on_delay(T111,TD111,preset=DS528,unit=Ts)"
+,DS529==1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,.reset()
+#,Reset the timer reset flag after it's been processed
+R4,DS529==1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS529)"
+#,Error detection - If step exceeds time limit
+R5,TD111>=DS528,DS527==1,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(1,DS525,oneshot=1)"
+,,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(DS531,DS526,oneshot=1)"
+#,Synchronize current and stored step (must be at top)
+#,
+R6,DS531!=DS532,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(DS531,DS532)"
+#,    # ==============================================================================#
+#,    # SECTION 2: STEP IMPLEMENTATION SECTION - MODIFY THIS SECTION ONLY
+#,    # ==============================================================================#
+#,
+#,FIRST STEP IS INIT
+#,(we will automatically set _init to 1 after Trans)
+#,
+#,Use `Once` as 'Entry' like actions for Steps
+R7,DS531>=1,DS525==0,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(C12)
+#,"# after everything is done, then Trans = 1"
+R8,DS531==1,TD111>2,C6,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(1,DS530)"
+#,Problem with either Contactor or Thermal Overload
+R9,DS531>=1,TD111>2,~C6,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(1,DS525)"
+,,,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(3,DS526)"
+#,    # =================================================================#
+#,    # SECTION 3: SFC Pause and Shutdown definition - Modify to Suit your project
+#,    # =================================================================#
+#,
+#,
+#,Pause actions
+R10,DS524==1,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,reset(C12)
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS531)"
+#,Pause conditions
+R11,DS524==1,~C6,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS533)"
+#,Stop actions
+R12,DS521==0,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,reset(C12)
+#,Stop conditions & Standard shutdown procedure
+R13,DS521==0,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"fill(0,DS522..DS526)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,TD111)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,TD112)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"fill(0,DS529..DS535)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS533)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,reset(C1102)
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,return()
+#,    # =================================================================#
+#,    # SECTION 4: SFC EXECUTION CONTROL BOILERPLATE - DO NOT MODIFY
+#,    # =================================================================#
+#,
+#,
+#,"Reset handling - xReset is self-clearing, while XInit must be set back to 0 manually."
+R14,DS523==1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS523)"
+#,Check if current step is odd
+R15,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"math(DS531 MOD 2,DS535,mode=decimal)"
+#,EVEN STEP HANDLING - SAFETY MECHANISM FOR MANUAL INTERVENTION
+#,    # This stays ABOVE incrementing CurStep
+#,"    # If we detect an even step number (either from normal transition or manual intervention),"
+#,    # we immediately increment to the next odd step without executing any step logic.
+#,"    # This provides a safe ""neutral zone"" when manually changing step numbers."
+R16,DS535!=1,DS524==0,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"math(DS531 + 1,DS531,mode=decimal)"
+#,Step advancement when transition is triggered
+R17,DS530==1,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"math(DS531 + 1,DS531,mode=decimal)"
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS530)"
+#,Built-in timer for step duration tracking
+#,# Note: reset after Trans
+R18,DS531==DS532,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"on_delay(T112,TD112,preset=0,unit=Ts)"
+#,Mark initialization complete after first step
+R19,DS531==2,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(1,DS534)"
+R20,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,return()

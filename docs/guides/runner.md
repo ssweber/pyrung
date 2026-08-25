@@ -187,8 +187,8 @@ runner.reboot()  # all tags reset
 ## Inspecting state
 
 ```python
-runner.current_state    # SystemState snapshot at latest committed scan
-runner.simulation_time  # shorthand for current_state.timestamp
+runner.state            # SystemState snapshot at latest committed scan
+runner.simulation_time  # shorthand for state.timestamp
 runner.time_mode        # current TimeMode
 runner.forces           # read-only view of active force overrides
 ```
@@ -213,12 +213,23 @@ runner = PLC(logic)  # 100 MB default cache, all scans addressable
 
 runner.history.at(5)          # state at scan 5
 runner.history.range(3, 7)    # [scan 3, 4, 5, 6]
+
+transition = runner.history.previous_transition(
+    Step,
+    to=101,
+    at_or_before=runner.playhead,
+)
 runner.history.latest(10)     # up to 10 most recent (oldest → newest)
 ```
 
 Every scan from 0 to the current tip is addressable.  Recent scans are served
 from an in-memory state cache (byte-bounded, default 100 MB); older scans are
 reconstructed on demand from the scan log and checkpoints.
+
+`previous_transition()` returns the latest matching recorded transition, or
+`None`. It uses compressed history indexes where available, independent of
+whether the underlying history is encoded as stable, alternating, arithmetic,
+or opaque ranges.
 
 To bound memory on long runs, set a retention window:
 
@@ -276,7 +287,10 @@ See [Testing — Forking](testing.md#forking-test-alternate-outcomes) for the al
 ```python
 runner.when(Fault).pause()                   # halt run()/run_for()/run_until()
 runner.when(Fault).snapshot("fault_seen")    # label scan in history
+runner.when(~Sensor).do(lambda state: runner.patch({Sensor: True}))  # run a callback, keep going
 runner.monitor(Motor, lambda curr, prev: print(f"{prev} → {curr}"))
 ```
+
+`.do()` runs a callback every scan its condition holds and lets the run continue — the hook for reactive inputs. Paired with `patch`, it re-asserts an input whenever the program drifts it: `when(~Sensor).do(...)` patches `Sensor` back True each time it falls (use `patch`, not `force` — a force would *pin* the tag, so the program could never drift it and the reaction would be moot). The patch changes visible state, so `run_until(..., fold=True)` won't fold past it — the window steps scan-by-scan while the callback is active, then folds normally once it stops firing.
 
 See [Testing — Monitoring changes](testing.md#monitoring-changes) and [Testing — Predicate breakpoints](testing.md#predicate-breakpoints-and-snapshots) for usage patterns.

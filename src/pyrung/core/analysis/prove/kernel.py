@@ -185,12 +185,14 @@ def _step_kernel(
     mutable = context.mutable_tag_names
     if _VERIFY_MUTABLE_SET and mutable is not None:
         static_keys = context.compiled._tag_template
+        simulation_status = context.simulation_status_tag_names
         before = dict(kernel.tags)
         _step_compiled_kernel(context.compiled, kernel, dt=context.dt)
         leaked = [
             name
             for name, value in kernel.tags.items()
             if name not in mutable
+            and name not in simulation_status
             and name in static_keys
             and name in before
             and before[name] != value
@@ -370,7 +372,9 @@ class _LiveInputCache:
         self._hidden_tags = _abstracted_hidden_tags(context)
         nd_names = frozenset(context.nondeterministic_dims)
         self._hidden_input_deps = {
-            tag_name: frozenset(context.graph.upstream_slice(tag_name) & nd_names)
+            tag_name: frozenset(
+                context.graph.upstream_slice(tag_name, follow_calls=False) & nd_names
+            )
             for tag_name in self._hidden_tags
         }
 

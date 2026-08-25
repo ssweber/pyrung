@@ -6,7 +6,7 @@ counterfactual evaluation, steady-state stopping, and edge cases.
 
 from __future__ import annotations
 
-from pyrung.core import PLC, And, Bool, Or, Program, Rung, latch, out, reset
+from pyrung.core import PLC, And, Bool, Or, Program, Rung, branch, latch, out, reset
 
 # ---------------------------------------------------------------------------
 # Worked example from spec
@@ -399,3 +399,53 @@ class TestEffectEdgeCases:
         assert "A" in chain.tags()
         assert "X" in chain.tags()
         assert 0 in chain.rungs()
+
+
+# ---------------------------------------------------------------------------
+# Branch / node-index alignment
+# ---------------------------------------------------------------------------
+
+
+class TestBranchNodeAlignment:
+    """effect() must use main_node_by_rung() when branches shift node indices.
+
+    When a rung has branches, the flat rung_nodes list interleaves branch
+    nodes between main rungs.  Bare rung_nodes[rung_idx] gets the wrong
+    node for downstream rungs.
+    """
+
+    def test_effect_finds_downstream_through_branched_rung(self) -> None:
+        """Trigger → Path1 (via branch on rung 0) → Result (rung 1).
+
+        Rung 0's branches push rung 1's PDG node to index 3.  Without
+        main_node_by_rung(), recorded_effect looks up the branch node
+        instead of rung 1's node and misses Result.
+        """
+        Trigger = Bool("Trigger", external=True)
+        Enable = Bool("Enable", external=True)
+        Path1 = Bool("Path1")
+        Path2 = Bool("Path2")
+        Result = Bool("Result")
+
+        with Program() as prog:
+            with Rung(Trigger):
+                with branch(Enable):
+                    out(Path1)
+                with branch(~Enable):
+                    out(Path2)
+            with Rung(Path1):
+                out(Result)
+
+        plc = PLC(prog)
+        plc.patch({"Trigger": True, "Enable": True})
+        plc.step()
+
+        assert plc.state.tags["Path1"] is True
+        assert plc.state.tags["Result"] is True
+
+        chain = plc.effect("Trigger", scan=1)
+        assert chain is not None
+        assert chain.mode == "recorded"
+        effect_tags = {s.transition.tag_name for s in chain.steps}
+        assert "Path1" in effect_tags
+        assert "Result" in effect_tags

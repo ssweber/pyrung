@@ -10,14 +10,16 @@ The client receive uses a raw Modbus address (``ModbusAddress``) instead of a Cl
 bank string, so it works with any Modbus TCP device — not only Click PLCs.
 """
 
-from pyrung import Bool, Char, Int, Or, Program, rung, Timer, copy, on_delay, out, rise
+from pyrung import Bool, Char, Int, Or, Program, rung, Timer, copy, on_delay, out, reset, rise
 from pyrung.circuitpy import (
     P1AM,
     ModbusClientConfig,
     ModbusServerConfig,
     generate_circuitpy,
 )
-from pyrung.click import ModbusTcpTarget, TagMap, c, ds, receive, t, td, txt
+from pyrung.click import ClickBlocks, ModbusTcpTarget, TagMap, receive
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
 
 # ── Hardware ──────────────────────────────────────────────────────────────
@@ -71,7 +73,7 @@ with Program() as logic:
     with rung(Or(rise(WalkRequest), rise(LocalPedButton))):
         out(WalkActive)
     with rung(GreenTimer.Done):
-        copy(False, WalkActive)
+        reset(WalkActive)
 
     # --- Drive relay outputs ---
     with rung(State == "r"):

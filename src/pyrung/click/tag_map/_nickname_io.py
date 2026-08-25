@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -15,9 +16,11 @@ from pyclickplc.blocks import compute_all_block_ranges, format_block_tag
 from pyclickplc.validation import validate_nickname
 
 from pyrung.core import Block, Physical, Tag
+from pyrung.core.physical import parse_profile_spec, profile_to_token
 from pyrung.core.tag import MappingEntry, _normalize_choices
 
 from ._parsers import (
+    _HARDWARE_BLOCK_CACHE,
     TagMeta,
     _build_block_spec,
     _compose_address_comment,
@@ -68,7 +71,9 @@ def _tag_meta_from_hints(
             physical_name = physical_obj.name
         on_delay = physical_obj.on_delay
         off_delay = physical_obj.off_delay
-        profile = physical_obj.profile
+        profile = (
+            profile_to_token(physical_obj.profile) if physical_obj.profile is not None else None
+        )
         system = physical_obj.system
     if (
         choices is None
@@ -115,7 +120,7 @@ def _physical_from_meta_details(meta: TagMeta, *, name: str) -> Physical:
         name,
         on_delay=meta.on_delay,
         off_delay=meta.off_delay,
-        profile=meta.profile,
+        profile=parse_profile_spec(meta.profile) if meta.profile is not None else None,
         system=meta.system,
     )
 
@@ -158,6 +163,10 @@ def tag_map_from_nickname_file(
     if mode not in {"warn", "strict"}:
         raise ValueError(f"Invalid mode {mode!r}; expected 'warn' or 'strict'.")
 
+    # Each parse must start with fresh hardware blocks so map_to stamps
+    # don't leak between calls (e.g. clicknick rebuilds in the same process).
+    _HARDWARE_BLOCK_CACHE.clear()
+
     records = pyclickplc.read_csv(path)
     rows = sorted(
         records.values(),
@@ -171,6 +180,9 @@ def tag_map_from_nickname_file(
     named_array_spans: dict[str, tuple[str, int, int]] = {}
     seen_names: dict[str, tuple[str, int]] = {}
     covered_rows: set[int] = set()
+    unmapped_defaults: dict[tuple[str, int], object] = {}
+    unmapped_retentive: dict[tuple[str, int], bool] = {}
+    unmapped_comments: dict[tuple[str, int], str] = {}
     seen_semantic_block_names: set[str] = set()
     udt_groups: dict[str, list[tuple[_BlockImportSpec, str]]] = defaultdict(list)
     physical_defs: dict[str, Physical] = {}
@@ -774,9 +786,19 @@ def tag_map_from_nickname_file(
     for idx, row in enumerate(rows):
         if idx in covered_rows:
             continue
-        if row.nickname == "":
-            continue
         if get_addr_key(row.memory_type, row.address) in reserved_system_hardware_keys:
+            continue
+        if row.nickname == "":
+            if not row.has_content:
+                continue
+            key = (row.memory_type, row.address)
+            if row.comment != "":
+                unmapped_comments[key] = row.comment
+            if not row.is_default_retentive:
+                unmapped_retentive[key] = row.retentive
+            if not row.retentive and not row.is_default_initial_value:
+                logical_type = _tag_type_for_memory_type(row.memory_type)
+                unmapped_defaults[key] = _parse_default(row.initial_value, logical_type)
             continue
 
         register_logical_name(row.nickname, memory_type=row.memory_type, address=row.address)
@@ -814,10 +836,18 @@ def tag_map_from_nickname_file(
     mapping._structure_by_name = {structure.name: structure for structure in structures}
     mapping._structure_warnings = tuple(structure_warnings)
     mapping._named_array_spans = named_array_spans
+    mapping._source_unmapped_defaults = unmapped_defaults
+    mapping._source_unmapped_retentive = unmapped_retentive
+    mapping._source_unmapped_comments = unmapped_comments
     return mapping
 
 
-def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
+def write_tag_map_to_nickname_file(
+    self,
+    path: str | Path,
+    *,
+    blocks: Iterable[Any] | None = None,
+) -> int:
     """Write mapped addresses to a Click nickname CSV file.
 
     Emits one row per mapped hardware address.  Block entries produce
@@ -827,6 +857,11 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
 
     Args:
         path: Destination CSV path. Parent directories must exist.
+        blocks: Extra blocks to scan for configured-but-unmapped slots.
+            Accepts a ``ClickBlockSet`` or any iterable of blocks;
+            non-Block items (e.g. standalone tags) are silently skipped.
+            When omitted, only blocks already known from TagMap entries
+            are scanned.
 
     Returns:
         Number of rows written.
@@ -921,14 +956,72 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
                 owner_name=structure_owner_name or slot.name,
             )
 
+            hw_block = entry.hardware.block
+            hw_effective = hw_block._effective_slot_name(hardware_addr)
+            hw_default = hw_block._format_tag_name(hardware_addr)
+            effective_nickname = hw_effective if hw_effective != hw_default else slot.name
+
             records[get_addr_key(memory_type, hardware_addr)] = AddressRecord(
                 memory_type=memory_type,
                 address=hardware_addr,
-                nickname=slot.name,
+                nickname=effective_nickname,
                 comment=_compose_address_comment(slot.comment, block_tag, tag_meta),
                 initial_value=_format_default(slot.default, slot.type),
                 retentive=slot.retentive,
                 data_type=BANKS[memory_type].data_type,
+            )
+
+    # Bank-resident scalars carry identity on the public Click bank slots
+    # (installed by generated ``bank.slot(...)`` config or ``map_to`` stamping)
+    # and may have no TagMap entry — emit rows for configured slots not already
+    # covered.  XD/YD use display-indexed addressing, and timer/counter/system
+    # banks keep TagMap-entry emission, so only plain data banks are scanned.
+    scanned_banks = {"X", "Y", "C", "DS", "DD", "DH", "DF", "TXT"}
+    seen_block_ids: set[int] = set()
+    all_blocks: list[Block] = []
+    for entry in self._block_entries_tuple:
+        bid = id(entry.logical)
+        if bid not in seen_block_ids:
+            seen_block_ids.add(bid)
+            all_blocks.append(entry.logical)
+    if blocks is not None:
+        for blk in blocks:
+            if not isinstance(blk, Block):
+                continue
+            bid = id(blk)
+            if bid not in seen_block_ids:
+                seen_block_ids.add(bid)
+                all_blocks.append(blk)
+    for bank in all_blocks:
+        if bank.name not in scanned_banks:
+            continue
+        for address in sorted(bank._configured_addresses()):
+            addr_key = get_addr_key(bank.name, address)
+            if addr_key in records:
+                continue
+            slot = bank.slot(address)
+            tag_meta = _tag_meta_from_hints(
+                choices=slot.choices,
+                readonly=slot.readonly,
+                external=slot.external,
+                final=slot.final,
+                public=slot.public,
+                lock=slot.lock,
+                physical=slot.physical,
+                link=slot.link,
+                min=slot.min,
+                max=slot.max,
+                uom=slot.uom,
+                owner_name=slot.name,
+            )
+            records[addr_key] = AddressRecord(
+                memory_type=bank.name,
+                address=address,
+                nickname=slot.name if slot.name_overridden else "",
+                comment=_compose_address_comment(slot.comment, tag_meta=tag_meta),
+                initial_value=_format_default(slot.default, bank.type),
+                retentive=slot.retentive,
+                data_type=BANKS[bank.name].data_type,
             )
 
     def write_boundary_comment(memory_type: str, address: int, block_tag: str) -> None:

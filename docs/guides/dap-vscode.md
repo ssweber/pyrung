@@ -238,8 +238,8 @@ Harness: active
   bool  Gripper_En -> Gripper_Fb_Contact  (on=5ms, off=5ms)
   bool  Gripper_En -> Gripper_Fb_Vacuum   (on=20ms, off=80ms)
   bool  Sorter_State==2 -> Sorter_BinSensor  (on=2000ms, off=500ms)
-  analog  Heater_En -> Heater_Fb_Temp  profile=generic_thermal [active]
-  analog  Oven_Mode==2 -> Oven_Temp  profile=zone_thermal [active]
+  analog  Heater_En -> Heater_Fb_Temp  profile=ramp:up=0.5|down=-0.05
+  analog  Oven_Mode==2 -> Oven_Temp  profile=approach:toward=180.0|rate=0.3
 ```
 
 When the harness applies patches, they appear in the Debug Console output prefixed with `[harness]`:

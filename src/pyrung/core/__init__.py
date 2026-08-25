@@ -32,7 +32,7 @@ from pyrung.core.expression import (
     sqrt,
     tan,
 )
-from pyrung.core.harness import Coupling, Harness, profile
+from pyrung.core.harness import Coupling, Harness
 from pyrung.core.instruction.send_receive import (
     ModbusAddress,
     ModbusRtuTarget,
@@ -60,7 +60,7 @@ from pyrung.core.memory_block import (
     SlotView,
     WordBlock,
 )
-from pyrung.core.physical import Physical, parse_duration
+from pyrung.core.physical import Approach, Physical, Pulse, Ramp, parse_duration
 from pyrung.core.program import (
     And,
     ForbiddenControlFlowError,
@@ -153,11 +153,13 @@ __all__ = [
     "normalize_unit",
     # Physical feedback
     "Physical",
+    "Ramp",
+    "Approach",
+    "Pulse",
     "parse_duration",
     # Autoharness
     "Coupling",
     "Harness",
-    "profile",
     # Structured factories
     "DoneAccUDT",
     "Field",

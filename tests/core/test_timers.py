@@ -26,6 +26,7 @@ from pyrung.core import (
     Rung,
     Timer,
     copy,
+    latch,
     off_delay,
     on_delay,
     out,
@@ -259,7 +260,7 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-                copy(True, ResetBtn)
+                latch(ResetBtn)
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
@@ -1141,3 +1142,133 @@ class TestPositionalAndUnitAliases:
             with Rung(Enable):
                 with pytest.raises(ValueError, match="ambiguous"):
                     on_delay(Timer[1], 100, "T")
+
+
+class TestTimerStatusBits:
+    """Test EN (Enable) and TT (Timer Timing) status bits."""
+
+    def test_ton_status_bits_through_cycle(self, runner_factory):
+        """TON: EN/TT track enable and timing state through full cycle."""
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer[1], preset=30)
+
+        runner = runner_factory(logic, dt=0.010)
+
+        # Disabled: EN=False, TT=False
+        runner.patch({"Enable": False})
+        runner.step()
+        assert runner.current_state.tags["Timer_EN"] is False
+        assert runner.current_state.tags["Timer_TT"] is False
+
+        # Enabled, timing: EN=True, TT=True
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["Timer_EN"] is True
+        assert runner.current_state.tags["Timer_TT"] is True
+
+        # Still timing (acc=20 < preset=30)
+        runner.step()
+        assert runner.current_state.tags["Timer_EN"] is True
+        assert runner.current_state.tags["Timer_TT"] is True
+
+        # Done (acc=30 >= preset=30): EN=True, TT=False
+        runner.step()
+        assert runner.current_state.tags["Timer_Done"] is True
+        assert runner.current_state.tags["Timer_EN"] is True
+        assert runner.current_state.tags["Timer_TT"] is False
+
+        # Disabled after done: EN=False, TT=False (TON resets)
+        runner.patch({"Enable": False})
+        runner.step()
+        assert runner.current_state.tags["Timer_EN"] is False
+        assert runner.current_state.tags["Timer_TT"] is False
+
+    def test_rton_status_bits_hold_path(self, runner_factory):
+        """RTON: EN/TT in hold path (disabled without reset)."""
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer[1], preset=50).reset(ResetBtn)
+
+        runner = runner_factory(logic, dt=0.010)
+
+        # Enable and accumulate
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["Timer_EN"] is True
+        assert runner.current_state.tags["Timer_TT"] is True
+
+        # Disable (RTON hold): EN=False, TT=False
+        runner.patch({"Enable": False})
+        runner.step()
+        assert runner.current_state.tags["Timer_EN"] is False
+        assert runner.current_state.tags["Timer_TT"] is False
+        assert runner.current_state.tags["Timer_Acc"] == 10  # held
+
+        # Reset: EN=False, TT=False
+        runner.patch({"ResetBtn": True})
+        runner.step()
+        assert runner.current_state.tags["Timer_EN"] is False
+        assert runner.current_state.tags["Timer_TT"] is False
+        assert runner.current_state.tags["Timer_Acc"] == 0
+
+    def test_tof_status_bits_through_cycle(self, runner_factory):
+        """TOF: EN tracks enable, TT=True while off-delay is timing."""
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with Rung(Enable):
+                off_delay(Timer[1], preset=30)
+
+        runner = runner_factory(logic, dt=0.010)
+
+        # Enable: EN=True, TT=False (not timing while enabled)
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["Timer_EN"] is True
+        assert runner.current_state.tags["Timer_TT"] is False
+        assert runner.current_state.tags["Timer_Done"] is True
+
+        # Disable, off-delay starts: EN=False, TT=True (timing)
+        runner.patch({"Enable": False})
+        runner.step()
+        assert runner.current_state.tags["Timer_EN"] is False
+        assert runner.current_state.tags["Timer_TT"] is True
+        assert runner.current_state.tags["Timer_Done"] is True
+
+        # Still timing
+        runner.step()
+        assert runner.current_state.tags["Timer_TT"] is True
+
+        # Off-delay expires: EN=False, TT=False
+        runner.step()
+        assert runner.current_state.tags["Timer_Done"] is False
+        assert runner.current_state.tags["Timer_EN"] is False
+        assert runner.current_state.tags["Timer_TT"] is False
+
+    def test_custom_udt_without_status_bits(self, runner_factory):
+        """Custom UDT without EN/TT works without errors."""
+
+        @udt()
+        class MyTimer:
+            Done: bool
+            Acc: int
+
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(MyTimer, preset=100)
+
+        runner = runner_factory(logic, dt=0.010)
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["MyTimer_Done"] is False
+        assert runner.current_state.tags["MyTimer_Acc"] == 10
+        assert "MyTimer_EN" not in runner.current_state.tags
+        assert "MyTimer_TT" not in runner.current_state.tags

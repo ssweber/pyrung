@@ -35,7 +35,7 @@ def _reload_locked(
     if adapter._thread_running_locked():
         raise adapter.DAPAdapterError("Cannot reload while continue is running")
     if adapter._capture.recording:
-        raise adapter.DAPAdapterError("Cannot reload while recording — stop recording first")
+        raise adapter.DAPAdapterError("Cannot reload while recording; stop recording first")
 
     old_runner: PLC = adapter._require_runner_locked()
     old_state: SystemState = old_runner.current_state
@@ -47,7 +47,7 @@ def _reload_locked(
 
     program_path = adapter._program_path
     if not program_path:
-        raise adapter.DAPAdapterError("No program loaded — cannot reload")
+        raise adapter.DAPAdapterError("No program loaded; cannot reload")
     path = Path(program_path)
     if not path.is_file():
         raise adapter.DAPAdapterError(f"Program file not found: {path}")
@@ -196,7 +196,7 @@ def _autoreload_loop(adapter: Any, program_dir: Path, stop_event: threading.Even
                     "output",
                     {
                         "category": "console",
-                        "output": "[autoreload] Skipped — continue is running\n",
+                        "output": "[autoreload] Skipped: continue is running\n",
                     },
                 )
                 continue

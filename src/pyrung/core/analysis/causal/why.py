@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
+from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 
 from .models import CausalChain, ChainStep, Transition
@@ -52,17 +53,25 @@ def why_cause(
     pdg: ProgramGraph,
     *,
     program: Program | None = None,
+    frontier: Callable[[str], bool] | None = None,
 ) -> CausalChain:
     """Build a diagnostic causal chain from a snapshot.
 
     Args:
-        logic: The program's rung list.
+        logic: The program's main rung list (kept for API compat;
+            ignored when *program* is provided).
         state: Frozen PLC state (snapshot).
         tags: Tag names to explain (at least one).
         pdg: Static program dependency graph.
-        program: Optional program for inference integration
-            (cone scoping, back-propagation, init-constant pinning,
-            write-before-read skipping).
+        program: Program for full subroutine resolution and
+            inference integration (cone scoping, back-propagation,
+            init-constant pinning, write-before-read skipping).
+        frontier: Optional termination predicate.  When provided and
+            ``frontier(tag_name)`` is True, the backward walk terminates
+            at that tag — classified as a conjunctive root, exactly like
+            the no-writers (external input) case — even though the tag
+            has writers.  ``None`` preserves the default behavior
+            (terminate only at external inputs / init constants).
 
     Returns:
         A ``CausalChain`` with ``mode='why'``.
@@ -77,6 +86,8 @@ def why_cause(
     inferred: dict[str, Any] = {}
 
     if program is not None:
+        resolver = _RungResolver(program, program.rungs)
+
         cone: set[str] = set()
         for t in tags:
             cone |= pdg.upstream_slice(t)
@@ -114,6 +125,8 @@ def why_cause(
             if t not in tags and pdg.unconditional_write_before_read(t):
                 wbr.add(t)
         wbr_tags = frozenset(wbr)
+    else:
+        resolver = _RungResolver(None, list(logic))
 
     view = _HistoricalView(state)
 
@@ -122,7 +135,7 @@ def why_cause(
 
     for tag_name in tags:
         _walk_backward(
-            logic,
+            resolver,
             state,
             pdg,
             tag_name,
@@ -134,6 +147,7 @@ def why_cause(
             init_constants=init_constants,
             wbr_tags=wbr_tags,
             inferred=inferred,
+            frontier=frontier,
         )
 
     primary = Transition(
@@ -173,12 +187,35 @@ def why_cause(
     )
 
 
-def _resolve_rung(logic: list[Rung], node: RungNode) -> Rung:
-    """Navigate from a PDG node to the actual ``Rung`` object."""
-    rung = logic[node.rung_index]
-    for branch_idx in node.branch_path:
-        rung = rung._branches[branch_idx]
-    return rung
+class _RungResolver:
+    """Resolve any PDG node to its ``Rung`` — main or subroutine.
+
+    Delegates to :func:`~pyrung.core.analysis.pdg.resolve_rung` when a
+    full *program* is available, with a fallback for the legacy
+    ``program=None`` path (main rungs only).
+    """
+
+    __slots__ = ("_program", "_main")
+
+    def __init__(self, program: Program | None, main_rungs: list[Rung]) -> None:
+        self._program = program
+        self._main = main_rungs
+
+    def resolve(self, node: RungNode) -> Rung:
+        if self._program is not None:
+            result = resolve_rung(self._program, node)
+            if result is not None:
+                return result
+            raise LookupError(f"Cannot resolve rung: {node.subroutine}[{node.rung_index}]")
+        if node.subroutine is not None:
+            raise LookupError(
+                f"Cannot resolve subroutine rung without program: "
+                f"{node.subroutine}[{node.rung_index}]"
+            )
+        rung = self._main[node.rung_index]
+        for branch_idx in node.branch_path:
+            rung = rung._branches[branch_idx]
+        return rung
 
 
 _INSTRUCTION_LABELS: dict[str, str] = {
@@ -196,33 +233,45 @@ _INSTRUCTION_LABELS: dict[str, str] = {
     "FillInstruction": "fill",
     "BlockCopyInstruction": "blockcopy",
     "PackBitsInstruction": "pack_bits",
+    "PackTextInstruction": "pack_text",
     "UnpackToBitsInstruction": "unpack_to_bits",
     "PackWordsInstruction": "pack_words",
     "UnpackToWordsInstruction": "unpack_to_words",
     "SearchInstruction": "search",
+    "ShiftInstruction": "shift",
+    "FunctionCallInstruction": "run_function",
+    "EnabledFunctionCallInstruction": "run_enabled_function",
+    "ModbusSendInstruction": "send",
+    "ModbusReceiveInstruction": "receive",
+    "ForLoopInstruction": "forloop",
 }
 
 
 def _instruction_label(rung: Rung, tag_name: str) -> str:
     """Derive the instruction name that writes *tag_name* in *rung*."""
-    from pyrung.core.tag import ImmediateRef
-    from pyrung.core.tag import Tag as TagClass
+    from pyrung.core.analysis.pdg import _extract_instruction_writes
+    from pyrung.core.instruction.control import ForLoopInstruction
 
-    for instr in rung._instructions:
-        for attr_name in instr._writes:
-            obj = getattr(instr, attr_name, None)
-            if obj is None:
-                continue
-            if isinstance(obj, ImmediateRef):
-                obj = object.__getattribute__(obj, "value")
-            if isinstance(obj, TagClass):
-                if obj.name == tag_name or tag_name.startswith(obj.name + "."):
-                    cls_name = type(instr).__name__
-                    # Strip oneshot wrapper — class name stays the same
-                    base = cls_name.replace("Oneshot", "")
-                    return _INSTRUCTION_LABELS.get(
-                        cls_name, _INSTRUCTION_LABELS.get(base, cls_name)
-                    )
+    def label_for(instr: Any) -> str:
+        cls_name = type(instr).__name__
+        base = cls_name.replace("Oneshot", "")
+        return _INSTRUCTION_LABELS.get(cls_name, _INSTRUCTION_LABELS.get(base, cls_name))
+
+    def walk(instructions: list[Any]) -> str | None:
+        tag_refs: dict[str, Any] = {}
+        for instr in instructions:
+            writes, _reads, implicit_writes = _extract_instruction_writes(instr, tag_refs)
+            if tag_name in writes or tag_name in implicit_writes:
+                return label_for(instr)
+            if isinstance(instr, ForLoopInstruction):
+                child_label = walk(list(instr.instructions))
+                if child_label is not None:
+                    return child_label
+        return None
+
+    found = walk(list(rung._instructions))
+    if found is not None:
+        return found
     return "write"
 
 
@@ -244,7 +293,7 @@ def _is_reset_for_tag(rung: Rung, tag_name: str) -> bool:
 
 
 def _walk_backward(
-    logic: list[Rung],
+    resolver: _RungResolver,
     state: SystemState,
     pdg: ProgramGraph,
     tag_name: str,
@@ -257,13 +306,18 @@ def _walk_backward(
     init_constants: frozenset[str] = frozenset(),
     wbr_tags: frozenset[str] = frozenset(),
     inferred: dict[str, Any] | None = None,
+    frontier: Callable[[str], bool] | None = None,
 ) -> None:
     if tag_name in wbr_tags:
         return
 
     writer_indices = pdg.writers_of.get(tag_name, frozenset())
 
-    if not writer_indices or tag_name in init_constants:
+    if (
+        not writer_indices
+        or tag_name in init_constants
+        or (frontier is not None and frontier(tag_name))
+    ):
         conjunctive_roots.append(
             Transition(
                 tag_name=tag_name,
@@ -284,9 +338,7 @@ def _walk_backward(
     reset_writers: list[int] = []
     for node_idx in writer_indices:
         node = pdg.rung_nodes[node_idx]
-        if node.rung_index >= len(logic):
-            continue
-        rung = _resolve_rung(logic, node)
+        rung = resolver.resolve(node)
         if _is_reset_for_tag(rung, tag_name):
             reset_writers.append(node_idx)
         else:
@@ -294,7 +346,7 @@ def _walk_backward(
 
     for node_idx in set_writers:
         node = pdg.rung_nodes[node_idx]
-        rung = _resolve_rung(logic, node)
+        rung = resolver.resolve(node)
         sp_tree = rung.sp_tree()
         is_ote = tag_name in node.ote_writes
         instr_label = _instruction_label(rung, tag_name)
@@ -311,7 +363,7 @@ def _walk_backward(
 
         if not is_ote and not rung_fires and tag_value:
             _walk_stateful_cleared(
-                logic,
+                resolver,
                 state,
                 pdg,
                 tag_name,
@@ -327,10 +379,11 @@ def _walk_backward(
                 wbr_tags=wbr_tags,
                 inferred=inferred,
                 instruction=instr_label,
+                frontier=frontier,
             )
         elif not is_ote and not rung_fires and not tag_value:
             _walk_attributed(
-                logic,
+                resolver,
                 state,
                 pdg,
                 tag_name,
@@ -347,11 +400,12 @@ def _walk_backward(
                 inferred=inferred,
                 kind="latch_blocked",
                 instruction=instr_label,
+                frontier=frontier,
             )
         else:
             kind = "transient" if is_transient else "attributed"
             _walk_attributed(
-                logic,
+                resolver,
                 state,
                 pdg,
                 tag_name,
@@ -368,12 +422,13 @@ def _walk_backward(
                 inferred=inferred,
                 kind=kind,
                 instruction=instr_label,
+                frontier=frontier,
             )
 
     if reset_writers:
         if tag_value:
             _walk_reset_path(
-                logic,
+                resolver,
                 state,
                 pdg,
                 tag_name,
@@ -384,7 +439,7 @@ def _walk_backward(
             )
         else:
             _walk_reset_cause(
-                logic,
+                resolver,
                 state,
                 pdg,
                 tag_name,
@@ -397,11 +452,12 @@ def _walk_backward(
                 init_constants=init_constants,
                 wbr_tags=wbr_tags,
                 inferred=inferred,
+                frontier=frontier,
             )
 
 
 def _walk_stateful_cleared(
-    logic: list[Rung],
+    resolver: _RungResolver,
     state: SystemState,
     pdg: ProgramGraph,
     tag_name: str,
@@ -418,6 +474,7 @@ def _walk_stateful_cleared(
     wbr_tags: frozenset[str] = frozenset(),
     inferred: dict[str, Any] | None = None,
     instruction: str | None = None,
+    frontier: Callable[[str], bool] | None = None,
 ) -> None:
     """Handle stateful writer whose trigger has cleared."""
     leaves = _collect_sp_leaves(sp_tree)
@@ -438,7 +495,7 @@ def _walk_stateful_cleared(
             ambiguous_roots.append(contact_transition)
         else:
             _walk_backward(
-                logic,
+                resolver,
                 state,
                 pdg,
                 contact_tag,
@@ -450,6 +507,7 @@ def _walk_stateful_cleared(
                 init_constants=init_constants,
                 wbr_tags=wbr_tags,
                 inferred=inferred,
+                frontier=frontier,
             )
 
     steps.append(
@@ -466,12 +524,13 @@ def _walk_stateful_cleared(
             fidelity="structural",
             kind="trigger_cleared",
             instruction=instruction,
+            subroutine=node.subroutine,
         )
     )
 
 
 def _walk_attributed(
-    logic: list[Rung],
+    resolver: _RungResolver,
     state: SystemState,
     pdg: ProgramGraph,
     tag_name: str,
@@ -497,6 +556,7 @@ def _walk_attributed(
         "transient",
     ] = "attributed",
     instruction: str | None = None,
+    frontier: Callable[[str], bool] | None = None,
 ) -> None:
     """Handle stateless writer or active stateful writer via attribution."""
     attributions = attribute(sp_tree, snapshot_eval)
@@ -517,7 +577,7 @@ def _walk_attributed(
             conjunctive_roots.append(contact_transition)
         else:
             _walk_backward(
-                logic,
+                resolver,
                 state,
                 pdg,
                 contact_tag,
@@ -529,6 +589,7 @@ def _walk_attributed(
                 init_constants=init_constants,
                 wbr_tags=wbr_tags,
                 inferred=inferred,
+                frontier=frontier,
             )
 
     steps.append(
@@ -545,12 +606,13 @@ def _walk_attributed(
             fidelity="structural",
             kind=kind,
             instruction=instruction,
+            subroutine=node.subroutine,
         )
     )
 
 
 def _walk_reset_path(
-    logic: list[Rung],
+    resolver: _RungResolver,
     state: SystemState,
     pdg: ProgramGraph,
     tag_name: str,
@@ -562,7 +624,7 @@ def _walk_reset_path(
     """Explain why reset rungs haven't cleared a latched tag."""
     for node_idx in reset_writer_indices:
         node = pdg.rung_nodes[node_idx]
-        rung = _resolve_rung(logic, node)
+        rung = resolver.resolve(node)
         sp_tree = rung.sp_tree()
 
         if sp_tree is None:
@@ -586,6 +648,7 @@ def _walk_reset_path(
                     fidelity="structural",
                     kind="reset_inconsistent",
                     instruction="reset",
+                    subroutine=node.subroutine,
                 )
             )
         else:
@@ -611,12 +674,13 @@ def _walk_reset_path(
                     fidelity="structural",
                     kind="reset_blocked",
                     instruction="reset",
+                    subroutine=node.subroutine,
                 )
             )
 
 
 def _walk_reset_cause(
-    logic: list[Rung],
+    resolver: _RungResolver,
     state: SystemState,
     pdg: ProgramGraph,
     tag_name: str,
@@ -630,11 +694,12 @@ def _walk_reset_cause(
     init_constants: frozenset[str] = frozenset(),
     wbr_tags: frozenset[str] = frozenset(),
     inferred: dict[str, Any] | None = None,
+    frontier: Callable[[str], bool] | None = None,
 ) -> None:
     """Explain why a latch tag is FALSE by finding active reset rungs."""
     for node_idx in reset_writer_indices:
         node = pdg.rung_nodes[node_idx]
-        rung = _resolve_rung(logic, node)
+        rung = resolver.resolve(node)
         sp_tree = rung.sp_tree()
 
         if sp_tree is None:
@@ -661,7 +726,7 @@ def _walk_reset_cause(
                 conjunctive_roots.append(contact_transition)
             else:
                 _walk_backward(
-                    logic,
+                    resolver,
                     state,
                     pdg,
                     contact_tag,
@@ -673,6 +738,7 @@ def _walk_reset_cause(
                     init_constants=init_constants,
                     wbr_tags=wbr_tags,
                     inferred=inferred,
+                    frontier=frontier,
                 )
 
         steps.append(
@@ -689,5 +755,6 @@ def _walk_reset_cause(
                 fidelity="structural",
                 kind="reset_active",
                 instruction="reset",
+                subroutine=node.subroutine,
             )
         )

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from pyrsistent import PMap, pmap
 
@@ -18,6 +18,47 @@ if TYPE_CHECKING:
     from pyrung.core.state import SystemState
 
 TagResolver = Callable[[str, Any], tuple[bool, Any]]
+OccurrenceDomain = Literal["tag", "memory"]
+ReadOccurrenceOrigin = Literal["entry", "resolved", "default", "pending"]
+OccurrenceSourceToken = object
+ReadOccurrenceSink = Callable[
+    [OccurrenceDomain, str, Any, ReadOccurrenceOrigin, OccurrenceSourceToken | None],
+    None,
+]
+WriteOccurrenceSink = Callable[
+    [OccurrenceDomain, str, Any, Any],
+    OccurrenceSourceToken,
+]
+
+# Read-path sentinel: hot lookups cache the ``state.tags``/``state.memory``
+# pmaps once (each ``state.<field>`` access is itself a PRecord bucket walk)
+# and probe them a single time via try/except instead of ``in`` + ``[]``.
+_MISSING = object()
+
+
+def _commit_changed(base: PMap, pending: Mapping[str, Any]) -> PMap:
+    """Publish only final values that differ from the immutable scan base."""
+    evolver = None
+    for key, value in pending.items():
+        if base.get(key, _MISSING) == value:
+            continue
+        if evolver is None:
+            evolver = base.evolver()
+        evolver[key] = value
+    return base if evolver is None else evolver.persistent()
+
+
+class RungId(NamedTuple):
+    """Identity of an executed rung for node-granular firing capture.
+
+    ``subroutine`` is ``None`` for a top-level (main) rung and the
+    subroutine name for a rung executed inside a ``call()``.  ``rung_index``
+    is 0-based within that scope.  Used as the key of the node-level firing
+    timeline and to build user-facing labels like ``"MySub:3"``.
+    """
+
+    subroutine: str | None
+    rung_index: int
 
 
 class ConditionView:
@@ -28,46 +69,108 @@ class ConditionView:
     by instructions that execute between branch evaluations.
     """
 
-    __slots__ = ("_state", "_tags_snapshot", "_memory_snapshot", "_resolver", "_scope_token")
+    __slots__ = (
+        "_state",
+        "_tags",
+        "_memory",
+        "_tags_snapshot",
+        "_memory_snapshot",
+        "_resolver",
+        "_scope_token",
+        "_read_sink",
+        "_tag_source_snapshot",
+        "_memory_source_snapshot",
+    )
 
     def __init__(self, ctx: ScanContext) -> None:
         self._state: SystemState = ctx._state
-        self._tags_snapshot: dict[str, Any] = dict(ctx._tags_pending)
-        self._memory_snapshot: dict[str, Any] = dict(ctx._memory_pending)
+        self._tags: Mapping[str, Any] = ctx._state_tags_read
+        self._memory: PMap = ctx._state_memory
+        self._tags_snapshot: dict[str, Any] = ctx._tags_pending.copy()
+        self._memory_snapshot: dict[str, Any] = ctx._memory_pending.copy()
         self._resolver = ctx._resolver
         self._scope_token = ctx._condition_scope_token
+        self._read_sink = ctx._read_sink
+        self._tag_source_snapshot = (
+            ctx._tag_write_sources.copy() if ctx._tag_write_sources is not None else None
+        )
+        self._memory_source_snapshot = (
+            ctx._memory_write_sources.copy() if ctx._memory_write_sources is not None else None
+        )
 
     def get_tag(self, name: str, default: Any = None) -> Any:
-        if name in self._tags_snapshot:
-            return self._tags_snapshot[name]
-        if name in self._state.tags:
-            return self._state.tags[name]
-        if self._resolver is not None:
-            resolved, value = self._resolver(name, self)
-            if resolved:
-                return value
-        return default
+        snap = self._tags_snapshot
+        value = snap.get(name, _MISSING)
+        source = None
+        if value is not _MISSING:
+            origin: ReadOccurrenceOrigin = "pending"
+            if self._tag_source_snapshot is not None:
+                source = self._tag_source_snapshot.get(name)
+        else:
+            try:
+                value = self._tags[name]
+                origin = "entry"
+            except KeyError:
+                if self._resolver is not None:
+                    resolved, value = self._resolver(name, self)
+                    if not resolved:
+                        value = default
+                        origin = "default"
+                    else:
+                        origin = "resolved"
+                else:
+                    value = default
+                    origin = "default"
+        sink = self._read_sink
+        if sink is not None:
+            sink("tag", name, value, origin, source)
+        return value
 
     def get_memory(self, key: str, default: Any = None) -> Any:
-        if key in self._memory_snapshot:
-            return self._memory_snapshot[key]
-        return self._state.memory.get(key, default)
+        snap = self._memory_snapshot
+        value = snap.get(key, _MISSING)
+        source = None
+        if value is not _MISSING:
+            origin: ReadOccurrenceOrigin = "pending"
+            if self._memory_source_snapshot is not None:
+                source = self._memory_source_snapshot.get(key)
+        else:
+            try:
+                value = self._memory[key]
+                origin = "entry"
+            except KeyError:
+                value = default
+                origin = "default"
+        sink = self._read_sink
+        if sink is not None:
+            sink("memory", key, value, origin, source)
+        return value
 
     def _get_tag_internal(self, name: str, default: Any = None) -> Any:
-        if name in self._tags_snapshot:
-            return self._tags_snapshot[name]
-        return self._state.tags.get(name, default)
+        snap = self._tags_snapshot
+        value = snap.get(name, _MISSING)
+        if value is not _MISSING:
+            return value
+        try:
+            return self._tags[name]
+        except KeyError:
+            return default
 
     def _has_tag_internal(self, name: str) -> bool:
-        return name in self._tags_snapshot or name in self._state.tags
+        return name in self._tags_snapshot or name in self._tags
 
     def _get_memory_internal(self, key: str, default: Any = None) -> Any:
-        if key in self._memory_snapshot:
-            return self._memory_snapshot[key]
-        return self._state.memory.get(key, default)
+        snap = self._memory_snapshot
+        value = snap.get(key, _MISSING)
+        if value is not _MISSING:
+            return value
+        try:
+            return self._memory[key]
+        except KeyError:
+            return default
 
     def _has_memory_internal(self, key: str) -> bool:
-        return key in self._memory_snapshot or key in self._state.memory
+        return key in self._memory_snapshot or key in self._memory
 
     @property
     def scan_id(self) -> int:
@@ -95,23 +198,31 @@ class ScanContext:
 
     Attributes:
         _state: The original SystemState (immutable, not modified).
-        _tags_evolver: Pyrsistent evolver for final tag commit.
-        _memory_evolver: Pyrsistent evolver for final memory commit.
         _tags_pending: Fast lookup dict for pending tag writes.
         _memory_pending: Fast lookup dict for pending memory writes.
     """
 
     __slots__ = (
         "_state",
-        "_tags_evolver",
-        "_memory_evolver",
+        "_state_tags",
+        "_state_tags_read",
+        "_state_memory",
         "_tags_pending",
         "_memory_pending",
+        "_capture_stack",
+        "_current_node_id",
+        "_read_sink",
+        "_write_sink",
+        "_tag_write_sources",
+        "_memory_write_sources",
         "_resolver",
         "_read_only_tags",
         "_condition_snapshot",
         "_condition_scope_token",
         "_rung_firings",
+        "_rung_firing_varied",
+        "_node_firings",
+        "_node_firing_varied",
         "_consumed_tags_getter",
         "_io_submit_staging",
         "_io_drain_staging",
@@ -128,6 +239,7 @@ class ScanContext:
         read_only_tags: frozenset[str] = frozenset(),
         consumed_tags_getter: Callable[[], frozenset[str] | None] | None = None,
         replay_io: tuple[Mapping[str, IoSubmitRecord], Mapping[str, IoResultRecord]] | None = None,
+        state_tags_read: Mapping[str, Any] | None = None,
     ) -> None:
         """Create a new ScanContext from a SystemState.
 
@@ -146,15 +258,47 @@ class ScanContext:
                 for this scan.  ``None`` during live execution.
         """
         self._state = state
-        self._tags_evolver = state.tags.evolver()
-        self._memory_evolver = state.memory.evolver()
+        self._state_tags: PMap = state.tags
+        self._state_tags_read: Mapping[str, Any] = (
+            self._state_tags if state_tags_read is None else state_tags_read
+        )
+        self._state_memory: PMap = state.memory
         self._tags_pending: dict[str, Any] = {}
         self._memory_pending: dict[str, Any] = {}
+        # Each journal entry is ``[last_attempted_value, varied]``.  The
+        # entry-state value is intentionally absent: varied means two writes
+        # in this scope attempted unequal after-values.
+        self._capture_stack: list[dict[str, list[Any]]] = []
+        # Identity of the subroutine rung whose ``capturing_node`` scope is
+        # currently open, or ``None`` at main scope.  Read by observers
+        # (ConditionViewCapture) so they key subroutine rungs by the same
+        # ``RungId`` as the node firing timeline — one source of truth.
+        self._current_node_id: RungId | None = None
+        # Optional exact read sink. During one selected interpreted replay it
+        # receives the observed value, origin, and pending-definition token;
+        # compatibility read-footprint projections are derived from that same
+        # event stream. ``None`` on normal scans, so the hot path pays only a
+        # nullable callback check.
+        self._read_sink: ReadOccurrenceSink | None = None
+        # Optional immediate write sink paired with ``_read_sink`` during one
+        # selected interpreted replay. Normal scans pay only this nullable
+        # callback check; no ordered journal is allocated unless an observer
+        # installs the sink.
+        self._write_sink: WriteOccurrenceSink | None = None
+        # Definition tokens for pending values during an observed replay.
+        # The write sink creates each token; ConditionView freezes these maps
+        # beside its pending values so a later read names the definition it
+        # actually observed, even if execution subsequently rewrites the tag.
+        self._tag_write_sources: dict[str, OccurrenceSourceToken] | None = None
+        self._memory_write_sources: dict[str, OccurrenceSourceToken] | None = None
         self._resolver = resolver
         self._read_only_tags = read_only_tags
         self._condition_snapshot: ConditionView | None = None
         self._condition_scope_token = object()
         self._rung_firings: dict[int, dict[str, Any]] = {}
+        self._rung_firing_varied: dict[int, frozenset[str]] = {}
+        self._node_firings: dict[RungId, dict[str, Any]] = {}
+        self._node_firing_varied: dict[RungId, frozenset[str]] = {}
         self._consumed_tags_getter = consumed_tags_getter
         self._io_submit_staging: dict[str, IoSubmitRecord] = {}
         self._io_drain_staging: dict[str, IoResultRecord] = {}
@@ -182,15 +326,32 @@ class ScanContext:
         Returns:
             The tag value from pending writes, original state, or default.
         """
-        if name in self._tags_pending:
-            return self._tags_pending[name]
-        if name in self._state.tags:
-            return self._state.tags[name]
-        if self._resolver is not None:
-            resolved, value = self._resolver(name, self)
-            if resolved:
-                return value
-        return default
+        pending = self._tags_pending
+        value = pending.get(name, _MISSING)
+        source = None
+        if value is not _MISSING:
+            origin: ReadOccurrenceOrigin = "pending"
+            if self._tag_write_sources is not None:
+                source = self._tag_write_sources.get(name)
+        else:
+            try:
+                value = self._state_tags_read[name]
+                origin = "entry"
+            except KeyError:
+                if self._resolver is not None:
+                    resolved, value = self._resolver(name, self)
+                    if not resolved:
+                        value = default
+                        origin = "default"
+                    else:
+                        origin = "resolved"
+                else:
+                    value = default
+                    origin = "default"
+        sink = self._read_sink
+        if sink is not None:
+            sink("tag", name, value, origin, source)
+        return value
 
     def get_memory(self, key: str, default: Any = None) -> Any:
         """Get a memory value, checking pending writes first.
@@ -204,13 +365,42 @@ class ScanContext:
         Returns:
             The memory value from pending writes, original state, or default.
         """
-        if key in self._memory_pending:
-            return self._memory_pending[key]
-        return self._state.memory.get(key, default)
+        pending = self._memory_pending
+        value = pending.get(key, _MISSING)
+        source = None
+        if value is not _MISSING:
+            origin: ReadOccurrenceOrigin = "pending"
+            if self._memory_write_sources is not None:
+                source = self._memory_write_sources.get(key)
+        else:
+            try:
+                value = self._state_memory[key]
+                origin = "entry"
+            except KeyError:
+                value = default
+                origin = "default"
+        sink = self._read_sink
+        if sink is not None:
+            sink("memory", key, value, origin, source)
+        return value
 
     # =========================================================================
     # Write operations (batched)
     # =========================================================================
+
+    def _journal_capture(self, name: str, value: Any) -> None:
+        """Record one attempted value in every open firing scope."""
+        stack = self._capture_stack
+        if not stack:
+            return
+        for journal in stack:
+            summary = journal.get(name)
+            if summary is None:
+                journal[name] = [value, False]
+            else:
+                if summary[0] != value:
+                    summary[1] = True
+                summary[0] = value
 
     def set_tag(self, name: str, value: Any) -> None:
         """Set a tag value (batched, committed at end of scan).
@@ -221,8 +411,13 @@ class ScanContext:
         """
         if name in self._read_only_tags:
             raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+        sink = self._write_sink
+        if sink is not None:
+            source = sink("tag", name, self._get_tag_internal(name), value)
+            if self._tag_write_sources is not None:
+                self._tag_write_sources[name] = source
+        self._journal_capture(name, value)
         self._tags_pending[name] = value
-        self._tags_evolver[name] = value
 
     def set_tags(self, updates: dict[str, Any]) -> None:
         """Set multiple tag values (batched, committed at end of scan).
@@ -233,20 +428,39 @@ class ScanContext:
         for name in updates:
             if name in self._read_only_tags:
                 raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+        sink = self._write_sink
+        if sink is not None:
+            for name, value in updates.items():
+                source = sink("tag", name, self._get_tag_internal(name), value)
+                if self._tag_write_sources is not None:
+                    self._tag_write_sources[name] = source
+        if self._capture_stack:
+            for name in updates:
+                self._journal_capture(name, updates[name])
         self._tags_pending.update(updates)
-        for name, value in updates.items():
-            self._tags_evolver[name] = value
 
     def _set_tag_internal(self, name: str, value: Any) -> None:
         """Set a tag while bypassing read-only guards (runtime-only use)."""
+        sink = self._write_sink
+        if sink is not None:
+            source = sink("tag", name, self._get_tag_internal(name), value)
+            if self._tag_write_sources is not None:
+                self._tag_write_sources[name] = source
+        self._journal_capture(name, value)
         self._tags_pending[name] = value
-        self._tags_evolver[name] = value
 
     def _set_tags_internal(self, updates: dict[str, Any]) -> None:
         """Set multiple tags while bypassing read-only guards (runtime-only use)."""
+        sink = self._write_sink
+        if sink is not None:
+            for name, value in updates.items():
+                source = sink("tag", name, self._get_tag_internal(name), value)
+                if self._tag_write_sources is not None:
+                    self._tag_write_sources[name] = source
+        if self._capture_stack:
+            for name in updates:
+                self._journal_capture(name, updates[name])
         self._tags_pending.update(updates)
-        for name, value in updates.items():
-            self._tags_evolver[name] = value
 
     def set_memory(self, key: str, value: Any) -> None:
         """Set a memory value (batched, committed at end of scan).
@@ -255,8 +469,12 @@ class ScanContext:
             key: The memory key to set.
             value: The value to set.
         """
+        sink = self._write_sink
+        if sink is not None:
+            source = sink("memory", key, self._get_memory_internal(key), value)
+            if self._memory_write_sources is not None:
+                self._memory_write_sources[key] = source
         self._memory_pending[key] = value
-        self._memory_evolver[key] = value
 
     def set_memory_bulk(self, updates: dict[str, Any]) -> None:
         """Set multiple memory values (batched, committed at end of scan).
@@ -264,29 +482,43 @@ class ScanContext:
         Args:
             updates: Dict of memory keys to values.
         """
+        sink = self._write_sink
+        if sink is not None:
+            for key, value in updates.items():
+                source = sink("memory", key, self._get_memory_internal(key), value)
+                if self._memory_write_sources is not None:
+                    self._memory_write_sources[key] = source
         self._memory_pending.update(updates)
-        for key, value in updates.items():
-            self._memory_evolver[key] = value
 
     def _get_tag_internal(self, name: str, default: Any = None) -> Any:
         """Read tag value without resolver fallback."""
-        if name in self._tags_pending:
-            return self._tags_pending[name]
-        return self._state.tags.get(name, default)
+        pending = self._tags_pending
+        value = pending.get(name, _MISSING)
+        if value is not _MISSING:
+            return value
+        try:
+            return self._state_tags_read[name]
+        except KeyError:
+            return default
 
     def _has_tag_internal(self, name: str) -> bool:
         """Check for a pending or persisted tag without resolver fallback."""
-        return name in self._tags_pending or name in self._state.tags
+        return name in self._tags_pending or name in self._state_tags_read
 
     def _get_memory_internal(self, key: str, default: Any = None) -> Any:
         """Read memory value without side effects."""
-        if key in self._memory_pending:
-            return self._memory_pending[key]
-        return self._state.memory.get(key, default)
+        pending = self._memory_pending
+        value = pending.get(key, _MISSING)
+        if value is not _MISSING:
+            return value
+        try:
+            return self._state_memory[key]
+        except KeyError:
+            return default
 
     def _has_memory_internal(self, key: str) -> bool:
         """Check for a pending or persisted memory key."""
-        return key in self._memory_pending or key in self._state.memory
+        return key in self._memory_pending or key in self._state_memory
 
     # =========================================================================
     # Passthrough properties
@@ -311,50 +543,164 @@ class ScanContext:
         """
         return self._state
 
+    def _new_condition_view(self) -> ConditionView:
+        """Create the rung-entry view, with an override point for analysis contexts."""
+        return ConditionView(self)
+
     # =========================================================================
     # Rung-scoped firing capture
     # =========================================================================
+
+    def _begin_capture(self) -> dict[str, list[Any]]:
+        """Open a write journal for the interpreter's allocation-sensitive path."""
+        journal: dict[str, list[Any]] = {}
+        self._capture_stack.append(journal)
+        return journal
+
+    def _finish_rung_capture(self, rung_index: int, journal: dict[str, list[Any]]) -> None:
+        """Close a hot-path main-rung journal and retain its writes."""
+        self._capture_stack.pop()
+        capture = self._finalize_capture(journal)
+        if capture is not None:
+            writes, varied = capture
+            self._rung_firings[rung_index] = writes
+            if varied:
+                self._rung_firing_varied[rung_index] = frozenset(varied)
+
+    def _finish_observed_capture(self, journal: dict[str, list[Any]]) -> dict[str, Any]:
+        """Close an observer journal and retain every attempted tag write.
+
+        Ordinary firing capture stores the final attempted value per scope. An
+        observed scan additionally preserves every rung occurrence, its entry
+        view, and its read footprint. The journal keys are the exact write
+        footprint, so reading their final pending values retains the attempted
+        values for that occurrence.
+        """
+        popped = self._capture_stack.pop()
+        if popped is not journal:
+            raise RuntimeError("observer capture scopes closed out of order")
+        pending = self._tags_pending
+        return {name: pending[name] for name in journal}
+
+    def _begin_node_capture(self, rung_id: RungId) -> tuple[dict[str, list[Any]], RungId | None]:
+        """Open a hot-path subroutine journal and publish its node identity."""
+        journal = self._begin_capture()
+        previous_node_id = self._current_node_id
+        self._current_node_id = rung_id
+        return journal, previous_node_id
+
+    def _finish_node_capture(
+        self,
+        rung_id: RungId,
+        journal: dict[str, list[Any]],
+        previous_node_id: RungId | None,
+        *,
+        retain_all_writes: bool = False,
+    ) -> None:
+        """Close a hot-path subroutine journal and merge repeated calls."""
+        self._current_node_id = previous_node_id
+        self._capture_stack.pop()
+        capture = self._finalize_capture(journal, retain_all_writes=retain_all_writes)
+        if capture is None:
+            return
+        writes, varied = capture
+        previous = self._node_firings.get(rung_id)
+        if previous is not None:
+            previous_varied = set(self._node_firing_varied.get(rung_id, ()))
+            previous_varied.update(varied)
+            previous_varied.update(
+                name
+                for name, value in writes.items()
+                if name in previous and previous[name] != value
+            )
+            merged = dict(previous)
+            merged.update(writes)
+            self._node_firings[rung_id] = merged
+            if previous_varied:
+                self._node_firing_varied[rung_id] = frozenset(previous_varied)
+        else:
+            self._node_firings[rung_id] = writes
+            if varied:
+                self._node_firing_varied[rung_id] = frozenset(varied)
 
     @contextmanager
     def capturing_rung(self, rung_index: int) -> Iterator[None]:
         """Attribute all tag writes made inside this block to ``rung_index``.
 
-        Produces the input data for :attr:`rung_firings` by diffing
-        ``_tags_pending`` at the scope boundary.  Wrap each top-level
-        rung evaluation in this context manager; both the non-debug and
-        debug scan paths rely on it to populate the firing log used by
-        causal-chain analysis.
+        Produces the input data for :attr:`rung_firings` from a write
+        journal: setters record each name's pre-write pending value
+        while a scope is open, so the exit diff costs O(writes in this
+        rung) instead of one full ``_tags_pending`` copy per rung.
+        Wrap each top-level rung evaluation in this context manager; both
+        the non-debug and debug scan paths rely on it to populate the
+        firing log used by causal-chain analysis.
 
-        Nesting is not supported — each scope must close before the next
-        opens.  Writes made outside any scope (e.g. pre-force, system
-        runtime) are intentionally unattributed.
+        Scopes nest via a stack: :meth:`capturing_node` opens inner scopes
+        for subroutine rungs while this outer scope stays open, so a write
+        is attributed to every open scope (the outer top-level rung still
+        sees the whole subtree — the main-rung firing is unchanged — while
+        the inner scope records the subroutine rung's own slice).  Writes
+        made outside any scope (e.g. pre-force, system runtime) are
+        intentionally unattributed.
         """
-        before = dict(self._tags_pending)
+        journal = self._begin_capture()
         try:
             yield
         finally:
-            pending = self._tags_pending
-            raw_writes = {
-                name: pending[name]
-                for name in pending
-                if name not in before or before[name] != pending[name]
-            }
-            if raw_writes:
-                consumed = (
-                    self._consumed_tags_getter() if self._consumed_tags_getter is not None else None
-                )
-                if consumed is None:
-                    writes = raw_writes
-                else:
-                    writes = {name: val for name, val in raw_writes.items() if name in consumed}
-                # Record the rung_index even when the filter emptied
-                # ``writes`` — the non-empty ``raw_writes`` establishes
-                # that the rung fired, which ``query.cold_rungs`` /
-                # ``query.hot_rungs`` and ``effect()``'s PDG fallback
-                # both need.  Consumers that care about per-tag values
-                # (like ``cause()``'s value-match) see the filtered view
-                # and fall through cleanly when it's empty.
-                self._rung_firings[rung_index] = writes
+            self._finish_rung_capture(rung_index, journal)
+
+    @contextmanager
+    def capturing_node(self, rung_id: RungId, *, retain_all_writes: bool = False) -> Iterator[None]:
+        """Attribute writes made inside this block to ``rung_id`` (a subroutine rung).
+
+        Opens an inner scope stacked under the enclosing
+        :meth:`capturing_rung`, recording the subroutine rung's own write
+        slice for the node-level firing timeline (``cold_rungs`` /
+        ``hot_rungs`` for subroutine rungs).  Multiple calls of the same
+        subroutine in one scan reuse the same ``rung_id`` key — writes
+        are merged (dict union) so all calls' tags are visible to
+        ``cause()`` and ``cold_rungs``.  If per-call-site attribution is
+        needed in the future, add a ``call_site`` field to ``RungId``
+        keyed by the main rung that triggered the ``call()``.
+
+        While the scope is open, :attr:`_current_node_id` names this rung so
+        observers can key it by the same ``RungId`` (nested calls save and
+        restore the enclosing id).
+        """
+        journal, previous_node_id = self._begin_node_capture(rung_id)
+        try:
+            yield
+        finally:
+            self._finish_node_capture(
+                rung_id,
+                journal,
+                previous_node_id,
+                retain_all_writes=retain_all_writes,
+            )
+
+    def _finalize_capture(
+        self, journal: dict[str, list[Any]], *, retain_all_writes: bool = False
+    ) -> tuple[dict[str, Any], set[str]] | None:
+        """Close a capture scope into its attempted firing writes.
+
+        Returns the (PDG-filtered) final ``{tag: attempted_value}`` for the
+        scope, or ``None`` only when the scope attempted no write at all.
+        Recording attempts consistently matters when a later writer reasserts
+        the already-pending value: it still owns an execution occurrence, and
+        the range encoder can compact that stable value while causal lookup
+        skips known-nonmatching attempts without replaying them.
+        """
+        if not journal:
+            return None
+        attempted_writes = {name: summary[0] for name, summary in journal.items()}
+        varied = {name for name, summary in journal.items() if summary[1]}
+        if retain_all_writes:
+            return attempted_writes, varied
+        consumed = self._consumed_tags_getter() if self._consumed_tags_getter is not None else None
+        if consumed is None:
+            return attempted_writes, varied
+        retained = {name: val for name, val in attempted_writes.items() if name in consumed}
+        return retained, varied & retained.keys()
 
     @property
     def rung_firings(self) -> PMap:
@@ -364,6 +710,17 @@ class ScanContext:
         Empty if no rung scopes were opened during the scan.
         """
         return pmap({i: pmap(w) for i, w in self._rung_firings.items()})
+
+    @property
+    def node_firings(self) -> PMap:
+        """Per-subroutine-rung write slices captured via :meth:`capturing_node`.
+
+        ``PMap[RungId, PMap[str, Any]]`` — keyed by
+        ``RungId(subroutine, rung_index)``.  Feeds the node-level firing
+        timeline that makes ``cold_rungs`` / ``hot_rungs`` see subroutine
+        rungs.  Empty when no subroutine ran during the scan.
+        """
+        return pmap({k: pmap(w) for k, w in self._node_firings.items()})
 
     # =========================================================================
     # I/O replay recording and lookup
@@ -402,9 +759,12 @@ class ScanContext:
             New SystemState with all changes applied.
         """
 
-        # Build final tags and memory from evolvers
-        new_tags = self._tags_evolver.persistent()
-        new_memory = self._memory_evolver.persistent()
+        # Within-scan reads use the pending dicts, so publishing can wait until
+        # the final value of each key is known.  Avoid touching the PMap for
+        # writes that finish equal to the immutable scan base; otherwise apply
+        # all genuinely changed values through one deferred evolver.
+        new_tags = _commit_changed(self._state_tags, self._tags_pending)
+        new_memory = _commit_changed(self._state_memory, self._memory_pending)
 
         # Create new state with updated tags/memory and advance scan
         new_state = self._state.set(tags=new_tags, memory=new_memory)

@@ -3,7 +3,7 @@
 from pyrung import Bool, Rung, call, copy, return_early, subroutine
 from pyrung.core import Block, Dint, Int, Program, TagType, calc
 from pyrung.core.validation.pointer_default import (
-    CORE_POINTER_DEFAULT_BEFORE_BLOCK_START,
+    PTR_DEFAULT_BEFORE_BLOCK_START,
     validate_pointer_defaults,
 )
 
@@ -22,18 +22,18 @@ class TestPointerDefaultValidator:
 
         assert len(report.findings) == 1
         finding = report.findings[0]
-        assert finding.code == CORE_POINTER_DEFAULT_BEFORE_BLOCK_START
+        assert finding.code == PTR_DEFAULT_BEFORE_BLOCK_START
         assert finding.target_name == "DS[Ptr]"
         assert finding.pointer_default == 0
         assert finding.block_start == 1
         assert finding.block_end == 100
         assert len(finding.sites) == 1
         assert finding.sites[0].arg_path == "instruction.source"
-        assert "separately initialized pointer tag" in finding.message
-        # Location is rendered 1-indexed (rung_index 0 → "rung 1").
+        assert "set Ptr in 1..100 before indexing DS" in finding.message
+        # Location is the compact traceback form, 1-indexed (rung_index 0 → "R1").
         assert finding.sites[0].rung_index == 0
-        assert "main rung 1" in finding.message
-        assert "main rung 0" not in finding.message
+        assert "Main:R1" in finding.message
+        assert "Main:R0" not in finding.message
 
     def test_source_and_dest_pointers_flagged_independently(self):
         ds = Block("DS", TagType.INT, 1, 100)
@@ -207,9 +207,9 @@ class TestPointerDefaultValidator:
             with Rung():
                 copy(ds[ptr], dest)
 
-        selected = prog.validate(select={CORE_POINTER_DEFAULT_BEFORE_BLOCK_START})
-        ignored = prog.validate(ignore={CORE_POINTER_DEFAULT_BEFORE_BLOCK_START})
+        selected = prog.validate(select={PTR_DEFAULT_BEFORE_BLOCK_START})
+        ignored = prog.validate(ignore={PTR_DEFAULT_BEFORE_BLOCK_START})
 
         assert len(selected.findings) == 1
-        assert all(f.code == CORE_POINTER_DEFAULT_BEFORE_BLOCK_START for f in selected.findings)
-        assert not any(f.code == CORE_POINTER_DEFAULT_BEFORE_BLOCK_START for f in ignored.findings)
+        assert all(f.code == PTR_DEFAULT_BEFORE_BLOCK_START for f in selected.findings)
+        assert not any(f.code == PTR_DEFAULT_BEFORE_BLOCK_START for f in ignored.findings)

@@ -6,12 +6,12 @@ in block synchronization for indirect ``dh[]`` / ``ds[]`` access.
 """
 
 from pyrung import (
+    And,
     Bool,
     BoolBlock,
     Int,
     IntBlock,
     Or,
-    rung,
     Timer,
     Word,
     calc,
@@ -28,9 +28,12 @@ from pyrung import (
     reset,
     return_early,
     rise,
+    rung,
     subroutine,
 )
-from pyrung.click import TagMap, c, dh, ds, t, td, x
+from pyrung.click import ClickBlocks, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 BOOL_CHOICES = {0: "False", 1: "True"}
 MODE_CHOICES = {0: "Undefined", 1: "Production", 2: "Maintenance", 3: "Manual"}
@@ -290,11 +293,15 @@ def sm_ctrl_cmd2_state_request():
         copy(S.STARTING, StateRequested)
         copy(0, LoopIndex)
 
-    with rung(CmdValidYes, CtrlCmd == 1, Or(StateCurrent == S.COMPLETED, StateCurrent == S.STOPPED)):
+    with rung(
+        CmdValidYes, CtrlCmd == 1, Or(StateCurrent == S.COMPLETED, StateCurrent == S.STOPPED)
+    ):
         copy(S.RESETTING, StateRequested)
         copy(0, LoopIndex)
 
-    with rung(CmdValidYes, CtrlCmd == 4, Or(StateCurrent == S.EXECUTE, StateCurrent == S.SUSPENDED)):
+    with rung(
+        CmdValidYes, CtrlCmd == 4, Or(StateCurrent == S.EXECUTE, StateCurrent == S.SUSPENDED)
+    ):
         copy(S.HOLDING, StateRequested)
         copy(0, LoopIndex)
 
@@ -310,7 +317,11 @@ def sm_ctrl_cmd2_state_request():
         copy(S.UNSUSPENDING, StateRequested)
         copy(0, LoopIndex)
 
-    with rung(CmdValidYes, CtrlCmd == 10, Or(StateCurrent == S.EXECUTE, StateCurrent == S.HELD, StateCurrent == S.SUSPENDED)):
+    with rung(
+        CmdValidYes,
+        CtrlCmd == 10,
+        Or(StateCurrent == S.EXECUTE, StateCurrent == S.HELD, StateCurrent == S.SUSPENDED),
+    ):
         copy(S.COMPLETING, StateRequested)
         copy(0, LoopIndex)
 
@@ -318,11 +329,46 @@ def sm_ctrl_cmd2_state_request():
         copy(S.CLEARING, StateRequested)
         copy(0, LoopIndex)
 
-    with rung(CmdValidYes, CtrlCmd == 3, Or(StateCurrent == S.IDLE, StateCurrent == S.STARTING, StateCurrent == S.EXECUTE, StateCurrent == S.COMPLETING, StateCurrent == S.COMPLETED, StateCurrent == S.RESETTING, StateCurrent == S.HOLDING, StateCurrent == S.HELD, StateCurrent == S.UNHOLDING, StateCurrent == S.SUSPENDING, StateCurrent == S.UNSUSPENDING)):
+    with rung(
+        CmdValidYes,
+        CtrlCmd == 3,
+        Or(
+            StateCurrent == S.IDLE,
+            StateCurrent == S.STARTING,
+            StateCurrent == S.EXECUTE,
+            StateCurrent == S.COMPLETING,
+            StateCurrent == S.COMPLETED,
+            StateCurrent == S.RESETTING,
+            StateCurrent == S.HOLDING,
+            StateCurrent == S.HELD,
+            StateCurrent == S.UNHOLDING,
+            StateCurrent == S.SUSPENDING,
+            StateCurrent == S.UNSUSPENDING,
+        ),
+    ):
         copy(S.STOPPING, StateRequested)
         copy(0, LoopIndex)
 
-    with rung(CmdValidYes, CtrlCmd == 8, Or(StateCurrent == S.IDLE, StateCurrent == S.STARTING, StateCurrent == S.EXECUTE, StateCurrent == S.COMPLETING, StateCurrent == S.COMPLETED, StateCurrent == S.RESETTING, StateCurrent == S.HOLDING, StateCurrent == S.HELD, StateCurrent == S.UNHOLDING, StateCurrent == S.SUSPENDING, StateCurrent == S.UNSUSPENDING, StateCurrent == S.STOPPING, StateCurrent == S.STOPPED, StateCurrent == S.CLEARING)):
+    with rung(
+        CmdValidYes,
+        CtrlCmd == 8,
+        Or(
+            StateCurrent == S.IDLE,
+            StateCurrent == S.STARTING,
+            StateCurrent == S.EXECUTE,
+            StateCurrent == S.COMPLETING,
+            StateCurrent == S.COMPLETED,
+            StateCurrent == S.RESETTING,
+            StateCurrent == S.HOLDING,
+            StateCurrent == S.HELD,
+            StateCurrent == S.UNHOLDING,
+            StateCurrent == S.SUSPENDING,
+            StateCurrent == S.UNSUSPENDING,
+            StateCurrent == S.STOPPING,
+            StateCurrent == S.STOPPED,
+            StateCurrent == S.CLEARING,
+        ),
+    ):
         copy(S.ABORTING, StateRequested)
         copy(0, LoopIndex)
 
@@ -331,6 +377,9 @@ def sm_ctrl_cmd2_state_request():
 def sm_state_complete2_request():
     with rung(StateCurrent == S.STARTING):
         copy(S.EXECUTE, StateRequested)
+        copy(0, LoopIndex)
+    with rung(StateCurrent == S.EXECUTE):
+        copy(S.COMPLETING, StateRequested)
         copy(0, LoopIndex)
     with rung(StateCurrent == S.COMPLETING):
         copy(S.COMPLETED, StateRequested)
@@ -372,7 +421,14 @@ def sm_copy_or_jump_state():
         copy(S.ABORTED, StateRequested)
 
     comment("Check if requested state is directly allowed")
-    with rung(Or(StateRequested == S.STOPPED, StateRequested == S.IDLE, StateRequested == S.EXECUTE, StateRequested == S.ABORTED)):
+    with rung(
+        Or(
+            StateRequested == S.STOPPED,
+            StateRequested == S.IDLE,
+            StateRequested == S.EXECUTE,
+            StateRequested == S.ABORTED,
+        )
+    ):
         copy(1, StateEnableYes)
 
     comment("Check if requested state is blocked by disabled-state mask")
@@ -414,7 +470,11 @@ def mode_change():
     with rung(ModeManual):
         copy(3, UnitModeCmd)
 
-    with rung():
+    # Guard against clobbering: mode_change is also called during init while
+    # UnitModeCmd == 0.  Copying 0 here would overwrite the init UnitModeCurrent
+    # (mode Production) with Undefined, so ModeConfigIdx lands on the unwritten
+    # dh[200].  Only apply a real mode request.
+    with rung(UnitModeCmd != 0):
         copy(UnitModeCmd, UnitModeCurrent)
         copy(0, StateTimer.Acc)
 
@@ -465,6 +525,59 @@ def alm_historian():
         copy(HistorianId, LastHistorianId)
         copy(0, HistorianId)
         reset(HistorianBit)
+
+
+@subroutine("task_sequencer")
+def task_sequencer():
+    # Resting step sequencer (cf. examples/task_example.py).  Each odd step is
+    # an active step that dwells until its step timer elapses, then requests an
+    # advance; even steps auto-advance.  Unlike a literal-jump sequence
+    # (copy(3, Step) / copy(5, Step)), the step value comes to *rest* at each
+    # active step instead of cascading 1 -> 3 -> 5 within a single scan, so
+    # each step is an observable committed state.
+
+    # Not active: clear the sequence and bail.
+    with rung(Task1.xCall == 0):
+        copy(0, Task1._CurStep)
+        copy(0, Task1.Trans)
+        copy(0, TaskTimer.Acc)
+        return_early()
+
+    # Paused: hold the step and freeze the step timer.
+    with rung(Task1.xPause == 1):
+        copy(0, TaskTimer.Acc)
+        return_early()
+
+    # Active and running: the step timer free-runs.
+    with rung():
+        on_delay(TaskTimer, 1, "sec")
+
+    # Active (odd) steps request an advance once their dwell elapses; the
+    # final step signals completion and restarts the sequence.
+    with rung(Task1._CurStep == 1, TaskTimer.Done):
+        copy(1, Task1.Trans)
+
+    with rung(Task1._CurStep == 3, TaskTimer.Done):
+        copy(1, Task1.Trans)
+
+    with rung(Task1._CurStep == 5, TaskTimer.Done):
+        copy(1, StateCompleteBool)
+        copy(0, Task1._CurStep)
+        copy(0, TaskTimer.Acc)
+        return_early()
+
+    # Boilerplate: even steps auto-advance; a requested advance moves the
+    # current (odd) step to the next even step and restarts the step timer.
+    # The modulo wrap keeps the step count bounded to [0, 5] (six-state cycle)
+    # so the value domain stays finite for static analysis.
+    with rung(Task1._CurStep % 2 == 0):
+        calc((Task1._CurStep + 1) % 6, Task1._CurStep)
+        copy(0, TaskTimer.Acc)
+
+    with rung(Task1.Trans == 1):
+        calc((Task1._CurStep + 1) % 6, Task1._CurStep)
+        copy(0, Task1.Trans)
+        copy(0, TaskTimer.Acc)
 
 
 @program
@@ -561,7 +674,21 @@ def logic():
     with rung():
         on_delay(StateTimer, 1, "sec")
 
-    with rung(Or(StateCurrent != S.IDLE, StateCurrent != S.STOPPED, StateCurrent != S.ABORTED), UnitModeCmd < 1, UnitModeCmd > 3):
+    # Reject a mode-change request when the machine is not in a mode-changeable
+    # state (none of IDLE/STOPPED/ABORTED), or the requested mode is out of the
+    # 1..3 range.  Ladder has no group-negation primitive, so "reject when NOT
+    # valid" distributes the negation by hand: the And must sit *inside* the Or.
+    with rung(
+        Or(
+            And(
+                StateCurrent != S.IDLE,
+                StateCurrent != S.STOPPED,
+                StateCurrent != S.ABORTED,
+            ),
+            UnitModeCmd < 1,
+            UnitModeCmd > 3,
+        )
+    ):
         copy(0, UnitModeCmd)
         reset(ModeChgRequest)
 
@@ -616,25 +743,8 @@ def logic():
     with rung(Or(StateCurrent == S.HELD, StateCurrent == S.SUSPENDED)):
         copy(1, Task1.xPause)
 
-    with rung(Task1.xCall == 1, Task1._CurStep == 0):
-        copy(1, Task1._CurStep)
-        copy(0, TaskTimer.Acc)
-
-    with rung(Task1.xCall == 1, Task1.xPause == 0):
-        on_delay(TaskTimer, 1, "sec")
-
-    with rung(Task1.xCall == 1, Task1.xPause == 0, Task1._CurStep == 1, TaskTimer.Done):
-        copy(3, Task1._CurStep)
-        copy(0, TaskTimer.Acc)
-
-    with rung(Task1.xCall == 1, Task1.xPause == 0, Task1._CurStep == 3, TaskTimer.Done):
-        copy(5, Task1._CurStep)
-        copy(0, TaskTimer.Acc)
-
-    with rung(Task1.xCall == 1, Task1.xPause == 0, Task1._CurStep == 5, TaskTimer.Done):
-        copy(1, StateCompleteBool)
-        copy(0, Task1._CurStep)
-        copy(0, TaskTimer.Acc)
+    with rung():
+        call(task_sequencer)
 
     with rung():
         copy(Task1._CurStep, TaskStepView)
@@ -682,7 +792,6 @@ def logic():
         fill(0, AlarmCoil.select(1, 8))
         fill(0, AlarmStatus.select(1, 8))
         copy(1, StateCompleteBool)
-
 
 
 mapping = TagMap(

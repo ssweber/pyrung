@@ -69,6 +69,16 @@ class _ExploreContext:
     # only these keys (the rest are write-once constants); None = snapshot all.
     mutable_tag_names: frozenset[str] | None = None
     base_tag_keys: frozenset[str] | None = None
+    simulation_status_tag_names: frozenset[str] = field(default_factory=frozenset)
+    pipeline_cache: _PipelineCache | None = None
+    combinational_tags: frozenset[str] = field(default_factory=frozenset)
+    elided_tags: dict[str, str] = field(default_factory=dict)
+    # ``{y: (x, scale, offset)}`` — ``y = scale * x + offset``, scale ∈ {1, -1}.
+    functional_dep_projections: dict[str, tuple[str, int, int | float]] = field(
+        default_factory=dict
+    )
+    init_constant_projections: dict[str, tuple[str, Any]] = field(default_factory=dict)
+    stepping_tags: frozenset[str] = field(default_factory=frozenset)
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec
@@ -118,6 +128,7 @@ from .passes import (
     _JournalBuilder,
     _PassContext,
     _passes_for_opt_config,
+    _PipelineCache,
     _run_pre_bfs_pipeline,
 )
 from .passes import _OptConfig as _OptConfig
@@ -162,12 +173,12 @@ def _validate_split_at(
         is_written = tag_name in graph.writers_of
         is_nd = role == TagRole.INPUT or not is_written
         if is_nd:
-            msg = f"split_at tag {tag_name!r} is an external input — it is already nondeterministic"
+            msg = f"split_at tag {tag_name!r} is an external input; it is already nondeterministic"
             raise ValueError(msg)
 
         if tag_name in edge_sources:
             msg = (
-                f"split_at tag {tag_name!r} appears in rise()/fall() — "
+                f"split_at tag {tag_name!r} appears in rise()/fall(); "
                 f"edge-bearing tags cannot be split"
             )
             raise ValueError(msg)
@@ -180,7 +191,7 @@ def _validate_split_at(
             domain = tuple(sorted(tag.choices.keys()))
         else:
             msg = (
-                f"split_at tag {tag_name!r} has no small enumerable domain — "
+                f"split_at tag {tag_name!r} has no small enumerable domain; "
                 f"only Bool, Done-paired, and choices= tags can be split"
             )
             raise ValueError(msg)
@@ -205,6 +216,9 @@ def _build_explore_context(
     _opt_config: _OptConfig = _DEFAULT_OPT_CONFIG,
     journal: bool = False,
     initial_state: dict[str, Any] | None = None,
+    pipeline_cache: _PipelineCache | None = None,
+    restrict_inputs_to_scope: bool = False,
+    allow_partial: bool = False,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for always()/reachable_states()."""
     split_at_tags = _validate_split_at(program, split_at) if split_at else None
@@ -223,8 +237,13 @@ def _build_explore_context(
         split_at_tags=split_at_tags,
         scope_snapshot=_opt_config.scope_snapshot,
         initial_state=initial_state,
+        pipeline_cache=pipeline_cache,
+        restrict_inputs_to_scope=restrict_inputs_to_scope,
+        domains_only=_opt_config.domains_only,
     )
-    return _run_pre_bfs_pipeline(ctx, _passes_for_opt_config(_opt_config))
+    return _run_pre_bfs_pipeline(
+        ctx, _passes_for_opt_config(_opt_config), allow_partial=allow_partial
+    )
 
 
 def _compile_property_spec(
@@ -308,7 +327,7 @@ def _upstream_cone(program: Program, tags: list[str]) -> frozenset[str]:
     graph = build_program_graph(program)
     cone: set[str] = set(tags)
     for tag_name in tags:
-        cone.update(graph.upstream_slice_with_calls(tag_name))
+        cone.update(graph.upstream_slice(tag_name))
     return frozenset(cone)
 
 
@@ -832,9 +851,9 @@ class _BFSProgress:
 
     def __call__(self, visited: int, queue_size: int, dt: float) -> None:
         if queue_size > self._prev_queue:
-            arrow = "↑"
+            arrow = "+"
         elif queue_size < self._prev_queue:
-            arrow = "↓"
+            arrow = "-"
         else:
             arrow = "="
         self._prev_queue = queue_size
@@ -1003,8 +1022,9 @@ def _build_semantic_metadata(
 ) -> tuple[dict[str, list[Any]], dict[str, str]]:
     """Build atom_index and domain_sources for semantic path annotations.
 
-    Returns ``(atom_index, domain_sources)`` suitable for passing to
-    ``_classify_step_inputs()``.
+    Returns ``(atom_index, domain_sources)`` describing the comparison atoms
+    per tag and each tag's domain source — the semantic metadata used to
+    annotate reachability output with constraint information.
     """
     from .expr import _build_atom_index
     from .passes import _infer_domain_source

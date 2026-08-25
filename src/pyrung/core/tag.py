@@ -144,8 +144,12 @@ class Tag:
     max: int | float | None = None
     uom: str | None = None
     band: BandMap | None = None
+    # Validation sometimes needs to distinguish an omitted default (which the
+    # runtime fills with the type's zero) from an intentionally configured zero.
+    _default_explicit: bool = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
+        object.__setattr__(self, "_default_explicit", self.default is not None)
         object.__setattr__(self, "default", _normalize_default_value(self.default))
 
         # Set type-appropriate default if not specified
@@ -189,6 +193,11 @@ class Tag:
 
     def __hash__(self) -> int:
         return hash(self.name)
+
+    @property
+    def has_explicit_default(self) -> bool:
+        """Whether the tag's initial value was configured rather than inferred."""
+        return self._default_explicit
 
     def _resolve_choice(self, value: object) -> object:
         if self.choices is not None and isinstance(value, str):
@@ -260,7 +269,7 @@ class Tag:
             if isinstance(other, (int, float)):
                 raise TypeError(
                     f"Cannot use bitwise | between Bool tag {self.name!r} and {other!r}. "
-                    "This is usually a precedence mistake — "
+                    "This is usually a precedence mistake; "
                     "add parentheses: Ready | (Speed > 50)"
                 )
         if isinstance(other, CondBase):
@@ -283,7 +292,7 @@ class Tag:
             if isinstance(other, (int, float)):
                 raise TypeError(
                     f"Cannot use bitwise | between {other!r} and Bool tag {self.name!r}. "
-                    "This is usually a precedence mistake — "
+                    "This is usually a precedence mistake; "
                     "add parentheses: (Speed > 50) | Ready"
                 )
         if isinstance(other, CondBase):
@@ -327,7 +336,27 @@ class Tag:
         runner.patch({self.name: new_value})
 
     def map_to(self, target: Tag) -> MappingEntry:
-        """Create a logical-to-hardware mapping entry."""
+        """Create a logical-to-hardware mapping entry.
+
+        If *target* is a block slot (e.g. ``ds[165]``), the tag is
+        registered as the canonical occupant of that address so that
+        ``block[addr]`` returns this tag directly.  The registration
+        survives ``Block.reset()`` (which only clears slot overrides
+        and the tag cache), so cached module imports remain correct
+        across test boundaries.
+        """
+        block = getattr(target, "_pyrung_block", None)
+        if block is not None:
+            addr: int = getattr(target, "_pyrung_block_addr")  # noqa: B009
+            existing = block._mapped_tags.get(addr)
+            if existing is not None and existing is not self and existing.name != self.name:
+                raise ValueError(
+                    f"Slot {block.name}[{addr}] mapping conflict: "
+                    f"already mapped to {existing.name!r}, "
+                    f"cannot remap to {self.name!r}."
+                )
+            block._mapped_tags[addr] = self
+            block._tag_cache.pop(addr, None)
         return MappingEntry(source=self, target=target)
 
     # =========================================================================
@@ -464,7 +493,7 @@ class Tag:
             if isinstance(other, (int, float)):
                 raise TypeError(
                     f"Cannot use bitwise & between {other!r} and Bool tag {self.name!r}. "
-                    "This is usually a precedence mistake — "
+                    "This is usually a precedence mistake; "
                     "add parentheses: (Speed > 50) & Ready"
                 )
 

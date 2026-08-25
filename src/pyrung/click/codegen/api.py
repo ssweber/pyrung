@@ -12,6 +12,7 @@ from pyrung.click.codegen.parser import (
     _parse_rows,
     _parse_subroutines,
 )
+from pyrung.core.structure import resolve_default
 
 if TYPE_CHECKING:
     from pyrung.click.codegen.models import _AnalyzedRung, _OperandCollection, _SubroutineInfo
@@ -19,11 +20,69 @@ if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
 
 
+class CodegenIdentityError(Exception):
+    """Generated code would not reconstruct the source project's per-slot values.
+
+    Raised by the ``validate=True`` self-check when the compressed structure
+    representation the emitter is about to write (field default + ``auto()``
+    sequence + per-slot overrides) does not resolve back to every value read
+    from the source runtime.
+    """
+
+
+_MISSING = object()
+
+
+def _verify_codegen_identity(
+    collection: _OperandCollection,
+    structured_map: TagMap | None,
+) -> None:
+    """Fail loudly when emitted structure defaults would drop source values.
+
+    Decl-level check (no exec, no re-parse): for each structure field, resolve
+    what the emitted representation reconstructs and compare it to the source
+    per-slot default.  Retentive fields are skipped — pyrung's model discards
+    their power-on defaults, so they are intentionally not reconstructed.
+    """
+    if structured_map is None:
+        return
+
+    mismatches: list[str] = []
+    for decl in collection.structures:
+        si = structured_map.structure_by_name(decl.name)
+        if si is None:
+            continue
+        runtime = si.runtime
+        for field_name, _type_name, base_default in decl.fields:
+            if decl.field_retentive.get(field_name, False):
+                continue
+            block = runtime._blocks.get(field_name)
+            if block is None:
+                continue
+            for index in range(1, decl.count + 1):
+                override = decl.field_slot_default.get((field_name, index), _MISSING)
+                reconstructed = (
+                    override if override is not _MISSING else resolve_default(base_default, index)
+                )
+                source = block.slot(index).default
+                if reconstructed != source:
+                    mismatches.append(
+                        f"{decl.name}.{field_name}[{index}]: source default {source!r} "
+                        f"but generated code reconstructs {reconstructed!r}"
+                    )
+
+    if mismatches:
+        raise CodegenIdentityError(
+            "codegen identity check failed (validate=True):\n  " + "\n  ".join(mismatches)
+        )
+
+
 def _prepare_codegen(
     source: str | Path | LadderBundle,
     *,
     nickname_csv: str | Path | None = None,
     nicknames: dict[str, str] | None = None,
+    validate: bool = False,
 ) -> tuple[
     list[_AnalyzedRung],
     _OperandCollection,
@@ -34,6 +93,10 @@ def _prepare_codegen(
     """Shared pipeline: parse, analyze, collect operands.
 
     Returns (main_rungs, collection, nick_map, subroutines, structured_map).
+
+    When *validate* is True, rung analysis raises ``ValueError`` for any source
+    contact that reaches no output (a dropped condition — see
+    ``analyzer._analyze_single_rung``); otherwise such drops only warn.
     """
     if nickname_csv is not None and nicknames is not None:
         raise ValueError("Provide nickname_csv or nicknames, not both.")
@@ -57,7 +120,7 @@ def _prepare_codegen(
     if isinstance(source, _LadderBundle):
         raw_rungs = _parse_rows(source.main_rows)
         call_names = _find_call_names(raw_rungs)
-        subroutines = _parse_subroutines_from_bundle(source, call_names)
+        subroutines = _parse_subroutines_from_bundle(source, call_names, validate=validate)
     elif isinstance(source, (str, Path)):
         csv_path = Path(source)
         if csv_path.is_dir():
@@ -71,13 +134,15 @@ def _prepare_codegen(
 
         raw_rungs = _parse_csv(main_path)
         call_names = _find_call_names(raw_rungs)
-        subroutines = _parse_subroutines(dir_path, call_names) if call_names else []
+        subroutines = (
+            _parse_subroutines(dir_path, call_names, validate=validate) if call_names else []
+        )
     else:
         raise TypeError(
             f"source must be a path (str/Path) or LadderBundle, got {type(source).__name__}"
         )
 
-    analyzed = _analyze_rungs(raw_rungs)
+    analyzed = _analyze_rungs(raw_rungs, validate=validate, source_name="Main program")
 
     all_analyzed = list(analyzed)
     for sub in subroutines:
@@ -96,6 +161,7 @@ def ladder_to_pyrung(
     nickname_csv: str | Path | None = None,
     nicknames: dict[str, str] | None = None,
     output_path: str | Path | None = None,
+    validate: bool = True,
 ) -> str:
     """Convert Click ladder data to pyrung Python source code.
 
@@ -110,19 +176,31 @@ def ladder_to_pyrung(
             to ``nickname_csv``; useful when the caller already has the map.
         output_path: Optional path to write the generated Python file.
             If ``None``, the code is returned as a string only.
+        validate: When *True* (default), run codegen self-checks: a decl-level
+            identity check that the generated structure defaults reconstruct
+            every source per-slot value (raises :class:`CodegenIdentityError`),
+            and a rung-analysis check that no source contact is silently dropped
+            for lack of wiring into an output (raises ``ValueError``). When
+            *False*, a dropped contact only warns instead of raising.
 
     Returns:
         The generated Python source code as a string.
 
     Raises:
         ValueError: If both ``nickname_csv`` and ``nicknames`` are provided,
-            if required subroutine CSV files are missing, or if the CSV
-            format is invalid.
+            if required subroutine CSV files are missing, if the CSV format is
+            invalid, or if ``validate`` is *True* and a rung drops a source
+            contact that reaches no output.
         TypeError: If ``source`` is not a supported type.
+        CodegenIdentityError: If ``validate`` is *True* and the generated code
+            would not reconstruct the source project's per-slot values.
     """
     analyzed, collection, nick_map, subroutines, structured_map = _prepare_codegen(
-        source, nickname_csv=nickname_csv, nicknames=nicknames
+        source, nickname_csv=nickname_csv, nicknames=nicknames, validate=validate
     )
+
+    if validate:
+        _verify_codegen_identity(collection, structured_map)
 
     code = _generate_code(
         analyzed, collection, nick_map, subroutines=subroutines, structured_map=structured_map
@@ -139,6 +217,8 @@ def ladder_to_pyrung(
 def _parse_subroutines_from_bundle(
     bundle: LadderBundle,
     call_names: dict[str, str],
+    *,
+    validate: bool = False,
 ) -> list:
     """Parse subroutine rows from a LadderBundle (in-memory, no disk I/O)."""
     from pyrung.click.codegen.models import _SubroutineInfo
@@ -149,7 +229,11 @@ def _parse_subroutines_from_bundle(
         slug = _slugify(subroutine_name)
         name = call_names.get(slug, subroutine_name)
         raw = _parse_rows(rows)
-        analyzed = _analyze_rungs(raw)
+        analyzed = _analyze_rungs(
+            raw,
+            validate=validate,
+            source_name=f'Subroutine "{name}"',
+        )
         subs.append(_SubroutineInfo(name=name, analyzed=analyzed))
     return subs
 
@@ -163,11 +247,13 @@ def ladder_to_pyrung_project(
     index: bool = False,
     overwrite: bool = False,
     machine_name: str = "PLC",
+    validate: bool = True,
 ) -> dict[str, str]:
     """Convert Click ladder data to a multi-file pyrung project.
 
-    Generates a project layout with separate ``tags.py``, ``main.py``, and
-    ``subroutines/*.py`` files suitable for simulation, testing, or editing.
+    Generates an installable ``src/plc`` project with separate ``tags.py``,
+    ``main.py``, and ``subroutines/*.py`` files suitable for simulation,
+    testing, or editing.
 
     Args:
         source: A file path (to main.csv or a directory containing main.csv
@@ -179,19 +265,26 @@ def ladder_to_pyrung_project(
             If ``None``, files are returned as strings only.
         overwrite: When *False* (default), scaffolding files (pyproject.toml,
             README.md, .vscode/) are skipped if they already exist on disk.
-            Logic files (tags.py, main.py, subroutines/) are always written.
-        machine_name: Human-readable machine name for CLAUDE.md/AGENTS.md
+            Logic files under src/plc/ are always written.
+        machine_name: Human-readable machine name for AGENTS.md
             header (e.g. from the .ckp filename).
+        validate: When *True* (default), run codegen self-checks (see
+            :func:`ladder_to_pyrung`): a structure-default identity check
+            (raises :class:`CodegenIdentityError`) and a dropped-contact check
+            (raises ``ValueError``). When *False*, dropped contacts only warn.
 
     Returns:
         A dict mapping relative file paths to their content, e.g.
-        ``{"main.py": "...", "tags.py": "...", "subroutines/startup.py": "..."}``.
+        ``{"src/plc/main.py": "...", "src/plc/tags.py": "..."}``.
     """
     from pyrung.click.codegen.project_emitter import _SCAFFOLDING_FILES, _generate_project
 
     analyzed, collection, nick_map, subroutines, structured_map = _prepare_codegen(
-        source, nickname_csv=nickname_csv, nicknames=nicknames
+        source, nickname_csv=nickname_csv, nicknames=nicknames, validate=validate
     )
+
+    if validate:
+        _verify_codegen_identity(collection, structured_map)
 
     files = _generate_project(
         analyzed,

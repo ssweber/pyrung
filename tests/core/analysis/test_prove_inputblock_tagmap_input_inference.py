@@ -132,8 +132,10 @@ class TestInputBlockNondeterministic:
         assert isinstance(result, Counterexample)
 
     def test_tagmap_stamps_external_on_input_mapped_tags(self):
-        from pyrung.click import TagMap, x, y
+        from pyrung.click import ClickBlocks, TagMap
 
+        blocks = ClickBlocks()
+        x, y = blocks.x, blocks.y
         button = Bool("Button")
         motor = Bool("Motor")
         assert not button.external
@@ -145,8 +147,9 @@ class TestInputBlockNondeterministic:
         assert not motor.external
 
     def test_tagmap_stamped_tag_becomes_nondeterministic(self):
-        from pyrung.click import TagMap, x
+        from pyrung.click import ClickBlocks, TagMap
 
+        x = ClickBlocks().x
         button = Bool("Button")
         light = Bool("Light")
 
@@ -162,8 +165,9 @@ class TestInputBlockNondeterministic:
         assert "Button" in nd
 
     def test_tagmap_stamped_reachable_states(self):
-        from pyrung.click import TagMap, x
+        from pyrung.click import ClickBlocks, TagMap
 
+        x = ClickBlocks().x
         button = Bool("Button")
         light = Bool("Light")
 

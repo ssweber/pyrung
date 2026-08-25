@@ -13,20 +13,15 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from pyrung.click import (
+    ClickBlocks,
+    CodegenIdentityError,
     TagMap,
-    c,
-    df,
-    ds,
     ladder_to_pyrung,
     ladder_to_pyrung_project,
     pyrung_to_ladder,
-    sc,
-    sd,
-    t,
-    td,
-    x,
-    y,
 )
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click.codegen.analyzer import _analyze_rungs
 from pyrung.click.codegen.parser import _parse_csv
 from pyrung.click.codegen.utils import _parse_af_args
@@ -93,7 +88,8 @@ def _round_trip(
     csv_input = csv_dir if has_subs else csv_dir / "main.csv"
     code = ladder_to_pyrung(csv_input, nicknames=nicknames)
 
-    # Execute the generated code
+    # Execute the generated code (exec_with_source resets the banks first —
+    # the original TagMap already claimed bank slot identities)
     ns: dict = {}
     exec_with_source(code, ns)
 
@@ -575,6 +571,150 @@ def _wheatstone_grid(draw):
     return _make_wheatstone_rows(contacts, offset=offset), contacts, offset
 
 
+class TestDroppedContactValidation:
+    """A source contact wired to no output must not vanish silently.
+
+    A second contact stacked in condition column 0 on a continuation row can
+    resemble an OR branch while lacking the required tee/down wiring. Its right
+    side then dangles, and the reachable-subgraph filter in ``_sp_reduce``
+    prunes it. See the analyzer's dropped-contact detection.
+    """
+
+    @staticmethod
+    def _dropped_or_rung():
+        """R1 with X001 reaching out(Y001) and X002 dangling (no tee wiring)."""
+        from pyrung.click.codegen.models import _RawRung
+
+        row0 = _make_row("R", _fill_dashes({0: "X001"}, 1, 31), af="out(Y001)")
+        row1 = _make_row("", {0: "X002"})  # no T on row0, no trailing wires: dangles
+        return _RawRung(comment_lines=[], rows=[row0, row1])
+
+    def test_dropped_contact_warns_by_default(self):
+        from pyrung.click.codegen.analyzer import _analyze_rungs
+
+        rung = self._dropped_or_rung()
+        with pytest.warns(UserWarning, match="drops contact"):
+            analyzed = _analyze_rungs([rung])
+
+        # X001 survives; the dangling X002 is omitted from the logic.
+        labels = _leaf_labels(analyzed[0].condition_tree)
+        for instruction in analyzed[0].instructions:
+            labels.extend(_leaf_labels(instruction.branch_tree))
+        assert "X001" in labels
+        assert "X002" not in labels
+
+    def test_dropped_contact_raises_when_validate(self):
+        from pyrung.click.codegen.analyzer import _analyze_rungs
+
+        rung = self._dropped_or_rung()
+        with pytest.raises(ValueError, match="X002"):
+            # warnings still fire before the raise; ignore them for this assertion
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                _analyze_rungs([rung], validate=True)
+
+    def test_wired_or_is_not_flagged(self):
+        """A correctly tee-wired OR keeps both contacts and never warns/raises."""
+        from pyrung.click.codegen.analyzer import _analyze_rungs
+        from pyrung.click.codegen.models import _RawRung
+
+        # Row 0 carries a T down-connector; row 1's contact wires up through it.
+        row0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
+        row1 = _make_row("", {0: "X002"})
+        rung = _RawRung(comment_lines=[], rows=[row0, row1])
+
+        for validate in (False, True):
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")  # any warning becomes a failure
+                analyzed = _analyze_rungs([rung], validate=validate)
+            par = _find_parallel(analyzed[0].condition_tree)
+            assert par is not None
+            assert sorted(_leaf_labels(c) for c in par.children) == [["X001"], ["X002"]]
+
+    def test_equivalent_conditions_merged_across_outputs_are_not_dropped(self):
+        """Factoring equal labels may merge occurrences at different positions."""
+        from pyrung.click.codegen.models import _RawRung
+
+        row0 = _make_row(
+            "R",
+            _fill_dashes({0: "rise(X001)", 1: "T:C001"}, 2, 31),
+            af="copy(0,DS001,oneshot=1)",
+        )
+        row1 = _make_row(
+            "",
+            _fill_dashes({1: "C001"}, 2, 31),
+            af="reset(C010..C012)",
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            analyzed = _analyze_rungs(
+                [_RawRung(comment_lines=[], rows=[row0, row1])],
+                validate=True,
+            )
+
+        assert _leaf_labels(analyzed[0].condition_tree) == ["rise(X001)", "C001"]
+        assert [instruction.af_token for instruction in analyzed[0].instructions] == [
+            "copy(0,DS001,oneshot=1)",
+            "reset(C010..C012)",
+        ]
+        assert all(instruction.branch_tree is None for instruction in analyzed[0].instructions)
+
+    @pytest.mark.parametrize("source_kind", ["bundle", "directory"])
+    def test_subroutine_error_identifies_subroutine_and_one_indexed_rung(
+        self, tmp_path: Path, source_kind: str
+    ):
+        """Public imports locate a malformed rung in either supported source form."""
+        from pyrung.click.ladder.types import LadderBundle
+
+        header = tuple(["marker", *[f"col_{i}" for i in range(31)], "AF"])
+        main_rung = _make_row(
+            "R",
+            _fill_dashes({0: "X001"}, 1, 31),
+            af='call("Worker")',
+        )
+        valid_sub_rung = _make_row(
+            "R",
+            _fill_dashes({0: "X002"}, 1, 31),
+            af="out(Y001)",
+        )
+        dropped_row = _make_row(
+            "R",
+            _fill_dashes({0: "X003"}, 1, 31),
+            af="out(Y002)",
+        )
+        dangling_row = _make_row("", {0: "X004"})
+        bundle = LadderBundle(
+            main_rows=(header, tuple(main_rung)),
+            subroutine_rows=(
+                (
+                    "worker",
+                    (
+                        header,
+                        tuple(valid_sub_rung),
+                        tuple(dropped_row),
+                        tuple(dangling_row),
+                    ),
+                ),
+            ),
+        )
+
+        if source_kind == "directory":
+            bundle.write(tmp_path)
+            source = tmp_path
+        else:
+            source = bundle
+
+        match = (
+            r'^Subroutine "Worker", rung 2: Rung drops condition\(s\) present '
+            r"in the source but not connected into any output: X004 \(row 1\)\."
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match=match):
+                ladder_to_pyrung(source)
+
+
 class TestGraphWalkEdgeCases:
     """Synthetic grids exercising SP graph reduction from the Phase 2 spec."""
 
@@ -923,7 +1063,11 @@ class TestGraphWalkEdgeCases:
             _make_row("", _fill_dashes({4: "X003", 5: "X004"}, 6, 31), af="out(Y002)"),
         ]
         rung = _RawRung(comment_lines=[], rows=rows)
-        result = _analyze_single_rung(rung)
+        # This degenerate grid leaves its mid-grid contacts wired to no output,
+        # so they are dropped and every output becomes unconditional. The drops
+        # are the documented outcome, so assert the warning rather than ignore it.
+        with pytest.warns(UserWarning, match="drops contact"):
+            result = _analyze_single_rung(rung)
 
         assert result.condition_tree is None
         assert [instruction.af_token for instruction in result.instructions] == [
@@ -1301,7 +1445,7 @@ class TestRoundTrip:
                 out(Y1)
             """,
             """
-            comment("Start motor")
+            comment('Start motor')
             with rung(X001):
                 out(Y001)
             """,
@@ -1326,20 +1470,50 @@ class TestRoundTrip:
 
     def test_multiline_comment_with_triple_quotes(self):
         """Multi-line comment containing triple-double-quotes must not break syntax."""
-        _assert_codegen_program_body(
-            '''
-            comment('Has """triple""" quotes\\nin comment text')
-            with rung(X1):
-                out(Y1)
-            ''',
-            '''
-            comment("""\\
-                Has \\\"\\\"\\\"triple\\\"\\\"\\\" quotes
-                in comment text""")
-            with rung(X001):
-                out(Y001)
-            ''',
-        )
+        source = '''
+        comment('First line contains """\\nSecond line')
+        with rung(X1):
+            out(Y1)
+        '''
+        logic, mapping = build_program(source)
+
+        code = ladder_to_pyrung(pyrung_to_ladder(logic, mapping))
+        namespace: dict = {}
+        exec_with_source(code, namespace)
+
+        assert "comment('''" in code
+        assert namespace["logic"].rungs[0].comment == 'First line contains """\nSecond line'
+
+    def test_multiline_comment_ending_in_double_quote_compiles(self):
+        """A trailing quote must not combine with the triple-quote delimiter."""
+        source = """
+        comment('First line\\nSecond line ends with "')
+        with rung(X1):
+            out(Y1)
+        """
+        logic, mapping = build_program(source)
+
+        code = ladder_to_pyrung(pyrung_to_ladder(logic, mapping))
+        namespace: dict = {}
+        exec_with_source(code, namespace)
+
+        assert "comment('''" in code
+        assert namespace["logic"].rungs[0].comment == 'First line\nSecond line ends with "'
+
+    def test_multiline_comment_uses_repr_when_no_triple_delimiter_is_safe(self):
+        """Both delimiters plus a backslash take the universal repr fallback."""
+        from pyrung.click.codegen.emitter import _emit_comment
+
+        text = 'Contains """ and ' + "'''" + " delimiters\nContains \\ separator"
+        lines: list[str] = []
+        _emit_comment(lines, text, 0)
+        generated = "\n".join(lines)
+        captured: list[str] = []
+
+        exec_with_source(generated, {"comment": captured.append})
+
+        assert generated.startswith("comment(\n")
+        assert captured == [text]
 
     def test_comparison_condition(self):
         """Comparison: DS1 == 5 → out(Y001)."""
@@ -1793,12 +1967,13 @@ class TestRoundTrip:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Int, Word, copy
-            from pyrung.click import TagMap, dh, ds
+            from pyrung import Program, rung, copy
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            DS134 = Int("DS134")
-            DH051 = Word("DH051")
+            DS134 = ds[134]
+            DH051 = dh[51]
 
             # --- Program ---
             with Program() as logic:
@@ -1806,10 +1981,7 @@ class TestRoundTrip:
                     copy(dh[DS134], DH051)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                DS134: ds[134],
-                DH051: dh[51],
-            })
+            mapping = TagMap({})
             """,
         )
         # Must be valid Python
@@ -2352,12 +2524,15 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, out
-            from pyrung.click import TagMap, x, y
+            from pyrung import Program, rung, out
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            start_button = Bool("start_button")  # X001
-            motor_out = Bool("motor_out")  # Y001
+            x.slot(1, name='start_button')
+            y.slot(1, name='motor_out')
+            start_button = x[1]  # X001
+            motor_out = y[1]  # Y001
 
             # --- Program ---
             with Program() as logic:
@@ -2365,10 +2540,7 @@ class TestNicknameMerge:
                     out(motor_out)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                start_button: x[1],
-                motor_out: y[1],
-            })
+            mapping = TagMap({})
             """,
         )
 
@@ -2382,13 +2554,16 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, Int, copy
-            from pyrung.click import TagMap, ds, x
+            from pyrung import Program, rung, copy
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            _True = Int("True")  # DS1
-            _False = Int("False")  # DS2
-            X001 = Bool("X001")
+            ds.slot(1, name='True')
+            ds.slot(2, name='False')
+            _True = ds[1]  # DS1
+            _False = ds[2]  # DS2
+            X001 = x[1]
 
             # --- Program ---
             with Program() as logic:
@@ -2396,11 +2571,7 @@ class TestNicknameMerge:
                     copy(_True, _False)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                _True: ds[1],
-                _False: ds[2],
-                X001: x[1],
-            })
+            mapping = TagMap({})
             """,
             nicknames={"DS1": "True", "DS2": "False"},
         )
@@ -2423,13 +2594,16 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, Int, copy
-            from pyrung.click import TagMap, ds, x
+            from pyrung import Program, rung, copy
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            _True = Int("True")  # DS1
-            _True_2 = Int("_True")  # DS2
-            X001 = Bool("X001")
+            ds.slot(1, name='True')
+            ds.slot(2, name='_True')
+            _True = ds[1]  # DS1
+            _True_2 = ds[2]  # DS2
+            X001 = x[1]
 
             # --- Program ---
             with Program() as logic:
@@ -2437,11 +2611,7 @@ class TestNicknameMerge:
                     copy(_True, _True_2)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                _True: ds[1],
-                _True_2: ds[2],
-                X001: x[1],
-            })
+            mapping = TagMap({})
             """,
         )
 
@@ -2455,12 +2625,15 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, out
-            from pyrung.click import TagMap, x, y
+            from pyrung import Program, rung, out
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            start_button = Bool("start_button")  # X001
-            motor_out = Bool("motor_out")  # Y001
+            x.slot(1, name='start_button')
+            y.slot(1, name='motor_out')
+            start_button = x[1]  # X001
+            motor_out = y[1]  # Y001
 
             # --- Program ---
             with Program() as logic:
@@ -2468,10 +2641,7 @@ class TestNicknameMerge:
                     out(motor_out)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                start_button: x[1],
-                motor_out: y[1],
-            })
+            mapping = TagMap({})
             """,
             nicknames={"X001": "start_button", "Y001": "motor_out"},
         )
@@ -2493,12 +2663,13 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, out
-            from pyrung.click import TagMap, x, y
+            from pyrung import Program, rung, out
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
-            Y001 = Bool("Y001")
+            X001 = x[1]
+            Y001 = y[1]
 
             # --- Program ---
             with Program() as logic:
@@ -2506,10 +2677,7 @@ class TestNicknameMerge:
                     out(Y001)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                X001: x[1],
-                Y001: y[1],
-            })
+            mapping = TagMap({})
             """,
         )
 
@@ -2531,11 +2699,12 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Timer, Bool, Int, on_delay
-            from pyrung.click import TagMap, t, td, x
+            from pyrung import Program, rung, Timer, on_delay
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
+            X001 = x[1]
 
             # --- Clones ---
             OvenTimer = Timer.clone("OvenTimer")
@@ -2547,11 +2716,8 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
-                # --- Timers & Counters ---
                 OvenTimer.Done.map_to(t[1]),
                 OvenTimer.Acc.map_to(td[1]),
-                # --- Tags ---
-                X001.map_to(x[1]),
             ])
             """,
             nicknames={"T1": "OvenTimer"},
@@ -2567,11 +2733,12 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Timer, Bool, Int, on_delay
-            from pyrung.click import TagMap, t, td, x
+            from pyrung import Program, rung, Timer, on_delay
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
+            X001 = x[1]
 
             # --- Clones ---
             OvenTimer = Timer.clone("OvenTimer")
@@ -2583,11 +2750,8 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
-                # --- Timers & Counters ---
                 OvenTimer.Done.map_to(t[1]),
                 OvenTimer.Acc.map_to(td[1]),
-                # --- Tags ---
-                X001.map_to(x[1]),
             ])
             """,
             nicknames={"T1": "OvenTimer_Done"},
@@ -2603,12 +2767,13 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Counter, Bool, Dint, count_up
-            from pyrung.click import TagMap, ct, ctd, x
+            from pyrung import Program, rung, Counter, count_up
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
-            X002 = Bool("X002")
+            X001 = x[1]
+            X002 = x[2]
 
             # --- Clones ---
             PartCounter = Counter.clone("PartCounter")
@@ -2620,12 +2785,8 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
-                # --- Timers & Counters ---
                 PartCounter.Done.map_to(ct[1]),
                 PartCounter.Acc.map_to(ctd[1]),
-                # --- Tags ---
-                X001.map_to(x[1]),
-                X002.map_to(x[2]),
             ])
             """,
             nicknames={"CT1": "PartCounter"},
@@ -2641,11 +2802,12 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Timer, Bool, Int, on_delay
-            from pyrung.click import TagMap, t, td, x
+            from pyrung import Program, rung, Timer, on_delay
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
+            X001 = x[1]
 
             # --- Clones ---
             T1 = Timer.clone("T1")
@@ -2657,11 +2819,8 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
-                # --- Timers & Counters ---
                 T1.Done.map_to(t[1]),
                 T1.Acc.map_to(td[1]),
-                # --- Tags ---
-                X001.map_to(x[1]),
             ])
             """,
         )
@@ -2678,12 +2837,13 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Timer, Bool, Int, on_delay, out
-            from pyrung.click import TagMap, t, td, x, y
+            from pyrung import Program, rung, Timer, on_delay, out
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
-            Y001 = Bool("Y001")
+            X001 = x[1]
+            Y001 = y[1]
 
             # --- Clones ---
             OvenTimer = Timer.clone("OvenTimer")
@@ -2698,12 +2858,8 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
-                # --- Timers & Counters ---
                 OvenTimer.Done.map_to(t[1]),
                 OvenTimer.Acc.map_to(td[1]),
-                # --- Tags ---
-                X001.map_to(x[1]),
-                Y001.map_to(y[1]),
             ])
             """,
             nicknames={"T1": "OvenTimer"},
@@ -2728,12 +2884,17 @@ class TestCodeGeneration:
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
         csv_path = _export_csv(logic, mapping, tmp_path)
         code = ladder_to_pyrung(csv_path)
-        import_lines = "\n".join(line for line in code.splitlines() if line.startswith("from "))
+        import_lines = "\n".join(
+            line
+            for line in code.splitlines()
+            if line.startswith("from ") or "ClickBlocks()" in line
+        )
         assert normalize_pyrung(import_lines) == normalize_pyrung(
             textwrap.dedent(
                 """
-                from pyrung import Program, rung, Bool, out
-                from pyrung.click import TagMap, x, y
+                from pyrung import Program, rung, out
+                from pyrung.click import ClickBlocks, TagMap
+                x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
                 """
             )
         )
@@ -2772,10 +2933,7 @@ class TestCodeGeneration:
         assert normalize_pyrung(mapping_block) == normalize_pyrung(
             textwrap.dedent(
                 """
-                mapping = TagMap({
-                    X001: x[1],
-                    Y001: y[1],
-                })
+                mapping = TagMap({})
                 """
             )
         )
@@ -3055,7 +3213,7 @@ class TestStructuredCodegen:
                     memory_type="DF",
                     address=101,
                     nickname="Pressure",
-                    comment="[link=Enable, profile=first_order, min=0, max=100, uom=psi]",
+                    comment="[link=Enable, profile=approach:toward=100|rate=0.3, min=0, max=100, uom=psi]",
                     initial_value="0.0",
                     retentive=True,
                     data_type=DataType.FLOAT,
@@ -3074,11 +3232,15 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert "Pressure_physical = Physical('Pressure', profile='first_order')" in code
         assert (
-            'Pressure = Real("Pressure", physical=Pressure_physical,'
+            "Pressure_physical = Physical('Pressure', profile=Approach(toward=100.0, rate=0.3))"
+            in code
+        )
+        assert (
+            "df.slot(101, name='Pressure', physical=Pressure_physical,"
             " link='Enable', min=0, max=100, uom='psi')"
         ) in code
+        assert "Pressure = df[101]" in code
 
     def test_flat_tag_codegen_emits_choices_and_flags_metadata(self, tmp_path: Path):
         from pyclickplc.addresses import AddressRecord, get_addr_key
@@ -3147,10 +3309,14 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert 'Enable = Bool("Enable", external=True, public=True)' in code
-        assert 'ConfigOK = Bool("ConfigOK", readonly=True)' in code
-        assert 'Done = Bool("Done", final=True)' in code
-        assert "Mode = Int(\"Mode\", choices={0: 'Off', 1: 'On'})" in code
+        assert "x.slot(1, name='Enable', external=True, public=True)" in code
+        assert "x.slot(2, name='ConfigOK', readonly=True)" in code
+        assert "c.slot(101, name='Done', final=True)" in code
+        assert "ds.slot(101, name='Mode', choices={0: 'Off', 1: 'On'})" in code
+        assert "Enable = x[1]" in code
+        assert "ConfigOK = x[2]" in code
+        assert "Done = c[101]" in code
+        assert "Mode = ds[101]" in code
 
     def test_udt_codegen_emits_physical_field_metadata(self, tmp_path: Path):
         from pyclickplc.addresses import AddressRecord, get_addr_key
@@ -3257,7 +3423,7 @@ class TestStructuredCodegen:
                     memory_type="DF",
                     address=101,
                     nickname="Pressure",
-                    comment="[link=Enable, profile=first_order]",
+                    comment="[link=Enable, profile=approach:toward=100|rate=0.3]",
                     initial_value="0.0",
                     retentive=True,
                     data_type=DataType.FLOAT,
@@ -3276,8 +3442,12 @@ class TestStructuredCodegen:
 
         files = ladder_to_pyrung_project(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert "from pyrung import Physical" in files["tags.py"]
-        assert "Pressure_physical = Physical('Pressure', profile='first_order')" in files["tags.py"]
+        assert "Physical" in files["src/plc/tags.py"]
+        assert "Approach" in files["src/plc/tags.py"]
+        assert (
+            "Pressure_physical = Physical('Pressure', profile=Approach(toward=100.0, rate=0.3))"
+            in files["src/plc/tags.py"]
+        )
 
     def test_named_array_codegen(self, tmp_path: Path):
         """Named array: codegen emits @named_array decorator and .map_to()."""
@@ -3440,6 +3610,216 @@ class TestStructuredCodegen:
         assert "id = Field(retentive=False)" in code
         assert "Channel[1].id" in code or "Channel[2].id" in code
         assert "val =" not in code
+
+    # ---- Per-slot / auto() default round-trip (identity gap) --------------
+
+    def _named_array_id_records(self, id_initials, *, id_retentive=False):
+        """Records for a ``Chan`` named_array (fields id, val; stride 2).
+
+        ``id`` gets the given per-instance initial values; ``val`` is all 0.
+        """
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        n = len(id_initials)
+        records = {
+            get_addr_key("X", 1): AddressRecord(
+                memory_type="X",
+                address=1,
+                nickname="Enable",
+                comment="",
+                initial_value="0",
+                retentive=False,
+                data_type=DataType.BIT,
+            ),
+        }
+        for i, init in enumerate(id_initials):
+            id_addr = 101 + 2 * i
+            val_addr = 102 + 2 * i
+            open_marker = f"<Chan:named_array({n},2)>" if i == 0 else ""
+            close_marker = f"</Chan:named_array({n},2)>" if i == n - 1 else ""
+            records[get_addr_key("DS", id_addr)] = AddressRecord(
+                memory_type="DS",
+                address=id_addr,
+                nickname=f"Chan{i + 1}_id",
+                comment=open_marker,
+                initial_value=str(init),
+                retentive=id_retentive,
+                data_type=DataType.INT,
+            )
+            records[get_addr_key("DS", val_addr)] = AddressRecord(
+                memory_type="DS",
+                address=val_addr,
+                nickname=f"Chan{i + 1}_val",
+                comment=close_marker,
+                initial_value="0",
+                retentive=False,
+                data_type=DataType.INT,
+            )
+        return records
+
+    def _codegen_named_array_ids(self, tmp_path, id_initials, *, id_retentive=False, validate=True):
+        """Emit pyrung source for a ``Chan`` named_array with the given id initials."""
+        Enable = Bool("Enable")
+        Chan_id_1 = Int("Chan1_id")
+        Chan_id_2 = Int("Chan2_id")
+
+        # Reference two id tags so the array's base type is imported by codegen.
+        with Program() as logic:
+            with rung(Enable):
+                copy(Chan_id_1, Chan_id_2)
+
+        mapping = TagMap(
+            {Enable: x[1], Chan_id_1: ds[101], Chan_id_2: ds[103]},
+            include_system=False,
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+        nick_path = self._make_nickname_csv(
+            tmp_path, self._named_array_id_records(id_initials, id_retentive=id_retentive)
+        )
+        return ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path, validate=validate)
+
+    def _tags_file_named_array_ids_project(self, tmp_path, id_initials):
+        """Emit the multi-file project's ``tags.py`` for a ``Chan`` named_array."""
+        Enable = Bool("Enable")
+        Chan_id_1 = Int("Chan1_id")
+        Chan_id_2 = Int("Chan2_id")
+
+        with Program() as logic:
+            with rung(Enable):
+                copy(Chan_id_1, Chan_id_2)
+
+        mapping = TagMap(
+            {Enable: x[1], Chan_id_1: ds[101], Chan_id_2: ds[103]},
+            include_system=False,
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+        nick_path = self._make_nickname_csv(tmp_path, self._named_array_id_records(id_initials))
+        files = ladder_to_pyrung_project(csv_dir, nickname_csv=nick_path)
+        return files["src/plc/tags.py"]
+
+    def _reconstruct_ids(self, code, count):
+        """Exec generated code and return the reconstructed Chan.id per-slot defaults."""
+        ns = exec_with_source(code)
+        chan = ns["Chan"]
+        return [chan._blocks["id"].slot(i).default for i in range(1, count + 1)]
+
+    def test_named_array_auto_default_sequence(self, tmp_path: Path):
+        """Divergent 1..N id defaults compress to auto() and reconstruct exactly."""
+        code = self._codegen_named_array_ids(tmp_path, [1, 2, 3])
+        assert "id = Field(retentive=False, default=auto())" in code
+        assert "Chan.id.slot(" not in code  # clean run needs no per-slot lines
+        assert self._reconstruct_ids(code, 3) == [1, 2, 3]
+
+    def test_named_array_auto_start_step(self, tmp_path: Path):
+        """Non-1/1 arithmetic run emits auto(start=, step=)."""
+        code = self._codegen_named_array_ids(tmp_path, [5, 7, 9])
+        assert "id = Field(retentive=False, default=auto(start=5, step=2))" in code
+        assert self._reconstruct_ids(code, 3) == [5, 7, 9]
+
+    def test_named_array_hybrid_auto_with_deviant(self, tmp_path: Path):
+        """Clean run with a lone deviant emits auto() + one per-slot override."""
+        code = self._codegen_named_array_ids(tmp_path, [1, 2, 99])
+        assert "id = Field(retentive=False, default=auto())" in code
+        assert "Chan.id.slot(3, default=99)" in code
+        assert self._reconstruct_ids(code, 3) == [1, 2, 99]
+
+    def test_named_array_non_arithmetic_per_slot_defaults(self, tmp_path: Path):
+        """Non-arithmetic defaults fall back to scalar base + per-slot overrides (no auto)."""
+        code = self._codegen_named_array_ids(tmp_path, [7, 7, 3])
+        assert "id = Field(retentive=False, default=7)" in code
+        assert "auto(" not in code
+        assert "Chan.id.slot(3, default=3)" in code
+        assert self._reconstruct_ids(code, 3) == [7, 7, 3]
+
+    def test_project_tags_file_imports_auto(self, tmp_path: Path):
+        """Multi-file project tags.py that emits auto() must import it (regression).
+
+        The single-file emitter imported ``auto`` for structure defaults, but the
+        project-mode ``_emit_tags_imports`` did not — so a generated ``tags.py``
+        raised ``NameError: name 'auto' is not defined`` on import/exec.
+        """
+        tags = self._tags_file_named_array_ids_project(tmp_path, [1, 2, 3])
+        assert "default=auto()" in tags
+        import_line = next(ln for ln in tags.splitlines() if ln.startswith("from pyrung import"))
+        imported = {
+            name.strip() for name in import_line.removeprefix("from pyrung import").split(",")
+        }
+        assert "auto" in imported
+        # The tags file must exec cleanly on its own (no NameError for auto).
+        exec_with_source(tags)
+
+    def test_named_array_retentive_divergence_not_reconstructed(self, tmp_path: Path):
+        """Retentive fields drop power-on defaults; validate does not flag the loss."""
+        # Divergent source initials on a retentive field — pyrung's model discards
+        # them, so codegen emits no default and validate=True must not raise.
+        code = self._codegen_named_array_ids(tmp_path, [1, 2, 3], id_retentive=True)
+        assert "id = 0" in code
+        assert "auto(" not in code
+        assert "Chan.id.slot(" not in code
+        assert self._reconstruct_ids(code, 3) == [0, 0, 0]
+
+    def test_validate_catches_default_collapse(self, tmp_path: Path, monkeypatch):
+        """validate=True raises when the emitted representation drops source values."""
+        # Force the pre-fix collapse: field default = slot-1 value, no overrides.
+        monkeypatch.setattr(
+            "pyrung.click.codegen.collector._summarize_field_defaults",
+            lambda defaults, *, type_name, retentive: (defaults[0] if defaults else None, {}),
+        )
+        with pytest.raises(CodegenIdentityError, match=r"Chan\.id\[2\]"):
+            self._codegen_named_array_ids(tmp_path, [1, 2, 3], validate=True)
+        # validate=False bypasses the check (still collapses, but does not raise).
+        code = self._codegen_named_array_ids(tmp_path, [1, 2, 3], validate=False)
+        assert self._reconstruct_ids(code, 3) == [1, 1, 1]
+
+    def test_format_default_unit(self):
+        """_format_default renders AutoDefault as auto(...); scalars unchanged."""
+        from pyrung.click.codegen.emitter import _format_default
+        from pyrung.core.structure import AutoDefault
+
+        assert _format_default(AutoDefault(start=1, step=1)) == "auto()"
+        assert _format_default(AutoDefault(start=5, step=2)) == "auto(start=5, step=2)"
+        assert _format_default(AutoDefault(start=1, step=3)) == "auto(step=3)"
+        assert _format_default(AutoDefault(start=4, step=1)) == "auto(start=4)"
+        assert _format_default(7) == "7"
+        assert _format_default("x") == "'x'"
+
+    def test_named_array_single_field_not_duplicated_as_block(self, tmp_path: Path):
+        """A count=1 single-field named_array must not also emit a plain block.
+
+        Its field maps as one block entry; re-emitting it as a plain block would
+        map the same hardware twice and raise a duplicate-name conflict on exec.
+        """
+        from pyrung.core import named_array
+
+        Enable = Bool("Enable")
+        runtime = named_array(Int, count=1, stride=1)(
+            type("Arr", (), {"__module__": __name__, "f0": 0})
+        )
+
+        with Program(strict=False) as logic:
+            with rung(Enable):
+                copy(runtime[1].f0, runtime[1].f0)
+
+        mapping = TagMap(
+            [Enable.map_to(x[1]), *runtime.map_to(ds.select(100, 100))],
+            include_system=False,
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+        nick_path = tmp_path / "nicknames.csv"
+        mapping.to_nickname_file(nick_path)
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'Block("Arr.f0"' not in code  # no phantom duplicate plain block
+        ns = exec_with_source(code)  # must not raise a hardware-address conflict
+        assert "mapping" in ns
 
     def test_udt_codegen(self, tmp_path: Path):
         """UDT: codegen emits @udt decorator and .map_to()."""
@@ -3657,6 +4037,75 @@ class TestStructuredCodegen:
         assert "reset(CmdTagBits.select(4, 6))" in code
         assert "CmdTagBits: c.select(1001, 1019)" in code
         assert 'Bool("Cmd_Mode_Production")' not in code
+
+    def test_indirectly_read_block_is_still_reconstructed(self, tmp_path: Path):
+        """A block only ever read through ``dh[idx]`` still reaches tags.py.
+
+        Its registers never appear as literal operands, so a usage-driven pass
+        dropped the whole block — losing the nicknames *and* the initial values
+        that make it a config table.
+        """
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Idx = Int("Idx")
+        Out = Int("Out")
+
+        with Program() as logic:
+            with rung():
+                copy(dh[Idx], Out)
+
+        mapping = TagMap({Idx: ds[1], Out: ds[2]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        def _dh(address: int, nickname: str, comment: str, initial: str) -> AddressRecord:
+            return AddressRecord(
+                memory_type="DH",
+                address=address,
+                nickname=nickname,
+                comment=comment,
+                initial_value=initial,
+                retentive=False,
+                data_type=DataType.HEX,
+            )
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DH", 200): _dh(200, "", "<ModeCfg:block>", "0"),
+                get_addr_key("DH", 201): _dh(201, "Cfg_Prod", "", "0000"),
+                get_addr_key("DH", 202): _dh(202, "Cfg_Maint", "", "1BE4"),
+                get_addr_key("DH", 203): _dh(203, "Cfg_Manual", "</ModeCfg:block>", "1FFF"),
+                get_addr_key("DS", 1): AddressRecord(
+                    memory_type="DS",
+                    address=1,
+                    nickname="Idx",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 2): AddressRecord(
+                    memory_type="DS",
+                    address=2,
+                    nickname="Out",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'ModeCfg = Block("ModeCfg", TagType.WORD, 1, 4)' in code
+        assert "ModeCfg.slot(2, name='Cfg_Prod')" in code
+        assert "ModeCfg.slot(3, name='Cfg_Maint', default=7140)" in code
+        assert "ModeCfg.slot(4, name='Cfg_Manual', default=8191)" in code
+        assert "ModeCfg: dh.select(200, 203)" in code
         assert 'C1004_to_C1006 = Block("C1004_to_C1006"' not in code
 
     def test_plain_block_explicit_start_uses_logical_indices(self, tmp_path: Path):
@@ -3729,11 +4178,12 @@ class TestStructuredCodegen:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, reset
-            from pyrung.click import TagMap, c, x
+            from pyrung import Program, rung, reset
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
+            X001 = x[1]
 
             # --- Program ---
             with Program() as logic:
@@ -3741,9 +4191,7 @@ class TestStructuredCodegen:
                     reset(c.select(1004, 1006))
 
             # --- Tag Map ---
-            mapping = TagMap({
-                X001: x[1],
-            })
+            mapping = TagMap({})
             """,
         )
 
@@ -4046,7 +4494,8 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert 'Cmd_Mode_Production = Bool("Cmd_Mode_Production")' in code
+        assert "c.slot(1004, name='Cmd_Mode_Production')" in code
+        assert "Cmd_Mode_Production = c[1004]" in code
         assert "out(Cmd_Mode_Production)" in code
         assert "reset(c.select(1004, 1006))" in code
         assert 'CmdTagBits = Block("CmdTagBits"' not in code
@@ -4104,7 +4553,8 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert 'Config1_timeout = Int("Config1_timeout", default=100)' in code
+        assert "ds.slot(301, name='Config1_timeout', default=100)" in code
+        assert "Config1_timeout = ds[301]" in code
         assert "@udt(" not in code
         assert "Config.timeout" not in code
         assert "copy(Config1_timeout, Config1_timeout)" in code
@@ -4177,9 +4627,8 @@ class TestStructuredCodegen:
         # Should have both structure and flat tags
         assert "@named_array(" in code
         assert "class Channel:" in code
-        assert 'FlatTag = Int("FlatTag")' in code
-        # Flat tag should use regular variable name in TagMap
-        assert "FlatTag.map_to(ds[200])" in code
+        assert "ds.slot(200, name='FlatTag')" in code
+        assert "FlatTag = ds[200]" in code
 
     def test_singleton_structure_no_index(self, tmp_path: Path):
         """Singleton structure (count=1) → no instance index in references."""
@@ -4296,15 +4745,296 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert 'ModeReady = Bool("ModeReady")' in code
-        assert 'RecipeShadow = Int("RecipeShadow", default=123)' in code
-        assert 'Mirror = Int("Mirror")' in code
+        assert "sc.slot(20, name='ModeReady')" in code
+        assert "sd.slot(91, name='RecipeShadow', default=123)" in code
+        assert "ds.slot(1, name='Mirror')" in code
+        assert "ModeReady = sc[20]" in code
+        assert "RecipeShadow = sd[91]" in code
+        assert "Mirror = ds[1]" in code
         assert "with rung(ModeReady):" in code
         assert "copy(RecipeShadow, Mirror)" in code
-        assert "ModeReady: sc[20]" in code
-        assert "RecipeShadow: sd[91]" in code
-        assert "Mirror: ds[1]" in code
         assert "system.rtc.year2" not in code
+
+    def test_retentive_tag_suppresses_initial_value(self, tmp_path: Path):
+        """Retentive registers use type default, not CSV initial_value."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        UnitMode = Int("C_UnitMode")
+        StepCount = Int("StepCount")
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with rung(Enable):
+                copy(UnitMode, StepCount)
+
+        mapping = TagMap(
+            {Enable: x[1], UnitMode: ds[1], StepCount: ds[2]},
+            include_system=False,
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 1): AddressRecord(
+                    memory_type="DS",
+                    address=1,
+                    nickname="C_UnitMode",
+                    comment="",
+                    initial_value="5",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 2): AddressRecord(
+                    memory_type="DS",
+                    address=2,
+                    nickname="StepCount",
+                    comment="",
+                    initial_value="10",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        # Retentive DS1: initial_value=5 suppressed → no default= kwarg
+        assert "ds.slot(1, name='C_UnitMode')" in code
+        assert "C_UnitMode = ds[1]" in code
+        assert "default=5" not in code
+        # Non-retentive DS2: initial_value=10 preserved
+        assert "ds.slot(2, name='StepCount', default=10)" in code
+        assert "StepCount = ds[2]" in code
+
+    def test_unnamed_row_configuration_is_emitted_for_indirect_read(self, tmp_path: Path):
+        """An unnamed configured CSV cell remains available through indirect addressing."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        from pyrung import PLC
+
+        Pointer = Int("Pointer")
+        Result = Int("Result")
+
+        with Program(strict=False) as logic:
+            with rung():
+                copy(ds[Pointer], Result)
+
+        mapping = TagMap({Pointer: ds[1], Result: ds[2]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 1): AddressRecord(
+                    memory_type="DS",
+                    address=1,
+                    nickname="Pointer",
+                    comment="",
+                    initial_value="820",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 2): AddressRecord(
+                    memory_type="DS",
+                    address=2,
+                    nickname="Result",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 820): AddressRecord(
+                    memory_type="DS",
+                    address=820,
+                    nickname="",
+                    comment="",
+                    initial_value="25",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 821): AddressRecord(
+                    memory_type="DS",
+                    address=821,
+                    nickname="",
+                    comment="",
+                    initial_value="99",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 822): AddressRecord(
+                    memory_type="DS",
+                    address=822,
+                    nickname="",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 823): AddressRecord(
+                    memory_type="DS",
+                    address=823,
+                    nickname="",
+                    comment="Indirect table note",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 824): AddressRecord(
+                    memory_type="DS",
+                    address=824,
+                    nickname="",
+                    comment="",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "ds.slot(820, retentive=False, default=25)" in code
+        assert "ds.slot(821, default=99)" not in code
+        assert "ds.slot(822, retentive=False)" in code
+        assert "ds.slot(822, retentive=False, default=0)" not in code
+        assert "ds.slot(823, comment='Indirect table note')" in code
+        assert "ds.slot(824" not in code
+        assert "DS820 =" not in code
+
+        namespace = exec_with_source(code)
+        assert namespace["ds"].slot(820).retentive is False
+        assert namespace["ds"].slot(823).comment == "Indirect table note"
+        plc = PLC(namespace["logic"])
+        plc.step()
+        assert plc.current_state.tags[namespace["Result"].name] == 25
+
+    def test_retentive_block_slot_suppresses_initial_value(self, tmp_path: Path):
+        """Retentive block slots use type default, not CSV initial_value."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Mode = Int("Mode")
+
+        with Program() as logic:
+            with rung(Enable):
+                copy(Mode, Mode)
+
+        mapping = TagMap({Enable: x[1], Mode: ds[1]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 1): AddressRecord(
+                    memory_type="DS",
+                    address=1,
+                    nickname="Modes_current",
+                    comment="<Modes:block>",
+                    initial_value="3",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 2): AddressRecord(
+                    memory_type="DS",
+                    address=2,
+                    nickname="Modes_target",
+                    comment="</Modes:block>",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        # Retentive block: initial_value=3 on slot 1 suppressed
+        assert "default=3" not in code
+        assert "retentive=True" in code
+
+    def test_retentive_udt_field_suppresses_initial_value(self, tmp_path: Path):
+        """Retentive UDT fields use type default, not CSV initial_value."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Motor_mode = Int("Motor1_mode")
+
+        with Program() as logic:
+            with rung(Enable):
+                copy(Motor_mode, Motor_mode)
+
+        mapping = TagMap({Enable: x[1], Motor_mode: ds[101]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 101): AddressRecord(
+                    memory_type="DS",
+                    address=101,
+                    nickname="Motor1_mode",
+                    comment="<Motor.mode:udt>",
+                    initial_value="7",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 102): AddressRecord(
+                    memory_type="DS",
+                    address=102,
+                    nickname="Motor2_mode",
+                    comment="</Motor.mode:udt>",
+                    initial_value="7",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        # Retentive UDT field: initial_value=7 suppressed
+        assert "default=7" not in code
+        assert "mode: Int = 0" in code
 
 
 class TestNop:
@@ -4321,7 +5051,7 @@ class TestNop:
                 out(Y1)
             """,
             """
-            comment("Section header")
+            comment('Section header')
             with rung():
                 pass
 
@@ -4341,7 +5071,7 @@ class TestNop:
                 out(Y1)
             """,
             """
-            comment("Explicit NOP")
+            comment('Explicit NOP')
             with rung():
                 pass
 
@@ -4507,7 +5237,7 @@ class TestIndexedMarkerImport:
             subroutine_rows=(),
         )
         files = ladder_to_pyrung_project(bundle, index=True)
-        main = files["main.py"]
+        main = files["src/plc/main.py"]
         assert "with rung(X001):  # R1" in main
         assert "with rung(X002):  # R2" in main
         assert "with rung():  # R3" in main
@@ -4523,4 +5253,4 @@ class TestIndexedMarkerImport:
             subroutine_rows=(),
         )
         files = ladder_to_pyrung_project(bundle, index=False)
-        assert "# R" not in files["main.py"]
+        assert "# R" not in files["src/plc/main.py"]

@@ -33,9 +33,13 @@ No domain → ``Intractable`` with hints.
 from __future__ import annotations
 
 import itertools
+import os
+import sys
+import time
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
+from pyrung.core.analysis.return_guards import _return_early_guard_exprs
 from pyrung.core.analysis.reverse_edges import (
     IDENTITY as _IDENTITY,
 )
@@ -143,6 +147,46 @@ _TIMER_COUNTER_INSTRUCTIONS = frozenset(
 )
 
 
+def _classify_profile_enabled() -> bool:
+    return bool(os.environ.get("PYRUNG_PROFILE_CLASSIFY"))
+
+
+def _classify_profile_format(value: Any) -> str:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return f"{value:,}"
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
+
+
+def _classify_profile_mark(
+    timings: list[tuple[str, float]],
+    label: str,
+    start: float,
+) -> float:
+    now = time.perf_counter()
+    timings.append((label, now - start))
+    return now
+
+
+def _classify_profile_emit(
+    label: str,
+    timings: list[tuple[str, float]],
+    total: float,
+    **meta: Any,
+) -> None:
+    meta_text = " ".join(f"{key}={_classify_profile_format(value)}" for key, value in meta.items())
+    prefix = f"[pyrung classify] {label}: total={total:.3f}s"
+    if meta_text:
+        prefix = f"{prefix} {meta_text}"
+    print(prefix, file=sys.stderr)
+    for timing_label, elapsed in timings:
+        print(
+            f"[pyrung classify]   {timing_label:<34s} {elapsed:8.3f}s",
+            file=sys.stderr,
+        )
+
+
 def _tag_is_observable(
     tag_name: str,
     *,
@@ -196,7 +240,7 @@ def _collect_all_exprs(
     if scope is not None:
         upstream_tags: set[str] = set(scope)
         for tag_name in scope:
-            upstream_tags.update(graph.upstream_slice(tag_name))
+            upstream_tags.update(graph.upstream_slice(tag_name, follow_calls=False))
         upstream = frozenset(upstream_tags)
         forms = {k: v for k, v in forms.items() if k in upstream}
 
@@ -230,6 +274,13 @@ def _collect_all_exprs(
             for caller_chain in _caller_conditions(site, caller_map):
                 for cond in caller_chain:
                     exprs.append(_condition_to_expr(cond))
+
+    for node in graph.rung_nodes:
+        if not node.guard_reads or not node.writes:
+            continue
+        if upstream is not None and not (node.writes & upstream):
+            continue
+        exprs.extend(_return_early_guard_exprs(program, node))
 
     _collect_implicit_edge_condition_exprs(program, upstream, exprs)
     return exprs
@@ -417,7 +468,12 @@ def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
     from pyrung.core.tag import ImmediateRef, Tag
 
     value = raw_value.value if isinstance(raw_value, ImmediateRef) else raw_value
-    if isinstance(value, (Tag, Expression)):
+    if isinstance(value, Tag):
+        if value.readonly:
+            value = value.default
+        else:
+            return _NO_LITERAL_WRITE
+    if isinstance(value, Expression):
         return _NO_LITERAL_WRITE
     if not isinstance(value, (bool, int, float, str)):
         return _NO_LITERAL_WRITE
@@ -486,6 +542,183 @@ def _collect_literal_write_domains(
             continue
         domains[target_name] = tuple(sorted({tag.default, *values}))
     return domains
+
+
+def _expr_reads_tag(expr: Any, tag_name: str) -> bool:
+    """True when *expr* references *tag_name* anywhere in the tree."""
+    from pyrung.core.expression import BinaryExpr, TagExpr, UnaryExpr
+
+    if isinstance(expr, TagExpr):
+        return getattr(expr.tag, "name", None) == tag_name
+    if isinstance(expr, BinaryExpr):
+        return _expr_reads_tag(expr.left, tag_name) or _expr_reads_tag(expr.right, tag_name)
+    if isinstance(expr, UnaryExpr):
+        return _expr_reads_tag(expr.operand, tag_name)
+    return False
+
+
+def _hop_affine_index(
+    idx_tag: str,
+    writer_instrs: dict[str, list[Any]],
+) -> tuple[str, int, int | float]:
+    """Follow a single-writer bijective ``copy`` / ``calc(src ± k)`` pointer back
+    to its root register, tracking the address-as-a-function-of-root transform.
+
+    A scratch pointer is often computed from the real driver
+    (``calc(StateRequested + 150, JumpIdx)``); the scratch itself never steps, so
+    the coupling must reach the root.  Only bijective affine hops (scale ∈ {1, -1})
+    are followed — they preserve "cycles through values", so the root steps iff
+    the pointer does.  Returns ``(root, scale, offset)`` where the addressed slot
+    is ``scale * root_value + offset`` (an ``IndirectRef`` addresses the block by
+    its pointer's value).  Bounded to three hops.
+    """
+    tag = idx_tag
+    scale_acc: int = 1
+    offset_acc: int | float = 0
+    for _ in range(3):
+        writers = writer_instrs.get(tag)
+        if writers is None or len(writers) != 1:
+            break
+        fwd = _extract_forward_affine(writers[0])
+        if fwd is None:
+            break
+        source, scale, offset = fwd
+        if source == tag or abs(scale) != 1:
+            break
+        # address = scale_acc * tag + offset_acc; tag = scale * source + offset
+        offset_acc = scale_acc * offset + offset_acc
+        scale_acc = scale_acc * scale
+        tag = source
+    return tag, scale_acc, offset_acc
+
+
+def _indirect_constant_table_index(
+    source: Any,
+    graph: ProgramGraph,
+    writer_instrs: dict[str, list[Any]],
+    literal_values: dict[str, set[Any]],
+) -> str | None:
+    """Index register a ``copy(block[index], dest)`` couples its dest's stepping to.
+
+    Returns the (root) index tag when *source* is an ``IndirectRef`` whose read
+    slots are never written **over the index's reachable address region**, else
+    ``None`` (punt).  When those slots are constant, ``dest = table[index]`` is a
+    pure function of the index, so ``dest`` steps iff the index steps.
+
+    The region is bounded by the *index's* derivable value domain — declared
+    ``choices=`` / ``min``/``max`` (a sound over-approximation) or, failing that,
+    the index's own literal write values — NOT the whole block: real jump tables
+    live inside a shared ``ds`` bank where unrelated slots are written, so a
+    whole-block never-written test would always punt on real machines (see
+    :func:`_domain_from_indirect_source`, which bounds the same way).  When the
+    index has no derivable finite domain there is no sound region, so we punt.
+    (``IndirectExprRef`` sources punt, matching the scope of
+    :func:`_domain_from_indirect_source`.)
+    """
+    from pyrung.core.memory_block import IndirectRef
+
+    if not isinstance(source, IndirectRef):
+        return None
+    idx_tag = getattr(source.pointer, "name", None)
+    if idx_tag is None:
+        return None
+
+    root, scale, offset = _hop_affine_index(idx_tag, writer_instrs)
+
+    root_tag = graph.tags.get(root)
+    domain = _declared_domain(root_tag) if root_tag is not None else None
+    if not domain:
+        lits = literal_values.get(root)
+        domain = tuple(sorted(lits)) if lits else None
+    if not domain:
+        return None
+
+    block = source.block
+    writers = graph.writers_of
+    for value in domain:
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        addr = scale * value + offset
+        if addr < block.start or addr > block.end:
+            continue
+        if block._effective_slot_name(addr) in writers:
+            return None
+    return root
+
+
+def _compute_stepping_tags(
+    program: Program,
+    graph: ProgramGraph,
+) -> frozenset[str]:
+    """Tags with write-site structure that actively cycles through values.
+
+    A tag is *stepping* if it has an arithmetic self-write (``calc(tag ± N, tag)``),
+    a self-referential calc (``calc(f(tag), tag)``), or >=2 distinct literal write
+    values.  Copy-coupled tags inherit stepping from their source — including a
+    ``copy(block[index], tag)`` indirect copy over a *constant* table, which
+    couples the destination to the table index (see
+    :func:`_indirect_constant_table_index`).
+    """
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    arithmetic: set[str] = set()
+    literal_values: dict[str, set[Any]] = {}
+    copy_targets: dict[str, str] = {}
+    writer_instrs: dict[str, list[Any]] = {}
+    indirect_pending: list[tuple[str, Any]] = []
+
+    for instr in walk_instructions(program):
+        targets = _all_write_targets(instr)
+        if not targets:
+            continue
+
+        for target_name, _itype in targets:
+            writer_instrs.setdefault(target_name, []).append(instr)
+
+            fwd = _extract_forward_offset(instr)
+            if fwd is not None:
+                source, offset = fwd
+                if source == target_name and offset != 0:
+                    arithmetic.add(target_name)
+
+            if isinstance(instr, CalcInstruction):
+                if getattr(instr.dest, "name", None) == target_name and _expr_reads_tag(
+                    instr.expression, target_name
+                ):
+                    arithmetic.add(target_name)
+
+            if isinstance(instr, CopyInstruction) and instr.convert is None:
+                source_name = _tag_name_from_value(instr.source)
+                if source_name is not None and source_name != target_name:
+                    copy_targets[target_name] = source_name
+                elif source_name is None:
+                    indirect_pending.append((target_name, instr.source))
+
+        lit = _literal_write_values(instr, graph.tags)
+        if lit is not None:
+            for name, val in lit.items():
+                literal_values.setdefault(name, set()).add(val)
+
+    # An indirect copy over a *constant* table couples the destination to the
+    # table INDEX (dest = table[index] is a pure function of the index).  Named
+    # copies keep priority; a writable table punts (no coupling).
+    for target_name, source in indirect_pending:
+        index_tag = _indirect_constant_table_index(source, graph, writer_instrs, literal_values)
+        if index_tag is not None and index_tag != target_name:
+            copy_targets.setdefault(target_name, index_tag)
+
+    stepping = set(arithmetic)
+    for tag, vals in literal_values.items():
+        if len(vals) >= 2:
+            stepping.add(tag)
+
+    for target, source in copy_targets.items():
+        if source in stepping:
+            stepping.add(target)
+
+    return frozenset(stepping)
 
 
 def _declared_domain(tag: Tag) -> tuple[Any, ...] | None:
@@ -845,6 +1078,38 @@ def _domain_from_write_instruction(
     return None
 
 
+def _is_monotone_self_feed_calc(instr: Any, target_name: str) -> bool:
+    """True for direct non-oneshot ``calc(T +/- k, T)`` progress writes."""
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    if not isinstance(instr, CalcInstruction):
+        return False
+    if getattr(instr, "oneshot", False):
+        return False
+    if getattr(instr.dest, "name", None) != target_name:
+        return False
+    fwd = _extract_forward_offset(instr)
+    return fwd is not None and fwd[0] == target_name and fwd[1] != 0
+
+
+def _merge_structural_domain_values(
+    target: Tag,
+    current_values: tuple[Any, ...],
+    candidate_values: set[Any],
+) -> tuple[Any, ...] | None:
+    merged_values = set(current_values)
+    merged_values.update(candidate_values)
+    if target.choices is not None and candidate_values <= set(target.choices.keys()):
+        merged_values = merged_values & set(target.choices.keys())
+    if target.min is not None:
+        merged_values = {v for v in merged_values if v >= target.min}
+    if target.max is not None:
+        merged_values = {v for v in merged_values if v <= target.max}
+    if len(merged_values) > 1000:
+        return None
+    return tuple(sorted(merged_values))
+
+
 def _collect_structural_domain_info(
     program: Program,
     graph: ProgramGraph,
@@ -860,16 +1125,34 @@ def _collect_structural_domain_info(
     """
     from pyrung.core.validation._common import walk_instructions
 
+    profile = _classify_profile_enabled()
+    timings: list[tuple[str, float]] = []
+    profile_start = profile_last = time.perf_counter() if profile else 0.0
+
     known_domains = dict(
         literal_write_domains or _collect_literal_write_domains(program, graph.tags)
     )
+    if profile:
+        profile_last = _classify_profile_mark(timings, "literal_domain_seed", profile_last)
 
     by_target: dict[str, list[Any]] = {}
     for instr in walk_instructions(program):
         for target_name, _itype in _all_write_targets(instr):
             by_target.setdefault(target_name, []).append(instr)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "writer_index", profile_last)
+
+    monotone_self_feed_targets = frozenset(
+        target_name
+        for target_name, writers in by_target.items()
+        if any(_is_monotone_self_feed_calc(instr, target_name) for instr in writers)
+    )
+    if profile:
+        profile_last = _classify_profile_mark(timings, "self_feed_index", profile_last)
 
     atom_idx = _build_atom_index(all_exprs)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "atom_index", profile_last)
 
     # Seed genuinely constant tags into known_domains so the fixpoint and
     # reverse-blocker analysis can resolve them.  Only two narrow cases:
@@ -881,6 +1164,8 @@ def _collect_structural_domain_info(
     # missing.  ``atom_idx`` only records *direct* comparison participation,
     # so the transitive data-flow closure is used.
     influences_comparison = _comparison_influencing_tags(graph, atom_idx, program)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "comparison_influence_index", profile_last)
     for tag_name, tag in graph.tags.items():
         if tag_name in known_domains:
             continue
@@ -893,17 +1178,66 @@ def _collect_structural_domain_info(
             and tag_name not in influences_comparison
         ):
             known_domains[tag_name] = (tag.default,)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "constant_seed", profile_last)
+
+    self_feed_boundary_targets: set[str] = set()
+    for target_name in monotone_self_feed_targets:
+        target = graph.tags.get(target_name)
+        if target is None:
+            continue
+        seed_domains = {
+            name: domain for name, domain in known_domains.items() if name != target_name
+        }
+        domain = _extract_value_domain(
+            target_name,
+            target,
+            all_exprs,
+            graph.tags,
+            known_domains=seed_domains,
+            graph=graph,
+            atom_index=atom_idx,
+        )
+        if not domain:
+            continue
+        merged = _merge_structural_domain_values(
+            target,
+            known_domains.get(target_name, ()),
+            set(domain),
+        )
+        if merged is not None:
+            known_domains[target_name] = merged
+            self_feed_boundary_targets.add(target_name)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "self_feed_boundary_seed", profile_last)
 
     changed = True
+    fixpoint_iterations = 0
+    fixpoint_target_visits = 0
+    fixpoint_writer_probes = 0
+    fixpoint_domain_changes = 0
+    fixpoint_self_feed_skips = 0
     while changed:
+        if profile:
+            fixpoint_iterations += 1
         changed = False
         for target_name, writers in by_target.items():
+            if profile:
+                fixpoint_target_visits += 1
             target = graph.tags.get(target_name)
             if target is None or not writers:
                 continue
 
             candidate_values: set[Any] = set()
             for instr in writers:
+                if profile:
+                    fixpoint_writer_probes += 1
+                if target_name in self_feed_boundary_targets and _is_monotone_self_feed_calc(
+                    instr, target_name
+                ):
+                    if profile:
+                        fixpoint_self_feed_skips += 1
+                    continue
                 domain = _domain_from_write_instruction(
                     instr,
                     target_name,
@@ -921,30 +1255,49 @@ def _collect_structural_domain_info(
             if not candidate_values:
                 continue
 
-            merged_values = set(known_domains.get(target_name, ()))
-            merged_values.update(candidate_values)
-            if target.choices is not None and candidate_values <= set(target.choices.keys()):
-                merged_values = merged_values & set(target.choices.keys())
-            if target.min is not None:
-                merged_values = {v for v in merged_values if v >= target.min}
-            if target.max is not None:
-                merged_values = {v for v in merged_values if v <= target.max}
-            if len(merged_values) > 1000:
+            merged = _merge_structural_domain_values(
+                target,
+                known_domains.get(target_name, ()),
+                candidate_values,
+            )
+            if merged is None:
                 continue
-
-            merged = tuple(sorted(merged_values))
             if known_domains.get(target_name) != merged:
                 known_domains[target_name] = merged
                 changed = True
+                if profile:
+                    fixpoint_domain_changes += 1
+    if profile:
+        profile_last = _classify_profile_mark(timings, "fixpoint", profile_last)
 
     if discovered_domains is not None:
         for name, domain in discovered_domains.items():
             if name not in known_domains:
                 known_domains[name] = domain
+    if profile:
+        profile_last = _classify_profile_mark(timings, "discovered_domain_merge", profile_last)
 
     blockers = _backward_propagate_comparison_boundaries(
         program, graph, all_exprs, known_domains, atom_idx
     )
+    if profile:
+        _classify_profile_mark(timings, "reverse_boundary_blockers", profile_last)
+        _classify_profile_emit(
+            "structural_domain_info",
+            timings,
+            time.perf_counter() - profile_start,
+            domains=len(known_domains),
+            targets=len(by_target),
+            writers=sum(len(writers) for writers in by_target.values()),
+            self_feed_targets=len(monotone_self_feed_targets),
+            self_feed_boundary_targets=len(self_feed_boundary_targets),
+            self_feed_skips=fixpoint_self_feed_skips,
+            iterations=fixpoint_iterations,
+            target_visits=fixpoint_target_visits,
+            writer_probes=fixpoint_writer_probes,
+            changes=fixpoint_domain_changes,
+            blockers=len(blockers),
+        )
 
     return known_domains, blockers
 
@@ -962,11 +1315,153 @@ def _collect_structural_domains(
     return domains
 
 
-def _extract_forward_offset(instr: Any) -> tuple[str, int | float] | None:
-    """Extract ``(source_tag_name, constant_offset)`` from a write instruction.
+def _collect_produced_value_domains(
+    program: Program,
+    graph: ProgramGraph,
+) -> dict[str, tuple[Any, ...]]:
+    """Finite values justified solely by program producers.
 
-    Returns the forward relationship ``dest = source + offset`` for Copy and
-    Calc instructions with simple ``source ± literal`` expressions.
+    Unlike :func:`_collect_structural_domains`, this deliberately does not use
+    comparison boundaries to construct a search domain.  It is therefore safe
+    for diagnostics that ask whether a literal comparison has any producer in
+    the program: accepting the comparison literal itself as domain evidence
+    would make that question circular.
+
+    A domain is returned only when every writer of the tag is understood.  The
+    fixed point covers literal and named copies, bounded calculations, and
+    constant/finite indirect-table reads through the same write-domain helpers
+    used by prover classification.  Unknown sources, self-fed calculations, and
+    over-cap indirect destinations cause a conservative punt.
+    """
+    from pyrung.core.analysis.sp_values import _expr_tag_names
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import (
+        BlockCopyInstruction,
+        CopyInstruction,
+        FillInstruction,
+    )
+    from pyrung.core.memory_block import IndirectRef
+    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
+
+    by_target: dict[str, list[Any]] = {}
+    for instr in walk_instructions(program):
+        for target_name, _itype in _all_write_targets(instr):
+            by_target.setdefault(target_name, []).append(instr)
+
+    # An over-cap indirect destination is intentionally absent from the normal
+    # static target list.  Any materialized slot in that block may still be its
+    # runtime target, so none of those slots can carry a complete producer set.
+    opaque_dest_blocks = {ref.block for ref in graph.indirect_writes}
+    opaque_targets = {
+        name
+        for name, tag in graph.tags.items()
+        if getattr(tag, "_pyrung_block", None) in opaque_dest_blocks
+    }
+    incomplete_targets = opaque_targets | {
+        name
+        for name, tag in graph.tags.items()
+        if graph.writers_of.get(name)
+        and (tag.external or tag.readonly or graph.is_physical_input(name))
+    }
+
+    known: dict[str, tuple[Any, ...]] = {}
+    for name, tag in graph.tags.items():
+        if name in incomplete_targets:
+            continue
+        writers = graph.writers_of.get(name)
+        if tag.readonly:
+            known[name] = (tag.default,)
+        elif not writers:
+            declared = _declared_domain(tag)
+            if tag.external or graph.is_physical_input(name):
+                if declared is not None:
+                    known[name] = declared
+            else:
+                known[name] = (tag.default,)
+
+    def dependencies_are_known(instr: Any, target_name: str) -> bool:
+        """Prevent write helpers from falling back to comparison-derived bounds."""
+        raw: Any | None = None
+        if isinstance(instr, CopyInstruction):
+            raw = instr.source
+        elif isinstance(instr, FillInstruction):
+            raw = instr.value
+
+        if raw is not None:
+            source_name = _tag_name_from_value(raw)
+            if source_name is not None:
+                # An identity self-copy only retains the already-accounted-for
+                # value; it is not an unknown producer.
+                return source_name == target_name or source_name in known
+            if isinstance(raw, IndirectRef):
+                pointer_name = getattr(raw.pointer, "name", None)
+                return pointer_name is not None and pointer_name in known
+            # A literal has no dependency.  Other indirect/expression forms punt.
+            return _literal_value_from_value(raw) is not None
+
+        if isinstance(instr, CalcInstruction):
+            refs = _expr_tag_names(instr.expression)
+            return refs is not None and target_name not in refs and refs <= known.keys()
+
+        if isinstance(instr, BlockCopyInstruction):
+            sources = _resolve_tag_names(instr.source)
+            return bool(sources) and set(sources) <= known.keys()
+
+        # Drums, searches, and converting copies have intrinsic finite domains;
+        # unsupported instruction types will return None below.
+        return True
+
+    changed = True
+    while changed:
+        changed = False
+        for target_name, writers in by_target.items():
+            if target_name in incomplete_targets or target_name in known:
+                continue
+            target = graph.tags.get(target_name)
+            if target is None:
+                continue
+
+            candidate_values: set[Any] = {target.default}
+            complete = True
+            for instr in writers:
+                if not dependencies_are_known(instr, target_name):
+                    complete = False
+                    break
+                # A self-copy contributes no new value beyond retention.
+                if isinstance(instr, (CopyInstruction, FillInstruction)):
+                    raw = instr.source if isinstance(instr, CopyInstruction) else instr.value
+                    if _tag_name_from_value(raw) == target_name:
+                        continue
+                domain = _domain_from_write_instruction(
+                    instr,
+                    target_name,
+                    target,
+                    graph,
+                    [],
+                    known,
+                    {},
+                )
+                if domain is None:
+                    complete = False
+                    break
+                candidate_values.update(domain)
+
+            if not complete:
+                continue
+            merged = _merge_structural_domain_values(target, (), candidate_values)
+            if merged is not None:
+                known[target_name] = merged
+                changed = True
+
+    return known
+
+
+def _extract_forward_affine(instr: Any) -> tuple[str, int, int | float] | None:
+    """Extract ``(source_tag_name, scale, offset)`` from a write instruction.
+
+    Returns the forward relationship ``dest = scale * source + offset``
+    (``scale`` ∈ {1, -1}) for Copy and Calc instructions with simple
+    ``source ± literal`` / ``literal - source`` expressions.
     """
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
@@ -976,7 +1471,7 @@ def _extract_forward_offset(instr: Any) -> tuple[str, int | float] | None:
             return None
         source_name = _tag_name_from_value(instr.source)
         if source_name is not None:
-            return (source_name, 0)
+            return (source_name, 1, 0)
         return None
 
     if isinstance(instr, CalcInstruction):
@@ -988,7 +1483,9 @@ def _extract_forward_offset(instr: Any) -> tuple[str, int | float] | None:
             if tag_name is None:
                 return None
             if expr.symbol == "+":
-                return (tag_name, 0)
+                return (tag_name, 1, 0)
+            if expr.symbol == "-":
+                return (tag_name, -1, 0)
             return None
 
         if not isinstance(expr, BinaryExpr):
@@ -1003,17 +1500,33 @@ def _extract_forward_offset(instr: Any) -> tuple[str, int | float] | None:
 
         if left_tag is not None and right_lit is not None and isinstance(right_lit, (int, float)):
             if expr.symbol == "+":
-                return (left_tag, right_lit)
+                return (left_tag, 1, right_lit)
             if expr.symbol == "-":
-                return (left_tag, -right_lit)
+                return (left_tag, 1, -right_lit)
 
         if right_tag is not None and left_lit is not None and isinstance(left_lit, (int, float)):
             if expr.symbol == "+":
-                return (right_tag, left_lit)
+                return (right_tag, 1, left_lit)
+            if expr.symbol == "-":
+                return (right_tag, -1, left_lit)
 
         return None
 
     return None
+
+
+def _extract_forward_offset(instr: Any) -> tuple[str, int | float] | None:
+    """Extract ``(source_tag_name, constant_offset)`` from a write instruction.
+
+    Returns the forward relationship ``dest = source + offset`` for Copy and
+    Calc instructions with simple ``source ± literal`` expressions — the
+    scale-1 slice of :func:`_extract_forward_affine` (negated forms stay
+    invisible to the prove-side consumers).
+    """
+    fwd = _extract_forward_affine(instr)
+    if fwd is None or fwd[1] != 1:
+        return None
+    return (fwd[0], fwd[2])
 
 
 def _expand_indirect_tag_names(dest: Any) -> list[str]:
@@ -1234,7 +1747,7 @@ def _backward_propagate_comparison_boundaries(
             for atom in atom_idx[_tag_name]:
                 if atom.form not in comparison_forms or atom.operand is None:
                     continue
-                if isinstance(atom.operand, str):
+                if atom.operand_is_tag:
                     continue
                 comp_boundaries.setdefault(_tag_name, []).append(atom.operand)
 
@@ -1344,36 +1857,25 @@ def _extract_value_domain(
     elif literal_write_domains and tag_name in literal_write_domains:
         base_domain = literal_write_domains[tag_name]
 
-    atoms = (
-        atom_index.get(tag_name, [])
-        if atom_index is not None
-        else _collect_atoms_for_tag(all_exprs, tag_name)
-    )
+    if atom_index is None:
+        atom_index = _build_atom_index(all_exprs)
+    atoms = _collect_atoms_for_tag(atom_index, tag_name)
 
     if not atoms:
         return base_domain or ()
 
-    def _is_tag_ref(s: str) -> bool:
-        return all_tags is not None and s in all_tags
-
-    def _is_literal_operand(operand: Any) -> bool:
-        if operand is None:
-            return False
-        if isinstance(operand, str):
-            return not _is_tag_ref(operand)
-        return not isinstance(operand, str)
+    def _is_literal_operand(atom: Atom) -> bool:
+        return atom.operand is not None and not atom.operand_is_tag
 
     if tag.choices is None and not (tag.min is not None and tag.max is not None):
         eq_ne_literals = {
             atom.operand
             for atom in atoms
-            if atom.form in {"eq", "ne"} and _is_literal_operand(atom.operand)
+            if atom.form in {"eq", "ne"} and _is_literal_operand(atom)
         }
         if (
             eq_ne_literals
-            and all(
-                atom.form in {"eq", "ne"} and _is_literal_operand(atom.operand) for atom in atoms
-            )
+            and all(atom.form in {"eq", "ne"} and _is_literal_operand(atom) for atom in atoms)
             and not _has_non_condition_data_read(tag_name, graph)
         ):
             if base_domain is not None:
@@ -1391,7 +1893,8 @@ def _extract_value_domain(
         if atom.form not in comparison_forms or atom.operand is None:
             continue
         other_ref = atom.operand if atom.tag == tag_name else atom.tag
-        if isinstance(other_ref, str) and _is_tag_ref(other_ref):
+        other_is_tag = atom.operand_is_tag if atom.tag == tag_name else True
+        if other_is_tag:
             if other_ref == tag_name:
                 continue
             if known_domains is not None and other_ref in known_domains:
@@ -1509,11 +2012,11 @@ _BOUNDARY_DOMAIN_CAP = 32
 def _compressed_acc_boundary_domain(
     program: Program,
     graph: ProgramGraph,
-    all_exprs: list[Any],
     tag: Tag,
     acc_name: str,
     done_name: str,
     done_acc_info: Any,
+    atom_index: dict[str, list[Atom]],
 ) -> tuple[Any, ...] | None:
     """Boundary-compressed domain for a consumed accumulator.
 
@@ -1532,7 +2035,7 @@ def _compressed_acc_boundary_domain(
     if _has_forbidden_data_read(program, acc_name):
         return None
 
-    atoms = _collect_atoms_for_tag(all_exprs, acc_name)
+    atoms = _collect_atoms_for_tag(atom_index, acc_name)
     boundaries: set[int] = set()
     for atom in atoms:
         specs = _threshold_atom_for_progress(atom, acc_name, graph, kind)
@@ -1739,7 +2242,7 @@ def _build_infeasible_hints(
         blocker = blockers.get(name)
         if blocker is not None:
             label = _KIND_LABELS.get(blocker.kind, "accumulator")
-            hints.append(f"  {name}: {label} — threshold abstraction blocked:")
+            hints.append(f"  {name}: {label}; threshold abstraction blocked:")
             for reason in blocker.reasons:
                 hints.append(f"    {reason}")
             continue
@@ -1749,17 +2252,17 @@ def _build_infeasible_hints(
             block_name, start, end = ptr_info
             hints.append(
                 f"  {name}: pointer into {block_name}[{start}..{end}]"
-                f" — add choices=, min={start}/max={end}, or readonly=True"
+                f"; add choices=, min={start}/max={end}, or readonly=True"
             )
         elif tag is not None and tag.min is not None and tag.max is not None:
             hints.append(
                 f"  {name}: range {tag.min}..{tag.max} ({int(tag.max - tag.min + 1)} values)"
-                f" — too wide; add choices=, narrow min=/max=, or readonly=True"
+                f"; too wide; add choices=, narrow min=/max=, or readonly=True"
             )
         else:
             hints.append(
                 f"  {name}: no domain constraint"
-                f" — add choices= for discrete values, or cover with dt= testing"
+                f"; add choices= for discrete values, or cover with dt= testing"
             )
     return hints
 
@@ -1797,21 +2300,66 @@ def _classify_dimensions_from_graph(
     scope: list[str] | None = None,
     project: tuple[str, ...] | None = None,
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
+    structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
     _skip_absorptions: bool = False,
     exclusions: dict[str, str] | None = None,
     unclassified: set[str] | None = None,
+    stepping_tags_out: set[str] | None = None,
+    threshold_absorptions_out: list[_ThresholdAbsorptions] | None = None,
 ) -> _ClassifyResult | Intractable:
-    """Classify dimensions using prebuilt graph/expression context."""
+    """Classify dimensions using prebuilt graph/expression context.
+
+    *structural_domain_info* is the ``(domains, blockers)`` pair from
+    :func:`_collect_structural_domain_info`; pass it to reuse a fixpoint already
+    computed by another pass (only valid when *discovered_domains* is None, since
+    that input feeds the fixpoint).
+    """
+    profile = _classify_profile_enabled()
+    timings: list[tuple[str, float]] = []
+    profile_start = profile_last = time.perf_counter() if profile else 0.0
+
+    def emit_profile(result: str, **meta: Any) -> None:
+        if not profile:
+            return
+        _classify_profile_emit(
+            "classify_dimensions_from_graph",
+            timings,
+            time.perf_counter() - profile_start,
+            result=result,
+            **meta,
+        )
+
+    if stepping_tags_out is not None:
+        stepping_tags_out.update(_compute_stepping_tags(program, graph))
+    if profile:
+        profile_last = _classify_profile_mark(timings, "stepping_tags", profile_last)
     done_acc_info = _collect_done_acc_pairs(program)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "done_acc_pairs", profile_last)
+    # Always needed below (feeds _extract_value_domain); cheap to recompute.
     literal_write_domains = _collect_literal_write_domains(program, graph.tags)
-    structural_domains, reverse_blockers = _collect_structural_domain_info(
-        program,
-        graph,
-        all_exprs,
-        literal_write_domains,
-        discovered_domains,
-    )
+    if profile:
+        profile_last = _classify_profile_mark(timings, "literal_write_domains", profile_last)
+    if structural_domain_info is not None and discovered_domains is None:
+        # Reuse the fixpoint another pass already ran — it's the dominant cost.
+        structural_domains, reverse_blockers = structural_domain_info
+        if profile:
+            profile_last = _classify_profile_mark(
+                timings, "structural_domain_info_reuse", profile_last
+            )
+    else:
+        structural_domains, reverse_blockers = _collect_structural_domain_info(
+            program,
+            graph,
+            all_exprs,
+            literal_write_domains,
+            discovered_domains,
+        )
+        if profile:
+            profile_last = _classify_profile_mark(
+                timings, "structural_domain_info_collect", profile_last
+            )
     known_domains = dict(structural_domains)
 
     for ptr_name, (_block_name, start, end) in graph.pointer_tags.items():
@@ -1830,9 +2378,15 @@ def _classify_dimensions_from_graph(
         values = set(range(start, end + 1))
         values.add(tag.default)
         known_domains[ptr_name] = tuple(sorted(values))
+    if profile:
+        profile_last = _classify_profile_mark(timings, "pointer_domains", profile_last)
 
     atom_idx = _build_atom_index(all_exprs)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "atom_index", profile_last)
     influences_comparison = _comparison_influencing_tags(graph, atom_idx, program)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "comparison_influence_index", profile_last)
 
     consumed_accs: set[str] = set()
     for acc_name in done_acc_info.pairs.values():
@@ -1841,6 +2395,8 @@ def _classify_dimensions_from_graph(
             acc_name,
         ):
             consumed_accs.add(acc_name)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "consumed_acc_scan", profile_last)
 
     if _skip_absorptions:
         absorptions = _RedundantAccAbsorptions(
@@ -1854,6 +2410,8 @@ def _classify_dimensions_from_graph(
             comparison_tags=frozenset(),
             vector_specs=(),
         )
+        if profile:
+            profile_last = _classify_profile_mark(timings, "absorptions_skipped", profile_last)
     else:
         absorptions = _find_redundant_acc_absorptions(
             program,
@@ -1861,15 +2419,23 @@ def _classify_dimensions_from_graph(
             all_exprs,
             done_acc_info,
             consumed_accs,
+            atom_idx,
         )
         consumed_accs.difference_update(absorptions.acc_names)
+        if profile:
+            profile_last = _classify_profile_mark(
+                timings, "redundant_acc_absorptions", profile_last
+            )
 
         threshold_absorptions = _find_threshold_absorptions(
             program,
             graph,
             all_exprs,
             project=project,
+            atom_index=atom_idx,
         )
+        if profile:
+            profile_last = _classify_profile_mark(timings, "threshold_absorptions", profile_last)
         comparison_absorptions = _find_comparison_absorptions(
             program,
             graph,
@@ -1877,14 +2443,23 @@ def _classify_dimensions_from_graph(
             structural_domains,
             project=project,
             receive_dest_names=receive_dest_names,
+            atom_index=atom_idx,
         )
+        if profile:
+            profile_last = _classify_profile_mark(timings, "comparison_absorptions", profile_last)
         threshold_absorptions = _merge_threshold_absorptions(
             threshold_absorptions,
             comparison_absorptions,
         )
         consumed_accs.difference_update(threshold_absorptions.progress_names)
+        if profile:
+            profile_last = _classify_profile_mark(timings, "absorption_merge", profile_last)
 
     _expand_consumed_accs_for_reset_timing(program, graph, done_acc_info, consumed_accs)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "reset_timing_expansion", profile_last)
+    if threshold_absorptions_out is not None:
+        threshold_absorptions_out.append(threshold_absorptions)
 
     done_by_acc = {a: d for d, a in done_acc_info.pairs.items()}
     done_acc = {d: a for d, a in done_acc_info.pairs.items() if a not in consumed_accs}
@@ -1899,14 +2474,14 @@ def _classify_dimensions_from_graph(
         for tag_name in scope:
             if _is_nd_input(tag_name):
                 upstream_tags.add(tag_name)
-            upstream_tags.update(
-                tag for tag in graph.upstream_slice_with_calls(tag_name) if _is_nd_input(tag)
-            )
+            upstream_tags.update(tag for tag in graph.upstream_slice(tag_name) if _is_nd_input(tag))
         for expr in all_exprs:
             upstream_tags.update(
                 tag_name for tag_name in _referenced_tags(expr) if _is_nd_input(tag_name)
             )
         scope_input_tags = frozenset(upstream_tags)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "scope_input_filter", profile_last)
 
     stateful: dict[str, tuple[Any, ...]] = {}
     nondeterministic: dict[str, tuple[Any, ...]] = {}
@@ -2077,7 +2652,13 @@ def _classify_dimensions_from_graph(
                 if domain is not None and len(domain) > _BOUNDARY_DOMAIN_CAP:
                     compressed = (
                         _compressed_acc_boundary_domain(
-                            program, graph, all_exprs, tag, tag_name, done_name, done_acc_info
+                            program,
+                            graph,
+                            tag,
+                            tag_name,
+                            done_name,
+                            done_acc_info,
+                            atom_idx,
                         )
                         if done_name is not None
                         else None
@@ -2086,7 +2667,13 @@ def _classify_dimensions_from_graph(
                         domain = compressed
                 if domain is None and done_name is not None:
                     domain = _compressed_acc_boundary_domain(
-                        program, graph, all_exprs, tag, tag_name, done_name, done_acc_info
+                        program,
+                        graph,
+                        tag,
+                        tag_name,
+                        done_name,
+                        done_acc_info,
+                        atom_idx,
                     )
                 if domain is not None:
                     stateful[tag_name] = domain
@@ -2148,6 +2735,8 @@ def _classify_dimensions_from_graph(
         if tag_name in consumed_accs:
             domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)
         stateful[tag_name] = domain
+    if profile:
+        profile_last = _classify_profile_mark(timings, "tag_classification_loop", profile_last)
 
     for ptr_name in graph.pointer_tags:
         if (
@@ -2163,6 +2752,8 @@ def _classify_dimensions_from_graph(
                 exclusions[ptr_name] = "readonly"
             continue
         infeasible_tags.append(ptr_name)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "pointer_completion", profile_last)
 
     for blocker_name in sorted(reverse_blockers):
         if blocker_name not in stateful and blocker_name not in nondeterministic:
@@ -2170,6 +2761,8 @@ def _classify_dimensions_from_graph(
         if blocker_name in infeasible_tags:
             continue
         infeasible_tags.append(blocker_name)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "reverse_blocker_merge", profile_last)
 
     if infeasible_tags:
         total_dims = len(stateful) + len(nondeterministic) + len(infeasible_tags)
@@ -2180,7 +2773,7 @@ def _classify_dimensions_from_graph(
             {d: p for d, p in absorptions.synthetic_presets.items() if d in done_acc}
         )
         done_kinds_partial = {d: done_acc_info.kinds[d] for d in done_acc}
-        return Intractable(
+        result = Intractable(
             reason=f"unbounded domain on {', '.join(sorted(infeasible_tags))}",
             dimensions=total_dims,
             estimated_space=0,
@@ -2195,12 +2788,22 @@ def _classify_dimensions_from_graph(
                 done_kinds_partial,
             ),
         )
+        emit_profile(
+            "intractable",
+            stateful=len(stateful),
+            nondeterministic=len(nondeterministic),
+            combinational=len(combinational),
+            infeasible=len(infeasible_tags),
+        )
+        return result
 
     fn_escape = _detect_function_escape_hatches(program, graph)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "function_escape_hatches", profile_last)
     if fn_escape:
         total_dims = len(stateful) + len(nondeterministic) + len(fn_escape)
         hints = [
-            f"  {name}: function output — add choices=, min=/max=, or readonly=True"
+            f"  {name}: function output; add choices=, min=/max=, or readonly=True"
             for name in sorted(fn_escape)
         ]
         done_presets_partial = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
@@ -2208,7 +2811,7 @@ def _classify_dimensions_from_graph(
             {d: p for d, p in absorptions.synthetic_presets.items() if d in done_acc}
         )
         done_kinds_partial = {d: done_acc_info.kinds[d] for d in done_acc}
-        return Intractable(
+        result = Intractable(
             reason=f"unannotated function output: {', '.join(sorted(fn_escape))}",
             dimensions=total_dims,
             estimated_space=0,
@@ -2223,11 +2826,19 @@ def _classify_dimensions_from_graph(
                 done_kinds_partial,
             ),
         )
+        emit_profile(
+            "function_escape",
+            stateful=len(stateful),
+            nondeterministic=len(nondeterministic),
+            combinational=len(combinational),
+            escapes=len(fn_escape),
+        )
+        return result
 
     done_presets = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
     done_presets.update({d: p for d, p in absorptions.synthetic_presets.items() if d in done_acc})
     done_kinds = {d: done_acc_info.kinds[d] for d in done_acc}
-    return (
+    result = (
         stateful,
         nondeterministic,
         frozenset(combinational),
@@ -2235,6 +2846,17 @@ def _classify_dimensions_from_graph(
         done_presets,
         done_kinds,
     )
+    if profile:
+        _classify_profile_mark(timings, "done_metadata", profile_last)
+        emit_profile(
+            "ok",
+            stateful=len(stateful),
+            nondeterministic=len(nondeterministic),
+            combinational=len(combinational),
+            done=len(done_acc),
+            threshold_vectors=len(threshold_absorptions.vector_specs),
+        )
+    return result
 
 
 def _classify_dimensions(

@@ -6,7 +6,9 @@ from datetime import datetime
 
 import pytest
 
-from pyrung.click import ClickDataProvider, TagMap, sc
+from pyrung.click import ClickBlocks, ClickDataProvider, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.core import PLC, Bool, system
 
 
@@ -66,7 +68,8 @@ def test_same_address_alias_is_allowed_but_conflicting_name_is_rejected():
     mapping = TagMap({alias: sc[2]})
     assert mapping.resolve("_1st_SCAN") == "SC2"
 
-    with pytest.raises(ValueError, match="Hardware address conflict"):
+    # The second claim raises at map_to time (bank slot name conflict).
+    with pytest.raises(ValueError, match="conflict"):
         TagMap({Bool("DifferentName"): sc[2]})
 
 

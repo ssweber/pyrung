@@ -27,7 +27,27 @@ stranded = plc.query.stranded_bits()
 
 Returns `CausalChain` objects for each latched tag with no reachable reset path. Each chain carries blocker diagnostics pointing at the specific inputs that would need to transition.
 
-The static validator [`CORE_STUCK_HIGH`](analysis-structure.md#rule-reference) checks structure — "is there a reset rung at all?" `stranded_bits()` checks reachability — "is there a reset rung *and can it actually fire*?"
+The static validator [`COIL_STUCK_HIGH`](analysis-structure.md#rule-reference) checks structure — "is there a reset rung at all?" `stranded_bits()` checks reachability — "is there a reset rung *and can it actually fire*?"
+
+## Wait edges without escape
+
+```python
+for finding in plc.query.wait_edges_without_escape():
+    print(finding.message)
+    # Rotate step 1 waits on i_RotateFB with no escape — R9 guards
+    # Rotate_CurStep == 3 and R5 needs Rotate_EnableLimit, which nothing sets
+    # (rests at 0)
+```
+
+A step that only advances when something outside the program arrives is a *wait edge*. If nothing else can fire while the step waits, the machine sits there looking fine. This survey is static — no history needed — and reports the absence of an escape the program can fire unaided.
+
+One rule decides both halves: a guard clause on a tag the ladder does not author holds only if the tag's resting value already satisfies it. That makes the advance a wait (`i_RotateFB` may never arrive) and disqualifies escapes gated the same way — a timeout switched off by a register nobody set and an abort waiting on a button nobody pressed fail for the same reason. An escape whose guard excludes the waiting step fails separately, on range.
+
+The survey deliberately does not guess *why* nobody sets a tag. A config register someone should have set at commissioning and a button someone would press are indistinguishable from a declaration — `Bool("EnableLimit")` is an ordinary way to write a config flag — so it reports the fact it proved ("nothing sets this") and leaves the intent to you.
+
+It reports the design decision; it never edits the program. When a guard can't be read statically it stays silent rather than inventing a verdict. The same finding surfaces in core validation as the [`STEP_NO_ESCAPE`](analysis-structure.md#rule-reference) warning, so `logic.validate()` picks it up with no extra call.
+
+**Reach.** It recognizes step machines that advance by `calc(Step + 1, Step)` or by stamping a literal in (`copy(2, Step)`), gated on a level or a rising edge, waiting on a contact or an analog threshold. It stays silent on shapes it cannot read — a `fall()`-gated advance, an `Or` guard, a drum — rather than guessing.
 
 ## Coverage reports and merge
 

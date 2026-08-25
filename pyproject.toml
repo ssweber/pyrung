@@ -52,8 +52,8 @@ dev = [
     "hypothesis>=6.0",
     "psutil>=5.9",
     "pytest>=8.3.5",
-    "ruff>=0.11.0",
-    "ty>=0.0.14",
+    "ruff>=0.16.0",
+    "ty>=0.0.65",
 ]
 docs = [
     "mkdocs>=1.6.1,<2",
@@ -95,13 +95,14 @@ exclude = ["scratchpad"]
 packages = ["src/pyrung"]
 
 [tool.uv]
+required-version = ">=0.11.29"
 exclude-newer = "7 days"
-exclude-newer-package = { pyclickplc = "0 days" }
+exclude-newer-package = { pyclickplc = "0 days", ty = "0 days" }
 
 [tool.ruff]
 # Set as desired, typically 88 (black standard) or 100 (wide).
 line-length = 100
-extend-exclude = ["tests/fuzz/reproducers"]
+extend-exclude = ["*.md", "tests/fuzz/reproducers"]
 
 [tool.ruff.lint]
 select = [
@@ -144,6 +145,7 @@ ignore = [
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
+ignore = ["scratchpad"]
 reportMissingTypeStubs = false
 reportUnknownMemberType = false
 reportUnknownArgumentType = false
@@ -160,7 +162,9 @@ root = ["./src", "./tests", "./devtools"]
 exclude = [
     "scratchpad/*",
     "devtools/serial_monitor.py",  # Windows-only APIs (ctypes.windll, msvcrt)
+    "tests/fixtures/tumbler/*",  # Click-generated fixture (huge tags.py)
     "tests/fuzz/reproducers/*",
+    "tests/**/test_walk*",  # walk engine deprecated (switched to pilot); mirrors pytest --ignore-glob
 ]
 
 [tool.ty.rules]
@@ -177,6 +181,7 @@ unused-ignore-comment = "error"
 include = ["tests/**"]
 [tool.ty.overrides.rules]
 invalid-argument-type = "ignore"
+invalid-return-type = "ignore"
 unresolved-attribute = "ignore"
 
 
@@ -189,12 +194,14 @@ markers = [
     "hypothesis: property-based tests (slower, run separately)",
     "soundness: expensive optimized-vs-unoptimized agreement tests",
     "fuzz: grammar-based fuzzer tests",
-    "parity: engine parity tests (interpreted vs compiled)",
     "known_answer: hand-enumerated reachable-state oracle tests",
+    "tumbler: slow full-program tumbler fixture tests (run separately)",
 ]
 testpaths = [
     "src",
     "tests",
 ]
 norecursedirs = ["tests/fuzz/reproducers"]
-filterwarnings = []
+filterwarnings = [
+    "error:copy\\(.*writes a bool literal to a BOOL tag:UserWarning",
+]

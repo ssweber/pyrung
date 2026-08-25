@@ -2,36 +2,47 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, TypeVar
+
+from pyrung.core.validation.registry import ALL_RULES, RULES, VALIDATOR_ORDER, resolve_rules
+from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
+    from pyrung.core.validation.display import FindingDisplay
+
+__all__ = ["ALL_RULES", "Finding", "ValidationReport", "validate"]
 
 
 class Finding(Protocol):
     """Structural contract shared by all validation findings."""
 
-    code: str
-    target_name: str
-    message: str
+    @property
+    def code(self) -> str: ...
+
+    @property
+    def target_name(self) -> str: ...
+
+    @property
+    def message(self) -> str: ...
+
+    @property
+    def severity(self) -> Severity: ...
+
+    @property
+    def display(self) -> FindingDisplay:
+        """Presentation structure; ``message`` is ``display.as_text()``."""
+        ...
 
 
-ALL_RULES: frozenset[str] = frozenset(
-    {
-        "CORE_ANTITOGGLE",
-        "CORE_CHOICES_VIOLATION",
-        "CORE_CONFLICTING_OUTPUT",
-        "CORE_FINAL_MULTIPLE_WRITERS",
-        "CORE_MISSING_PROFILE",
-        "CORE_POINTER_DEFAULT_BEFORE_BLOCK_START",
-        "CORE_RANGE_VIOLATION",
-        "CORE_READONLY_WRITE",
-        "CORE_STUCK_HIGH",
-        "CORE_STUCK_LOW",
-    }
-)
+_FindingT = TypeVar("_FindingT", bound=Finding)
+
+
+def _as_findings(findings: tuple[_FindingT, ...]) -> tuple[Finding, ...]:
+    """Widen a concrete validator's finding tuple to the shared protocol."""
+    return findings
 
 
 @dataclass(frozen=True)
@@ -47,7 +58,31 @@ class ValidationReport:
         for f in self.findings:
             by_code[f.code] = by_code.get(f.code, 0) + 1
         parts = [f"{code}: {n}" for code, n in sorted(by_code.items())]
-        return f"{len(self.findings)} finding(s) ({', '.join(parts)})"
+        by_sev: dict[str, int] = {}
+        for f in self.findings:
+            by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
+        sev_parts = [
+            f"{sev}: {by_sev[sev]}"
+            for sev in ("error", "warning", "info", "advisory")
+            if sev in by_sev
+        ]
+        return f"{len(self.findings)} finding(s) [{', '.join(sev_parts)}] ({', '.join(parts)})"
+
+    def errors(self) -> tuple[Finding, ...]:
+        """Findings at ``error`` severity — the CI gate."""
+        return tuple(f for f in self.findings if f.severity == "error")
+
+    def warnings(self) -> tuple[Finding, ...]:
+        return tuple(f for f in self.findings if f.severity == "warning")
+
+    def infos(self) -> tuple[Finding, ...]:
+        return tuple(f for f in self.findings if f.severity == "info")
+
+    def advisories(self) -> tuple[Finding, ...]:
+        return tuple(f for f in self.findings if f.severity == "advisory")
+
+    def has_errors(self) -> bool:
+        return any(f.severity == "error" for f in self.findings)
 
     def __bool__(self) -> bool:
         return bool(self.findings)
@@ -59,19 +94,6 @@ class ValidationReport:
         return iter(self.findings)
 
 
-def _resolve_rules(
-    select: set[str] | None,
-    ignore: set[str] | None,
-) -> frozenset[str]:
-    unknown = ((select or set()) | (ignore or set())) - ALL_RULES
-    if unknown:
-        raise ValueError(f"Unknown rule code(s): {', '.join(sorted(unknown))}")
-    active = frozenset(select) if select is not None else ALL_RULES
-    if ignore is not None:
-        active = active - ignore
-    return active
-
-
 def validate(
     program: Program,
     *,
@@ -79,51 +101,60 @@ def validate(
     ignore: set[str] | None = None,
     dt: float = 0.010,
 ) -> ValidationReport:
-    """Run core validators, optionally filtered by rule code.
+    """Run core validators, optionally filtered by rule code or category.
 
-    With no arguments, all validators run.  ``select`` limits to the given
-    codes; ``ignore`` excludes codes.  Both may be combined (``select -
-    ignore``).  Unknown codes raise ``ValueError``.
+    With no arguments, every default-on validator runs.  ``select`` limits to
+    the given codes or category prefixes (e.g. ``{"COIL"}``); ``ignore``
+    excludes them.  Both may be combined (``select - ignore``).  Unknown tokens
+    raise ``ValueError``.
 
     ``dt`` is forwarded to the physical-realism validator.
     """
-    active = _resolve_rules(select, ignore)
+    active = resolve_rules(select, ignore)
     if not active:
         return ValidationReport(findings=())
 
+    needed = {RULES[code].validator for code in active}
+    dispatch = _validator_dispatch(program, dt)
+
+    findings: list[Finding] = []
+    for key in VALIDATOR_ORDER:
+        if key not in needed:
+            continue
+        for f in dispatch[key]():
+            if f.code in active:
+                findings.append(f)
+    return ValidationReport(findings=tuple(findings))
+
+
+def _validator_dispatch(
+    program: Program, dt: float
+) -> dict[str, Callable[[], tuple[Finding, ...]]]:
+    """Map each validator key to a thunk returning that pass's findings.
+
+    Imports are local so importing this module never eagerly loads the validator
+    modules — matching the historical import profile of :func:`validate`.
+    """
     from pyrung.core.validation.choices_violation import validate_choices
+    from pyrung.core.validation.cmp_conditions import validate_cmp_conditions
     from pyrung.core.validation.duplicate_out import validate_conflicting_outputs
     from pyrung.core.validation.final_writers import validate_final_writers
     from pyrung.core.validation.physical_realism import validate_physical_realism
     from pyrung.core.validation.pointer_default import validate_pointer_defaults
     from pyrung.core.validation.readonly_write import validate_readonly_writes
+    from pyrung.core.validation.rung_conditions import validate_rung_conditions
     from pyrung.core.validation.stuck_bits import validate_stuck_bits
+    from pyrung.core.validation.wait_escape import validate_wait_escapes
 
-    findings: list[Finding] = []
-
-    if active & {"CORE_STUCK_HIGH", "CORE_STUCK_LOW"}:
-        for f in validate_stuck_bits(program).findings:
-            if f.code in active:
-                findings.append(f)
-
-    if "CORE_CONFLICTING_OUTPUT" in active:
-        findings.extend(validate_conflicting_outputs(program).findings)
-
-    if "CORE_READONLY_WRITE" in active:
-        findings.extend(validate_readonly_writes(program).findings)
-
-    if "CORE_POINTER_DEFAULT_BEFORE_BLOCK_START" in active:
-        findings.extend(validate_pointer_defaults(program).findings)
-
-    if "CORE_CHOICES_VIOLATION" in active:
-        findings.extend(validate_choices(program).findings)
-
-    if "CORE_FINAL_MULTIPLE_WRITERS" in active:
-        findings.extend(validate_final_writers(program).findings)
-
-    if active & {"CORE_RANGE_VIOLATION", "CORE_MISSING_PROFILE", "CORE_ANTITOGGLE"}:
-        for f in validate_physical_realism(program, dt=dt).findings:
-            if f.code in active:
-                findings.append(f)
-
-    return ValidationReport(findings=tuple(findings))
+    return {
+        "stuck": lambda: _as_findings(validate_stuck_bits(program).findings),
+        "conflicting": lambda: _as_findings(validate_conflicting_outputs(program).findings),
+        "readonly": lambda: _as_findings(validate_readonly_writes(program).findings),
+        "pointer": lambda: _as_findings(validate_pointer_defaults(program).findings),
+        "choices": lambda: _as_findings(validate_choices(program).findings),
+        "final": lambda: _as_findings(validate_final_writers(program).findings),
+        "physical": lambda: _as_findings(validate_physical_realism(program, dt=dt).findings),
+        "rung": lambda: _as_findings(validate_rung_conditions(program).findings),
+        "cmp": lambda: _as_findings(validate_cmp_conditions(program).findings),
+        "wait": lambda: _as_findings(validate_wait_escapes(program).findings),
+    }

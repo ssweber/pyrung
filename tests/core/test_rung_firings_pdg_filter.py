@@ -17,9 +17,8 @@ Covers:
 - Consumed writes of any type are kept.
 - The escape-hatch flag bypasses the filter.
 - Mixed rungs (Bool + non-Bool writes on the same rung): the Bool
-  write survives, the non-Bool write drops.  This keeps the rung's
-  intern pool small so causal chains on the Bool stay intact even
-  when the non-Bool side is monotonic.
+  write survives, the non-Bool write drops, so unrelated monotonic
+  churn cannot degrade the Bool's exact causal column.
 - Rung-fired status is preserved even when every write was filtered
   (the rung index still appears in the firing log with an empty
   inner map, so ``cause``'s PDG fallback and ``query.hot_rungs`` /
@@ -127,14 +126,8 @@ def test_pdg_filter_keeps_consumed_writes() -> None:
 def test_pdg_filter_mixed_rung_keeps_bool_drops_int() -> None:
     """A rung with mixed Bool + non-Bool writes keeps the Bool side only.
 
-    This is the refinement's concrete payoff for the
-    cycle→fired_only transition: a rung that writes a Bool flag plus a
-    monotonic counter would otherwise churn the intern pool
-    (counter value changes every scan) and get promoted to fired-only,
-    losing the Bool causal chain in the process.  With Bools
-    preserved and non-Bool unconsumed writes dropped, the rung's
-    pattern stays stable on the Bool axis regardless of counter
-    churn.
+    With unconsumed non-Bool writes dropped, the retained Bool column
+    stays stable regardless of counter churn.
     """
     Enable = Bool("Enable")
     Flag = Bool("Flag")
@@ -147,9 +140,7 @@ def test_pdg_filter_mixed_rung_keeps_bool_drops_int() -> None:
             copy(Source, Counter)
 
     runner = PLC(logic)
-    # Run for 150 scans with Counter changing every scan; under the
-    # old "drop all unconsumed" filter the intern pool would hit the
-    # 100-pattern threshold and the rung would transition to fired-only.
+    # Run for 150 scans with Counter changing every scan.
     for scan_id in range(150):
         runner.patch({"Enable": True, "Source": scan_id})
         runner.step()
@@ -159,10 +150,10 @@ def test_pdg_filter_mixed_rung_keeps_bool_drops_int() -> None:
     assert firings[0]["Flag"] is True
     assert "Counter" not in firings[0]
 
-    # Critical: intern pool stayed small (single Bool pattern),
-    # so the rung never promoted to fired-only.
-    assert runner._rung_firing_timelines.mode(0) == "cycle"
-    assert runner._rung_firing_timelines.intern_size(0) == 1
+    # The retained Bool column remains exact; filtered Counter churn cannot
+    # degrade an unrelated value column.
+    assert runner._rung_firing_timelines.value_is_known(0, "Flag")
+    assert (0, "Counter") not in runner._rung_firing_timelines._value_timelines
 
 
 def test_record_all_tags_bypasses_pdg_filter() -> None:

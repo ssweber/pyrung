@@ -15,43 +15,64 @@ Stage 5: Pointer default validation for indirect block dereferences.
 """
 
 from pyrung.core.validation.choices_violation import (
-    CORE_CHOICES_VIOLATION,
+    TAG_CHOICES_VIOLATION,
     ChoicesViolationFinding,
     ChoicesViolationReport,
     validate_choices,
 )
+from pyrung.core.validation.cmp_conditions import (
+    CMP_EQ_ON_MONOTONE,
+    CMP_OPERAND_STAYS_ZERO,
+    CMP_PRESET_STAYS_ZERO,
+    CMP_STATIC_ON_LEFT,
+    CMP_STEPPER_VALUE_NOT_SET,
+    CMP_TRUE_AT_RESET,
+    CmpConditionFinding,
+    CmpConditionReport,
+    validate_cmp_conditions,
+)
+from pyrung.core.validation.display import (
+    FindingDisplay,
+    Frame,
+)
 from pyrung.core.validation.duplicate_out import (
-    CORE_CONFLICTING_OUTPUT,
+    COIL_CONFLICTING_OUTPUT,
     ConflictingOutputFinding,
     ConflictingOutputReport,
     OutputSite,
     validate_conflicting_outputs,
 )
 from pyrung.core.validation.final_writers import (
-    CORE_FINAL_MULTIPLE_WRITERS,
+    TAG_FINAL_MULTIPLE_WRITERS,
     FinalWritersFinding,
     FinalWritersReport,
     validate_final_writers,
 )
 from pyrung.core.validation.physical_realism import (
-    CORE_ANTITOGGLE,
-    CORE_MISSING_PROFILE,
-    CORE_RANGE_VIOLATION,
+    PHYS_ANTITOGGLE,
+    PHYS_MISSING_PROFILE,
+    TAG_RANGE_VIOLATION,
     PhysicalRealismFinding,
     PhysicalRealismReport,
     validate_physical_realism,
 )
 from pyrung.core.validation.pointer_default import (
-    CORE_POINTER_DEFAULT_BEFORE_BLOCK_START,
+    PTR_DEFAULT_BEFORE_BLOCK_START,
     PointerDefaultFinding,
     PointerDefaultReport,
     validate_pointer_defaults,
 )
 from pyrung.core.validation.readonly_write import (
-    CORE_READONLY_WRITE,
+    TAG_READONLY_WRITE,
     ReadonlyWriteFinding,
     ReadonlyWriteReport,
     validate_readonly_writes,
+)
+from pyrung.core.validation.registry import (
+    CATEGORIES,
+    RULES,
+    RuleSpec,
+    ordered_rules,
 )
 from pyrung.core.validation.report import (
     ALL_RULES,
@@ -59,12 +80,25 @@ from pyrung.core.validation.report import (
     ValidationReport,
     validate,
 )
+from pyrung.core.validation.rung_conditions import (
+    RUNG_CONTRADICTION,
+    RUNG_TAUTOLOGY,
+    RungConditionFinding,
+    RungConditionReport,
+    validate_rung_conditions,
+)
 from pyrung.core.validation.stuck_bits import (
-    CORE_STUCK_HIGH,
-    CORE_STUCK_LOW,
+    COIL_STUCK_HIGH,
+    COIL_STUCK_LOW,
     StuckBitFinding,
     StuckBitReport,
     validate_stuck_bits,
+)
+from pyrung.core.validation.wait_escape import (
+    STEP_NO_ESCAPE,
+    StepEscapeFinding,
+    StepEscapeReport,
+    validate_wait_escapes,
 )
 from pyrung.core.validation.walker import (
     FactScope,
@@ -77,18 +111,35 @@ from pyrung.core.validation.walker import (
 
 __all__ = [
     "ALL_RULES",
-    "CORE_ANTITOGGLE",
-    "CORE_CHOICES_VIOLATION",
-    "CORE_CONFLICTING_OUTPUT",
-    "CORE_FINAL_MULTIPLE_WRITERS",
-    "CORE_MISSING_PROFILE",
-    "CORE_POINTER_DEFAULT_BEFORE_BLOCK_START",
-    "CORE_RANGE_VIOLATION",
-    "CORE_READONLY_WRITE",
-    "CORE_STUCK_HIGH",
-    "CORE_STUCK_LOW",
+    "CATEGORIES",
+    "RULES",
+    "RuleSpec",
+    "ordered_rules",
+    "FindingDisplay",
+    "Frame",
+    "PHYS_ANTITOGGLE",
+    "TAG_CHOICES_VIOLATION",
+    "COIL_CONFLICTING_OUTPUT",
+    "TAG_FINAL_MULTIPLE_WRITERS",
+    "PHYS_MISSING_PROFILE",
+    "PTR_DEFAULT_BEFORE_BLOCK_START",
+    "TAG_RANGE_VIOLATION",
+    "TAG_READONLY_WRITE",
+    "COIL_STUCK_HIGH",
+    "COIL_STUCK_LOW",
+    "RUNG_CONTRADICTION",
+    "RUNG_TAUTOLOGY",
+    "CMP_EQ_ON_MONOTONE",
+    "CMP_OPERAND_STAYS_ZERO",
+    "CMP_PRESET_STAYS_ZERO",
+    "CMP_STATIC_ON_LEFT",
+    "CMP_STEPPER_VALUE_NOT_SET",
+    "CMP_TRUE_AT_RESET",
+    "STEP_NO_ESCAPE",
     "ChoicesViolationFinding",
     "ChoicesViolationReport",
+    "CmpConditionFinding",
+    "CmpConditionReport",
     "ConflictingOutputFinding",
     "ConflictingOutputReport",
     "FactScope",
@@ -105,11 +156,17 @@ __all__ = [
     "ProgramLocation",
     "ReadonlyWriteFinding",
     "ReadonlyWriteReport",
+    "RungConditionFinding",
+    "RungConditionReport",
+    "StepEscapeFinding",
+    "StepEscapeReport",
     "StuckBitFinding",
     "StuckBitReport",
     "ValidationReport",
     "ValueKind",
     "validate",
+    "validate_cmp_conditions",
+    "validate_rung_conditions",
     "validate_choices",
     "validate_conflicting_outputs",
     "validate_final_writers",
@@ -117,5 +174,6 @@ __all__ = [
     "validate_pointer_defaults",
     "validate_readonly_writes",
     "validate_stuck_bits",
+    "validate_wait_escapes",
     "walk_program",
 ]

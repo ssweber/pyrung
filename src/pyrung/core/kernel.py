@@ -140,6 +140,12 @@ class CompiledKernel:
     source: str = ""
     blockless: bool = False
     has_io_gaps: bool = False
+    # Optional leading pass, run *before* the input drain so it reads the previous
+    # commit (the synthesis ``plant`` / input-read phase).  ``None`` ⇒ a single
+    # ``step_fn`` covers the whole scan (the common case; deploy/prove/bare replay).
+    # Shares the runtime kernel's tags/blocks/memory with ``step_fn`` — same
+    # signature — because both are compiled from one program (union templates).
+    pre_step_fn: Callable[..., None] | None = None
     indirect_block_info: dict[str, tuple[str, int, int, frozenset[int]]] = field(
         default_factory=dict
     )

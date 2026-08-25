@@ -123,9 +123,9 @@ def _cmd_check(args: argparse.Namespace) -> None:
         split_at=split_at,
     )
     if diff is None:
-        print("OK — program matches lock file")
+        print("OK: program matches lock file")
     else:
-        print("CHANGED — program does not match lock file", file=sys.stderr)
+        print("CHANGED: program does not match lock file", file=sys.stderr)
         if diff.added:
             print(f"  {len(diff.added)} new reachable state(s)", file=sys.stderr)
         if diff.removed:
@@ -214,7 +214,7 @@ def _run_with_optional_profile(
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="pyrung",
-        description="pyrung — ladder logic in Python",
+        description="pyrung: ladder logic in Python",
     )
     sub = parser.add_subparsers(dest="command")
 

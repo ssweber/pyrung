@@ -38,6 +38,7 @@ from pyrung.core import (
     off_delay,
     on_delay,
     out,
+    pack_bits,
     pack_words,
     reset,
     return_early,
@@ -1587,6 +1588,146 @@ def test_fuzz_consumed_acc_with_atoms_not_combinational():
     assert plc.current_state.tags["C1_Acc"] >= 4
 
 
+def _assert_subset_agrees(logic, condition, pass_name):
+    """Run sound_baseline with one extra pass and assert it still finds the
+    Counterexample the baseline finds — then confirm the concrete violation."""
+    baseline = always(
+        logic,
+        condition,
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=_OptConfig.sound_baseline(),
+    )
+    candidate = always(
+        logic,
+        condition,
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=replace(_OptConfig.sound_baseline(), **{pass_name: True}),
+    )
+    assert isinstance(baseline, Counterexample)
+    assert isinstance(candidate, Counterexample), (
+        f"{pass_name}: expected Counterexample, got {type(candidate).__name__}"
+    )
+    plc = _replay_trace(logic, candidate.trace)
+    assert plc.current_state.tags["B0"] and plc.current_state.tags["B1"]
+
+
+def test_fuzz_property_coupled_free_inputs_not_factored():
+    """Property ``Or(~B1, ~B0)`` couples two free inputs the program keeps apart.
+
+    B0 only gates a counter reset; B1 only gates an out-of-scope pack_bits, so
+    their cones are disjoint and ``free_input_factoring`` split them into
+    independent groups.  Factoring composes only WRITE deltas, so the factored
+    input values never reached the merged state the predicate is evaluated on —
+    the property was only ever checked at the default ``(False, False)`` corner
+    and returned a false Proven.  Fixed by excluding property-observed ND inputs
+    from the factoring partition.
+    """
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    W0 = Word("W0")
+    C0 = Counter.clone("C0")
+    CB = Block("CB", TagType.BOOL, 1, 8)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            count_up(C0, 10).reset(B0)
+        with Rung(B1):
+            pack_bits(CB.select(1, 8), W0)
+
+    _assert_subset_agrees(logic, Or(~B1, ~B0), "free_input_factoring")
+
+
+def test_fuzz_property_input_not_pruned_when_combinational_collapses():
+    """A property ND input must stay live even when a combinational sibling can
+    collapse the property residual to a constant.
+
+    B0 is driven combinational by an unconditional ``out(B0)``; B1 is a free
+    input gating an out-of-scope pack_bits.  At the initial state B0 is False,
+    so ``Or(~B1, ~B0)`` partial-evaluates to a constant True and
+    ``live_input_pruning`` dropped B1 — but B0 turns True after the scan, so B1
+    is decisive and is read (never written), hence always live.  With B1 pruned
+    and B0 absent from the state key the BFS halted after one state and returned
+    a false Proven.  Fixed by marking property-observed ND inputs always-live.
+    """
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    W0 = Word("W0")
+    CB = Block("CB", TagType.BOOL, 1, 8)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            out(B0)
+        with Rung(B1):
+            pack_bits(CB.select(1, 8), W0)
+
+    _assert_subset_agrees(logic, Or(~B1, ~B0), "live_input_pruning")
+
+
+def test_free_input_factoring_preserves_hidden_timer_done_projection():
+    In0 = Bool("In0", external=True)
+    In1 = Bool("In1", external=True)
+    B0 = Bool("B0")
+    T0 = Timer.clone("T0")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            on_delay(T0, 50)
+        with Rung(In1):
+            out(B0)
+
+    projection = ["B0", "T0_Done"]
+    baseline = reachable_states(
+        logic,
+        project=projection,
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=_OptConfig.sound_baseline(),
+    )
+    candidate = reachable_states(
+        logic,
+        project=projection,
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=replace(_OptConfig.sound_baseline(), free_input_factoring=True),
+    )
+
+    assert not isinstance(baseline, Intractable)
+    assert not isinstance(candidate, Intractable)
+    assert baseline <= candidate
+    assert frozenset({("B0", False), ("T0_Done", True)}) in candidate
+    assert frozenset({("B0", True), ("T0_Done", True)}) in candidate
+
+
+def test_return_early_guard_expr_keeps_projected_input_live():
+    In0 = Bool("In0", external=True)
+    In1 = Bool("In1", external=True)
+    B0 = Bool("B0")
+    T1 = Timer.clone("T1")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            call("sub_0")
+        with Rung(In0):
+            on_delay(T1, 50)
+        with subroutine("sub_0"):
+            with Rung(In1):
+                return_early()
+            with Rung():
+                out(B0)
+
+    states = reachable_states(
+        logic,
+        project=["B0", "T1_Done"],
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=replace(_OptConfig.sound_baseline(), live_input_pruning=True),
+    )
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("T1_Done", True)}) in states
+
+
 def test_fuzz_self_resetting_counter_threshold_absorption_unsound():
     """Threshold absorption of self-resetting counter produces false counterexample.
 
@@ -1672,7 +1813,7 @@ def test_fuzz_self_resetting_counter_tag_preset_unbounded():
     When the preset tag has no declared bounds, absorption must still
     not produce a false counterexample for the bounded accumulator.
     """
-    Preset = Int("Preset", external=True)
+    Preset = Int("Preset", external=True, min=0, max=100)
     B0 = Bool("B0")
     C0 = Counter.clone("C0")
     C1 = Counter.clone("C1")

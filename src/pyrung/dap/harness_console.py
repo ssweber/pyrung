@@ -43,7 +43,7 @@ def try_auto_install(adapter: Any) -> str | None:
         parts.append(f"{n_bool} bool")
     if n_profile:
         parts.append(f"{n_profile} profile")
-    return f"Harness: {total} feedback loop(s) ({', '.join(parts)}) — `harness status` for details"
+    return f"Harness: {total} feedback loop(s) ({', '.join(parts)}); `harness status` for details"
 
 
 def uninstall_harness(adapter: Any) -> None:
@@ -90,7 +90,9 @@ def _make_patch_listener(adapter: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-@register("harness", usage="harness <install|remove|status>", group="capture")
+@register(
+    "harness", usage="harness <install|remove|status>", group="capture", hint="needs physical+link="
+)
 def _cmd_harness(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
@@ -126,10 +128,9 @@ def _harness_status(adapter: Any) -> ConsoleResult:
             f"(on={bc['on_delay_ms']}ms, off={bc['off_delay_ms']}ms)"
         )
     for ac in summary["profile_couplings"]:
-        active = " [active]" if ac["active"] else ""
         tv = ac.get("trigger_value")
         en_label = f"{ac['en']}=={tv}" if tv is not None else ac["en"]
-        lines.append(f"  analog  {en_label} -> {ac['fb']}  profile={ac['profile']}{active}")
+        lines.append(f"  analog  {en_label} -> {ac['fb']}  profile={ac['profile']}")
 
     pending = summary["pending_patches"]
     if pending:
@@ -140,12 +141,12 @@ def _harness_status(adapter: Any) -> ConsoleResult:
 
 def _harness_install(adapter: Any) -> ConsoleResult:
     if adapter._harness is not None:
-        return ConsoleResult("Harness already installed — use `harness remove` first")
+        return ConsoleResult("Harness already installed; use `harness remove` first")
 
     adapter._require_runner_locked()
     banner = try_auto_install(adapter)
     if banner is None:
-        return ConsoleResult("No Physical+link= couplings found — nothing to install")
+        return ConsoleResult("No Physical+link= couplings found; nothing to install")
     return ConsoleResult(banner)
 
 

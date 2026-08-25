@@ -5,8 +5,17 @@ from __future__ import annotations
 from operator import eq, ge, gt, le, lt, ne
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.crossing import Constraint, Eq
+from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import Tag
 
+from .advance import (
+    AdvanceProfile,
+    AdvanceStep,
+    ConditionDemand,
+    Snapshot,
+    constraint_holds,
+)
 from .base import Instruction, OneShotMixin
 from .resolvers import (
     resolve_block_range_ctx,
@@ -332,3 +341,44 @@ class ShiftInstruction(Instruction):
 
     def is_terminal(self) -> bool:
         return True
+
+    def advance_profile(self) -> AdvanceProfile | None:
+        # An indirect range has no fixed set of owned channels at index-build
+        # time. Registering the whole block would claim channels this instance
+        # may not write, so leave it to ordinary trace.
+        if not isinstance(self.bit_range, BlockRange):
+            return None
+        tags = tuple(self.bit_range.tags())
+
+        def plan(constraint: Constraint, snapshot: Snapshot) -> AdvanceStep | None:
+            if not isinstance(constraint, Eq) or len(constraint.values) != 1:
+                return None
+            if constraint_holds(constraint, snapshot) is True:
+                return None
+            desired = next(iter(constraint.values))
+            if not isinstance(desired, bool):
+                return None
+            target_index = next(
+                (index for index, tag in enumerate(tags) if tag.name == constraint.tag),
+                None,
+            )
+            if target_index is None:
+                return None
+
+            # One clock can extend a matching prefix by one cell. Establish the
+            # injected data and a safe reset level, pulse once, then retrace.
+            boundary = tags[target_index]
+            for tag in tags[: target_index + 1]:
+                if bool(snapshot.get(tag.name, tag.default)) is not desired:
+                    boundary = tag
+                    break
+            return AdvanceStep(
+                until=Eq(boundary.name, frozenset((desired,))),
+                holds=(
+                    ConditionDemand(self.data_condition, desired),
+                    ConditionDemand(self.reset_condition, False),
+                ),
+                pulse=ConditionDemand(self.clock_condition),
+            )
+
+        return AdvanceProfile(channels=tags, plan=plan)

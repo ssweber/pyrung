@@ -107,7 +107,7 @@ This loop — load dump, `why()`, force a tag, `why()` again — is the core int
 
 ## `how()` — how do I reach a target state?
 
-`how()` returns the minimum sequence of external input changes to reach a target state. Use it after `why()` to turn a diagnosis into action, or on its own to answer "how do I even start this machine?"
+`how()` drives the PLC to a target state the way an engineer would — it reads the program backward to find what needs to change, tests each command on a fork, verifies what moved, and adapts when the program pushes back. It waits through timer dwells, navigates multi-step state machines, and returns to the last good state after a regression. Use it after `why()` to turn a diagnosis into action, or on its own to answer "how do I even start this machine?"
 
 Given a state machine with IDLE, RUNNING, and FAULTED states:
 
@@ -116,48 +116,124 @@ plc.how(State == RUNNING)
 ```
 
 ```
-Path (1 step(s), 1 input change(s)):
-  Step 1: CmdStart=True  (1 scan(s))
+Reached State=running in 2 scans (~20ms).
+
+Steps:
+
+1. Pulse CmdStart=True.
+   Observed: State idle -> running.
 ```
 
 From a faulted state, the path is longer:
 
 ```
-Path (2 step(s), 3 input change(s)):
-  Step 1: CmdReset=True, Fault=False  (1 scan(s))
-  Step 2: CmdStart=True  (1 scan(s))
+Reached State=running in 4 scans (~40ms).
+
+Steps:
+
+1. Pulse CmdReset=True, Fault=False.
+   Observed: State faulted -> idle.
+
+2. Pulse CmdStart=True.
+   Observed: State idle -> running.
 ```
+
+The headline is deliberately specific:
+
+- `Reached` means the returned recording ends at the target.
+- `Cannot reach` means `how()` proved a conflict or physical constraint.
+- `Stopped` means it could not identify another safe action. It does not call an unknown path impossible.
+
+The debug console reports long-running work as it happens. Trials and investigations are deliberately streamed as unfinished sentences, then completed by the result event:
+
+```
+Pulse CmdStart=True... done.
+  State jumped 6 -> 10 Checking... unexpected.
+  Preventable? Yes -- with rung(State == 3): latch(DoorClosed).
+```
+
+`Pulse CmdStart=True...` is emitted before its trial; ` done.` is appended only after acceptance. `Checking...` is emitted before stable-landing analysis. `Preventable?` is emitted before causal replay, and the replay result is appended on the same line when the investigation returns. A long investigation therefore reads as active work instead of a hung console.
 
 ### Condition syntax
 
-Same grammar as `rung()`, `always()`, `run_until()`. Multiple positional args are implicit AND:
+Accepts one or more targets — each a Tag (Bool shorthand for `== True`) or a comparison. Several targets are an AND goal: `how()` reaches one state where they all hold at once.
 
 ```python
-plc.how(State == RUNNING)                        # single condition
-plc.how(State == RUNNING, Fault == False)         # implicit AND
+plc.how(State == RUNNING)                        # comparison
 plc.how(Running)                                  # Bool shorthand — target is True
+plc.how(Running, State == RUNNING)               # AND — a state where both hold
 ```
+
+If the targets can't coexist — the same register at two values, or two states whose only writers clobber each other — the result says `Cannot reach` and names the conflict:
+
+```python
+plc.how(State == IDLE, State == RUNNING)         # Cannot reach: one register, two values
+```
+
+`avoid=` works with multiple targets too — the same exclusions apply while
+PILOT works toward each target.
 
 ### `avoid`
 
-Exclude states from the path search. Uses the same condition syntax:
+`avoid X` = do not take a path that depends on X. It excludes routes, operator actions, and observed scan states that satisfy the predicate. Uses the same condition syntax:
 
 ```python
 plc.how(State == RUNNING, avoid=State == FAULTED)
 ```
 
-`avoid` filters stable states — transient states that resolve within a single scan can't be avoided because they're never observable between scans.
+Momentary commands are treated as actions, not just settled states — `avoid=C_Complete` will not *press* `C_Complete` even though the command settles back to rest a scan later. A condition-like avoided state that the path enters transiently is excluded too: PILOT carries the condition into folded trial coasts, so there is no two-scan wink where it blips true and settles false again. An opaque Python callable has no readable condition for folding; it is checked at trial endpoints, retained real snapshots, and kernel scans the coast actually executes, but not logical scans skipped by a fold. Use condition syntax when every logical scan must be constrained. `rise()` and `fall()` are transition predicates rather than states and are not accepted by `avoid=`.
+
+Pass more than one condition — a tuple or list — for a **union of exclusions**: each is avoided independently.
+
+```python
+plc.how(Burner, avoid=(ProdMode, MaintFault))   # avoid ProdMode OR MaintFault
+```
+
+Express a composite prohibition explicitly: `avoid=And(A, B)` avoids only the combined state, not A or B on their own.
+
+When every path is excluded the returned `Plan` stops with a reason that names the violated avoid condition(s).
+
+### The route taken
+
+When a target can be reached more than one way — two writers, or an `OR` over internal coils — `how()` never asks you to disambiguate. It takes a deterministic default route and tells you where it went on `Plan.route`:
+
+```python
+plan = plc.how(Burner)
+print(plan)
+# Reached Burner=True in 3 scans (~30ms).
+# Route: ProdMode
+#   Other routes: avoid=ProdMode
+#
+# Steps:
+#
+# 1. Pulse ProdCmd=True.
+```
+
+You already know your machine, so exclude the reported route with `avoid=` and PILOT will read the remaining current-world alternatives:
+
+```python
+plc.how(Burner, avoid=ProdMode)    # exclude production; maintenance remains
+```
+
+The route report is the same for any concrete value target, not just `Bool == True`. A word target that two modes drive (`copy(5, State)` under `Or(ProdMode, MaintMode)`) and a `Bool == False` target with two reset writers both report a `Plan.route`, and the chosen route can be excluded the same way:
+
+```python
+plc.how(Running == False, avoid=StopA)   # clear the latch via the other stop
+```
+
+A relational target (`State > 5`) has no frozen value to route over, so it never carries a `Plan.route`.
+
+A fork that's a plain choice of inputs (`Or(Auto, Manual)`) is taken silently — there's nothing to report — so `Plan.route` is `None`.
 
 ## In a debug session
 
-`why` takes space-separated tag names. `how` takes a condition expression: commas for implicit AND, `And()`/`Or()` for grouping, `~` for negation, comparisons with `==`/`!=`/`<`/`>`.
+`why` takes space-separated tag names. `how` takes a single condition expression with comparisons (`==`/`!=`/`<`/`>`).
 
 ```
 > why Alarm_Horn
 > why FaultAlarm MotorStall
 > how StateCurrent == 6
-> how Running, ~Fault
-> how Or(StateCurrent == 2, StateCurrent == 6)
+> how Running
 ```
 
 ## Next steps

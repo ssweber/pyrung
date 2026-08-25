@@ -11,7 +11,9 @@ The [P1AM-ETH](https://facts-engineering.github.io/modules/P1AM-ETH/P1AM-ETH.htm
 ```python
 from pyrung import Bool, Int, Program, rung, out
 from pyrung.circuitpy import ModbusServerConfig, P1AM, generate_circuitpy
-from pyrung.click import TagMap, c, ds
+from pyrung.click import ClickBlocks, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 # Hardware
 hw = P1AM()

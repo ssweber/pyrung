@@ -27,24 +27,8 @@ CLICK_BLOCK_SYMBOLS: tuple[str, ...] = (
     "pyrung.click.Float",
     "pyrung.click.Hex",
     "pyrung.click.Txt",
-    "pyrung.click.x",
-    "pyrung.click.y",
-    "pyrung.click.c",
-    "pyrung.click.t",
-    "pyrung.click.ct",
-    "pyrung.click.sc",
-    "pyrung.click.ds",
-    "pyrung.click.dd",
-    "pyrung.click.dh",
-    "pyrung.click.df",
-    "pyrung.click.xd",
-    "pyrung.click.yd",
-    "pyrung.click.xd0u",
-    "pyrung.click.yd0u",
-    "pyrung.click.td",
-    "pyrung.click.ctd",
-    "pyrung.click.sd",
-    "pyrung.click.txt",
+    "pyrung.click.ClickBlocks",
+    "pyrung.click.ClickBlockSet",
 )
 
 CLICK_HELPER_SYMBOLS: tuple[str, ...] = (
@@ -68,6 +52,8 @@ CLICK_HELPER_SYMBOLS: tuple[str, ...] = (
     "pyrung.click.nop",
     "pyrung.click.RawInstruction",
     "pyrung.click.raw",
+    "pyrung.click.validate_click_program",
+    "pyrung.click.ValidationMode",
 )
 
 
@@ -82,7 +68,9 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.Physical",
             "pyrung.Harness",
             "pyrung.Coupling",
-            "pyrung.profile",
+            "pyrung.Ramp",
+            "pyrung.Approach",
+            "pyrung.Pulse",
             "pyrung.system",
         ),
     ),

@@ -18,6 +18,9 @@ Query grammar:
 - ``how:Tag1,Tag2``       — multi-tag how (comma-separated, implicit AND)
 - ``how:Tag == value``    — expression with comparison (==, !=, <, >, <=, >=)
 - ``how:Tag == S.HELD``   — choice label (dotted or bare, resolved via tag choices)
+- ``how:Tag1 == v1, Tag2 == v2`` — compound: comma-separated conjuncts mix
+  comparisons and bare tags (implicit AND; the walker reorders goals when
+  a later conjunct's walk breaks an earlier one)
 
 Response envelope::
 
@@ -83,14 +86,12 @@ def _parse_query(query: str) -> _ParsedQuery:
     q = query.strip()
     if ":" not in q:
         raise ValueError(
-            f"pyrungCausal.query missing ':' — expected cause:Tag, effect:Tag, or recovers:Tag (got {query!r})"
+            f"pyrungCausal.query missing ':'; expected cause:Tag, effect:Tag, or recovers:Tag (got {query!r})"
         )
     cmd, _, rest = q.partition(":")
     cmd_lower = cmd.lower().strip()
     if cmd_lower not in _COMMANDS:
-        raise ValueError(
-            f"pyrungCausal.query unknown command {cmd!r} — expected one of {_COMMANDS}"
-        )
+        raise ValueError(f"pyrungCausal.query unknown command {cmd!r}; expected one of {_COMMANDS}")
     rest = rest.strip()
     if not rest:
         raise ValueError(f"pyrungCausal.query missing tag name (got {query!r})")
@@ -164,6 +165,7 @@ def on_pyrung_causal(adapter: Any, args: dict[str, Any]) -> HandlerResult:
                 "command": "how",
                 "ok": path.reachable,
                 "path": str(path),
+                "changes": dict(path.changes),
             }, []
         elif pq.command == "why":
             tags = [t.strip() for t in pq.tag.split(",") if t.strip()]

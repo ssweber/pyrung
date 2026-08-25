@@ -32,6 +32,7 @@ from ._core import _get_condition_snapshot, compile_condition
 from ._primitives import (
     _compile_guarded_instruction,
     _compile_lvalue,
+    _compile_range_flush,
     _compile_range_setup,
     _compile_set_out_of_range_fault_body,
     _compile_value,
@@ -69,6 +70,7 @@ def _compile_blockcopy_instruction(
         "    _blockcopy_values.append(_raw)",
         f"for _raw, _dst_idx in zip(_blockcopy_values, {dst_indices}):",
         f"    {_range_item_write_expr(dst_symbol, '_dst_idx', store_expr)}",
+        *_compile_range_flush(instr.dest, dst_symbol, ctx),
     ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
@@ -115,6 +117,7 @@ def _compile_blockcopy_converter_instruction(
                 f"        _converted.append({_store_coerce_expr('_numeric', dst_type, ctx)})",
                 f"    for _dst_idx, _converted_value in zip({dst_indices}, _converted):",
                 f"        {_range_item_write_expr(dst_symbol, '_dst_idx', '_converted_value')}",
+                *_indent_body(_compile_range_flush(instr.dest, dst_symbol, ctx), 4),
                 "except (IndexError, TypeError, ValueError, OverflowError):",
                 *_indent_body(fault_body, 4),
             ]
@@ -141,6 +144,7 @@ def _compile_fill_instruction(
         f"_fill_value = {value_expr}",
         f"for _dst_idx in {dst_indices}:",
         f"    {_range_item_write_expr(dst_symbol, '_dst_idx', store_expr)}",
+        *_compile_range_flush(instr.dest, dst_symbol, ctx),
     ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
@@ -342,6 +346,14 @@ def _compile_shift_instruction(
         f"        {_range_item_write_expr(range_symbol, '_idx', 'False')}",
         f"_mem[{key!r}] = _clock_curr",
     ]
+    range_flush = _compile_range_flush(instr.bit_range, range_symbol, ctx)
+    if range_flush:
+        lines.extend(
+            [
+                f"if _rising_edge or bool({reset_expr}):",
+                *_indent_body(range_flush, 4),
+            ]
+        )
     return [" " * indent + line for line in lines]
 
 

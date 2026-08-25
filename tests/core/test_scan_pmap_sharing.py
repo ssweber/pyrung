@@ -9,7 +9,11 @@ sharing for the idle case.
 
 from __future__ import annotations
 
+from pyrsistent import pmap
+
 from pyrung.core import PLC, Bool, Program, Rung, out
+from pyrung.core.context import ScanContext
+from pyrung.core.state import SystemState
 
 
 def _idle_runner() -> PLC:
@@ -47,6 +51,33 @@ def test_idle_scan_reuses_tags_pmap() -> None:
         assert runner.current_state.tags is primed_tags
 
 
+def test_scan_commit_reuses_pmaps_when_final_writes_match_base() -> None:
+    state = SystemState(tags=pmap({"Value": 0}), memory=pmap({"slot": "base"}))
+    ctx = ScanContext(state)
+
+    ctx.set_tag("Value", 1)
+    ctx.set_tag("Value", 0)
+    ctx.set_memory("slot", "temporary")
+    ctx.set_memory("slot", "base")
+    committed = ctx.commit(dt=0.01)
+
+    assert committed.tags is state.tags
+    assert committed.memory is state.memory
+
+
+def test_scan_commit_publishes_final_changed_values() -> None:
+    state = SystemState(tags=pmap({"A": 0, "B": 0}), memory=pmap({"slot": "base"}))
+    ctx = ScanContext(state)
+
+    ctx.set_tags({"A": 1, "B": 2})
+    ctx.set_tag("A", 3)
+    ctx.set_memory_bulk({"slot": "changed", "new": 4})
+    committed = ctx.commit(dt=0.01)
+
+    assert committed.tags == pmap({"A": 3, "B": 2})
+    assert committed.memory == pmap({"slot": "changed", "new": 4})
+
+
 def test_idle_scan_reuses_rung_firing_timeline_range() -> None:
     """A rung firing the same pattern every scan stays in a single range.
 
@@ -59,12 +90,12 @@ def test_idle_scan_reuses_rung_firing_timeline_range() -> None:
 
     for _ in range(3):
         runner.step()
-    timeline = runner._rung_firing_timelines._timelines.get(0, [])
+    timeline = runner._rung_firing_timelines._fired_ranges.get(0, [])
     assert len(timeline) == 1
 
     for _ in range(20):
         runner.step()
-        timeline = runner._rung_firing_timelines._timelines[0]
+        timeline = runner._rung_firing_timelines._fired_ranges[0]
         # Still a single range, extended to cover every idle scan.
         assert len(timeline) == 1
         assert timeline[0].end_scan_id == runner.current_state.scan_id

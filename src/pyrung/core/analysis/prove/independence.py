@@ -64,52 +64,8 @@ def _influenced_rungs(
     recorded but the traversal does not follow through to their readers.
     Used by split_at to prevent promoted tags from bridging independent cones.
     """
-    sub_members: dict[str, list[int]] = defaultdict(list)
-    callers: dict[str, list[int]] = defaultdict(list)
-    for idx, node in enumerate(graph.rung_nodes):
-        if node.subroutine is not None:
-            sub_members[node.subroutine].append(idx)
-        for sub_name in node.calls:
-            callers[sub_name].append(idx)
-
-    visited_rungs: set[int] = set()
-    read_tags: set[str] = set()
-    write_tags: set[str] = set()
-    queue: list[str] = [tag_name]
-    visited_tags: set[str] = set()
-    rung_queue: list[int] = []
-
-    def _visit_rung(rung_idx: int) -> None:
-        if rung_idx in visited_rungs:
-            return
-        visited_rungs.add(rung_idx)
-        node = graph.rung_nodes[rung_idx]
-        read_tags.update(node.condition_reads)
-        read_tags.update(node.data_reads)
-        for written_tag in node.writes:
-            write_tags.add(written_tag)
-            if written_tag not in visited_tags and written_tag not in barrier_tags:
-                queue.append(written_tag)
-        for sub_name in node.calls:
-            for member_idx in sub_members.get(sub_name, ()):
-                rung_queue.append(member_idx)
-        if node.subroutine is not None:
-            for caller_idx in callers.get(node.subroutine, ()):
-                rung_queue.append(caller_idx)
-
-    while queue or rung_queue:
-        while queue:
-            current = queue.pop()
-            if current in visited_tags:
-                continue
-            visited_tags.add(current)
-            for rung_idx in graph.readers_of.get(current, frozenset()):
-                rung_queue.append(rung_idx)
-        while rung_queue:
-            _visit_rung(rung_queue.pop())
-
-    read_tags.discard(tag_name)
-    return frozenset(visited_rungs), frozenset(read_tags), frozenset(write_tags)
+    cone = graph.influenced_cone(tag_name, barrier_tags=barrier_tags)
+    return cone.rung_indices, cone.read_tags, cone.write_tags
 
 
 def _build_independence_relation(

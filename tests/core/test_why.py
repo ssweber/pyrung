@@ -676,3 +676,70 @@ class TestKind:
         assert reset_step.instruction == "reset"
         trigger_tags = [t.tag_name for t in reset_step.triggers]
         assert "FlowAlarm" in trigger_tags
+
+
+# ---------------------------------------------------------------------------
+# Pluggable frontier: terminate the walk at caller-actionable tags
+# ---------------------------------------------------------------------------
+
+
+class TestFrontier:
+    """``frontier=`` terminates the backward walk at internal tags."""
+
+    def test_frontier_terminates_at_internal_tag(self) -> None:
+        """A frontier predicate stops the walk at B (program-written) as a
+        conjunctive root; default mode walks through B to the true root A."""
+        from pyrung.core.analysis.causal import why_cause
+        from pyrung.core.analysis.pdg import build_program_graph
+
+        logic = _build_chain()  # A -> out(B), B -> out(C), C -> out(Output)
+        state = SystemState().with_tags({"A": True, "B": True, "C": True, "Output": True})
+        plc = PLC(logic=logic, initial_state=state)
+        pdg = build_program_graph(plc._program)
+
+        # Default mode: walks through B and C to the external root A.
+        default = why_cause(
+            logic=plc._logic, state=plc._state, tags=["Output"], pdg=pdg, program=plc._program
+        )
+        assert [r.tag_name for r in default.conjunctive_roots] == ["A"]
+        assert "B" in [s.transition.tag_name for s in default.steps]
+
+        # Frontier mode: B is "actionable" — the walk terminates there even
+        # though B has a writer.
+        result = why_cause(
+            logic=plc._logic,
+            state=plc._state,
+            tags=["Output"],
+            pdg=pdg,
+            program=plc._program,
+            frontier=lambda name: name == "B",
+        )
+        root_tags = [r.tag_name for r in result.conjunctive_roots]
+        assert root_tags == ["B"]
+        assert result.conjunctive_roots[0].to_value is True
+        step_tags = [s.transition.tag_name for s in result.steps]
+        assert "B" not in step_tags  # B's writer rung was never expanded
+        assert "A" not in step_tags  # nothing beyond the frontier
+
+    def test_frontier_none_preserves_default(self) -> None:
+        """``frontier=None`` is bit-identical to the pre-frontier walk."""
+        from pyrung.core.analysis.causal import why_cause
+        from pyrung.core.analysis.pdg import build_program_graph
+
+        logic = _build_chain()
+        state = SystemState().with_tags({"A": True, "B": False, "C": False, "Output": False})
+        plc = PLC(logic=logic, initial_state=state)
+        pdg = build_program_graph(plc._program)
+
+        with_kw = why_cause(
+            logic=plc._logic,
+            state=plc._state,
+            tags=["Output"],
+            pdg=pdg,
+            program=plc._program,
+            frontier=None,
+        )
+        without_kw = why_cause(
+            logic=plc._logic, state=plc._state, tags=["Output"], pdg=pdg, program=plc._program
+        )
+        assert with_kw.to_dict() == without_kw.to_dict()

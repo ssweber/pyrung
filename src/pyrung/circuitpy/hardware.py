@@ -169,7 +169,7 @@ class P1AM:
                 catalog, or the slot is already configured.
         """
         if not isinstance(number, int) or number < 1 or number > MAX_SLOTS:
-            msg = f"Slot number must be 1–{MAX_SLOTS}, got {number!r}."
+            msg = f"Slot number must be 1..{MAX_SLOTS}, got {number!r}."
             raise ValueError(msg)
 
         if number in self._slots:

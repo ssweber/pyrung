@@ -107,6 +107,34 @@ def test_derived_points_always_on_first_scan_scan_clock_and_fixed_mode(runner_fa
     assert runner.current_state.tags["ScanClockValue"] is True
 
 
+def test_clock_rise_fall_edge_detect_not_level():
+    """rise()/fall() on a periodic system clock fire once per edge, not every
+    scan the clock holds its level.
+
+    sys.clock_1s is resolved on read and never stored, so its previous-scan
+    value must still be snapshotted for edge detection; otherwise rise() sees
+    a constant-False previous and collapses into the clock's level (firing on
+    every True scan instead of only the 0->1 transition).
+    """
+    rises = Int("Rises")
+    falls = Int("Falls")
+    with Program() as program:
+        with Rung(rise(system.sys.clock_1s)):
+            calc(rises + 1, rises)
+        with Rung(fall(system.sys.clock_1s)):
+            calc(falls + 1, falls)
+
+    runner = PLC(program, dt=0.010)
+    runner.step()
+    for _ in range(330):  # ~3.3 s; clock_1s has a 0.5 s half-period
+        runner.step()
+
+    # Three rising edges (~0.5, 1.5, 2.5 s) and three falling (~1.0, 2.0, 3.0).
+    # The pre-fix level behavior would give ~150 (one per True scan).
+    assert runner.current_state.tags["Rises"] == 3
+    assert runner.current_state.tags["Falls"] == 3
+
+
 def test_scan_counter_and_scan_min_max_stats_update():
     runner = PLC(logic=[], dt=0.1)
 
@@ -146,6 +174,52 @@ def test_scan_counter_wraps_at_32768():
 
     runner.step()
     assert _resolved(runner, system.sys.scan_counter.name) == 1
+
+
+def test_sys_dt_reports_scan_period_as_real_seconds():
+    from pyrung.core.system_points import (
+        READ_ONLY_SYSTEM_TAG_NAMES,
+        SYSTEM_TAGS_BY_NAME,
+        WRITABLE_SYSTEM_TAG_NAMES,
+    )
+
+    runner = PLC(logic=[], dt=0.02)
+
+    assert SYSTEM_TAGS_BY_NAME["sys.dt"].type == TagType.REAL
+    assert "sys.dt" in READ_ONLY_SYSTEM_TAG_NAMES
+    assert "sys.dt" not in WRITABLE_SYSTEM_TAG_NAMES
+
+    # Resolves to the run's scan period, before and after a step, as a float.
+    assert _resolved(runner, system.sys.dt.name) == pytest.approx(0.02)
+    runner.step()
+    assert _resolved(runner, system.sys.dt.name) == pytest.approx(0.02)
+    assert isinstance(_resolved(runner, system.sys.dt.name), float)
+
+
+def test_sys_dt_reflects_fold_dt_override_during_macro_skip():
+    # A time fold jumps N scans by setting a single inflated dt for the next
+    # scan; ``sys.dt`` must report that inflated dt so a plant calc rung reading
+    # it (``Fb += rate*dt``) advances by the full N-scan amount for free.
+    runner = PLC(logic=[], dt=0.01)
+    runner.step()
+    assert _resolved(runner, system.sys.dt.name) == pytest.approx(0.01)
+
+    runner._dt_override_for_next_scan = 0.01 * 50
+    runner.step()
+    assert _resolved(runner, system.sys.dt.name) == pytest.approx(0.5)
+
+    # Override is one-shot: the next scan is back to the normal period.
+    runner.step()
+    assert _resolved(runner, system.sys.dt.name) == pytest.approx(0.01)
+
+
+def test_sys_dt_is_read_only_to_user_logic():
+    with Program() as program:
+        with Rung():
+            copy(0.5, system.sys.dt)
+    runner = PLC(logic=program)
+    with pytest.raises(ValueError, match="read-only system point"):
+        runner.step()
 
 
 def test_scan_clock_toggle_derived_edge_rise(runner_factory):

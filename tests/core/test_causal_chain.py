@@ -6,7 +6,27 @@ and edge cases for the backward walk algorithm.
 
 from __future__ import annotations
 
-from pyrung.core import PLC, And, Bool, Or, Program, Rung, latch, out, reset
+from pyrung.core import (
+    PLC,
+    And,
+    Bool,
+    Int,
+    Or,
+    Program,
+    Rung,
+    Timer,
+    call,
+    copy,
+    latch,
+    on_delay,
+    out,
+    reset,
+    rise,
+    subroutine,
+)
+from pyrung.core.memory_block import Block, IntBlock
+from pyrung.core.program import rung
+from pyrung.core.tag import TagType
 
 # ---------------------------------------------------------------------------
 # Worked example from spec
@@ -115,12 +135,43 @@ class TestWorkedExample:
         assert faulted.value is False
         assert faulted.held_since_scan is None
 
-        # Root causes
-        assert len(chain.conjunctive_roots) == 1
-        assert chain.conjunctive_roots[0].tag_name == "Sensor_Pressure"
+        # Root causes: the trigger AND the deep walk's temporal hop on the
+        # held Permissive_OK enabler (its establishing patch at scan 1 is a
+        # genuine but-for support of the fault).
+        conjunctive_tags = {t.tag_name for t in chain.conjunctive_roots}
+        assert conjunctive_tags == {"Sensor_Pressure", "Permissive_OK"}
+
+        # Classified terminals: both patched inputs, plus the never-moved
+        # Faulted support on the rung that actually fired.
+        root_by_tag = {r.tag_name: r for r in chain.roots}
+        assert root_by_tag["Sensor_Pressure"].kind == "never_written"
+        assert root_by_tag["Sensor_Pressure"].held_since_scan == 8
+        assert root_by_tag["Faulted"].kind == "never_written"
+        assert root_by_tag["Faulted"].held_since_scan is None  # held since cold
+        # The reset rung never fired, so its silent command is not part of the
+        # newly conductive causal path.
+        assert "Cmd_Reset" not in root_by_tag
 
         # Confidence should be 1.0 (unambiguous)
         assert chain.confidence == 1.0
+
+    def test_fault_tripped_chain_shallow(self) -> None:
+        """deep=False restores the trigger-only walk: one root, no terminals."""
+        logic = _build_worked_example()
+        runner = PLC(logic)
+
+        runner.patch({"Permissive_OK": True})
+        runner.step()
+        for _ in range(3):
+            runner.step()  # Permissive_OK settles into a held enabler
+        runner.patch({"Sensor_Pressure": True})
+        runner.step()
+
+        chain = runner.cause("Sts_FaultTripped", deep=False)
+
+        assert chain is not None
+        assert [t.tag_name for t in chain.conjunctive_roots] == ["Sensor_Pressure"]
+        assert chain.roots == []
 
     def test_fault_tripped_at_specific_scan(self) -> None:
         """cause(tag, scan=N) should explain the transition at that scan."""
@@ -327,6 +378,503 @@ class TestEdgeCases:
         # Chain spans from scan 1 (A→B) to scan 2 (B→C) → duration = 1
         assert chain.duration_scans == 1
 
+    def test_enabling_only_transition_is_not_self_rooted(self) -> None:
+        """If a writer has only held enablers, cause() must not root the written
+        tag itself — the deep walk resolves the held enabler's establishing
+        transition instead."""
+        Enable = Bool("Enable", external=True)
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer[1], preset=50)
+
+        runner = PLC(logic, dt=0.010)
+        runner.patch({"Enable": True})
+        for _ in range(5):
+            runner.step()
+
+        chain = runner.cause("Timer_Done")
+        assert chain is not None
+        assert chain.effect.tag_name == "Timer_Done"
+        assert chain.effect.to_value is True
+        assert chain.steps[0].triggers == ()
+        assert [(e.tag_name, e.value) for e in chain.steps[0].enablers] == [("Enable", True)]
+        # Never the written tag itself; the held Enable resolves to its
+        # establishing transition (temporal hop) and classifies external.
+        rooted = {t.tag_name for t in chain.conjunctive_roots}
+        assert "Timer_Done" not in rooted
+        assert rooted == {"Enable"}
+        assert [(r.tag_name, r.kind) for r in chain.roots] == [("Enable", "external")]
+
+        # Shallow mode preserves the historical no-root behavior.
+        shallow = runner.cause("Timer_Done", deep=False)
+        assert shallow is not None
+        assert shallow.conjunctive_roots == []
+        assert shallow.roots == []
+
+    def test_deep_enabler_uses_observed_writer_on_first_fork_scan(self) -> None:
+        """A child fork can inherit a true program-owned enabler.
+
+        When that enabler becomes newly relevant on the child's first scan,
+        its establishing transition belongs to the parent. ``deep=True`` must
+        explain the conductive enabler through the writer observed maintaining
+        it on the firing scan and the inherited transition that enabled it.
+        """
+        State = Int("State", external=True)
+        Starting = Bool("Starting")
+        DoorClosed = Bool("DoorClosed", external=True)
+        Alarm = Bool("Alarm")
+
+        with Program() as prog:
+            # Reader before writer: the parent establishes Starting, then the
+            # child's first scan is the first opportunity for Alarm to fire.
+            with Rung(Starting, ~DoorClosed):
+                latch(Alarm)
+            with Rung(State == 3):
+                out(Starting)
+
+        parent = PLC(prog)
+        parent.patch({"State": 3})
+        parent.step()
+        assert parent.state.tags["Starting"] is True
+        assert parent.state.tags["Alarm"] is False
+
+        child = parent.fork(history_budget=float("inf"))
+        child.step()
+        assert child.state.tags["Alarm"] is True
+
+        chain = child.cause("Alarm", scan=child.state.scan_id, deep=True)
+        assert chain is not None
+        assert any(step.transition.tag_name == "Starting" for step in chain.steps)
+        starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {("State", 3)}
+        assert starting_step.enablers == ()
+
+    def test_deep_enabler_uses_observed_subroutine_writer_on_first_fork_scan(
+        self,
+    ) -> None:
+        """The retained-boundary expansion also resolves a subroutine writer."""
+        State = Int("State", external=True)
+        Starting = Bool("Starting")
+        DoorClosed = Bool("DoorClosed", external=True)
+        Alarm = Bool("Alarm")
+
+        @subroutine("map_state")
+        def map_state():
+            with rung(State == 3):
+                out(Starting)
+
+        with Program() as prog:
+            with Rung(Starting, ~DoorClosed):
+                latch(Alarm)
+            with Rung():
+                call(map_state)
+
+        parent = PLC(prog)
+        parent.patch({"State": 3})
+        parent.step()
+        child = parent.fork(history_budget=float("inf"))
+        child.step()
+
+        chain = child.cause("Alarm", scan=child.state.scan_id, deep=True)
+        assert chain is not None
+        starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
+        assert starting_step.subroutine == "map_state"
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {("State", 3)}
+        assert starting_step.enablers == ()
+
+    def test_deep_enabler_resolves_block_slot_writer_when_firing_log_omits_it(
+        self,
+    ) -> None:
+        """A named block slot may be absent from the node write capture.
+
+        The at-fire replay still proves which candidate writer maintained the
+        slot, so deep cause must use that observed evaluation rather than stop
+        at the program-owned alias.
+        """
+        State = Int("State", external=True)
+        states = Block("States", TagType.BOOL, 1, 1)
+        states.slot(1, name="Starting")
+        Starting = states[1]
+        DoorClosed = Bool("DoorClosed", external=True)
+        Alarm = Bool("Alarm")
+
+        @subroutine("map_block_state")
+        def map_block_state():
+            with rung(State == 3):
+                out(Starting)
+
+        with Program() as prog:
+            with Rung(Starting, ~DoorClosed):
+                latch(Alarm)
+            with Rung():
+                call(map_block_state)
+
+        parent = PLC(prog)
+        parent.patch({"State": 3})
+        parent.step()
+        child = parent.fork(history_budget=float("inf"))
+        child.step()
+        # Reproduce an execution backend that retained the at-fire replay
+        # views but omitted the repeated subroutine write from its node timeline.
+        child._node_firings_at = lambda _scan: {}  # ty: ignore[invalid-assignment]
+
+        chain = child.cause("Alarm", scan=child.state.scan_id, deep=True)
+        assert chain is not None
+        starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
+        assert starting_step.subroutine == "map_block_state"
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {("State", 3)}
+        assert starting_step.enablers == ()
+
+    def test_deep_enabler_does_not_infer_an_uncalled_static_writer(self) -> None:
+        """A true guard is not evidence that its subroutine executed."""
+        State = Int("State", external=True)
+        Starting = Bool("Starting")
+        DoorClosed = Bool("DoorClosed", external=True)
+        CallUncalled = Bool("CallUncalled", external=True)
+        Alarm = Bool("Alarm")
+
+        @subroutine("called_map")
+        def called_map():
+            with rung(State == 3):
+                out(Starting)
+
+        @subroutine("uncalled_map")
+        def uncalled_map():
+            with rung(State == 3):
+                out(Starting)
+
+        with Program() as prog:
+            with Rung(Starting, ~DoorClosed):
+                latch(Alarm)
+            with Rung():
+                call(called_map)
+            with Rung(CallUncalled):
+                call(uncalled_map)
+
+        parent = PLC(prog)
+        parent.patch({"State": 3})
+        parent.step()
+        child = parent.fork(history_budget=float("inf"))
+        child.step()
+        child._node_firings_at = lambda _scan: {}  # ty: ignore[invalid-assignment]
+
+        chain = child.cause("Alarm", scan=child.state.scan_id, deep=True)
+        assert chain is not None
+        starting_steps = [step for step in chain.steps if step.transition.tag_name == "Starting"]
+        assert [(step.subroutine, step.rung_index) for step in starting_steps] == [
+            ("called_map", 0)
+        ]
+
+    def test_deep_enabler_uses_prior_writer_when_alias_changes_later_same_scan(
+        self,
+    ) -> None:
+        """A consumer may read the old alias before its mapper updates it."""
+        State = Int("State", external=True)
+        Advance = Bool("Advance", external=True)
+        Starting = Bool("Starting")
+        DoorClosed = Bool("DoorClosed", external=True)
+        Alarm = Bool("Alarm")
+
+        @subroutine("map_state")
+        def map_state():
+            with rung(State == 3):
+                out(Starting)
+
+        with Program() as prog:
+            with Rung(Starting, ~DoorClosed):
+                latch(Alarm)
+            with Rung(Advance):
+                copy(6, State)
+            with Rung():
+                call(map_state)
+
+        parent = PLC(prog)
+        parent.patch({"State": 3, "DoorClosed": True})
+        parent.step()
+        assert parent.state.tags["Starting"] is True
+
+        child = parent.fork(history_budget=float("inf"))
+        child.patch({"Advance": True, "DoorClosed": False})
+        child.step()
+        assert child.state.tags["Alarm"] is True
+        assert child.state.tags["State"] == 6
+        assert child.state.tags["Starting"] is False
+
+        chain = child.cause("Alarm", scan=child.state.scan_id, deep=True)
+        assert chain is not None
+        starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
+        assert starting_step.transition.scan_id == child.state.scan_id - 1
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {("State", 3)}
+        assert starting_step.enablers == ()
+
+    def test_deep_enabler_jumps_to_sparse_prior_writer(
+        self,
+        monkeypatch,
+    ) -> None:
+        """Held support uses the firing index instead of replaying an idle gap."""
+        Seed = Bool("SparseWriterSeed", external=True)
+        CallMap = Bool("SparseWriterCall", external=True)
+        DoorClosed = Bool("SparseWriterDoorClosed", external=True)
+        Starting = Bool("SparseWriterStarting")
+        Alarm = Bool("SparseWriterAlarm")
+
+        @subroutine("sparse_map")
+        def sparse_map():
+            with rung(Seed):
+                latch(Starting)
+
+        with Program() as prog:
+            with Rung(Starting, ~DoorClosed):
+                latch(Alarm)
+            with Rung(CallMap):
+                call(sparse_map)
+
+        plc = PLC(prog)
+        plc.patch(
+            {
+                Seed.name: True,
+                CallMap.name: True,
+                DoorClosed.name: True,
+            }
+        )
+        plc.step()
+        child = plc.fork(history_budget=float("inf"))
+        child.patch({Seed.name: False, CallMap.name: False})
+        child.run(400)
+        child.patch({DoorClosed.name: False})
+        child.step()
+
+        capture_scans: list[int] = []
+        original_capture = PLC._replay_capture_at
+
+        def observed_capture(source: PLC, scan_id: int):
+            capture_scans.append(scan_id)
+            return original_capture(source, scan_id)
+
+        monkeypatch.setattr(PLC, "_replay_capture_at", observed_capture)
+        chain = child.cause(Alarm.name, scan=child.state.scan_id, deep=True)
+
+        assert chain is not None
+        starting_step = next(
+            step for step in chain.steps if step.transition.tag_name == Starting.name
+        )
+        assert starting_step.transition.scan_id == 1
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {
+            (Seed.name, True),
+        }
+        assert {(e.tag_name, e.value) for e in starting_step.enablers} == {(CallMap.name, True)}
+        assert len(set(capture_scans)) < 20
+
+    def test_fork_boundary_cause_uses_parent_execution_evidence(self) -> None:
+        """The fork point was executed by the parent, not reconstructed by the child."""
+        Trigger = Bool("Trigger", external=True)
+        Result = Bool("Result")
+        with Program() as prog:
+            with Rung(Trigger):
+                latch(Result)
+
+        parent = PLC(prog)
+        parent.patch({"Trigger": True})
+        parent.step()
+        child = parent.fork(history_budget=float("inf"))
+
+        chain = child.cause("Result", scan=child.state.scan_id, deep=True)
+        assert chain is not None
+        assert chain.effect.scan_id == parent.state.scan_id
+        assert [trigger.tag_name for trigger in chain.steps[0].triggers] == ["Trigger"]
+
+    def test_consumed_command_keeps_exact_trigger_and_enablers(self) -> None:
+        """A same-scan command traces to the rung that became conductive.
+
+        Entering Execute is the real trigger.  The two open-door contacts were
+        already true, but only became relevant when Execute made their series
+        path conductive.  The downstream command/request registers are consumed
+        before end-of-scan; cause() must still cross them using at-fire values.
+        """
+        Enter = Bool("EnterExecute", external=True)
+        Door = Bool("DoorClosed", external=True)
+        LintDoor = Bool("LintDoorClosed", external=True)
+        Execute = Bool("StateExecute")
+        State = Int("State")
+        Cmd = Int("Command")
+        Requested = Int("StateRequested")
+
+        with Program() as prog:
+            with Rung(State == 6):
+                out(Execute)
+            with Rung(Enter):
+                copy(6, State)
+            with Rung(Execute, Or(~Door, ~LintDoor)):
+                copy(4, Cmd)
+            with Rung(Cmd == 4):
+                copy(10, Requested)
+            with Rung(Requested != 0):
+                copy(Requested, State)
+                copy(0, Requested)
+                copy(0, Cmd)
+
+        plc = PLC(prog)
+        plc.patch({"EnterExecute": True})
+        plc.step()
+        plc.patch({"EnterExecute": False})
+        plc.step()
+
+        assert plc.state.tags["State"] == 10
+        assert plc.state.tags["Command"] == 0
+        assert plc.state.tags["StateRequested"] == 0
+
+        chain = plc.cause("State")
+        assert chain is not None
+        command_step = next(step for step in chain.steps if step.transition.tag_name == "Command")
+
+        assert [t.tag_name for t in command_step.triggers] == ["StateExecute"]
+        assert {(e.tag_name, e.value) for e in command_step.enablers} == {
+            ("DoorClosed", False),
+            ("LintDoorClosed", False),
+        }
+
+    def test_at_fire_replay_preserves_synthesis_holds(self) -> None:
+        """Historical contact capture replays the active soft-exec brackets."""
+        HeldInput = Bool("ReplayHeldInput", external=True)
+        Output = Bool("ReplayHeldOutput")
+
+        with Program() as prog:
+            with Rung(HeldInput):
+                out(Output)
+
+        plc = PLC(prog)
+        from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+        plc._synthesis = Synthesis(
+            holds=[copy_hold_rung(value=True, dest=HeldInput)],
+        )
+        plc.step()
+
+        chain = plc.cause("ReplayHeldOutput")
+
+        assert chain is not None
+        assert [(t.tag_name, t.from_value, t.to_value) for t in chain.steps[0].triggers] == [
+            ("ReplayHeldInput", False, True)
+        ]
+
+    def test_plant_writer_has_stable_synthetic_identity(self) -> None:
+        """A plant transition is attributed to its exact zero-based rung."""
+        PlantValue = Bool("AttributedPlantValue")
+        Observed = Bool("AttributedPlantObserved")
+
+        with Program() as prog:
+            with Rung(PlantValue):
+                out(Observed)
+
+        plc = PLC(prog)
+        from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+        plc._synthesis = Synthesis(
+            plant=[copy_hold_rung(value=True, dest=PlantValue)],
+        )
+        plc.step()
+
+        chain = plc.cause(PlantValue)
+
+        assert chain is not None
+        assert (chain.steps[0].subroutine, chain.steps[0].rung_index) == ("plant", 0)
+        assert "plant:0" in str(chain)
+
+    def test_active_hold_writer_has_stable_synthetic_identity(self) -> None:
+        """An active guarded hold is attributed to its exact PILOT rung."""
+        Guard = Bool("AttributedHoldGuard", default=True)
+        Held = Bool("AttributedHeldValue")
+        Observed = Bool("AttributedHeldObserved")
+
+        with Program() as prog:
+            with Rung(Guard, Held):
+                out(Observed)
+
+        plc = PLC(prog)
+        from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+        plc._synthesis = Synthesis(
+            holds=[copy_hold_rung(value=True, dest=Held, guard=Guard)],
+        )
+        plc.step()
+
+        chain = plc.cause(Held)
+
+        assert chain is not None
+        assert (chain.steps[0].subroutine, chain.steps[0].rung_index) == ("PILOT", 0)
+        assert {(e.tag_name, e.value) for e in chain.steps[0].enablers} == {(Guard.name, True)}
+        assert chain.steps[0].to_dict()["subroutine"] == "PILOT"
+        assert "PILOT:0" in str(chain)
+
+        from pyrung.core.context import RungId
+
+        assert RungId("PILOT", 0) in plc._replay_node_views_at(plc.state.scan_id)
+
+    def test_guard_expiry_names_restoring_plant_not_stale_hold(self) -> None:
+        """When a hold expires, the plant rung that restores the value owns it."""
+        Guard = Bool("ReleaseGuard", external=True)
+        Value = Bool("ReleasedValue")
+        Observed = Bool("ReleasedObserved")
+
+        with Program() as prog:
+            with Rung(Value):
+                out(Observed)
+
+        plc = PLC(prog)
+        from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+        plc._synthesis = Synthesis(
+            plant=[copy_hold_rung(value=False, dest=Value)],
+            holds=[copy_hold_rung(value=True, dest=Value, guard=Guard)],
+        )
+        plc.patch({Guard.name: True})
+        plc.step()  # patch drains after synthesis
+        plc.step()  # hold sees Guard=True and raises Value
+        plc.patch({Guard.name: False})
+        plc.step()  # hold still sees the prior input image
+        plc.step()  # plant restores Value after the guard has expired
+
+        chain = plc.cause(Value)
+
+        assert chain is not None
+        assert chain.effect.to_value is False
+        assert [(step.subroutine, step.rung_index) for step in chain.steps[:1]] == [("plant", 0)]
+
+    def test_last_actual_hold_writer_wins(self) -> None:
+        """Two holds on one tag retain only the later matching writer."""
+        Value = Bool("OrderedHeldValue")
+        Observed = Bool("OrderedHeldObserved")
+
+        with Program() as prog:
+            with Rung(Value):
+                out(Observed)
+
+        plc = PLC(prog)
+        from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+        plc._synthesis = Synthesis(
+            holds=[
+                copy_hold_rung(value=False, dest=Value),
+                copy_hold_rung(value=True, dest=Value),
+            ],
+        )
+        plc.step()
+
+        chain = plc.cause(Value)
+
+        assert chain is not None
+        assert [
+            (step.subroutine, step.rung_index)
+            for step in chain.steps
+            if step.transition.tag_name == Value.name
+        ] == [("PILOT", 1)]
+
+        child = plc.fork()
+        inherited = child.cause(Value, scan=plc.state.scan_id)
+        assert inherited is not None
+        assert (inherited.steps[0].subroutine, inherited.steps[0].rung_index) == ("PILOT", 1)
+
 
 # ---------------------------------------------------------------------------
 # Serialization
@@ -491,3 +1039,361 @@ class TestRendering:
         rendered = str(chain)
         assert "Rung 1:" in rendered
         assert "Rung 0:" not in rendered
+
+
+# ---------------------------------------------------------------------------
+# Subroutine writer resolution
+# ---------------------------------------------------------------------------
+
+
+class TestSubroutineWriters:
+    """cause() must resolve writers inside subroutines.
+
+    The executor rolls subroutine writes up under the calling rung's index
+    in the firing log.  When the write is PDG-filtered (terminal tag), the
+    fallback must resolve via the PDG node's subroutine field.
+    """
+
+    def test_primary_path_resolves_subroutine_node(self) -> None:
+        """Non-terminal tag written in subroutine: cause reports the semantic writer."""
+        Enable = Bool("Enable", external=True)
+        Trigger = Bool("Trigger", external=True)
+        Output = Bool("Output")
+        Lamp = Bool("Lamp")
+
+        @subroutine("MySub")
+        def my_sub():
+            with rung(Trigger):
+                latch(Output)
+
+        with Program() as prog:
+            with Rung(Enable):
+                call(my_sub)
+            with Rung(Output):
+                out(Lamp)
+
+        plc = PLC(prog)
+        plc.patch({"Enable": True, "Trigger": True})
+        plc.step()
+
+        assert plc.state.tags["Output"] is True
+
+        chain = plc.cause("Output")
+        assert chain is not None
+        assert chain.mode == "recorded"
+        # Firing storage is keyed by the caller, but attribution reports
+        # the subroutine rung that actually wrote Output.
+        assert chain.steps[0].subroutine == "MySub"
+        assert chain.steps[0].rung_index == 0
+        assert [t.tag_name for t in chain.steps[0].triggers] == ["Trigger"]
+
+    def test_pdg_fallback_resolves_subroutine_node(self) -> None:
+        """Non-Bool terminal written in subroutine: PDG fallback resolves correctly.
+
+        Terminal (Int) is not read by any rung, so its write is PDG-filtered
+        from the firing log.  Replay-backed PDG resolution must use resolve_rung()
+        to get the subroutine rung instead of indexing the main logic list.
+
+        Must be non-Bool: Bool tags are always kept in the consumed set
+        (runner.py _ensure_pdg), so the filter never drops them.
+        PDG creation is forced with a cause() call before the meaningful scan.
+        """
+        Enable = Bool("Enable", external=True)
+        Trigger = Bool("Trigger", external=True)
+        Terminal = Int("Terminal")
+
+        @subroutine("MySub")
+        def my_sub():
+            with rung(Trigger):
+                copy(1, Terminal)
+
+        with Program() as prog:
+            with Rung(Enable):
+                call(my_sub)
+
+        plc = PLC(prog)
+        plc.patch({"Enable": True})
+        plc.step()  # scan 0: Enable True, Trigger False → Terminal stays 0
+        plc.cause("Enable")  # force PDG creation so filter is active
+        plc.patch({"Trigger": True})
+        plc.step()  # scan 1: Terminal written, but PDG-filtered (non-Bool)
+
+        assert plc.state.tags["Terminal"] == 1
+
+        chain = plc.cause("Terminal")
+        assert chain is not None
+        assert chain.mode == "recorded"
+        assert len(chain.steps) >= 1
+        step = chain.steps[0]
+        # The step should identify the subroutine rung, not a main rung.
+        assert step.subroutine == "MySub"
+        assert step.rung_index == 0  # first rung in the subroutine
+
+    def test_timeline_finds_subroutine_transition(self) -> None:
+        """Timeline path must resolve subroutine PDG writers to call-site indices.
+
+        _find_transition uses PDG writers_of (node indices) to query the
+        timeline, but the timeline is keyed by main-rung indices from
+        capturing_rung.  Without timeline_writers_of translation, the
+        timeline lookup misses the write and falls through to the O(S)
+        state-reconstruction fallback.
+        """
+        Enable = Bool("Enable", external=True)
+        Trigger = Bool("Trigger", external=True)
+        Output = Bool("Output")
+        Reader = Bool("Reader")
+
+        @subroutine("MySub")
+        def my_sub():
+            with rung(Trigger):
+                latch(Output)
+
+        with Program() as prog:
+            with Rung(Enable):
+                call(my_sub)
+            with Rung(Output):
+                out(Reader)
+
+        plc = PLC(prog)
+        plc.patch({"Enable": True})
+        # Run many scans to build up history so the timeline path is meaningful.
+        for _ in range(50):
+            plc.step()
+        plc.patch({"Trigger": True})
+        plc.step()
+
+        assert plc.state.tags["Output"] is True
+
+        chain = plc.cause("Output")
+        assert chain is not None
+        assert chain.mode == "recorded"
+        assert chain.steps[0].subroutine == "MySub"
+        assert chain.steps[0].rung_index == 0
+
+    def test_timeline_multiple_call_sites(self) -> None:
+        """Subroutine called from two main rungs — timeline checks both capture sites."""
+        ModeA = Bool("ModeA", external=True)
+        ModeB = Bool("ModeB", external=True)
+        Trigger = Bool("Trigger", external=True)
+        Output = Bool("Output")
+        Reader = Bool("Reader")
+
+        @subroutine("SharedSub")
+        def shared_sub():
+            with rung(Trigger):
+                latch(Output)
+
+        with Program() as prog:
+            with Rung(ModeA):
+                call(shared_sub)
+            with Rung(ModeB):
+                call(shared_sub)
+            with Rung(Output):
+                out(Reader)
+
+        # Call via first call site (ModeA)
+        plc = PLC(prog)
+        plc.patch({"ModeA": True})
+        for _ in range(20):
+            plc.step()
+        plc.patch({"Trigger": True})
+        plc.step()
+
+        assert plc.state.tags["Output"] is True
+        chain = plc.cause("Output")
+        assert chain is not None
+        assert chain.steps[0].subroutine == "SharedSub"
+        assert chain.steps[0].rung_index == 0
+
+        # Call via second call site (ModeB)
+        plc2 = PLC(prog)
+        plc2.patch({"ModeB": True})
+        for _ in range(20):
+            plc2.step()
+        plc2.patch({"Trigger": True})
+        plc2.step()
+
+        assert plc2.state.tags["Output"] is True
+        chain2 = plc2.cause("Output")
+        assert chain2 is not None
+        assert chain2.steps[0].subroutine == "SharedSub"
+        assert chain2.steps[0].rung_index == 0
+
+    def test_repeated_call_uses_the_occurrence_that_actually_wrote(self) -> None:
+        """A later disabled call must not replace the firing call's view."""
+        Gate = Bool("RepeatedCallGate")
+        Output = Int("RepeatedCallOutput")
+
+        @subroutine("RepeatedCallSub")
+        def shared_sub():
+            with rung(Gate):
+                copy(1, Output)
+
+        with Program(strict=False) as prog:
+            with Rung():
+                latch(Gate)
+                call(shared_sub)
+            with Rung():
+                reset(Gate)
+                call(shared_sub)
+
+        plc = PLC(prog)
+        plc.step()
+
+        chain = plc.cause(Output)
+
+        assert chain is not None
+        assert (chain.steps[0].subroutine, chain.steps[0].rung_index) == (
+            "RepeatedCallSub",
+            0,
+        )
+        assert chain.steps[0].caller_rung_index == 0
+        assert [
+            (trigger.tag_name, trigger.from_value, trigger.to_value)
+            for trigger in chain.steps[0].triggers
+        ] == [(Gate.name, False, True)]
+
+    def test_subroutine_intra_scan_transient_and_caller_gate(self) -> None:
+        """Subroutine writer named + at-fire-time gate + caller-gate lever.
+
+        Reproduces the burner ``cause(S_StateRequested)`` defect on a
+        2-line ladder: a main rung gated on ``CallGate`` calls a subroutine
+        whose first rung latches ``Target`` while ``Cmd`` is True, and whose
+        second rung consumes ``Cmd`` (reset) **after** the writer — so at
+        end-of-scan ``Cmd`` is False even though the writer read it True.
+
+        Pre-Part-2 the chain dead-ended at the call-site main rung with the
+        gate read at end-of-scan (``Cmd=False``).  Part 2 must:
+
+        - name the **subroutine** writer (``cmd_sub`` rung 0), not the call
+          site (writer identity from the node firing timeline);
+        - report ``Cmd`` as the exact ``False -> True`` trigger at the moment
+          the rung fired, despite its end-of-scan value being ``False``;
+        - surface the call-site caller gate (``CallGate``) as a linked
+          enabler with ``caller_rung_index`` set (reversing it disables the
+          whole subtree).
+        """
+        Cmd = Bool("Cmd", external=True)
+        CallGate = Bool("CallGate", external=True)
+        Target = Bool("Target")
+        Echo = Bool("Echo")
+
+        @subroutine("cmd_sub")
+        def cmd_sub():
+            with rung(Cmd):  # writer — latches Target while the command holds
+                latch(Target)
+            with rung(Cmd):  # consumes the command inside the sub, after the writer
+                reset(Cmd)
+
+        with Program() as prog:
+            with Rung(CallGate):
+                call(cmd_sub)
+            with Rung(Target):
+                out(Echo)
+
+        plc = PLC(prog)
+        plc.force("CallGate", True)
+        for _ in range(5):
+            plc.step()
+        plc.patch({"Cmd": True})
+        plc.step()
+
+        assert plc.state.tags["Target"] is True
+        # The command was consumed within the scan — end-of-scan it is False.
+        assert plc.state.tags["Cmd"] is False
+
+        chain = plc.cause("Target")
+        assert chain is not None
+        assert chain.mode == "recorded"
+
+        # 2a: the precise subroutine writer, not the call-site main rung.
+        step = chain.steps[0]
+        assert step.subroutine == "cmd_sub"
+        assert step.rung_index == 0
+
+        enablers = {e.tag_name: e.value for e in step.enablers}
+
+        # 2b: the consumed command remains the exact at-fire transition.
+        assert any(
+            trigger.tag_name == "Cmd" and trigger.from_value is False and trigger.to_value is True
+            for trigger in step.triggers
+        )
+
+        # 2c: the caller gate is surfaced as a linked enabler/lever.
+        assert step.caller_rung_index == 0
+        assert enablers.get("CallGate") is True
+
+
+class TestIndirectCopyWriter:
+    """cause() follows copy(src, block[ptr]) when the block exceeds the cap."""
+
+    def test_indirect_copy_single_call(self) -> None:
+        """Basic case: one indirect copy per scan, pointer matches target."""
+        Source = Int("Source")
+        Pointer = Int("Pointer")
+        Trigger = Bool("Trigger")
+        blk = IntBlock(1, 2000, name="blk")
+        Target = blk._get_tag(500)
+
+        with Program() as prog:
+            with Rung(Trigger):
+                copy(42, Source)
+                copy(500, Pointer)
+            with Rung():
+                copy(Source, blk[Pointer])
+
+        plc = PLC(prog)
+        plc.patch({"Trigger": True})
+        plc.step()
+        plc.step()
+
+        chain = plc.cause(Target.name)
+        assert chain is not None
+        assert chain.mode == "recorded"
+        assert len(chain.steps) >= 1
+
+        all_triggers = {t.tag_name for s in chain.steps for t in s.triggers}
+        assert "Source" in all_triggers
+
+        all_enablers = {e.tag_name for s in chain.steps for e in s.enablers}
+        assert "Pointer" in all_enablers
+
+    def test_consumed_within_same_scan(self) -> None:
+        """cause() follows a tag set-then-reset within the same rung evaluation.
+
+        Pattern: main rung copies a trigger into a parameter tag, calls a
+        subroutine that uses and resets it.  The firing log captures the
+        final value (False, after reset), so the intermediate True is
+        invisible at scan boundaries.  The fire-view fallback in the PDG
+        writer resolution re-evaluates the rise() condition at rung-entry
+        time, where the edge is still live.
+        """
+        Trigger = Bool("Trigger")
+        Param = Bool("Param")
+        Result = Bool("Result")
+
+        @subroutine("use_and_reset")
+        def use_and_reset():
+            with Rung(Param):
+                latch(Result)
+            with Rung():
+                reset(Param)
+
+        with Program() as prog:
+            with Rung(rise(Trigger)):
+                copy(Trigger, Param)
+                call(use_and_reset)
+
+        plc = PLC(prog)
+        plc.patch({"Trigger": True})
+        plc.step()
+
+        chain = plc.cause("Result")
+        assert chain is not None
+        assert len(chain.steps) >= 2
+
+        all_tags = {
+            t.tag_name for s in chain.steps for t in (*s.triggers, *(e for e in s.enablers))
+        }
+        assert "Param" in all_tags
+        assert "Trigger" in all_tags

@@ -1016,6 +1016,8 @@ Timer = _DoneAccRuntime(
     field_specs=(
         _FieldSpec("Done", TagType.BOOL, UNSET, retentive=False),
         _FieldSpec("Acc", TagType.INT, UNSET, retentive=True),
+        _FieldSpec("EN", TagType.BOOL, UNSET, retentive=False, final=True),
+        _FieldSpec("TT", TagType.BOOL, UNSET, retentive=False, final=True),
     ),
 )
 
@@ -1025,5 +1027,7 @@ Counter = _DoneAccRuntime(
     field_specs=(
         _FieldSpec("Done", TagType.BOOL, UNSET, retentive=False),
         _FieldSpec("Acc", TagType.DINT, UNSET, retentive=True),
+        _FieldSpec("CU", TagType.BOOL, UNSET, retentive=False, final=True),
+        _FieldSpec("CD", TagType.BOOL, UNSET, retentive=False, final=True),
     ),
 )

@@ -40,9 +40,57 @@ from pyrung.click.codegen.utils import (
     _strip_quoted_strings,
 )
 from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
+from pyrung.core.structure import AutoDefault
 
 if TYPE_CHECKING:
     from pyrung.click.tag_map import OwnerInfo, TagMap
+
+
+# Numeric type names that support auto() incrementing defaults (mirrors
+# _validate_auto_default_allowed in core.structure).
+_AUTO_NUMERIC_TYPES = frozenset({"Int", "Dint", "Word"})
+
+
+def _summarize_field_defaults(
+    defaults: list[object],
+    *,
+    type_name: str,
+    retentive: bool,
+) -> tuple[object, dict[int, object]]:
+    """Compress a field's per-slot defaults into (base, {slot_index: override}).
+
+    ``base`` is an ``AutoDefault`` for a clean arithmetic run, otherwise the
+    scalar value the emitter should declare; ``overrides`` (1-based indices)
+    holds every slot the base does not reconstruct.  Retentive fields keep
+    slot-1 behaviour — their power-on defaults are moot in pyrung's model.
+    """
+    if not defaults:
+        return None, {}
+    if retentive or len(defaults) == 1:
+        return defaults[0], {}
+
+    # Scalar-base representation: first value + every deviating slot.
+    scalar_base = defaults[0]
+    scalar_overrides = {
+        idx: value for idx, value in enumerate(defaults, start=1) if value != scalar_base
+    }
+    if not scalar_overrides:
+        return scalar_base, {}
+
+    # Auto-sequence representation (numeric int-like types only).
+    if type_name in _AUTO_NUMERIC_TYPES and all(isinstance(v, int) for v in defaults):
+        start = cast(int, defaults[0])
+        step = cast(int, defaults[1]) - start
+        if step != 0:
+            auto_overrides = {
+                idx: value
+                for idx, value in enumerate(defaults, start=1)
+                if value != start + (idx - 1) * step
+            }
+            if len(auto_overrides) < len(scalar_overrides):
+                return AutoDefault(start=start, step=step), auto_overrides
+
+    return scalar_base, scalar_overrides
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +195,19 @@ def _collect_operands(
         _enrich_with_ownership(collection, structured_map)
 
     return collection
+
+
+def _hw_address_name(tag: Any) -> str:
+    """Hardware ADDRESS display name for a bank-slot tag.
+
+    ``tag.name`` may be a nickname once the slot has been stamped via
+    ``map_to``; the block's address formatter is the canonical source.
+    """
+    block = getattr(tag, "_pyrung_block", None)
+    if block is not None:
+        addr: int = getattr(tag, "_pyrung_block_addr")  # noqa: B009
+        return block._format_tag_name(addr)
+    return cast(str, tag.name)
 
 
 def _enrich_with_ownership(
@@ -278,12 +339,19 @@ def _enrich_with_ownership(
         field_retentive: dict[str, bool] = {}
         field_metadata: dict[str, _TagMetadata] = {}
         field_slot_metadata: dict[tuple[str, int], _TagMetadata] = {}
+        field_slot_default: dict[tuple[str, int], object] = {}
         for fn in field_names:
             block = runtime._blocks[fn]
             type_name = _TAG_TYPE_MAP.get(block.type.name, block.type.name)
             sv = block.slot(1)
-            fields.append((fn, type_name, sv.default))
             field_retentive[fn] = sv.retentive
+            slot_defaults = [block.slot(i).default for i in range(1, si.count + 1)]
+            base_default, default_overrides = _summarize_field_defaults(
+                slot_defaults, type_name=type_name, retentive=sv.retentive
+            )
+            fields.append((fn, type_name, base_default))
+            for idx, value in default_overrides.items():
+                field_slot_default[(fn, idx)] = value
             slot_metadata = tuple(_metadata_from_tag(block.slot(i)) for i in range(1, si.count + 1))
             nonempty_metadata = [meta for meta in slot_metadata if not _metadata_is_empty(meta)]
             if nonempty_metadata and all(meta == slot_metadata[0] for meta in slot_metadata):
@@ -307,8 +375,8 @@ def _enrich_with_ownership(
             first_hw = _resolve_hw_tag(fblock[1])
             last_hw = _resolve_hw_tag(fblock[si.count])
             if first_hw is not None and last_hw is not None:
-                mem_type, fstart = parse_address(first_hw.name)
-                _, fend = parse_address(last_hw.name)
+                mem_type, fstart = parse_address(_hw_address_name(first_hw))
+                _, fend = parse_address(_hw_address_name(last_hw))
                 bvar = _MEM_TO_BLOCK.get(mem_type, mem_type.lower())
                 per_field_hw[fn] = _FieldHw(block_var=bvar, start=fstart, end=fend)
                 collection.used_blocks.add(bvar)
@@ -317,7 +385,7 @@ def _enrich_with_ownership(
         first_slot = first_field_block[1]
         hw_tag = _resolve_hw_tag(first_slot)
         if hw_tag is not None:
-            mem_type, addr = parse_address(hw_tag.name)
+            mem_type, addr = parse_address(_hw_address_name(hw_tag))
             hw_start = addr
             hw_block_var = _MEM_TO_BLOCK.get(mem_type, mem_type.lower())
 
@@ -332,7 +400,7 @@ def _enrich_with_ownership(
             last_slot = last_field_block[si.count]
             last_hw_tag = _resolve_hw_tag(last_slot)
             if last_hw_tag is not None:
-                _, hw_end = parse_address(last_hw_tag.name)
+                _, hw_end = parse_address(_hw_address_name(last_hw_tag))
 
         decl = _StructureDecl(
             name=si.name,
@@ -347,6 +415,7 @@ def _enrich_with_ownership(
             field_retentive=field_retentive,
             field_metadata=field_metadata,
             field_slot_metadata=field_slot_metadata,
+            field_slot_default=field_slot_default,
             field_hw=per_field_hw,
             always_number=getattr(runtime, "always_number", False),
         )
@@ -371,10 +440,17 @@ def _enrich_with_ownership(
             return None
 
         logical_block = entry.logical
+        # A single-field, stride-1 named_array maps its field as one block entry
+        # (see _NamedArrayRuntime.map_to). It is already declared via its
+        # @named_array/@udt class, so never re-emit it as a plain block — doing so
+        # would map the same hardware twice (duplicate-name conflict).
+        if getattr(logical_block, "_pyrung_structure_kind", None) in ("named_array", "udt"):
+            return None
+
         first_hw = entry.hardware.block[entry.hardware_addresses[0]]
         last_hw = entry.hardware.block[entry.hardware_addresses[-1]]
-        mem_type, hw_start = parse_address(first_hw.name)
-        _, hw_end = parse_address(last_hw.name)
+        mem_type, hw_start = parse_address(_hw_address_name(first_hw))
+        _, hw_end = parse_address(_hw_address_name(last_hw))
         var_name = _make_safe_identifier(
             logical_block.name,
             used_names=used_symbol_names,
@@ -433,6 +509,15 @@ def _enrich_with_ownership(
         collection.plain_blocks.append(decl)
         collection.used_blocks.add(decl.hw_block_var)
         return decl
+
+    # Declare every structure and plain block the TagMap knows about, not just the
+    # ones the ladder happens to name. Indirectly-addressed blocks (``dh[idx]``)
+    # never surface an operand token, so a usage-driven pass drops their slot
+    # names and — worse — their defaults.
+    for structure in structured_map.structures:
+        _ensure_structure_decl(structure.name)
+    for block_entry in structured_map.blocks():
+        _ensure_plain_block_decl(block_entry.logical.name)
 
     for operand in list(collection.tags):
         owner = structured_map._owner_of(operand)
@@ -565,7 +650,11 @@ def _enrich_with_ownership(
             if comment is not None:
                 collection.range_comments[range_str] = comment
 
-    tag_by_hardware = {entry.hardware.name: entry.logical for entry in structured_map.tags()}
+    # Key by hardware ADDRESS name — entry.hardware.name may be a nickname
+    # when the slot was stamped via map_to.
+    tag_by_hardware = {
+        _hw_address_name(entry.hardware): entry.logical for entry in structured_map.tags()
+    }
     for operand, decl in collection.tags.items():
         if operand in collection.semantic_operands or operand in collection.timer_counter_operands:
             continue
@@ -573,7 +662,7 @@ def _enrich_with_ownership(
         if logical_tag is None:
             continue
         decl.metadata = _register_metadata(_metadata_from_tag(logical_tag))
-        if logical_tag.default is not None:
+        if logical_tag.default is not None and not logical_tag.retentive:
             decl.default = logical_tag.default
 
     # Inject mapped tags not referenced in any rung so they still appear in
@@ -604,10 +693,37 @@ def _enrich_with_ownership(
             comment=f"  # {hw_name}",
             metadata=metadata,
         )
-        if logical_tag.default is not None:
+        if logical_tag.default is not None and not logical_tag.retentive:
             decl.default = logical_tag.default
         collection.tags[hw_name] = decl
         collection.used_types.add(tag_type)
+        collection.used_blocks.add(block_var)
+
+    # Unnamed CSV rows are not logical TagMap entries, but user-defined slot
+    # configuration must survive codegen. Preserve it for indirect reads and
+    # later export without inventing a nickname.
+    for (memory_type, index), default in structured_map._source_unmapped_defaults.items():
+        parsed = _parse_operand_prefix(format_address_display(memory_type, index))
+        if parsed is None:
+            continue
+        _, _tag_type, block_var, _index = parsed
+        collection.unmapped_defaults[(block_var, index)] = default
+        collection.used_blocks.add(block_var)
+
+    for (memory_type, index), retentive in structured_map._source_unmapped_retentive.items():
+        parsed = _parse_operand_prefix(format_address_display(memory_type, index))
+        if parsed is None:
+            continue
+        _, _tag_type, block_var, _index = parsed
+        collection.unmapped_retentive[(block_var, index)] = retentive
+        collection.used_blocks.add(block_var)
+
+    for (memory_type, index), comment in structured_map._source_unmapped_comments.items():
+        parsed = _parse_operand_prefix(format_address_display(memory_type, index))
+        if parsed is None:
+            continue
+        _, _tag_type, block_var, _index = parsed
+        collection.unmapped_comments[(block_var, index)] = comment
         collection.used_blocks.add(block_var)
 
 
@@ -853,6 +969,22 @@ def _register_operands_from_text(
             # Mark all addresses in this range to suppress individual tags
             for i in range(num1, num2 + 1):
                 range_spans.add(f"{prefix1}{i}")
+                if nicknames:
+                    display_addr = format_address_display(prefix1, i)
+                    nick = nicknames.get(display_addr)
+                    if nick is not None:
+                        collection.range_aliases[display_addr] = nick
+
+            # Build boundary comment for ranges with nicknamed endpoints
+            if nicknames and range_str not in collection.range_comments:
+                start_display = format_address_display(prefix1, num1)
+                end_display = format_address_display(prefix1, num2)
+                start_nick = nicknames.get(start_display)
+                end_nick = nicknames.get(end_display)
+                if start_nick is not None or end_nick is not None:
+                    start_label = start_nick if start_nick is not None else start_display
+                    end_label = end_nick if end_nick is not None else end_display
+                    collection.range_comments[range_str] = f"# {start_label}..{end_label}"
 
     # Find individual operands (skip those covered by a range)
     for op_match in _OPERAND_RE.finditer(text):

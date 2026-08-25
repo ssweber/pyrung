@@ -177,11 +177,13 @@ def _collect_snapshot_refs(
         return
 
     if isinstance(value, Tag):
-        block_info = ctx.tag_block_addresses.get(value.name)
-        if block_info is not None:
-            block_ids.add(block_info[0])
-        else:
-            scalar_tags.add(value.name)
+        # A direct tag needs only one rung-entry value even when map_to() makes
+        # it the canonical occupant of a block address.  ``_snapshot_tag_symbol``
+        # reads that scalar snapshot from the live block slot for array-backed
+        # kernels and from ``tags`` for blockless kernels.  Treating the alias as
+        # a block reference copies the entire bank and makes generated code
+        # depend on whether a prior compilation materialized Block._tag_cache.
+        scalar_tags.add(value.name)
         return
 
     if isinstance(value, IndirectRef):

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import _parse_time_unit
 
+from .advance import AdvanceProfile, ConditionDemand, monotone_profile
 from .base import Instruction
 from .utils import (
     instruction_condition_view,
@@ -50,6 +52,7 @@ class OnDelayInstruction(Instruction):
     _conditions = ("enable_condition", "reset_condition")
     _structural_fields = ("unit",)
     _exclusive_fields = ("accumulator",)
+    _status_fields = ("en_bit", "tt_bit")
 
     def __init__(
         self,
@@ -59,16 +62,28 @@ class OnDelayInstruction(Instruction):
         enable_condition: Any,
         reset_condition: Any = None,
         unit: str = "Tms",
+        en_bit: Tag | None = None,
+        tt_bit: Tag | None = None,
     ):
         self.done_bit = done_bit
         self.accumulator = accumulator
         self.preset = preset
         self.unit = _parse_time_unit(unit)
         self.has_reset = reset_condition is not None
+        self.en_bit = en_bit
+        self.tt_bit = tt_bit
 
         # Convert Tags to Conditions if needed
         self.enable_condition = to_condition(enable_condition)
         self.reset_condition = to_condition(reset_condition)
+
+    def _status_tags(self, en: bool, tt: bool) -> dict[str, bool]:
+        tags: dict[str, bool] = {}
+        if self.en_bit is not None:
+            tags[self.en_bit.name] = en
+        if self.tt_bit is not None:
+            tags[self.tt_bit.name] = tt
+        return tags
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         frac_key = f"_frac:{self.accumulator.name}"
@@ -84,25 +99,77 @@ class OnDelayInstruction(Instruction):
 
         if reset_active:
             ctx.set_memory(frac_key, 0.0)
-            ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})
+            ctx.set_tags(
+                {
+                    self.done_bit.name: False,
+                    self.accumulator.name: 0,
+                    **self._status_tags(enabled, False),
+                }
+            )
         elif enabled:
             dt_units = self.unit.dt_to_units(dt) + frac
             int_units = int(dt_units)
             new_frac = dt_units - int_units
             acc_value = min(acc_value + int_units, 32767)
             ctx.set_memory(frac_key, new_frac)
+            done_value = acc_value >= sp
             ctx.set_tags(
                 {
-                    self.done_bit.name: acc_value >= sp,
+                    self.done_bit.name: done_value,
                     self.accumulator.name: acc_value,
+                    **self._status_tags(True, not done_value),
                 }
             )
         elif not self.has_reset:
             ctx.set_memory(frac_key, 0.0)
-            ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})
+            ctx.set_tags(
+                {
+                    self.done_bit.name: False,
+                    self.accumulator.name: 0,
+                    **self._status_tags(False, False),
+                }
+            )
+        else:
+            status = self._status_tags(False, False)
+            if status:
+                ctx.set_tags(status)
 
     def is_terminal(self) -> bool:
         return self.has_reset
+
+    def advance_profile(self) -> AdvanceProfile:
+        restore = (
+            ConditionDemand(self.reset_condition)
+            if self.reset_condition is not None
+            else ConditionDemand(self.enable_condition, False)
+        )
+        channels = tuple(
+            tag for tag in (self.accumulator, self.done_bit, self.tt_bit) if tag is not None
+        )
+        return monotone_profile(
+            channels=channels,
+            accumulator=self.accumulator,
+            done=self.done_bit,
+            progress=(
+                ConditionDemand(to_condition(self.tt_bit)) if self.tt_bit is not None else None
+            ),
+            preset=self.preset,
+            direction=1,
+            rate_per_scan=self.unit.dt_to_units,
+            advance=ConditionDemand(self.enable_condition),
+            restore=restore,
+            restore_is_pulse=isinstance(
+                self.reset_condition, (RisingEdgeCondition, FallingEdgeCondition)
+            ),
+            completion_controls=(
+                ConditionDemand(self.enable_condition, True),
+                *(
+                    (ConditionDemand(self.reset_condition, False),)
+                    if self.reset_condition is not None
+                    else ()
+                ),
+            ),
+        )
 
 
 class OffDelayInstruction(Instruction):
@@ -132,6 +199,7 @@ class OffDelayInstruction(Instruction):
     _conditions = ("enable_condition",)
     _structural_fields = ("unit",)
     _exclusive_fields = ("accumulator",)
+    _status_fields = ("en_bit", "tt_bit")
 
     def __init__(
         self,
@@ -140,14 +208,26 @@ class OffDelayInstruction(Instruction):
         preset: Tag | int,
         enable_condition: Any,
         unit: str = "Tms",
+        en_bit: Tag | None = None,
+        tt_bit: Tag | None = None,
     ):
         self.done_bit = done_bit
         self.accumulator = accumulator
         self.preset = preset
         self.unit = _parse_time_unit(unit)
+        self.en_bit = en_bit
+        self.tt_bit = tt_bit
 
         # Convert Tags to Conditions if needed
         self.enable_condition = to_condition(enable_condition)
+
+    def _status_tags(self, en: bool, tt: bool) -> dict[str, bool]:
+        tags: dict[str, bool] = {}
+        if self.en_bit is not None:
+            tags[self.en_bit.name] = en
+        if self.tt_bit is not None:
+            tags[self.tt_bit.name] = tt
+        return tags
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         frac_key = f"_frac:{self.accumulator.name}"
@@ -155,7 +235,13 @@ class OffDelayInstruction(Instruction):
         if enabled:
             # While enabled: done = True, acc = 0
             ctx.set_memory(frac_key, 0.0)
-            ctx.set_tags({self.done_bit.name: True, self.accumulator.name: 0})
+            ctx.set_tags(
+                {
+                    self.done_bit.name: True,
+                    self.accumulator.name: 0,
+                    **self._status_tags(True, False),
+                }
+            )
         else:
             acc_value = ctx.get_tag(self.accumulator.name, 0)
 
@@ -163,6 +249,9 @@ class OffDelayInstruction(Instruction):
             # The enabled branch always sets Done=True before Acc=0,
             # so (False, 0) uniquely identifies a timer that was never enabled.
             if not ctx.get_tag(self.done_bit.name, False) and acc_value == 0:
+                status = self._status_tags(False, False)
+                if status:
+                    ctx.set_tags(status)
                 return
 
             sp = resolve_preset_ctx(self.preset, ctx)
@@ -182,4 +271,30 @@ class OffDelayInstruction(Instruction):
             done = acc_value < sp
 
             ctx.set_memory(frac_key, new_frac)
-            ctx.set_tags({self.done_bit.name: done, self.accumulator.name: acc_value})
+            # TOF TT: timing while disabled and done is still True
+            ctx.set_tags(
+                {
+                    self.done_bit.name: done,
+                    self.accumulator.name: acc_value,
+                    **self._status_tags(False, done),
+                }
+            )
+
+    def advance_profile(self) -> AdvanceProfile:
+        channels = tuple(
+            tag for tag in (self.accumulator, self.done_bit, self.tt_bit) if tag is not None
+        )
+        return monotone_profile(
+            channels=channels,
+            accumulator=self.accumulator,
+            done=self.done_bit,
+            progress=(
+                ConditionDemand(to_condition(self.tt_bit)) if self.tt_bit is not None else None
+            ),
+            preset=self.preset,
+            direction=1,
+            rate_per_scan=self.unit.dt_to_units,
+            advance=ConditionDemand(self.enable_condition, False),
+            done_at_boundary=False,
+            restore=ConditionDemand(self.enable_condition, True),
+        )

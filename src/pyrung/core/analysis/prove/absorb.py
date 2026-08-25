@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.simplified import Atom, Expr
 from pyrung.core.tag import TagType
 
-from .expr import _collect_atoms_for_tag
+from .expr import _build_atom_index, _collect_atoms_for_tag
 from .results import PENDING
 
 if TYPE_CHECKING:
@@ -472,7 +472,7 @@ def _atom_matches_acc_preset_boundary(
     """True if *atom* is one side of the Acc/Preset done threshold."""
     if atom.tag == acc_name:
         return atom.operand in preset_match_values and atom.form in {"ge", "lt"}
-    if atom.operand == acc_name:
+    if atom.operand_is_tag and atom.operand == acc_name:
         return atom.tag in preset_match_values and atom.form in {"le", "gt"}
     return False
 
@@ -553,8 +553,11 @@ def _find_redundant_acc_absorptions(
     all_exprs: list[Expr],
     done_acc_info: _DoneAccInfo,
     consumed_accs: set[str],
+    atom_index: dict[str, list[Atom]] | None = None,
 ) -> _RedundantAccAbsorptions:
     """Find timer presets whose Acc/Preset comparisons are redundant."""
+    if atom_index is None:
+        atom_index = _build_atom_index(all_exprs)
     absorbed_accs: set[str] = set()
     absorbed_preset_tags: set[str] = set()
     synthetic_presets: dict[str, int] = {}
@@ -570,12 +573,12 @@ def _find_redundant_acc_absorptions(
 
         if preset_tag_name is not None:
             match_values = _preset_match_values(preset_tag_name, graph)
-            acc_atoms = _collect_atoms_for_tag(all_exprs, acc_name)
+            acc_atoms = _collect_atoms_for_tag(atom_index, acc_name)
             if not _is_acc_done_redundant(acc_name, match_values, kind, acc_atoms):
                 rejected[acc_name] = "accumulator comparisons not redundant"
                 continue
 
-            preset_atoms = _collect_atoms_for_tag(all_exprs, preset_tag_name)
+            preset_atoms = _collect_atoms_for_tag(atom_index, preset_tag_name)
             if not _all_atoms_absorbed(preset_atoms, acc_name, match_values):
                 rejected[acc_name] = "preset atoms not fully absorbed"
                 continue
@@ -601,7 +604,7 @@ def _find_redundant_acc_absorptions(
                 rejected[acc_name] = "no const preset available"
                 continue
             match_values = frozenset({const_preset})
-            acc_atoms = _collect_atoms_for_tag(all_exprs, acc_name)
+            acc_atoms = _collect_atoms_for_tag(atom_index, acc_name)
             if not _is_acc_done_redundant(acc_name, match_values, kind, acc_atoms):
                 rejected[acc_name] = "accumulator comparisons not redundant"
                 continue
@@ -686,14 +689,18 @@ def _threshold_atom_for_descending_progress(
             return [_ThresholdAtomSpec(acc_name, atom.operand, form, mode)]
         return []
 
-    if atom.operand == acc_name and atom.form in {"lt", "le"}:
+    if atom.operand_is_tag and atom.operand == acc_name and atom.form in {"lt", "le"}:
         mode = _threshold_mode(atom.tag, graph)
         if mode is None:
             return []
         form = _THRESHOLD_FORM_GE if atom.form == "lt" else _THRESHOLD_FORM_GT
         return [_ThresholdAtomSpec(acc_name, atom.tag, form, mode)]
 
-    if atom.operand == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
+    if (
+        atom.operand_is_tag
+        and atom.operand == acc_name
+        and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}
+    ):
         mode = _threshold_mode(atom.tag, graph)
         if mode is None:
             return []
@@ -703,7 +710,7 @@ def _threshold_atom_for_descending_progress(
     if atom.form in {"eq", "ne"}:
         if atom.tag == acc_name:
             threshold = atom.operand
-        elif atom.operand == acc_name:
+        elif atom.operand_is_tag and atom.operand == acc_name:
             threshold = atom.tag
         else:
             return []
@@ -751,14 +758,18 @@ def _threshold_atom_for_progress(
             return [_ThresholdAtomSpec(acc_name, atom.operand, form, mode)]
         return []
 
-    if atom.operand == acc_name and atom.form in {"lt", "le"}:
+    if atom.operand_is_tag and atom.operand == acc_name and atom.form in {"lt", "le"}:
         mode = _threshold_mode(atom.tag, graph)
         if mode is None:
             return []
         form = _THRESHOLD_FORM_GT if atom.form == "lt" else _THRESHOLD_FORM_GE
         return [_ThresholdAtomSpec(acc_name, atom.tag, form, mode)]
 
-    if atom.operand == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
+    if (
+        atom.operand_is_tag
+        and atom.operand == acc_name
+        and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}
+    ):
         mode = _threshold_mode(atom.tag, graph)
         if mode is None:
             return []
@@ -768,7 +779,7 @@ def _threshold_atom_for_progress(
     if atom.form in {"eq", "ne"}:
         if atom.tag == acc_name:
             threshold = atom.operand
-        elif atom.operand == acc_name:
+        elif atom.operand_is_tag and atom.operand == acc_name:
             threshold = atom.tag
         else:
             return []
@@ -868,11 +879,16 @@ def _find_comparison_absorptions(
     *,
     project: tuple[str, ...] | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
+    atom_index: dict[str, list[Atom]] | None = None,
 ) -> _ThresholdAbsorptions:
     """Find written tags whose value is only ever observed through comparisons."""
+    if atom_index is None:
+        atom_index = _build_atom_index(all_exprs)
     projected = frozenset(project or ())
     progress_sources = set(_collect_progress_source_kinds(program))
-    progress_sources.update(_collect_int_progress_source_kinds(program, graph, all_exprs))
+    progress_sources.update(
+        _collect_int_progress_source_kinds(program, graph, all_exprs, atom_index)
+    )
 
     done_acc_info = _collect_done_acc_pairs(program)
     preset_source_tags = frozenset(done_acc_info.preset_tags.values())
@@ -901,7 +917,7 @@ def _find_comparison_absorptions(
         if _has_forbidden_data_read(program, tag_name):
             continue
 
-        atoms = _collect_atoms_for_tag(all_exprs, tag_name)
+        atoms = _collect_atoms_for_tag(atom_index, tag_name)
         if not atoms:
             continue
 
@@ -951,17 +967,22 @@ def _diagnose_unstable_atom(
         "ne",
     }:
         threshold = atom.operand
-    elif atom.operand == acc_name and atom.form in {
-        "lt",
-        "le",
-        _THRESHOLD_FORM_GT,
-        _THRESHOLD_FORM_GE,
-        "eq",
-        "ne",
-    }:
+    elif (
+        atom.operand_is_tag
+        and atom.operand == acc_name
+        and atom.form
+        in {
+            "lt",
+            "le",
+            _THRESHOLD_FORM_GT,
+            _THRESHOLD_FORM_GE,
+            "eq",
+            "ne",
+        }
+    ):
         threshold = atom.tag
     else:
-        return "non-comparison form — only comparison atoms can be abstracted"
+        return "non-comparison form; only comparison atoms can be abstracted"
 
     if _is_numeric_literal(threshold):
         return None
@@ -1009,7 +1030,9 @@ def _is_zero_literal(value: Any) -> bool:
         return value.value == 0
     if isinstance(value, Expression):
         return False
-    return value == 0 and not isinstance(value, bool)
+    # Tag/IndirectRef.__eq__ returns a Condition, not bool — use isinstance guard
+    result = value == 0
+    return isinstance(result, bool) and result and not isinstance(value, bool)
 
 
 def _tag_expr_name(value: Any) -> str | None:
@@ -1248,6 +1271,7 @@ def _collect_int_progress_source_kinds(
     program: Program,
     graph: ProgramGraph,
     all_exprs: list[Expr],
+    atom_index: dict[str, list[Atom]] | None = None,
 ) -> dict[str, str]:
     """Find internal integer progress counters implemented as reset/constant-stride writes."""
     from pyrung.core.validation._common import walk_instructions
@@ -1258,14 +1282,16 @@ def _collect_int_progress_source_kinds(
         for target_name, _itype in _all_write_targets(instr):
             by_target.setdefault(target_name, []).append(instr)
     stable_int_tags = _stable_int_tag_values(graph, by_target)
+    # Only referenced-at-all matters here.
+    if atom_index is None:
+        atom_index = _build_atom_index(all_exprs)
 
     for tag_name, tag in graph.tags.items():
         if tag.type not in {TagType.INT, TagType.DINT}:
             continue
         if tag.external or tag.public or tag.readonly:
             continue
-        atoms = _collect_atoms_for_tag(all_exprs, tag_name)
-        if not atoms:
+        if tag_name not in atom_index:
             continue
         writes = by_target.get(tag_name, [])
         if not writes:
@@ -1416,6 +1442,7 @@ def _collect_real_progress_source_kinds(
     program: Program,
     graph: ProgramGraph,
     all_exprs: list[Expr],
+    atom_index: dict[str, list[Atom]] | None = None,
 ) -> dict[str, str]:
     """Find conservative monotone Real progress tags.
 
@@ -1431,14 +1458,15 @@ def _collect_real_progress_source_kinds(
         for target_name, _itype in _all_write_targets(instr):
             by_target.setdefault(target_name, []).append(instr)
     stable_int_tags = _stable_int_tag_values(graph, by_target)
+    if atom_index is None:
+        atom_index = _build_atom_index(all_exprs)
 
     for tag_name, tag in graph.tags.items():
         if tag.type is not TagType.REAL:
             continue
         if tag.external or tag.public or tag.readonly:
             continue
-        atoms = _collect_atoms_for_tag(all_exprs, tag_name)
-        if not atoms:
+        if tag_name not in atom_index:
             continue
         writes = by_target.get(tag_name, [])
         if not writes:
@@ -1500,14 +1528,17 @@ def _find_threshold_absorptions(
     all_exprs: list[Expr],
     *,
     project: tuple[str, ...] | None = None,
+    atom_index: dict[str, list[Atom]] | None = None,
 ) -> _ThresholdAbsorptions:
     """Find progress accumulator threshold comparisons that can be event-abstracted."""
+    if atom_index is None:
+        atom_index = _build_atom_index(all_exprs)
     projected = frozenset(project or ())
     done_acc_info = _collect_done_acc_pairs(program)
     done_by_acc = {acc: done for done, acc in done_acc_info.pairs.items()}
     source_kinds = _collect_progress_source_kinds(program)
-    source_kinds.update(_collect_int_progress_source_kinds(program, graph, all_exprs))
-    source_kinds.update(_collect_real_progress_source_kinds(program, graph, all_exprs))
+    source_kinds.update(_collect_int_progress_source_kinds(program, graph, all_exprs, atom_index))
+    source_kinds.update(_collect_real_progress_source_kinds(program, graph, all_exprs, atom_index))
 
     candidate_vectors: dict[str, _ThresholdVectorSpec] = {}
     threshold_progress: dict[str, set[str]] = {}
@@ -1519,7 +1550,7 @@ def _find_threshold_absorptions(
         tag = graph.tags.get(acc_name)
         if tag is not None and (tag.external or tag.public):
             continue
-        atoms = _collect_atoms_for_tag(all_exprs, acc_name)
+        atoms = _collect_atoms_for_tag(atom_index, acc_name)
         if not atoms:
             continue
 
@@ -1559,7 +1590,7 @@ def _find_threshold_absorptions(
                     _ThresholdBlocker(
                         acc_name,
                         kind,
-                        (f"{acc_name}: has non-owner writes — remove direct assignments",),
+                        (f"{acc_name}: has non-owner writes; remove direct assignments",),
                     )
                 )
                 continue
@@ -1581,7 +1612,7 @@ def _find_threshold_absorptions(
                     _ThresholdBlocker(
                         acc_name,
                         kind,
-                        (f"{acc_name}: read in data-flow — remove copy/calc reads of accumulator",),
+                        (f"{acc_name}: read in data-flow; remove copy/calc reads of accumulator",),
                     )
                 )
                 continue
@@ -1637,7 +1668,7 @@ def _find_threshold_absorptions(
                     acc_name,
                     kind,
                     tuple(
-                        f"{name}: in projection — remove from project= to allow abstraction"
+                        f"{name}: in projection; remove from project= to allow abstraction"
                         for name in projected_thresholds
                     ),
                 )
@@ -1675,7 +1706,7 @@ def _find_threshold_absorptions(
             continue
         forbidden_reasons: list[str] = []
         for threshold_name in threshold_names:
-            threshold_atoms = _collect_atoms_for_tag(all_exprs, threshold_name)
+            threshold_atoms = _collect_atoms_for_tag(atom_index, threshold_name)
             if not all(
                 _threshold_atom_for_progress(atom, acc_name, graph, vector.kind)
                 for atom in threshold_atoms

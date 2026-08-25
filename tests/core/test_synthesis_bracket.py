@@ -1,0 +1,154 @@
+"""Runner bracket hook: a hand-built synthesis overlay reproduces the dwell.
+
+Increment 2 of the synthesis-is-rungs consolidation.  The PLC scans
+``_synthesis.holds`` before user logic and ``_synthesis.plant`` after, in the
+same ctx/commit.  Here we hand-build a ``plant`` TON/TOF pair (the shape the
+harness factory will emit) and assert it reproduces the bool dwell — *without*
+the harness, proving the bracket itself carries the semantics.
+"""
+
+from __future__ import annotations
+
+from pyrung import Bool, Int, Program, Rung, copy
+from pyrung.core.condition import BitCondition
+from pyrung.core.runner import PLC
+from pyrung.core.synthesis import (
+    Synthesis,
+    bool_feedback_rungs,
+    conditional_hold_rung,
+    copy_hold_rung,
+)
+
+
+def _prog() -> Program:
+    Enable = Bool("Enable", external=True)
+    Fb = Bool("Fb")
+    Stage = Int("Stage")
+    with Program() as prog:
+        with Rung(Enable, Fb):
+            copy(1, Stage)
+    return prog
+
+
+def _plant_overlay(plc: PLC, *, on_ms: int, off_ms: int) -> Synthesis:
+    En = plc._known_tags_by_name["Enable"]
+    Fb = plc._known_tags_by_name["Fb"]
+    rungs = bool_feedback_rungs(
+        enable=BitCondition(En),
+        fb_tag=Fb,
+        ton_done=Bool("__cpl_ond__Fb"),
+        ton_acc=Int("__cpl_on__Fb"),
+        tof_acc=Int("__cpl_off__Fb"),
+        on_delay_ms=on_ms,
+        off_delay_ms=off_ms,
+    )
+    return Synthesis(plant=rungs)
+
+
+def _run(plc: PLC, en_seq: list[bool]) -> list[bool]:
+    out = []
+    for en in en_seq:
+        plc.patch({"Enable": en})
+        plc.step()
+        out.append(plc.state.tags["Fb"])
+    return out
+
+
+def test_plant_ton_reproduces_dwell() -> None:
+    plc = PLC(_prog(), dt=0.1)
+    plc._synthesis = _plant_overlay(plc, on_ms=200, off_ms=100)
+    # on_delay 200ms = 2 scans, off_delay 100ms = 1 scan; En held 4 then 3 off.
+    # __plant__ is the pre-logic input-read: it reads the *previous* commit's En,
+    # so the committed feedback lags the command by one scan (feedback is an
+    # input): rise at scan 3, three trues, fall at scan 6.
+    assert _run(plc, [True] * 4 + [False] * 3) == [False, False, True, True, True, False, False]
+
+
+def test_plant_glitch_is_suppressed() -> None:
+    plc = PLC(_prog(), dt=0.1)
+    plc._synthesis = _plant_overlay(plc, on_ms=300, off_ms=100)  # 3-scan on-delay
+    # A 1-scan glitch (< on_delay) never sustains the TON → Fb stays False.
+    assert _run(plc, [True] + [False] * 6) == [False] * 7
+
+
+def test_empty_synthesis_is_inert() -> None:
+    plc = PLC(_prog(), dt=0.1)
+    plc._synthesis = Synthesis()  # no holds, no plant
+    # Fb is never synthesized; the program never sets Stage.
+    assert _run(plc, [True, True, True]) == [False, False, False]
+    assert plc.state.tags["Stage"] == 0
+
+
+def test_conditional_hold_branch_oscillates() -> None:
+    # A two-rule liveness hold as ONE multi-branch rung: each branch's guard reads
+    # the rung-entry snapshot, so the polarities stay mutually exclusive and the
+    # tag oscillates each scan.  If the branches read mid-rung writes instead, the
+    # second would see the first's flip and cancel it (net False every scan).
+    from pyrung.core.condition import CompareNe
+
+    W = Bool("W")
+    with Program() as prog:
+        with Rung(W):
+            copy(1, Int("Seen"))
+    plc = PLC(prog, dt=0.1)
+    plc._synthesis = Synthesis(
+        holds=[
+            conditional_hold_rung(
+                dest=W, rules=[(True, CompareNe(W, True)), (False, CompareNe(W, False))]
+            )
+        ]
+    )
+    seq = []
+    for _ in range(4):
+        plc.step()
+        seq.append(plc.state.tags["W"])
+    assert seq == [True, False, True, False]
+
+
+def test_single_rule_conditional_hold_self_releases() -> None:
+    # One guarded copy rung = a self-releasing hold: drive True while W != True,
+    # so W settles True and the guard stops firing (it no longer re-drives, but the
+    # value persists).  This is the "with Rung(guard): copy(value)" shape.
+    from pyrung.core.condition import CompareNe
+
+    W = Bool("W")
+    with Program() as prog:
+        with Rung(W):
+            copy(1, Int("Seen"))
+    plc = PLC(prog, dt=0.1)
+    plc._synthesis = Synthesis(holds=[copy_hold_rung(value=True, dest=W, guard=CompareNe(W, True))])
+    seq = []
+    for _ in range(3):
+        plc.step()
+        seq.append(plc.state.tags["W"])
+    assert seq == [True, True, True]
+
+
+def test_false_hold_turns_default_true_bool_off() -> None:
+    W = Bool("W", default=True)
+    with Program() as prog:
+        with Rung(W):
+            copy(1, Int("Seen"))
+    plc = PLC(prog, dt=0.1)
+    plc._synthesis = Synthesis(holds=[copy_hold_rung(value=False, dest=W)])
+
+    plc.step()
+
+    assert plc.state.tags["W"] is False
+
+
+def test_holds_bracket_steers_input_before_program_reads_it() -> None:
+    # A steady hold copies True into Enable each scan *before* user logic, so the
+    # program sees the held input the same scan.  The pre-logic plant reads the
+    # *previous* commit, so it arms off the held Enable the next scan (on_delay 0
+    # → Fb on the scan after Enable first commits).
+    plc = PLC(_prog(), dt=0.1)
+    syn = _plant_overlay(plc, on_ms=0, off_ms=0)
+    En = plc._known_tags_by_name["Enable"]
+    syn.holds.append(copy_hold_rung(value=True, dest=En))
+    plc._synthesis = syn
+    # Never patch Enable — the hold drives it.  on_delay 0 → Fb on the next scan.
+    plc.step()
+    assert plc.state.tags["Enable"] is True
+    plc.step()
+    assert plc.state.tags["Fb"] is True

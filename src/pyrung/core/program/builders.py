@@ -65,6 +65,21 @@ def _extract_done_acc(instance: DoneAccUDT, func_name: str) -> tuple[Tag, Tag]:
     return done_bit, accumulator
 
 
+def _extract_status_tags(instance: DoneAccUDT, *names: str) -> tuple[Tag | None, ...]:
+    """Optionally extract status bit tags from a Timer/Counter instance.
+
+    Returns None for any field not present (e.g. custom UDTs without EN/TT).
+    """
+    result: list[Tag | None] = []
+    for name in names:
+        tag = getattr(instance, name, None)
+        if isinstance(tag, Tag) and tag.type is TagType.BOOL:
+            result.append(tag)
+        else:
+            result.append(None)
+    return tuple(result)
+
+
 def _capture_rung_condition_and_source(
     func_name: str,
     *,
@@ -543,6 +558,8 @@ class CountUpBuilder(_BuilderBase):
         up_condition: Any,
         source_file: str | None = None,
         source_line: int | None = None,
+        cu_bit: Tag | None = None,
+        cd_bit: Tag | None = None,
     ):
         super().__init__(func_name="count_up", source_file=source_file, source_line=source_line)
         self._register_required_builder("count_up(...).reset(...)")
@@ -552,6 +569,8 @@ class CountUpBuilder(_BuilderBase):
         self._up_condition = up_condition  # From rung conditions
         self._down_condition: Any = None
         self._reset_condition: Any = None
+        self._cu_bit = cu_bit
+        self._cd_bit = cd_bit
         self._down_source_file: str | None = None
         self._down_source_line: int | None = None
         self._reset_source_file: str | None = None
@@ -603,6 +622,8 @@ class CountUpBuilder(_BuilderBase):
                 self._up_condition,
                 self._reset_condition,
                 self._down_condition,
+                cu_bit=self._cu_bit,
+                cd_bit=self._cd_bit,
             )
             substeps: list[DebugInstructionSubStep] = [
                 DebugInstructionSubStep(
@@ -656,6 +677,8 @@ class CountDownBuilder(_BuilderBase):
         down_condition: Any,
         source_file: str | None = None,
         source_line: int | None = None,
+        cu_bit: Tag | None = None,
+        cd_bit: Tag | None = None,
     ):
         super().__init__(func_name="count_down", source_file=source_file, source_line=source_line)
         self._register_required_builder("count_down(...).reset(...)")
@@ -664,6 +687,8 @@ class CountDownBuilder(_BuilderBase):
         self._preset = preset
         self._down_condition = down_condition  # From rung conditions
         self._reset_condition: Any = None
+        self._cu_bit = cu_bit
+        self._cd_bit = cd_bit
         self._reset_source_file: str | None = None
         self._reset_source_line: int | None = None
 
@@ -693,6 +718,8 @@ class CountDownBuilder(_BuilderBase):
                 self._preset,
                 self._down_condition,
                 self._reset_condition,
+                cu_bit=self._cu_bit,
+                cd_bit=self._cd_bit,
             )
             instr.debug_substeps = (
                 DebugInstructionSubStep(
@@ -741,6 +768,7 @@ def count_up(
         Builder for chaining .down() and .reset().
     """
     done_bit, accumulator = _extract_done_acc(counter, "count_up")
+    cu_bit, cd_bit = _extract_status_tags(counter, "CU", "CD")
     up_condition, source_file, source_line = _capture_rung_condition_and_source("count_up")
     return CountUpBuilder(
         done_bit,
@@ -749,6 +777,8 @@ def count_up(
         up_condition,
         source_file=source_file,
         source_line=source_line,
+        cu_bit=cu_bit,
+        cd_bit=cd_bit,
     )
 
 
@@ -775,6 +805,7 @@ def count_down(
         Builder for chaining .reset().
     """
     done_bit, accumulator = _extract_done_acc(counter, "count_down")
+    cu_bit, cd_bit = _extract_status_tags(counter, "CU", "CD")
     down_condition, source_file, source_line = _capture_rung_condition_and_source("count_down")
     return CountDownBuilder(
         done_bit,
@@ -783,6 +814,8 @@ def count_down(
         down_condition,
         source_file=source_file,
         source_line=source_line,
+        cu_bit=cu_bit,
+        cd_bit=cd_bit,
     )
 
 
@@ -802,6 +835,8 @@ class OnDelayBuilder(_AutoFinalizeBuilderBase):
         unit: str,
         source_file: str | None = None,
         source_line: int | None = None,
+        en_bit: Tag | None = None,
+        tt_bit: Tag | None = None,
     ):
         super().__init__(func_name="on_delay", source_file=source_file, source_line=source_line)
         self._done_bit = done_bit
@@ -809,6 +844,8 @@ class OnDelayBuilder(_AutoFinalizeBuilderBase):
         self._preset = preset
         self._enable_condition = enable_condition
         self._unit = unit
+        self._en_bit = en_bit
+        self._tt_bit = tt_bit
         self._reset_condition: Any = None
         self._reset_source_file: str | None = None
         self._reset_source_line: int | None = None
@@ -843,6 +880,8 @@ class OnDelayBuilder(_AutoFinalizeBuilderBase):
                 self._enable_condition,
                 self._reset_condition,
                 self._unit,
+                en_bit=self._en_bit,
+                tt_bit=self._tt_bit,
             )
             if instr.reset_condition is not None:
                 instr.debug_substeps = (
@@ -886,6 +925,8 @@ class OffDelayBuilder(_AutoFinalizeBuilderBase):
         unit: str,
         source_file: str | None = None,
         source_line: int | None = None,
+        en_bit: Tag | None = None,
+        tt_bit: Tag | None = None,
     ):
         super().__init__(func_name="off_delay", source_file=source_file, source_line=source_line)
         self._done_bit = done_bit
@@ -893,6 +934,8 @@ class OffDelayBuilder(_AutoFinalizeBuilderBase):
         self._preset = preset
         self._enable_condition = enable_condition
         self._unit = unit
+        self._en_bit = en_bit
+        self._tt_bit = tt_bit
 
     def _finalize(self) -> None:
         """Build and add the instruction to the rung."""
@@ -903,6 +946,8 @@ class OffDelayBuilder(_AutoFinalizeBuilderBase):
                 self._preset,
                 self._enable_condition,
                 self._unit,
+                en_bit=self._en_bit,
+                tt_bit=self._tt_bit,
             )
         )
 
@@ -942,6 +987,7 @@ def on_delay(
     """
     canonical_unit = normalize_unit(unit)
     done_bit, accumulator = _extract_done_acc(timer, "on_delay")
+    en_bit, tt_bit = _extract_status_tags(timer, "EN", "TT")
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("on_delay")
     return OnDelayBuilder(
         done_bit,
@@ -951,6 +997,8 @@ def on_delay(
         canonical_unit,
         source_file=source_file,
         source_line=source_line,
+        en_bit=en_bit,
+        tt_bit=tt_bit,
     )
 
 
@@ -983,6 +1031,7 @@ def off_delay(
     """
     canonical_unit = normalize_unit(unit)
     done_bit, accumulator = _extract_done_acc(timer, "off_delay")
+    en_bit, tt_bit = _extract_status_tags(timer, "EN", "TT")
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("off_delay")
     return OffDelayBuilder(
         done_bit,
@@ -992,4 +1041,6 @@ def off_delay(
         canonical_unit,
         source_file=source_file,
         source_line=source_line,
+        en_bit=en_bit,
+        tt_bit=tt_bit,
     )

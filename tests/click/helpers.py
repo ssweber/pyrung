@@ -13,26 +13,15 @@ from pathlib import Path
 from typing import Any, NamedTuple, Protocol
 
 from pyrung.click import (
+    ClickBlocks,
     ModbusAddress,
     ModbusRtuTarget,
     ModbusTcpTarget,
     RegisterType,
     TagMap,
-    c,
-    ct,
-    ctd,
-    dd,
-    df,
-    dh,
-    ds,
-    sc,
-    sd,
-    t,
-    td,
-    txt,
-    x,
-    y,
 )
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click.codegen.constants import _OPERAND_RE
 from pyrung.click.codegen.utils import _parse_operand_prefix, _strip_quoted_strings
 from pyrung.core import (

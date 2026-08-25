@@ -6,7 +6,8 @@ Client side (``main()``) is the ``pyrung live`` CLI entry point.
 
 Protocol: plain text over a length-prefixed TCP connection.
   - Client sends a command (UTF-8 text via ``send_bytes``).
-  - Server sends the result text back, then closes the connection.
+  - Server sends zero or more progress frames (``\\x01`` prefix + UTF-8 text),
+    then the final result text (no prefix), then closes the connection.
   - Error responses are prefixed with ``ERROR: ``.
 
 Session discovery uses port files in a well-known directory:
@@ -33,6 +34,10 @@ _SESSION_DIR = Path(
 )
 
 
+#: Verbs answered by the server itself, ahead of the adapter's state lock.
+_CANCEL_VERBS = frozenset({"stop", "cancel"})
+
+
 def _port_file(session_name: str) -> Path:
     return _SESSION_DIR / f"pyrung-{session_name}.port"
 
@@ -52,6 +57,8 @@ class LiveServer:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._port: int | None = None
+        self._inflight_lock = threading.Lock()
+        self._inflight: str | None = None
 
     @property
     def session_name(self) -> str:
@@ -88,12 +95,34 @@ class LiveServer:
                 conn = listener.accept()
             except OSError:
                 break
-            try:
-                self._handle(conn)
-            except Exception:
-                pass
-            finally:
-                conn.close()
+            # One thread per connection. A serial loop could not accept a
+            # `stop` until the command it is meant to cancel had finished.
+            threading.Thread(
+                target=self._serve,
+                args=(conn,),
+                daemon=True,
+                name=f"pyrung-live-conn-{self._session_name}",
+            ).start()
+
+    def _serve(self, conn: Any) -> None:
+        try:
+            self._handle(conn)
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    def _request_cancel(self) -> str:
+        """Flag the in-flight command for cancellation. Never takes the state lock."""
+        with self._inflight_lock:
+            inflight = self._inflight
+        if inflight is None:
+            return "Nothing running."
+        cancel = getattr(self._adapter, "_cancel", None)
+        if cancel is None:
+            return "ERROR: this adapter does not support stop"
+        cancel.request()
+        return f"Stop requested ({inflight})."
 
     def _handle(self, conn: Any) -> None:
         raw = conn.recv_bytes()
@@ -102,11 +131,39 @@ class LiveServer:
             conn.send_bytes(b"ERROR: empty command")
             return
 
+        # Answered ahead of ``_state_lock`` -- the entire point of `stop` is to
+        # reach the adapter while a long command still holds that lock.
+        if command.split()[0].lower() in _CANCEL_VERBS:
+            conn.send_bytes(self._request_cancel().encode("utf-8"))
+            return
+
         from pyrung.dap.console import dispatch
 
         try:
             with self._adapter._state_lock:
-                result = dispatch(self._adapter, command, provenance="live")
+                # Patch _send_event under the lock: two concurrent connections
+                # would otherwise capture each other's wrapper as "original"
+                # and leak progress onto the wrong socket.
+                cancel = getattr(self._adapter, "_cancel", None)
+                if cancel is not None:
+                    cancel.reset()
+                with self._inflight_lock:
+                    self._inflight = command
+                original_send = self._adapter._send_event
+
+                def _send_with_progress(event: str, body: dict[str, Any] | None = None) -> None:
+                    original_send(event, body)
+                    if event == "output" and body and body.get("category") == "console":
+                        text = body.get("output", "")
+                        conn.send_bytes(b"\x01" + text.encode("utf-8"))
+
+                self._adapter._send_event = _send_with_progress  # type: ignore[assignment]
+                try:
+                    result = dispatch(self._adapter, command, provenance="live")
+                finally:
+                    self._adapter._send_event = original_send  # type: ignore[assignment]
+                    with self._inflight_lock:
+                        self._inflight = None
             conn.send_bytes(result.text.encode("utf-8"))
         except Exception as exc:
             conn.send_bytes(f"ERROR: {exc}".encode())
@@ -126,17 +183,31 @@ def _resolve_address(session_name: str) -> tuple[str, int]:
     return ("localhost", port)
 
 
-def send_command(session_name: str, command: str) -> tuple[bool, str]:
-    """Connect, send *command*, return ``(ok, text)``."""
+def send_command(
+    session_name: str,
+    command: str,
+    *,
+    on_progress: Any = None,
+) -> tuple[bool, str]:
+    """Connect, send *command*, return ``(ok, text)``.
+
+    If *on_progress* is provided it is called with each progress line
+    (str) the server emits during long-running commands like ``how``.
+    """
     address = _resolve_address(session_name)
     conn = Client(address, family="AF_INET")
     try:
         conn.send_bytes(command.encode("utf-8"))
-        raw = conn.recv_bytes()
-        text = raw.decode("utf-8")
-        if text.startswith("ERROR: "):
-            return False, text[7:]
-        return True, text
+        while True:
+            raw = conn.recv_bytes()
+            if raw[:1] == b"\x01":
+                if on_progress is not None:
+                    on_progress(raw[1:].decode("utf-8"))
+                continue
+            text = raw.decode("utf-8")
+            if text.startswith("ERROR: "):
+                return False, text[7:]
+            return True, text
     finally:
         conn.close()
 
@@ -243,16 +314,32 @@ def main() -> None:
 
     raw = " ".join(args.command)
     commands = [c.strip() for c in raw.split(";") if c.strip()]
+
+    def _print_progress(text: str) -> None:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
     all_ok = True
     for _i, command in enumerate(commands):
         try:
-            ok, text = send_command(args.session, command)
+            ok, text = send_command(args.session, command, on_progress=_print_progress)
         except ConnectionRefusedError:
             print(f"Cannot connect to session '{args.session}'", file=sys.stderr)
             sys.exit(1)
         except FileNotFoundError:
             print(f"Session '{args.session}' not found", file=sys.stderr)
             sys.exit(1)
+        except KeyboardInterrupt:
+            # Ask the session to cancel rather than just dropping the socket:
+            # the server would otherwise keep planning, holding its state lock
+            # and locking out every later command.
+            print()
+            try:
+                _, note = send_command(args.session, "stop")
+                print(note)
+            except (ConnectionRefusedError, FileNotFoundError, OSError) as exc:
+                print(f"Cancel request failed: {exc}", file=sys.stderr)
+            sys.exit(130)
         print(text)
         if not ok:
             all_ok = False

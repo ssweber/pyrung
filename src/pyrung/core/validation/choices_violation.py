@@ -14,9 +14,12 @@ from pyrung.core.tag import Tag
 from pyrung.core.validation._common import (
     WriteSite,
     _build_tag_map,
-    _format_site_location,
     _resolve_tag_names,
+    site_frame,
 )
+from pyrung.core.validation.display import FindingDisplay
+from pyrung.core.validation.render import operand_name
+from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -25,7 +28,7 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-CORE_CHOICES_VIOLATION = "CORE_CHOICES_VIOLATION"
+TAG_CHOICES_VIOLATION = "TAG_CHOICES_VIOLATION"
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -41,7 +44,12 @@ class ChoicesViolationFinding:
     value: Any
     allowed: tuple[Any, ...]
     site: WriteSite
-    message: str
+    display: FindingDisplay
+    severity: Severity = "error"
+
+    @property
+    def message(self) -> str:
+        return self.display.as_text()
 
 
 @dataclass(frozen=True)
@@ -119,6 +127,7 @@ def validate_choices(program: Program) -> ChoicesViolationReport:
                     conditions=conditions,
                     source_file=getattr(instr, "source_file", None),
                     source_line=getattr(instr, "source_line", None),
+                    instruction=instr,
                 )
                 literal_sites.append((site, value))
             if isinstance(instr, ForLoopInstruction) and hasattr(instr, "instructions"):
@@ -154,19 +163,24 @@ def validate_choices(program: Program) -> ChoicesViolationReport:
             continue
         if value not in tag.choices:
             allowed = tuple(tag.choices.keys())
-            loc = _format_site_location(site)
-            message = (
-                f"Tag '{site.target_name}' has choices {allowed} "
-                f"but write site copies literal {value!r}:\n  - {loc}"
+            token = operand_name(value)
+            allowed_txt = ", ".join(operand_name(c) for c in allowed)
+            display = FindingDisplay(
+                code=TAG_CHOICES_VIOLATION,
+                severity="error",
+                frames=(
+                    site_frame(site, caret_token=token, caret_label=f"not in ({allowed_txt})"),
+                ),
+                hint="use an allowed value, or add it to choices",
             )
             findings.append(
                 ChoicesViolationFinding(
-                    code=CORE_CHOICES_VIOLATION,
+                    code=TAG_CHOICES_VIOLATION,
                     target_name=site.target_name,
                     value=value,
                     allowed=allowed,
                     site=site,
-                    message=message,
+                    display=display,
                 )
             )
 

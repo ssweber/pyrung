@@ -132,7 +132,7 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
 
         suffix = ""
         if candidates:
-            suffix = f"\n{len(candidates)} candidate invariant(s) — use `candidates` to review"
+            suffix = f"\n{len(candidates)} candidate invariant(s); use `candidates` to review"
         return ConsoleResult(f"Recording stopped.\n{condensed.transcript}{suffix}")
 
     if capture.recording:

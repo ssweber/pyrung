@@ -55,23 +55,26 @@ if TYPE_CHECKING:
 class Whitelist:
     """Known-acceptable coverage findings.
 
-    Rung numbers are **1-indexed** — they match the values printed in the
-    coverage report and the ``Rung N`` labels shown by ``why()``/``cause()``
-    and the debugger (the first rung is ``1``).
+    Rung labels are **1-indexed** strings — they match the values printed in
+    the coverage report and the labels shown by ``why()``/``cause()`` and the
+    debugger: ``"3"`` for a main rung, ``"MySub:3"`` for a subroutine rung.
 
     Loaded from a TOML file with this shape::
 
         [cold_rungs]
-        allow = [22, 91, 104]
+        allow = ["22", "91", "MySub:3"]
 
         [stranded_chains]
         # Each entry is the effect-tag name.  The blocker fingerprint is
         # intentionally *not* part of the whitelist — if the blocker
         # reason changes, the entry should be re-evaluated.
         allow = ["Sts_SpecialFault"]
+
+    Bare integers are also accepted for ``cold_rungs`` (coerced to strings)
+    so existing integer whitelists keep working.
     """
 
-    cold_rungs: frozenset[int] = field(default_factory=frozenset)
+    cold_rungs: frozenset[str] = field(default_factory=frozenset)
     stranded_tags: frozenset[str] = field(default_factory=frozenset)
 
 
@@ -88,12 +91,14 @@ def load_whitelist(path: Path) -> Whitelist:
     text = path.read_text(encoding="utf-8")
     data = tomllib.loads(text)
 
-    cold = frozenset(data.get("cold_rungs", {}).get("allow", []))
+    # Coerce to strings so existing integer whitelists (``allow = [22, 91]``)
+    # keep working alongside the new label form (``allow = ["MySub:3"]``).
+    cold = frozenset(str(x) for x in data.get("cold_rungs", {}).get("allow", []))
     stranded = frozenset(data.get("stranded_chains", {}).get("allow", []))
     return Whitelist(cold_rungs=cold, stranded_tags=stranded)
 
 
-def check_whitelist(report: CoverageReport, whitelist: Whitelist) -> tuple[set[int], set[str]]:
+def check_whitelist(report: CoverageReport, whitelist: Whitelist) -> tuple[set[str], set[str]]:
     """Return (new_cold, new_stranded) not covered by the whitelist."""
     new_cold = set(report.cold_rungs) - set(whitelist.cold_rungs)
     stranded_tags = {tag for tag, _blockers in report.stranded_chains}

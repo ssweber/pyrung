@@ -65,7 +65,9 @@ hardware-agnostic ``pyrung`` core:
 Typical usage::
 
     from pyrung import *
-    from pyrung.click import x, y, ds, TagMap
+    from pyrung.click import ClickBlocks, TagMap
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
     Button = Bool("Button")
     Light  = Bool("Light")
@@ -77,7 +79,7 @@ Typical usage::
     mapping = TagMap({Button: x[1], Light: y[1]})
 """
 
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 from pyclickplc.addresses import format_address_display
 from pyclickplc.banks import BANKS, DEFAULT_RETENTIVE, BankConfig, DataType
@@ -164,26 +166,64 @@ def _block_from_bank_config(config: BankConfig) -> Block | InputBlock | OutputBl
     )
 
 
-x: InputBlock = cast(InputBlock, _block_from_bank_config(BANKS["X"]))
-y: OutputBlock = cast(OutputBlock, _block_from_bank_config(BANKS["Y"]))
-c: Block = _block_from_bank_config(BANKS["C"])
-t: Block = _block_from_bank_config(BANKS["T"])
-ct: Block = _block_from_bank_config(BANKS["CT"])
-sc: Block = _block_from_bank_config(BANKS["SC"])
-ds: Block = _block_from_bank_config(BANKS["DS"])
-dd: Block = _block_from_bank_config(BANKS["DD"])
-dh: Block = _block_from_bank_config(BANKS["DH"])
-df: Block = _block_from_bank_config(BANKS["DF"])
-xd: InputBlock = cast(InputBlock, _block_from_bank_config(BANKS["XD"]))
-yd: OutputBlock = cast(OutputBlock, _block_from_bank_config(BANKS["YD"]))
-xd0u = InputTag("XD0u", TagType.WORD, retentive=False)
-yd0u = OutputTag("YD0u", TagType.WORD, retentive=False)
-td: Block = _block_from_bank_config(BANKS["TD"])
-ctd: Block = _block_from_bank_config(BANKS["CTD"])
-sd: Block = _block_from_bank_config(BANKS["SD"])
-txt: Block = _block_from_bank_config(BANKS["TXT"])
+class ClickBlockSet(NamedTuple):
+    x: InputBlock
+    y: OutputBlock
+    c: Block
+    t: Block
+    ct: Block
+    sc: Block
+    ds: Block
+    dd: Block
+    dh: Block
+    df: Block
+    xd: InputBlock
+    yd: OutputBlock
+    xd0u: InputTag
+    yd0u: OutputTag
+    td: Block
+    ctd: Block
+    sd: Block
+    txt: Block
 
-from pyrung.click.codegen import ladder_to_pyrung, ladder_to_pyrung_project
+
+def ClickBlocks() -> ClickBlockSet:
+    """Create a fresh set of Click PLC memory blocks.
+
+    Returns a named tuple of 18 independent block/tag instances — one per
+    Click memory bank plus the XD0u/YD0u unsolicited-response tags.
+    Callers unpack the result to get instance-scoped blocks with no
+    shared mutable state::
+
+        x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
+    """
+    return ClickBlockSet(
+        x=cast(InputBlock, _block_from_bank_config(BANKS["X"])),
+        y=cast(OutputBlock, _block_from_bank_config(BANKS["Y"])),
+        c=_block_from_bank_config(BANKS["C"]),
+        t=_block_from_bank_config(BANKS["T"]),
+        ct=_block_from_bank_config(BANKS["CT"]),
+        sc=_block_from_bank_config(BANKS["SC"]),
+        ds=_block_from_bank_config(BANKS["DS"]),
+        dd=_block_from_bank_config(BANKS["DD"]),
+        dh=_block_from_bank_config(BANKS["DH"]),
+        df=_block_from_bank_config(BANKS["DF"]),
+        xd=cast(InputBlock, _block_from_bank_config(BANKS["XD"])),
+        yd=cast(OutputBlock, _block_from_bank_config(BANKS["YD"])),
+        xd0u=InputTag("XD0u", TagType.WORD, retentive=False),
+        yd0u=OutputTag("YD0u", TagType.WORD, retentive=False),
+        td=_block_from_bank_config(BANKS["TD"]),
+        ctd=_block_from_bank_config(BANKS["CTD"]),
+        sd=_block_from_bank_config(BANKS["SD"]),
+        txt=_block_from_bank_config(BANKS["TXT"]),
+    )
+
+
+from pyrung.click.codegen import (
+    CodegenIdentityError,
+    ladder_to_pyrung,
+    ladder_to_pyrung_project,
+)
 from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.ladder import LadderBundle, LadderExportError, pyrung_to_ladder
 from pyrung.click.nop import NopInstruction, nop
@@ -214,7 +254,7 @@ def _click_dialect_validator(program: Program, *, mode: str = "warn", **kwargs: 
         raise TypeError("Program.validate('click', ...) expects tag_map=TagMap(...).")
     if mode not in {"warn", "strict"}:
         raise ValueError("Program.validate('click', ...) mode must be 'warn' or 'strict'.")
-    validated_mode = cast(ValidationMode, mode)
+    validated_mode = mode
     return validate_click_program(program, tag_map=tag_map, mode=validated_mode, **kwargs)
 
 
@@ -226,24 +266,8 @@ __all__ = [
     "Float",
     "Hex",
     "Txt",
-    "x",
-    "y",
-    "c",
-    "t",
-    "ct",
-    "sc",
-    "ds",
-    "dd",
-    "dh",
-    "df",
-    "xd",
-    "yd",
-    "xd0u",
-    "yd0u",
-    "td",
-    "ctd",
-    "sd",
-    "txt",
+    "ClickBlocks",
+    "ClickBlockSet",
     "TagMap",
     "LadderBundle",
     "LadderExportError",
@@ -261,7 +285,10 @@ __all__ = [
     "nop",
     "RawInstruction",
     "raw",
+    "CodegenIdentityError",
     "ladder_to_pyrung",
     "ladder_to_pyrung_project",
     "pyrung_to_ladder",
+    "validate_click_program",
+    "ValidationMode",
 ]

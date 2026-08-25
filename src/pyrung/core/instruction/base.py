@@ -8,6 +8,17 @@ from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
+    from pyrung.core.instruction.advance import AdvanceProfile
+
+
+# Immutable execution-plan opcodes.  Rungs classify their contents once while
+# the program is built so the scan walker does not repeat concrete-type checks
+# for every instruction on every scan.
+_EXECUTOR_INSTRUCTION = 0
+_EXECUTOR_CALL = 1
+_EXECUTOR_FOR_LOOP = 2
+_EXECUTOR_RETURN = 3
+_EXECUTOR_BRANCH = 4
 
 
 @dataclass(frozen=True)
@@ -41,6 +52,7 @@ class Instruction(ABC):
     _conditions: tuple[str, ...] = ()
     _structural_fields: tuple[str, ...] = ()
     _exclusive_fields: tuple[str, ...] = ()
+    _executor_kind: int = _EXECUTOR_INSTRUCTION
 
     @abstractmethod
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -68,7 +80,13 @@ class Instruction(ABC):
         Walkers see reads, writes, hidden conditions, and any structural
         fields that should still be surfaced for validation/codegen.
         """
-        fields = cls._reads + cls._writes + cls._conditions + cls._structural_fields
+        fields = (
+            cls._reads
+            + cls._writes
+            + cls._conditions
+            + cls._structural_fields
+            + getattr(cls, "_status_fields", ())
+        )
         return tuple(dict.fromkeys(fields))
 
     def always_execute(self) -> bool:
@@ -95,6 +113,10 @@ class Instruction(ABC):
     def is_terminal(self) -> bool:
         """Whether this instruction must be the last execution item in its flow."""
         return False
+
+    def advance_profile(self) -> AdvanceProfile | None:
+        """Describe the next cross-scan operation for owned result channels."""
+        return None
 
 
 class SubroutineReturnSignal(Exception):

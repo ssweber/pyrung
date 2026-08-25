@@ -55,7 +55,9 @@ class TagMap:
 
     .. code-block:: python
 
-        from pyrung.click import TagMap, x, y, c, ds
+        from pyrung.click import ClickBlocks, TagMap
+
+        x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
         mapping = TagMap({
             StartButton:  x[1],              # Tag → Tag (BOOL → X001)
@@ -129,6 +131,9 @@ class TagMap:
         self._structure_by_name: dict[str, StructuredImport] = {}
         self._structure_warnings: tuple[str, ...] = ()
         self._named_array_spans: dict[str, tuple[str, int, int]] = {}
+        self._source_unmapped_defaults: dict[tuple[str, int], object] = {}
+        self._source_unmapped_retentive: dict[tuple[str, int], bool] = {}
+        self._source_unmapped_comments: dict[tuple[str, int], str] = {}
 
         used_hardware: dict[int, str] = {}
         used_hardware_logical: dict[int, str] = {}
@@ -245,9 +250,14 @@ class TagMap:
             reserved_system_hardware_keys=_RESERVED_SYSTEM_HARDWARE_KEYS,
         )
 
-    def to_nickname_file(self, path: str | Path) -> int:
+    def to_nickname_file(
+        self,
+        path: str | Path,
+        *,
+        blocks: Iterable[Any] | None = None,
+    ) -> int:
         """Write this mapping to a Click nickname CSV file."""
-        return write_tag_map_to_nickname_file(self, path)
+        return write_tag_map_to_nickname_file(self, path, blocks=blocks)
 
     def resolve(self, source: Tag | Block | str, index: int | None = None) -> str:
         """Resolve a logical source to a hardware address string."""
@@ -261,7 +271,7 @@ class TagMap:
                 entry = self._system_alias_forward.get(source)
             if entry is None:
                 raise KeyError(f"No mapping for standalone tag {source!r}.")
-            return entry.hardware.name
+            return self._hardware_address_name(entry.hardware)
 
         if isinstance(source, Tag):
             if index is not None:
@@ -272,12 +282,12 @@ class TagMap:
             if entry is None:
                 hardware = self._block_slot_forward_by_id.get(id(source))
                 if hardware is not None:
-                    return hardware.name
+                    return self._hardware_address_name(hardware)
                 hardware = self._block_slot_forward_by_name.get(source.name)
                 if hardware is not None:
-                    return hardware.name
+                    return self._hardware_address_name(hardware)
                 raise KeyError(f"No mapping for standalone tag {source.name!r}.")
-            return entry.hardware.name
+            return self._hardware_address_name(entry.hardware)
 
         if isinstance(source, Block):
             if index is None:
@@ -291,7 +301,7 @@ class TagMap:
             hardware_addr = entry.logical_to_hardware.get(index)
             if hardware_addr is None:
                 raise IndexError(f"Logical index {index} out of range for block {source.name!r}.")
-            return entry.hardware.block[hardware_addr].name
+            return self._hardware_address_name(entry.hardware.block[hardware_addr])
 
         raise TypeError("resolve source must be Tag, Block, or str.")
 
@@ -565,10 +575,15 @@ class TagMap:
             return []
         if isinstance(mappings, dict):
             mapping_dict = cast(dict[Tag | Block, Tag | BlockRange], mappings)
-            return [
-                MappingEntry(source=source, target=target)
-                for source, target in mapping_dict.items()
-            ]
+            entries: list[MappingEntry] = []
+            for source, target in mapping_dict.items():
+                # Route through map_to so dict-form construction also stamps
+                # slot identity onto the hardware bank.
+                if isinstance(source, Block):
+                    entries.append(source.map_to(cast("BlockRange", target)))
+                else:
+                    entries.append(source.map_to(cast("Tag", target)))
+            return entries
 
         normalized: list[MappingEntry] = []
         for item in mappings:
@@ -601,7 +616,20 @@ class TagMap:
         )
 
     @staticmethod
+    def _hardware_address_name(tag: Tag) -> str:
+        block = getattr(tag, "_pyrung_block", None)
+        if block is not None:
+            addr: int = getattr(tag, "_pyrung_block_addr")  # noqa: B009
+            return block._format_tag_name(addr)
+        return tag.name
+
+    @staticmethod
     def _parse_hardware_tag(tag: Tag) -> tuple[str, int]:
+        block = getattr(tag, "_pyrung_block", None)
+        if block is not None:
+            addr: int = getattr(tag, "_pyrung_block_addr")  # noqa: B009
+            hw_name = block._format_tag_name(addr)
+            return parse_address(hw_name)
         try:
             memory_type, address = parse_address(tag.name)
         except ValueError as exc:

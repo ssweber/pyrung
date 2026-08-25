@@ -19,14 +19,18 @@ from typing import TYPE_CHECKING
 
 from pyrung.core.validation._common import (
     WriteSite,
+    _AliasMap,
     _build_caller_map,
+    _build_ote_alias_map,
     _caller_conditions,
     _CallerMap,
     _chain_pair_mutually_exclusive,
     _collect_write_sites,
-    _format_site_location,
     _instruction_write_targets,
+    site_frame,
 )
+from pyrung.core.validation.display import FindingDisplay
+from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -35,7 +39,7 @@ if TYPE_CHECKING:
 # Public types
 # ---------------------------------------------------------------------------
 
-CORE_CONFLICTING_OUTPUT = "CORE_CONFLICTING_OUTPUT"
+COIL_CONFLICTING_OUTPUT = "COIL_CONFLICTING_OUTPUT"
 
 # Re-export WriteSite under the original public name for backwards compat.
 OutputSite = WriteSite
@@ -48,7 +52,12 @@ class ConflictingOutputFinding:
     code: str
     target_name: str
     sites: tuple[OutputSite, ...]
-    message: str
+    display: FindingDisplay
+    severity: Severity = "error"
+
+    @property
+    def message(self) -> str:
+        return self.display.as_text()
 
 
 @dataclass(frozen=True)
@@ -67,7 +76,10 @@ class ConflictingOutputReport:
 
 
 def _sites_mutually_exclusive(
-    site_a: OutputSite, site_b: OutputSite, caller_map: _CallerMap
+    site_a: OutputSite,
+    site_b: OutputSite,
+    caller_map: _CallerMap,
+    alias_map: _AliasMap | None = None,
 ) -> bool:
     """Check if two output sites are provably mutually exclusive.
 
@@ -114,7 +126,7 @@ def _sites_mutually_exclusive(
     # Every pair of caller chains must be mutually exclusive
     for ca in chains_a:
         for cb in chains_b:
-            if not _chain_pair_mutually_exclusive(ca, cb):
+            if not _chain_pair_mutually_exclusive(ca, cb, alias_map):
                 return False
     return True
 
@@ -134,6 +146,7 @@ def validate_conflicting_outputs(program: Program) -> ConflictingOutputReport:
     """
     sites = _collect_write_sites(program, target_extractor=_instruction_write_targets)
     caller_map = _build_caller_map(program)
+    alias_map = _build_ote_alias_map(program)
 
     # Group sites by target tag name
     groups: dict[str, list[OutputSite]] = defaultdict(list)
@@ -151,7 +164,7 @@ def validate_conflicting_outputs(program: Program) -> ConflictingOutputReport:
         conflicting: set[int] = set()
         for i in range(len(group)):
             for j in range(i + 1, len(group)):
-                if not _sites_mutually_exclusive(group[i], group[j], caller_map):
+                if not _sites_mutually_exclusive(group[i], group[j], caller_map, alias_map):
                     conflicting.add(i)
                     conflicting.add(j)
 
@@ -159,18 +172,20 @@ def validate_conflicting_outputs(program: Program) -> ConflictingOutputReport:
             continue
 
         conflict_sites = tuple(group[i] for i in sorted(conflicting))
-        locations = [_format_site_location(s) for s in conflict_sites]
-        message = (
-            f"Tag '{target_name}' is written by {len(conflict_sites)} "
-            f"non-exclusive instructions:\n" + "\n".join(f"  - {loc}" for loc in locations)
+        display = FindingDisplay(
+            code=COIL_CONFLICTING_OUTPUT,
+            severity="error",
+            frames=tuple(site_frame(s) for s in conflict_sites),
+            problem=f"{target_name} is set by multiple instructions in one scan.",
+            hint="only one should drive it; gate them exclusively",
         )
 
         findings.append(
             ConflictingOutputFinding(
-                code=CORE_CONFLICTING_OUTPUT,
+                code=COIL_CONFLICTING_OUTPUT,
                 target_name=target_name,
                 sites=conflict_sites,
-                message=message,
+                display=display,
             )
         )
 

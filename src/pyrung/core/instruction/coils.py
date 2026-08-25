@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 from .base import Instruction, OneShotMixin
 from .resolvers import (
@@ -14,6 +14,36 @@ from .resolvers import (
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
     from pyrung.core.memory_block import BlockRange, IndirectBlockRange
+
+
+def _static_coil_targets(
+    target: Tag | BlockRange | IndirectBlockRange | ImmediateRef,
+) -> tuple[Tag, ...] | None:
+    """Resolve immutable direct coil destinations once at construction."""
+    from pyrung.core.memory_block import BlockRange
+
+    if isinstance(target, ImmediateRef):
+        return _static_coil_targets(target.value)
+    if isinstance(target, Tag):
+        return (target,)
+    if isinstance(target, BlockRange):
+        return tuple(target.tags())
+    return None
+
+
+_RESET_VALUES: dict[TagType, bool | int | float | str] = {
+    TagType.BOOL: False,
+    TagType.INT: 0,
+    TagType.DINT: 0,
+    TagType.REAL: 0.0,
+    TagType.WORD: 0,
+    TagType.CHAR: "",
+}
+
+
+def reset_value_for_type(tag_type: TagType) -> bool | int | float | str:
+    """Return the OFF/zero value written by a RESET instruction."""
+    return _RESET_VALUES[tag_type]
 
 
 class OutInstruction(OneShotMixin, Instruction):
@@ -36,9 +66,12 @@ class OutInstruction(OneShotMixin, Instruction):
     ):
         OneShotMixin.__init__(self, oneshot)
         self.target = target
+        self._static_targets = _static_coil_targets(target)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        targets = resolve_coil_targets_ctx(self.target, ctx)
+        targets = self._static_targets
+        if targets is None:
+            targets = resolve_coil_targets_ctx(self.target, ctx)
         if not enabled:
             self.reset_oneshot()
             if self._oneshot:
@@ -76,18 +109,23 @@ class LatchInstruction(Instruction):
 
     def __init__(self, target: Tag | BlockRange | IndirectBlockRange | ImmediateRef):
         self.target = target
+        self._static_targets = _static_coil_targets(target)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
             return
-        for target in resolve_coil_targets_ctx(self.target, ctx):
+        targets = self._static_targets
+        if targets is None:
+            targets = resolve_coil_targets_ctx(self.target, ctx)
+        for target in targets:
             ctx.set_tag(target.name, True)
 
 
 class ResetInstruction(Instruction):
     """Reset/Unlatch instruction (RST).
 
-    Sets the target to its default value (False for bits, 0 for ints).
+    Clears the target to its type's OFF/zero value, independent of its
+    initialization default.
     """
 
     _reads = ()
@@ -97,9 +135,13 @@ class ResetInstruction(Instruction):
 
     def __init__(self, target: Tag | BlockRange | IndirectBlockRange | ImmediateRef):
         self.target = target
+        self._static_targets = _static_coil_targets(target)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
             return
-        for target in resolve_coil_targets_ctx(self.target, ctx):
-            ctx.set_tag(target.name, target.default)
+        targets = self._static_targets
+        if targets is None:
+            targets = resolve_coil_targets_ctx(self.target, ctx)
+        for target in targets:
+            ctx.set_tag(target.name, reset_value_for_type(target.type))

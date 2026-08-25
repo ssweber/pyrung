@@ -10,7 +10,9 @@ import pytest
 from pyclickplc.addresses import AddressRecord, get_addr_key
 from pyclickplc.banks import DataType
 
-from pyrung.click import TagMap, c, df, ds, x
+from pyrung.click import ClickBlocks, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click.tag_map._parsers import (
     TagMeta,
     _compose_address_comment,
@@ -19,6 +21,7 @@ from pyrung.click.tag_map._parsers import (
     parse_tag_meta,
 )
 from pyrung.core import Block, Bool, Physical, Tag, TagType
+from pyrung.core.physical import Approach, Pulse, Ramp
 
 
 def test_resolve_standalone_tag():
@@ -170,7 +173,7 @@ def test_address_conflict_tag_tag_raises():
     valve = Bool("Valve")
     pump = Bool("Pump")
 
-    with pytest.raises(ValueError, match="Hardware address conflict"):
+    with pytest.raises(ValueError, match="conflict"):
         TagMap({valve: c[1], pump: c[1]})
 
 
@@ -497,6 +500,51 @@ def test_nickname_file_round_trip_preserves_physical_tag_meta(tmp_path):
     restored_tag = restored.tags()[0].logical
     assert restored_tag.link == "Enable"
     assert restored_tag.physical == feedback_physical
+
+
+@pytest.mark.parametrize(
+    ("spec", "tag_type", "addr", "expected_token"),
+    [
+        (Ramp(up=0.8, down=-0.05), TagType.REAL, df[101], "profile=ramp:up=0.8|down=-0.05"),
+        (
+            Approach(toward=180.0, rate=0.3),
+            TagType.REAL,
+            df[102],
+            "profile=approach:toward=180.0|rate=0.3",
+        ),
+        (
+            Approach(toward="SetPt", rate=0.3),
+            TagType.REAL,
+            df[103],
+            "profile=approach:toward=SetPt|rate=0.3",
+        ),
+        (
+            Pulse(on_dwell="8ms", off_dwell="8ms"),
+            TagType.BOOL,
+            c[201],
+            "profile=pulse:on_dwell=8ms|off_dwell=8ms",
+        ),
+    ],
+)
+def test_nickname_file_round_trip_preserves_profile_tag_meta(
+    tmp_path, spec, tag_type, addr, expected_token
+):
+    # A declarative profile spec must survive to_nickname_file -> from_nickname_file.
+    # Its comment token carries ``:`` and ``|`` (spec grammar), which the scalar
+    # ``_CHOICE_VALUE_RE`` forbids; the writer must accept it as the reader already does.
+    profile_physical = Physical("Fb", profile=spec)
+    fb = Tag("Fb", tag_type, physical=profile_physical, link="Enable")
+    mapping = TagMap({fb: addr}, include_system=False)
+
+    path = tmp_path / "profile_meta_round_trip.csv"
+    mapping.to_nickname_file(path)
+    record = next(r for r in pyclickplc.read_csv(path).values() if r.nickname == "Fb")
+    assert expected_token in record.comment
+
+    restored = TagMap.from_nickname_file(path)
+    restored_tag = next(e.logical for e in restored.tags() if e.logical.name == "Fb")
+    # Physical is a frozen dataclass, so == compares the profile field too.
+    assert restored_tag.physical == profile_physical
 
 
 def test_from_nickname_file_resolves_named_physical_reference(tmp_path):
@@ -2319,7 +2367,6 @@ def test_load_snapshot_returns_system_state(tmp_path, monkeypatch):
 
 
 def test_stamp_external_standalone_tags():
-    from pyrung.click import y
     from pyrung.core import Int
 
     button = Bool("Button")
@@ -2334,8 +2381,6 @@ def test_stamp_external_standalone_tags():
 
 
 def test_stamp_external_block_range():
-    from pyrung.click import y
-
     sensors = Block("Sensor", TagType.BOOL, 1, 4)
     outputs = Block("Out", TagType.BOOL, 1, 4)
 
@@ -2366,7 +2411,6 @@ def test_no_stamp_for_non_input():
 
 
 def test_stamp_lock_standalone_tags():
-    from pyrung.click import y
     from pyrung.core import Int
 
     button = Bool("Button")
@@ -2381,8 +2425,6 @@ def test_stamp_lock_standalone_tags():
 
 
 def test_stamp_lock_block_range():
-    from pyrung.click import y
-
     sensors = Block("Sensor", TagType.BOOL, 1, 4)
     outputs = Block("Out", TagType.BOOL, 1, 4)
 
@@ -2397,7 +2439,6 @@ def test_stamp_lock_block_range():
 
 def test_stamp_lock_noop_when_already_lock():
     motor = Bool("Motor", lock=True)
-    from pyrung.click import y
 
     TagMap({motor: y[1]}, include_system=False)
     assert motor.lock
@@ -2407,3 +2448,37 @@ def test_no_lock_stamp_for_non_output():
     button = Bool("Button")
     TagMap({button: x[1]}, include_system=False)
     assert not button.lock
+
+
+def test_block_map_to_stamps_slot_identity_onto_bank():
+    """A block-mapped register is one tag: the bank slot IS the logical slot.
+
+    Without this an indirect ``dh[expr]`` reader saw a blank 0 instead of the
+    configured value — a config table mapped as a block was a blank ROM.
+    """
+    cfg = Block("Cfg", TagType.WORD, 1, 3)
+    cfg.slot(1, name="Cfg_Prod", default=0x0000)
+    cfg.slot(2, name="Cfg_Maint", default=0x1BE4)
+    cfg.slot(3, name="Cfg_Manual", default=0x1FFF)
+
+    TagMap({cfg: dh.select(201, 203)}, include_system=False)
+
+    assert dh[201] is cfg[1]
+    assert dh[202] is cfg[2]
+    assert dh[203] is cfg[3]
+    assert dh[202].name == "Cfg_Maint"
+    assert dh[202].default == 0x1BE4
+    assert dh[203].default == 0x1FFF
+
+
+def test_named_array_map_to_stamps_slot_identity_onto_bank():
+    from pyrung.core import Int, named_array
+
+    @named_array(Int, count=2)
+    class Alarm:
+        id = 0
+
+    TagMap({Alarm._blocks["id"]: ds.select(1001, 1002)}, include_system=False)
+
+    assert ds[1001] is Alarm[1].id
+    assert ds[1002] is Alarm[2].id

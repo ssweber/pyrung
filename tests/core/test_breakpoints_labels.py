@@ -6,6 +6,7 @@ from datetime import datetime
 
 import pytest
 
+from pyrung import Or, Program, Rung, Timer, latch, on_delay, out
 from pyrung.core import PLC, Bool, Int
 from pyrung.core.state import SystemState
 
@@ -204,3 +205,88 @@ def test_run_until_accepts_callable_predicate() -> None:
 
     result = runner.run_until(lambda state: state.scan_id >= 3, max_cycles=10)
     assert result.scan_id == 3
+
+
+# ---------------------------------------------------------------------------
+# .do(callback) — reactive side-effect action (the hook for conditional holds)
+# ---------------------------------------------------------------------------
+
+
+def test_do_breakpoint_runs_callback_on_match_and_continues() -> None:
+    runner = PLC(logic=[])
+    hits: list[int] = []
+    runner.when(lambda state: state.scan_id > 0 and state.scan_id % 2 == 0).do(
+        lambda state: hits.append(state.scan_id)
+    )
+
+    runner.run(cycles=5)
+
+    assert runner.current_state.scan_id == 5  # do() does not pause — run continues
+    assert hits == [2, 4]
+
+
+def test_do_breakpoint_can_force_a_tag() -> None:
+    motor = Bool("Motor", external=True)
+    lamp = Bool("Lamp")
+    with Program() as prog:
+        with Rung(motor):
+            out(lamp)
+    runner = PLC(prog)
+    runner.when(lambda state: state.scan_id == 1).do(lambda state: runner.force("Motor", True))
+
+    runner.run(cycles=3)
+
+    assert runner.current_state.tags["Motor"] is True
+    assert runner.current_state.tags["Lamp"] is True  # forced input flowed through logic
+
+
+def test_do_breakpoint_handle_removable() -> None:
+    runner = PLC(logic=[])
+    hits: list[int] = []
+    handle = runner.when(lambda state: True).do(lambda state: hits.append(state.scan_id))
+
+    runner.run(cycles=2)
+    handle.remove()
+    runner.run(cycles=2)
+
+    assert hits == [1, 2]  # nothing after remove
+
+
+def _watchdog_delay_program() -> Program:
+    """The liveness shape, minimal: a sensor under two opposite-edge watchdogs
+    and a delay that only counts while neither has faulted."""
+    Sensor = Bool("Sensor", external=True)
+    OffWD = Timer.clone("OffWD")  # resets on Sensor -> counts while False
+    OnWD = Timer.clone("OnWD")  # resets on ~Sensor -> counts while True
+    RunDelay = Timer.clone("RunDelay")
+    Fault = Bool("Fault")
+    Running = Bool("Running")
+    with Program() as prog:
+        with Rung():
+            on_delay(OffWD, 50, "ms").reset(Sensor)
+        with Rung():
+            on_delay(OnWD, 50, "ms").reset(~Sensor)
+        with Rung(Or(OffWD.Done, OnWD.Done)):
+            latch(Fault)
+        with Rung(~Fault):
+            on_delay(RunDelay, 1000, "ms")
+        with Rung(RunDelay.Done):
+            out(Running)
+    return prog
+
+
+def test_do_breakpoint_oscillation_survives_fold() -> None:
+    # A do() oscillator flips the sensor every scan; folding cannot skip past it
+    # because the flip changes visible state each scan (the window degrades to
+    # scan-by-scan exactly during the oscillation).  So both watchdogs stay reset
+    # and the 1 s RunDelay reaches Running with no fault, even under fold=True.
+    plc = PLC(_watchdog_delay_program(), dt=0.010)
+    plc.step()
+    plc.when(lambda state: True).do(
+        lambda state: plc.patch({"Sensor": state.tags.get("Sensor") is not True})
+    )
+
+    plc.run_until(lambda state: state.tags.get("Running") is True, fold=True, max_cycles=3000)
+
+    assert plc.current_state.tags["Running"] is True
+    assert plc.current_state.tags["Fault"] is False

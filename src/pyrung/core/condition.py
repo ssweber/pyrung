@@ -63,27 +63,46 @@ class Condition(ABC):
             )
         return self is other
 
+    def __bool__(self) -> bool:
+        raise TypeError(
+            f"Cannot use Condition '{type(self).__name__}' as boolean. "
+            "Use .evaluate(ctx) inside a scan, or compare against .default "
+            "for plain-value assertions: assert val == Tag.default"
+        )
+
     def __hash__(self) -> int:
         """Allow conditions to be used in sets/dicts."""
         return id(self)
+
+    def __repr__(self) -> str:
+        """Render as the pyrung source that built this condition.
+
+        The default object repr is an address, which makes a condition opaque
+        everywhere it is shown -- logs, exceptions, plan output, and golden
+        files.  :func:`~pyrung.core.validation.render.render_condition` is the
+        neutral owner of that text and never fails; import it lazily because it
+        reads this module's classes.  This is presentation only: ``==`` and
+        ``hash`` remain identity-based, so an equal repr is not equality.
+        """
+        try:
+            from pyrung.core.validation.render import render_condition
+
+            return render_condition(self)
+        except Exception:  # noqa: BLE001 - repr must never raise
+            return f"<{type(self).__name__}>"
 
 
 class CompareEq(Condition):
     """Equality comparison: tag == value or tag == other_tag."""
 
     def __init__(self, tag: Tag, value: Any):
-        from pyrung.core.tag import Tag as _Tag
-
         self.tag = tag
         self.value = value
-        self._value_is_tag = isinstance(value, _Tag)
+        self._value_kind = _classify_value(value)
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         tag_value = ctx.get_tag(self.tag.name, self.tag.default)
-        if self._value_is_tag:
-            other_value = ctx.get_tag(self.value.name, self.value.default)
-        else:
-            other_value = self.value
+        other_value = _resolve_classified(self.value, self._value_kind, ctx)
         return tag_value == other_value
 
 
@@ -91,18 +110,13 @@ class CompareNe(Condition):
     """Inequality comparison: tag != value or tag != other_tag."""
 
     def __init__(self, tag: Tag, value: Any):
-        from pyrung.core.tag import Tag as _Tag
-
         self.tag = tag
         self.value = value
-        self._value_is_tag = isinstance(value, _Tag)
+        self._value_kind = _classify_value(value)
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         tag_value = ctx.get_tag(self.tag.name, self.tag.default)
-        if self._value_is_tag:
-            other_value = ctx.get_tag(self.value.name, self.value.default)
-        else:
-            other_value = self.value
+        other_value = _resolve_classified(self.value, self._value_kind, ctx)
         return tag_value != other_value
 
 
@@ -111,26 +125,36 @@ _VALUE_TAG = 1
 _VALUE_EXPR = 2
 
 
+_VALUE_INDIRECT = 3
+
+
 def _classify_value(value: Any) -> int:
     from pyrung.core.expression import Expression
+    from pyrung.core.memory_block import IndirectRef
     from pyrung.core.tag import Tag
 
     if isinstance(value, Expression):
         return _VALUE_EXPR
     if isinstance(value, Tag):
         return _VALUE_TAG
+    if isinstance(value, IndirectRef):
+        return _VALUE_INDIRECT
     return _VALUE_LITERAL
 
 
 def _resolve_value(value: Any, ctx: ScanContext | ConditionView) -> Any:
-    """Resolve a value that may be a Tag, Expression, or literal."""
+    """Resolve a value that may be a Tag, IndirectRef, Expression, or literal."""
     from pyrung.core.expression import Expression
+    from pyrung.core.memory_block import IndirectRef
     from pyrung.core.tag import Tag
 
     if isinstance(value, Expression):
         return value.evaluate(ctx)
     if isinstance(value, Tag):
         return ctx.get_tag(value.name, value.default)
+    if isinstance(value, IndirectRef):
+        resolved_tag = value.resolve_ctx(ctx)
+        return ctx.get_tag(resolved_tag.name, resolved_tag.default)
     return value
 
 
@@ -139,6 +163,9 @@ def _resolve_classified(value: Any, kind: int, ctx: ScanContext | ConditionView)
         return value.evaluate(ctx)
     if kind == _VALUE_TAG:
         return ctx.get_tag(value.name, value.default)
+    if kind == _VALUE_INDIRECT:
+        resolved_tag = value.resolve_ctx(ctx)
+        return ctx.get_tag(resolved_tag.name, resolved_tag.default)
     return value
 
 
@@ -309,7 +336,7 @@ class IndirectCompareEq(Condition):
         if self._value_is_tag:
             other_value = ctx.get_tag(self.value.name, self.value.default)
         else:
-            other_value = self.value
+            other_value = _resolve_value(self.value, ctx)
         return resolved_value == other_value
 
 
@@ -329,7 +356,7 @@ class IndirectCompareNe(Condition):
         if self._value_is_tag:
             other_value = ctx.get_tag(self.value.name, self.value.default)
         else:
-            other_value = self.value
+            other_value = _resolve_value(self.value, ctx)
         return resolved_value != other_value
 
 
@@ -343,7 +370,7 @@ class IndirectCompareLt(Condition):
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         resolved_tag = self.indirect_ref.resolve_ctx(ctx)
         tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
-        return tag_value < self.value
+        return tag_value < _resolve_value(self.value, ctx)
 
 
 class IndirectCompareLe(Condition):
@@ -356,7 +383,7 @@ class IndirectCompareLe(Condition):
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         resolved_tag = self.indirect_ref.resolve_ctx(ctx)
         tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
-        return tag_value <= self.value
+        return tag_value <= _resolve_value(self.value, ctx)
 
 
 class IndirectCompareGt(Condition):
@@ -369,7 +396,7 @@ class IndirectCompareGt(Condition):
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         resolved_tag = self.indirect_ref.resolve_ctx(ctx)
         tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
-        return tag_value > self.value
+        return tag_value > _resolve_value(self.value, ctx)
 
 
 class IndirectCompareGe(Condition):
@@ -382,7 +409,7 @@ class IndirectCompareGe(Condition):
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         resolved_tag = self.indirect_ref.resolve_ctx(ctx)
         tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
-        return tag_value >= self.value
+        return tag_value >= _resolve_value(self.value, ctx)
 
 
 # =============================================================================
@@ -459,7 +486,10 @@ class AllCondition(Condition):
             raise ValueError("And() requires at least one condition")
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        return all(cond.evaluate(ctx) for cond in self.conditions)
+        for cond in self.conditions:
+            if not cond.evaluate(ctx):
+                return False
+        return True
 
 
 class AnyCondition(Condition):
@@ -483,7 +513,10 @@ class AnyCondition(Condition):
             raise ValueError("Or() requires at least one condition")
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        return any(cond.evaluate(ctx) for cond in self.conditions)
+        for cond in self.conditions:
+            if cond.evaluate(ctx):
+                return True
+        return False
 
 
 def _normalize_and_condition(

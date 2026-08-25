@@ -10,7 +10,8 @@ Covers:
 
 from __future__ import annotations
 
-from pyrung.core import PLC, And, Bool, Program, Rung, latch, out, reset
+from pyrung.core import PLC, And, Bool, Program, Rung, call, latch, out, reset, subroutine
+from pyrung.core.program import rung
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -57,6 +58,26 @@ def _build_stranded():
             out(Alarm)
 
     return logic, Sensor, Fault, Alarm
+
+
+def test_synthesis_rungs_do_not_enter_public_coverage_universe() -> None:
+    """Synthetic node identities never shift or extend user coverage labels."""
+    Enable = Bool("CoverageEnable")
+    Output = Bool("CoverageOutput")
+    with Program() as program:
+        with Rung(Enable):
+            out(Output)
+
+    plc = PLC(program)
+    from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+    plc._synthesis = Synthesis(
+        holds=[copy_hold_rung(value=True, dest=Enable)],
+    )
+    plc.step()
+
+    assert plc.query.hot_rungs() == ["1"]
+    assert plc.query.cold_rungs() == []
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +138,7 @@ class TestColdRungs:
         # latch/reset rungs (1, 2) are no-ops when disabled → cold.
         # out() rung (3) writes False even when disabled → not cold.
         cold = runner.query.cold_rungs()
-        assert cold == [1, 2]
+        assert cold == ["1", "2"]
 
     def test_some_cold_after_input(self) -> None:
         logic, _Sensor, _Fault, _Reset, _Alarm = _build_recoverable()
@@ -128,9 +149,9 @@ class TestColdRungs:
         # Rung 1 fired (latched Fault), Rung 3 fired (out Alarm)
         # Rung 2 is cold (needs Fault AND Reset, Reset is False)
         cold = runner.query.cold_rungs()
-        assert 2 in cold
-        assert 1 not in cold
-        assert 3 not in cold
+        assert "2" in cold
+        assert "1" not in cold
+        assert "3" not in cold
 
     def test_no_cold_all_exercised(self) -> None:
         logic, _Sensor, _Fault, _Reset, _Alarm = _build_recoverable()
@@ -165,8 +186,8 @@ class TestHotRungs:
         runner.step()
 
         hot = runner.query.hot_rungs()
-        assert 1 in hot
-        assert 2 in hot
+        assert "1" in hot
+        assert "2" in hot
 
     def test_latch_rung_not_hot_when_intermittent(self) -> None:
         """latch() is no-op when disabled, so it only fires some scans."""
@@ -183,7 +204,7 @@ class TestHotRungs:
         runner.patch({"A": False})
         runner.step()  # doesn't fire
 
-        assert 1 not in runner.query.hot_rungs()
+        assert "1" not in runner.query.hot_rungs()
 
     def test_no_hot_when_only_latch_reset(self) -> None:
         """Programs with only latch/reset have no hot rungs when nothing enables."""
@@ -219,7 +240,102 @@ class TestHotRungs:
 
         # Rung 1 only fired on scan 1, not scan 2
         hot = runner.query.hot_rungs()
-        assert 1 not in hot
+        assert "1" not in hot
+
+
+class TestSubroutineColdHot:
+    """cold_rungs / hot_rungs see subroutine rungs (labelled ``Sub:N``)."""
+
+    def test_uncalled_subroutine_rungs_are_cold(self) -> None:
+        """A subroutine never called shows its rungs as cold ``Sub:N`` labels."""
+        Enable = Bool("Enable")
+        Trigger = Bool("Trigger")
+        Out = Bool("Out")
+
+        @subroutine("Sub")
+        def sub():
+            with rung(Trigger):
+                out(Out)
+
+        with Program() as prog:
+            with Rung(Enable):
+                call(sub)
+
+        runner = PLC(prog)
+        runner.step()  # Enable False → subroutine never called
+
+        # Pre-fix this was invisible: subroutine rungs weren't in the universe.
+        assert "Sub:1" in runner.query.cold_rungs()
+
+    def test_called_subroutine_rung_is_hot(self) -> None:
+        """A subroutine rung that fires every scan is hot, labelled ``Sub:N``."""
+        Enable = Bool("Enable")
+        Out = Bool("Out")
+
+        @subroutine("Sub")
+        def sub():
+            with rung(Enable):
+                out(Out)
+
+        with Program() as prog:
+            with Rung(Enable):
+                call(sub)
+
+        runner = PLC(prog)
+        runner.patch({"Enable": True})
+        runner.step()
+        runner.step()
+
+        assert "Sub:1" in runner.query.hot_rungs()
+        # Not cold once it has fired.
+        assert "Sub:1" not in runner.query.cold_rungs()
+
+    def test_main_and_subroutine_same_index_are_distinct(self) -> None:
+        """A main rung and a subroutine rung sharing index 0 get distinct labels."""
+        Enable = Bool("Enable")
+        Out = Bool("Out")
+
+        @subroutine("Sub")
+        def sub():
+            with rung(Enable):  # subroutine rung index 0
+                out(Out)
+
+        with Program() as prog:
+            with Rung(Enable):  # main rung index 0
+                call(sub)
+
+        runner = PLC(prog)
+        runner.step()  # nothing enabled → subroutine never runs
+
+        cold = runner.query.cold_rungs()
+        # The subroutine rung (index 0) is reported separately from main rungs.
+        assert "Sub:1" in cold
+
+    def test_subroutine_called_twice_per_scan_dedups(self) -> None:
+        """A subroutine called from two sites in one scan records one entry per rung."""
+        A = Bool("A")
+        B = Bool("B")
+        Out = Bool("Out")
+
+        @subroutine("Sub")
+        def sub():
+            with rung(A):
+                out(Out)
+
+        with Program() as prog:
+            with Rung(A):
+                call(sub)
+            with Rung(B):
+                call(sub)
+
+        runner = PLC(prog)
+        runner.patch({"A": True, "B": True})
+        # Two calls per scan must not violate the timeline's one-entry-per-scan
+        # invariant — the per-scan node firing dict dedups by RungId.
+        runner.step()
+        runner.step()
+
+        assert "Sub:1" in runner.query.hot_rungs()
 
 
 # ---------------------------------------------------------------------------
@@ -317,19 +433,19 @@ class TestCoverageReport:
         """Cold rungs merge by intersection — only cold if no test fired it."""
         from pyrung.core.analysis.query import CoverageReport
 
-        r1 = CoverageReport(cold_rungs=frozenset({0, 1, 2}))
-        r2 = CoverageReport(cold_rungs=frozenset({1, 2, 3}))
+        r1 = CoverageReport(cold_rungs=frozenset({"0", "1", "2"}))
+        r2 = CoverageReport(cold_rungs=frozenset({"1", "2", "3"}))
         merged = r1.merge(r2)
-        assert merged.cold_rungs == frozenset({1, 2})
+        assert merged.cold_rungs == frozenset({"1", "2"})
 
     def test_merge_hot_rungs_intersection(self) -> None:
         """Hot rungs merge by intersection — only hot if hot in every test."""
         from pyrung.core.analysis.query import CoverageReport
 
-        r1 = CoverageReport(hot_rungs=frozenset({0, 1}))
-        r2 = CoverageReport(hot_rungs=frozenset({1, 2}))
+        r1 = CoverageReport(hot_rungs=frozenset({"0", "1"}))
+        r2 = CoverageReport(hot_rungs=frozenset({"1", "2"}))
         merged = r1.merge(r2)
-        assert merged.hot_rungs == frozenset({1})
+        assert merged.hot_rungs == frozenset({"1"})
 
     def test_merge_stranded_intersection(self) -> None:
         """Stranded chains merge by intersection on chain identity."""
@@ -348,11 +464,11 @@ class TestCoverageReport:
         from pyrung.core.analysis.query import CoverageReport
 
         r1 = CoverageReport(
-            cold_rungs=frozenset({0, 1, 2, 3}),
+            cold_rungs=frozenset({"0", "1", "2", "3"}),
             stranded_chains=frozenset({("X", ()), ("Y", ())}),
         )
         r2 = CoverageReport(
-            cold_rungs=frozenset({2, 3, 4}),
+            cold_rungs=frozenset({"2", "3", "4"}),
             stranded_chains=frozenset({("Y", ()), ("Z", ())}),
         )
         merged = r1.merge(r2)
@@ -363,13 +479,13 @@ class TestCoverageReport:
         from pyrung.core.analysis.query import CoverageReport
 
         r = CoverageReport(
-            cold_rungs=frozenset({2, 0}),
-            hot_rungs=frozenset({1}),
+            cold_rungs=frozenset({"2", "0"}),
+            hot_rungs=frozenset({"1"}),
             stranded_chains=frozenset(),
         )
         d = r.to_dict()
-        assert d["cold_rungs"] == [0, 2]
-        assert d["hot_rungs"] == [1]
+        assert d["cold_rungs"] == ["0", "2"]
+        assert d["hot_rungs"] == ["1"]
         assert d["stranded_chains"] == []
 
     def test_end_to_end_two_tests_merge(self) -> None:
@@ -393,6 +509,6 @@ class TestCoverageReport:
         merged = report1.merge(report2)
 
         # Test 2 exercised the reset rung (rung 2) → it is not cold in merged
-        assert 2 not in merged.cold_rungs
+        assert "2" not in merged.cold_rungs
         # Test 2 showed recovery path → no stranded bits in merged
         assert len(merged.stranded_chains) == 0

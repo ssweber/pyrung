@@ -4,6 +4,7 @@ Instructions execute within a ScanContext, writing to batched evolvers.
 All state modifications are collected and committed at scan end.
 """
 
+from .advance import AdvanceProfile, AdvanceStep, ConditionDemand, LinearProgress
 from .advanced import SearchInstruction, ShiftInstruction
 from .base import DebugInstructionSubStep, Instruction, OneShotMixin, SubroutineReturnSignal
 from .calc import CalcInstruction
@@ -37,8 +38,12 @@ from .timers import OffDelayInstruction, OnDelayInstruction
 
 __all__ = [
     # Base
+    "AdvanceProfile",
+    "AdvanceStep",
+    "ConditionDemand",
     "DebugInstructionSubStep",
     "Instruction",
+    "LinearProgress",
     "OneShotMixin",
     "SubroutineReturnSignal",
     # Resolvers

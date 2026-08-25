@@ -93,6 +93,7 @@ runner.monitor(tag, callback)
 runner.history.at(scan_id)
 runner.history.range(start_scan_id, end_scan_id)
 runner.history.latest(n)
+runner.history.previous_transition(tag, to=value, at_or_before=scan_id)
 runner.history.find(label)
 runner.history.find_all(label)
 

@@ -41,9 +41,11 @@ from pyrung.click.codegen.utils import (
     _CLICK_PI_RE,
     _EXPR_FUNC_IMPORT_NAMES,
     _parse_af_args,
+    _parse_operand_prefix,
     _sub_operand,
     _sub_operand_kwarg,
 )
+from pyrung.core.structure import AutoDefault
 
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
@@ -160,13 +162,27 @@ def _type_default_value(type_name: str) -> object:
 
 def _structure_needs_field_import(collection: _OperandCollection) -> bool:
     for decl in collection.structures:
-        if any(v for v in decl.field_retentive.values()):
-            return True
+        # A field needs the Field() wrapper whenever its retentive policy differs
+        # from its type default (e.g. a non-retentive Int, whose type default is
+        # retentive) — not only when it is explicitly retentive.
+        for field_name, type_name, _default in decl.fields:
+            type_default_ret = _TYPE_NAME_DEFAULT_RETENTIVE.get(type_name, True)
+            if decl.field_retentive.get(field_name, False) != type_default_ret:
+                return True
         if any(_has_metadata(meta) for meta in decl.field_metadata.values()):
             return True
         if any(_has_metadata(meta) for meta in decl.field_slot_metadata.values()):
             return True
     return False
+
+
+def _structure_uses_auto(collection: _OperandCollection) -> bool:
+    """True when any structure field declares an ``auto()`` default sequence."""
+    return any(
+        isinstance(default, AutoDefault)
+        for decl in collection.structures
+        for _, _, default in decl.fields
+    )
 
 
 def _emit_physical_declarations(lines: list[str], collection: _OperandCollection) -> None:
@@ -212,10 +228,9 @@ def _generate_code(
         lines.append("")
 
     # Tag declarations (skip semantic-owned)
-    has_flat_tags = any(op not in collection.semantic_operands for op in collection.tags)
-    if has_flat_tags:
+    if _has_flat_tags(collection):
         lines.append("# --- Tags ---")
-        _emit_tag_declarations(lines, collection)
+        _emit_slot_aliases(lines, collection)
         lines.append("")
 
     if collection.timer_counter_clones:
@@ -233,6 +248,9 @@ def _generate_code(
         lines.append("# --- Structures ---")
         _emit_structure_declarations(lines, collection)
         lines.append("")
+
+    # Slot name overrides for nicknamed addresses inside ranges
+    _emit_slot_overrides(lines, collection)
 
     # Program body
     lines.append("# --- Program ---")
@@ -260,6 +278,14 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     core_imports: list[str] = ["Program", "rung"]
     if collection.physical_decls:
         core_imports.append("Physical")
+        # A declarative analog profile emits ``profile=Ramp(...)`` / ``Approach(...)``,
+        # so the generated file must import the spec class it references.
+        profile_types = {
+            type(decl.spec.profile).__name__
+            for decl in collection.physical_decls.values()
+            if decl.spec.profile is not None
+        }
+        core_imports.extend(sorted(profile_types & {"Ramp", "Approach", "Pulse"}))
 
     # Block/TagType for reconstructed plain named blocks
     if collection.plain_blocks:
@@ -276,6 +302,8 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         core_imports.append("udt")
     if has_retentive_field:
         core_imports.append("Field")
+    if _structure_uses_auto(collection):
+        core_imports.append("auto")
 
     # Built-in Timer/Counter UDTs
     if collection.used_instructions & {"on_delay", "off_delay"}:
@@ -283,10 +311,11 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     if collection.used_instructions & {"count_up", "count_down"}:
         core_imports.append("Counter")
 
-    # Tag types
-    for tt in sorted(collection.used_types):
-        if tt not in core_imports:
-            core_imports.append(tt)
+    # Tag types (needed for structure field types, not for flat tags which are slot aliases)
+    if collection.structures or collection.plain_blocks:
+        for tt in sorted(collection.used_types):
+            if tt not in core_imports:
+                core_imports.append(tt)
 
     # Condition helpers
     if collection.has_Or:
@@ -342,9 +371,7 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     lines.append(f"from pyrung import {', '.join(core_imports)}")
 
     # Click imports
-    click_imports: list[str] = ["TagMap"]
-    for bv in sorted(collection.used_blocks):
-        click_imports.append(bv)
+    click_imports: list[str] = ["ClickBlocks", "TagMap"]
     if collection.has_modbus_target:
         click_imports.append("ModbusTcpTarget")
     if collection.has_modbus_rtu_target:
@@ -360,6 +387,11 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
 
     lines.append(f"from pyrung.click import {', '.join(click_imports)}")
 
+    if collection.used_blocks:
+        lines.append(
+            "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()"
+        )
+
     # Expression function imports (sqrt, lsh, etc.)
     if collection.used_expr_funcs:
         expr_imports = sorted(collection.used_expr_funcs)
@@ -369,33 +401,80 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         lines.append("from pyrung.core.system_points import system")
 
 
-def _emit_tag_declarations(
+def _has_flat_tags(collection: _OperandCollection) -> bool:
+    """True when at least one standalone tag declaration will be emitted."""
+    has_unmapped_slots = bool(
+        collection.unmapped_defaults
+        or collection.unmapped_retentive
+        or collection.unmapped_comments
+    )
+    return has_unmapped_slots or any(
+        op not in collection.semantic_operands and op not in collection.timer_counter_operands
+        for op in collection.tags
+    )
+
+
+def _emit_slot_aliases(
     lines: list[str],
     collection: _OperandCollection,
     *,
     suppress_comments: bool = False,
 ) -> None:
-    """Emit tag variable declarations."""
-    # Sort by block order, then by index
+    """Emit block slot aliases for the un-annotated codegen path.
+
+    Pass 1: ``block.slot(addr, name=..., default=...)`` for nicknamed or
+    metadata-bearing tags.
+    Pass 2: ``VarName = block[addr]`` alias assignments.
+    """
     block_order = {bv: i for i, (_, _, bv) in enumerate(_OPERAND_PREFIXES)}
-    sorted_tags = sorted(
-        collection.tags.values(),
-        key=lambda t: (block_order.get(t.block_var, 99), t.block_index),
+    unmapped_slots = (
+        collection.unmapped_defaults.keys()
+        | collection.unmapped_retentive.keys()
+        | collection.unmapped_comments.keys()
     )
-    for decl in sorted_tags:
-        if decl.operand in collection.semantic_operands:
-            continue
-        if decl.operand in collection.timer_counter_operands:
-            continue
-        args = [f'"{decl.tag_name}"']
+    for block_var, index in sorted(
+        unmapped_slots,
+        key=lambda item: (block_order.get(item[0], 99), item[1]),
+    ):
         kwargs: list[str] = []
+        if (block_var, index) in collection.unmapped_retentive:
+            kwargs.append(f"retentive={collection.unmapped_retentive[(block_var, index)]}")
+        if (block_var, index) in collection.unmapped_defaults:
+            kwargs.append(
+                f"default={_format_literal(collection.unmapped_defaults[(block_var, index)])}"
+            )
+        if (block_var, index) in collection.unmapped_comments:
+            kwargs.append(f"comment={collection.unmapped_comments[(block_var, index)]!r}")
+        lines.append(f"{block_var}.slot({index}, {', '.join(kwargs)})")
+
+    sorted_tags = [
+        decl
+        for decl in sorted(
+            collection.tags.values(),
+            key=lambda t: (block_order.get(t.block_var, 99), t.block_index),
+        )
+        if decl.operand not in collection.semantic_operands
+        and decl.operand not in collection.timer_counter_operands
+    ]
+
+    # Pass 1: slot() calls
+    for decl in sorted_tags:
+        has_nickname = decl.var_name != decl.operand
+        kwargs: list[str] = []
+        if has_nickname:
+            kwargs.append(f"name={decl.tag_name!r}")
         if decl.default is not None and decl.default != _type_default_value(decl.tag_type):
             kwargs.append(f"default={_format_literal(decl.default)}")
         _append_metadata_kwargs(kwargs, decl.metadata, collection)
-        args.extend(kwargs)
-        line = f"{decl.var_name} = {decl.tag_type}({', '.join(args)})"
-        if decl.comment and not suppress_comments:
-            line += decl.comment
+        if kwargs:
+            lines.append(f"{decl.block_var}.slot({decl.block_index}, {', '.join(kwargs)})")
+
+    # Pass 2: alias assignments
+    for decl in sorted_tags:
+        has_nickname = decl.var_name != decl.operand
+        line = f"{decl.var_name} = {decl.block_var}[{decl.block_index}]"
+        if has_nickname and not suppress_comments:
+            line += f"  # {decl.operand}"
         lines.append(line)
 
 
@@ -431,7 +510,7 @@ def _emit_plain_block_decl(
             kwargs.append(f"name={slot.tag_name!r}")
         if slot.retentive_overridden and slot.retentive != block_retentive:
             kwargs.append(f"retentive={slot.retentive}")
-        if slot.default_overridden:
+        if slot.default_overridden and not slot.retentive:
             kwargs.append(f"default={_format_literal(slot.default)}")
         if slot.comment_overridden:
             kwargs.append(f"comment={slot.comment!r}")
@@ -487,19 +566,21 @@ def _emit_named_array_decl(
     type_default_ret = _TYPE_NAME_DEFAULT_RETENTIVE.get(decl.base_type or "Int", True)
     for field_name, _type_name, default in decl.fields:
         retentive = decl.field_retentive.get(field_name, False)
+        effective_default = _type_default_value(decl.base_type or "Int") if retentive else default
         metadata = decl.field_metadata.get(field_name, _TagMetadata())
         if retentive != type_default_ret or _has_metadata(metadata):
             kwargs: list[str] = []
             if retentive != type_default_ret:
                 kwargs.append(f"retentive={retentive}")
-            if default != _type_default_value(decl.base_type or "Int"):
-                kwargs.append(f"default={_format_literal(default)}")
+            if effective_default != _type_default_value(decl.base_type or "Int"):
+                kwargs.append(f"default={_format_default(effective_default)}")
             _append_metadata_kwargs(kwargs, metadata, collection)
             lines.append(f"    {field_name} = Field({', '.join(kwargs)})")
         else:
-            default_repr = _format_literal(default)
+            default_repr = _format_default(effective_default)
             lines.append(f"    {field_name} = {default_repr}")
     _emit_structure_slot_metadata(lines, decl, collection)
+    _emit_structure_slot_defaults(lines, decl)
 
 
 def _emit_udt_decl(
@@ -518,19 +599,21 @@ def _emit_udt_decl(
     for field_name, type_name, default in decl.fields:
         retentive = decl.field_retentive.get(field_name, False)
         type_default_ret = _TYPE_NAME_DEFAULT_RETENTIVE.get(type_name, True)
+        effective_default = _type_default_value(type_name) if retentive else default
         metadata = decl.field_metadata.get(field_name, _TagMetadata())
         if retentive != type_default_ret or _has_metadata(metadata):
             kwargs: list[str] = []
             if retentive != type_default_ret:
                 kwargs.append(f"retentive={retentive}")
-            if default != _type_default_value(type_name):
-                kwargs.append(f"default={_format_literal(default)}")
+            if effective_default != _type_default_value(type_name):
+                kwargs.append(f"default={_format_default(effective_default)}")
             _append_metadata_kwargs(kwargs, metadata, collection)
             lines.append(f"    {field_name}: {type_name} = Field({', '.join(kwargs)})")
         else:
-            default_repr = _format_literal(default)
+            default_repr = _format_default(effective_default)
             lines.append(f"    {field_name}: {type_name} = {default_repr}")
     _emit_structure_slot_metadata(lines, decl, collection)
+    _emit_structure_slot_defaults(lines, decl)
 
 
 def _emit_structure_slot_metadata(
@@ -543,6 +626,24 @@ def _emit_structure_slot_metadata(
         _append_metadata_kwargs(kwargs, metadata, collection)
         if kwargs:
             lines.append(f"{decl.name}.{field_name}.slot({index}, {', '.join(kwargs)})")
+
+
+def _emit_structure_slot_defaults(lines: list[str], decl: _StructureDecl) -> None:
+    """Emit per-slot ``default=`` overrides the field default does not reconstruct."""
+    for (field_name, index), value in sorted(decl.field_slot_default.items()):
+        lines.append(f"{decl.name}.{field_name}.slot({index}, default={_format_literal(value)})")
+
+
+def _format_default(default: object) -> str:
+    """Format a field default, rendering ``AutoDefault`` as an ``auto(...)`` call."""
+    if isinstance(default, AutoDefault):
+        args: list[str] = []
+        if default.start != 1:
+            args.append(f"start={default.start}")
+        if default.step != 1:
+            args.append(f"step={default.step}")
+        return f"auto({', '.join(args)})"
+    return _format_literal(default)
 
 
 def _format_literal(default: object) -> str:
@@ -1099,7 +1200,7 @@ def _render_af_token(
         sub = _sub_operand(token, collection, nicknames, structured_map)
         if sub == token and token not in collection.tags:
             raise ValueError(
-                f"Unrecognised AF token {token!r} — not a known instruction or operand. "
+                f"Unrecognised AF token {token!r}; not a known instruction or operand. "
                 f"If this is a new Click instruction, add it to the codegen."
             )
         return sub
@@ -1189,21 +1290,40 @@ def _render_pin(
     return f".{pin.name}()"
 
 
+def _comment_triple_delimiter(comment: str) -> str | None:
+    """Choose a safe readable delimiter, or defer to repr literals."""
+    if "\\" in comment or any(not char.isprintable() and char != "\n" for char in comment):
+        return None
+
+    delimiters = sorted(('"""', "'''"), key=lambda delimiter: comment.count(delimiter[0]))
+    for delimiter in delimiters:
+        quote = delimiter[0]
+        if delimiter not in comment and not comment.endswith(quote):
+            return delimiter
+    return None
+
+
 def _emit_comment(lines: list[str], comment: str, indent: int) -> None:
     """Emit a comment() call above the rung."""
     pad = "    " * indent
-    if "\n" in comment:
-        # Multi-line → triple-quoted string
-        escaped = comment.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
-        parts = escaped.split("\n")
+    delimiter = _comment_triple_delimiter(comment) if "\n" in comment else None
+    if delimiter is not None:
+        parts = comment.split("\n")
         content_pad = "    " * (indent + 1)
-        lines.append(f'{pad}comment("""\\')
+        lines.append(f"{pad}comment({delimiter}\\")
         for part in parts[:-1]:
             lines.append(f"{content_pad}{part}" if part else "")
-        lines.append(f'{content_pad}{parts[-1]}""")')
+        lines.append(f"{content_pad}{parts[-1]}{delimiter})")
+    elif "\n" in comment or "\r" in comment:
+        # repr() is the failsafe for ambiguous delimiters, backslashes, and
+        # control characters; adjacent literals preserve readable line breaks.
+        content_pad = "    " * (indent + 1)
+        lines.append(f"{pad}comment(")
+        for part in comment.splitlines(keepends=True):
+            lines.append(f"{content_pad}{part!r}")
+        lines.append(f"{pad})")
     else:
-        escaped = comment.replace("\\", "\\\\").replace('"', '\\"')
-        lines.append(f'{pad}comment("{escaped}")')
+        lines.append(f"{pad}comment({comment!r})")
 
 
 def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
@@ -1213,22 +1333,15 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
     has_blocks = bool(collection.plain_blocks)
     use_list_form = has_structures or has_clones
 
-    block_order = {bv: i for i, (_, _, bv) in enumerate(_OPERAND_PREFIXES)}
-    sorted_tags = sorted(
-        collection.tags.values(),
-        key=lambda t: (block_order.get(t.block_var, 99), t.block_index),
-    )
-    flat_tags = [
-        d
-        for d in sorted_tags
-        if d.operand not in collection.semantic_operands
-        and d.operand not in collection.timer_counter_operands
-    ]
-    has_flat = bool(flat_tags)
+    has_flat = False
 
     # Count non-empty sections to decide whether to add headers
     section_count = sum([has_structures, has_clones, has_blocks, has_flat])
     use_headers = section_count >= 2
+
+    if section_count == 0:
+        lines.append("mapping = TagMap({})")
+        return
 
     if use_list_form:
         lines.append("mapping = TagMap([")
@@ -1276,11 +1389,6 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
             lines.append(
                 f"    {bdecl.var_name}.map_to({bdecl.hw_block_var}.select({bdecl.hw_start}, {bdecl.hw_end})),"  # noqa: E501
             )
-        # Flat tags (non-structure-owned)
-        if has_flat and use_headers:
-            lines.append("    # --- Tags ---")
-        for decl in flat_tags:
-            lines.append(f"    {decl.var_name}.map_to({decl.block_var}[{decl.block_index}]),")
         lines.append("])")
     else:
         if has_blocks and use_headers:
@@ -1289,9 +1397,22 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
             lines.append(
                 f"    {bdecl.var_name}: {bdecl.hw_block_var}.select({bdecl.hw_start}, {bdecl.hw_end}),"
             )
-        if has_flat and use_headers:
-            lines.append("    # --- Tags ---")
-        for decl in flat_tags:
-            lines.append(f"    {decl.var_name}: {decl.block_var}[{decl.block_index}],")
 
         lines.append("})")
+
+
+def _emit_slot_overrides(lines: list[str], collection: _OperandCollection) -> None:
+    """Emit slot name overrides for nicknamed addresses inside ranges."""
+    if not collection.range_aliases:
+        return
+    out: list[str] = []
+    for hw_addr, nickname in sorted(collection.range_aliases.items()):
+        if hw_addr in collection.tags:
+            continue
+        parsed = _parse_operand_prefix(hw_addr)
+        if parsed:
+            _, _, block_var, index = parsed
+            out.append(f'{block_var}.slot({index}, name="{nickname}")')
+    if out:
+        lines.extend(out)
+        lines.append("")

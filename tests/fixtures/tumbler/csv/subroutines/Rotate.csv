@@ -1,0 +1,95 @@
+marker,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF
+#,Error List:
+#,
+#,1 = Not getting Feedback from Contactor (ie either contactor or thermal overload isn't getting power
+#,2 = Not rotating
+#,
+#,    # ==============================================================================#
+#,    # SECTION 1: SFC INITIALIZATION BOILERPLATE - DO NOT MODIFY
+#,    # ==============================================================================#
+#,
+R1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,latch(C1103)
+#,Shared Resets for Init and Reset
+R2,DS542==1,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS554)"
+,DS543==1,|,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,TD121)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,TD122)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"fill(1,DS551..DS552)"
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"fill(0,DS545..DS546)"
+#,Built-in timer for step timeout detection
+R3,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"on_delay(T121,TD121,preset=DS548,unit=Ts)"
+,DS549==1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,.reset()
+#,Reset the timer reset flag after it's been processed
+R4,DS549==1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS549)"
+#,Error detection - If step exceeds time limit
+R5,TD121>=DS548,DS547==1,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(1,DS545,oneshot=1)"
+,,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(DS551,DS546,oneshot=1)"
+#,Synchronize current and stored step (must be at top)
+#,
+R6,DS551!=DS552,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(DS551,DS552)"
+#,    # ==============================================================================#
+#,    # SECTION 2: STEP IMPLEMENTATION SECTION - MODIFY THIS SECTION ONLY
+#,    # ==============================================================================#
+#,
+#,FIRST STEP IS INIT
+#,(we will automatically set _init to 1 after Trans)
+#,
+#,Use `Once` as 'Entry' like actions for Steps
+R7,DS551>=1,DS545==0,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(C11)
+#,"# after everything is done, then Trans = 1"
+R8,DS551==1,TD121>2,C5,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(1,DS550)"
+#,Problem with either Contactor or Thermal Overload
+R9,DS551==3,TD121>2,~C5,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(1,DS545)"
+,,,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(3,DS546)"
+#,Rotating sensor configuration
+R10,DS551>=3,C4,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"on_delay(T123,TD123,preset=2,unit=Ts)"
+,~C4,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,.reset()
+R11,DS551>=3,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"on_delay(T124,TD124,preset=10,unit=Ts)"
+,C4,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,.reset()
+R12,T123,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(2,DS545)"
+,T124,|,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(3,DS546)"
+#,    # =================================================================#
+#,    # SECTION 3: SFC Pause and Shutdown definition - Modify to Suit your project
+#,    # =================================================================#
+#,
+#,
+#,Pause actions
+R13,DS544==1,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,reset(C11)
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS551)"
+#,Pause conditions
+R14,DS544==1,~C5,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS553)"
+#,Stop actions
+R15,DS541==0,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,reset(C11)
+#,Stop conditions & Standard shutdown procedure
+R16,DS541==0,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"fill(0,DS542..DS546)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,TD121)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,TD122)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"fill(0,DS549..DS555)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS553)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,reset(C1103)
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,return()
+#,    # =================================================================#
+#,    # SECTION 4: SFC EXECUTION CONTROL BOILERPLATE - DO NOT MODIFY
+#,    # =================================================================#
+#,
+#,
+#,"Reset handling - xReset is self-clearing, while XInit must be set back to 0 manually."
+R17,DS543==1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS543)"
+#,Check if current step is odd
+R18,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"math(DS551 MOD 2,DS555,mode=decimal)"
+#,EVEN STEP HANDLING - SAFETY MECHANISM FOR MANUAL INTERVENTION
+#,    # This stays ABOVE incrementing CurStep
+#,"    # If we detect an even step number (either from normal transition or manual intervention),"
+#,    # we immediately increment to the next odd step without executing any step logic.
+#,"    # This provides a safe ""neutral zone"" when manually changing step numbers."
+R19,DS555!=1,DS544==0,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"math(DS551 + 1,DS551,mode=decimal)"
+#,Step advancement when transition is triggered
+R20,DS550==1,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"math(DS551 + 1,DS551,mode=decimal)"
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS550)"
+#,Built-in timer for step duration tracking
+#,# Note: reset after Trans
+R21,DS551==DS552,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"on_delay(T122,TD122,preset=0,unit=Ts)"
+#,Mark initialization complete after first step
+R22,DS551==2,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(1,DS554)"
+R23,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,return()

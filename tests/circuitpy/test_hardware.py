@@ -231,22 +231,22 @@ class TestTagNaming:
 class TestValidation:
     def test_slot_zero_raises(self):
         hw = P1AM()
-        with pytest.raises(ValueError, match="1.15"):
+        with pytest.raises(ValueError, match=r"1\.\.15"):
             hw.slot(0, "P1-08SIM")
 
     def test_slot_negative_raises(self):
         hw = P1AM()
-        with pytest.raises(ValueError, match="1.15"):
+        with pytest.raises(ValueError, match=r"1\.\.15"):
             hw.slot(-1, "P1-08SIM")
 
     def test_slot_over_max_raises(self):
         hw = P1AM()
-        with pytest.raises(ValueError, match="1.15"):
+        with pytest.raises(ValueError, match=r"1\.\.15"):
             hw.slot(16, "P1-08SIM")
 
     def test_slot_non_int_raises(self):
         hw = P1AM()
-        with pytest.raises(ValueError, match="1.15"):
+        with pytest.raises(ValueError, match=r"1\.\.15"):
             hw.slot("1", "P1-08SIM")  # ty: ignore[no-matching-overload]
 
     def test_unknown_module_raises(self):

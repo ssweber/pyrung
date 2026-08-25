@@ -623,3 +623,43 @@ class TestGroupedOr:
 
         with pytest.raises(TypeError, match="And\\(\\.\\.\\.\\)"):
             Or([A, B], C)
+
+
+class TestRepr:
+    """A condition reprs as the pyrung source that built it."""
+
+    def test_repr_renders_source_text_not_an_address(self):
+        """The default object repr hides structure everywhere a guard is shown."""
+        Step = Int("Step")
+
+        assert repr(Step == 0) == "Step == 0"
+        assert repr(Step != 0) == "Step != 0"
+        assert repr(Step >= 3) == "Step >= 3"
+
+    def test_repr_renders_bool_tags_as_contacts(self):
+        """A Bool compared to a literal is a contact, as it is written."""
+        Door = Bool("Door")
+
+        assert repr(Door == True) == "Door"  # noqa: E712
+        assert repr(Door == False) == "~Door"  # noqa: E712
+
+    def test_repr_nests_combinators(self):
+        """A compound guard shows its whole shape, including duplicates."""
+        from pyrung.core import And, Or
+
+        Step = Int("Step")
+        State = Int("State")
+
+        guard = And(Or(State == 4, State == 3), Step == 101)
+
+        assert repr(guard) == "And(Or(State == 4, State == 3), Step == 101)"
+
+    def test_repr_is_presentation_only(self):
+        """An equal repr is not equality: conditions still compare by identity."""
+        State = Int("State")
+        first = State == 3
+        second = State == 3
+
+        assert repr(first) == repr(second)
+        assert first is not second
+        assert hash(first) != hash(second)

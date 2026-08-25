@@ -77,7 +77,7 @@ def _range_reverse(range_value: Any) -> bool:
 
 def _static_range_length(range_value: Any) -> int | None:
     if isinstance(range_value, BlockRange):
-        return len(range_value.addresses)
+        return len(range_value)
     return None
 
 
@@ -93,14 +93,14 @@ def _first_defined_name(source: str) -> str | None:
     return None
 
 
-def _coil_target_default(
+def _coil_reset_value(
     target: Tag | BlockRange | IndirectBlockRange | ImmediateRef,
     ctx: CodegenContext,
 ) -> str:
     if isinstance(target, ImmediateRef):
-        return _coil_target_default(target.value, ctx)
+        return _coil_reset_value(target.value, ctx)
     if isinstance(target, Tag):
-        return repr(target.default)
+        return repr(_TYPE_DEFAULTS[target.type])
     binding = ctx.block_bindings[id(target.block)]
     return repr(_TYPE_DEFAULTS[binding.tag_type])
 

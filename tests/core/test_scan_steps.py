@@ -20,6 +20,7 @@ from pyrung.core import (
     count_down,
     count_up,
     event_drum,
+    latch,
     on_delay,
     out,
     return_early,
@@ -272,7 +273,7 @@ def test_scan_steps_debug_uses_precomputed_branch_enable():
 
     with Program(strict=False) as logic:
         with Rung(enable):
-            copy(True, mode)
+            latch(mode)
             with branch(mode):
                 out(branch_out)
 
@@ -394,7 +395,7 @@ def test_scan_steps_debug_instruction_helper_trace_uses_rung_snapshot():
 
     with Program(strict=False) as logic:
         with Rung(enable):
-            copy(True, reset)
+            latch(reset)
             on_delay(Timer[1], preset=50).reset(reset)
 
     runner = PLC(logic, dt=0.010)

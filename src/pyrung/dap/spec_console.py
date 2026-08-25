@@ -61,7 +61,7 @@ def _extract_program_source(adapter: Any) -> tuple[str, str]:
     """
     program_path = getattr(adapter, "_program_path", None)
     if not program_path:
-        raise adapter.DAPAdapterError("No program loaded — cannot extract source.")
+        raise adapter.DAPAdapterError("No program loaded; cannot extract source.")
     source = Path(program_path).read_text(encoding="utf-8")
 
     prog_var = "logic"

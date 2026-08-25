@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from pyrung.core.analysis.simplified import And, Atom, Const, Expr, Or
+from pyrung.core.analysis.partial_eval import partial_eval
+from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Const, Expr, Or
 
 
 def _build_atom_index(exprs: list[Expr]) -> dict[str, list[Atom]]:
@@ -19,28 +20,16 @@ def _build_atom_index(exprs: list[Expr]) -> dict[str, list[Atom]]:
 def _index_atoms(expr: Expr, index: dict[str, list[Atom]]) -> None:
     if isinstance(expr, Atom):
         index.setdefault(expr.tag, []).append(expr)
-        if isinstance(expr.operand, str):
+        if expr.operand_is_tag and expr.operand != expr.tag:
             index.setdefault(expr.operand, []).append(expr)
     elif isinstance(expr, (And, Or)):
         for t in expr.terms:
             _index_atoms(t, index)
 
 
-def _collect_atoms_for_tag(exprs: list[Expr], tag_name: str) -> list[Atom]:
-    """Collect all Atom nodes referencing a specific tag from a list of expressions."""
-    atoms: list[Atom] = []
-    for expr in exprs:
-        _walk_atoms(expr, tag_name, atoms)
-    return atoms
-
-
-def _walk_atoms(expr: Expr, tag_name: str, out: list[Atom]) -> None:
-    if isinstance(expr, Atom):
-        if expr.tag == tag_name or expr.operand == tag_name:
-            out.append(expr)
-    elif isinstance(expr, (And, Or)):
-        for t in expr.terms:
-            _walk_atoms(t, tag_name, out)
+def _collect_atoms_for_tag(atom_index: Mapping[str, list[Atom]], tag_name: str) -> list[Atom]:
+    """Look up all Atom nodes referencing a specific tag."""
+    return atom_index.get(tag_name, [])
 
 
 def _eval_atom(atom: Atom, value: Any) -> bool | None:
@@ -81,12 +70,43 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
         return None
 
     eval_atom = atom
-    if isinstance(atom.operand, str) and atom.operand in state:
-        eval_atom = Atom(atom.tag, atom.form, state[atom.operand])
+    if atom.operand_is_tag and atom.operand in state:
+        try:
+            operand = atom.operand_scale * state[atom.operand] + atom.operand_offset
+        except TypeError:
+            return None
+        eval_atom = Atom(atom.tag, atom.form, operand)
     return _eval_atom(eval_atom, state[atom.tag])
 
 
-def _eval_expr_from_state(expr: Expr, state: Mapping[str, Any]) -> bool | None:
+def _eval_arith_atom_from_state(atom: ArithAtom, state: Mapping[str, Any]) -> bool | None:
+    """Evaluate one arithmetic comparison against a concrete tag mapping."""
+    if atom.left not in state or atom.right not in state:
+        return None
+    left = state[atom.left]
+    right = state[atom.right]
+    if (
+        not isinstance(left, (int, float))
+        or isinstance(left, bool)
+        or not isinstance(right, (int, float))
+        or isinstance(right, bool)
+    ):
+        return None
+    try:
+        if atom.arith_op == "+":
+            actual = left + right
+        elif atom.arith_op == "-":
+            actual = left - right
+        elif atom.arith_op == "*":
+            actual = left * right
+        else:
+            return None
+        return _eval_atom(Atom("", atom.form, atom.operand), actual)
+    except TypeError:
+        return None
+
+
+def _eval_expr_from_state(expr: Expr | ArithAtom, state: Mapping[str, Any]) -> bool | None:
     """Evaluate an expression against a concrete tag mapping.
 
     Returns ``None`` when residual edge-sensitive or missing-tag terms make the
@@ -96,6 +116,8 @@ def _eval_expr_from_state(expr: Expr, state: Mapping[str, Any]) -> bool | None:
         return bool(expr.value)
     if isinstance(expr, Atom):
         return _eval_atom_from_state(expr, state)
+    if isinstance(expr, ArithAtom):
+        return _eval_arith_atom_from_state(expr, state)
     if isinstance(expr, And):
         saw_unknown = False
         for term in expr.terms:
@@ -117,50 +139,30 @@ def _eval_expr_from_state(expr: Expr, state: Mapping[str, Any]) -> bool | None:
     return None
 
 
+def _known_eval_atom(atom: Atom, known: dict[str, Any]) -> bool | None:
+    """Decide an atom against *known* by substituting operand tags manually.
+
+    The prover's atom arm for the shared partial-eval walk (see
+    ``core/analysis/partial_eval.py``); PILOT's twin is ``_guard_eval_atom``
+    in ``pilot/trace.py``.
+    """
+    if atom.tag not in known:
+        return None
+    eval_expr = atom
+    if atom.operand_is_tag:
+        if atom.operand not in known:
+            return None
+        try:
+            operand = atom.operand_scale * known[atom.operand] + atom.operand_offset
+        except TypeError:
+            return None
+        eval_expr = Atom(atom.tag, atom.form, operand)
+    return _eval_atom(eval_expr, known[atom.tag])
+
+
 def _partial_eval(expr: Expr, known: dict[str, Any]) -> Expr:
     """Substitute known tag values and simplify."""
-    if isinstance(expr, Const):
-        return expr
-
-    if isinstance(expr, Atom):
-        if expr.tag in known:
-            eval_expr = expr
-            if isinstance(expr.operand, str):
-                if expr.operand not in known:
-                    return expr
-                eval_expr = Atom(expr.tag, expr.form, known[expr.operand])
-            result = _eval_atom(eval_expr, known[expr.tag])
-            if result is not None:
-                return Const(result)
-        return expr
-
-    if isinstance(expr, And):
-        terms: list[Expr] = []
-        for t in expr.terms:
-            evaled = _partial_eval(t, known)
-            if isinstance(evaled, Const):
-                if not evaled.value:
-                    return Const(False)
-                continue
-            terms.append(evaled)
-        if not terms:
-            return Const(True)
-        return And(tuple(terms)) if len(terms) > 1 else terms[0]
-
-    if isinstance(expr, Or):
-        terms = []
-        for t in expr.terms:
-            evaled = _partial_eval(t, known)
-            if isinstance(evaled, Const):
-                if evaled.value:
-                    return Const(True)
-                continue
-            terms.append(evaled)
-        if not terms:
-            return Const(False)
-        return Or(tuple(terms)) if len(terms) > 1 else terms[0]
-
-    return expr
+    return partial_eval(expr, known, _known_eval_atom)
 
 
 _COMPARISON_FORMS = frozenset({"eq", "ne", "lt", "le", "gt", "ge"})
@@ -183,13 +185,20 @@ def _substitute_elided_atoms(
             return expr
         source_name, invert = subs[expr.tag]
         if expr.form in _COMPARISON_FORMS:
-            if isinstance(expr.operand, str):
+            if expr.operand_is_tag:
                 return expr
             new_operand = invert(expr.operand)
             if new_operand is None or not isinstance(new_operand, (int, float, bool)):
                 return None
             return Atom(source_name, expr.form, new_operand)
-        return Atom(source_name, expr.form, expr.operand)
+        return Atom(
+            source_name,
+            expr.form,
+            expr.operand,
+            operand_is_tag=expr.operand_is_tag,
+            operand_scale=expr.operand_scale,
+            operand_offset=expr.operand_offset,
+        )
 
     if isinstance(expr, And):
         terms: list[Expr] = []
@@ -222,7 +231,7 @@ def _referenced_tags(expr: Expr) -> frozenset[str]:
 def _walk_tags(expr: Expr, out: set[str]) -> None:
     if isinstance(expr, Atom):
         out.add(expr.tag)
-        if isinstance(expr.operand, str):
+        if expr.operand_is_tag:
             out.add(expr.operand)
     elif isinstance(expr, (And, Or)):
         for t in expr.terms:

@@ -26,15 +26,18 @@ from pyrung.circuitpy.codegen._util import (
     _subroutine_symbol,
 )
 from pyrung.circuitpy.codegen.compile import compile_rungs
-from pyrung.circuitpy.codegen.context import CodegenContext
+from pyrung.circuitpy.codegen.context import CodegenContext, describe_static_range
 from pyrung.core.kernel import BlockSpec, CompiledKernel
-from pyrung.core.memory_block import Block
+from pyrung.core.memory_block import Block, BlockRange
 from pyrung.core.program import Program
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import Tag
 
 
-def _collect_materialized_tag_names(program: Program) -> frozenset[str]:
+def _collect_materialized_tag_names(
+    program: Program,
+    ctx: CodegenContext | None = None,
+) -> frozenset[str]:
     """Return the set of non-system tag names materialized in the program graph.
 
     ``BlockRange`` objects intentionally retain their owning ``Block``.  Walking
@@ -61,6 +64,17 @@ def _collect_materialized_tag_names(program: Program) -> frozenset[str]:
         if isinstance(current, (str, bytes, bytearray, int, float, bool)):
             continue
         if isinstance(current, Block):
+            continue
+        if type(current) is BlockRange:
+            continue
+        if isinstance(current, BlockRange):
+            layout = (
+                ctx.static_range_layout(current)
+                if ctx is not None
+                else describe_static_range(current)
+            )
+            if not layout.uses_backing_storage:
+                queue.extend(layout.tags)
             continue
 
         current_id = id(current)
@@ -95,19 +109,27 @@ def compile_kernel(
     force_rung_enable: bool = False,
     blockless: bool = False,
     proof_metadata: bool = False,
+    split_after: int | None = None,
 ) -> CompiledKernel:
-    """Compile a Program into a fast in-process replay kernel."""
+    """Compile a Program into a fast in-process replay kernel.
+
+    ``split_after`` (a rung count) emits a second ``pre_step_fn`` covering the
+    leading rungs — the synthesis ``plant`` pass — so the caller can drain inputs
+    *between* the two passes (the plant reads the previous commit, the input-read
+    phase).  ``None`` ⇒ a single ``step_fn`` for the whole program.
+    """
     ctx = CodegenContext.for_kernel(
         program,
         force_rung_enable=force_rung_enable,
         blockless=blockless,
         proof_metadata=proof_metadata,
     )
-    source = _render_kernel_source(ctx)
+    source = _render_kernel_source(ctx, split_after=split_after)
 
     namespace: dict[str, Any] = {}
     exec(compile(source, "<kernel>", "exec"), namespace)  # noqa: S102
     step_fn = namespace["_kernel_step"]
+    pre_step_fn = namespace.get("_kernel_step_pre")
 
     indirect_block_info: dict[str, tuple[str, int, int, frozenset[int]]] = {}
     for block_id in ctx.used_indirect_blocks:
@@ -127,6 +149,7 @@ def compile_kernel(
 
     return CompiledKernel(
         step_fn=step_fn,
+        pre_step_fn=pre_step_fn,
         referenced_tags=dict(ctx.referenced_tags),
         block_specs=block_specs,
         edge_tags=set(ctx.edge_prev_tags),
@@ -134,20 +157,27 @@ def compile_kernel(
         blockless=blockless,
         has_io_gaps=ctx.has_io_gaps,
         indirect_block_info=indirect_block_info,
-        materialized_tag_names=_collect_materialized_tag_names(program),
+        materialized_tag_names=_collect_materialized_tag_names(program, ctx),
     )
 
 
 def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:
     specs: dict[str, BlockSpec] = {}
     for binding in sorted(
-        ctx.block_bindings.values(),
+        ctx.emitted_bindings(),
         key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
     ):
         symbol = ctx.block_symbols[binding.block_id]
-        tag_names = list(ctx.block_layout_tag_names(binding.block_id))
+        compact = ctx.compact_block_map.get(binding.block_id)
+        addresses = (
+            sorted(compact) if compact is not None else list(range(binding.start, binding.end + 1))
+        )
+        tags = [binding.block._get_tag(addr) for addr in addresses]
+        tag_names = [t.name for t in tags]
         if not tag_names:
             continue
+        for tag in tags:
+            ctx.referenced_tags.setdefault(tag.name, tag)
         specs[symbol] = BlockSpec(
             symbol=symbol,
             size=len(tag_names),
@@ -158,9 +188,21 @@ def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:
     return specs
 
 
-def _render_kernel_source(ctx: CodegenContext) -> str:
+def _render_kernel_source(ctx: CodegenContext, *, split_after: int | None = None) -> str:
     sub_fn_lines = _compile_subroutines(ctx)
-    main_body = _compile_main_body(ctx)
+    rungs = ctx.program.rungs
+    if split_after is None:
+        pre_body: list[str] | None = None
+        main_body = _compile_rung_body(ctx, rungs, "_kernel_step")
+    else:
+        # Split the scan into a leading ``plant`` pre-pass and the main pass.  Both
+        # compile against the *same* ctx (symbols already assigned over the whole
+        # program in ``for_kernel``), so referenced tags / blocks / edge tags are
+        # the correct union; only the rung bodies differ.  Each renders its own
+        # load→run→flush, so a drain between the two passes is visible to the main
+        # pass (it re-reads the tags dict).
+        pre_body = _compile_rung_body(ctx, rungs[:split_after], "_kernel_step_pre")
+        main_body = _compile_rung_body(ctx, rungs[split_after:], "_kernel_step")
 
     lines: list[str] = []
     lines.extend(_render_imports(ctx))
@@ -169,6 +211,8 @@ def _render_kernel_source(ctx: CodegenContext) -> str:
     lines.extend(_render_embedded_functions(ctx))
     lines.extend(_render_declarations(ctx))
     lines.extend(sub_fn_lines)
+    if pre_body is not None:
+        lines.extend(_render_step_function(ctx, pre_body, fn_name="_kernel_step_pre"))
     lines.extend(_render_step_function(ctx, main_body))
     return "\n".join(lines).rstrip() + "\n"
 
@@ -204,11 +248,10 @@ def _compile_subroutines(ctx: CodegenContext) -> list[str]:
     return lines
 
 
-def _compile_main_body(ctx: CodegenContext) -> list[str]:
-    fn_name = "_kernel_step"
+def _compile_rung_body(ctx: CodegenContext, rungs: list[Any], fn_name: str) -> list[str]:
     ctx.function_globals[fn_name] = set()
     ctx.set_current_function(fn_name)
-    body = compile_rungs(ctx.program.rungs, fn_name, ctx, indent=4)
+    body = compile_rungs(rungs, fn_name, ctx, indent=4)
     ctx.set_current_function(None)
     return body
 
@@ -385,7 +428,7 @@ def _render_helpers(ctx: CodegenContext) -> list[str]:
             '    if text == "":',
             '        raise ValueError("empty text cannot be parsed")',
             '    if dest_type in {"INT", "DINT"}:',
-            '        if not re.fullmatch(r"[+-]?\\\\d+", text):',
+            '        if not re.fullmatch(r"[+-]?\\d+", text):',
             '            raise ValueError("integer parse failed")',
             "        parsed = int(text, 10)",
             '        if dest_type == "INT" and (parsed < -32768 or parsed > 32767):',
@@ -546,7 +589,7 @@ def _render_declarations(ctx: CodegenContext) -> list[str]:
 
     if ctx.blockless:
         for binding in sorted(
-            ctx.block_bindings.values(),
+            ctx.emitted_bindings(),
             key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
         ):
             tag_names = ctx.block_layout_tag_names(binding.block_id)
@@ -555,7 +598,7 @@ def _render_declarations(ctx: CodegenContext) -> list[str]:
             lines.append(f"{ctx.block_name_tuple_symbol(binding.block_id)} = {tag_names!r}")
     else:
         for binding in sorted(
-            ctx.block_bindings.values(),
+            ctx.emitted_bindings(),
             key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
         ):
             compact = ctx.compact_block_map.get(binding.block_id)
@@ -573,7 +616,9 @@ def _render_declarations(ctx: CodegenContext) -> list[str]:
     return lines
 
 
-def _render_step_function(ctx: CodegenContext, main_body: list[str]) -> list[str]:
+def _render_step_function(
+    ctx: CodegenContext, main_body: list[str], *, fn_name: str = "_kernel_step"
+) -> list[str]:
     all_symbols: set[str] = set()
     scalar_symbols = sorted(ctx.symbol_table[n] for n in ctx.scalar_tags)
     all_symbols.update(scalar_symbols)
@@ -581,7 +626,7 @@ def _render_step_function(ctx: CodegenContext, main_body: list[str]) -> list[str
 
     active_block_bindings = []
     for binding in sorted(
-        ctx.block_bindings.values(),
+        ctx.emitted_bindings(),
         key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
     ):
         if ctx.blockless:
@@ -595,7 +640,7 @@ def _render_step_function(ctx: CodegenContext, main_body: list[str]) -> list[str
         active_block_bindings.append(binding)
         all_symbols.add(ctx.block_symbols[binding.block_id])
 
-    lines: list[str] = ["def _kernel_step(tags, blocks, memory, prev, dt):"]
+    lines: list[str] = [f"def {fn_name}(tags, blocks, memory, prev, dt):"]
     globals_line = _global_line(sorted(all_symbols), indent=4)
     if globals_line is not None:
         lines.append(globals_line)

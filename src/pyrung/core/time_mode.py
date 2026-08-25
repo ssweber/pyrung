@@ -96,14 +96,14 @@ def normalize_unit(unit: str) -> str:
     """
     key = unit.lower().strip()
     if key == "t":
-        raise ValueError("ambiguous time unit 'T' — use one of: ms, s, min, h, d")
+        raise ValueError("ambiguous time unit 'T'; use one of: ms, s, min, h, d")
     # Strip leading 't' so "tms" → "ms", "ts" → "s", etc.
     stripped = key.lstrip("t")
     if stripped in UNIT_MAP:
         return UNIT_MAP[stripped]
     if key in UNIT_MAP:
         return UNIT_MAP[key]
-    raise ValueError(f"unknown time unit '{unit}' — use one of: ms, s, min, h, d")
+    raise ValueError(f"unknown time unit '{unit}'; use one of: ms, s, min, h, d")
 
 
 def _parse_time_unit(value: str) -> TimeUnit:

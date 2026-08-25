@@ -61,7 +61,9 @@ HMIs, SCADA systems, [ClickNick](https://github.com/ssweber/clicknick)'s Data Vi
 ## Option B: Map to a Click PLC
 
 ```python
-from pyrung.click import x, y, ds, TagMap, pyrung_to_ladder
+from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 mapping = TagMap({
     StartBtn:       x[1],       # Physical input terminal 1

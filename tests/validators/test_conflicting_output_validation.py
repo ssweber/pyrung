@@ -9,6 +9,7 @@ from pyrung.core import (
     Bool,
     Counter,
     Int,
+    Or,
     OutputBlock,
     Program,
     Rung,
@@ -30,7 +31,7 @@ from pyrung.core import (
     subroutine,
 )
 from pyrung.core.validation.duplicate_out import (
-    CORE_CONFLICTING_OUTPUT,
+    COIL_CONFLICTING_OUTPUT,
     validate_conflicting_outputs,
 )
 
@@ -53,6 +54,10 @@ ButtonC = Bool("ButtonC")
 Flag = Bool("Flag")
 State = Int("State")
 ResetBtn = Bool("ResetBtn")
+Mode = Int("Mode")
+ProdMode = Bool("ProdMode")
+MaintMode = Bool("MaintMode")
+ManualMode = Bool("ManualMode")
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +76,7 @@ class TestDirectDuplicateOut:
         report = validate_conflicting_outputs(prog)
         assert len(report.findings) == 1
         assert report.findings[0].target_name == "Light"
-        assert report.findings[0].code == CORE_CONFLICTING_OUTPUT
+        assert report.findings[0].code == COIL_CONFLICTING_OUTPUT
         assert len(report.findings[0].sites) == 2
 
 
@@ -273,14 +278,18 @@ class TestLatchResetExcluded:
 class TestBlockRangeTarget:
     def test_overlapping_block_ranges(self):
         Y = OutputBlock("Y", TagType.BOOL, 1, 16)
+        first = Y.select(1, 4)
+        second = Y.select(1, 4)
         with Program() as prog:
             with Rung(ButtonA):
-                out(Y.select(1, 4))
+                out(first)
             with Rung(ButtonB):
-                out(Y.select(1, 4))
+                out(second)
 
         report = validate_conflicting_outputs(prog)
         assert len(report.findings) == 4  # Y1, Y2, Y3, Y4
+        assert "_tag_name_cache" not in vars(first)
+        assert "_tag_name_cache" not in vars(second)
 
 
 # ---------------------------------------------------------------------------
@@ -757,6 +766,83 @@ class TestCallerExclusivityPatterns:
         assert len(report.findings) == 1
 
 
+class TestOneHotAliasExclusivity:
+    """One-hot mode-decoded caller bits resolve to their register comparisons,
+    exposing exclusivity the raw bit names hide.
+
+    Mirrors the packml SetOutputs vs SetOutputsManual case: ``ProdMode`` /
+    ``ManualMode`` are decoded one-hot from ``Mode``, so callers gated on them are
+    exclusive even though the bit *names* differ.
+    """
+
+    def test_one_hot_decoded_callers_exclusive(self):
+        """Or(ProdMode, MaintMode) vs ManualMode → exclusive via Mode decode."""
+        with Program() as prog:
+            with Rung(Mode == 1):
+                out(ProdMode)
+            with Rung(Mode == 2):
+                out(MaintMode)
+            with Rung(Mode == 3):
+                out(ManualMode)
+            with Rung(Or(ProdMode, MaintMode)):
+                call("set_outputs")
+            with Rung(ManualMode):
+                call("set_outputs_manual")
+            with subroutine("set_outputs"):
+                with Rung(Flag):
+                    out(Light)
+            with subroutine("set_outputs_manual"):
+                with Rung(Flag):
+                    out(Light)
+
+        report = validate_conflicting_outputs(prog)
+        assert len(report.findings) == 0
+
+    def test_same_decoded_value_callers_conflict(self):
+        """Both callers gated on the SAME decoded bit → resolves to Mode==1 twice,
+        which is satisfiable → the conflict still reports (no over-suppression)."""
+        with Program() as prog:
+            with Rung(Mode == 1):
+                out(ProdMode)
+            with Rung(ProdMode):
+                call("sub_a")
+            with Rung(ProdMode):
+                call("sub_b")
+            with subroutine("sub_a"):
+                with Rung():
+                    out(Light)
+            with subroutine("sub_b"):
+                with Rung():
+                    out(Light)
+
+        report = validate_conflicting_outputs(prog)
+        assert len(report.findings) == 1
+
+    def test_latched_mode_bit_not_resolved(self):
+        """A bit with a latch writer is not purely combinational, so it cannot be
+        alias-resolved — exclusivity is unprovable and the conflict still reports."""
+        with Program() as prog:
+            with Rung(Mode == 1):
+                out(ProdMode)
+            with Rung(ResetBtn):
+                latch(ProdMode)
+            with Rung(Mode == 3):
+                out(ManualMode)
+            with Rung(ProdMode):
+                call("sub_a")
+            with Rung(ManualMode):
+                call("sub_b")
+            with subroutine("sub_a"):
+                with Rung():
+                    out(Light)
+            with subroutine("sub_b"):
+                with Rung():
+                    out(Light)
+
+        report = validate_conflicting_outputs(prog)
+        assert len(report.findings) == 1
+
+
 # ---------------------------------------------------------------------------
 # Modbus send/receive status tag conflicts
 # ---------------------------------------------------------------------------
@@ -804,7 +890,7 @@ class TestSendReceiveStatusTagConflicts:
         flagged = {f.target_name for f in report.findings}
         assert flagged == {"Sending", "Success", "Error", "ExCode"}
         for f in report.findings:
-            assert f.code == CORE_CONFLICTING_OUTPUT
+            assert f.code == COIL_CONFLICTING_OUTPUT
 
     def test_send_and_receive_sharing_success_flags_it(self):
         from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive, send

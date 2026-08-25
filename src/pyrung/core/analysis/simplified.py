@@ -7,7 +7,8 @@ it as a human-readable formula.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
@@ -26,14 +27,36 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Atom:
-    """Leaf: a single contact or comparison."""
+    """Leaf: a single contact or comparison.
+
+    ``operand_is_tag`` preserves whether a comparison's right-hand operand was
+    a tag reference before the condition was lowered to names. A string operand
+    is otherwise ambiguous: it may be a literal string or the name of a tag.
+    Consumers must use this receipt rather than guessing from ``str``.
+    """
 
     tag: str
     form: str  # "xic"|"xio"|"rise"|"fall"|"truthy"|"eq"|"ne"|"lt"|"le"|"gt"|"ge"
     operand: Any = None
+    operand_is_tag: bool = False
+    operand_scale: int | float = 1
+    operand_offset: int | float = 0
+    # Unknown Condition subclasses historically became a synthetic
+    # ``Atom(type_name, "xic")``. Keep that conservative projection for
+    # existing simplified-expression consumers, but retain the raw construct so
+    # readers with a strict support boundary can report that they did not
+    # understand it.
+    unsupported: Any = field(default=None, compare=False, hash=False, repr=False)
 
-    def _key(self) -> tuple[str, str, Any]:
-        return (self.tag, self.form, self.operand)
+    def _key(self) -> tuple[str, str, Any, bool, int | float, int | float]:
+        return (
+            self.tag,
+            self.form,
+            self.operand,
+            self.operand_is_tag,
+            self.operand_scale,
+            self.operand_offset,
+        )
 
 
 @dataclass(frozen=True)
@@ -89,6 +112,74 @@ class TerminalForm:
 
 
 # ---------------------------------------------------------------------------
+# Three-valued evaluation under a partial assignment
+# ---------------------------------------------------------------------------
+
+
+def _atom_true_under(atom: Atom, value: Any) -> bool | None:
+    """Whether a simplified ``Atom`` holds given its tag is steadily *value*.
+
+    Returns ``None`` for an edge form (``rise``/``fall``) — a steadily held value
+    never produces an edge, so it can never *force* an edge-gated rung.
+    """
+    form = atom.form
+    if form in ("rise", "fall"):
+        return None
+    if form in ("xic", "truthy"):
+        return bool(value)
+    if form == "xio":
+        return not bool(value)
+    if atom.operand_is_tag:
+        return None
+    from pyrung.core.analysis.sp_values import _values_match
+
+    op = atom.operand
+    if form == "eq":
+        return _values_match(value, op)
+    if form == "ne":
+        return not _values_match(value, op)
+    try:
+        if form == "lt":
+            return value < op
+        if form == "le":
+            return value <= op
+        if form == "gt":
+            return value > op
+        if form == "ge":
+            return value >= op
+    except TypeError:
+        return None
+    return None
+
+
+def _expr_forced_true(expr: Any, assign: dict[str, Any]) -> bool | None:
+    """Three-valued: is *expr* **necessarily** True under partial *assign*?
+
+    Tags absent from *assign* are UNKNOWN.  ``True`` means the expression holds
+    regardless of the unknowns (an ``Or`` with one satisfied disjunct, an ``And``
+    whose every term is satisfied); ``False`` means it cannot hold; ``None``
+    means it depends on the unknowns.
+    """
+    if isinstance(expr, Const):
+        return expr.value
+    if isinstance(expr, Atom):
+        return None if expr.tag not in assign else _atom_true_under(expr, assign[expr.tag])
+    if isinstance(expr, ArithAtom):
+        return None
+    if isinstance(expr, And):
+        vals = [_expr_forced_true(t, assign) for t in expr.terms]
+        if any(v is False for v in vals):
+            return False
+        return True if all(v is True for v in vals) else None
+    if isinstance(expr, Or):
+        vals = [_expr_forced_true(t, assign) for t in expr.terms]
+        if any(v is True for v in vals):
+            return True
+        return False if all(v is False for v in vals) else None
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Condition → Expr conversion
 # ---------------------------------------------------------------------------
 
@@ -120,6 +211,13 @@ def _operand_label(value: Any) -> Any:
             return value.default
         return value.name
     return value
+
+
+def _operand_is_tag(value: Any) -> bool:
+    """Whether *value* remains a live tag reference after lowering."""
+    from pyrung.core.tag import Tag
+
+    return isinstance(value, Tag) and not value.readonly
 
 
 def _condition_to_expr(condition: Any) -> Expr:
@@ -177,6 +275,7 @@ def _condition_to_expr(condition: Any) -> Expr:
             condition.tag.name,
             _COMPARE_FORMS[cls_name],
             _operand_label(condition.value),
+            operand_is_tag=_operand_is_tag(condition.value),
         )
 
     if cls_name in _INDIRECT_COMPARE_FORMS:
@@ -184,11 +283,13 @@ def _condition_to_expr(condition: Any) -> Expr:
             f"indirect({cls_name})",
             _INDIRECT_COMPARE_FORMS[cls_name],
             _operand_label(condition.value),
+            operand_is_tag=_operand_is_tag(condition.value),
         )
 
-    return Atom(cls_name, "xic")
+    return Atom(cls_name, "xic", unsupported=condition)
 
 
+@lru_cache(maxsize=4096)
 def _sp_to_expr(node: SPNode) -> Expr:
     """Convert an SP tree to an Expr."""
     if isinstance(node, SPLeaf):
@@ -278,38 +379,97 @@ def _try_factored_branches(
     return And((parent_expr, inner))
 
 
-def _expr_for_writers(
-    writer_indices: frozenset[int],
-    graph: ProgramGraph,
-    rung_map: dict[int, Rung],
-    *,
-    before: int | None = None,
-) -> tuple[Expr, list[int]] | None:
-    """Build the combined Expr for a tag's writers.
+def _resets_only(rung: Rung, tag: str) -> bool:
+    """True when *rung* writes *tag* only via reset/unlatch.
 
-    Groups writer node indices by top-level rung_index, keeps only the
-    last rung group (OTE last-write-wins).  When all writers in the group
-    are sibling branches, the shared parent conditions are factored out
-    (``And(parent, Or(local₁, local₂))``); otherwise branches are ORed.
-
-    *before*, when set, restricts to writers whose node index < before.
-
-    Returns ``(expr, effective_node_indices)`` or ``None`` if no writers.
+    A reset drives a Boolean tag OFF, never True, so such a writer
+    must not define the tag's simplified *True* form.  Out/latch and value
+    writers do drive it true and are kept.
     """
-    indices = writer_indices
-    if before is not None:
-        indices = frozenset(i for i in indices if i < before)
-        if not indices:
-            indices = writer_indices
+    from pyrung.core.instruction.coils import ResetInstruction
+    from pyrung.core.validation._common import _resolve_tag_names
 
+    has_reset = False
+    has_driver = False
+    for instr in rung._instructions:
+        target = getattr(instr, "target", None)
+        if target is None or tag not in _resolve_tag_names(target):
+            continue
+        if isinstance(instr, ResetInstruction):
+            has_reset = True
+        else:
+            has_driver = True
+    return has_reset and not has_driver
+
+
+@dataclass(frozen=True)
+class _GuardCtx:
+    """Per-program call-guard context for cross-scope writer combination.
+
+    Lets a tag's writers that live in *conditionally-called* subroutines carry
+    their call guard into the simplified form, and lets mutually-exclusive
+    subroutine writers be ORed instead of one being dropped by last-write-wins.
+    Built on the shared duplicate-out machinery (caller map + site exclusion in
+    ``validation/_common``), so the "are these writes exclusive / what guards
+    this call" logic lives in one place, consumed by both the validator and here.
+    """
+
+    caller_map: Any
+    caller_guards: dict[str, Expr]  # subroutine name -> call-guard Expr (True if unconditional)
+    exec_pos: dict[str, int]  # subroutine name -> approx execution position (caller rung index)
+
+
+def _build_guard_ctx(program: Program) -> _GuardCtx:
+    """Compute per-subroutine call guards and execution positions."""
+    from pyrung.core.validation._common import _build_caller_map
+
+    caller_map = _build_caller_map(program)
+    guards: dict[str, Expr] = {}
+    computing: set[str] = set()
+
+    def guard_for(sub: str) -> Expr:
+        if sub in guards:
+            return guards[sub]
+        callers = caller_map.get(sub, [])
+        if not callers:
+            return Const(False)  # uncalled subroutine never executes
+        if sub in computing:
+            return Const(True)  # recursive call chain — stay conservative
+        computing.add(sub)
+        terms: list[Expr] = []
+        for scope, caller_sub, _ri, _bp, conds in callers:
+            local = _conditions_list_to_expr(list(conds))
+            if scope == "subroutine" and caller_sub is not None:
+                terms.append(simplify(And((guard_for(caller_sub), local))))
+            else:
+                terms.append(local)
+        computing.discard(sub)
+        result = simplify(terms[0] if len(terms) == 1 else Or(tuple(terms)))
+        guards[sub] = result
+        return result
+
+    for sub in program.subroutines:
+        guard_for(sub)
+
+    exec_pos = {
+        sub: min((ri for _s, _cs, ri, _bp, _c in callers), default=0)
+        for sub, callers in caller_map.items()
+    }
+    return _GuardCtx(caller_map=caller_map, caller_guards=guards, exec_pos=exec_pos)
+
+
+def _combine_single_scope(
+    indices: frozenset[int], graph: ProgramGraph, rung_map: dict[int, Rung]
+) -> tuple[Expr, list[int]] | None:
+    """Combine writers within one scope: last rung-group wins; sibling branches
+    in that rung factor as ``And(parent, Or(...))`` (else ORed)."""
     by_rung: dict[int, list[int]] = {}
     for ni in indices:
-        node = graph.rung_nodes[ni]
-        by_rung.setdefault(node.rung_index, []).append(ni)
+        by_rung.setdefault(graph.rung_nodes[ni].rung_index, []).append(ni)
+    if not by_rung:
+        return None
 
-    last_rung_index = max(by_rung)
-    effective = sorted(by_rung[last_rung_index])
-
+    effective = sorted(by_rung[max(by_rung)])
     if len(effective) > 1:
         factored = _try_factored_branches(effective, graph, rung_map)
         if factored is not None:
@@ -321,16 +481,98 @@ def _expr_for_writers(
         if rung is None:
             continue
         sp = rung.sp_tree()
-        if sp is None:
-            branch_exprs.append(Const(True))
-        else:
-            branch_exprs.append(_sp_to_expr(sp))
+        branch_exprs.append(Const(True) if sp is None else _sp_to_expr(sp))
 
     if not branch_exprs:
         return None
-
     expr = branch_exprs[0] if len(branch_exprs) == 1 else Or(tuple(branch_exprs))
     return expr, effective
+
+
+def _expr_for_writers(
+    writer_indices: frozenset[int],
+    graph: ProgramGraph,
+    rung_map: dict[int, Rung],
+    *,
+    tag: str | None = None,
+    before: int | None = None,
+    ctx: _GuardCtx | None = None,
+) -> tuple[Expr, list[int]] | None:
+    """Build the combined True-form Expr for a tag's writers.
+
+    Within one scope (main, or one subroutine), the last rung-group wins
+    (OTE last-write-wins) and sibling branches factor/OR.  Across scopes (a tag
+    written in several subroutines, or main + a subroutine), each scope's local
+    form is ANDed with that subroutine's **call guard** (so a mode-gated
+    ``out`` carries ``S_ProductionMode`` etc.) and the scopes are combined
+    exclusion-aware: a later, non-mutually-exclusive scope overrides an earlier
+    one; mutually-exclusive scopes (e.g. Production vs Manual subroutines) are
+    ORed.  Requires *ctx* (from :func:`_build_guard_ctx`) for the cross-scope
+    path; without it, falls back to single-scope combination.
+
+    *tag*, when set, drops reset/unlatch-only writers first: they drive the tag
+    False, never True, so they must not define its True form (else a later
+    unconditionally-reached reset would collapse the form to ``True``).  When
+    *every* writer only resets the tag, the True form is ``False``.
+
+    *before*, when set, restricts to writers whose node index < before.
+
+    Returns ``(expr, effective_node_indices)`` or ``None`` if no writers.
+    """
+    indices = writer_indices
+    if before is not None:
+        indices = frozenset(i for i in indices if i < before)
+        if not indices:
+            indices = writer_indices
+
+    if tag is not None:
+        drivers = frozenset(
+            i for i in indices if not ((r := rung_map.get(i)) is not None and _resets_only(r, tag))
+        )
+        if not drivers:
+            return Const(False), sorted(indices)
+        indices = drivers
+
+    if ctx is None:
+        return _combine_single_scope(frozenset(indices), graph, rung_map)
+
+    scopes: dict[str | None, list[int]] = {}
+    for ni in indices:
+        scopes.setdefault(graph.rung_nodes[ni].subroutine, []).append(ni)
+
+    # Per scope: combine its writers locally, then AND that scope's subroutine
+    # call guard (so a mode-gated ``out`` carries ``S_ProductionMode`` etc.; the
+    # guard is ``True`` for main scope, so main-scope forms are unchanged).
+    # Then OR the scopes.  OR is exact for any program that passes conflicting-
+    # output validation, which guarantees cross-scope writers of a tag are
+    # mutually exclusive (a non-exclusive pair is a flagged conflict, not a
+    # last-write-wins override).  So no scope is dropped — the bug last-write-
+    # wins caused (keeping only the highest-rung-index scope) is gone.
+    contribs: list[tuple[int, Expr, list[int]]] = []
+    for sub, nodes in scopes.items():
+        res = _combine_single_scope(frozenset(nodes), graph, rung_map)
+        if res is None:
+            continue
+        local, eff = res
+        guard = Const(True) if sub is None else ctx.caller_guards.get(sub, Const(True))
+        if guard == Const(False):
+            continue  # uncalled subroutine never drives the tag
+        expr = local if guard == Const(True) else simplify(And((guard, local)))
+        pos = (
+            min((graph.rung_nodes[ni].rung_index for ni in nodes), default=0)
+            if sub is None
+            else ctx.exec_pos.get(sub, 0)
+        )
+        contribs.append((pos, expr, eff))
+
+    if not contribs:
+        return None
+
+    contribs.sort(key=lambda c: c[0])  # stable, readable OR-term order
+    exprs = [c[1] for c in contribs]
+    all_eff = sorted({ni for c in contribs for ni in c[2]})
+    combined = exprs[0] if len(exprs) == 1 else Or(tuple(exprs))
+    return combined, all_eff
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +610,7 @@ def _resolve_pivots(
     reader_node_index: int | None = None,
     visited: frozenset[str] = frozenset(),
     depth: int = 0,
+    ctx: _GuardCtx | None = None,
     _stats: dict[str, int] | None = None,
 ) -> Expr:
     """Recursively substitute pivot atoms with their writing rung's expression.
@@ -390,6 +633,7 @@ def _resolve_pivots(
                 reader_node_index=reader_node_index,
                 visited=visited,
                 depth=depth,
+                ctx=ctx,
                 _stats=_stats,
             )
             for t in expr.terms
@@ -406,6 +650,7 @@ def _resolve_pivots(
                 reader_node_index=reader_node_index,
                 visited=visited,
                 depth=depth,
+                ctx=ctx,
                 _stats=_stats,
             )
             for t in expr.terms
@@ -432,7 +677,9 @@ def _resolve_pivots(
         writer_indices,
         graph,
         rung_map,
+        tag=tag_name,
         before=reader_node_index,
+        ctx=ctx,
     )
     if result is None:
         return expr
@@ -451,6 +698,7 @@ def _resolve_pivots(
         reader_node_index=max(effective),
         visited=visited | {tag_name},
         depth=depth + 1,
+        ctx=ctx,
         _stats=_stats,
     )
 
@@ -466,10 +714,37 @@ def _negate(expr: Expr) -> Expr:
         return Const(not expr.value)
 
     if isinstance(expr, Atom):
-        flips = {"xic": "xio", "xio": "xic"}
+        flips = {
+            "xic": "xio",
+            "xio": "xic",
+            "rise": "fall",
+            "fall": "rise",
+            "eq": "ne",
+            "ne": "eq",
+            "lt": "ge",
+            "le": "gt",
+            "gt": "le",
+            "ge": "lt",
+        }
         if expr.form in flips:
-            return Atom(expr.tag, flips[expr.form], expr.operand)
-        return Atom(expr.tag, expr.form, expr.operand)
+            return Atom(
+                expr.tag,
+                flips[expr.form],
+                expr.operand,
+                operand_is_tag=expr.operand_is_tag,
+                operand_scale=expr.operand_scale,
+                operand_offset=expr.operand_offset,
+                unsupported=expr.unsupported,
+            )
+        return Atom(
+            expr.tag,
+            expr.form,
+            expr.operand,
+            operand_is_tag=expr.operand_is_tag,
+            operand_scale=expr.operand_scale,
+            operand_offset=expr.operand_offset,
+            unsupported=expr.unsupported,
+        )
 
     # De Morgan for compound expressions
     if isinstance(expr, And):
@@ -491,7 +766,15 @@ def _expr_key(expr: Expr) -> tuple[Any, ...]:
     if isinstance(expr, Const):
         return (0, expr.value)
     if isinstance(expr, Atom):
-        return (1, expr.tag, expr.form, str(expr.operand))
+        return (
+            1,
+            expr.tag,
+            expr.form,
+            str(expr.operand),
+            expr.operand_is_tag,
+            expr.operand_scale,
+            expr.operand_offset,
+        )
     if isinstance(expr, And):
         return (2, tuple(_expr_key(t) for t in expr.terms))
     if isinstance(expr, Or):
@@ -636,7 +919,10 @@ def _render(expr: Expr, parent: type | None) -> str:
         if expr.form == "truthy":
             return f"{expr.tag} != 0"
         if expr.form in _OP_SYMBOLS:
-            return f"{expr.tag} {_OP_SYMBOLS[expr.form]} {expr.operand}"
+            operand = str(expr.operand)
+            if expr.operand_is_tag and (expr.operand_scale != 1 or expr.operand_offset != 0):
+                operand = f"({expr.operand_scale!r} * {expr.operand} + {expr.operand_offset!r})"
+            return f"{expr.tag} {_OP_SYMBOLS[expr.form]} {operand}"
         return expr.tag
 
     if isinstance(expr, And):
@@ -756,6 +1042,7 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
     graph = build_program_graph(program)
     rung_map = _build_rung_map(program)
     resolvable = _ote_resolvable(graph)
+    ctx = _build_guard_ctx(program)
 
     results: dict[str, TerminalForm] = {}
 
@@ -767,7 +1054,7 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
         if not writer_indices:
             continue
 
-        result = _expr_for_writers(writer_indices, graph, rung_map)
+        result = _expr_for_writers(writer_indices, graph, rung_map, tag=tag_name, ctx=ctx)
         if result is None:
             continue
 
@@ -780,6 +1067,7 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
             rung_map,
             resolvable=resolvable,
             reader_node_index=max(effective),
+            ctx=ctx,
             _stats=stats,
         )
         simplified_expr = simplify(resolved)

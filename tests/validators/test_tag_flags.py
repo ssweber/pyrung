@@ -1,8 +1,8 @@
 """Tests for tag flag plumbing and flag-based validators.
 
 Covers: external, final, public fields on Tag; mutual exclusivity;
-Block/SlotView plumbing; Click comment parser; CORE_READONLY_WRITE,
-CORE_CHOICES_VIOLATION, CORE_FINAL_MULTIPLE_WRITERS validators;
+Block/SlotView plumbing; Click comment parser; TAG_READONLY_WRITE,
+TAG_CHOICES_VIOLATION, TAG_FINAL_MULTIPLE_WRITERS validators;
 stuck-bits skipping readonly/external; recovers() external support.
 """
 
@@ -215,14 +215,14 @@ class TestTagMetaParser:
 
 
 # ===========================================================================
-# 5. CORE_READONLY_WRITE validator
+# 5. TAG_READONLY_WRITE validator
 # ===========================================================================
 
 
 class TestReadonlyWriteValidator:
     def test_write_to_readonly_flagged(self):
         from pyrung.core.validation.readonly_write import (
-            CORE_READONLY_WRITE,
+            TAG_READONLY_WRITE,
             validate_readonly_writes,
         )
 
@@ -235,7 +235,7 @@ class TestReadonlyWriteValidator:
 
         report = validate_readonly_writes(prog)
         assert len(report.findings) == 1
-        assert report.findings[0].code == CORE_READONLY_WRITE
+        assert report.findings[0].code == TAG_READONLY_WRITE
         assert report.findings[0].target_name == "Light"
 
     def test_no_write_to_readonly_clean(self):
@@ -284,14 +284,14 @@ class TestReadonlyWriteValidator:
 
 
 # ===========================================================================
-# 6. CORE_CHOICES_VIOLATION validator
+# 6. TAG_CHOICES_VIOLATION validator
 # ===========================================================================
 
 
 class TestChoicesViolationValidator:
     def test_literal_outside_choices_flagged(self):
         from pyrung.core.validation.choices_violation import (
-            CORE_CHOICES_VIOLATION,
+            TAG_CHOICES_VIOLATION,
             validate_choices,
         )
 
@@ -303,7 +303,7 @@ class TestChoicesViolationValidator:
 
         report = validate_choices(prog)
         assert len(report.findings) == 1
-        assert report.findings[0].code == CORE_CHOICES_VIOLATION
+        assert report.findings[0].code == TAG_CHOICES_VIOLATION
         assert report.findings[0].value == 99
 
     def test_literal_in_choices_clean(self):
@@ -333,7 +333,7 @@ class TestChoicesViolationValidator:
 
 
 # ===========================================================================
-# 7. CORE_FINAL_MULTIPLE_WRITERS validator
+# 7. TAG_FINAL_MULTIPLE_WRITERS validator
 # ===========================================================================
 
 
@@ -352,7 +352,7 @@ class TestFinalWritersValidator:
 
     def test_multiple_writers_flagged(self):
         from pyrung.core.validation.final_writers import (
-            CORE_FINAL_MULTIPLE_WRITERS,
+            TAG_FINAL_MULTIPLE_WRITERS,
             validate_final_writers,
         )
 
@@ -367,7 +367,7 @@ class TestFinalWritersValidator:
 
         report = validate_final_writers(prog)
         assert len(report.findings) == 1
-        assert report.findings[0].code == CORE_FINAL_MULTIPLE_WRITERS
+        assert report.findings[0].code == TAG_FINAL_MULTIPLE_WRITERS
         assert report.findings[0].target_name == "Total"
         assert len(report.findings[0].sites) == 2
 
@@ -422,7 +422,7 @@ class TestStuckBitsExternalSkip:
         assert len(report.findings) == 0
 
     def test_non_external_latch_no_reset_still_flagged(self):
-        from pyrung.core.validation.stuck_bits import CORE_STUCK_HIGH, validate_stuck_bits
+        from pyrung.core.validation.stuck_bits import COIL_STUCK_HIGH, validate_stuck_bits
 
         Light = Bool("Light")
         Trigger = Bool("Trigger")
@@ -433,7 +433,7 @@ class TestStuckBitsExternalSkip:
 
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 1
-        assert report.findings[0].code == CORE_STUCK_HIGH
+        assert report.findings[0].code == COIL_STUCK_HIGH
 
 
 # ===========================================================================

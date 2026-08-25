@@ -14,6 +14,7 @@ from pyrung.core import (
     blockcopy,
     copy,
     fill,
+    pack_text,
     search,
     unpack_to_bits,
     unpack_to_words,
@@ -145,6 +146,22 @@ class TestFill:
         runner.patch({"DS1": 0})
         runner.step()
         assert runner.current_state.tags["DS1"] == 0
+
+
+class TestPackText:
+    def test_parses_integer_text(self, runner_factory):
+        Enable = Bool("Enable")
+        Chars = Block("Chars", TagType.CHAR, 1, 2)
+        Result = Int("Result")
+
+        with Program() as logic:
+            with Rung(Enable):
+                pack_text(Chars.select(1, 2), Result)
+
+        runner = runner_factory(logic)
+        runner.patch({"Enable": True, "Chars1": "4", "Chars2": "2", "Result": 0})
+        runner.step()
+        assert runner.current_state.tags["Result"] == 42
 
 
 class TestSearch:

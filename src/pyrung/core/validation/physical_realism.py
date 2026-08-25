@@ -22,27 +22,35 @@ from pyrung.core.validation._common import (
     _build_tag_map,
     _chain_pair_mutually_exclusive,
     _collect_write_sites,
-    _format_site_location,
     _resolve_tag_names,
     _resolve_tag_objects,
+    site_frame,
 )
+from pyrung.core.validation.display import FindingDisplay, Frame
+from pyrung.core.validation.render import operand_name
+from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
 
-CORE_RANGE_VIOLATION = "CORE_RANGE_VIOLATION"
-CORE_MISSING_PROFILE = "CORE_MISSING_PROFILE"
-CORE_ANTITOGGLE = "CORE_ANTITOGGLE"
+TAG_RANGE_VIOLATION = "TAG_RANGE_VIOLATION"
+PHYS_MISSING_PROFILE = "PHYS_MISSING_PROFILE"
+PHYS_ANTITOGGLE = "PHYS_ANTITOGGLE"
 
 
 @dataclass(frozen=True)
 class PhysicalRealismFinding:
     code: str
     target_name: str
-    message: str
+    display: FindingDisplay
     site: WriteSite | None = None
     sites: tuple[WriteSite, ...] = ()
     value: Any = None
+    severity: Severity = "warning"
+
+    @property
+    def message(self) -> str:
+        return self.display.as_text()
 
 
 @dataclass(frozen=True)
@@ -108,6 +116,7 @@ def _literal_write_sites(program: Program) -> list[tuple[WriteSite, int | float,
                             conditions=conditions,
                             source_file=getattr(instr, "source_file", None),
                             source_line=getattr(instr, "source_line", None),
+                            instruction=instr,
                         ),
                         value,
                         tag,
@@ -229,18 +238,26 @@ def _validate_ranges(program: Program, tag_map: dict[str, Tag]) -> list[Physical
         too_high = tag.max is not None and value > tag.max
         if not too_low and not too_high:
             continue
-        loc = _format_site_location(site)
-        message = (
-            f"Tag '{site.target_name}' has range {tag.min!r}..{tag.max!r} "
-            f"but write site copies literal {value!r}:\n  - {loc}"
+        display = FindingDisplay(
+            code=TAG_RANGE_VIOLATION,
+            severity="error",
+            frames=(
+                site_frame(
+                    site,
+                    caret_token=operand_name(value),
+                    caret_label=f"outside {tag.min}..{tag.max}",
+                ),
+            ),
+            hint="use a value in range, or widen it",
         )
         findings.append(
             PhysicalRealismFinding(
-                code=CORE_RANGE_VIOLATION,
+                code=TAG_RANGE_VIOLATION,
                 target_name=site.target_name,
                 value=value,
                 site=site,
-                message=message,
+                display=display,
+                severity="error",
             )
         )
     return findings
@@ -256,12 +273,16 @@ def _validate_missing_profiles(tag_map: dict[str, Tag]) -> list[PhysicalRealismF
             continue
         findings.append(
             PhysicalRealismFinding(
-                code=CORE_MISSING_PROFILE,
+                code=PHYS_MISSING_PROFILE,
                 target_name=tag.name,
-                message=(
-                    f"Linked analog feedback '{tag.name}' should declare "
-                    "physical=Physical(..., profile=...)."
+                display=FindingDisplay(
+                    code=PHYS_MISSING_PROFILE,
+                    severity="info",
+                    frames=(Frame(location=tag.name),),
+                    problem=f"{tag.name} has no physical model.",
+                    hint="add physical=Physical(..., profile=...)",
                 ),
+                severity="info",
             )
         )
     return findings
@@ -307,17 +328,21 @@ def _validate_antitoggle(
                 if key in seen:
                     continue
                 seen.add(key)
-                loc = _format_site_location(site)
                 findings.append(
                     PhysicalRealismFinding(
-                        code=CORE_ANTITOGGLE,
+                        code=PHYS_ANTITOGGLE,
                         target_name=command_name,
                         site=site,
                         sites=(site,),
-                        message=(
-                            f"Linked command '{command_name}' is driven by a one-scan edge "
-                            f"pulse ({dt_ms:g} ms) faster than feedback cycle floor "
-                            f"{cycle_floor:g} ms:\n  - {loc}"
+                        display=FindingDisplay(
+                            code=PHYS_ANTITOGGLE,
+                            severity="warning",
+                            frames=(site_frame(site),),
+                            problem=(
+                                f"{command_name} switches every {dt_ms:g} ms; "
+                                f"feedback needs ~{cycle_floor:g} ms."
+                            ),
+                            hint="drive it slower than the feedback",
                         ),
                     )
                 )
@@ -331,14 +356,18 @@ def _validate_antitoggle(
                     continue
                 findings.append(
                     PhysicalRealismFinding(
-                        code=CORE_ANTITOGGLE,
+                        code=PHYS_ANTITOGGLE,
                         target_name=command_name,
                         sites=(site_a, site_b),
-                        message=(
-                            f"Linked command '{command_name}' has same-scan opposing OUT "
-                            f"write sites faster than feedback cycle floor {cycle_floor:g} ms:\n"
-                            f"  - {_format_site_location(site_a)}\n"
-                            f"  - {_format_site_location(site_b)}"
+                        display=FindingDisplay(
+                            code=PHYS_ANTITOGGLE,
+                            severity="warning",
+                            frames=(site_frame(site_a), site_frame(site_b)),
+                            problem=(
+                                f"{command_name} is set on and off in one scan, faster than "
+                                f"the ~{cycle_floor:g} ms feedback."
+                            ),
+                            hint="gate the two writes exclusively",
                         ),
                     )
                 )

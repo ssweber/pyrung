@@ -301,7 +301,7 @@ class DataView:
 
     def upstream(self, tag: str) -> DataView:
         """Upstream dependency cone of *tag*, intersected with current view."""
-        return self._narrow(self._tags & self._graph.upstream_slice(tag))
+        return self._narrow(self._tags & self._graph.upstream_slice(tag, follow_calls=False))
 
     def downstream(self, tag: str) -> DataView:
         """Downstream dependency cone of *tag*, intersected with current view."""

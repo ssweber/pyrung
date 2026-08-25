@@ -23,7 +23,7 @@ from hypothesis import strategies as st
 
 pytestmark = pytest.mark.hypothesis
 
-from pyrung.click import TagMap, c, ladder_to_pyrung, pyrung_to_ladder, x, y
+from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.core import And, Bool, Or, Program, Rung
 from pyrung.core.program import branch, out
 from tests.click.helpers import exec_with_source
@@ -238,6 +238,7 @@ _CONDITION_COLS = 31
 
 
 def _make_tag_map(cond_tags, out_tags):
+    x, y, c, *_ = ClickBlocks()
     mapping: dict = {}
     x_idx, c_idx = 1, 1
     for tag in cond_tags:

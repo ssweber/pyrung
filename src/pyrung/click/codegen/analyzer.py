@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import warnings
 from collections import defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from pyrung.click._topology import (
@@ -70,6 +71,24 @@ def _warn_bypassed_contact(label: str) -> None:
     )
 
 
+def _warn_dropped_contact(label: str, row: int) -> None:
+    """Warn when a source contact reaches no output and is omitted.
+
+    Unlike :func:`_warn_bypassed_contact` (a ``src == dst`` self-short), this
+    fires for a contact that is present in the source grid but connects to no
+    output — a dead-end edge pruned by the reachable-subgraph intersection in
+    :func:`_sp_reduce`. The detector only observes the drop; the cause is
+    either a malformed source ladder or a codec/wiring bug, so the message
+    names both and prescribes no fix.
+    """
+    warnings.warn(
+        f"Imported ladder rung drops contact {label!r} (row {row}): it is present in the "
+        "source grid but is not connected into any output, so it was omitted from generated "
+        "logic. The source ladder is malformed or the codec produced invalid topology.",
+        stacklevel=2,
+    )
+
+
 def _extract_conditions(row: list[str], start: int, end: int) -> list[str]:
     """Extract non-wire condition tokens from columns [start, end)."""
     tokens: list[str] = []
@@ -84,6 +103,19 @@ def _is_pin_row(row: list[str]) -> bool:
     """Check if a row is a pin row (AF starts with '.')."""
     af = row[-1]
     return bool(af and af.startswith("."))
+
+
+def _annotate_rung_rows(rows: list[list[str]], highlight_row: int) -> str:
+    """Render rung rows as CSV lines with carets under *highlight_row*'s AF cell."""
+    lines: list[str] = []
+    for r, row in enumerate(rows):
+        prefix = f"  row {r:>2} | "
+        lines.append(prefix + ",".join(row))
+        if r == highlight_row:
+            af_offset = len(",".join(row[:-1])) + (1 if len(row) > 1 else 0)
+            carets = " " * af_offset + "^" * max(1, len(row[-1]))
+            lines.append(" " * (len(prefix) - 2) + "| " + carets)
+    return "\n".join(lines)
 
 
 def _rows_are_blank(rows: list[list[str]]) -> bool:
@@ -403,6 +435,17 @@ def _grid_to_graph(
 # ---------------------------------------------------------------------------
 
 
+def _walk_tree_leaves(node: SPNode | None) -> Iterator[Leaf]:
+    """Yield every Leaf in an SP tree (carrying its row/col position)."""
+    if node is None:
+        return
+    if isinstance(node, Leaf):
+        yield node
+    else:
+        for child in node.children:
+            yield from _walk_tree_leaves(child)
+
+
 def _min_attr(tree: SPNode, attr: str) -> int:
     """Minimum leaf attribute in an SP tree (for sort stability)."""
     if isinstance(tree, Leaf):
@@ -714,9 +757,32 @@ def _split_continued(rung: _AnalyzedRung) -> list[_AnalyzedRung]:
     return result
 
 
-def _analyze_rungs(raw_rungs: list[_RawRung]) -> list[_AnalyzedRung]:
-    """Analyze topology of each rung."""
+def _analyze_rungs(
+    raw_rungs: list[_RawRung],
+    *,
+    validate: bool = False,
+    source_name: str | None = None,
+) -> list[_AnalyzedRung]:
+    """Analyze topology of each rung.
+
+    When *validate* is True, a source contact that reaches no output raises
+    ``ValueError`` instead of only warning (see ``_analyze_single_rung``).
+    When *source_name* is provided, analysis errors identify that source and
+    the 1-indexed raw rung number.
+    """
     analyzed: list[_AnalyzedRung] = []
+
+    def analyze_one(rung_index: int, *, role: RungRole = RungRole.NORMAL) -> _AnalyzedRung:
+        try:
+            return _analyze_single_rung(
+                raw_rungs[rung_index],
+                role=role,
+                validate=validate,
+            )
+        except ValueError as exc:
+            if source_name is None:
+                raise
+            raise ValueError(f"{source_name}, rung {rung_index + 1}: {exc}") from None
 
     # Strip trailing end() rung (auto-appended by pyrung_to_ladder, not part of user logic).
     if raw_rungs:
@@ -733,20 +799,20 @@ def _analyze_rungs(raw_rungs: list[_RawRung]) -> list[_AnalyzedRung]:
 
         if af0.startswith("for("):
             # for/next block
-            analyzed.append(_analyze_single_rung(rung, role=RungRole.FORLOOP_START))
+            analyzed.append(analyze_one(i, role=RungRole.FORLOOP_START))
             i += 1
             # Collect body rungs until next()
             while i < len(raw_rungs):
                 body_rung = raw_rungs[i]
                 body_af = body_rung.rows[0][-1] if body_rung.rows else ""
                 if body_af == "next()":
-                    analyzed.append(_analyze_single_rung(body_rung, role=RungRole.FORLOOP_NEXT))
+                    analyzed.append(analyze_one(i, role=RungRole.FORLOOP_NEXT))
                     i += 1
                     break
-                analyzed.append(_analyze_single_rung(body_rung, role=RungRole.FORLOOP_BODY))
+                analyzed.append(analyze_one(i, role=RungRole.FORLOOP_BODY))
                 i += 1
         else:
-            analyzed.extend(_split_continued(_analyze_single_rung(rung)))
+            analyzed.extend(_split_continued(analyze_one(i)))
             i += 1
 
     return analyzed
@@ -756,8 +822,19 @@ def _analyze_single_rung(
     rung: _RawRung,
     *,
     role: RungRole = RungRole.NORMAL,
+    validate: bool = False,
 ) -> _AnalyzedRung:
-    """Analyze a single rung's topology via SP graph reduction."""
+    """Analyze a single rung's topology via SP graph reduction.
+
+    Every content contact becomes an ``_Edge`` in :func:`_grid_to_graph`; a
+    contact whose right side wires to nothing (e.g. a malformed OR-branch
+    lacking tee/down wiring) becomes a dead-end edge that :func:`_sp_reduce`
+    prunes via its reachable-subgraph intersection, so it silently vanishes
+    from the generated logic. After building the trees we compare every
+    content edge's Leaf position against the positions actually present in the
+    produced trees; any missing one is a dropped contact — always warned, and
+    raised as ``ValueError`` when *validate* is True.
+    """
     # Strip trailing empty comment lines (Click IDE visual padding).
     cleaned = list(rung.comment_lines) if rung.comment_lines else []
     while cleaned and not cleaned[-1]:
@@ -807,6 +884,21 @@ def _analyze_single_rung(
     # Output Grouping
     condition_tree, instructions, af_rows = _group_outputs(output_trees)
 
+    if validate:
+        retained_instruction_rows = set(af_rows)
+        missing_instructions = [
+            (af_token, af_row)
+            for _tree, af_token, af_row in output_trees
+            if af_row not in retained_instruction_rows
+        ]
+        if missing_instructions:
+            detail = ", ".join(
+                f"{af_token} (row {af_row})" for af_token, af_row in missing_instructions
+            )
+            raise ValueError(
+                f"Rung drops output instruction(s) present in the source during grouping: {detail}."
+            )
+
     # Exporter pins immediately follow their owning AF row. Walk the raw rows
     # in order so malformed layouts fail loudly instead of silently attaching
     # to the wrong instruction.
@@ -826,7 +918,8 @@ def _analyze_single_rung(
             if row_index in pin_row_set:
                 if current_instruction is None:
                     raise ValueError(
-                        f"Pin row {row_index} must immediately follow its owning instruction row."
+                        f"Pin row {row_index} must immediately follow its owning instruction "
+                        f"row.\n{_annotate_rung_rows(rows, row_index)}"
                     )
 
                 match = _PIN_RE.match(af)
@@ -848,6 +941,36 @@ def _analyze_single_rung(
                 continue
 
             current_instruction = None
+
+    # Dropped-condition detection: every content edge's Leaf should reach at
+    # least one output or pin tree before output grouping. Grouping may safely
+    # merge equal conditions from different source positions, so checking its
+    # factored trees would mistake that merge for a dropped source occurrence.
+    # Positions absent from every pre-group tree were pruned as dead-end edges
+    # (unwired conditions) and silently omitted from the logic.
+    present: set[tuple[int, int]] = set()
+    for tree, _af_token, _af_row in output_trees:
+        for leaf in _walk_tree_leaves(tree):
+            present.add((leaf.row, leaf.col))
+    for tree in pin_trees.values():
+        for leaf in _walk_tree_leaves(tree):
+            present.add((leaf.row, leaf.col))
+
+    dropped = [
+        (str(e.tree.label), e.tree.row)
+        for e in edges
+        if isinstance(e.tree, Leaf) and (e.tree.row, e.tree.col) not in present
+    ]
+    if dropped:
+        for label, drow in dropped:
+            _warn_dropped_contact(label, drow)
+        if validate:
+            detail = ", ".join(f"{label} (row {drow})" for label, drow in dropped)
+            raise ValueError(
+                "Rung drops condition(s) present in the source but not connected into any "
+                f"output: {detail}. The source ladder is malformed or the codec produced "
+                "invalid topology."
+            )
 
     return _AnalyzedRung(
         comment=comment,

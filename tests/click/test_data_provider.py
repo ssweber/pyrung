@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 from pyclickplc.server import MemoryDataProvider
 
-from pyrung.click import ClickDataProvider, TagMap, c, ds, txt, x, y
+from pyrung.click import ClickBlocks, ClickDataProvider, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.core import PLC, Block, Program, Rung, SystemState, Tag, TagType, out
 
 

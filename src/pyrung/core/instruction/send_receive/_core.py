@@ -369,6 +369,13 @@ class ModbusReceiveInstruction(Instruction):
     def is_inert_when_disabled(self) -> bool:
         return False
 
+    @property
+    def external_payload_names(self) -> frozenset[str]:
+        """Destination tags whose values come from the injected I/O result."""
+        if isinstance(self.dest, Tag):
+            return frozenset({self.dest.name})
+        return frozenset(tag.name for tag in self.dest.tags())
+
     def _is_live(self) -> bool:
         return self.host is not None or self.raw_target is not None
 

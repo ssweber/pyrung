@@ -14,7 +14,9 @@ pip install pyrung
 
 ```python
 from pyrung import Bool, Int, PLC, Program, rung, copy, latch, reset, rise
-from pyrung.click import x, y, c, ds, TagMap
+from pyrung.click import ClickBlocks, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 ```
 
 ## Workflow: write first, validate later
@@ -81,7 +83,9 @@ ds.slot(200, retentive=True, default=123)
 td.slot(1, 5, retentive=False, default=0)
 ```
 
-If a slot is already materialized (`block[n]` accessed), later configuration for that slot raises `ValueError`.
+Re-applying identical configuration is a no-op, even after the slot is materialized (`block[n]` accessed). A conflicting second claim — a different name or default for the same slot — raises `ValueError` naming both values. Each call to `ClickBlocks()` returns fresh blocks with no shared state, so multi-project workflows don't need manual cleanup.
+
+Retentive registers ignore their CSV initial value, matching hardware: the Click PLC applies the initial value at project download only, and a retentive register keeps its last value afterward. pyrung therefore models retentive slots with the type zero, and codegen omits `default=` for them.
 
 ## Type aliases
 
@@ -115,7 +119,9 @@ The CSV ladder export uses Click-facing token names: `calc` emits as `math(...)`
 
 ```python
 from pyrung import Bool, Real, PLC, Program, rung, copy, latch, reset, rise
-from pyrung.click import x, y, c, ds, df, TagMap
+from pyrung.click import ClickBlocks, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 # Define semantic tags (hardware-agnostic)
 StartButton  = Bool()

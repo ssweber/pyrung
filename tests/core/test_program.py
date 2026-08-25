@@ -648,6 +648,37 @@ class TestStrictDslControlFlowGuard:
             with Program():
                 dummy.comment = "mutated"
 
+    def test_subroutine_decorator_rejects_comment_in_rung_body(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Rung, comment, out, subroutine
+
+        Light = Bool("Light")
+
+        with pytest.raises(ForbiddenControlFlowError, match="comment.*inside a rung body"):
+
+            @subroutine("bad_sub")
+            def bad_sub():
+                with Rung():
+                    comment("misplaced")
+                    out(Light)
+
+    def test_subroutine_decorator_allows_comment_before_rung(self):
+        from pyrung.core.program import Program, Rung, call, comment, out, subroutine
+
+        Enable = Bool("Enable")
+        Light = Bool("Light")
+
+        @subroutine("good_sub")
+        def good_sub():
+            comment("Sub edit")
+            with Rung():
+                out(Light)
+
+        with Program() as logic:
+            with Rung(Enable):
+                call(good_sub)
+
+        assert logic.subroutines["good_sub"][0].comment == "Sub edit"
+
     def test_program_strict_false_opt_out(self):
         from pyrung.core.program import Program, Rung, out
 
@@ -1000,8 +1031,11 @@ class TestClickPrebuiltProgramIntegration:
 
     def test_click_input_to_output_rung_uses_canonical_names(self):
         """x/y prebuilt blocks execute in Program with Click canonical tag names."""
-        from pyrung.click import x, y
+        from pyrung.click import ClickBlocks
         from pyrung.core.program import Program, Rung, out
+
+        blocks = ClickBlocks()
+        x, y = blocks.x, blocks.y
 
         with Program() as prog:
             with Rung(x[1]):
@@ -1013,8 +1047,11 @@ class TestClickPrebuiltProgramIntegration:
 
     def test_click_sparse_window_pack_bits_skips_invalid_addresses(self):
         """x.select(1, 21) packs 17 valid bits (1-16 and 21), not raw 21 addresses."""
-        from pyrung.click import dd, x
+        from pyrung.click import ClickBlocks
         from pyrung.core.program import Program, Rung, pack_bits
+
+        blocks = ClickBlocks()
+        dd, x = blocks.dd, blocks.x
 
         with Program() as prog:
             with Rung():
@@ -1244,7 +1281,7 @@ class TestBranch:
 
     def test_branch_enable_is_snapshotted_before_item_execution(self, runner_factory):
         """Branch enable is computed before item execution and applied for this whole rung scan."""
-        from pyrung.core.program import Program, Rung, branch, copy, out
+        from pyrung.core.program import Program, Rung, branch, latch, out
 
         Step = Int("Step")
         AutoMode = Bool("AutoMode")
@@ -1256,7 +1293,7 @@ class TestBranch:
                 out(Light1)
                 # This write happens before the branch item in source order.
                 # Branch should still use its precomputed enable from scan start.
-                copy(True, AutoMode)
+                latch(AutoMode)
                 with branch(AutoMode):
                     out(Light2)
 
@@ -1573,7 +1610,7 @@ class TestNestedBranches:
     def test_nested_branch_conditions_see_rung_entry_snapshot(self, runner_factory):
         """All branch conditions at every nesting depth evaluate against the
         same frozen snapshot taken at rung entry — not the live mutable state."""
-        from pyrung.core.program import Program, Rung, branch, copy, out
+        from pyrung.core.program import Program, Rung, branch, latch, out
 
         A = Bool("A")
         Flag = Bool("Flag")
@@ -1581,10 +1618,10 @@ class TestNestedBranches:
 
         with Program() as logic:
             with Rung(A):
-                # This copy mutates Flag before the nested branch is reached
+                # This latch mutates Flag before the nested branch is reached
                 # in source order, but the condition snapshot was frozen at
                 # rung entry when Flag was still False.
-                copy(True, Flag)
+                latch(Flag)
                 with branch(A):
                     with branch(Flag):
                         out(Light)
@@ -1593,7 +1630,7 @@ class TestNestedBranches:
         runner.patch({"A": True, "Flag": False, "Light": False})
         runner.step()
 
-        # Flag was mutated to True by copy(), but the nested branch's
+        # Flag was mutated to True by latch(), but the nested branch's
         # condition was evaluated against the rung-entry snapshot where
         # Flag was False — so Light should be False.
         assert runner.current_state.tags["Flag"] is True
@@ -1606,7 +1643,7 @@ class TestNestedBranches:
     def test_snapshot_applies_across_all_nesting_levels(self, runner_factory):
         """Even a deeply nested branch's condition sees the rung-entry state,
         not mutations from parent-level instructions."""
-        from pyrung.core.program import Program, Rung, branch, copy, out
+        from pyrung.core.program import Program, Rung, branch, latch, out
 
         A = Bool("A")
         B = Bool("B")
@@ -1615,9 +1652,9 @@ class TestNestedBranches:
 
         with Program() as logic:
             with Rung(A):
-                copy(True, Flag)  # mutates Flag early in source order
+                latch(Flag)  # mutates Flag early in source order
                 with branch(B):
-                    copy(True, Deep)  # mutates Deep inside parent branch
+                    latch(Deep)  # mutates Deep inside parent branch
                     with branch(Flag):
                         # Flag was False at rung entry — should not fire
                         out(Bool("L1"))

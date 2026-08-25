@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
 from pyrung.core.tag import Tag
 
+from .advance import AdvanceProfile, ConditionDemand, monotone_profile
 from .base import Instruction
 from .conversions import (
     _clamp_dint,
@@ -51,6 +53,7 @@ class CountUpInstruction(Instruction):
     _conditions = ("up_condition", "down_condition", "reset_condition")
     _structural_fields = ()
     _exclusive_fields = ("accumulator",)
+    _status_fields = ("cu_bit", "cd_bit")
 
     def __init__(
         self,
@@ -60,15 +63,27 @@ class CountUpInstruction(Instruction):
         up_condition: Any,
         reset_condition: Any,
         down_condition: Any = None,
+        cu_bit: Tag | None = None,
+        cd_bit: Tag | None = None,
     ):
         self.done_bit = done_bit
         self.accumulator = accumulator
         self.preset = preset
+        self.cu_bit = cu_bit
+        self.cd_bit = cd_bit
 
         # Convert Tags to Conditions if needed
         self.up_condition = to_condition(up_condition)
         self.reset_condition = to_condition(reset_condition)
         self.down_condition = to_condition(down_condition)
+
+    def _status_tags(self, cu: bool, cd: bool) -> dict[str, bool]:
+        tags: dict[str, bool] = {}
+        if self.cu_bit is not None:
+            tags[self.cu_bit.name] = cu
+        if self.cd_bit is not None:
+            tags[self.cd_bit.name] = cd
+        return tags
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         condition_view = instruction_condition_view(ctx)
@@ -83,7 +98,13 @@ class CountUpInstruction(Instruction):
         sp = resolve_preset_ctx(self.preset, ctx)
 
         if reset_active:
-            ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})
+            ctx.set_tags(
+                {
+                    self.done_bit.name: False,
+                    self.accumulator.name: 0,
+                    **self._status_tags(enabled, down_active),
+                }
+            )
         else:
             delta = (1 if enabled else 0) - (1 if down_active else 0)
             acc_value = _clamp_dint(acc_value + delta)
@@ -91,11 +112,33 @@ class CountUpInstruction(Instruction):
                 {
                     self.done_bit.name: acc_value >= sp,
                     self.accumulator.name: acc_value,
+                    **self._status_tags(enabled, down_active),
                 }
             )
 
     def is_terminal(self) -> bool:
         return True
+
+    def advance_profile(self) -> AdvanceProfile:
+        return monotone_profile(
+            channels=(self.accumulator, self.done_bit),
+            accumulator=self.accumulator,
+            done=self.done_bit,
+            progress=None,
+            preset=self.preset,
+            direction=1,
+            rate_per_scan=lambda _dt: 1.0,
+            advance=ConditionDemand(self.up_condition),
+            advance_is_pulse=isinstance(
+                self.up_condition, (RisingEdgeCondition, FallingEdgeCondition)
+            ),
+            restore=(
+                ConditionDemand(self.reset_condition) if self.reset_condition is not None else None
+            ),
+            restore_is_pulse=isinstance(
+                self.reset_condition, (RisingEdgeCondition, FallingEdgeCondition)
+            ),
+        )
 
 
 class CountDownInstruction(Instruction):
@@ -127,6 +170,7 @@ class CountDownInstruction(Instruction):
     _conditions = ("down_condition", "reset_condition")
     _structural_fields = ()
     _exclusive_fields = ("accumulator",)
+    _status_fields = ("cu_bit", "cd_bit")
 
     def __init__(
         self,
@@ -135,14 +179,26 @@ class CountDownInstruction(Instruction):
         preset: Tag | int,
         down_condition: Any,
         reset_condition: Any,
+        cu_bit: Tag | None = None,
+        cd_bit: Tag | None = None,
     ):
         self.done_bit = done_bit
         self.accumulator = accumulator
         self.preset = preset
+        self.cu_bit = cu_bit
+        self.cd_bit = cd_bit
 
         # Convert Tags to Conditions if needed
         self.down_condition = to_condition(down_condition)
         self.reset_condition = to_condition(reset_condition)
+
+    def _status_tags(self, cu: bool, cd: bool) -> dict[str, bool]:
+        tags: dict[str, bool] = {}
+        if self.cu_bit is not None:
+            tags[self.cu_bit.name] = cu
+        if self.cd_bit is not None:
+            tags[self.cd_bit.name] = cd
+        return tags
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         condition_view = instruction_condition_view(ctx)
@@ -154,7 +210,13 @@ class CountDownInstruction(Instruction):
         sp = resolve_preset_ctx(self.preset, ctx)
 
         if reset_active:
-            ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})
+            ctx.set_tags(
+                {
+                    self.done_bit.name: False,
+                    self.accumulator.name: 0,
+                    **self._status_tags(False, enabled),
+                }
+            )
         else:
             if enabled:
                 acc_value -= 1
@@ -163,8 +225,30 @@ class CountDownInstruction(Instruction):
                 {
                     self.done_bit.name: acc_value <= -sp,
                     self.accumulator.name: acc_value,
+                    **self._status_tags(False, enabled),
                 }
             )
 
     def is_terminal(self) -> bool:
         return True
+
+    def advance_profile(self) -> AdvanceProfile:
+        return monotone_profile(
+            channels=(self.accumulator, self.done_bit),
+            accumulator=self.accumulator,
+            done=self.done_bit,
+            progress=None,
+            preset=self.preset,
+            direction=-1,
+            rate_per_scan=lambda _dt: 1.0,
+            advance=ConditionDemand(self.down_condition),
+            advance_is_pulse=isinstance(
+                self.down_condition, (RisingEdgeCondition, FallingEdgeCondition)
+            ),
+            restore=(
+                ConditionDemand(self.reset_condition) if self.reset_condition is not None else None
+            ),
+            restore_is_pulse=isinstance(
+                self.reset_condition, (RisingEdgeCondition, FallingEdgeCondition)
+            ),
+        )

@@ -222,13 +222,18 @@ class _StructureDecl:
     base_type: str | None  # e.g. "Int" for named_array; None for udt
     count: int
     stride: int | None
-    fields: list[tuple[str, str, object]]  # (field_name, type_name, default)
+    fields: list[
+        tuple[str, str, object]
+    ]  # (field_name, type_name, default); default may be AutoDefault
     hw_block_var: str  # "ds", "c", etc. (primary, for named_array)
     hw_start: int | None  # first hw address (for named_array)
     hw_end: int | None  # last hw address (for named_array)
     field_retentive: dict[str, bool] = field(default_factory=dict)
     field_metadata: dict[str, _TagMetadata] = field(default_factory=dict)
     field_slot_metadata: dict[tuple[str, int], _TagMetadata] = field(default_factory=dict)
+    # Per-slot default overrides (deviants only) — reconstructs values that the
+    # field-level default / auto() sequence does not cover.
+    field_slot_default: dict[tuple[str, int], object] = field(default_factory=dict)
     field_hw: dict[str, _FieldHw] = field(default_factory=dict)  # per-field hw (for udt)
     always_number: bool = False
 
@@ -265,6 +270,10 @@ class _OperandCollection:
     has_modbus_rtu_target: bool = False
     has_modbus_address: bool = False
     has_system_operands: bool = False
+    unmapped_defaults: dict[tuple[str, int], object] = field(default_factory=dict)
+    unmapped_retentive: dict[tuple[str, int], bool] = field(default_factory=dict)
+    unmapped_comments: dict[tuple[str, int], str] = field(default_factory=dict)
+    range_aliases: dict[str, str] = field(default_factory=dict)
     plain_blocks: list[_PlainBlockDecl] = field(default_factory=list)
     structures: list[_StructureDecl] = field(default_factory=list)
     semantic_operands: dict[str, _SemanticRender] = field(default_factory=dict)

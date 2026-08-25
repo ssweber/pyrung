@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
 from enum import Enum
 from types import BuiltinFunctionType, FunctionType, MethodType
@@ -27,11 +27,29 @@ from pyrung.core.memory_block import (
 from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
 
+from .write_sites import instruction_write_targets
+
 if TYPE_CHECKING:
     from pyrung.core.program import Program
     from pyrung.core.rung import Rung
 
 GraphScope = Literal["main", "subroutine"]
+
+
+@dataclass(frozen=True)
+class IndirectWriteRef:
+    """Descriptor for an indirect write whose block exceeded the enumeration cap.
+
+    When a block is too large for ``_full_block_tags`` to enumerate statically,
+    the individual writes are dropped from ``writers_of``.  This descriptor
+    preserves the instruction-level metadata so that ``cause()`` can resolve the
+    actual target at runtime by reading the pointer value from recorded state.
+    """
+
+    node_index: int
+    pointer_tag: str
+    source_tags: frozenset[str]
+    block: Block
 
 
 class TagRole(Enum):
@@ -55,11 +73,16 @@ class RungNode:
     data_reads: frozenset[str]
     exclusive_reads: frozenset[str]
     writes: frozenset[str]
+    implicit_writes: frozenset[str]
     ote_writes: frozenset[str]
     calls: tuple[str, ...]
     source_file: str | None
     source_line: int | None
     guard_reads: frozenset[str] = frozenset()
+
+    @property
+    def all_writes(self) -> frozenset[str]:
+        return self.writes | self.implicit_writes
 
 
 @dataclass(frozen=True)
@@ -75,6 +98,15 @@ class TagVersion:
     read_by: frozenset[int]
 
 
+@dataclass(frozen=True)
+class InfluenceCone:
+    """Static rungs and tags influenced by one seed tag within a scan."""
+
+    rung_indices: frozenset[int]
+    read_tags: frozenset[str]
+    write_tags: frozenset[str]
+
+
 @dataclass
 class ProgramGraph:
     """Static PDG-style summary for a Program."""
@@ -82,12 +114,121 @@ class ProgramGraph:
     rung_nodes: tuple[RungNode, ...]
     tag_roles: dict[str, TagRole]
     def_use_chains: dict[str, tuple[TagVersion, ...]]
-    readers_of: dict[str, frozenset[int]]
-    all_readers_of: dict[str, frozenset[int]]
-    writers_of: dict[str, frozenset[int]]
+    readers_of: dict[str, frozenset[int]]  # tag → node indices (rung_nodes position)
+    all_readers_of: dict[str, frozenset[int]]  # includes exclusive_reads
+    writers_of: dict[
+        str, frozenset[int]
+    ]  # node indices — use timeline_writers_of() for timeline keys
     tags: dict[str, Tag]
     block_ranges: dict[str, list[str]]  # range label → member tag names
     pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
+    indirect_writes: tuple[IndirectWriteRef, ...] = ()
+    _main_node_index: dict[int, int] | None = field(default=None, init=False, repr=False)
+    _call_site_cache: dict[str, frozenset[int]] | None = field(default=None, init=False, repr=False)
+    _subroutine_member_cache: dict[str, tuple[int, ...]] | None = field(
+        default=None, init=False, repr=False
+    )
+    _subroutine_caller_cache: dict[str, tuple[int, ...]] | None = field(
+        default=None, init=False, repr=False
+    )
+    # Slice methods are pure functions of the (immutable) graph but are called
+    # with repeating arguments across pilot iterations — memoize them.
+    _influenced_cone_cache: dict[tuple[str, bool, frozenset[str]], InfluenceCone] | None = field(
+        default=None, init=False, repr=False
+    )
+    _downstream_slice_cache: dict[tuple[str, bool], frozenset[str]] | None = field(
+        default=None, init=False, repr=False
+    )
+    _upstream_slice_cache: dict[tuple[str, bool], frozenset[str]] | None = field(
+        default=None, init=False, repr=False
+    )
+
+    @classmethod
+    def from_program(cls, program: Program) -> ProgramGraph:
+        return build_program_graph(program)
+
+    def main_node_by_rung(self) -> dict[int, int]:
+        """Map main-program rung_index → node index for top-level nodes."""
+        if self._main_node_index is None:
+            self._main_node_index = {
+                node.rung_index: i
+                for i, node in enumerate(self.rung_nodes)
+                if node.scope == "main" and not node.branch_path
+            }
+        return self._main_node_index
+
+    def call_site_rung_indices(self) -> dict[str, frozenset[int]]:
+        """Map subroutine name → main-rung indices of all call sites.
+
+        Cached; used by the recorded causal walk to surface the caller
+        gate as a lever on a subroutine writer (reversing the caller
+        disables the whole subtree), and by :meth:`timeline_writers_of`
+        to resolve subroutine writers to the main-rung indices the
+        executor's ``capturing_rung`` rolls them up under.  Includes
+        branch call sites — branches execute under the same capturing
+        scope as their parent rung.
+        """
+        if self._call_site_cache is not None:
+            return self._call_site_cache
+        sites: dict[str, set[int]] = {}
+        for node in self.rung_nodes:
+            if node.scope == "main" and node.calls:
+                for sub_name in node.calls:
+                    sites.setdefault(sub_name, set()).add(node.rung_index)
+        self._call_site_cache = {name: frozenset(idxs) for name, idxs in sites.items()}
+        return self._call_site_cache
+
+    def _subroutine_member_indices(self) -> dict[str, tuple[int, ...]]:
+        """Map subroutine name to PDG node indices inside that subroutine."""
+        if self._subroutine_member_cache is None:
+            members: dict[str, list[int]] = defaultdict(list)
+            for idx, node in enumerate(self.rung_nodes):
+                if node.subroutine is not None:
+                    members[node.subroutine].append(idx)
+            self._subroutine_member_cache = {
+                name: tuple(indices) for name, indices in members.items()
+            }
+        return self._subroutine_member_cache
+
+    def _subroutine_caller_indices(self) -> dict[str, tuple[int, ...]]:
+        """Map subroutine name to PDG node indices that call it."""
+        if self._subroutine_caller_cache is None:
+            callers: dict[str, list[int]] = defaultdict(list)
+            for idx, node in enumerate(self.rung_nodes):
+                for sub_name in node.calls:
+                    callers[sub_name].append(idx)
+            self._subroutine_caller_cache = {
+                name: tuple(indices) for name, indices in callers.items()
+            }
+        return self._subroutine_caller_cache
+
+    def timeline_writers_of(self, tag_name: str) -> frozenset[int]:
+        """Main-rung indices whose ``capturing_rung`` scope captures writes to *tag_name*.
+
+        For main-scope writers, returns ``node.rung_index`` directly.
+        For subroutine writers, returns the call-site main-rung indices —
+        the executor runs subroutines inside the caller's capture scope,
+        so the timeline keys are call-site indices, not PDG node indices.
+        """
+        node_indices = self.writers_of.get(tag_name, frozenset())
+        if not node_indices:
+            return frozenset()
+        main_indices: set[int] = set()
+        call_sites = self.call_site_rung_indices()
+        for ni in node_indices:
+            node = self.rung_nodes[ni]
+            if node.subroutine is None:
+                main_indices.add(node.rung_index)
+            else:
+                main_indices.update(call_sites.get(node.subroutine, frozenset()))
+        return frozenset(main_indices)
+
+    def timeline_capture_indices_for_node(self, node_index: int) -> frozenset[int]:
+        """Main-rung timeline indices that can capture writes from one PDG node."""
+        node = self.rung_nodes[node_index]
+        if node.subroutine is None:
+            return frozenset({node.rung_index})
+        return self.call_site_rung_indices().get(node.subroutine, frozenset())
 
     def is_physical_input(self, tag_name: str) -> bool:
         """Return whether ``tag_name`` resolves to a physical input tag."""
@@ -139,7 +280,7 @@ class ProgramGraph:
                         continue
                     seen.add(key)
                 edges.append({"source": src, "target": rung_id, "type": "data"})
-            for tag_name in sorted(node.writes):
+            for tag_name in sorted(node.all_writes):
                 tgt = collapse.get(tag_name, tag_name) if collapse else tag_name
                 key = (rung_id, tgt, "write")
                 if seen is not None:
@@ -199,59 +340,28 @@ class ProgramGraph:
             for ri in self.all_readers_of.get(tag_name, frozenset())
         )
 
-    def upstream_slice(self, tag_name: str) -> frozenset[str]:
-        """Return all tags transitively upstream of *tag_name*."""
-        visited_tags: set[str] = set()
-        visited_rungs: set[int] = set()
-        queue: list[str] = [tag_name]
+    def upstream_slice(
+        self,
+        tag_name: str,
+        *,
+        follow_calls: bool = True,
+    ) -> frozenset[str]:
+        """Return all tags transitively upstream of *tag_name*.
 
-        while queue:
-            current = queue.pop()
-            if current in visited_tags:
-                continue
-            visited_tags.add(current)
-            for rung_idx in self.writers_of.get(current, frozenset()):
-                if rung_idx in visited_rungs:
-                    continue
-                visited_rungs.add(rung_idx)
-                node = self.rung_nodes[rung_idx]
-                for read_tag in node.condition_reads | node.data_reads:
-                    if read_tag not in visited_tags:
-                        queue.append(read_tag)
-
-        visited_tags.discard(tag_name)
-        return frozenset(visited_tags)
-
-    def upstream_slice_all(self, tag_name: str) -> frozenset[str]:
-        """Like ``upstream_slice`` but also follows ``exclusive_reads``."""
-        visited_tags: set[str] = set()
-        visited_rungs: set[int] = set()
-        queue: list[str] = [tag_name]
-
-        while queue:
-            current = queue.pop()
-            if current in visited_tags:
-                continue
-            visited_tags.add(current)
-            for rung_idx in self.writers_of.get(current, frozenset()):
-                if rung_idx in visited_rungs:
-                    continue
-                visited_rungs.add(rung_idx)
-                node = self.rung_nodes[rung_idx]
-                for read_tag in node.condition_reads | node.data_reads | node.exclusive_reads:
-                    if read_tag not in visited_tags:
-                        queue.append(read_tag)
-
-        visited_tags.discard(tag_name)
-        return frozenset(visited_tags)
-
-    def upstream_slice_with_calls(self, tag_name: str) -> frozenset[str]:
-        """Like ``upstream_slice_all`` but also follows call-site conditions.
-
-        When an upstream rung lives in a subroutine, the caller rung's
-        condition_reads are included — the subroutine only executes when
-        the caller fires.
+        Always follows ``condition_reads``, ``data_reads``, and
+        ``exclusive_reads``.  When *follow_calls* is ``True`` (the
+        default), call-site conditions of subroutines are included —
+        the conservative closure safe for soundness-critical analysis.
+        Pass ``follow_calls=False`` for informational / display uses
+        where a tighter cone is preferred.
         """
+        if self._upstream_slice_cache is None:
+            self._upstream_slice_cache = {}
+        cache_key = (tag_name, follow_calls)
+        cached = self._upstream_slice_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         visited_tags: set[str] = set()
         visited_rungs: set[int] = set()
         visited_subs: set[str] = set()
@@ -270,7 +380,11 @@ class ProgramGraph:
                 for read_tag in node.condition_reads | node.data_reads | node.exclusive_reads:
                     if read_tag not in visited_tags:
                         queue.append(read_tag)
-                if node.subroutine is not None and node.subroutine not in visited_subs:
+                if (
+                    follow_calls
+                    and node.subroutine is not None
+                    and node.subroutine not in visited_subs
+                ):
                     visited_subs.add(node.subroutine)
                     for caller in self.rung_nodes:
                         if node.subroutine in caller.calls:
@@ -279,10 +393,106 @@ class ProgramGraph:
                                     queue.append(read_tag)
 
         visited_tags.discard(tag_name)
-        return frozenset(visited_tags)
+        result = frozenset(visited_tags)
+        self._upstream_slice_cache[cache_key] = result
+        return result
 
-    def downstream_slice(self, tag_name: str) -> frozenset[str]:
-        """Return all tags transitively downstream of *tag_name*."""
+    def influenced_cone(
+        self,
+        tag_name: str,
+        *,
+        follow_calls: bool = True,
+        barrier_tags: frozenset[str] = frozenset(),
+    ) -> InfluenceCone:
+        """Return rungs, reads, and writes influenced by *tag_name*.
+
+        The traversal starts at rungs that read *tag_name*, follows write→read
+        edges transitively, and optionally crosses subroutine boundaries.  When
+        *follow_calls* is true, a cone rung that calls a subroutine pulls in the
+        called subroutine body, and a cone rung inside a subroutine pulls in its
+        callers.  *barrier_tags* are recorded as writes but not followed through
+        to their readers.
+        """
+        if self._influenced_cone_cache is None:
+            self._influenced_cone_cache = {}
+        cache_key = (tag_name, follow_calls, barrier_tags)
+        cached = self._influenced_cone_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        sub_members = self._subroutine_member_indices()
+        callers = self._subroutine_caller_indices()
+
+        visited_tags: set[str] = set()
+        visited_rungs: set[int] = set()
+        read_tags: set[str] = set()
+        write_tags: set[str] = set()
+        tag_queue: list[str] = [tag_name]
+        rung_queue: list[int] = []
+
+        def _visit_rung(rung_idx: int) -> None:
+            if rung_idx in visited_rungs:
+                return
+            visited_rungs.add(rung_idx)
+            node = self.rung_nodes[rung_idx]
+            read_tags.update(node.condition_reads)
+            read_tags.update(node.data_reads)
+            for written_tag in node.writes:
+                write_tags.add(written_tag)
+                if written_tag not in visited_tags and written_tag not in barrier_tags:
+                    tag_queue.append(written_tag)
+            if not follow_calls:
+                return
+            for sub_name in node.calls:
+                rung_queue.extend(sub_members.get(sub_name, ()))
+            if node.subroutine is not None:
+                rung_queue.extend(callers.get(node.subroutine, ()))
+
+        while tag_queue or rung_queue:
+            while tag_queue:
+                current = tag_queue.pop()
+                if current in visited_tags:
+                    continue
+                visited_tags.add(current)
+                rung_queue.extend(self.readers_of.get(current, frozenset()))
+            while rung_queue:
+                _visit_rung(rung_queue.pop())
+
+        read_tags.discard(tag_name)
+        write_tags.discard(tag_name)
+        result = InfluenceCone(
+            rung_indices=frozenset(visited_rungs),
+            read_tags=frozenset(read_tags),
+            write_tags=frozenset(write_tags),
+        )
+        self._influenced_cone_cache[cache_key] = result
+        return result
+
+    def downstream_slice(
+        self,
+        tag_name: str,
+        *,
+        follow_calls: bool = False,
+    ) -> frozenset[str]:
+        """Return all tags transitively downstream of *tag_name*.
+
+        By default this preserves the historical direct PDG slice.  Pass
+        ``follow_calls=True`` to include subroutine bodies reached by call
+        instructions and caller sites reached from subroutine rungs.
+        """
+        if self._downstream_slice_cache is None:
+            self._downstream_slice_cache = {}
+        cache_key = (tag_name, follow_calls)
+        cached = self._downstream_slice_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        if follow_calls:
+            # influenced_cone has its own cache; this just keys the write_tags.
+            result = self.influenced_cone(tag_name, follow_calls=True).write_tags
+            self._downstream_slice_cache[cache_key] = result
+            return result
+
         visited_tags: set[str] = set()
         visited_rungs: set[int] = set()
         queue: list[str] = [tag_name]
@@ -302,7 +512,9 @@ class ProgramGraph:
                         queue.append(written_tag)
 
         visited_tags.discard(tag_name)
-        return frozenset(visited_tags)
+        result = frozenset(visited_tags)
+        self._downstream_slice_cache[cache_key] = result
+        return result
 
     def to_json_dict(self) -> dict[str, Any]:
         """Serialize the graph for DAP/webview consumption.
@@ -349,7 +561,7 @@ class ProgramGraph:
                     "branchPath": list(node.branch_path),
                     "conditionReads": sorted(node.condition_reads),
                     "dataReads": sorted(node.data_reads),
-                    "writes": sorted(node.writes),
+                    "writes": sorted(node.all_writes),
                     "calls": list(node.calls),
                     "sourceFile": node.source_file,
                     "sourceLine": node.source_line,
@@ -668,6 +880,7 @@ def _extract_rung_node(
     data_reads: set[str] = set()
     exclusive_reads: set[str] = set()
     writes: set[str] = set()
+    implicit_writes: set[str] = set()
     ote_writes: set[str] = set()
     calls: list[str] = []
 
@@ -687,18 +900,16 @@ def _extract_rung_node(
                 _extract_tag_names(getattr(instr, field_name), tag_refs, ranges=range_acc)
             )
 
-        for field_name in getattr(cls, "_writes", ()):
-            target_writes, target_reads = _extract_write_targets(
-                getattr(instr, field_name),
-                tag_refs,
-                ranges=range_acc,
-            )
-            writes.update(target_writes)
-            data_reads.update(target_reads)
-            if isinstance(instr, OutInstruction):
-                ote_writes.update(target_writes)
-
-        writes.update(_implicit_fault_writes(instr, tag_refs))
+        instruction_writes, target_reads, instr_implicit_writes = _extract_instruction_writes(
+            instr,
+            tag_refs,
+            ranges=range_acc,
+        )
+        writes.update(instruction_writes)
+        implicit_writes.update(instr_implicit_writes)
+        data_reads.update(target_reads)
+        if isinstance(instr, OutInstruction):
+            ote_writes.update(instruction_writes)
 
         for field_name in getattr(cls, "_exclusive_fields", ()):
             exclusive_reads.update(
@@ -724,6 +935,7 @@ def _extract_rung_node(
         data_reads=frozenset(data_reads),
         exclusive_reads=frozenset(exclusive_reads),
         writes=frozenset(writes),
+        implicit_writes=frozenset(implicit_writes),
         ote_writes=frozenset(ote_writes),
         calls=tuple(calls),
         source_file=getattr(rung, "source_file", None),
@@ -743,12 +955,11 @@ def _extract_instruction_event(
     for field_name in getattr(cls, "_reads", ()):
         data_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
 
-    for field_name in getattr(cls, "_writes", ()):
-        target_writes, target_reads = _extract_write_targets(getattr(instr, field_name), tag_refs)
-        writes.update(target_writes)
-        data_reads.update(target_reads)
-
-    writes.update(_implicit_fault_writes(instr, tag_refs))
+    instruction_writes, target_reads, _implicit_writes = _extract_instruction_writes(
+        instr, tag_refs
+    )
+    writes.update(instruction_writes)
+    data_reads.update(target_reads)
 
     for field_name in getattr(cls, "_conditions", ()):
         condition_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
@@ -759,6 +970,35 @@ def _extract_instruction_event(
         data_reads=frozenset(data_reads),
         writes=frozenset(writes),
     )
+
+
+def _extract_instruction_writes(
+    instr: Any,
+    tag_refs: dict[str, Tag],
+    ranges: dict[str, list[str]] | None = None,
+) -> tuple[set[str], set[str], set[str]]:
+    """Extract shared write targets for one instruction plus target-address reads.
+
+    Declared writes, declared status fields, and static sequential-copy fan-out
+    come from :mod:`write_sites`.  This PDG-specific layer retains indirect
+    address reads and conservative regions.  Returns
+    ``(writes, reads, implicit_writes)`` — fault writes are tracked separately
+    so they don't pollute ``writers_of`` or cone computations.
+    """
+    writes: set[str] = set()
+    reads: set[str] = set()
+
+    for target in instruction_write_targets(instr):
+        target_writes, target_reads = _extract_write_targets(
+            target,
+            tag_refs,
+            ranges=ranges,
+        )
+        writes.update(target_writes)
+        reads.update(target_reads)
+
+    implicit_writes = _implicit_fault_writes(instr, tag_refs)
+    return writes, reads, implicit_writes
 
 
 def _implicit_fault_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:
@@ -900,41 +1140,69 @@ def _build_def_use_chains(
             for tag_name in (event.condition_reads | event.data_reads | event.writes)
         }
     )
-    chains: dict[str, tuple[TagVersion, ...]] = {}
 
-    for tag_name in all_tags:
-        versions: list[dict[str, Any]] = [{"defined_at": None, "read_by": set()}]
-        current_index = 0
+    # One pass over the events, touching only the tags each one actually names.
+    # Sweeping every tag across every event instead asks "does this event mention
+    # me?" for each pair — quadratic, and almost always a miss, since a tag appears
+    # in a handful of events out of thousands.  The event already knows its tags.
+    versions_by_tag: dict[str, list[dict[str, Any]]] = {
+        tag_name: [{"defined_at": None, "read_by": set()}] for tag_name in all_tags
+    }
 
-        for event in access_events:
-            if tag_name in event.condition_reads or tag_name in event.data_reads:
-                versions[current_index]["read_by"].add(event.node_index)
+    for event in access_events:
+        # Reads land on the version in force *before* this event's write, so a
+        # rung that reads and writes the same tag reads the old value — the scan's
+        # own semantics, and the reason reads are applied first.
+        for tag_name in event.condition_reads:
+            versions_by_tag[tag_name][-1]["read_by"].add(event.node_index)
+        for tag_name in event.data_reads:
+            versions_by_tag[tag_name][-1]["read_by"].add(event.node_index)
+        for tag_name in event.writes:
+            versions_by_tag[tag_name].append({"defined_at": event.node_index, "read_by": set()})
 
-            if tag_name in event.writes:
-                versions.append({"defined_at": event.node_index, "read_by": set()})
-                current_index = len(versions) - 1
-
-        chains[tag_name] = tuple(
+    return {
+        tag_name: tuple(
             TagVersion(
                 tag=tag_name,
                 defined_at=version["defined_at"],
                 read_by=frozenset(version["read_by"]),
             )
-            for version in versions
+            for version in versions_by_tag[tag_name]
         )
+        for tag_name in all_tags
+    }
 
-    return chains
+
+def resolve_rung(program: Program, node: RungNode) -> Rung | None:
+    """Resolve a PDG node to its ``Rung`` object (main, subroutine, or branch)."""
+    if node.subroutine is not None:
+        rungs = program.subroutines.get(node.subroutine)
+        if rungs is None or node.rung_index >= len(rungs):
+            return None
+        rung = rungs[node.rung_index]
+    else:
+        if node.rung_index >= len(program.rungs):
+            return None
+        rung = program.rungs[node.rung_index]
+    for bi in node.branch_path:
+        if bi >= len(rung._branches):
+            return None
+        rung = rung._branches[bi]
+    return rung
 
 
 def classify_tags(graph: ProgramGraph) -> dict[str, TagRole]:
     """Classify tags by coarse graph role."""
+    # One pass over the nodes, same reason as _build_def_use_chains: sweeping every
+    # tag across every node asks "does this node read me?" per pair and answers no
+    # almost every time.  Tags with no condition reads simply get no entry — every
+    # read below goes through .get(..., frozenset()).
+    _condition_readers: dict[str, set[int]] = {}
+    for node_index, node in enumerate(graph.rung_nodes):
+        for tag_name in node.condition_reads:
+            _condition_readers.setdefault(tag_name, set()).add(node_index)
     condition_readers_of: dict[str, frozenset[int]] = {
-        tag_name: frozenset(
-            node_index
-            for node_index, node in enumerate(graph.rung_nodes)
-            if tag_name in node.condition_reads
-        )
-        for tag_name in (set(graph.readers_of) | set(graph.writers_of))
+        tag_name: frozenset(indices) for tag_name, indices in _condition_readers.items()
     }
 
     roles: dict[str, TagRole] = {}
@@ -1080,6 +1348,18 @@ def build_program_graph(program: Program) -> ProgramGraph:
                 branch_path=(),
             )
 
+    # Indirect-destination writer attribution (the region crossing): resolve the
+    # slots an over-cap ``copy(src, block[ptr])`` can statically reach and fold
+    # them into the writer node's ``writes`` BEFORE writers_of is built, so a
+    # program-authored status band stops masquerading as never-written free words.
+    writer_instrs = _build_writer_instrs(program)
+    indirect_writes, indirect_attribution = _collect_indirect_writes(
+        program, rung_nodes, tag_refs, writer_instrs
+    )
+    for node_index, slots in indirect_attribution.items():
+        node = rung_nodes[node_index]
+        rung_nodes[node_index] = _dc_replace(node, writes=node.writes | slots)
+
     readers_of_mut: dict[str, set[int]] = defaultdict(set)
     all_readers_of_mut: dict[str, set[int]] = defaultdict(set)
     writers_of_mut: dict[str, set[int]] = defaultdict(set)
@@ -1106,6 +1386,7 @@ def build_program_graph(program: Program) -> ProgramGraph:
         tags=dict(sorted(tag_refs.items())),
         block_ranges=range_acc,
         pointer_tags=_collect_pointer_tags(program),
+        indirect_writes=indirect_writes,
     )
     graph.tag_roles = classify_tags(graph)
     program._cached_graph = graph
@@ -1176,11 +1457,119 @@ def _collect_pointer_tags(program: Program) -> dict[str, tuple[str, int, int]]:
     return pointers
 
 
+def _named_write_dests(instr: Any) -> list[str]:
+    """Names of exact single-``Tag`` destinations *instr* writes.
+
+    The affine-pointer hop and the root's literal-write domain
+    (:mod:`pyrung.core.analysis.crossings.indirect_dest`) both follow these named,
+    non-indirect writes.  Indirect, range, and expression destinations are
+    skipped because they resolve to no single root register.
+    """
+    out: list[str] = []
+    for dest in instruction_write_targets(instr):
+        if isinstance(dest, ImmediateRef):
+            dest = dest.value
+        if isinstance(dest, Tag):
+            out.append(dest.name)
+    return out
+
+
+def _build_writer_instrs(program: Program) -> dict[str, list[Any]]:
+    """Map each named-``Tag`` destination to the instructions that write it.
+
+    Consumed by the indirect-destination region crossing to hop an affine pointer
+    (``calc(root ± k)``) back to its root and read that root's literal-write
+    domain.  Whole-program (main + branches + subroutines + ForLoop bodies)."""
+    from pyrung.core.validation._common import walk_instructions
+
+    writer_instrs: dict[str, list[Any]] = {}
+    for instr in walk_instructions(program):
+        for name in _named_write_dests(instr):
+            writer_instrs.setdefault(name, []).append(instr)
+    return writer_instrs
+
+
+def _collect_indirect_writes(
+    program: Program,
+    rung_nodes: list[RungNode],
+    tag_refs: dict[str, Tag],
+    writer_instrs: dict[str, list[Any]],
+) -> tuple[tuple[IndirectWriteRef, ...], dict[int, frozenset[str]]]:
+    """Collect descriptors for over-cap indirect writes, plus static attribution.
+
+    Returns ``(descriptors, attribution)`` where *descriptors* preserve the
+    runtime-resolution metadata (unchanged — ``cause()`` reads it) and
+    *attribution* maps a writer node index to the concrete destination slots the
+    indirect write can *statically* reach, via the indirect-destination region
+    crossing (:func:`crossings.indirect_dest.writable_slots`).  Attribution fires
+    only where the ordinary write-target extraction dropped the write (over-cap
+    block, pointer with no declared domain) — precisely the masquerade gap: an
+    indirectly-written status band otherwise looks never-program-written.  The
+    region is bounded by the pointer's derivable domain (a sound over-approximation
+    — a superset of write targets only ever *removes* a tag from the operator-lever
+    set); a non-derivable pointer contributes no attribution (today's behavior).
+    """
+    from pyrung.core.analysis.crossings.indirect_dest import writable_slots
+
+    refs: list[IndirectWriteRef] = []
+    attribution: dict[int, set[str]] = {}
+
+    def _check_instruction(instr: Any, node_index: int) -> None:
+        cls = type(instr)
+        for dest in instruction_write_targets(instr):
+            if isinstance(dest, ImmediateRef):
+                dest = dest.value
+            if not isinstance(dest, (IndirectRef, IndirectExprRef)):
+                continue
+            block = dest.block
+            if block.end - block.start + 1 <= _INDIRECT_BLOCK_CAP:
+                continue
+            if isinstance(dest, IndirectRef):
+                if _indirect_ref_tags(block, dest.pointer) is not None:
+                    continue
+                pointer_name = dest.pointer.name
+            else:
+                base = _indirect_expr_base_tag(dest.expr)
+                if base is None:
+                    continue
+                if _indirect_ref_tags(block, base) is not None:
+                    continue
+                pointer_name = base.name
+            source_tags: set[str] = set()
+            for read_field in getattr(cls, "_reads", ()):
+                source_tags.update(_extract_tag_names(getattr(instr, read_field), tag_refs))
+            refs.append(
+                IndirectWriteRef(
+                    node_index=node_index,
+                    pointer_tag=pointer_name,
+                    source_tags=frozenset(source_tags),
+                    block=block,
+                )
+            )
+            slots = writable_slots(dest, block=block, writer_instrs=writer_instrs, tags=tag_refs)
+            if slots:
+                attribution.setdefault(node_index, set()).update(slots)
+
+    for node_index, node in enumerate(rung_nodes):
+        rung = resolve_rung(program, node)
+        if rung is None:
+            continue
+        for instr in rung._instructions:
+            _check_instruction(instr, node_index)
+            if isinstance(instr, ForLoopInstruction):
+                for child in instr.instructions:
+                    _check_instruction(child, node_index)
+
+    return tuple(refs), {ni: frozenset(slots) for ni, slots in attribution.items()}
+
+
 __all__ = [
+    "IndirectWriteRef",
     "ProgramGraph",
     "RungNode",
     "TagRole",
     "TagVersion",
     "build_program_graph",
     "classify_tags",
+    "resolve_rung",
 ]

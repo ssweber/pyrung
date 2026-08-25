@@ -38,7 +38,9 @@ from pyrung import (
     rise,
     udt,
 )
-from pyrung.click import TagMap, c, ct, ctd, ds, t, td, x, y
+from pyrung.click import ClickBlocks, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 # ---------------------------------------------------------------------------
 # Structured types — UDTs with physical annotations

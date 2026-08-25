@@ -1,0 +1,701 @@
+"""PILOT gate: a pending program departure remains ordinary piloting.
+
+The shape (a miniature of the real tumbler's HoldForSheet handshake):
+
+* the Execute-era recipe dwell needs the door **closed** (``i_Door`` gates the
+  phase timer), so the pilot earns a steady ``Door=True`` hold as a coast
+  prerequisite;
+* at recipe step 103 the program issues its **own** Hold — a channel departure
+  that classifies as a stopover with a clean return route;
+* the Execute-scoped door rung yields in HELD, so Boolean baseline opens the
+  door and advances the recipe from 103 to 105;
+* the clean route supplies ``C_Unhold``. Trying it with the door open enters
+  Unholding, latches ``DoorAlarm``, and regresses to Aborted;
+* ordinary investigation from the pending HELD checkpoint learns the
+  corrective closed-door rung; the outer loop installs it and reorients from
+  the local checkpoint;
+* with the door closed through Unholding, the detour rejoins Execute and works.
+
+The gate proves there is no second detour controller: normal candidate,
+VERIFY, regression, investigation, PilotRung, checkpoint, and replay mechanics
+remain active while the program departure is pending.
+
+The fixture reuses the armed opaque-loop / constant-mask-table skeleton of
+``test_pilot_table_detour.py`` (the plain-copy sibling never arms the compass
+value graph the detour classifier reads) plus the discrete stepper shape of
+``test_pilot_earned_work._step_chain_program`` (the detour needs an earned-work component
+or classification fails closed to regression).
+"""
+
+from __future__ import annotations
+
+from pyrung import (
+    PLC,
+    Block,
+    Bool,
+    Int,
+    Program,
+    TagType,
+    Timer,
+    calc,
+    copy,
+    latch,
+    on_delay,
+    out,
+    reset,
+    rung,
+)
+from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement
+
+_DWELL_MS = 100
+
+
+def _door_cycle_program(
+    *,
+    premature_door_hold: bool = False,
+) -> tuple[Program, dict[str, object]]:
+    IDLE, EXECUTE, ABORTED, HOLDING, HELD, UNHOLDING, RESETTING, COMPLETING, COMPLETED = (
+        4,
+        6,
+        9,
+        10,
+        11,
+        12,
+        15,
+        16,
+        17,
+    )
+    START_CMD, HOLD_CMD, UNHOLD_CMD, COMPLETE_CMD = 2, 4, 5, 10
+
+    STATE_CHOICES = {
+        0: "Undefined", 1: "Clearing", 2: "Stopped", 3: "Starting", 4: "Idle",
+        5: "Suspended", 6: "Execute", 7: "Stopping", 8: "Aborting", 9: "Aborted",
+        10: "Holding", 11: "Held", 12: "Unholding", 13: "Suspending",
+        14: "Unsuspending", 15: "Resetting", 16: "Completing", 17: "Completed",
+    }  # fmt: skip
+    CMD_CHOICES = {
+        0: "Undefined", 1: "Reset", 2: "Start", 3: "Stop", 4: "Hold", 5: "Unhold",
+        6: "Suspend", 7: "Unsuspend", 8: "Abort", 9: "Clear", 10: "Complete",
+    }  # fmt: skip
+
+    # Operator surface: the door (a physical input), the start button, the
+    # Unhold button, and the command button PILOT must avoid.
+    Door = Bool("HRel_DoorClosed", external=True)
+    C_Start = Bool("HRel_C_Start", external=True)
+    C_Unhold = Bool("HRel_C_Unhold", external=True)
+    C_Complete = Bool("HRel_C_Complete", external=True)
+    DoorAlarm = Bool("HRel_DoorAlarm")
+
+    i_Door = Bool("HRel_iDoorClosed")  # the input image (the ReadInputs idiom)
+
+    Cmd = Int("HRel_Cmd", choices=CMD_CHOICES)
+    CmdReq = Int("HRel_CmdReq")
+    State = Int("HRel_State", default=IDLE, choices=STATE_CHOICES)
+    StateRequested = Int("HRel_StateRequested")
+    Mode = Int("HRel_Mode", default=1, choices={1: "Production", 2: "Maintenance", 3: "Manual"})
+
+    CmdStartRef = Int("HRel_CmdStartRef", readonly=True, default=START_CMD)
+    CmdHoldRef = Int("HRel_CmdHoldRef", readonly=True, default=HOLD_CMD)
+    CmdUnholdRef = Int("HRel_CmdUnholdRef", readonly=True, default=UNHOLD_CMD)
+    CmdCompleteRef = Int("HRel_CmdCompleteRef", readonly=True, default=COMPLETE_CMD)
+
+    # The recipe coordinate — a discrete stepper (credential family B): +2
+    # affine advances armed by step-derived flags (self-limiting provenance).
+    # ``choices`` bounds the backward trace's affine descent (need 103 while
+    # the snapshot sits at 105 would otherwise walk 101, 99, 97, … forever).
+    Step = Int(
+        "HRel_Step",
+        default=101,
+        choices={
+            101: "Phase1",
+            103: "SafetyWindow",
+            105: "HoldPoint",
+            107: "DoorCycled",
+            109: "Phase2Done",
+        }
+        if premature_door_hold
+        else {101: "Phase1", 103: "HoldPoint", 105: "DoorCycled", 107: "Phase2Done"},
+    )
+    At101 = Bool("HRel_At101")
+    At103 = Bool("HRel_At103")
+    At105 = Bool("HRel_At105")
+    At107 = Bool("HRel_At107")
+    At109 = Bool("HRel_At109")
+    Trans = Bool("HRel_Trans")
+
+    PhaseTmr = Timer.clone("HRel_PhaseTmr")
+    PrematureHoldTmr = Timer.clone("HRel_PrematureHoldTmr")
+    RecoveryTmr = Timer.clone("HRel_RecoveryTmr")
+    FinishTmr = Timer.clone("HRel_FinishTmr")
+
+    MaskIdx = Int("HRel_MaskIdx")
+    StateMask = Int("HRel_StateMask")
+    CfgIdx = Int("HRel_CfgIdx")
+    DisabledStates = Int("HRel_DisabledStates")
+    MaskResult = Int("HRel_MaskResult")
+    EnblYes = Int("HRel_EnblYes")
+    JumpIdx = Int("HRel_JumpIdx")
+    JumpTarget = Int("HRel_JumpTarget")
+
+    # Constant tables (see test_pilot_table_detour.py): per-state mask bits at
+    # MT[301..317], cfg disabled-state masks at MT[201..203] (nothing disabled),
+    # identity jump table JT[151..167].
+    MT = Block("HRel_MT", TagType.INT, 200, 340)
+    JT = Block("HRel_JT", TagType.INT, 150, 340)
+    MT.slot(201, default=0x0000)
+    MT.slot(202, default=0x0000)
+    MT.slot(203, default=0x0000)
+    for s, bit in {
+        1: 0x0001, 2: 0x0002, 3: 0x0004, 4: 0x0008, 5: 0x0010, 6: 0x0020,
+        7: 0x0040, 8: 0x0080, 9: 0x0100, 10: 0x0200, 11: 0x0400, 12: 0x0800,
+        13: 0x1000, 14: 0x2000, 15: 0x4000, 16: 0x8000, 17: 0x0001,
+    }.items():  # fmt: skip
+        MT.slot(300 + s, default=bit)
+    for s in range(1, 18):
+        JT.slot(150 + s, default=s)
+
+    with Program(strict=False) as logic:
+        # Input image — the out-coil hop the release check must read through
+        # (a held Door pins i_Door at the hold's polarity every scan).
+        with rung(Door):
+            out(i_Door)
+
+        # Step-derived flags (the stepper's self-limiting provenance).
+        with rung(Step == 101):
+            out(At101)
+        with rung(Step == 103):
+            out(At103)
+        with rung(Step == 105):
+            out(At105)
+        with rung(Step == 107):
+            out(At107)
+        if premature_door_hold:
+            with rung(Step == 109):
+                out(At109)
+
+        # Operator command producers.
+        with rung(C_Start):
+            copy(CmdStartRef, Cmd)
+            copy(1, CmdReq)
+        with rung(C_Complete):
+            copy(CmdCompleteRef, Cmd)
+            copy(1, CmdReq)
+        with rung(C_Unhold):
+            copy(CmdUnholdRef, Cmd)
+            copy(1, CmdReq)
+
+        # Recipe phase 1: the normal fixture needs the door CLOSED.  The
+        # two-Held policy fixture below lets the recipe clock advance
+        # independently so a shorter missing-door watchdog can first produce
+        # a premature Held occurrence.
+        if premature_door_hold:
+            with rung(State == EXECUTE, At101):
+                on_delay(PhaseTmr, _DWELL_MS, "ms")
+            # The watchdog becomes eligible only after phase 1 has advanced the
+            # earned work. Its later Execute -> Held occurrence must not inherit that
+            # earlier 101 -> 103 work as its own opening receipt.
+            with rung(State == EXECUTE, At103, ~i_Door):
+                on_delay(PrematureHoldTmr, 30, "ms")
+            with rung(PrematureHoldTmr.Done):
+                copy(CmdHoldRef, Cmd)
+                copy(1, CmdReq)
+        else:
+            with rung(State == EXECUTE, At101, i_Door):
+                on_delay(PhaseTmr, _DWELL_MS, "ms")
+        with rung(At101, PhaseTmr.Done):
+            latch(Trans)
+
+        if premature_door_hold:
+            # Once the missing support is repaired, 103 is merely the safety
+            # window's exit.  Give that exit its own boundary so incident replay
+            # can observe that suppressing the watchdog prevented *this*
+            # occurrence before the later 105 station Hold becomes eligible.
+            with rung(State == EXECUTE, At103, i_Door):
+                on_delay(RecoveryTmr, 60, "ms")
+            with rung(At103, RecoveryTmr.Done):
+                latch(Trans)
+            with rung(State == EXECUTE, At105):
+                copy(CmdHoldRef, Cmd)
+                copy(1, CmdReq)
+            with rung(State == HELD, At105, ~i_Door):
+                latch(Trans)
+            with rung(State == EXECUTE, At107, i_Door):
+                on_delay(FinishTmr, _DWELL_MS, "ms")
+            with rung(At107, FinishTmr.Done):
+                latch(Trans)
+            with rung(State == EXECUTE, At109):
+                copy(CmdCompleteRef, Cmd)
+                copy(1, CmdReq)
+        else:
+            # At step 103 the program holds itself (the burner's R17).
+            with rung(State == EXECUTE, At103):
+                copy(CmdHoldRef, Cmd)
+                copy(1, CmdReq)
+
+            # The HELD-era door cycle: the advance needs the door OPEN (R18).
+            with rung(State == HELD, At103, ~i_Door):
+                latch(Trans)
+
+            # Recipe phase 2 back in Execute needs the door CLOSED again.
+            with rung(State == EXECUTE, At105, i_Door):
+                on_delay(FinishTmr, _DWELL_MS, "ms")
+            with rung(At105, FinishTmr.Done):
+                latch(Trans)
+
+            # At step 107 the program completes on its own.
+            with rung(State == EXECUTE, At107):
+                copy(CmdCompleteRef, Cmd)
+                copy(1, CmdReq)
+
+        # The stepper: one +2 affine writer, transition-pulse armed.
+        with rung(Trans):
+            calc(Step + 2, Step)
+            reset(Trans)
+
+        # Real recipe steppers have an establishment/reset writer.  Besides
+        # being the credential eraser, it bounds reverse value walking when a
+        # stale step-derived Trans writer is considered after the live step has
+        # already advanced.
+        with rung(State == RESETTING):
+            copy(101, Step)
+
+        # Command -> state request, gated by the current state.
+        with rung(CmdReq == 1, Cmd == START_CMD, State == IDLE):
+            copy(EXECUTE, StateRequested)
+        with rung(CmdReq == 1, Cmd == HOLD_CMD, State == EXECUTE):
+            copy(HOLDING, StateRequested)
+        with rung(CmdReq == 1, Cmd == UNHOLD_CMD, State == HELD):
+            copy(UNHOLDING, StateRequested)
+        with rung(CmdReq == 1, Cmd == COMPLETE_CMD, State == EXECUTE):
+            copy(COMPLETING, StateRequested)
+
+        # Auto (state-complete) transitions.  The Completed request carries the
+        # recipe conjunct (state-complete gated on the recipe being done) — it
+        # is also what lets the backward trace cross from the channel side
+        # (cut at the second channel value by the opaque-loop budget) into the
+        # stepper chain where the door needs live.
+        with rung(State == HOLDING):
+            copy(HELD, StateRequested)
+        with rung(State == UNHOLDING):
+            copy(EXECUTE, StateRequested)
+        # Executable safety truth: entering Unholding open latches an alarm,
+        # which wins over the normal rejoin and throws the route to Aborted.
+        with rung(State == UNHOLDING, ~i_Door):
+            latch(DoorAlarm)
+        with rung(DoorAlarm):
+            copy(ABORTED, StateRequested)
+        if premature_door_hold:
+            with rung(State == COMPLETING, At109):
+                copy(COMPLETED, StateRequested)
+        else:
+            with rung(State == COMPLETING, At107):
+                copy(COMPLETED, StateRequested)
+
+        # Enable: constant-table mask predicate (everything enabled).
+        with rung():
+            calc(300 + StateRequested, MaskIdx)
+        with rung():
+            copy(MT[MaskIdx], StateMask)
+        with rung():
+            calc(200 + Mode, CfgIdx)
+        with rung():
+            copy(MT[CfgIdx], DisabledStates)
+        with rung():
+            calc(StateMask & DisabledStates, MaskResult)
+        with rung():
+            copy(0, EnblYes)
+        with rung(MaskResult == 0):
+            copy(1, EnblYes)
+
+        # Indirect jump-table hop (arms detect_opaque_loop).
+        with rung():
+            calc(StateRequested + 150, JumpIdx)
+        with rung():
+            copy(JT[JumpIdx], JumpTarget)
+
+        # Apply (enabled) or redirect through the jump chain.
+        with rung(StateRequested != 0, EnblYes == 1):
+            copy(StateRequested, State)
+            copy(0, StateRequested)
+            copy(0, Cmd)
+            copy(0, CmdReq)
+        with rung(StateRequested != 0, EnblYes != 1, JumpTarget != 0):
+            copy(JumpTarget, StateRequested)
+
+    tags: dict[str, object] = {
+        "Door": Door,
+        "i_Door": i_Door,
+        "C_Start": C_Start,
+        "C_Unhold": C_Unhold,
+        "C_Complete": C_Complete,
+        "DoorAlarm": DoorAlarm,
+        "State": State,
+        "Step": Step,
+        "Idle": IDLE,
+        "Execute": EXECUTE,
+        "Aborted": ABORTED,
+        "Held": HELD,
+        "Completed": COMPLETED,
+    }
+    return logic, tags
+
+
+def _pulse(plc: PLC, tag, value=True, release=False) -> None:
+    plc.patch({tag.name: value})
+    plc.step()
+    if release:
+        plc.patch({tag.name: not value})
+
+
+def test_door_cycle_premise() -> None:
+    """Hand-drive: close door, start, program holds itself at 103; open door
+    (103 -> 105), ack (program unholds), re-close door, dwell (105 -> 107),
+    program completes — Completed without pressing C_Complete."""
+    logic, tags = _door_cycle_program()
+    plc = PLC(logic, dt=0.010)
+    state, step = tags["State"].name, tags["Step"].name
+
+    plc.patch({tags["Door"].name: True})
+    plc.step()
+    _pulse(plc, tags["C_Start"], release=True)
+    plc.run(cycles=30)
+    assert plc.state.tags[state] == tags["Held"], plc.state.tags[state]
+    assert plc.state.tags[step] == 103
+
+    # The door cycle: open advances the recipe at HELD.
+    plc.patch({tags["Door"].name: False})
+    plc.run(cycles=3)
+    assert plc.state.tags[step] == 105
+
+    # Unhold while open is unsafe and latches the alarm.
+    _pulse(plc, tags["C_Unhold"], release=True)
+    plc.run(cycles=3)
+    assert plc.state.tags[state] == tags["Aborted"]
+    assert plc.state.tags[tags["DoorAlarm"].name] is True
+
+    # A fresh safe run closes before Unhold.
+    logic, tags = _door_cycle_program()
+    plc = PLC(logic, dt=0.010)
+    state, step = tags["State"].name, tags["Step"].name
+    plc.patch({tags["State"].name: tags["Held"], tags["Step"].name: 105})
+    plc.patch({tags["Door"].name: True})
+    plc.step()
+    _pulse(plc, tags["C_Unhold"], release=True)
+    plc.run(cycles=3)
+    assert plc.state.tags[state] == tags["Execute"]
+    assert plc.state.tags[tags["DoorAlarm"].name] is False
+
+    # Door re-closed, phase-2 dwell, program-issued Complete.
+    plc.patch({tags["Door"].name: True})
+    plc.run(cycles=30)
+    assert plc.state.tags[state] == tags["Completed"]
+    assert plc.state.tags[step] == 107
+    assert plc.state.tags[tags["C_Complete"].name] is False
+
+
+def test_stepper_is_an_earned_work_component() -> None:
+    """Detour classification fails closed without earned work; the fixture's
+    recipe stepper must classify (family B, self-limiting +2 advances)."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.drive_setup import build_prover_context
+    from pyrung.core.analysis.pilot.earned_work import build_earned_work
+    from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
+
+    logic, tags = _door_cycle_program()
+    plc = PLC(logic, dt=0.010)
+    plc.step()
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
+    clear_only = compute_clear_only(pdg, plc._known_tags_by_name, logic)
+    prover = build_prover_context(logic, dict(plc.state.tags))
+    assert prover.key_config is not None
+    earned_work = build_earned_work(
+        pdg,
+        logic,
+        tags["State"].name,
+        prover.key_config,
+        steerable=steerable,
+        clear_only=clear_only,
+        edge_tags=frozenset(),
+        pipeline_internal_tags=frozenset(),
+        channel_tags=frozenset({tags["State"].name}),
+        harness=None,
+    )
+    by_tag = {c.tag: c for c in earned_work.components}
+    assert tags["Step"].name in by_tag, [c.tag for c in earned_work.components]
+    # The prover threshold-absorbs the ``Step == …`` flag comparisons, so the
+    # register classifies as family A (ordinal); without that absorption it
+    # would classify as family B (stepper). Either carries the detour.
+    assert by_tag[tags["Step"].name].kind in ("ordinal", "stepper")
+    assert by_tag[tags["Step"].name].direction == 1
+
+
+def test_program_owned_held_scan_checkpoint_keeps_the_next_decision() -> None:
+    """Fast BurnerLoop decision smoke from an executable scan checkpoint.
+
+    Capture the later, recipe-owned HELD world (Step 103 was earned before the
+    program issued Hold), then ask PILOT for only its next decision.  Future
+    work may teach recovery that an earlier door-caused Held is a pointless
+    detour; it must not erase this awaited action or perturb the established choice:
+    open the door for the recipe transition and issue Unhold, never Complete.
+
+    ``PLC.fork()`` is the checkpoint seam: it preserves the exact timer, edge,
+    tag, and history state at this scan without replaying the full tumbler
+    drive.
+    """
+    from pyrung.core.analysis.pilot.api import pilot_events
+    from pyrung.core.runner import _compile_avoid
+
+    logic, tags = _door_cycle_program()
+    plc = PLC(logic, dt=0.010)
+    plc.patch({tags["Door"].name: True, tags["State"].name: tags["Execute"]})
+    plc.step()
+    plc.run(cycles=20)
+
+    assert plc.state.tags[tags["State"].name] == tags["Held"]
+    assert plc.state.tags[tags["Step"].name] == 103
+    held_checkpoint = plc.fork()
+
+    built = None
+    tried = None
+    for event in pilot_events(
+        held_checkpoint,
+        tags["State"] == tags["Completed"],
+        avoid_pred=_compile_avoid(tags["C_Complete"]),
+        max_scans=100,
+    ):
+        if event.kind == "candidates_built":
+            built = event.data["candidates"]
+        elif event.kind == "candidate_try":
+            tried = event.data
+            break
+
+    assert built is not None
+    assert [(candidate["tag"], candidate["value"]) for candidate in built] == [
+        (tags["Door"].name, False),
+    ]
+    assert tried is not None
+    assert tried["applied"] == ((tags["Door"].name, False),)
+    assert all(tag != tags["C_Complete"].name for tag, _value in tried["applied"])
+
+
+def test_clean_detour_is_investigated_before_retention_without_poisoning_later_awaited_action(
+    monkeypatch,
+) -> None:
+    """One PILOT session distinguishes two target-relative Held occurrences.
+
+    The first Held is only structurally on-route: phase 1 has advanced 101 ->
+    103, then a missing-door watchdog causes a distinct occurrence.  Clean continuation is
+    therefore not permission to skip investigation; PILOT must install the
+    non-self-defeating Execute-era door correction and revert.
+
+    The second Held carries the recipe's awaited action at Step 105. Preventing that
+    program-owned Hold would defeat earned recipe progress, so PILOT retains
+    the detour and still chooses its established next act: Unhold plus the
+    open-door recipe transition, never the avoided Complete button.
+    """
+    from pyrung.core.analysis.pilot import progress as progress_module
+    from pyrung.core.analysis.pilot.api import pilot_events
+    from pyrung.core.analysis.sp_values import _SnapshotView
+    from pyrung.core.runner import _compile_avoid
+
+    logic, tags = _door_cycle_program(premature_door_hold=True)
+    plc = PLC(logic, dt=0.010)
+    # Begin at the clean Execute receipt.  This keeps the first watchdog
+    # departure out of Start's pulse-settlement transaction and mirrors the
+    # real drive's already-accepted Starting -> Execute bearing.
+    plc.patch({tags["State"].name: tags["Execute"]})
+    plc.step()
+
+    departure_observations = []
+    observe_departure = progress_module.observe_departure
+
+    def _capture_departure(*args, **kwargs):
+        observation, settled_work = observe_departure(*args, **kwargs)
+        departure_observations.append(observation)
+        return observation, settled_work
+
+    monkeypatch.setattr(progress_module, "observe_departure", _capture_departure)
+
+    events = []
+    last_committed = {}
+    departures = []
+    pending_step = None
+    later_build = None
+    later_candidates = None
+    later_prerequisite_pilot_rungs = ()
+    later_snapshot = None
+    later_try = None
+    iteration_snapshot = {}
+    for event in pilot_events(
+        plc,
+        tags["State"] == tags["Completed"],
+        avoid_pred=_compile_avoid(tags["C_Complete"]),
+        max_scans=3000,
+    ):
+        events.append(event)
+        if event.kind == "trial_committed":
+            last_committed = dict(event.data["snapshot"])
+        elif event.kind == "iteration":
+            iteration_snapshot = dict(event.data["snapshot"])
+        elif event.kind == "letrun_ejection":
+            departures.append((len(events) - 1, dict(last_committed)))
+        elif event.kind == "pending_departure_started":
+            pending_step = last_committed.get(tags["Step"].name)
+        elif event.kind == "candidates_built" and pending_step == 105:
+            later_build = event.data
+            later_candidates = event.data["candidates"]
+            later_prerequisite_pilot_rungs = event.data["prerequisite_pilot_rungs"]
+            later_snapshot = iteration_snapshot
+        elif event.kind == "candidate_try" and later_candidates is not None:
+            later_try = event.data
+            break
+
+    assert departures, [event.kind for event in events]
+    initial_index, initial_landing = next(
+        departure for departure in departures if departure[1].get(tags["Step"].name) == 103
+    )
+    assert initial_landing[tags["State"].name] != tags["Execute"]
+    initial_observation = next(
+        observation
+        for observation in departure_observations
+        if observation.reading.occurrence_scan is not None
+        and observation.progress.source_mark == ((tags["Step"].name, 103),)
+    )
+    assert initial_observation.progress.movement is EarnedWorkMovement.UNCHANGED
+    assert initial_observation.progress.source_mark == ((tags["Step"].name, 103),)
+    assert initial_observation.progress.landing_mark == ((tags["Step"].name, 103),)
+    assert initial_observation.reading.external_supports == ((tags["Door"].name, False),)
+
+    resolution = next(
+        event
+        for event in events[initial_index + 1 :]
+        if event.kind in {"trend_regression", "pending_departure_started"}
+    )
+    assert resolution.kind == "trend_regression", [
+        (event.kind, event.data)
+        for event in events[initial_index + 1 :]
+        if event.kind in {"departure_investigated", "trend_regression", "pending_departure_started"}
+    ]
+    investigation = resolution.data["investigation"]
+    assert investigation["working_theory"] is True
+    assert investigation["exact_regression"] is True
+    assert investigation["bounded_proof"] is True
+    requirement = investigation["requirement"]
+    assert resolution.data["pilot_rungs"] == ()
+    assert any(rung.dest == tags["Door"].name for rung in requirement.corrective_pilot_rungs)
+    door_correction = next(
+        rung
+        for rung in reversed(requirement.corrective_pilot_rungs)
+        if rung.dest == tags["Door"].name
+    )
+    # The exact missing-support requirement is just-in-time for the harmful
+    # Execute/103 occurrence. Ordinary execution owns what happens after that
+    # earned-work coordinate advances; the correction must not claim the whole
+    # Execute tenure merely because the old replay crossed it.
+    assert door_correction.guard.evaluate(
+        _SnapshotView(
+            {
+                **initial_landing,
+                tags["State"].name: tags["Execute"],
+                tags["Step"].name: 103,
+            },
+            {},
+        )
+    )
+    assert not door_correction.guard.evaluate(
+        _SnapshotView(
+            {
+                **initial_landing,
+                tags["State"].name: tags["Execute"],
+                tags["Step"].name: 105,
+            },
+            {},
+        )
+    )
+
+    recipe_index, _recipe_landing = next(
+        departure for departure in departures if departure[1].get(tags["Step"].name) == 105
+    )
+    recipe_started = next(
+        event for event in events[recipe_index + 1 :] if event.kind == "pending_departure_started"
+    )
+    # The earlier correction releases once Execute/103 is discharged, so the
+    # HELD-era 105 -> 107 work can legitimately occur while this station
+    # departure settles.  Its source must still be the occurrence's 105—not
+    # the coast's earlier 101/103 receipt.
+    assert recipe_started.data["entry_progress"].movement is EarnedWorkMovement.FORWARD
+    assert recipe_started.data["entry_progress"].source_mark == ((tags["Step"].name, 105),)
+    recipe_promoted = next(
+        event for event in events[recipe_index + 1 :] if event.kind == "pending_departure_promoted"
+    )
+    assert recipe_promoted.data["entry_progress"].movement is EarnedWorkMovement.FORWARD
+    assert recipe_promoted.data["corridor_open"] is True
+    assert not any(event.kind == "departure_investigated" for event in events[recipe_index + 1 :])
+
+    assert later_candidates is not None, [
+        (event.kind, event.data.get("settled_value"))
+        for event in events
+        if event.kind in {"letrun_ejection", "pending_departure_started", "finished"}
+    ]
+    assert later_snapshot is not None
+    later_pairs = [(candidate["tag"], candidate["value"]) for candidate in later_candidates]
+    # The earlier incident correction may already have supplied the open-door
+    # scan while the recipe-owned Hold settled. In that case step 107 is banked
+    # and Unhold is correctly the next move; asking for Door=False again would
+    # relearn work the current world already proves complete.
+    assert later_snapshot[tags["Door"].name] is False
+    assert later_snapshot[tags["Step"].name] == 107
+    assert later_pairs == [(tags["C_Unhold"].name, True)]
+    assert later_try is not None
+    assert later_try["applied"] == ((tags["C_Unhold"].name, True),)
+    assert (
+        (tags["Door"].name, False) in later_pairs
+        or later_snapshot[tags["Door"].name] is False
+        or any(
+            rung.dest == tags["Door"].name and rung.value is False
+            for rung in later_prerequisite_pilot_rungs
+        )
+    ), later_build
+    assert all(candidate["tag"] != tags["C_Complete"].name for candidate in later_candidates)
+
+
+def test_pending_departure_keeps_the_ordinary_pilot_loop_active() -> None:
+    """PILOT reaches Completed through the HELD door cycle.
+
+    The route first falsifies open-door Unholding, ordinary investigation
+    learns the correction, and the detour works at Execute rejoin—without
+    pressing the avoided ``C_Complete``."""
+    from pyrung.core.analysis.pilot.api import pilot_events
+    from pyrung.core.runner import _compile_avoid
+
+    logic, tags = _door_cycle_program()
+    plc = PLC(logic, dt=0.010)
+    # Focus the gate on the program departure. Starting from Idle lets the
+    # candidate settlement fast-forward the phase timer and land directly in
+    # HELD, so no Execute checkpoint, earned Door=True hold, or detour loan ever
+    # exists. At Execute the first bearing coast earns that hold before the program's
+    # own Hold ejects the coast.
+    plc.patch({tags["Door"].name: True, tags["State"].name: tags["Execute"]})
+    plc.step()
+
+    kinds: list[str] = []
+    finished = None
+    for ev in pilot_events(
+        plc,
+        tags["State"] == tags["Completed"],
+        avoid_pred=_compile_avoid(tags["C_Complete"]),
+        max_scans=3000,
+    ):
+        kinds.append(ev.kind)
+        if ev.kind == "finished":
+            finished = ev.data
+            break
+
+    assert finished is not None and finished["reached"], (finished or {}).get("reason")
+    assert "pending_departure_started" in kinds, kinds
+    assert "pending_departure_promoted" in kinds, kinds
+    final = finished["work"].state.tags
+    assert final[tags["State"].name] == tags["Completed"]
+    assert final[tags["C_Complete"].name] is not True
+    assert final[tags["DoorAlarm"].name] is False

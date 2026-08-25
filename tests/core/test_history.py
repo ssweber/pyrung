@@ -13,7 +13,8 @@ from datetime import datetime
 
 import pytest
 
-from pyrung.core import PLC, TimeMode
+from pyrung.core import PLC, Bool, Int, Program, Rung, TimeMode, copy, out
+from pyrung.core.analysis.causal._rung_writes import build_scan_rung_write_projection
 from pyrung.core.state import SystemState
 
 
@@ -68,6 +69,135 @@ def test_history_latest_returns_chronological_window_with_bounds() -> None:
     assert [state.scan_id for state in runner.history.latest(50)] == [0, 1, 2, 3, 4]
     assert runner.history.latest(0) == []
     assert runner.history.latest(-3) == []
+
+
+def test_previous_transition_queries_value_and_scan_boundary() -> None:
+    Enable = Bool("HistoryTransitionEnable", external=True)
+    Light = Bool("HistoryTransitionLight")
+
+    with Program() as program:
+        with Rung(Enable):
+            out(Light)
+
+    runner = PLC(program)
+    runner.patch({Enable.name: True})
+    runner.step()
+    runner.patch({Enable.name: False})
+    runner.step()
+    runner.patch({Enable.name: True})
+    runner.step()
+
+    latest = runner.history.previous_transition(Light)
+    previous_false = runner.history.previous_transition(Light.name, to=False)
+    bounded_true = runner.history.previous_transition(Light, to=True, at_or_before=2)
+
+    assert latest is not None
+    assert (latest.scan_id, latest.from_value, latest.to_value) == (3, False, True)
+    assert previous_false is not None
+    assert (previous_false.scan_id, previous_false.from_value, previous_false.to_value) == (
+        2,
+        True,
+        False,
+    )
+    assert bounded_true is not None
+    assert (bounded_true.scan_id, bounded_true.to_value) == (1, True)
+    assert runner.history.previous_transition(Light, to=None) is None
+
+
+def test_previous_transition_validates_compressed_candidate_against_committed_boundary() -> None:
+    """Multiple same-scan writers must not make a timeline payload authoritative."""
+    Seed = Bool("HistoryBoundarySeed", external=True)
+    MainWrite = Bool("HistoryBoundaryMainWrite", external=True)
+    ErrorWrite = Bool("HistoryBoundaryErrorWrite", external=True)
+    ProcessStep = Int("HistoryBoundaryProcessStep")
+    Observed = Bool("HistoryBoundaryObserved")
+
+    with Program() as program:
+        with Rung(Seed):
+            copy(99, ProcessStep)
+        with Rung(MainWrite):
+            copy(10, ProcessStep)
+        with Rung(ErrorWrite):
+            copy(98, ProcessStep)
+        with Rung(ProcessStep == 98):
+            out(Observed)
+
+    runner = PLC(program)
+    runner.patch({Seed.name: True})
+    runner.step()
+    runner.patch(
+        {
+            Seed.name: False,
+            MainWrite.name: True,
+            ErrorWrite.name: True,
+        }
+    )
+    runner.step()
+
+    assert runner.history.at(1).tags[ProcessStep.name] == 99
+    assert runner.history.at(2).tags[ProcessStep.name] == 98
+
+    writers = runner._ensure_pdg().timeline_writers_of(ProcessStep.name)
+    candidates = runner._causal_rung_firing_timelines.tag_transition_candidate_scans_before(
+        writers,
+        ProcessStep.name,
+        3,
+    )
+    assert candidates[0] == 2
+
+    boundary = runner.history.previous_transition(ProcessStep)
+    assert boundary is not None
+    assert boundary.scan_id == 2
+    assert boundary.occurrence_ordinal is None
+    assert (boundary.from_value, boundary.to_value) == (99, 98)
+    assert runner.history.previous_transition(ProcessStep, to=98) == boundary
+    # The first writer's 99 -> 10 occurrence is real execution evidence, but
+    # it was overwritten before commit and is not an observed History boundary.
+    assert runner.history.previous_transition(ProcessStep, to=10) is None
+
+    # Public cause preserves the committed boundary while attributing it to the
+    # final writer. Exact immediate values live only in the ephemeral replay
+    # projection built after the compressed query has selected scan 2.
+    exact = runner.cause(ProcessStep, scan=boundary.scan_id, deep=True)
+    assert exact is not None
+    assert (
+        exact.effect.scan_id,
+        exact.effect.from_value,
+        exact.effect.to_value,
+    ) == (2, 99, 98)
+    assert exact.effect.occurrence_ordinal is not None
+    assert exact.steps[0].rung_index == 2
+
+    runs = runner._replay_rung_runs_at(boundary.scan_id)
+    projection = build_scan_rung_write_projection(
+        runner.history,
+        boundary.scan_id,
+        runs,
+    )
+    assert projection is not None
+    occurrence = projection.write_at_ordinal(exact.effect.occurrence_ordinal)
+    assert occurrence is not None
+    assert (
+        occurrence.transition.from_value,
+        occurrence.transition.to_value,
+        occurrence.rung_id.rung_index,
+    ) == (10, 98, 2)
+
+
+def test_previous_transition_uses_recorded_external_input_changes() -> None:
+    Input = Bool("HistoryTransitionInput", external=True)
+    runner = PLC(logic=[])
+    runner.patch({Input.name: True})
+    runner.step()
+
+    transition = runner.history.previous_transition(Input, to=True)
+
+    assert transition is not None
+    assert (transition.tag_name, transition.scan_id, transition.to_value) == (
+        Input.name,
+        1,
+        True,
+    )
 
 
 def test_unbounded_history_retains_all_scans() -> None:
@@ -219,7 +349,7 @@ def test_fork_defaults_to_current_tip_even_if_playhead_is_in_the_past() -> None:
 
     assert fork.current_state.scan_id == 3
     assert fork.current_state.timestamp == pytest.approx(runner.current_state.timestamp)
-    assert _scan_ids(fork) == [3]
+    assert _scan_ids(fork) == [0, 1, 2, 3]
     assert fork.playhead == 3
 
 
@@ -237,7 +367,7 @@ def test_fork_with_scan_id_starts_from_exact_snapshot_and_preserves_time_config(
     assert fork.current_state.timestamp == pytest.approx(0.25)
     assert dict(fork.current_state.tags) == dict(snapshot.tags)
     assert dict(fork.current_state.memory) == dict(snapshot.memory)
-    assert [state.scan_id for state in fork.history.latest(10)] == [1]
+    assert [state.scan_id for state in fork.history.latest(10)] == [0, 1]
     assert fork.time_mode == TimeMode.FIXED_STEP
 
     fork.step()
@@ -277,7 +407,7 @@ def test_fork_starts_clean_and_parent_fork_evolve_independently() -> None:
     assert runner.current_state.tags["X"] == 2
     assert fork.current_state.tags["X"] == 99
     assert _scan_ids(runner) == [0, 1, 2]
-    assert _scan_ids(fork) == [1, 2]
+    assert _scan_ids(fork) == [0, 1, 2]
 
 
 def test_fork_raises_for_unknown_scan() -> None:
@@ -285,6 +415,53 @@ def test_fork_raises_for_unknown_scan() -> None:
 
     with pytest.raises(KeyError):
         runner.fork(scan_id=999)
+
+
+def test_fork_reuses_parent_tag_index_without_program_rewalk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``fork()`` hands the parent's tag index to the child instead of
+    re-walking the program AST.
+
+    The index is derived only from the immutable program shared by every
+    fork, and the AST walk dominates fork cost on large programs (~95 ms
+    on a 6,000-tag PackML project) — PILOT uses many forks for verified actions
+    and isolated probes, so a re-walk per fork turns drive wall-clock from
+    seconds into hours.
+    """
+    from pyrung import Bool, Program, Rung, out
+    from pyrung.core import runner as runner_mod
+
+    A = Bool("A", external=True)
+    B = Bool("B")
+
+    with Program() as prog:
+        with Rung(A):
+            out(B)
+
+    runner = PLC(prog)
+    runner.step()
+
+    walks: list[int] = []
+    orig = runner_mod._iter_tags_and_edge_names
+
+    def counting(roots):
+        walks.append(1)
+        return orig(roots)
+
+    monkeypatch.setattr(runner_mod, "_iter_tags_and_edge_names", counting)
+
+    fork = runner.fork()
+
+    assert walks == []
+    assert fork._known_tags_by_name == runner._known_tags_by_name
+    assert fork._edge_tag_names == runner._edge_tag_names
+
+    # The handoff is a copy: registrations on either side stay private.
+    C = Bool("C")
+    fork._register_known_tag(C)
+    assert "C" in fork._known_tags_by_name
+    assert "C" not in runner._known_tags_by_name
 
 
 def test_fork_from_starts_from_exact_snapshot_and_preserves_time_config() -> None:
@@ -301,7 +478,7 @@ def test_fork_from_starts_from_exact_snapshot_and_preserves_time_config() -> Non
     assert fork.current_state.timestamp == pytest.approx(0.25)
     assert dict(fork.current_state.tags) == dict(snapshot.tags)
     assert dict(fork.current_state.memory) == dict(snapshot.memory)
-    assert [state.scan_id for state in fork.history.latest(10)] == [1]
+    assert [state.scan_id for state in fork.history.latest(10)] == [0, 1]
     assert fork.time_mode == TimeMode.FIXED_STEP
 
     fork.step()
@@ -329,14 +506,14 @@ def test_fork_from_inherits_history_budget() -> None:
 
     fork = runner.fork_from(4)
     assert fork._recent_state_cache_budget == budget
-    assert _scan_ids(fork) == [4]
+    assert _scan_ids(fork) == [0, 1, 2, 3, 4]
 
     fork.step()
     fork.step()
     fork.step()
 
-    # Fork starts at scan 4; subsequent scans 5, 6, 7 stay addressable.
-    assert _scan_ids(fork) == [4, 5, 6, 7]
+    # The inherited prefix and subsequent branch scans stay addressable.
+    assert _scan_ids(fork) == list(range(8))
     assert fork.history.at(4).scan_id == 4
 
 
@@ -361,7 +538,7 @@ def test_fork_from_starts_clean_and_parent_fork_evolve_independently() -> None:
     assert runner.current_state.tags["X"] == 2
     assert fork.current_state.tags["X"] == 99
     assert _scan_ids(runner) == [0, 1, 2]
-    assert _scan_ids(fork) == [1, 2]
+    assert _scan_ids(fork) == [0, 1, 2]
 
 
 def test_fork_from_raises_for_unknown_scan() -> None:
@@ -525,6 +702,65 @@ def test_trim_advances_oldest_scan_id() -> None:
     assert plc.history.oldest_scan_id == 10
     assert not plc.history.contains(9)
     assert plc.history.contains(10)
+
+
+def test_fork_inf_budget_never_evicts() -> None:
+    """``history_budget=math.inf`` disables eviction on the fork."""
+    import math
+
+    A = Bool("A")
+    B = Bool("B")
+    with Program() as prog:
+        with Rung(A):
+            out(B)
+
+    plc = PLC(prog, dt=0.01)
+    plc.patch({"A": True})
+    plc.step()
+
+    fork = plc.fork(history_budget=math.inf)
+    assert fork._recent_state_cache_budget == math.inf
+    assert fork._cache_retention_scans is None
+
+    fork.patch({"A": False})
+    fork.step()
+    fork.patch({"A": True})
+    fork.step()
+
+    chain = fork.cause("B")
+    assert chain is not None
+    for step in chain.steps:
+        assert step.fidelity == "full"
+
+    assert fork._state_in_cache(fork._initial_scan_id)
+    assert all(
+        fork._state_in_cache(sid) for sid in range(fork._initial_scan_id, fork.state.scan_id + 1)
+    )
+
+
+def test_fork_inf_budget_inherited_by_subfork() -> None:
+    """Sub-forks inherit ``math.inf`` budget from their parent."""
+    import math
+
+    plc = PLC(logic=[], dt=0.01)
+    plc.run(cycles=3)
+
+    fork = plc.fork(history_budget=math.inf)
+    fork.step()
+
+    child = fork.fork()
+    assert child._recent_state_cache_budget == math.inf
+    assert child._cache_retention_scans is None
+
+
+def test_history_stitches_fork_ancestry_on_the_retained_branch() -> None:
+    plc = PLC(logic=[], dt=0.01)
+    plc.run(cycles=2)
+    child = plc.fork()
+    child.run(cycles=2)
+
+    assert [state.scan_id for state in child.history.latest(10)] == [0, 1, 2, 3, 4]
+    assert [state.scan_id for state in child._causal_history_range(0, 5)] == [0, 1, 2, 3, 4]
 
 
 def test_history_scan_ids_reflects_trim() -> None:
