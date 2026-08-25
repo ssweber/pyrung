@@ -16,6 +16,7 @@
 
 - Generated Click project exports now run validation and reject address-identity conflicts, while named hardware slots ending in digits resolve to their actual addresses instead of nickname-shaped operands.
 - Click ladder bundles now write `rung_sources.json`, mapping each exported rung back to its contributing Python source spans for semantic downstream previews.
+- Click validation now recognizes named pointer tags from their owning hardware blocks, so generated projects do not require redundant `TagMap` entries to prove that a pointer uses DS memory.
 
 ### Performance
 

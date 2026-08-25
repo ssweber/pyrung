@@ -193,17 +193,22 @@ def _classify_value(
 
     # 3. IndirectRef
     if isinstance(obj, IndirectRef):
+        metadata: dict[str, str | int | bool] = {
+            "block_name": obj.block.name,
+            "pointer_name": obj.pointer.name,
+            "block_start": obj.block.start,
+            "block_end": obj.block.end,
+            "pointer_default": obj.pointer.default,
+        }
+        pointer_block = getattr(obj.pointer, "_pyrung_block", None)
+        pointer_block_name = getattr(pointer_block, "name", None)
+        if isinstance(pointer_block_name, str):
+            metadata["pointer_block_name"] = pointer_block_name
         return (
             "indirect_ref",
             type(obj).__name__,
             f"IndirectRef({obj.block.name}[{obj.pointer.name}])",
-            {
-                "block_name": obj.block.name,
-                "pointer_name": obj.pointer.name,
-                "block_start": obj.block.start,
-                "block_end": obj.block.end,
-                "pointer_default": obj.pointer.default,
-            },
+            metadata,
         )
 
     # 4. Expression

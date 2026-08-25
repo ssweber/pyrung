@@ -46,6 +46,7 @@ from .resolve import (
     _bank_label,
     _format_location,
     _instruction_location,
+    _resolve_block_memory_type,
     _resolve_direct_tag,
     _resolve_pointer_memory_type,
     _ResolvedSlot,
@@ -87,7 +88,14 @@ def _evaluate_fact(
             )
         else:
             pointer_name = str(fact.metadata.get("pointer_name", ""))
-            memory_type = _resolve_pointer_memory_type(pointer_name, tag_map)
+            pointer_block_name = fact.metadata.get("pointer_block_name")
+            memory_type = (
+                _resolve_block_memory_type(pointer_block_name, tag_map)
+                if isinstance(pointer_block_name, str)
+                else None
+            )
+            if memory_type is None:
+                memory_type = _resolve_pointer_memory_type(pointer_name, tag_map)
             if memory_type is None:
                 code = CLK_PTR_DS_UNVERIFIED
                 findings.append(

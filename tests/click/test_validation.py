@@ -103,6 +103,21 @@ class TestAllowedCopyWithDSPointer:
         ]
         assert relevant == []
 
+    def test_named_ds_block_slot_needs_no_explicit_tag_map_entry(self):
+        blocks = ClickBlocks()
+        blocks.ds.slot(121, name="Pointer")
+
+        def logic():
+            with Rung():
+                copy(blocks.dd[blocks.ds[121]], blocks.dd[1])
+
+        prog = _build_program(logic)
+        report = validate_click_program(prog, TagMap(include_system=False), mode="strict")
+        codes = _finding_codes(report)
+
+        assert CLK_PTR_DS_UNVERIFIED not in codes
+        assert CLK_PTR_POINTER_MUST_BE_DS not in codes
+
 
 # ---------------------------------------------------------------------------
 # Test 2: Non-DS pointer
@@ -127,6 +142,21 @@ class TestNonDSPointer:
         report = validate_click_program(prog, tag_map, mode="warn")
         assert any(f.code == CLK_PTR_POINTER_MUST_BE_DS for f in report.hints)
         assert not report.errors
+
+    def test_named_dd_block_slot_is_rejected_without_tag_map_entry(self):
+        blocks = ClickBlocks()
+        blocks.dd.slot(50, name="Pointer")
+
+        def logic():
+            with Rung():
+                copy(blocks.dd[blocks.dd[50]], blocks.dd[1])
+
+        prog = _build_program(logic)
+        report = validate_click_program(prog, TagMap(include_system=False), mode="strict")
+        codes = _finding_codes(report)
+
+        assert CLK_PTR_POINTER_MUST_BE_DS in codes
+        assert CLK_PTR_DS_UNVERIFIED not in codes
 
     def test_strict_mode_gives_error(self):
         Pointer = Tag("Pointer", TagType.DINT)

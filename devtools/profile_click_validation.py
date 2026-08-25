@@ -114,6 +114,9 @@ def main() -> None:
         with patch.object(_LadderExporter, "_run_precheck", skip_precheck):
             return pyrung_to_ladder(program, tag_map, validate=True)
 
+    def strict_export() -> object:
+        return pyrung_to_ladder(program, tag_map, validate=True)
+
     slot_count = len(tag_map.mapped_slots())
     print(
         f"{args.module}: {_rung_count(program)} rungs, "
@@ -127,21 +130,25 @@ def main() -> None:
     validation_ms = _median_ms(strict_validation, reset=reset, repeat=args.repeat)
     render_ms = _median_ms(unchecked_export, reset=reset, repeat=args.repeat)
     roundtrip_ms = _median_ms(render_and_roundtrip, reset=reset, repeat=args.repeat)
+    reset()
+    report = strict_validation()
+    finding_count = len(report.errors) + len(report.warnings) + len(report.hints)
     print(f"tag collector:          {collector_ms:8.2f} ms")
     print(f"full dependency graph:  {graph_ms:8.2f} ms")
     print(f"strict validation:      {validation_ms:8.2f} ms")
     print(f"render only:            {render_ms:8.2f} ms")
     print(f"render plus round-trip: {roundtrip_ms:8.2f} ms")
-    print(f"estimated strict export:{validation_ms + roundtrip_ms:8.2f} ms")
+    if finding_count == 0:
+        strict_export_ms = _median_ms(strict_export, reset=reset, repeat=args.repeat)
+        print(f"strict export:          {strict_export_ms:8.2f} ms")
+    else:
+        print(f"estimated strict export:{validation_ms + roundtrip_ms:8.2f} ms")
 
     with patch.object(identity_validation, "collect_program_tags", full_graph_collector):
         graph_validation_ms = _median_ms(strict_validation, reset=reset, repeat=args.repeat)
     print(f"validation via graph:   {graph_validation_ms:8.2f} ms")
     print(f"estimated graph export: {graph_validation_ms + roundtrip_ms:8.2f} ms")
 
-    reset()
-    report = strict_validation()
-    finding_count = len(report.errors) + len(report.warnings) + len(report.hints)
     print(f"strict findings:        {finding_count:8d}")
 
     print("\nCurrent strict-validation profile:")
