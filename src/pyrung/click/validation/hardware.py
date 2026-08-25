@@ -222,11 +222,12 @@ def _evaluate_copy_compatibility(
     if not source_resolution.slots or not dest_resolution.slots:
         return findings
 
-    for source_slot in source_resolution.slots:
-        for dest_slot in dest_resolution.slots:
-            if not profile.copy_compatible(
-                operation, source_slot.memory_type, dest_slot.memory_type
-            ):
+    source_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in source_resolution.slots))
+    dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in dest_resolution.slots))
+
+    for source_memory_type in source_memory_types:
+        for dest_memory_type in dest_memory_types:
+            if not profile.copy_compatible(operation, source_memory_type, dest_memory_type):
                 location_text = _format_location(dest_location)
                 findings.append(
                     ClickFinding(
@@ -234,7 +235,7 @@ def _evaluate_copy_compatibility(
                         severity=_route_severity(CLK_COPY_BANK_INCOMPATIBLE, mode),
                         message=(
                             f"Copy operation {operation} is incompatible for "
-                            f"{source_slot.memory_type} -> {dest_slot.memory_type} "
+                            f"{source_memory_type} -> {dest_memory_type} "
                             f"at {location_text}."
                         ),
                         location=location_text,
@@ -247,8 +248,8 @@ def _evaluate_copy_compatibility(
         compat = CONVERTER_COMPATIBILITY.get(converter.mode)
         if compat is not None:
             valid_sources, valid_dests = compat
-            for source_slot in source_resolution.slots:
-                if source_slot.memory_type not in valid_sources:
+            for source_memory_type in source_memory_types:
+                if source_memory_type not in valid_sources:
                     location_text = _format_location(source_location)
                     findings.append(
                         ClickFinding(
@@ -256,7 +257,7 @@ def _evaluate_copy_compatibility(
                             severity=_route_severity(CLK_COPY_CONVERTER_INCOMPATIBLE, mode),
                             message=(
                                 f"Converter to_{converter.mode} requires source bank in "
-                                f"{sorted(valid_sources)}, got {source_slot.memory_type} "
+                                f"{sorted(valid_sources)}, got {source_memory_type} "
                                 f"at {location_text}."
                             ),
                             location=location_text,
@@ -265,8 +266,8 @@ def _evaluate_copy_compatibility(
                             ),
                         )
                     )
-            for dest_slot in dest_resolution.slots:
-                if dest_slot.memory_type not in valid_dests:
+            for dest_memory_type in dest_memory_types:
+                if dest_memory_type not in valid_dests:
                     location_text = _format_location(dest_location)
                     findings.append(
                         ClickFinding(
@@ -274,7 +275,7 @@ def _evaluate_copy_compatibility(
                             severity=_route_severity(CLK_COPY_CONVERTER_INCOMPATIBLE, mode),
                             message=(
                                 f"Converter to_{converter.mode} requires destination bank in "
-                                f"{sorted(valid_dests)}, got {dest_slot.memory_type} "
+                                f"{sorted(valid_dests)}, got {dest_memory_type} "
                                 f"at {location_text}."
                             ),
                             location=location_text,
@@ -314,9 +315,11 @@ def _evaluate_pack_text(
         return findings
 
     allowed_dest_banks = {"DS", "DD", "DH", "DF", "TD", "CTD"}
-    for source_slot in source_resolution.slots:
-        for dest_slot in dest_resolution.slots:
-            if source_slot.memory_type == "TXT" and dest_slot.memory_type in allowed_dest_banks:
+    source_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in source_resolution.slots))
+    dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in dest_resolution.slots))
+    for source_memory_type in source_memory_types:
+        for dest_memory_type in dest_memory_types:
+            if source_memory_type == "TXT" and dest_memory_type in allowed_dest_banks:
                 continue
             location_text = _format_location(dest_location)
             findings.append(
@@ -325,7 +328,7 @@ def _evaluate_pack_text(
                     severity=_route_severity(CLK_PACK_TEXT_BANK_INCOMPATIBLE, mode),
                     message=(
                         "pack_text is incompatible for "
-                        f"{source_slot.memory_type} -> {dest_slot.memory_type} at {location_text}."
+                        f"{source_memory_type} -> {dest_memory_type} at {location_text}."
                     ),
                     location=location_text,
                 )

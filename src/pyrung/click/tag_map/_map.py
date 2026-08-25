@@ -112,6 +112,7 @@ class TagMap:
     ):
         normalized = self._normalize_mappings(mappings)
         self._include_system = include_system
+        self._mapped_slots_cache: tuple[MappedSlot, ...] | None = None
 
         self._tag_entries: list[_TagEntry] = []
         self._block_entries: list[_BlockEntry] = []
@@ -355,6 +356,9 @@ class TagMap:
 
     def mapped_slots(self) -> tuple[MappedSlot, ...]:
         """Return all mapped slots for runtime hardware-facing consumers."""
+        if self._mapped_slots_cache is not None:
+            return self._mapped_slots_cache
+
         slots: list[MappedSlot] = []
 
         for entry in self._entries_tuple:
@@ -381,7 +385,8 @@ class TagMap:
                 )
             )
 
-        return tuple(slots)
+        self._mapped_slots_cache = tuple(slots)
+        return self._mapped_slots_cache
 
     def tags_from_plc_data(
         self,

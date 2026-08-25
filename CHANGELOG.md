@@ -17,6 +17,10 @@
 - Generated Click project exports now run validation and reject address-identity conflicts, while named hardware slots ending in digits resolve to their actual addresses instead of nickname-shaped operands.
 - Click ladder bundles now write `rung_sources.json`, mapping each exported rung back to its contributing Python source spans for semantic downstream previews.
 
+### Performance
+
+- Click validation now reuses frozen tag-map slots and checks each unique memory-bank pair once, avoiding quadratic compatibility work and duplicate findings for large range operations.
+
 ## v0.11.0 (2026-08-24)
 
 ### Breaking Changes

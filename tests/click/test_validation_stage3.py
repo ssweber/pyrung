@@ -128,6 +128,22 @@ def test_r8_copy_family_compatible_pair():
     assert CLK_COPY_BANK_INCOMPATIBLE not in _codes(report)
 
 
+def test_r8_blockcopy_reports_each_incompatible_bank_pair_once():
+    def logic():
+        with Rung():
+            blockcopy(x.select(1, 16), ds.select(1, 16))
+
+    prog = _build_program(logic)
+    report = validate_click_program(prog, TagMap(include_system=False), mode="warn")
+    findings = [
+        finding
+        for finding in (*report.errors, *report.warnings, *report.hints)
+        if finding.code == CLK_COPY_BANK_INCOMPATIBLE
+    ]
+
+    assert len(findings) == 1
+
+
 def test_stage3_recurses_into_forloop_children_for_r6():
     target = Bool("Target")
 
@@ -235,7 +251,12 @@ def test_pack_text_stage3_incompatible_source_bank():
     tag_map = TagMap([dest.map_to(ds[2])], include_system=False)
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_PACK_TEXT_BANK_INCOMPATIBLE in _codes(report)
+    findings = [
+        finding
+        for finding in (*report.errors, *report.warnings, *report.hints)
+        if finding.code == CLK_PACK_TEXT_BANK_INCOMPATIBLE
+    ]
+    assert len(findings) == 1
 
 
 def test_wrapped_copy_source_keeps_copy_context_rules():
@@ -648,7 +669,12 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([dest.map_to(ds[10])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+        findings = [
+            finding
+            for finding in (*report.errors, *report.warnings, *report.hints)
+            if finding.code == CLK_COPY_CONVERTER_INCOMPATIBLE
+        ]
+        assert len(findings) == 1
 
     def test_converter_finding_includes_suggestion(self):
         source = Int("Source")
