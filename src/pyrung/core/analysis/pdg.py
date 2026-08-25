@@ -1296,6 +1296,61 @@ def _always_run_subroutines(graph: ProgramGraph) -> frozenset[str]:
     return frozenset(always)
 
 
+def collect_program_tags(program: Program) -> tuple[Tag, ...]:
+    """Collect program tag identities without constructing a dependency graph.
+
+    The collector shares the graph builder's rung extraction so conditions,
+    expressions, ranges, nested instructions, branches, subroutines, and
+    implicit status tags retain the same identity semantics.  When a graph is
+    already cached, its tag collection is reused directly.
+    """
+    cached_graph = getattr(program, "_cached_graph", None)
+    if cached_graph is not None:
+        return tuple(cached_graph.tags.values())
+
+    tag_refs: dict[str, Tag] = {}
+
+    def walk_rung(
+        rung: Rung,
+        *,
+        scope: GraphScope,
+        subroutine: str | None,
+        rung_index: int,
+        branch_path: tuple[int, ...],
+    ) -> None:
+        _extract_rung_node(
+            rung,
+            rung_index=rung_index,
+            scope=scope,
+            subroutine=subroutine,
+            branch_path=branch_path,
+            tag_refs=tag_refs,
+        )
+        for branch_index, branch_rung in enumerate(rung._branches):
+            walk_rung(
+                branch_rung,
+                scope=scope,
+                subroutine=subroutine,
+                rung_index=rung_index,
+                branch_path=branch_path + (branch_index,),
+            )
+
+    for rung_index, rung in enumerate(program.rungs):
+        walk_rung(rung, scope="main", subroutine=None, rung_index=rung_index, branch_path=())
+
+    for subroutine_name in sorted(program.subroutines):
+        for rung_index, rung in enumerate(program.subroutines[subroutine_name]):
+            walk_rung(
+                rung,
+                scope="subroutine",
+                subroutine=subroutine_name,
+                rung_index=rung_index,
+                branch_path=(),
+            )
+
+    return tuple(tag_refs[name] for name in sorted(tag_refs))
+
+
 def build_program_graph(program: Program) -> ProgramGraph:
     """Build the static PDG summary for a Program."""
     cached_graph = getattr(program, "_cached_graph", None)

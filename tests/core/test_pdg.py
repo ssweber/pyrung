@@ -25,7 +25,7 @@ from pyrung.core import (
     return_early,
     subroutine,
 )
-from pyrung.core.analysis import TagRole, TagVersion, build_program_graph
+from pyrung.core.analysis import TagRole, TagVersion, build_program_graph, collect_program_tags
 from pyrung.core.validation.walker import walk_program
 
 
@@ -340,6 +340,45 @@ def test_build_program_graph_caches_on_program() -> None:
 
     assert graph_a is graph_b
     assert prog._cached_graph is graph_a
+
+
+def test_collect_program_tags_matches_graph_extraction() -> None:
+    values = Block("Value", TagType.INT, 1, 20)
+    enable = Bool("Enable")
+    pointer = Int("Pointer", min=3, max=5)
+    source = Int("Source")
+    result = Int("Result")
+    branch_result = Int("BranchResult")
+
+    with Program() as prog:
+        with Rung(enable):
+            calc(source + values[1], result)
+            copy(values[pointer], result)
+            with branch():
+                copy(values.select(6, 8), values.select(9, 11))
+            call("worker")
+        with subroutine("worker"):
+            with Rung(result > 0):
+                copy(result, branch_result)
+
+    collected = {tag.name: tag for tag in collect_program_tags(prog)}
+    graph = build_program_graph(prog)
+
+    assert collected.keys() == graph.tags.keys()
+    assert all(collected[name] is graph.tags[name] for name in collected)
+
+
+def test_collect_program_tags_reuses_cached_graph_tags() -> None:
+    start_button = Bool("StartButton")
+    light = Bool("Light")
+
+    with Program() as prog:
+        with Rung(start_button):
+            out(light)
+
+    graph = build_program_graph(prog)
+
+    assert collect_program_tags(prog) == tuple(graph.tags.values())
 
 
 def test_pointer_tag_scan_does_not_walk_program_backrefs() -> None:

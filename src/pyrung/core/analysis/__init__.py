@@ -15,6 +15,7 @@ from pyrung.core.analysis.pdg import (
     TagVersion,
     build_program_graph,
     classify_tags,
+    collect_program_tags,
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -55,6 +56,7 @@ __all__ = [
     "TraceStep",
     "build_program_graph",
     "classify_tags",
+    "collect_program_tags",
     "diff_states",
     "always",
     "never",

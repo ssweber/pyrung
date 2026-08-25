@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from pyclickplc.addresses import format_address_display, parse_address
 
-from pyrung.core.analysis import build_program_graph
+from pyrung.core.analysis import collect_program_tags
 
 from .findings import (
     CLK_ADDRESS_IDENTITY_CONFLICT,
@@ -64,7 +64,7 @@ def _evaluate_address_identity_conflicts(
 ) -> list[ClickFinding]:
     """Find distinct pyrung state identities that target one Click address."""
     tags_by_address: dict[tuple[str, int], dict[str, Tag]] = defaultdict(dict)
-    for tag in build_program_graph(program).tags.values():
+    for tag in collect_program_tags(program):
         resolved = _canonical_click_address(tag, tag_map)
         if resolved is not None:
             tags_by_address[resolved][tag.name] = tag
