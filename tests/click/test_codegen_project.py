@@ -174,13 +174,14 @@ class TestProjectBasic:
         assert "`csv/` — regenerated reference snapshot" in guidance
         assert "`csv_output/` — proposed ladder export" in guidance
         readme = files["README.md"]
-        assert "closing the CLICK application deletes" in readme
-        assert "The copied folder is useful offline" in readme
-        assert "every command targets ClickNick's active temporary workspace" in readme
-        assert "copy those source edits back into the active temporary folder" in readme
-        assert "`csv/` is the regenerated snapshot" in readme
-        assert "`csv_output/` is the proposed ladder export" in readme
-        assert "clicknick-cli rung list main" in readme
+        normalized_readme = " ".join(readme.split())
+        assert "closing the CLICK application deletes" in normalized_readme
+        assert "The copied folder is useful offline" in normalized_readme
+        assert "every command targets ClickNick's active temporary workspace" in normalized_readme
+        assert "copy those source edits back into the active temporary folder" in normalized_readme
+        assert "`csv/` is the regenerated snapshot" in normalized_readme
+        assert "`csv_output/` is the proposed ladder export" in normalized_readme
+        assert "clicknick-cli rung list main" in normalized_readme
         assert "`how()` is an experimental steering aid" in normalized_guidance
         assert (
             "does not mean the program is broken or the target is unreachable"
