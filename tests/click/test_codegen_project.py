@@ -169,8 +169,22 @@ class TestProjectBasic:
         )
         assert "Copy offline source edits back into the active folder" in normalized_guidance
         assert "Names beginning with `Example` below are placeholders" in normalized_guidance
+        assert "ClickNick itself provides the live `clicknick-cli` session" in normalized_guidance
+        assert (
+            "Console is the engineer's active consent gate for `pyrung live`" in normalized_guidance
+        )
+        assert "Closing the Console ends the pyrung live session" in normalized_guidance
+        assert "does not end `clicknick-cli`" in normalized_guidance
+        assert "No active ClickNick session found" in guidance
+        assert "verify that ClickNick is open and connected" in normalized_guidance
         assert "uv run pyrung live" in guidance
         assert "clicknick-cli rung list main" in guidance
+        assert "save the empty subroutine before editing Python" in normalized_guidance
+        assert "Add New Subroutine Program" in guidance
+        assert "(`Ctrl+U`)" in guidance
+        assert "Wait for ClickNick to regenerate this folder" in normalized_guidance
+        assert "Do not predict its Python filename" in normalized_guidance
+        assert "appends the terminal `return()` automatically" in normalized_guidance
         assert "`csv/` — regenerated reference snapshot" in guidance
         assert "`csv_output/` — proposed ladder export" in guidance
         readme = files["README.md"]
@@ -179,6 +193,9 @@ class TestProjectBasic:
         assert "The copied folder is useful offline" in normalized_readme
         assert "every command targets ClickNick's active temporary workspace" in normalized_readme
         assert "copy those source edits back into the active temporary folder" in normalized_readme
+        assert "ClickNick itself provides the `clicknick-cli` session" in normalized_readme
+        assert "choose **Tools → Console**" in readme
+        assert "closing the Console ends that pyrung live session" in normalized_readme
         assert "`csv/` is the regenerated snapshot" in normalized_readme
         assert "`csv_output/` is the proposed ladder export" in normalized_readme
         assert "clicknick-cli rung list main" in normalized_readme

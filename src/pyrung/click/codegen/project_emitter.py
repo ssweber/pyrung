@@ -248,6 +248,11 @@ from edits in `src/plc/`; this is the folder you load through Guided Paste.
 
        clicknick-cli rung list
 
+   ClickNick itself provides the `clicknick-cli` session. The Console window is
+   not required for those commands. For simulation and analysis through
+   `uv run pyrung live`, ask the engineer to choose **Tools → Console** and keep
+   it open; closing the Console ends that pyrung live session.
+
    This lists `main` and the available subroutine files. Use
    `clicknick-cli rung list main` to list the main program's rung numbers and
    comments.
@@ -765,6 +770,15 @@ the live connection used by these commands:
 - **`uv run pyrung live`** — simulate and analyze with patch, force, step, why, and how
 - **`clicknick-cli`** — inspect Click and propose tag or rung changes
 
+ClickNick itself provides the live `clicknick-cli` session while the application
+is open and connected to the CLICK project. The Console is the engineer's active
+consent gate for `pyrung live`: before starting simulation or analysis, ask the
+engineer to open **Tools → Console** in ClickNick and keep it open while you use
+`uv run pyrung live`. Closing the Console ends the pyrung live session but does
+not end `clicknick-cli`. If a CLI command reports
+`No active ClickNick session found`, ask the engineer to verify that ClickNick is
+open and connected to the project, then retry the command.
+
 Chain commands with `;` to avoid repeated process launches.
 
 First confirm that ClickNick can see the generated program:
@@ -901,7 +915,22 @@ Browse existing rungs:
     clicknick-cli rung list main
     clicknick-cli rung preview --select r3
 
-Edit `src/plc/main.py` or `src/plc/subroutines/*.py` directly. Then:
+### Add a new subroutine
+
+A Python file cannot create the destination program inside CLICK. When a change
+needs a new subroutine, tell the engineer the exact CLICK title and ask them to
+choose **Add New Subroutine Program** (`Ctrl+U`), enter that title, and save the
+empty subroutine before editing Python. An empty subroutine is enough for CLICK
+to persist it.
+
+Wait for ClickNick to regenerate this folder, then find the new file under
+`src/plc/subroutines/` by its `@subroutine("Exact Title")` decorator. Do not
+predict its Python filename. Edit that materialized file, then import and call
+its generated function from `main.py` where appropriate. Click export appends
+the terminal `return()` automatically; use `return_early()` only for an earlier
+exit path.
+
+Edit `src/plc/main.py` or an existing `src/plc/subroutines/*.py` directly. Then:
 
 1. `clicknick-cli rung apply <file>` — convert to ladder CSVs in csv_output/
 2. `clicknick-cli rung preview <file>` — opens preview window with diff
