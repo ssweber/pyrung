@@ -204,7 +204,12 @@ def _generate_readme() -> str:
 > **Temporary workspace:** This folder exists inside CLICK's temporary project
 > directory. It survives CLICK saves, but closing the CLICK application deletes
 > the entire folder. Copy the whole folder elsewhere before closing CLICK if you
-> want to keep your tests, environment, or other work.
+> want to keep your tests, backup, environment, or other work.
+
+ClickNick keeps the most recent `rung apply` source snapshot under
+`backup/src/plc/`. Use `clicknick-cli backup` to replace that snapshot manually
+and `clicknick-cli restore` to replace the active `src/plc/` tree from it. This
+backup is temporary too and disappears when CLICK closes.
 
 The copied folder is useful offline: `uv run pytest`, `uv run python run.py`,
 VS Code debugging, and `uv run python project_to_csv.py` continue to work.
@@ -441,11 +446,11 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
     click: list[str] = ["ClickBlocks", "TagMap"]
     lines.append(f"from pyrung.click import {', '.join(click)}")
 
+    # Keep the ClickBlockSet bound as ``blocks`` so project_to_csv.py can pass
+    # it to to_nickname_file(blocks=...). The export imports this name even for
+    # a completely empty project, before any individual bank aliases are needed.
+    lines.append("blocks = ClickBlocks()")
     if collection.used_blocks:
-        # Keep the ClickBlockSet bound as ``blocks`` so project_to_csv.py can pass
-        # it to to_nickname_file(blocks=...) — without it, configured-but-unmapped
-        # slots (the bulk of nicknames + all annotations) are dropped.
-        lines.append("blocks = ClickBlocks()")
         lines.append(
             "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = blocks"
         )
@@ -722,11 +727,18 @@ A Click save regenerates this folder from the accepted project, like refreshing
 the working branch from the repository. Propose work you want accepted before
 the engineer saves.
 
-`tests/`, `pyproject.toml`, `uv.lock`, and `.venv/` survive regeneration while
-this CLICK project remains open. This workspace still lives in CLICK's temporary
-project folder: closing the CLICK application deletes the entire folder,
-including those preserved files. Copy the whole folder elsewhere before closing
-CLICK if you want to keep it.
+`backup/`, `tests/`, `pyproject.toml`, `uv.lock`, and `.venv/` survive
+regeneration while this CLICK project remains open. This workspace still lives
+in CLICK's temporary project folder: closing the CLICK application deletes the
+entire folder, including those preserved files. Copy the whole folder elsewhere
+before closing CLICK if you want to keep it.
+
+`clicknick-cli rung apply` automatically snapshots the complete active
+`src/plc/` tree to `backup/src/plc/` before exporting. Use
+`clicknick-cli backup` to replace that recovery snapshot at any other time, and
+`clicknick-cli restore` to replace active `src/plc/` from it. The backup is for
+recovering a proposal after regeneration or a failed export; keep editing and
+applying from `src/plc/`, not from `backup/`.
 
 A copied folder is an offline project, not the active ClickNick workspace. Its
 tests, `run.py`, VS Code debugger, and `project_to_csv.py` continue to work.
@@ -932,7 +944,7 @@ exit path.
 
 Edit `src/plc/main.py` or an existing `src/plc/subroutines/*.py` directly. Then:
 
-1. `clicknick-cli rung apply <file>` — convert to ladder CSVs in csv_output/
+1. `clicknick-cli rung apply <file>` — back up `src/plc/`, then convert to ladder CSVs in csv_output/
 2. `clicknick-cli rung preview <file>` — opens preview window with diff
 3. Engineer clicks Copy, pastes in Click, saves
 4. ScrWatcher detects save → auto-regenerates pyrung_project/
@@ -944,6 +956,7 @@ finds a path, but its failure to find one is not a failed verification.
 ## Reference
 
 - `src/plc/` — importable pyrung model of this machine's logic
+- `backup/src/plc/` — latest source snapshot from `rung apply` or `clicknick-cli backup`
 - `tests/` — smoke test and focused behavioral tests
 - `csv/` — regenerated reference snapshot of the ladder accepted in CLICK
 - `csv_output/` — proposed ladder export produced from edits in `src/plc/`

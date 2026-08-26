@@ -14,6 +14,8 @@
 
 ### Fixes
 
+- Empty generated Click projects now define their hardware block set so `project_to_csv.py` can export the first proposed rungs.
+- Generated Click project guidance now documents ClickNick's temporary source backup and restore workflow.
 - Generated Click project exports now run validation and reject address-identity conflicts, while named hardware slots ending in digits resolve to their actual addresses instead of nickname-shaped operands.
 - Generated Click project guidance now distinguishes ClickNick's application-wide `clicknick-cli` session from the Console-gated `pyrung live` simulation session.
 - Generated Click project guidance now asks the engineer to create and save an empty CLICK subroutine before the agent edits its materialized Python file, avoiding provisional filenames and title mismatches.

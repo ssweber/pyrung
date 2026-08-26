@@ -111,6 +111,19 @@ def _exec_project(files: dict[str, str], tmp_path: Path) -> dict:
 class TestProjectBasic:
     """Basic project generation (no subroutines)."""
 
+    def test_empty_project_defines_blocks_for_export(self, tmp_path: Path):
+        with Program() as logic:
+            pass
+
+        files = _project_from_program(
+            logic,
+            TagMap({}, include_system=False),
+            tmp_path,
+        )
+
+        assert "blocks = ClickBlocks()" in files[_TAGS_PATH]
+        assert "from plc.tags import mapping, blocks" in files["project_to_csv.py"]
+
     def test_basic_files(self, tmp_path: Path):
         """Program with no subroutines produces main.py and tags.py only."""
         Button = Bool("Button")
@@ -157,9 +170,16 @@ class TestProjectBasic:
         assert "rung preview` then opens the Rung Preview" in normalized_guidance
         assert "engineer accepts the proposal" in normalized_guidance
         assert (
-            "`tests/`, `pyproject.toml`, `uv.lock`, and `.venv/` survive regeneration"
+            "`backup/`, `tests/`, `pyproject.toml`, `uv.lock`, and `.venv/` survive regeneration"
             in normalized_guidance
         )
+        assert "automatically snapshots the complete active `src/plc/` tree" in normalized_guidance
+        assert "`clicknick-cli backup`" in guidance
+        assert "`clicknick-cli restore`" in guidance
+        assert (
+            "keep editing and applying from `src/plc/`, not from `backup/`" in normalized_guidance
+        )
+        assert "`backup/src/plc/` — latest source snapshot" in guidance
         assert "closing the CLICK application deletes the entire folder" in normalized_guidance
         assert "Copy the whole folder elsewhere before closing CLICK" in normalized_guidance
         assert "A copied folder is an offline project" in normalized_guidance
@@ -190,6 +210,10 @@ class TestProjectBasic:
         readme = files["README.md"]
         normalized_readme = " ".join(readme.split())
         assert "closing the CLICK application deletes" in normalized_readme
+        assert "most recent `rung apply` source snapshot" in normalized_readme
+        assert "`clicknick-cli backup`" in readme
+        assert "`clicknick-cli restore`" in readme
+        assert "backup is temporary too and disappears when CLICK closes" in normalized_readme
         assert "The copied folder is useful offline" in normalized_readme
         assert "every command targets ClickNick's active temporary workspace" in normalized_readme
         assert "copy those source edits back into the active temporary folder" in normalized_readme
