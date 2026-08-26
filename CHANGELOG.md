@@ -18,6 +18,8 @@
 
 ### Fixes
 
+- Comparison validation now treats numeric `==`/`!= 0`/`1` conditions as Boolean conventions instead of reporting their unwritten operand as stuck at zero.
+- Generated Click project guidance now directs agents to run `clicknick-cli check` for lint-style analysis before using `rung apply` for export validation.
 - Generated Click project guidance now uses the single `rung apply` proposal workflow and explains ClickNick's staged-versus-synced status model.
 - Empty generated Click projects now define their hardware block set so `project_to_csv.py` can export the first proposed rungs.
 - Generated Click project guidance now documents ClickNick's temporary source backup and restore workflow.

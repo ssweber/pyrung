@@ -213,6 +213,10 @@ class TestProjectBasic:
         assert "No active ClickNick session found" in guidance
         assert "verify that ClickNick is open and connected" in normalized_guidance
         assert "uv run pyrung live" in guidance
+        assert "clicknick-cli check" in guidance
+        assert "same rules as Tools → Check Program" in guidance
+        assert "lint-style program findings" in normalized_guidance
+        assert "does not replace `rung apply`" in normalized_guidance
         assert "clicknick-cli rung list main" in guidance
         assert "save the empty subroutine before editing Python" in normalized_guidance
         assert "Add New Subroutine Program" in guidance

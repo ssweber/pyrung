@@ -792,6 +792,7 @@ the live connection used by these commands:
 
 - **`uv run pyrung live`** — simulate and analyze with patch, force, step, why, and how
 - **`clicknick-cli`** — inspect Click and propose tag or rung changes
+- **`clicknick-cli check`** — lint the editable proposal with the same rules as Tools → Check Program
 
 ClickNick itself provides the live `clicknick-cli` session while the application
 is open and connected to the CLICK project. The Console is the engineer's active
@@ -811,6 +812,10 @@ First confirm that ClickNick can see the generated program:
 
 The first command lists the available program files. The second lists the main
 program's rung numbers and comments.
+
+Run `clicknick-cli check` after meaningful logic edits. It reports lint-style
+program findings from the editable `src/plc` proposal; it does not replace
+`rung apply`, whose validation catches failures that prevent Click export.
 
 Structural commands such as `upstream` and `simplified` work without a snapshot.
 To diagnose the machine's actual state, start from a tag snapshot. If `why()`
@@ -966,10 +971,11 @@ exit path.
 
 Edit `src/plc/main.py` or an existing `src/plc/subroutines/*.py` directly. Then:
 
-1. `clicknick-cli rung apply <file>` — back up `src/plc/`, validate and stage
+1. `clicknick-cli check` — review lint-style program findings
+2. `clicknick-cli rung apply <file>` — back up `src/plc/`, validate and stage
    ladder CSVs in `csv_output/`, then open the paste window with the diff
-2. Engineer clicks Copy, pastes in Click, and saves
-3. ScrWatcher detects the save and auto-regenerates `pyrung_project/`
+3. Engineer clicks Copy, pastes in Click, and saves
+4. ScrWatcher detects the save and auto-regenerates `pyrung_project/`
 
 Use `--select` for a focused proposal, for example
 `clicknick-cli rung apply main --select r3`. Rerun `rung apply` whenever the
