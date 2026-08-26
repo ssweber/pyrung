@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 from typing import TYPE_CHECKING
 
@@ -38,6 +39,7 @@ from pyrung.click.codegen.models import (
 from pyrung.click.codegen.utils import (
     _CLICK_FUNC_RE,
     _CLICK_FUNC_TO_PYTHON,
+    _CLICK_HEX_RE,
     _CLICK_PI_RE,
     _EXPR_FUNC_IMPORT_NAMES,
     _parse_af_args,
@@ -1015,6 +1017,44 @@ def _build_conditions_str(
     return _render_sp_node(rung.condition_tree, collection, nicknames, structured_map)
 
 
+_NO_CHOICE_LITERAL = object()
+
+
+def _parse_choice_literal(text: str) -> object:
+    """Return a Python scalar for a CLICK literal, or a private sentinel."""
+    hex_match = _CLICK_HEX_RE.fullmatch(text.strip())
+    if hex_match is not None:
+        return int(hex_match.group(1), 16)
+    try:
+        value = ast.literal_eval(text.strip())
+    except (SyntaxError, ValueError):
+        return _NO_CHOICE_LITERAL
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return _NO_CHOICE_LITERAL
+    return value
+
+
+def _render_choice_literal(
+    literal: str,
+    tag_operand: str,
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    structured_map: TagMap | None,
+) -> str | None:
+    """Render a stored scalar as ``Tag.choice(label)`` when metadata permits."""
+    choices = collection.choice_maps.get(tag_operand.strip())
+    if choices is None:
+        return None
+    value = _parse_choice_literal(literal)
+    if value is _NO_CHOICE_LITERAL:
+        return None
+    tag = _sub_operand(tag_operand.strip(), collection, nicknames, structured_map)
+    for choice_value, label in choices.items():
+        if choice_value == value:
+            return f"{tag}.choice({label!r})"
+    return None
+
+
 def _render_condition(
     token: str,
     collection: _OperandCollection,
@@ -1039,9 +1079,20 @@ def _render_condition(
     # Comparison: DS1==5, DS1!=DS2
     cmp_match = _COMPARE_RE.match(token)
     if cmp_match:
-        left = _sub_operand(cmp_match.group(1), collection, nicknames, structured_map)
+        left_token = cmp_match.group(1)
+        right_token = cmp_match.group(3)
+        left = _sub_operand(left_token, collection, nicknames, structured_map)
         op = cmp_match.group(2)
-        right = _sub_operand(cmp_match.group(3), collection, nicknames, structured_map)
+        right = _render_choice_literal(
+            right_token, left_token, collection, nicknames, structured_map
+        )
+        if right is None:
+            left_choice = _render_choice_literal(
+                left_token, right_token, collection, nicknames, structured_map
+            )
+            if left_choice is not None:
+                left = left_choice
+            right = _sub_operand(right_token, collection, nicknames, structured_map)
         return f"{left} {op} {right}"
 
     # Plain operand
@@ -1251,8 +1302,16 @@ def _render_af_token(
             return rendered_timer_counter
 
     rendered_parts = []
-    for arg in args:
-        rendered_parts.append(_sub_operand(arg, collection, nicknames, structured_map))
+    choice_source = None
+    if func_name == "copy" and len(args) >= 2 and not any(k == "convert" for k, _ in kwargs):
+        choice_source = _render_choice_literal(
+            args[0], args[1], collection, nicknames, structured_map
+        )
+    for index, arg in enumerate(args):
+        if index == 0 and choice_source is not None:
+            rendered_parts.append(choice_source)
+        else:
+            rendered_parts.append(_sub_operand(arg, collection, nicknames, structured_map))
     for key, value in kwargs:
         if key in _DROP_KWARGS:
             continue

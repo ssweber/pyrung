@@ -216,6 +216,22 @@ def _enrich_with_ownership(
 ) -> None:
     """Build semantic ownership metadata for structures and plain named blocks."""
 
+    # Keep a direct hardware-operand lookup for context-aware rendering.  CLICK
+    # stores choice-backed values as scalars, but the nickname metadata retains
+    # their labels, allowing the emitter to reconstruct ``Tag.choice(...)``.
+    for entry in structured_map.tags():
+        choices = entry.logical.choices
+        if choices is not None:
+            collection.choice_maps[_hw_address_name(entry.hardware)] = choices
+    for entry in structured_map.blocks():
+        for logical_addr, hardware_addr in zip(
+            entry.logical_addresses, entry.hardware_addresses, strict=True
+        ):
+            choices = entry.logical[logical_addr].choices
+            if choices is not None:
+                hardware = entry.hardware.block[hardware_addr]
+                collection.choice_maps[_hw_address_name(hardware)] = choices
+
     seen_structures: dict[str, _StructureDecl] = {}
     seen_plain_blocks: dict[str, _PlainBlockDecl] = {}
     used_symbol_names = (

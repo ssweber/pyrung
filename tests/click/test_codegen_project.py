@@ -166,9 +166,14 @@ class TestProjectBasic:
         assert "generated folder as its editable working branch" in normalized_guidance
         assert "propose finished changes to the engineer" in normalized_guidance
         assert "tag apply` stages tag changes and opens the Address Editor" in normalized_guidance
-        assert "rung apply` writes the ladder CSVs" in normalized_guidance
-        assert "rung preview` then opens the Rung Preview" in normalized_guidance
+        assert "rung apply` validates and stages the ladder CSVs" in normalized_guidance
+        assert "then opens the Rung Preview" in normalized_guidance
+        assert "Rungs remain `staged`" in normalized_guidance
+        assert "copying to the clipboard is not treated as proof" in normalized_guidance
         assert "engineer accepts the proposal" in normalized_guidance
+        assert "Python-only constants in them do not survive a save" in normalized_guidance
+        assert 'copy(State.choice("RUNNING"), State)' in guidance
+        assert "Import `State` from `plc.tags`, not constants from `plc.main`" in guidance
         assert (
             "`backup/`, `tests/`, `pyproject.toml`, `uv.lock`, and `.venv/` survive regeneration"
             in normalized_guidance
@@ -183,10 +188,10 @@ class TestProjectBasic:
             "If ClickNick restarts or the generated project refreshes after `rung apply`"
             in normalized_guidance
         )
-        assert (
-            "Run `clicknick-cli restore`, then rerun `rung apply` and `rung preview`"
-            in normalized_guidance
-        )
+        assert "Run `clicknick-cli restore`, then rerun `rung apply`" in normalized_guidance
+        assert "clicknick-cli rung preview" not in guidance
+        assert "clicknick-cli rung apply main --select r3" in guidance
+        assert "Rerun `rung apply`" in normalized_guidance
         assert "If CLICK Programming Software itself was closed" in normalized_guidance
         assert "temporary backup is gone" in normalized_guidance
         assert "`backup/src/plc/` — latest source snapshot" in guidance

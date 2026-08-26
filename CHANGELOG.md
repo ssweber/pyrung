@@ -12,8 +12,13 @@
 
 ## v0.11.1 (2026-08-25)
 
+### Features
+
+- Choice-backed tags now provide `tag.choice(label)` for explicit readable values, and Click reverse codegen reconstructs recognized comparison and `copy()` literals with that form.
+
 ### Fixes
 
+- Generated Click project guidance now uses the single `rung apply` proposal workflow and explains ClickNick's staged-versus-synced status model.
 - Empty generated Click projects now define their hardware block set so `project_to_csv.py` can export the first proposed rungs.
 - Generated Click project guidance now documents ClickNick's temporary source backup and restore workflow.
 - Generated Click project exports now run validation and reject address-identity conflicts, while named hardware slots ending in digits resolve to their actual addresses instead of nickname-shaped operands.

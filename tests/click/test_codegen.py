@@ -3256,6 +3256,8 @@ class TestStructuredCodegen:
                 out(Done)
             with rung(ConfigOK):
                 copy(Mode, Mode)
+            with rung(Mode == 1):
+                copy(0, Mode)
 
         mapping = TagMap(
             {Enable: x[1], ConfigOK: x[2], Done: c[101], Mode: ds[101]},
@@ -3317,6 +3319,8 @@ class TestStructuredCodegen:
         assert "ConfigOK = x[2]" in code
         assert "Done = c[101]" in code
         assert "Mode = ds[101]" in code
+        assert "with rung(Mode == Mode.choice('On')):" in code
+        assert "copy(Mode.choice('Off'), Mode)" in code
 
     def test_udt_codegen_emits_physical_field_metadata(self, tmp_path: Path):
         from pyclickplc.addresses import AddressRecord, get_addr_key

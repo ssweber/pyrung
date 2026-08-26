@@ -719,9 +719,14 @@ editable working branch. Read, test, and change the Python files here.
 
 Use the apply workflows to propose finished changes to the engineer.
 `clicknick-cli tag apply` stages tag changes and opens the Address Editor.
-`clicknick-cli rung apply` writes the ladder CSVs; `clicknick-cli rung preview`
-then opens the Rung Preview for Copy/paste. The engineer accepts the proposal
-by Syncing or pasting it, then decides when to save in Click.
+`clicknick-cli rung apply` validates and stages the ladder CSVs, then opens the
+Rung Preview for Copy/paste. The engineer accepts the proposal by Syncing or
+pasting it, then decides when to save in Click.
+
+The CLI reports only state it can know. Tags move from `staged` to `synced`
+before the engineer saves. Rungs remain `staged` while they differ from the
+last saved CLICK project; copying to the clipboard is not treated as proof that
+the engineer pasted them.
 
 A Click save regenerates this folder from the accepted project, like refreshing
 the working branch from the repository. Propose work you want accepted before
@@ -742,7 +747,7 @@ applying from `src/plc/`, not from `backup/`.
 
 If ClickNick restarts or the generated project refreshes after `rung apply` but
 before the engineer pastes, the proposal is still recoverable. Run
-`clicknick-cli restore`, then rerun `rung apply` and `rung preview`. If CLICK
+`clicknick-cli restore`, then rerun `rung apply`. If CLICK
 Programming Software itself was closed, the temporary backup is gone unless
 the project folder was copied or exported elsewhere.
 
@@ -826,6 +831,18 @@ them with relevant names from `src/plc/tags.py` before running the command.
 Run `uv run pytest`. The generated smoke test checks that the whole program
 loads and completes a scan. Add focused tests under `tests/` for behavior you
 change, especially interlocks, state transitions, alarms, and failure cases.
+
+`src/plc/main.py` and subroutine files are reconstructed from CLICK, so arbitrary
+Python-only constants in them do not survive a save. For discrete states, keep
+the durable labels in tag `choices=` metadata and use the explicit value form in
+logic and tests:
+
+    copy(State.choice("RUNNING"), State)
+    assert State.value == State.choice("RUNNING")
+
+Import `State` from `plc.tags`, not constants from `plc.main`. Comparisons also
+allow the shorthand `State == "RUNNING"`; reverse codegen emits the explicit
+`State.choice("RUNNING")` form when CLICK stores the underlying number.
 
 ## Choose an analysis tool
 
@@ -931,7 +948,6 @@ Browse existing rungs:
 
     clicknick-cli rung list
     clicknick-cli rung list main
-    clicknick-cli rung preview --select r3
 
 ### Add a new subroutine
 
@@ -950,10 +966,14 @@ exit path.
 
 Edit `src/plc/main.py` or an existing `src/plc/subroutines/*.py` directly. Then:
 
-1. `clicknick-cli rung apply <file>` — back up `src/plc/`, then convert to ladder CSVs in csv_output/
-2. `clicknick-cli rung preview <file>` — opens preview window with diff
-3. Engineer clicks Copy, pastes in Click, saves
-4. ScrWatcher detects save → auto-regenerates pyrung_project/
+1. `clicknick-cli rung apply <file>` — back up `src/plc/`, validate and stage
+   ladder CSVs in `csv_output/`, then open the paste window with the diff
+2. Engineer clicks Copy, pastes in Click, and saves
+3. ScrWatcher detects the save and auto-regenerates `pyrung_project/`
+
+Use `--select` for a focused proposal, for example
+`clicknick-cli rung apply main --select r3`. Rerun `rung apply` whenever the
+proposal window needs to be refreshed or reopened.
 
 Verify every logic change with focused tests and direct patch/step scenarios,
 including the failure case. `how()` can provide additional evidence when it

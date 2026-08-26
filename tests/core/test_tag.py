@@ -283,6 +283,49 @@ class TestImmediateRef:
 class TestTagComparison:
     """Test Tag comparison operators create Conditions."""
 
+    def test_choice_returns_stored_value(self):
+        from pyrung.core import Int
+
+        State = Int("State", choices={0: "IDLE", 3: "RUNNING"})
+
+        assert State.choice("RUNNING") == 3
+
+    def test_choice_rejects_missing_metadata_or_label(self):
+        from pyrung.core import Int
+
+        with pytest.raises(ValueError, match="has no choices"):
+            Int("Step").choice("RUNNING")
+
+        State = Int("State", choices={0: "IDLE", 3: "RUNNING"})
+        with pytest.raises(ValueError, match="'FAULTED'.*Available: 'IDLE', 'RUNNING'"):
+            State.choice("FAULTED")
+
+    def test_choice_label_comparison_shorthand_resolves_stored_value(self):
+        from pyrung.core import Int
+
+        State = Int("State", choices={0: "IDLE", 3: "RUNNING"})
+
+        condition = State == "RUNNING"
+
+        assert condition.value == State.choice("RUNNING")
+
+    def test_choice_label_comparison_shorthand_rejects_unknown_label(self):
+        from pyrung.core import Int
+
+        State = Int("State", choices={0: "IDLE", 3: "RUNNING"})
+
+        with pytest.raises(ValueError, match="'FAULTED'.*Available: 'IDLE', 'RUNNING'"):
+            State.__eq__("FAULTED")
+
+    def test_choice_label_comparison_allows_stored_string_key(self):
+        from pyrung.core import Char
+
+        State = Char("State", choices={"i": "IDLE", "r": "RUNNING"})
+
+        condition = State == "r"
+
+        assert condition.value == "r"
+
     def test_tag_eq_literal_creates_condition(self):
         """tag == value creates a CompareEq condition."""
         from pyrung.core import Int
