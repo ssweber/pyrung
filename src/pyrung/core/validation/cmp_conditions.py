@@ -28,8 +28,8 @@ subroutines + branches, both the ``Compare*`` leaf family and the expression-tre
 
 * ``CMP_OPERAND_STAYS_ZERO`` — a numeric tag used directly in a comparison has an
   implicit zero start and no ladder writer, so it stays zero.  Explicit defaults,
-  external inputs, physical inputs, and read-only zero constants are exempt.
-  **warning**.
+  external inputs, physical inputs, read-only zero constants, and numeric
+  ``==``/``!= 0``/``1`` Boolean conventions are exempt.  **warning**.
 
 * ``CMP_PRESET_STAYS_ZERO`` — the same high-confidence check for a tag-valued
   timer/counter preset.  Literal zero remains an intentional, supported elapsed-
@@ -362,11 +362,31 @@ def _tag_stays_zero(tag: Tag, graph: Any) -> bool:
 
 def _zero_operand(cmp: _Compare, graph: Any) -> tuple[_Operand, Tag] | None:
     """Prefer the conventional right-hand bound, then check the left operand."""
+    if _is_boolish_numeric_compare(cmp):
+        return None
     for operand in (cmp.right, cmp.left):
         tag = _operand_tag(operand)
         if tag is not None and _tag_stays_zero(tag, graph):
             return operand, tag
     return None
+
+
+def _is_boolish_numeric_compare(cmp: _Compare) -> bool:
+    """Whether a numeric comparison is being used as a Boolean convention."""
+    if cmp.op not in ("==", "!="):
+        return False
+    for tag_operand, literal_operand in ((cmp.left, cmp.right), (cmp.right, cmp.left)):
+        tag = _operand_tag(tag_operand)
+        value = literal_operand.value
+        if (
+            tag is not None
+            and tag.type in _NUMERIC_TAG_TYPES
+            and literal_operand.kind == "literal"
+            and not isinstance(value, bool)
+            and value in (0, 1)
+        ):
+            return True
+    return False
 
 
 def _preset_sites(program: Program, graph: Any) -> list[tuple[Any, Tag, Any]]:

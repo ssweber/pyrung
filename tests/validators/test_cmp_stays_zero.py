@@ -95,6 +95,27 @@ class TestOperandStaysZero:
 
         assert not _codes(program, CMP_OPERAND_STAYS_ZERO)
 
+    def test_boolish_numeric_equality_is_clean(self) -> None:
+        flag = Int("NumericFlag")
+        result = Bool("BoolishResult", external=True)
+        with Program(strict=False) as program:
+            with Rung(flag == 1):
+                copy(1, result)
+            with Rung(flag != 0):
+                copy(1, result)
+
+        assert not _codes(program, CMP_OPERAND_STAYS_ZERO)
+
+    def test_non_boolish_numeric_equality_is_still_reported(self) -> None:
+        state = Int("State")
+        result = Bool("StateResult", external=True)
+        with Program(strict=False) as program:
+            with Rung(state == 7):
+                copy(1, result)
+
+        findings = _codes(program, CMP_OPERAND_STAYS_ZERO)
+        assert [finding.target_name for finding in findings] == ["State"]
+
 
 class TestPresetStaysZero:
     def test_timer_and_counter_tag_presets_are_reported(self) -> None:
