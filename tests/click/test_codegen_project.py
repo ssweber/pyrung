@@ -179,6 +179,16 @@ class TestProjectBasic:
         assert (
             "keep editing and applying from `src/plc/`, not from `backup/`" in normalized_guidance
         )
+        assert (
+            "If ClickNick restarts or the generated project refreshes after `rung apply`"
+            in normalized_guidance
+        )
+        assert (
+            "Run `clicknick-cli restore`, then rerun `rung apply` and `rung preview`"
+            in normalized_guidance
+        )
+        assert "If CLICK Programming Software itself was closed" in normalized_guidance
+        assert "temporary backup is gone" in normalized_guidance
         assert "`backup/src/plc/` — latest source snapshot" in guidance
         assert "closing the CLICK application deletes the entire folder" in normalized_guidance
         assert "Copy the whole folder elsewhere before closing CLICK" in normalized_guidance

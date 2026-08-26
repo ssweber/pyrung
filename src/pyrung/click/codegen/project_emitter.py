@@ -740,6 +740,12 @@ before closing CLICK if you want to keep it.
 recovering a proposal after regeneration or a failed export; keep editing and
 applying from `src/plc/`, not from `backup/`.
 
+If ClickNick restarts or the generated project refreshes after `rung apply` but
+before the engineer pastes, the proposal is still recoverable. Run
+`clicknick-cli restore`, then rerun `rung apply` and `rung preview`. If CLICK
+Programming Software itself was closed, the temporary backup is gone unless
+the project folder was copied or exported elsewhere.
+
 A copied folder is an offline project, not the active ClickNick workspace. Its
 tests, `run.py`, VS Code debugger, and `project_to_csv.py` continue to work.
 Every `clicknick-cli` command is routed to ClickNick's active temporary folder,
