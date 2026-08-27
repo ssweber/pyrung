@@ -53,7 +53,7 @@ _SPECS: tuple[RuleSpec, ...] = (
         "PTR",
         "warning",
         "pointer",
-        "Pointer Default Before Block",
+        "Pointer Can Be 0",
     ),
     RuleSpec("PHYS_MISSING_PROFILE", "PHYS", "info", "physical", "Missing Physical Profile"),
     RuleSpec("PHYS_ANTITOGGLE", "PHYS", "warning", "physical", "Anti-Toggle Oscillation"),
@@ -81,8 +81,21 @@ _SPECS: tuple[RuleSpec, ...] = (
         "cmp",
         "Stepper Equality Value Is Never Set",
     ),
+    RuleSpec(
+        "CMP_REPEATED_STATE_VALUE",
+        "CMP",
+        "advisory",
+        "cmp",
+        "Repeated Literal Comparison",
+    ),
     RuleSpec("CMP_TRUE_AT_RESET", "CMP", "warning", "cmp", "Comparison True at Reset Value"),
-    RuleSpec("CMP_STATIC_ON_LEFT", "CMP", "advisory", "cmp", "Static Operand on Left"),
+    RuleSpec(
+        "CMP_STATIC_ON_LEFT",
+        "CMP",
+        "advisory",
+        "cmp",
+        "Comparison May Read Backwards",
+    ),
     RuleSpec("STEP_NO_ESCAPE", "STEP", "warning", "wait", "Wait Step Can Hang Forever"),
 )
 

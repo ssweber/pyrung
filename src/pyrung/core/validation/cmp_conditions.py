@@ -1,6 +1,6 @@
 """Comparison-semantics validators: monotone/reset/order/zero/stepper operands.
 
-Six rules, one pass over every comparison in every rung condition (main +
+Seven rules, one pass over every comparison in every rung condition (main +
 subroutines + branches, both the ``Compare*`` leaf family and the expression-tree
 ``ExprCompare``):
 
@@ -17,14 +17,11 @@ subroutines + branches, both the ``Compare*`` leaf family and the expression-tre
   configured preset — zero false positives.  **warning**.
 
 * ``CMP_STATIC_ON_LEFT`` — the operand-order convention: the moving value on the
-  left, the threshold on the right.  Severity tracks how sure we are, not one fixed
-  level: ``==`` / ``!=`` is cosmetic → **info**; an ordered comparison whose dynamic
-  side is a self-advancing register is a **KNOWN** order issue (the accumulator is
-  provably the mover) → **warning**; an ordered comparison between two ordinary tags
-  is a **MAYBE** (a live measurement and a threshold are indistinguishable to the
-  analyzer) → **advisory**, kept out of the ``errors()`` / ``warnings()`` gate.  A
-  monotone register on the right that is true at reset escalates through
-  ``CMP_TRUE_AT_RESET`` instead.
+  left, the threshold on the right.  This is always an **advisory** because reversing
+  both the operands and operator preserves the program's behavior.  Confidence only
+  sharpens the wording.  ``==`` and ``!=`` are exempt because their order conveys no
+  direction.  A monotone register on the right that is true at reset escalates
+  through ``CMP_TRUE_AT_RESET`` instead.
 
 * ``CMP_OPERAND_STAYS_ZERO`` — a numeric tag used directly in a comparison has an
   implicit zero start and no ladder writer, so it stays zero.  Explicit defaults,
@@ -39,6 +36,10 @@ subroutines + branches, both the ``Compare*`` leaf family and the expression-tre
   equality with a numeric value that none of its fully understood direct or
   indirect producers can establish.  Unknown writer paths punt rather than
   speculate.  **warning**.
+
+* ``CMP_REPEATED_STATE_VALUE`` — repeated equality checks against the same
+  discrete numeric values have become hard to read or maintain as raw numbers.
+  Suggests a named read-only reference or one decoded Bool status tag.  **advisory**.
 
 "Dynamic" (belongs on the left) is any program-written tag, self-advancing register,
 or inline computed expression; "static" is a literal, an ``S.`` constant, or any
@@ -74,6 +75,7 @@ from pyrung.core.expression import (
 )
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation._common import (
+    RungLoc,
     _collect_write_sites,
     _resolve_tag_names,
     iter_rungs,
@@ -104,8 +106,20 @@ CMP_STATIC_ON_LEFT = "CMP_STATIC_ON_LEFT"
 CMP_OPERAND_STAYS_ZERO = "CMP_OPERAND_STAYS_ZERO"
 CMP_PRESET_STAYS_ZERO = "CMP_PRESET_STAYS_ZERO"
 CMP_STEPPER_VALUE_NOT_SET = "CMP_STEPPER_VALUE_NOT_SET"
+CMP_REPEATED_STATE_VALUE = "CMP_REPEATED_STATE_VALUE"
 
 _NUMERIC_TAG_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.REAL, TagType.WORD})
+_DISCRETE_NUMERIC_TAG_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
+
+# Repeated-state advice is deliberately statistical. Keep every tuning knob here
+# so the rule can be made quieter or more eager without hunting through its logic.
+_REPEATED_STATE_SINGLE_VALUE_MIN_RUNGS = 4
+_REPEATED_STATE_BREADTH_MIN_VALUES = 2
+_REPEATED_STATE_BREADTH_MIN_RUNGS_PER_VALUE = 2
+_REPEATED_STATE_DISPERSION_MIN_RUNGS = 2
+_REPEATED_STATE_CROSS_SCOPE_MIN_SCOPES = 2
+_REPEATED_STATE_MIN_INTERVENING_RUNGS = 8
+_REPEATED_STATE_BOOLISH_VALUES = frozenset({0, 1})
 
 _SYMBOL_BY_CLASS: dict[type, str] = {
     CompareEq: "==",
@@ -150,12 +164,16 @@ class _Operand:
 class _Compare:
     """A single comparison lifted out of a rung condition."""
 
-    loc: str
+    rung_loc: RungLoc
     op: str
     left: _Operand
     right: _Operand
     cond: Condition  # identity is the dedup key across the three passes
     rung_conds: tuple[Condition, ...]  # the enclosing rung's conditions, for `with rung(...)`
+
+    @property
+    def loc(self) -> str:
+        return self.rung_loc.compact
 
 
 def _operand_of(value: Any) -> _Operand:
@@ -209,11 +227,11 @@ def _iter_compares(program: Program) -> Iterator[_Compare]:
     for loc, rung in iter_rungs(program):
         conds = tuple(rung._conditions)
         for cond in conds:
-            yield from _compares_in(loc.compact, cond, conds)
+            yield from _compares_in(loc, cond, conds)
 
 
 def _compares_in(
-    loc: str, cond: Condition, rung_conds: tuple[Condition, ...]
+    loc: RungLoc, cond: Condition, rung_conds: tuple[Condition, ...]
 ) -> Iterator[_Compare]:
     if isinstance(cond, (AllCondition, AnyCondition)):
         for sub in cond.conditions:
@@ -310,7 +328,7 @@ def _is_static(op: _Operand, written: set[str], acc: dict[str, AdvanceProfile]) 
 
     Deliberately coarse: an external sensor input and an HMI setpoint both land here
     because neither is written by the ladder.  The rule does not pretend to tell a
-    live measurement from a threshold — that ambiguity is carried by *severity*
+    live measurement from a threshold; that ambiguity is reflected in the wording
     (see :func:`_static_on_left_finding`), not by trying to classify it away.
     """
     if op.kind == "literal":
@@ -507,6 +525,184 @@ def _unset_stepper_value(
 
 
 # ---------------------------------------------------------------------------
+# Repeated state-value comparisons
+# ---------------------------------------------------------------------------
+
+_RungKey = tuple[str, str | None, int]
+_ScopeKey = tuple[str, str | None]
+
+
+def _rung_key(cmp: _Compare) -> _RungKey:
+    loc = cmp.rung_loc
+    return loc.scope, loc.subroutine, loc.rung_index
+
+
+def _scope_key(cmp: _Compare) -> _ScopeKey:
+    loc = cmp.rung_loc
+    return loc.scope, loc.subroutine
+
+
+def _state_literal_pair(cmp: _Compare) -> tuple[Tag, int] | None:
+    """Return a direct discrete-tag equality and its integer literal."""
+    if cmp.op != "==":
+        return None
+    for tag_operand, literal_operand in ((cmp.left, cmp.right), (cmp.right, cmp.left)):
+        tag = _operand_tag(tag_operand)
+        value = literal_operand.value
+        if (
+            tag is not None
+            and tag.type in _DISCRETE_NUMERIC_TAG_TYPES
+            and literal_operand.kind == "literal"
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+        ):
+            return tag, value
+    return None
+
+
+def _dedupe_top_level_rungs(compares: list[_Compare]) -> list[_Compare]:
+    """Keep one comparison per top-level rung, collapsing parallel branches."""
+    seen: set[_RungKey] = set()
+    unique: list[_Compare] = []
+    for cmp in compares:
+        key = _rung_key(cmp)
+        if key not in seen:
+            seen.add(key)
+            unique.append(cmp)
+    return unique
+
+
+def _scope_label(scope: _ScopeKey) -> str:
+    return "Main" if scope[0] == "main" else scope[1] or "subroutine"
+
+
+def _state_value_dispersion_reasons(
+    value: int,
+    sites: list[_Compare],
+    all_sites: dict[int, list[_Compare]],
+    tag: Tag,
+) -> list[str]:
+    if len(sites) < _REPEATED_STATE_DISPERSION_MIN_RUNGS:
+        return []
+
+    scopes = {_scope_key(cmp) for cmp in sites}
+    if len(scopes) >= _REPEATED_STATE_CROSS_SCOPE_MIN_SCOPES:
+        names = ", ".join(_scope_label(scope) for scope in sorted(scopes))
+        return [f"{_choice_value(tag, value)} is compared in {names}"]
+
+    scope = next(iter(scopes))
+    rung_indexes = sorted(cmp.rung_loc.rung_index for cmp in sites)
+    reasons: list[str] = []
+    largest_gap = max(
+        (right - left - 1 for left, right in zip(rung_indexes, rung_indexes[1:], strict=False)),
+        default=0,
+    )
+    if largest_gap >= _REPEATED_STATE_MIN_INTERVENING_RUNGS:
+        reasons.append(
+            f"{_choice_value(tag, value)} is compared again after {largest_gap} intervening rungs "
+            f"(limit: {_REPEATED_STATE_MIN_INTERVENING_RUNGS})"
+        )
+
+    first, last = rung_indexes[0], rung_indexes[-1]
+    interleaved = sorted(
+        other_value
+        for other_value, other_sites in all_sites.items()
+        if other_value != value
+        and any(
+            _scope_key(cmp) == scope and first < cmp.rung_loc.rung_index < last
+            for cmp in other_sites
+        )
+    )
+    if interleaved:
+        values = ", ".join(_choice_value(tag, other) for other in interleaved)
+        reasons.append(
+            f"{_choice_value(tag, value)} is compared on both sides of another value ({values})"
+        )
+    return reasons
+
+
+def _choice_value(tag: Tag, value: int) -> str:
+    label = tag.choices.get(value) if tag.choices is not None else None
+    return f"{value} ({label!r})" if label is not None else str(value)
+
+
+def _repeated_state_findings(compares: list[_Compare]) -> list[CmpConditionFinding]:
+    """One advisory per tag whose raw state comparisons cross a tuning threshold."""
+    grouped: dict[str, tuple[Tag, dict[int, list[_Compare]]]] = {}
+    for cmp in compares:
+        pair = _state_literal_pair(cmp)
+        if pair is None:
+            continue
+        tag, value = pair
+        _stored_tag, by_value = grouped.setdefault(tag.name, (tag, {}))
+        by_value.setdefault(value, []).append(cmp)
+
+    findings: list[CmpConditionFinding] = []
+    for tag_name, (tag, raw_by_value) in grouped.items():
+        if set(raw_by_value) <= _REPEATED_STATE_BOOLISH_VALUES:
+            continue
+
+        by_value = {value: _dedupe_top_level_rungs(sites) for value, sites in raw_by_value.items()}
+        repeated = {
+            value: sites
+            for value, sites in by_value.items()
+            if len(sites) >= _REPEATED_STATE_BREADTH_MIN_RUNGS_PER_VALUE
+        }
+        qualifying: set[int] = {
+            value
+            for value, sites in by_value.items()
+            if len(sites) >= _REPEATED_STATE_SINGLE_VALUE_MIN_RUNGS
+        }
+        reasons = [
+            f"{_choice_value(tag, value)} appears on {len(by_value[value])} separate rungs "
+            f"(limit: {_REPEATED_STATE_SINGLE_VALUE_MIN_RUNGS})"
+            for value in sorted(qualifying)
+        ]
+        if len(repeated) >= _REPEATED_STATE_BREADTH_MIN_VALUES:
+            qualifying.update(repeated)
+            reasons.append(
+                f"{len(repeated)} values are each compared on at least "
+                f"{_REPEATED_STATE_BREADTH_MIN_RUNGS_PER_VALUE} separate rungs "
+                f"(limit: {_REPEATED_STATE_BREADTH_MIN_VALUES} values)"
+            )
+        for value, sites in by_value.items():
+            dispersion_reasons = _state_value_dispersion_reasons(value, sites, by_value, tag)
+            if dispersion_reasons:
+                qualifying.add(value)
+                reasons.extend(dispersion_reasons)
+        if not qualifying:
+            continue
+
+        ordered_values = sorted(qualifying)
+        descriptions = [
+            f"{_choice_value(tag, value)} on {len(by_value[value])} rungs"
+            for value in ordered_values
+        ]
+        problem = (
+            f"{tag_name} repeats equals comparisons (==): "
+            + "; ".join(descriptions)
+            + ". Why: "
+            + "; ".join(reasons)
+            + "."
+        )
+        frames = tuple(_cmp_frame(cmp) for value in ordered_values for cmp in by_value[value])
+        display = FindingDisplay(
+            code=CMP_REPEATED_STATE_VALUE,
+            severity="advisory",
+            frames=frames,
+            problem=problem,
+            hint=(
+                f"give each repeated {tag_name} value a name: use a read-only reference tag, "
+                "or compare it once and reuse the resulting Bool status tag"
+            ),
+        )
+        findings.append(
+            CmpConditionFinding(CMP_REPEATED_STATE_VALUE, tag_name, display, "advisory")
+        )
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Findings
 # ---------------------------------------------------------------------------
 
@@ -665,49 +861,39 @@ def _static_on_left_finding(
     acc: dict[str, AdvanceProfile],
     calc: set[str],
 ) -> CmpConditionFinding | None:
-    """The operand-order finding, at a severity set by how sure we are.
+    """An advisory to put the moving value on the conventional left side.
 
-    ``==`` / ``!=`` is cosmetic (same predicate either way) → **info**.  An ordered
-    comparison whose dynamic side is a self-advancing register is a **KNOWN** order
-    issue — we can prove the accumulator is the moving value → **warning**.  An
-    ordered comparison between two ordinary tags is a **MAYBE** — we cannot tell a
-    live measurement from a threshold → **advisory**, with hedged wording.
+    The rewrite is behavior-preserving in every confidence tier.  Certainty about
+    the moving operand changes the explanation, not the severity.
     """
-    if not (_is_static(cmp.left, written, acc) and _is_dynamic(cmp.right, written, acc)):
+    if cmp.op in ("==", "!=") or not (
+        _is_static(cmp.left, written, acc) and _is_dynamic(cmp.right, written, acc)
+    ):
         return None
 
     flip = f"{_render(cmp.right)} {_FLIP[cmp.op]} {_render(cmp.left)}"
 
-    if cmp.op in ("==", "!="):
-        display = FindingDisplay(
-            code=CMP_STATIC_ON_LEFT,
-            severity="info",
-            frames=(_cmp_frame(cmp, "fixed value on the left"),),
-            hint=f"{_render(cmp.left)} {cmp.op} {_render(cmp.right)} -> {flip}",
-        )
-        return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, display, "info")
-
     if cmp.right.kind == "tag" and cmp.right.name in acc:
-        # KNOWN: the accumulator is provably the moving register.
+        changing = _render(cmp.right)
         display = FindingDisplay(
             code=CMP_STATIC_ON_LEFT,
-            severity="warning",
-            frames=(_cmp_frame(cmp, f"{_render(cmp.right)} is what changes"),),
-            hint=f"{_render_compare(cmp)} -> {flip}",
+            severity="advisory",
+            frames=(_cmp_frame(cmp, f"{changing} changes, but it is on the right"),),
+            hint=f"write the changing value first: {flip}",
         )
-        return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, display, "warning")
+        return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, display, "advisory")
 
-    # MAYBE: two ordinary tags — cannot prove which is measurement vs threshold.
+    changing = _render(cmp.right)
     label = (
-        f"{_render(cmp.right)} is calculated; likely the mover"
+        f"{changing} is calculated and may be what changes"
         if _is_calc(cmp.right, calc)
-        else "which side is the moving value?"
+        else f"{changing} may be what changes"
     )
     display = FindingDisplay(
         code=CMP_STATIC_ON_LEFT,
         severity="advisory",
         frames=(_cmp_frame(cmp, label),),
-        hint=f"put the changing side on the left: {flip}",
+        hint=f"if {changing} changes, write it first: {flip}",
     )
     return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, display, "advisory")
 
@@ -828,12 +1014,16 @@ def validate_cmp_conditions(program: Program) -> CmpConditionReport:
             findings.append(finding)
             claimed.add(id(cmp.cond))
 
-    # 5. Operand-order convention (info/warning) for whatever remains.
+    # 5. Operand-order convention (advisory) for whatever remains.
     for cmp in compares:
         if id(cmp.cond) in claimed:
             continue
         finding = _static_on_left_finding(cmp, written, acc, calc)
         if finding is not None:
             findings.append(finding)
+
+    # 6. Program-level readability advice is independent of the per-comparison
+    #    ownership above: an otherwise valid comparison can still be repeated.
+    findings.extend(_repeated_state_findings(compares))
 
     return CmpConditionReport(findings=tuple(findings))

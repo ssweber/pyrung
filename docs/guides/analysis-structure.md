@@ -200,8 +200,9 @@ Unknown codes raise `ValueError`.
 | `CMP_OPERAND_STAYS_ZERO` | A numeric tag used in a comparison has an implicit zero start and no ladder writer, so it stays zero. Configured defaults, external inputs, and read-only zero constants are left alone. |
 | `CMP_PRESET_STAYS_ZERO` | A tag-valued timer or counter preset has an implicit zero start and no ladder writer, so completion is immediate. Configured and literal zero presets are intentional and left alone. |
 | `CMP_STEPPER_VALUE_NOT_SET` | A discrete stepping tag (state-machine/step/stage logic) is tested with `==` against a value that none of its understood direct copies, copy chains, or constant indirect-table producers can establish. Dynamic, external, and unresolved producer paths are left alone. |
+| `CMP_REPEATED_STATE_VALUE` | Literal equals comparisons (`==`) against the same discrete values are repeated heavily or spread across the program. Consider a named read-only reference tag or compare each value once and reuse the resulting Bool status tag. Numeric `0`/`1`-only conventions are left alone. |
 | `CMP_TRUE_AT_RESET` | A timer/counter comparison has the completion test backwards and is already true when the accumulator resets. |
-| `CMP_STATIC_ON_LEFT` | A fixed value appears on the left of a comparison and the changing value on the right. |
+| `CMP_STATIC_ON_LEFT` | An ordered comparison may read backwards because the changing value is on the right. Timer/counter accumulators get direct wording; uncertain ordinary tags get a hedged suggestion. `==` and `!=` are left alone. |
 | `STEP_NO_ESCAPE` | A step whose only advance needs something the program cannot supply, with no escape it can fire unaided. The machine can sit there forever. See [wait edges without escape](analysis-coverage.md#wait-edges-without-escape). |
 
 `PTR_DEFAULT_BEFORE_BLOCK_START` is intentionally syntax-level. It checks the actual dereference tag used in `Block[Ptr]`, not whether some earlier rung computed a different intermediate pointer.

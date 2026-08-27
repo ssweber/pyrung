@@ -195,6 +195,7 @@ class TestValidationReport:
             "CMP_EQ_ON_MONOTONE",
             "CMP_OPERAND_STAYS_ZERO",
             "CMP_PRESET_STAYS_ZERO",
+            "CMP_REPEATED_STATE_VALUE",
             "CMP_STEPPER_VALUE_NOT_SET",
             "CMP_TRUE_AT_RESET",
             "CMP_STATIC_ON_LEFT",

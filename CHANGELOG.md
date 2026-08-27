@@ -15,9 +15,11 @@
 ### Features
 
 - Choice-backed tags now provide `tag.choice(label)` for explicit readable values, and Click reverse codegen reconstructs recognized comparison and `copy()` literals with that form.
+- Program validation now advises when repeated or dispersed literal equals comparisons would be clearer as named read-only references or decoded Bool status tags.
 
 ### Fixes
 
+- Check Program now ranks operand-order suggestions consistently as advisories and labels the common uninitialized indirect-address problem as `Pointer Can Be 0`.
 - Comparison validation now treats numeric `==`/`!= 0`/`1` conditions as Boolean conventions instead of reporting their unwritten operand as stuck at zero.
 - Generated Click project guidance now directs agents to run `clicknick-cli check` for lint-style analysis before using `rung apply` for export validation.
 - Generated Click project guidance now uses the single `rung apply` proposal workflow and explains ClickNick's staged-versus-synced status model.
