@@ -12,27 +12,21 @@
 
 ### Features
 
-- Timer and Counter clones now accept independent `Done` and `Acc` nickname overrides, and Click reverse codegen preserves every existing timer/counter nickname while supplying address-based names for unnamed pairs.
-- Choice-backed tags now provide `tag.choice(label)` for explicit readable values, and Click reverse codegen reconstructs recognized comparison and `copy()` literals with that form.
-- Program validation now advises when repeated or dispersed literal equals comparisons would be clearer as named read-only references or decoded Bool status tags.
+- Timer and Counter clones accept independent `Done` and `Acc` nickname overrides, and Click reverse codegen preserves existing timer/counter nicknames while supplying address-based names for unnamed pairs.
+- Choice-backed tags provide `tag.choice(label)` for explicit readable values, and Click reverse codegen reconstructs recognized comparison and `copy()` literals with that form.
+- Click ladder bundles include `rung_sources.json`, which maps exported rungs back to their contributing Python source spans for downstream previews.
+- Generated Click projects guide agents through the complete ClickNick proposal workflow, including project checks, staged-versus-synced state, source recovery, application-versus-simulation sessions, and new subroutine setup.
+- Program validation identifies repeated or dispersed literal comparisons that would be clearer as named read-only references or decoded Bool status tags.
 
 ### Fixes
 
-- Check Program now ranks operand-order suggestions consistently as advisories and labels the common uninitialized indirect-address problem as `Pointer Can Be 0`.
-- Comparison validation now treats numeric `==`/`!= 0`/`1` conditions as Boolean conventions instead of reporting their unwritten operand as stuck at zero.
-- Generated Click project guidance now directs agents to run `clicknick-cli check` for lint-style analysis before using `rung apply` for export validation.
-- Generated Click project guidance now uses the single `rung apply` proposal workflow and explains ClickNick's staged-versus-synced status model.
-- Empty generated Click projects now define their hardware block set so `project_to_csv.py` can export the first proposed rungs.
-- Generated Click project guidance now documents ClickNick's temporary source backup and restore workflow.
-- Generated Click project exports now run validation and reject address-identity conflicts, while named hardware slots ending in digits resolve to their actual addresses instead of nickname-shaped operands.
-- Generated Click project guidance now distinguishes ClickNick's application-wide `clicknick-cli` session from the Console-gated `pyrung live` simulation session.
-- Generated Click project guidance now asks the engineer to create and save an empty CLICK subroutine before the agent edits its materialized Python file, avoiding provisional filenames and title mismatches.
-- Click ladder bundles now write `rung_sources.json`, mapping each exported rung back to its contributing Python source spans for semantic downstream previews.
-- Click validation now recognizes named pointer tags from their owning hardware blocks, so generated projects do not require redundant `TagMap` entries to prove that a pointer uses DS memory.
+- Generated Click projects preserve empty-project and edited-rung round trips, validate exports for address-identity conflicts, and resolve digit-ending slot names to their actual hardware addresses.
+- Click validation recognizes named DS pointer slots without redundant `TagMap` entries and treats numeric `==`/`!= 0`/`1` conditions as Boolean conventions instead of reporting their operands as stuck at zero.
+- Check Program consistently ranks operand-order suggestions as advisories and labels the common uninitialized indirect-address problem as `Pointer Can Be 0`.
 
 ### Performance
 
-- Click validation now reuses frozen tag-map slots and operand resolutions, checks each unique memory-bank pair once, and collects address identities without building a full dependency graph, reducing strict-export latency for large programs.
+- Click validation reuses frozen tag-map slots and operand resolutions, checks each unique memory-bank pair once, and collects address identities without building a dependency graph, reducing strict-export latency for large programs.
 
 ## v0.11.0 (2026-08-24)
 
