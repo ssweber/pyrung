@@ -136,6 +136,7 @@ class _TimerCounterCloneDecl:
     index: int  # 1-based block index
     done_operand: str  # original done-bit operand (e.g. "T1")
     acc_operand: str  # original accumulator operand (e.g. "TD1")
+    nicknames: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

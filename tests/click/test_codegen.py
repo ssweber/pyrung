@@ -2707,7 +2707,7 @@ class TestNicknameMerge:
             X001 = x[1]
 
             # --- Clones ---
-            OvenTimer = Timer.clone("OvenTimer")
+            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer'})
 
             # --- Program ---
             with Program() as logic:
@@ -2741,7 +2741,7 @@ class TestNicknameMerge:
             X001 = x[1]
 
             # --- Clones ---
-            OvenTimer = Timer.clone("OvenTimer")
+            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer_Done'})
 
             # --- Program ---
             with Program() as logic:
@@ -2756,6 +2756,54 @@ class TestNicknameMerge:
             """,
             nicknames={"T1": "OvenTimer_Done"},
         )
+
+    @pytest.mark.parametrize(
+        ("source_nicknames", "clone_name", "expected_nicknames"),
+        [
+            (
+                {"T1": "HeatingComplete", "TD1": "HeatingElapsedMs"},
+                "HeatingComplete",
+                {"Done": "HeatingComplete", "Acc": "HeatingElapsedMs"},
+            ),
+            (
+                {"TD1": "HeatingElapsed_Acc"},
+                "HeatingElapsed",
+                {"Acc": "HeatingElapsed_Acc"},
+            ),
+        ],
+    )
+    def test_timer_preserves_each_present_nickname(
+        self,
+        tmp_path: Path,
+        source_nicknames: dict[str, str],
+        clone_name: str,
+        expected_nicknames: dict[str, str],
+    ):
+        """Done and accumulator nicknames survive codegen independently."""
+        import pyclickplc
+        from pyclickplc.addresses import get_addr_key
+
+        logic, mapping = build_program(
+            """
+            with rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            """
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        code = ladder_to_pyrung(bundle, nicknames=source_nicknames)
+
+        expected_arg = repr(expected_nicknames)
+        assert f'{clone_name} = Timer.clone("{clone_name}", nicknames={expected_arg})' in code
+
+        namespace = exec_with_source(code)
+        nickname_path = tmp_path / "nicknames.csv"
+        namespace["mapping"].to_nickname_file(nickname_path)
+        rows = pyclickplc.read_csv(nickname_path)
+
+        expected_done = source_nicknames.get("T1", f"{clone_name}_Done")
+        expected_acc = source_nicknames.get("TD1", f"{clone_name}_Acc")
+        assert rows[get_addr_key("T", 1)].nickname == expected_done
+        assert rows[get_addr_key("TD", 1)].nickname == expected_acc
 
     def test_named_counter(self):
         """Counter with nickname emits Counter.clone() declaration."""
@@ -2776,7 +2824,7 @@ class TestNicknameMerge:
             X002 = x[2]
 
             # --- Clones ---
-            PartCounter = Counter.clone("PartCounter")
+            PartCounter = Counter.clone("PartCounter", nicknames={'Done': 'PartCounter'})
 
             # --- Program ---
             with Program() as logic:
@@ -2792,8 +2840,37 @@ class TestNicknameMerge:
             nicknames={"CT1": "PartCounter"},
         )
 
-    def test_timer_without_nickname_unchanged(self):
-        """Timer without nickname emits clone named after operand."""
+    def test_counter_preserves_distinct_acc_nickname(self, tmp_path: Path):
+        import pyclickplc
+        from pyclickplc.addresses import get_addr_key
+
+        logic, mapping = build_program(
+            """
+            with rung(X1):
+                count_up(Counter[1], preset=10).reset(X2)
+            """
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        code = ladder_to_pyrung(
+            bundle,
+            nicknames={"CT1": "PartsComplete", "CTD1": "LifetimeParts"},
+        )
+
+        assert (
+            'PartsComplete = Counter.clone("PartsComplete", '
+            "nicknames={'Done': 'PartsComplete', 'Acc': 'LifetimeParts'})"
+        ) in code
+
+        namespace = exec_with_source(code)
+        nickname_path = tmp_path / "nicknames.csv"
+        namespace["mapping"].to_nickname_file(nickname_path)
+        rows = pyclickplc.read_csv(nickname_path)
+
+        assert rows[get_addr_key("CT", 1)].nickname == "PartsComplete"
+        assert rows[get_addr_key("CTD", 1)].nickname == "LifetimeParts"
+
+    def test_timer_without_nickname_uses_address_based_field_names(self, tmp_path: Path):
+        """An unnamed Timer exposes both underlying CLICK addresses."""
         _assert_codegen_full(
             """
             with rung(X1):
@@ -2810,7 +2887,7 @@ class TestNicknameMerge:
             X001 = x[1]
 
             # --- Clones ---
-            T1 = Timer.clone("T1")
+            T1 = Timer.clone("T1", nicknames={'Done': 'T1_Done', 'Acc': 'TD1_Acc'})
 
             # --- Program ---
             with Program() as logic:
@@ -2824,6 +2901,24 @@ class TestNicknameMerge:
             ])
             """,
         )
+
+        import pyclickplc
+        from pyclickplc.addresses import get_addr_key
+
+        logic, mapping = build_program(
+            """
+            with rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            """
+        )
+        generated = ladder_to_pyrung(pyrung_to_ladder(logic, mapping))
+        namespace = exec_with_source(generated)
+        nickname_path = tmp_path / "nicknames.csv"
+        namespace["mapping"].to_nickname_file(nickname_path)
+        rows = pyclickplc.read_csv(nickname_path)
+
+        assert rows[get_addr_key("T", 1)].nickname == "T1_Done"
+        assert rows[get_addr_key("TD", 1)].nickname == "TD1_Acc"
 
     def test_named_timer_condition_reference(self):
         """Timer done-bit used as condition renders as Slug.Done."""
@@ -2846,7 +2941,7 @@ class TestNicknameMerge:
             Y001 = y[1]
 
             # --- Clones ---
-            OvenTimer = Timer.clone("OvenTimer")
+            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer'})
 
             # --- Program ---
             with Program() as logic:

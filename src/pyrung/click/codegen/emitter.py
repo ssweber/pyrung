@@ -483,7 +483,11 @@ def _emit_slot_aliases(
 def _emit_tc_clone_declarations(lines: list[str], collection: _OperandCollection) -> None:
     """Emit Timer.clone() / Counter.clone() declarations."""
     for decl in collection.timer_counter_clones:
-        lines.append(f'{decl.var_name} = {decl.kind}.clone("{decl.var_name}")')
+        nickname_items = ", ".join(
+            f"{field_name!r}: {nickname!r}" for field_name, nickname in decl.nicknames.items()
+        )
+        nicknames_arg = f", nicknames={{{nickname_items}}}" if nickname_items else ""
+        lines.append(f'{decl.var_name} = {decl.kind}.clone("{decl.var_name}"{nicknames_arg})')
 
 
 def _emit_plain_block_declarations(lines: list[str], collection: _OperandCollection) -> None:

@@ -10,10 +10,9 @@
 
 ## Unreleased
 
-## v0.11.1 (2026-08-25)
-
 ### Features
 
+- Timer and Counter clones now accept independent `Done` and `Acc` nickname overrides, and Click reverse codegen preserves every existing timer/counter nickname while supplying address-based names for unnamed pairs.
 - Choice-backed tags now provide `tag.choice(label)` for explicit readable values, and Click reverse codegen reconstructs recognized comparison and `copy()` literals with that form.
 - Program validation now advises when repeated or dispersed literal equals comparisons would be clearer as named read-only references or decoded Bool status tags.
 
