@@ -63,7 +63,7 @@ from pyrung.core.validation._common import (
     _tag_name,
     site_frame,
 )
-from pyrung.core.validation.display import FindingDisplay
+from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
 from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
@@ -317,7 +317,7 @@ def _site_provably_unreachable(site: WriteSite, caller_map: _CallerMap) -> bool:
 
 
 @dataclass(frozen=True)
-class StuckBitFinding:
+class StuckBitFinding(_FindingTextMixin):
     """A stuck-bit finding for a single tag."""
 
     code: str

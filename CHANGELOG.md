@@ -10,13 +10,19 @@
 
 ## Unreleased
 
+### Breaking Changes
+
+- **`pyrung check` now runs ladder lints.** Replace behavioral lock comparisons with `pyrung lock <module> --check`; use `pyrung check <module>` for static ladder findings, `pyrung live check` for the loaded program, and `Program.check()` in Python. `Program.validate()` without a dialect remains a compatibility alias, while dialect validation is unchanged.
+
 ### Features
 
 - Timer and Counter clones accept independent `Done` and `Acc` nickname overrides, and Click reverse codegen preserves existing timer/counter nicknames while supplying address-based names for unnamed pairs.
 - Choice-backed tags provide `tag.choice(label)` for explicit readable values, and Click reverse codegen reconstructs recognized comparison and `copy()` literals with that form.
 - Click ladder bundles include `rung_sources.json`, which maps exported rungs back to their contributing Python source spans for downstream previews.
 - Generated Click projects guide agents through the complete ClickNick proposal workflow, including project checks, staged-versus-synced state, source recovery, application-versus-simulation sessions, and new subroutine setup.
-- Program validation identifies repeated or dispersed literal comparisons that would be clearer as named read-only references or decoded Bool status tags.
+- The new Ladder Lints guide grounds static checks in ladder-logic practice and documents all 20 core rules, diagnostic output, rule selection, and command-line usage.
+- Ladder checks identify repeated or dispersed literal comparisons that would be clearer as named read-only references or decoded Bool status tags.
+- Core validation findings print as complete compiler-style diagnostics, including their rule code and severity.
 
 ### Fixes
 

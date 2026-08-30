@@ -66,6 +66,7 @@ _GROUP_ORDER = ["execution", "data", "analysis", "capture", "review", ""]
 
 _GROUP_LAYOUT: dict[str, list[str | None]] = {
     "analysis": [
+        "check",
         "log",
         None,
         "dataview",
@@ -1102,8 +1103,24 @@ def _parse_value(raw: str) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# DataView verbs
+# Static checks and DataView verbs
 # ---------------------------------------------------------------------------
+
+
+@register("check", usage="check [RULE_OR_CATEGORY ...]", group="analysis")
+def _cmd_check(adapter: Any, expression: str) -> ConsoleResult:
+    selectors = set(expression.strip().split()[1:]) or None
+    runner = adapter._require_runner_locked()
+    try:
+        report = runner.program.check(select=selectors)
+    except ValueError as exc:
+        raise adapter.DAPAdapterError(f"check: {exc}") from exc
+
+    if not report:
+        return ConsoleResult("No findings.")
+
+    diagnostics = "\n\n".join(str(finding) for finding in report)
+    return ConsoleResult(f"{diagnostics}\n\n{report.summary()}")
 
 
 @register("dataview", usage="dataview <text | i: | p: | t: | upstream:tag>", group="analysis")

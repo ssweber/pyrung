@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 
 from pyrung.core.condition import AnyCondition
 from pyrung.core.validation._common import RungLoc, _flatten_and_conditions, iter_rungs
-from pyrung.core.validation.display import FindingDisplay, Frame
+from pyrung.core.validation.display import FindingDisplay, Frame, _FindingTextMixin
 from pyrung.core.validation.render import (
     caret_of,
     render_condition,
@@ -160,7 +160,7 @@ def _tautology_display(
 
 
 @dataclass(frozen=True)
-class RungConditionFinding:
+class RungConditionFinding(_FindingTextMixin):
     """A rung-level satisfiability finding (contradiction or tautology)."""
 
     code: str

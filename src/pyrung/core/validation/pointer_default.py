@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pyrung.core.validation._common import compact_location
-from pyrung.core.validation.display import FindingDisplay, Frame
+from pyrung.core.validation.display import FindingDisplay, Frame, _FindingTextMixin
 from pyrung.core.validation.render import caret_of
 from pyrung.core.validation.severity import Severity
 from pyrung.core.validation.walker import OperandFact, ProgramLocation, walk_program
@@ -24,7 +24,7 @@ PTR_DEFAULT_BEFORE_BLOCK_START = "PTR_DEFAULT_BEFORE_BLOCK_START"
 
 
 @dataclass(frozen=True)
-class PointerDefaultFinding:
+class PointerDefaultFinding(_FindingTextMixin):
     """An indirect block dereference whose pointer defaults below block start."""
 
     code: str

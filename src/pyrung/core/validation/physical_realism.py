@@ -26,7 +26,7 @@ from pyrung.core.validation._common import (
     _resolve_tag_objects,
     site_frame,
 )
-from pyrung.core.validation.display import FindingDisplay, Frame
+from pyrung.core.validation.display import FindingDisplay, Frame, _FindingTextMixin
 from pyrung.core.validation.render import operand_name
 from pyrung.core.validation.severity import Severity
 
@@ -39,7 +39,7 @@ PHYS_ANTITOGGLE = "PHYS_ANTITOGGLE"
 
 
 @dataclass(frozen=True)
-class PhysicalRealismFinding:
+class PhysicalRealismFinding(_FindingTextMixin):
     code: str
     target_name: str
     display: FindingDisplay

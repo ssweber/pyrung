@@ -1043,6 +1043,34 @@ class TestMonitorVerbs:
 
 
 # ---------------------------------------------------------------------------
+# Ladder checks
+# ---------------------------------------------------------------------------
+
+
+class TestCheckVerb:
+    def test_check_clean_program(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "check")
+        assert resp["success"] is True
+        assert resp["body"]["result"] == "No findings."
+
+    def test_check_prints_finding(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        resp, _ = _repl(adapter, out, "check COIL_STUCK_HIGH")
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "[COIL_STUCK_HIGH] warning" in result
+        assert "never reset" in result
+        assert "COIL_STUCK_HIGH: 1" in result
+
+    def test_check_rejects_unknown_selector(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "check NOT_A_RULE")
+        assert resp["success"] is False
+        assert "Unknown rule code or category" in resp["message"]
+
+
+# ---------------------------------------------------------------------------
 # Simplified
 # ---------------------------------------------------------------------------
 
@@ -1096,6 +1124,7 @@ class TestHelpAndErrors:
             "run",
             "cause",
             "effect",
+            "check",
             "monitor",
             "simplified",
             "help",

@@ -4,7 +4,7 @@ import pytest
 
 from pyrung.core import Bool, Program, Rung, latch, out
 from pyrung.core.validation.registry import RULES, VALIDATOR_ORDER
-from pyrung.core.validation.report import ALL_RULES, ValidationReport, validate
+from pyrung.core.validation.report import ALL_RULES, ValidationReport, check, validate
 
 
 def _error_and_warning_program():
@@ -127,6 +127,11 @@ class TestSelectIgnore:
 
 
 class TestProgramValidateMethod:
+    def test_check_runs_core(self):
+        report = _error_and_warning_program().check(select={"COIL_STUCK_HIGH"})
+        assert report
+        assert all(f.code == "COIL_STUCK_HIGH" for f in report)
+
     def test_no_args_runs_core(self):
         btn = Bool("Btn")
         motor = Bool("Motor")
@@ -136,6 +141,11 @@ class TestProgramValidateMethod:
         report = prog.validate()
         assert isinstance(report, ValidationReport)
         assert not report
+
+    def test_validate_without_dialect_is_check_alias(self):
+        prog = _error_and_warning_program()
+        assert prog.validate().findings == prog.check().findings
+        assert validate(prog).findings == check(prog).findings
 
     def test_select_kwarg(self):
         go = Bool("Go")
@@ -177,6 +187,13 @@ class TestValidationReport:
         report = validate(prog, select={"COIL_STUCK_HIGH"})
         findings_list = list(report)
         assert len(findings_list) == len(report)
+
+    def test_finding_str_renders_complete_diagnostic(self):
+        report = validate(_error_and_warning_program(), select={"TAG_READONLY_WRITE"})
+        (finding,) = report.findings
+        expected = f"[{finding.code}] {finding.severity}\n{finding.message}"
+        assert str(finding) == expected
+        assert str(finding.display) == expected
 
     def test_all_rules_constant_complete(self):
         expected = {

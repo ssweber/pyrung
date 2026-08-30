@@ -238,7 +238,8 @@ A fork that's a plain choice of inputs (`Or(Auto, Manual)`) is taken silently �
 
 ## Next steps
 
-- [Program Structure](analysis-structure.md) — DataView, simplified forms, static validators
+- [Program Structure](analysis-structure.md) — DataView and simplified forms
+- [Ladder Lints](ladder-lints.md) — static checks for ladder logic
 - [Cause & Effect](analysis-causal.md) — `cause()` and `effect()` over scan history
 - [Test Coverage](analysis-coverage.md) — cold rungs, stranded bits, pytest plugin
 - [Testing Guide](testing.md) — forces as fixtures, forking, monitors, breakpoints

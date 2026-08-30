@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from pyrung.core.program import Program
     from pyrung.core.validation.display import FindingDisplay
 
-__all__ = ["ALL_RULES", "Finding", "ValidationReport", "validate"]
+__all__ = ["ALL_RULES", "Finding", "ValidationReport", "check", "validate"]
 
 
 class Finding(Protocol):
@@ -94,14 +94,14 @@ class ValidationReport:
         return iter(self.findings)
 
 
-def validate(
+def check(
     program: Program,
     *,
     select: set[str] | None = None,
     ignore: set[str] | None = None,
     dt: float = 0.010,
 ) -> ValidationReport:
-    """Run core validators, optionally filtered by rule code or category.
+    """Run core ladder checks, optionally filtered by rule code or category.
 
     With no arguments, every default-on validator runs.  ``select`` limits to
     the given codes or category prefixes (e.g. ``{"COIL"}``); ``ignore``
@@ -125,6 +125,17 @@ def validate(
             if f.code in active:
                 findings.append(f)
     return ValidationReport(findings=tuple(findings))
+
+
+def validate(
+    program: Program,
+    *,
+    select: set[str] | None = None,
+    ignore: set[str] | None = None,
+    dt: float = 0.010,
+) -> ValidationReport:
+    """Compatibility alias for :func:`check`."""
+    return check(program, select=select, ignore=ignore, dt=dt)
 
 
 def _validator_dispatch(

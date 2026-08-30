@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from pyrung import cli
+from pyrung.core import Bool, Program, Rung, out
 
 
 def test_run_with_optional_profile_passthrough() -> None:
@@ -106,3 +107,100 @@ def test_main_parses_lock_profile(monkeypatch: pytest.MonkeyPatch) -> None:
         "module": "main",
         "func": _fake_lock,
     }
+
+
+def test_main_parses_lock_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_wrapper(args: argparse.Namespace, func: object) -> None:
+        captured["check"] = args.check
+        captured["output"] = args.output
+        captured["func"] = func
+
+    monkeypatch.setattr(cli, "_run_with_optional_profile", _fake_wrapper)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["pyrung", "lock", "main", "--check", "-o", "behavior.lock"],
+    )
+
+    cli.main()
+
+    assert captured == {
+        "check": True,
+        "output": "behavior.lock",
+        "func": cli._cmd_lock,
+    }
+
+
+def test_main_parses_ladder_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_wrapper(args: argparse.Namespace, func: object) -> None:
+        captured["module"] = args.module
+        captured["select"] = args.select
+        captured["ignore"] = args.ignore
+        captured["dt"] = args.dt
+        captured["func"] = func
+
+    monkeypatch.setattr(cli, "_run_with_optional_profile", _fake_wrapper)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pyrung",
+            "check",
+            "main:logic",
+            "--select",
+            "RUNG",
+            "CMP",
+            "--ignore",
+            "CMP_STATIC_ON_LEFT",
+            "--dt",
+            "0.05",
+        ],
+    )
+
+    cli.main()
+
+    assert captured == {
+        "module": "main:logic",
+        "select": ["RUNG", "CMP"],
+        "ignore": ["CMP_STATIC_ON_LEFT"],
+        "dt": 0.05,
+        "func": cli._cmd_check,
+    }
+
+
+def test_check_prints_findings_and_exits_on_errors(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    read_only = Bool("ReadOnly", readonly=True)
+    with Program() as program:
+        with Rung():
+            out(read_only)
+    monkeypatch.setattr(cli, "_find_program", lambda _module: (program, SimpleNamespace()))
+    args = argparse.Namespace(module="main", select=None, ignore=None, dt=0.010)
+
+    with pytest.raises(SystemExit, match="1"):
+        cli._cmd_check(args)
+
+    output = capsys.readouterr().out
+    assert "[TAG_READONLY_WRITE] error" in output
+    assert "TAG_READONLY_WRITE: 1" in output
+
+
+def test_check_clean_program_succeeds(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    button = Bool("Button")
+    light = Bool("Light")
+    with Program() as program:
+        with Rung(button):
+            out(light)
+    monkeypatch.setattr(cli, "_find_program", lambda _module: (program, SimpleNamespace()))
+    args = argparse.Namespace(module="main", select=None, ignore=None, dt=0.010)
+
+    cli._cmd_check(args)
+
+    assert capsys.readouterr().out == "No findings.\n"

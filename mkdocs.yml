@@ -53,6 +53,7 @@ nav:
         - Physical Annotations: guides/physical-harness.md
         - Analysis: guides/analysis.md
         - Program Structure: guides/analysis-structure.md
+        - Ladder Lints: guides/ladder-lints.md
         - Diagnosis: guides/analysis-diagnosis.md
         - Cause & Effect: guides/analysis-causal.md
         - Test Coverage: guides/analysis-coverage.md
@@ -134,6 +135,7 @@ plugins:
           - guides/physical-harness.md
           - guides/analysis.md
           - guides/analysis-structure.md
+          - guides/ladder-lints.md
           - guides/analysis-diagnosis.md
           - guides/analysis-causal.md
           - guides/analysis-coverage.md

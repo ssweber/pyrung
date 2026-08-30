@@ -15,7 +15,7 @@ from pyrung.core.validation._common import (
     _collect_write_sites,
     site_frame,
 )
-from pyrung.core.validation.display import FindingDisplay
+from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
 from pyrung.core.validation.readonly_write import _any_write_targets
 from pyrung.core.validation.severity import Severity
 
@@ -34,7 +34,7 @@ TAG_FINAL_MULTIPLE_WRITERS = "TAG_FINAL_MULTIPLE_WRITERS"
 
 
 @dataclass(frozen=True)
-class FinalWritersFinding:
+class FinalWritersFinding(_FindingTextMixin):
     """A final tag with more than one write site."""
 
     code: str

@@ -27,7 +27,7 @@ stranded = plc.query.stranded_bits()
 
 Returns `CausalChain` objects for each latched tag with no reachable reset path. Each chain carries blocker diagnostics pointing at the specific inputs that would need to transition.
 
-The static validator [`COIL_STUCK_HIGH`](analysis-structure.md#rule-reference) checks structure — "is there a reset rung at all?" `stranded_bits()` checks reachability — "is there a reset rung *and can it actually fire*?"
+The ladder lint [`COIL_STUCK_HIGH`](ladder-lints.md#rule-reference) checks structure — "is there a reset rung at all?" `stranded_bits()` checks reachability — "is there a reset rung *and can it actually fire*?"
 
 ## Wait edges without escape
 
@@ -45,7 +45,7 @@ One rule decides both halves: a guard clause on a tag the ladder does not author
 
 The survey deliberately does not guess *why* nobody sets a tag. A config register someone should have set at commissioning and a button someone would press are indistinguishable from a declaration — `Bool("EnableLimit")` is an ordinary way to write a config flag — so it reports the fact it proved ("nothing sets this") and leaves the intent to you.
 
-It reports the design decision; it never edits the program. When a guard can't be read statically it stays silent rather than inventing a verdict. The same finding surfaces in core validation as the [`STEP_NO_ESCAPE`](analysis-structure.md#rule-reference) warning, so `logic.validate()` picks it up with no extra call.
+It reports the design decision; it never edits the program. When a guard can't be read statically it stays silent rather than inventing a verdict. The same finding surfaces as the [`STEP_NO_ESCAPE`](ladder-lints.md#rule-reference) ladder lint, so `logic.check()` picks it up with no extra call.
 
 **Reach.** It recognizes step machines that advance by `calc(Step + 1, Step)` or by stamping a literal in (`copy(2, Step)`), gated on a level or a rising edge, waiting on a contact or an analog threshold. It stays silent on shapes it cannot read — a `fall()`-gated advance, an `Or` guard, a drum — rather than guessing.
 
@@ -148,7 +148,8 @@ With one test, cold rungs and stranded bits are mostly noise. After hundreds of 
 
 ## Next steps
 
-- [Program Structure](analysis-structure.md) — DataView, simplified forms, static validators
+- [Program Structure](analysis-structure.md) — DataView and simplified forms
+- [Ladder Lints](ladder-lints.md) — static checks for ladder logic
 - [Diagnosis](analysis-diagnosis.md) — snapshot-only debugging with `why()` and `how()`
 - [Cause & Effect](analysis-causal.md) — causal chains over scan history
 - [Verification](verification.md) — prove properties hold, fault coverage, lock files

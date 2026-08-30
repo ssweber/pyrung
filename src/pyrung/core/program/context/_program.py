@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.analysis.simplified import TerminalForm
     from pyrung.core.context import ScanContext
+    from pyrung.core.validation.report import ValidationReport
 
     from ..validation import DialectValidator
 
@@ -206,6 +207,22 @@ class Program:
         """Return registered dialect names in deterministic order."""
         return tuple(sorted(cls._dialect_validators))
 
+    def check(
+        self,
+        *,
+        select: set[str] | None = None,
+        ignore: set[str] | None = None,
+        dt: float = 0.010,
+    ) -> ValidationReport:
+        """Run core ladder checks and return their findings.
+
+        ``select`` and ``ignore`` accept complete rule codes or categories.
+        ``dt`` configures the physical-realism checks.
+        """
+        from pyrung.core.validation.report import check as _check_core
+
+        return _check_core(self, select=select, ignore=ignore, dt=dt)
+
     def validate(
         self,
         dialect: str | None = None,
@@ -218,9 +235,7 @@ class Program:
     ) -> Any:
         """Run validation on this Program.
 
-        Without arguments, runs all core validators and returns a
-        ``ValidationReport``.  Use ``select`` / ``ignore`` to filter by
-        rule code, and ``dt`` to configure the physical-realism validator.
+        Without a dialect, this is a compatibility alias for :meth:`check`.
 
         With a ``dialect`` string, runs dialect-specific portability
         validation (e.g. ``logic.validate("click", mode="strict")``).
@@ -235,9 +250,7 @@ class Program:
                     f"Import the dialect package first (example: import pyrung.{dialect})."
                 )
             return validator(self, mode=mode, **kwargs)
-        from pyrung.core.validation.report import validate as _validate_core
-
-        return _validate_core(self, select=select, ignore=ignore, dt=dt)
+        return self.check(select=select, ignore=ignore, dt=dt)
 
     def dataview(self) -> DataView:
         """Return a chainable query over this program's tag dependency graph.

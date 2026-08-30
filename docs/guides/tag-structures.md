@@ -288,7 +288,7 @@ metadata supplies a matching choice label.
 
 ## Tag flags
 
-Tags carry metadata flags that control validation, presentation, and lock file projection. Three semantic flags are enforced by static validators; two metadata flags control presentation and verification.
+Tags carry metadata flags that control validation, presentation, and lock file projection. Three semantic flags are enforced by [ladder lints](ladder-lints.md); two metadata flags control presentation and verification.
 
 ### Semantic flags
 

@@ -79,6 +79,7 @@ from pyrung.core.validation.report import (
     ALL_RULES,
     Finding,
     ValidationReport,
+    check,
     validate,
 )
 from pyrung.core.validation.rung_conditions import (
@@ -166,6 +167,7 @@ __all__ = [
     "StuckBitReport",
     "ValidationReport",
     "ValueKind",
+    "check",
     "validate",
     "validate_cmp_conditions",
     "validate_rung_conditions",

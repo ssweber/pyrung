@@ -105,3 +105,18 @@ class FindingDisplay:
         if self.hint:
             out.append(f"  = hint: {self.hint}")
         return "\n".join(out)
+
+    def __str__(self) -> str:
+        """Render a complete terminal diagnostic, including code and severity."""
+        header = f"[{self.code}] {self.severity}"
+        body = self.as_text()
+        return f"{header}\n{body}" if body else header
+
+
+class _FindingTextMixin:
+    """Give concrete finding records the terminal rendering of their display."""
+
+    display: FindingDisplay
+
+    def __str__(self) -> str:
+        return str(self.display)

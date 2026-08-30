@@ -82,7 +82,7 @@ from pyrung.core.validation._common import (
     site_frame,
     walk_instructions,
 )
-from pyrung.core.validation.display import FindingDisplay, Frame
+from pyrung.core.validation.display import FindingDisplay, Frame, _FindingTextMixin
 from pyrung.core.validation.render import (
     caret_of,
     operand_name,
@@ -708,7 +708,7 @@ def _repeated_state_findings(compares: list[_Compare]) -> list[CmpConditionFindi
 
 
 @dataclass(frozen=True)
-class CmpConditionFinding:
+class CmpConditionFinding(_FindingTextMixin):
     """A comparison-semantics finding (monotone/reset/operand-order)."""
 
     code: str
