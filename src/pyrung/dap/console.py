@@ -1112,7 +1112,7 @@ def _cmd_check(adapter: Any, expression: str) -> ConsoleResult:
     selectors = set(expression.strip().split()[1:]) or None
     runner = adapter._require_runner_locked()
     try:
-        report = runner.program.check(select=selectors)
+        report = runner.program.check(select=selectors, dt=runner.dt)
     except ValueError as exc:
         raise adapter.DAPAdapterError(f"check: {exc}") from exc
 

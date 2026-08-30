@@ -110,8 +110,14 @@ class TestTimeModeValidation:
     def test_default_dt_is_10ms(self, runner_factory):
         """Default dt is 0.010 (10 ms)."""
         runner = runner_factory(_empty_program())
+        assert runner.dt == pytest.approx(0.010)
         runner.step()
         assert runner.simulation_time == pytest.approx(0.010)
+
+    def test_dt_reports_configured_scan_period(self, runner_factory):
+        runner = runner_factory(_empty_program(), dt=0.05)
+
+        assert runner.dt == pytest.approx(0.05)
 
 
 class TestRunFor:

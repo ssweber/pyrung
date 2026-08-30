@@ -26,6 +26,7 @@
 
 ### Fixes
 
+- `pyrung live check` uses the loaded runner's configured scan period for timing-sensitive physical checks instead of assuming 10 ms.
 - Generated Click projects preserve empty-project and edited-rung round trips, validate exports for address-identity conflicts, and resolve digit-ending slot names to their actual hardware addresses.
 - Click validation recognizes named DS pointer slots without redundant `TagMap` entries and treats numeric `==`/`!= 0`/`1` conditions as Boolean conventions instead of reporting their operands as stuck at zero.
 - Check Program consistently ranks operand-order suggestions as advisories and labels the common uninitialized indirect-address problem as `Pointer Can Be 0`.

@@ -54,7 +54,7 @@ def _stopped_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [msg for msg in messages if msg.get("type") == "event" and msg.get("event") == "stopped"]
 
 
-def _runner_script() -> str:
+def _runner_script(*, dt: float = 0.010) -> str:
     return (
         "from pyrung.core import Bool, Int, PLC, Program, Rung, out, copy\n"
         "\n"
@@ -68,7 +68,7 @@ def _runner_script() -> str:
         "    with Rung():\n"
         "        copy(0, counter)\n"
         "\n"
-        "runner = PLC(prog, dt=0.010)\n"
+        f"runner = PLC(prog, dt={dt!r})\n"
     )
 
 
@@ -171,10 +171,10 @@ def _setup_how(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
     return adapter, out_stream
 
 
-def _setup(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
+def _setup(tmp_path: Path, *, dt: float = 0.010) -> tuple[DAPAdapter, io.BytesIO]:
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
-    script = _write_script(tmp_path, "logic.py", _runner_script())
+    script = _write_script(tmp_path, "logic.py", _runner_script(dt=dt))
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _send_request(adapter, out_stream, seq=2, command="configurationDone")
     _drain_messages(out_stream)
@@ -1068,6 +1068,23 @@ class TestCheckVerb:
         resp, _ = _repl(adapter, out, "check NOT_A_RULE")
         assert resp["success"] is False
         assert "Unknown rule code or category" in resp["message"]
+
+    def test_check_uses_runner_scan_period(self, tmp_path: Path, monkeypatch):
+        adapter, out = _setup(tmp_path, dt=0.05)
+        program = adapter._runner.program
+        original_check = program.check
+        observed: dict[str, float] = {}
+
+        def recording_check(**kwargs):
+            observed["dt"] = kwargs["dt"]
+            return original_check(**kwargs)
+
+        monkeypatch.setattr(program, "check", recording_check)
+
+        resp, _ = _repl(adapter, out, "check")
+
+        assert resp["success"] is True
+        assert observed["dt"] == 0.05
 
 
 # ---------------------------------------------------------------------------
