@@ -121,7 +121,7 @@ class TestRoleFilters:
     def test_inputs_contains_buttons(self, dv) -> None:
         inputs = dv.inputs()
         assert "StartBtn" in inputs
-        assert "StopBtn" in inputs
+        assert "StopCircuitOK" in inputs
         assert "EntrySensor" in inputs
 
     def test_inputs_excludes_non_inputs(self, dv) -> None:
@@ -186,8 +186,12 @@ class TestContains:
     def test_contains_btn_abbreviation(self, dv) -> None:
         result = dv.contains("btn")
         assert "StartBtn" in result
-        assert "StopBtn" in result
         assert "DiverterBtn" in result
+        assert "StopCircuitOK" not in result
+
+    def test_contains_stop_circuit(self, dv) -> None:
+        result = dv.contains("stop")
+        assert "StopCircuitOK" in result
 
     def test_contains_motor(self, dv) -> None:
         result = dv.contains("motor")
@@ -207,7 +211,7 @@ class TestContains:
     def test_contains_with_role_chain(self, dv) -> None:
         result = dv.inputs().contains("btn")
         assert "StartBtn" in result
-        assert "StopBtn" in result
+        assert "StopCircuitOK" not in result
         assert "ConveyorMotor" not in result
 
     def test_empty_needle_returns_all(self, dv) -> None:

@@ -6,7 +6,7 @@ from pyrung import PLC, Bool, Int, Or, Program, rung, branch, comment, latch, ou
 
 Auto = Bool()
 Manual = Bool()
-StopBtn = Bool()  # NC contact
+StopCircuitOK = Bool()  # NC stop circuit: True when healthy
 StartBtn = Bool()
 EstopOK = Bool()  # NC safety relay permission
 Running = Bool()
@@ -32,7 +32,7 @@ with Program() as logic:
     comment("Start/stop — NC stop resets when pressed or wire broken")
     with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with rung(~StopBtn):
+    with rung(~StopCircuitOK):
         reset(Running)
     with rung(~EstopOK):
         reset(Running)
@@ -47,7 +47,7 @@ with Program() as logic:
 # --- Try it ---
 
 with PLC(logic) as plc:
-    StopBtn.value = True  # NC inputs: True = healthy
+    StopCircuitOK.value = True  # Stop circuit is healthy
     EstopOK.value = True
 
     Auto.value = True

@@ -19,13 +19,13 @@ In the real world, you press a momentary "Start" button. Your finger comes off. 
 from pyrung import Bool, Program, rung, PLC, latch, reset
 
 StartBtn = Bool()    # NO momentary contact
-StopBtn  = Bool()    # NC contact: conductive at rest
+StopCircuitOK = Bool()  # NC stop circuit: True when healthy
 Running  = Bool()
 
 with Program() as logic:
     with rung(StartBtn):
         latch(Running)       # SET: Running = True, stays True
-    with rung(~StopBtn):
+    with rung(~StopCircuitOK):
         reset(Running)       # RESET when stop pressed or wire broken
 ```
 
@@ -33,11 +33,11 @@ with Program() as logic:
 
 Why two rungs? Your Python instinct says "the rung went false, the output should drop." That's how `out` works. But `latch` isn't `out` — it sets the bit and *leaves it set*. After Start is pressed, `Running` stays true on its own. To clear it, you need a separate rung with `reset()`. If you only had the first rung, the motor would stop the instant you released Start — exactly the bug [Lesson 1](scan-cycle.md) ended on.
 
-`StopBtn` is wired **normally-closed** — the circuit is conductive at rest, so the PLC input reads True when healthy. Writing `~StopBtn` means "this contact fires when the stop circuit opens" — button pressed, wire cut, or power lost. The reset rung is last because stop should always win (remember "last rung wins" from [Lesson 1](scan-cycle.md)).
+`StopCircuitOK` comes from a **normally-closed** circuit, so the PLC input reads True when healthy. Writing `~StopCircuitOK` means "this contact fires when the stop circuit opens" — button pressed, wire cut, or power lost. The reset rung is last because stop should always win (remember "last rung wins" from [Lesson 1](scan-cycle.md)).
 
 !!! note "What `~` actually means"
 
-    Your Python instinct reads `~StopBtn` as "not StopBtn" — a Boolean inversion. That's not what it is. In ladder logic, `~` declares the **contact type**: normally-closed (NC), conductive in its resting state. In a real ladder editor, `~` is drawn as `|/|` (NC), versus `| |` for normally-open (NO). Two different symbols, two different physical contact types — not "X" and "not X."
+    Your Python instinct reads `~StopCircuitOK` as "not StopCircuitOK" — a Boolean inversion. That's not what it is. In ladder logic, `~` declares the **contact type**: normally-closed (NC), conductive in its resting state. In a real ladder editor, `~` is drawn as `|/|` (NC), versus `| |` for normally-open (NO). Two different symbols, two different physical contact types — not "X" and "not X."
 
     Why does this matter? Because it composes naturally with how real devices are wired. Stop buttons, door interlocks, motor overload contacts, and level sensors are *typically wired NC* so that a wire break reads as "stop" instead of silently leaving the machine running. Every NC device on a real machine reads with a `~` in the rung — not because it's "alarmed" but because it's *physically wired* as normally-closed. Once you read `~` as "NC contact" instead of "not," ladder rungs start reading like wiring diagrams. Which is what they are.
 
@@ -52,7 +52,7 @@ Why two rungs? Your Python instinct says "the rung went false, the output should
 
 ```python
 with PLC(logic) as plc:
-    StopBtn.value = True             # NC input: True = healthy wiring
+    StopCircuitOK.value = True       # Stop circuit is healthy
 
     StartBtn.value = True
     plc.step()
@@ -62,7 +62,7 @@ with PLC(logic) as plc:
     plc.step()
     assert Running.value is True     # Still running!
 
-    StopBtn.value = False            # Stop pressed (NC opens)
+    StopCircuitOK.value = False      # Stop pressed (NC opens)
     plc.step()
     assert Running.value is False
 ```
@@ -83,7 +83,7 @@ with Program() as logic:
     with rung(StartBtn):
         latch(Running)
     comment("Stop — NC contact resets when pressed or wire broken")
-    with rung(~StopBtn):
+    with rung(~StopCircuitOK):
         reset(Running)
 ```
 
@@ -93,7 +93,7 @@ By [Lesson 11](hardware.md) you'll meet `EstopOK` — same NC wiring, different 
 
 ## Exercise
 
-Build a stop-blocks-start test: start the conveyor, then press stop. Verify it stops. Then verify that pressing Start while Stop is still held does NOT restart the conveyor. (Hint: you need `~StopBtn` to block the start, not just reset after it. Think about adding `~StopBtn` as a condition on the latch rung too.)
+Build a stop-blocks-start test: start the conveyor, then press stop. Verify it stops. Then verify that pressing Start while Stop is still held does NOT restart the conveyor. (Hint: you need `StopCircuitOK` to permit starting, not just `~StopCircuitOK` to reset after the circuit opens. Think about adding `StopCircuitOK` as a condition on the latch rung too.)
 
 ---
 

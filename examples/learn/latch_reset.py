@@ -5,19 +5,19 @@
 from pyrung import PLC, Bool, Program, rung, comment, latch, reset
 
 StartBtn = Bool()  # NO momentary contact
-StopBtn = Bool()  # NC contact: conductive at rest
+StopCircuitOK = Bool()  # NC stop circuit: True when healthy
 Running = Bool()
 
 with Program() as logic:
     with rung(StartBtn):
         latch(Running)  # SET: Running = True, stays True
-    with rung(~StopBtn):
+    with rung(~StopCircuitOK):
         reset(Running)  # RESET when stop pressed or wire broken
 
 # --- Try it ---
 
 with PLC(logic) as plc:
-    StopBtn.value = True  # NC input: True = healthy wiring
+    StopCircuitOK.value = True  # Stop circuit is healthy
 
     StartBtn.value = True
     plc.step()
@@ -27,7 +27,7 @@ with PLC(logic) as plc:
     plc.step()
     assert Running.value is True  # Still running!
 
-    StopBtn.value = False  # Stop pressed (NC opens)
+    StopCircuitOK.value = False  # Stop pressed (NC opens)
     plc.step()
     assert Running.value is False
 
@@ -38,5 +38,5 @@ with Program() as logic:
     with rung(StartBtn):
         latch(Running)
     comment("Stop — NC contact resets when pressed or wire broken")
-    with rung(~StopBtn):
+    with rung(~StopCircuitOK):
         reset(Running)

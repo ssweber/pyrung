@@ -45,7 +45,7 @@ x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = Click
 # Tags — inputs
 # ---------------------------------------------------------------------------
 StartBtn = Bool(public=True)  # X001 — NO momentary start button
-StopBtn = Bool(public=True)  # X002 — NC stop button (healthy at rest)
+StopCircuitOK = Bool(public=True)  # X002 — NC stop circuit (True when healthy)
 EstopOK = Bool(public=True)  # X003 — NC safety relay permission contact
 Auto = Bool(public=True)  # X004 — auto mode selector
 Manual = Bool(public=True)  # X005 — manual mode selector
@@ -68,6 +68,7 @@ Running = Bool(public=True)  # C001 — motor run latch
 IsLarge = Bool()  # C002 — size classification result
 CountReset = Bool(public=True)  # C003 — counter reset button
 
+
 # State constants — read-only named array, never written
 @named_array(Int, stride=4, readonly=True)
 class SortState:
@@ -75,6 +76,7 @@ class SortState:
     DETECTING = 1
     SORTING = 2
     RESETTING = 3
+
 
 SortState = cast(Any, SortState)
 
@@ -98,7 +100,7 @@ mapping = TagMap(
     [
         # Inputs
         StartBtn.map_to(x[1]),
-        StopBtn.map_to(x[2]),
+        StopCircuitOK.map_to(x[2]),
         EstopOK.map_to(x[3]),
         Auto.map_to(x[4]),
         Manual.map_to(x[5]),
@@ -144,7 +146,7 @@ def logic():
     comment("Start/stop — NC stop button resets when pressed or wire broken")
     with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with rung(~StopBtn):
+    with rung(~StopCircuitOK):
         reset(Running)
     with rung(~EstopOK):
         reset(Running)
@@ -204,7 +206,7 @@ runner = PLC(logic, dt=0.010)
 if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
     with runner:
         # NC inputs: True simulates healthy wiring
-        StopBtn.value = True
+        StopCircuitOK.value = True
         EstopOK.value = True
         Auto.value = True
         SizeThreshold.value = 100

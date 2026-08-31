@@ -21,7 +21,7 @@ def click_conveyor(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
 def _set_nc_inputs(mod: ModuleType) -> None:
     """Set NC-wired inputs True to simulate healthy wiring."""
     with mod.runner:
-        mod.StopBtn.value = True
+        mod.StopCircuitOK.value = True
         mod.EstopOK.value = True
 
 
@@ -55,7 +55,7 @@ def test_motor_stops_on_stop(click_conveyor: ModuleType) -> None:
 
     # NC stop button pressed (opens circuit)
     with runner:
-        click_conveyor.StopBtn.value = False
+        click_conveyor.StopCircuitOK.value = False
         runner.step()
 
     with runner:
