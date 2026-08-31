@@ -120,7 +120,7 @@ Reached State=running in 2 scans (~20ms).
 
 Steps:
 
-1. Pulse CmdStart=True.
+1. Set CmdStart=True.
    Observed: State idle -> running.
 ```
 
@@ -131,10 +131,10 @@ Reached State=running in 4 scans (~40ms).
 
 Steps:
 
-1. Pulse CmdReset=True, Fault=False.
+1. Set CmdReset=True, Fault=False.
    Observed: State faulted -> idle.
 
-2. Pulse CmdStart=True.
+2. Set CmdStart=True.
    Observed: State idle -> running.
 ```
 
@@ -147,12 +147,12 @@ The headline is deliberately specific:
 The debug console reports long-running work as it happens. Trials and investigations are deliberately streamed as unfinished sentences, then completed by the result event:
 
 ```
-Pulse CmdStart=True... done.
+Trying CmdStart=True... done.
   State jumped 6 -> 10 Checking... unexpected.
   Preventable? Yes -- with rung(State == 3): latch(DoorClosed).
 ```
 
-`Pulse CmdStart=True...` is emitted before its trial; ` done.` is appended only after acceptance. `Checking...` is emitted before stable-landing analysis. `Preventable?` is emitted before causal replay, and the replay result is appended on the same line when the investigation returns. A long investigation therefore reads as active work instead of a hung console.
+`Trying CmdStart=True...` is emitted before its trial; ` done.` is appended only after acceptance. `Checking...` is emitted before stable-landing analysis. `Preventable?` is emitted before causal replay, and the replay result is appended on the same line when the investigation returns. A long investigation therefore reads as active work instead of a hung console.
 
 ### Condition syntax
 
@@ -206,7 +206,7 @@ print(plan)
 #
 # Steps:
 #
-# 1. Pulse ProdCmd=True.
+# 1. Set ProdCmd=True.
 ```
 
 You already know your machine, so exclude the reported route with `avoid=` and PILOT will read the remaining current-world alternatives:

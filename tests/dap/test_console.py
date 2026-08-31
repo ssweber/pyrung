@@ -524,7 +524,7 @@ class TestCausalVerbs:
             PilotEvent("candidate_accepted", 11, {"applied": (("Start", True),)})
         )
 
-        assert trying == "\nPulse Start=True..."
+        assert trying == "\nTrying Start=True..."
         assert accepted == " done.\n"
 
     def test_how_progress_streams_an_atomic_widening_batch(self):
@@ -537,7 +537,7 @@ class TestCausalVerbs:
         trying = progress.format(PilotEvent("candidate_try", 10, {"applied": actions}))
         accepted = progress.format(PilotEvent("widening_accepted", 11, {"applied": actions}))
 
-        assert trying == "\nPulse ModeRequest=True, Production=True..."
+        assert trying == "\nTrying ModeRequest=True, Production=True..."
         assert accepted == " done.\n"
 
     def test_how_progress_streams_an_exact_crossing_as_one_atomic_pulse(self):
@@ -550,7 +550,7 @@ class TestCausalVerbs:
         trying = progress.format(PilotEvent("crossing_try", 10, {"actions": actions}))
         accepted = progress.format(PilotEvent("crossing_accepted", 11, {"applied": actions}))
 
-        assert trying == "\nPulse ModeRequest=True, Production=True..."
+        assert trying == "\nTrying ModeRequest=True, Production=True..."
         assert accepted == " done.\n"
 
     def test_how_progress_closes_a_rejected_exact_crossing(self):
@@ -563,7 +563,7 @@ class TestCausalVerbs:
         trying = progress.format(PilotEvent("crossing_try", 10, {"actions": actions}))
         rejected = progress.format(PilotEvent("crossing_rejected", 11, {"actions": actions}))
 
-        assert trying == "\nPulse ModeRequest=True, Production=True..."
+        assert trying == "\nTrying ModeRequest=True, Production=True..."
         assert rejected == " no useful change.\n"
 
     def test_how_progress_calls_prerequisite_controls_set_and_explains_why(self):
@@ -613,9 +613,9 @@ class TestCausalVerbs:
 
         fragment = progress.format(PilotEvent("candidate_try", 11, {"applied": (("Start", True),)}))
 
-        assert fragment == " valid.\n\nPulse Start=True..."
+        assert fragment == " valid.\n\nTrying Start=True..."
 
-    def test_how_progress_does_not_call_a_sustained_control_a_pulse(self):
+    def test_how_progress_excludes_a_sustained_control_from_the_trial(self):
         from pyrung import Bool, Int
         from pyrung.core.analysis.pilot.overlay import PilotRung
         from pyrung.core.analysis.pilot.types import PilotEvent
@@ -642,7 +642,7 @@ class TestCausalVerbs:
             )
         )
 
-        assert fragment == "\nPulse Start=True..."
+        assert fragment == "\nTrying Start=True..."
 
     def test_how_progress_resumes_without_repeating_the_wait_target(self):
         from pyrung.core.analysis.pilot.types import PilotEvent

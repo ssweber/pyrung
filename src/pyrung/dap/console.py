@@ -621,7 +621,7 @@ class _PilotProgressFormatter:
 
         if kind in {"candidate_try", "crossing_try"}:
             # Exact same-scan operations use the crossing lifecycle, but they
-            # are still one atomic pulse from the operator's point of view.
+            # are still one atomic trial from the operator's point of view.
             actions = data.get("applied", data.get("actions", ()))
             if not actions:
                 return None
@@ -635,9 +635,9 @@ class _PilotProgressFormatter:
             if self._retry_open:
                 return prefix + "\nRetrying..."
             # Prerequisite rungs are already reported as sustained temporary
-            # logic.  Do not mislabel their witness values as momentary pulses.
+            # logic. Do not repeat their witness values as trial assignments.
             pulsed = tuple(action for action in actions if action not in self._last_holds)
-            return prefix + f"\nPulse {_pilot_assignments(pulsed or actions)}..."
+            return prefix + f"\nTrying {_pilot_assignments(pulsed or actions)}..."
 
         if kind in {
             "candidate_rejected",

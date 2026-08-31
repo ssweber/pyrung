@@ -497,7 +497,7 @@ def _format_plan_step(
 
     if step.kind == "pulse":
         tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
-        line = f"{prefix} Pulse {tags}."
+        line = f"{prefix} Set {tags}."
         if step.transition:
             line += f"\n   Observed: {step.transition}."
         return _with_notes(line)
