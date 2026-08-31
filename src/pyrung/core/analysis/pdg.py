@@ -86,6 +86,16 @@ class RungNode:
 
 
 @dataclass(frozen=True)
+class CallSite:
+    """One call edge anchored to the PDG rung node that contains it."""
+
+    node_index: int
+    call_index: int
+    caller: str | None
+    callee: str
+
+
+@dataclass(frozen=True)
 class TagVersion:
     """A single intra-scan version of a tag.
 
@@ -125,6 +135,10 @@ class ProgramGraph:
     indirect_writes: tuple[IndirectWriteRef, ...] = ()
     _main_node_index: dict[int, int] | None = field(default=None, init=False, repr=False)
     _call_site_cache: dict[str, frozenset[int]] | None = field(default=None, init=False, repr=False)
+    _call_sites_cache: tuple[CallSite, ...] | None = field(default=None, init=False, repr=False)
+    _rung_node_location_cache: (
+        dict[tuple[GraphScope, str | None, int, tuple[int, ...]], RungNode] | None
+    ) = field(default=None, init=False, repr=False)
     _subroutine_member_cache: dict[str, tuple[int, ...]] | None = field(
         default=None, init=False, repr=False
     )
@@ -177,6 +191,41 @@ class ProgramGraph:
                     sites.setdefault(sub_name, set()).add(node.rung_index)
         self._call_site_cache = {name: frozenset(idxs) for name, idxs in sites.items()}
         return self._call_site_cache
+
+    def call_sites(self) -> tuple[CallSite, ...]:
+        """Return every structural call edge with its containing rung node.
+
+        Calls nested in loop instructions are already represented by
+        :attr:`RungNode.calls`; this method preserves node and per-node call order.
+        """
+        if self._call_sites_cache is None:
+            self._call_sites_cache = tuple(
+                CallSite(
+                    node_index=node_index,
+                    call_index=call_index,
+                    caller=node.subroutine,
+                    callee=callee,
+                )
+                for node_index, node in enumerate(self.rung_nodes)
+                for call_index, callee in enumerate(node.calls)
+            )
+        return self._call_sites_cache
+
+    def rung_node(
+        self,
+        *,
+        scope: GraphScope,
+        subroutine: str | None,
+        rung_index: int,
+        branch_path: tuple[int, ...] = (),
+    ) -> RungNode | None:
+        """Resolve a structural rung location to its PDG node."""
+        if self._rung_node_location_cache is None:
+            self._rung_node_location_cache = {
+                (node.scope, node.subroutine, node.rung_index, node.branch_path): node
+                for node in self.rung_nodes
+            }
+        return self._rung_node_location_cache.get((scope, subroutine, rung_index, branch_path))
 
     def _subroutine_member_indices(self) -> dict[str, tuple[int, ...]]:
         """Map subroutine name to PDG node indices inside that subroutine."""
@@ -1619,6 +1668,7 @@ def _collect_indirect_writes(
 
 
 __all__ = [
+    "CallSite",
     "IndirectWriteRef",
     "ProgramGraph",
     "RungNode",

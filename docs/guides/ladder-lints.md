@@ -89,11 +89,13 @@ Categories are the prefixes before the first underscore:
 
 | Category | Checks |
 |---|---|
-| `RUNG` | Contradictory and ineffective rung conditions |
+| `RUNG` | Contradictory, ineffective, and redundant rung conditions |
 | `COIL` | Conflicting and one-sided coil writes |
 | `CMP` | Comparisons that cannot behave as intended |
 | `TAG` | Writes that violate tag declarations |
 | `PTR` | Unsafe indirect-pointer defaults |
+| `CALL` | Unreachable or recursive subroutine calls |
+| `MATH` | Definite arithmetic faults |
 | `PHYS` | Physical-link completeness and realism |
 | `STEP` | State-machine steps with no available escape |
 
@@ -126,6 +128,7 @@ pyrung live check RUNG
 |---|---|---|
 | `RUNG_CONTRADICTION` | Error | A rung condition conjunction that is provably unsatisfiable, so the rung can never fire. A bare `Rung()` is intentionally always on and is not reported. |
 | `RUNG_TAUTOLOGY` | Warning | A top-level `Or(...)` term that is provably always true and therefore gates nothing. The finding shows the residual condition that actually controls the rung. |
+| `RUNG_REDUNDANT_TERM` | Info | An exact duplicate or provably subsumed Boolean/range term. Contradictions and tautologies take precedence over this lower-severity finding. |
 
 ### Coils
 
@@ -139,6 +142,8 @@ pyrung live check RUNG
 
 | Code | Severity | What it detects |
 |---|---|---|
+| `CMP_ALWAYS_FALSE` | Error | A comparison that is false for every value in its complete Bool, choices, bounded-integer, or fully understood producer domain. Open domains are left alone. |
+| `CMP_ALWAYS_TRUE` | Info | A comparison that is true for every value in the same complete domains and therefore does not gate its rung. |
 | `CMP_EQ_ON_MONOTONE` | Error | Equality against a timer or counter accumulator that can step past the exact value. |
 | `CMP_OPERAND_STAYS_ZERO` | Warning | A numeric comparison operand has an implicit zero start and no ladder writer, so it stays zero. Configured defaults, external inputs, and read-only zero constants are left alone. |
 | `CMP_PRESET_STAYS_ZERO` | Warning | A tag-valued timer or counter preset has an implicit zero start and no ladder writer, so completion is immediate. Configured and literal zero presets are left alone. |
@@ -155,14 +160,24 @@ pyrung live check RUNG
 | `TAG_CHOICES_VIOLATION` | Error | A literal write is not present in the target tag's `choices` keys. |
 | `TAG_RANGE_VIOLATION` | Error | A literal write falls outside the target tag's declared `min`/`max` range. |
 | `TAG_FINAL_MULTIPLE_WRITERS` | Warning | More than one write site targets a tag declared with `final=True`. Mutual exclusivity does not exempt the writers. |
+| `TAG_DEAD_WRITE` | Warning | A resolved direct scalar write that ordered scan analysis proves is overwritten before any read. The first implementation deliberately punts on loops, branches, calls, subroutine returns, indirect targets, one-shots, and conditional overwrites. |
 
 ### Pointers
 
 | Code | Severity | What it detects |
 |---|---|---|
 | `PTR_DEFAULT_BEFORE_BLOCK_START` | Warning | An exact indirect dereference such as `DS[Ptr]` uses a pointer whose default is below the block start. This usually means a 1-based block is indexed by a tag with the implicit `default=0`. |
+| `PTR_MAY_ESCAPE_BLOCK` | Warning | A pointer's complete domain contains concrete out-of-block values compatible with the dereference's effective guards. Guard narrowing is used only for scan-stable pointers; open domains and pointers sanitized by a proven unconditional write-before-read are left alone. |
 
 This rule checks the actual dereference tag used in `Block[Ptr]`. It does not infer that an earlier rung computed a different intermediate pointer.
+
+### Calls and arithmetic
+
+| Code | Severity | What it detects |
+|---|---|---|
+| `CALL_NEVER_CALLED` | Info | A program-owned subroutine with no call path from Main. |
+| `CALL_RECURSION` | Error | A direct or indirect recursive subroutine component. One concrete closed call path is shown for each recursive component. |
+| `MATH_DIV_ZERO` | Error | A `/`, `//`, or `%` divisor in `calc` that is proved zero whenever the instruction can execute. Literal/constant zero, solely-zero closed domains, and guard-proved scan-stable tags are covered; possible-zero and control-flow-ambiguous cases are left alone. |
 
 ### Physical behavior
 

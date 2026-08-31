@@ -1358,10 +1358,10 @@ def _is_sequential_unconditional_same_scope(
 def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
     assert ctx.graph is not None and ctx.stateful_dims is not None
 
+    from pyrung.core.analysis.affine import extract_forward_affine
     from pyrung.core.validation._common import walk_instructions
 
     from .absorb import _all_write_targets
-    from .classify import _extract_forward_affine
     from .expr import _edge_source_tags
 
     source_offsets: dict[str, set[tuple[str, int, int | float]]] = {}
@@ -1382,7 +1382,7 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
         targets = [name for name, _itype in _all_write_targets(instr)]
         if not targets:
             continue
-        fwd = _extract_forward_affine(instr)
+        fwd = extract_forward_affine(instr)
         for target_name in targets:
             if target_name not in admissible or target_name in disqualified:
                 continue

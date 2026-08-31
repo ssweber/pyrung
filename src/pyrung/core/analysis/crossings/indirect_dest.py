@@ -30,14 +30,15 @@ from __future__ import annotations
 
 from typing import Any, TypeGuard
 
-from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr, UnaryExpr
-from pyrung.core.instruction.calc import CalcInstruction
+from pyrung.core.analysis.affine import extract_affine_expression, extract_forward_affine
+from pyrung.core.analysis.value_domains import declared_value_domain
+from pyrung.core.expression import TagExpr
 from pyrung.core.instruction.data_transfer import CopyInstruction
 from pyrung.core.memory_block import Block, IndirectExprRef, IndirectRef
-from pyrung.core.tag import Tag, TagType
+from pyrung.core.tag import Tag
 
-#: Cap on the resolved region size — mirrors ``_declared_domain`` / the
-#: ``> 1000`` guards in ``prove/classify`` so a wide declared range does not
+#: Cap on the resolved region size, passed to shared declared-domain analysis
+#: so a wide declared range does not
 #: enumerate a runaway slot list.
 _REGION_CAP = 1000
 #: Affine-hop depth bound (mirrors ``prove/classify._hop_affine_index``).
@@ -46,50 +47,6 @@ _MAX_HOPS = 3
 
 def _is_int(value: Any) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
-
-
-def _forward_affine(instr: Any) -> tuple[str, int, int | float] | None:
-    """``(source_tag, scale, offset)`` for ``dest = scale*source + offset``.
-
-    The self-contained twin of ``prove/classify._extract_forward_affine`` (kept
-    here so this low layer never imports ``prove``): an identity ``copy(src, D)``
-    and a ``calc(src ± k)`` / ``calc(k ± src)`` / unary ``±src`` with ``scale ∈
-    {1, -1}``.  Anything else → ``None``.
-    """
-    if isinstance(instr, CopyInstruction):
-        if instr.convert is not None:
-            return None
-        src = instr.source
-        name = getattr(src, "name", None)
-        if name is not None and not isinstance(src, (IndirectRef, IndirectExprRef)):
-            return (name, 1, 0)
-        return None
-    if isinstance(instr, CalcInstruction):
-        return _affine_of_expr(instr.expression)
-    return None
-
-
-def _affine_of_expr(expr: Any) -> tuple[str, int, int | float] | None:
-    """``(tag, scale, offset)`` when *expr* is an affine map over one tag."""
-    if isinstance(expr, UnaryExpr):
-        if isinstance(expr.operand, TagExpr):
-            if expr.symbol == "+":
-                return expr.operand.tag.name, 1, 0
-            if expr.symbol == "-":
-                return expr.operand.tag.name, -1, 0
-        return None
-    if not isinstance(expr, BinaryExpr) or expr.symbol not in ("+", "-"):
-        return None
-    left, right = expr.left, expr.right
-    left_tag = left.tag.name if isinstance(left, TagExpr) else None
-    right_tag = right.tag.name if isinstance(right, TagExpr) else None
-    left_lit = left.value if isinstance(left, LiteralExpr) else None
-    right_lit = right.value if isinstance(right, LiteralExpr) else None
-    if left_tag is not None and _is_int(right_lit):
-        return (left_tag, 1, right_lit if expr.symbol == "+" else -right_lit)
-    if right_tag is not None and _is_int(left_lit):
-        return (right_tag, 1 if expr.symbol == "+" else -1, left_lit)
-    return None
 
 
 def _hop_affine_index(
@@ -110,8 +67,8 @@ def _hop_affine_index(
         writers = writer_instrs.get(tag)
         if writers is None or len(writers) != 1:
             break
-        fwd = _forward_affine(writers[0])
-        if fwd is None:
+        fwd = extract_forward_affine(writers[0])
+        if fwd is None or isinstance(fwd[2], bool):
             break
         source, scale, offset = fwd
         if source == tag or abs(scale) != 1:
@@ -120,25 +77,6 @@ def _hop_affine_index(
         scale_acc = scale_acc * scale
         tag = source
     return tag, scale_acc, offset_acc
-
-
-def _declared_domain(tag: Tag | None) -> tuple[Any, ...] | None:
-    """Finite explicit metadata domain (mirrors ``prove/classify._declared_domain``)."""
-    if tag is None:
-        return None
-    if tag.type == TagType.BOOL:
-        return (False, True)
-    if tag.choices is not None:
-        return tuple(sorted(tag.choices.keys()))
-    if tag.min is None or tag.max is None:
-        return None
-    if not isinstance(tag.min, (int, float)) or not isinstance(tag.max, (int, float)):
-        return None
-    if int(tag.min) != tag.min or int(tag.max) != tag.max:
-        return None
-    if tag.max - tag.min + 1 > _REGION_CAP:
-        return None
-    return tuple(range(int(tag.min), int(tag.max) + 1))
 
 
 def _pointer_affine(
@@ -164,8 +102,8 @@ def _pointer_affine(
     if isinstance(expr, TagExpr):
         root, scale, offset = _hop_affine_index(expr.tag.name, writer_instrs)
         return (root, scale, offset)
-    aff = _affine_of_expr(expr)
-    if aff is None:
+    aff = extract_affine_expression(expr)
+    if aff is None or isinstance(aff[2], bool):
         return None
     root, scale, offset = aff
     # One further hop through the root's own affine writer (e.g. root is itself a
@@ -224,7 +162,7 @@ def writable_slots(
     if scale == 0:
         return None
 
-    domain = _declared_domain(tags.get(root))
+    domain = declared_value_domain(tags.get(root), max_values=_REGION_CAP)
     if not domain:
         lits = _literal_write_values(root, writer_instrs)
         if lits:

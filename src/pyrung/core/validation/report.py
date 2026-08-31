@@ -146,10 +146,13 @@ def _validator_dispatch(
     Imports are local so importing this module never eagerly loads the validator
     modules — matching the historical import profile of :func:`validate`.
     """
+    from pyrung.core.validation.call_graph import validate_call_graph
     from pyrung.core.validation.choices_violation import validate_choices
     from pyrung.core.validation.cmp_conditions import validate_cmp_conditions
+    from pyrung.core.validation.dead_write import validate_dead_writes
     from pyrung.core.validation.duplicate_out import validate_conflicting_outputs
     from pyrung.core.validation.final_writers import validate_final_writers
+    from pyrung.core.validation.math_conditions import validate_math_conditions
     from pyrung.core.validation.physical_realism import validate_physical_realism
     from pyrung.core.validation.pointer_default import validate_pointer_defaults
     from pyrung.core.validation.readonly_write import validate_readonly_writes
@@ -161,11 +164,14 @@ def _validator_dispatch(
         "stuck": lambda: _as_findings(validate_stuck_bits(program).findings),
         "conflicting": lambda: _as_findings(validate_conflicting_outputs(program).findings),
         "readonly": lambda: _as_findings(validate_readonly_writes(program).findings),
+        "dead_write": lambda: _as_findings(validate_dead_writes(program).findings),
         "pointer": lambda: _as_findings(validate_pointer_defaults(program).findings),
         "choices": lambda: _as_findings(validate_choices(program).findings),
         "final": lambda: _as_findings(validate_final_writers(program).findings),
         "physical": lambda: _as_findings(validate_physical_realism(program, dt=dt).findings),
         "rung": lambda: _as_findings(validate_rung_conditions(program).findings),
         "cmp": lambda: _as_findings(validate_cmp_conditions(program).findings),
+        "call": lambda: _as_findings(validate_call_graph(program).findings),
+        "math": lambda: _as_findings(validate_math_conditions(program).findings),
         "wait": lambda: _as_findings(validate_wait_escapes(program).findings),
     }

@@ -31,7 +31,7 @@ class RuleSpec:
     """
 
     code: str
-    category: str  # "TAG" | "COIL" | "PTR" | "PHYS" | "RUNG" | "CMP" | "STEP"
+    category: str
     severity: Severity
     validator: str
     title: str
@@ -42,6 +42,7 @@ _SPECS: tuple[RuleSpec, ...] = (
     RuleSpec("TAG_READONLY_WRITE", "TAG", "error", "readonly", "Writes to Read-Only"),
     RuleSpec("TAG_CHOICES_VIOLATION", "TAG", "error", "choices", "Choices Violation"),
     RuleSpec("TAG_RANGE_VIOLATION", "TAG", "error", "physical", "Range Violation"),
+    RuleSpec("TAG_DEAD_WRITE", "TAG", "warning", "dead_write", "Write Overwritten Before Read"),
     RuleSpec(
         "TAG_FINAL_MULTIPLE_WRITERS", "TAG", "warning", "final", "Final Tag: Multiple Writers"
     ),
@@ -55,10 +56,14 @@ _SPECS: tuple[RuleSpec, ...] = (
         "pointer",
         "Pointer Can Be 0",
     ),
+    RuleSpec("PTR_MAY_ESCAPE_BLOCK", "PTR", "warning", "pointer", "Pointer May Escape Block"),
     RuleSpec("PHYS_MISSING_PROFILE", "PHYS", "info", "physical", "Missing Physical Profile"),
     RuleSpec("PHYS_ANTITOGGLE", "PHYS", "warning", "physical", "Anti-Toggle Oscillation"),
     RuleSpec("RUNG_CONTRADICTION", "RUNG", "error", "rung", "Rung Never Fires (Contradiction)"),
     RuleSpec("RUNG_TAUTOLOGY", "RUNG", "warning", "rung", "Always-True Or Term (Tautology)"),
+    RuleSpec("RUNG_REDUNDANT_TERM", "RUNG", "info", "rung", "Redundant Condition Term"),
+    RuleSpec("CMP_ALWAYS_FALSE", "CMP", "error", "cmp", "Comparison Always False"),
+    RuleSpec("CMP_ALWAYS_TRUE", "CMP", "info", "cmp", "Comparison Always True"),
     RuleSpec("CMP_EQ_ON_MONOTONE", "CMP", "error", "cmp", "Equality vs Self-Advancing Register"),
     RuleSpec(
         "CMP_OPERAND_STAYS_ZERO",
@@ -96,6 +101,9 @@ _SPECS: tuple[RuleSpec, ...] = (
         "cmp",
         "Comparison May Read Backwards",
     ),
+    RuleSpec("CALL_NEVER_CALLED", "CALL", "info", "call", "Subroutine Never Called"),
+    RuleSpec("CALL_RECURSION", "CALL", "error", "call", "Recursive Subroutine Call"),
+    RuleSpec("MATH_DIV_ZERO", "MATH", "error", "math", "Definite Division by Zero"),
     RuleSpec("STEP_NO_ESCAPE", "STEP", "warning", "wait", "Wait Step Can Hang Forever"),
 )
 
@@ -117,12 +125,15 @@ VALIDATOR_ORDER: tuple[str, ...] = (
     "stuck",
     "conflicting",
     "readonly",
+    "dead_write",
     "pointer",
     "choices",
     "final",
     "physical",
     "rung",
     "cmp",
+    "call",
+    "math",
     "wait",
 )
 

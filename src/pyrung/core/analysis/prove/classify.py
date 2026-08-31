@@ -38,8 +38,14 @@ import sys
 import time
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.affine import (
+    extract_forward_affine as _extract_forward_affine,
+)
+from pyrung.core.analysis.affine import (
+    extract_forward_offset as _extract_forward_offset,
+)
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
-from pyrung.core.analysis.return_guards import _return_early_guard_exprs
+from pyrung.core.analysis.return_guards import return_early_guard_exprs
 from pyrung.core.analysis.reverse_edges import (
     IDENTITY as _IDENTITY,
 )
@@ -280,7 +286,7 @@ def _collect_all_exprs(
             continue
         if upstream is not None and not (node.writes & upstream):
             continue
-        exprs.extend(_return_early_guard_exprs(program, node))
+        exprs.extend(return_early_guard_exprs(program, node))
 
     _collect_implicit_edge_condition_exprs(program, upstream, exprs)
     return exprs
@@ -1315,7 +1321,7 @@ def _collect_structural_domains(
     return domains
 
 
-def _collect_produced_value_domains(
+def collect_produced_value_domains(
     program: Program,
     graph: ProgramGraph,
 ) -> dict[str, tuple[Any, ...]]:
@@ -1454,79 +1460,6 @@ def _collect_produced_value_domains(
                 changed = True
 
     return known
-
-
-def _extract_forward_affine(instr: Any) -> tuple[str, int, int | float] | None:
-    """Extract ``(source_tag_name, scale, offset)`` from a write instruction.
-
-    Returns the forward relationship ``dest = scale * source + offset``
-    (``scale`` ∈ {1, -1}) for Copy and Calc instructions with simple
-    ``source ± literal`` / ``literal - source`` expressions.
-    """
-    from pyrung.core.instruction.calc import CalcInstruction
-    from pyrung.core.instruction.data_transfer import CopyInstruction
-
-    if isinstance(instr, CopyInstruction):
-        if instr.convert is not None:
-            return None
-        source_name = _tag_name_from_value(instr.source)
-        if source_name is not None:
-            return (source_name, 1, 0)
-        return None
-
-    if isinstance(instr, CalcInstruction):
-        from pyrung.core.expression import BinaryExpr, UnaryExpr
-
-        expr = instr.expression
-        if isinstance(expr, UnaryExpr):
-            tag_name = _tag_name_from_value(expr.operand)
-            if tag_name is None:
-                return None
-            if expr.symbol == "+":
-                return (tag_name, 1, 0)
-            if expr.symbol == "-":
-                return (tag_name, -1, 0)
-            return None
-
-        if not isinstance(expr, BinaryExpr):
-            return None
-        if expr.symbol not in ("+", "-"):
-            return None
-
-        left_tag = _tag_name_from_value(expr.left)
-        left_lit = _literal_value_from_value(expr.left)
-        right_tag = _tag_name_from_value(expr.right)
-        right_lit = _literal_value_from_value(expr.right)
-
-        if left_tag is not None and right_lit is not None and isinstance(right_lit, (int, float)):
-            if expr.symbol == "+":
-                return (left_tag, 1, right_lit)
-            if expr.symbol == "-":
-                return (left_tag, 1, -right_lit)
-
-        if right_tag is not None and left_lit is not None and isinstance(left_lit, (int, float)):
-            if expr.symbol == "+":
-                return (right_tag, 1, left_lit)
-            if expr.symbol == "-":
-                return (right_tag, -1, left_lit)
-
-        return None
-
-    return None
-
-
-def _extract_forward_offset(instr: Any) -> tuple[str, int | float] | None:
-    """Extract ``(source_tag_name, constant_offset)`` from a write instruction.
-
-    Returns the forward relationship ``dest = source + offset`` for Copy and
-    Calc instructions with simple ``source ± literal`` expressions — the
-    scale-1 slice of :func:`_extract_forward_affine` (negated forms stay
-    invisible to the prove-side consumers).
-    """
-    fwd = _extract_forward_affine(instr)
-    if fwd is None or fwd[1] != 1:
-        return None
-    return (fwd[0], fwd[2])
 
 
 def _expand_indirect_tag_names(dest: Any) -> list[str]:

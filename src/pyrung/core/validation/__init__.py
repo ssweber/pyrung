@@ -11,9 +11,16 @@ Stage 3: Stuck-bit detection for latch/reset imbalances.
 Stage 4: Tag-flag validators (readonly writes, choices violations, final
 multiple-writers).
 
-Stage 5: Pointer default validation for indirect block dereferences.
+Stage 5: Domain, call-graph, math, redundancy, and ordered-write checks.
 """
 
+from pyrung.core.validation.call_graph import (
+    CALL_NEVER_CALLED,
+    CALL_RECURSION,
+    CallGraphFinding,
+    CallGraphReport,
+    validate_call_graph,
+)
 from pyrung.core.validation.choices_violation import (
     TAG_CHOICES_VIOLATION,
     ChoicesViolationFinding,
@@ -21,6 +28,8 @@ from pyrung.core.validation.choices_violation import (
     validate_choices,
 )
 from pyrung.core.validation.cmp_conditions import (
+    CMP_ALWAYS_FALSE,
+    CMP_ALWAYS_TRUE,
     CMP_EQ_ON_MONOTONE,
     CMP_OPERAND_STAYS_ZERO,
     CMP_PRESET_STAYS_ZERO,
@@ -31,6 +40,12 @@ from pyrung.core.validation.cmp_conditions import (
     CmpConditionFinding,
     CmpConditionReport,
     validate_cmp_conditions,
+)
+from pyrung.core.validation.dead_write import (
+    TAG_DEAD_WRITE,
+    DeadWriteFinding,
+    DeadWriteReport,
+    validate_dead_writes,
 )
 from pyrung.core.validation.display import (
     FindingDisplay,
@@ -49,6 +64,12 @@ from pyrung.core.validation.final_writers import (
     FinalWritersReport,
     validate_final_writers,
 )
+from pyrung.core.validation.math_conditions import (
+    MATH_DIV_ZERO,
+    MathConditionFinding,
+    MathConditionReport,
+    validate_math_conditions,
+)
 from pyrung.core.validation.physical_realism import (
     PHYS_ANTITOGGLE,
     PHYS_MISSING_PROFILE,
@@ -59,6 +80,7 @@ from pyrung.core.validation.physical_realism import (
 )
 from pyrung.core.validation.pointer_default import (
     PTR_DEFAULT_BEFORE_BLOCK_START,
+    PTR_MAY_ESCAPE_BLOCK,
     PointerDefaultFinding,
     PointerDefaultReport,
     validate_pointer_defaults,
@@ -84,6 +106,7 @@ from pyrung.core.validation.report import (
 )
 from pyrung.core.validation.rung_conditions import (
     RUNG_CONTRADICTION,
+    RUNG_REDUNDANT_TERM,
     RUNG_TAUTOLOGY,
     RungConditionFinding,
     RungConditionReport,
@@ -120,16 +143,23 @@ __all__ = [
     "FindingDisplay",
     "Frame",
     "PHYS_ANTITOGGLE",
+    "CALL_NEVER_CALLED",
+    "CALL_RECURSION",
+    "CMP_ALWAYS_FALSE",
+    "CMP_ALWAYS_TRUE",
+    "MATH_DIV_ZERO",
     "TAG_CHOICES_VIOLATION",
     "COIL_CONFLICTING_OUTPUT",
     "TAG_FINAL_MULTIPLE_WRITERS",
     "PHYS_MISSING_PROFILE",
     "PTR_DEFAULT_BEFORE_BLOCK_START",
+    "PTR_MAY_ESCAPE_BLOCK",
     "TAG_RANGE_VIOLATION",
     "TAG_READONLY_WRITE",
     "COIL_STUCK_HIGH",
     "COIL_STUCK_LOW",
     "RUNG_CONTRADICTION",
+    "RUNG_REDUNDANT_TERM",
     "RUNG_TAUTOLOGY",
     "CMP_EQ_ON_MONOTONE",
     "CMP_OPERAND_STAYS_ZERO",
@@ -139,6 +169,9 @@ __all__ = [
     "CMP_STEPPER_VALUE_NOT_SET",
     "CMP_TRUE_AT_RESET",
     "STEP_NO_ESCAPE",
+    "TAG_DEAD_WRITE",
+    "CallGraphFinding",
+    "CallGraphReport",
     "ChoicesViolationFinding",
     "ChoicesViolationReport",
     "CmpConditionFinding",
@@ -149,6 +182,10 @@ __all__ = [
     "Finding",
     "FinalWritersFinding",
     "FinalWritersReport",
+    "DeadWriteFinding",
+    "DeadWriteReport",
+    "MathConditionFinding",
+    "MathConditionReport",
     "OperandFact",
     "OutputSite",
     "PhysicalRealismFinding",
@@ -170,6 +207,9 @@ __all__ = [
     "check",
     "validate",
     "validate_cmp_conditions",
+    "validate_call_graph",
+    "validate_dead_writes",
+    "validate_math_conditions",
     "validate_rung_conditions",
     "validate_choices",
     "validate_conflicting_outputs",

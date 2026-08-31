@@ -20,7 +20,8 @@
 - Choice-backed tags provide `tag.choice(label)` for explicit readable values, and Click reverse codegen reconstructs recognized comparison and `copy()` literals with that form.
 - Click ladder bundles include `rung_sources.json`, which maps exported rungs back to their contributing Python source spans for downstream previews.
 - Generated Click projects guide agents through the complete ClickNick proposal workflow, including project checks, staged-versus-synced state, source recovery, application-versus-simulation sessions, and new subroutine setup.
-- The new Ladder Lints guide grounds static checks in ladder-logic practice and documents all 20 core rules, diagnostic output, rule selection, and command-line usage.
+- The new Ladder Lints guide grounds static checks in ladder-logic practice and documents all 28 core rules, diagnostic output, rule selection, and command-line usage.
+- Ladder checks now detect constant comparisons, escaping pointer domains, unreachable or recursive subroutines, definite zero divisors, redundant condition terms, and direct writes overwritten before any read.
 - Ladder checks identify repeated or dispersed literal comparisons that would be clearer as named read-only references or decoded Bool status tags.
 - Core validation findings print as complete compiler-style diagnostics, including their rule code and severity.
 

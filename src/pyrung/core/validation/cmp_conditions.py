@@ -1,8 +1,11 @@
-"""Comparison-semantics validators: monotone/reset/order/zero/stepper operands.
+"""Comparison-semantics validators: domains, monotone/reset/order/zero/stepper operands.
 
-Seven rules, one pass over every comparison in every rung condition (main +
+Nine rules, one pass over every comparison in every rung condition (main +
 subroutines + branches, both the ``Compare*`` leaf family and the expression-tree
 ``ExprCompare``):
+
+* ``CMP_ALWAYS_FALSE`` / ``CMP_ALWAYS_TRUE`` — a comparison has one truth value
+  over complete declared or producer-derived domains. **error** / **info**.
 
 * ``CMP_EQ_ON_MONOTONE`` — ``==`` / ``!=`` against a self-advancing register
   (``Timer.Acc``, a counter accumulator).  The register steps by ``rate_per_scan``
@@ -45,8 +48,7 @@ subroutines + branches, both the ``Compare*`` leaf family and the expression-tre
 or inline computed expression; "static" is a literal, an ``S.`` constant, or any
 never-written tag (an external sensor and an HMI setpoint both land here — the rule
 does not classify measurement vs threshold, it grades the finding by confidence).
-Calc-derived provenance is recovered via the prover's ``_extract_forward_affine`` —
-the same affine extractor the functional-dependency pass uses — and sharpens the
+Calc-derived provenance is recovered via shared affine analysis and sharpens the
 message without changing the verdict.
 """
 
@@ -55,6 +57,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.affine import extract_forward_affine
+from pyrung.core.analysis.value_domains import (
+    closed_value_domains,
+    produced_value_domains,
+)
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -107,6 +114,8 @@ CMP_OPERAND_STAYS_ZERO = "CMP_OPERAND_STAYS_ZERO"
 CMP_PRESET_STAYS_ZERO = "CMP_PRESET_STAYS_ZERO"
 CMP_STEPPER_VALUE_NOT_SET = "CMP_STEPPER_VALUE_NOT_SET"
 CMP_REPEATED_STATE_VALUE = "CMP_REPEATED_STATE_VALUE"
+CMP_ALWAYS_FALSE = "CMP_ALWAYS_FALSE"
+CMP_ALWAYS_TRUE = "CMP_ALWAYS_TRUE"
 
 _NUMERIC_TAG_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.REAL, TagType.WORD})
 _DISCRETE_NUMERIC_TAG_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
@@ -138,6 +147,15 @@ _FLIP: dict[str, str] = {
     ">": "<",
     "<=": ">=",
     ">=": "<=",
+}
+
+_COMPARE_VALUE: dict[str, Any] = {
+    "==": lambda left, right: left == right,
+    "!=": lambda left, right: left != right,
+    "<": lambda left, right: left < right,
+    "<=": lambda left, right: left <= right,
+    ">": lambda left, right: left > right,
+    ">=": lambda left, right: left >= right,
 }
 
 # ---------------------------------------------------------------------------
@@ -222,6 +240,64 @@ def _render_compare(cmp: _Compare) -> str:
     return f"{_render(cmp.left)} {cmp.op} {_render(cmp.right)}"
 
 
+def _operand_domain(
+    operand: _Operand,
+    domains: dict[str, tuple[Any, ...]],
+) -> tuple[Any, ...] | None:
+    if operand.kind == "literal":
+        return (operand.value,)
+    if operand.kind == "tag" and operand.name is not None:
+        return domains.get(operand.name)
+    return None
+
+
+def _constant_result(
+    cmp: _Compare,
+    domains: dict[str, tuple[Any, ...]],
+) -> bool | None:
+    """Return a comparison's sole truth value, or None when it can vary."""
+    if cmp.left.kind == "tag" and cmp.right.kind == "tag" and cmp.left.name == cmp.right.name:
+        domain = domains.get(cmp.left.name)
+        if domain is None:
+            return None
+        outcomes: set[bool] = set()
+        for value in domain:
+            try:
+                outcomes.add(bool(_COMPARE_VALUE[cmp.op](value, value)))
+            except (TypeError, ValueError):
+                return None
+            if len(outcomes) > 1:
+                return None
+        return next(iter(outcomes)) if outcomes else None
+    left = _operand_domain(cmp.left, domains)
+    right = _operand_domain(cmp.right, domains)
+    if left is None or right is None:
+        return None
+    outcomes: set[bool] = set()
+    for left_value in left:
+        for right_value in right:
+            try:
+                outcomes.add(bool(_COMPARE_VALUE[cmp.op](left_value, right_value)))
+            except (TypeError, ValueError):
+                return None
+            if len(outcomes) > 1:
+                return None
+    return next(iter(outcomes)) if outcomes else None
+
+
+def _constant_display(cmp: _Compare, result: bool) -> FindingDisplay:
+    return FindingDisplay(
+        code=CMP_ALWAYS_TRUE if result else CMP_ALWAYS_FALSE,
+        severity="info" if result else "error",
+        frames=(_cmp_frame(cmp, "always true" if result else "always false"),),
+        hint=(
+            "remove the redundant comparison"
+            if result
+            else "change the comparison or the operand's closed domain"
+        ),
+    )
+
+
 def _iter_compares(program: Program) -> Iterator[_Compare]:
     """Yield every comparison in every rung condition, both compare families."""
     for loc, rung in iter_rungs(program):
@@ -293,16 +369,14 @@ def _written_names(program: Program) -> set[str]:
 def _calc_derived_names(program: Program) -> set[str]:
     """Tag names that are the product of a calculation (calc expr or affine transform).
 
-    Reuses the prover's ``_extract_forward_affine`` — the affine extractor the
-    functional-dependency projection pass builds on — so an identity ``copy`` is
+    Reuses shared affine analysis so an identity ``copy`` is
     excluded while a ``dest = src ± k`` / calc expression is admitted.
     """
-    from pyrung.core.analysis.prove.classify import _extract_forward_affine
     from pyrung.core.instruction.calc import CalcInstruction
 
     names: set[str] = set()
     for instr in walk_instructions(program):
-        affine = _extract_forward_affine(instr)
+        affine = extract_forward_affine(instr)
         non_identity = affine is not None and (affine[1] != 1 or affine[2] != 0)
         if isinstance(instr, CalcInstruction) or non_identity:
             names |= _write_target_names(instr)
@@ -913,7 +987,6 @@ def validate_cmp_conditions(program: Program) -> CmpConditionReport:
     """
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.prove.classify import (
-        _collect_produced_value_domains,
         _compute_stepping_tags,
     )
 
@@ -922,7 +995,8 @@ def validate_cmp_conditions(program: Program) -> CmpConditionReport:
     calc = _calc_derived_names(program)
     graph = build_program_graph(program)
     stepping = _compute_stepping_tags(program, graph)
-    produced_domains = _collect_produced_value_domains(program, graph)
+    produced_domains = produced_value_domains(program, graph)
+    closed_domains = closed_value_domains(program, graph)
 
     compares = list(_iter_compares(program))
     claimed: set[int] = set()
@@ -1005,7 +1079,22 @@ def validate_cmp_conditions(program: Program) -> CmpConditionReport:
         )
         claimed.add(id(cmp.cond))
 
-    # 4. True-at-reset completion check (warning), either operand order.
+    # 4. A comparison whose complete operand domains yield one truth value.
+    #    Preserve the more specific stays-zero and stepper diagnostics above.
+    for cmp in compares:
+        if id(cmp.cond) in claimed:
+            continue
+        result = _constant_result(cmp, closed_domains)
+        if result is None:
+            continue
+        code = CMP_ALWAYS_TRUE if result else CMP_ALWAYS_FALSE
+        severity: Severity = "info" if result else "error"
+        findings.append(
+            CmpConditionFinding(code, cmp.loc, _constant_display(cmp, result), severity)
+        )
+        claimed.add(id(cmp.cond))
+
+    # 5. True-at-reset completion check (warning), either operand order.
     for cmp in compares:
         if id(cmp.cond) in claimed or cmp.op not in ("<", "<=", ">", ">="):
             continue
@@ -1014,7 +1103,7 @@ def validate_cmp_conditions(program: Program) -> CmpConditionReport:
             findings.append(finding)
             claimed.add(id(cmp.cond))
 
-    # 5. Operand-order convention (advisory) for whatever remains.
+    # 6. Operand-order convention (advisory) for whatever remains.
     for cmp in compares:
         if id(cmp.cond) in claimed:
             continue
@@ -1022,7 +1111,7 @@ def validate_cmp_conditions(program: Program) -> CmpConditionReport:
         if finding is not None:
             findings.append(finding)
 
-    # 6. Program-level readability advice is independent of the per-comparison
+    # 7. Program-level readability advice is independent of the per-comparison
     #    ownership above: an otherwise valid comparison can still be repeated.
     findings.extend(_repeated_state_findings(compares))
 

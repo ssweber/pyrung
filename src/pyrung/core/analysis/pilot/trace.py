@@ -58,7 +58,7 @@ from pyrung.core.analysis.pilot.writer_selection import (
     _WriterRank,
 )
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
-from pyrung.core.analysis.return_guards import _return_early_guard_exprs
+from pyrung.core.analysis.return_guards import return_early_guard_exprs
 from pyrung.core.analysis.reverse_semantics import normalize_reverse_result
 from pyrung.core.analysis.simplified import (
     And,
@@ -1737,7 +1737,7 @@ def _trace_back(
 
         # Reaching this writer at all requires no upstream return_early() to have
         # fired — its negated guard is a prerequisite of the rung executing.
-        for guard_expr in _return_early_guard_exprs(env.program, rung_node):
+        for guard_expr in return_early_guard_exprs(env.program, rung_node):
             attempt_node.children.extend(
                 _trace_expression(
                     env,

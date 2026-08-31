@@ -198,16 +198,22 @@ class TestValidationReport:
     def test_all_rules_constant_complete(self):
         expected = {
             "PHYS_ANTITOGGLE",
+            "CALL_NEVER_CALLED",
+            "CALL_RECURSION",
+            "CMP_ALWAYS_FALSE",
+            "CMP_ALWAYS_TRUE",
             "TAG_CHOICES_VIOLATION",
             "COIL_CONFLICTING_OUTPUT",
             "TAG_FINAL_MULTIPLE_WRITERS",
             "PHYS_MISSING_PROFILE",
             "PTR_DEFAULT_BEFORE_BLOCK_START",
+            "PTR_MAY_ESCAPE_BLOCK",
             "TAG_RANGE_VIOLATION",
             "TAG_READONLY_WRITE",
             "COIL_STUCK_HIGH",
             "COIL_STUCK_LOW",
             "RUNG_CONTRADICTION",
+            "RUNG_REDUNDANT_TERM",
             "RUNG_TAUTOLOGY",
             "CMP_EQ_ON_MONOTONE",
             "CMP_OPERAND_STAYS_ZERO",
@@ -217,6 +223,8 @@ class TestValidationReport:
             "CMP_TRUE_AT_RESET",
             "CMP_STATIC_ON_LEFT",
             "STEP_NO_ESCAPE",
+            "MATH_DIV_ZERO",
+            "TAG_DEAD_WRITE",
         }
         assert ALL_RULES == expected
 
