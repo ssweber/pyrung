@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
     from pyrung.core.analysis.return_guards import ReachChain
     from pyrung.core.program import Program
+    from pyrung.core.validation.context import ValidationContext
 
 
 MATH_DIV_ZERO = "MATH_DIV_ZERO"
@@ -151,20 +152,24 @@ def _calc_instructions(instructions: list[Any]) -> Iterator[CalcInstruction]:
             yield from _calc_instructions(instr.instructions)
 
 
-def validate_math_conditions(program: Program) -> MathConditionReport:
+def validate_math_conditions(
+    program: Program,
+    *,
+    _context: ValidationContext | None = None,
+) -> MathConditionReport:
     """Report only calc divisors proved zero on every executable call path."""
-    from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.return_guards import effective_reach_chains, scope_reach_chains
-    from pyrung.core.analysis.value_domains import closed_value_domains
+    from pyrung.core.analysis.return_guards import effective_reach_chains
+    from pyrung.core.validation.context import ValidationContext
 
-    graph = build_program_graph(program)
-    raw_domains = closed_value_domains(program, graph)
+    context = _context or ValidationContext(program)
+    graph = context.graph
+    raw_domains = context.closed_domains
     domains = {
         name: set(values)
         for name, values in raw_domains.items()
         if all(isinstance(value, (int, float)) for value in values)
     }
-    reach = scope_reach_chains(program, graph)
+    reach = context.scope_reach_chains
     findings: list[MathConditionFinding] = []
 
     for loc, rung in iter_rungs(program):

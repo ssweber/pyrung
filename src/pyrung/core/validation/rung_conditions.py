@@ -66,6 +66,7 @@ if TYPE_CHECKING:
 
     from pyrung.core.condition import Condition
     from pyrung.core.program import Program
+    from pyrung.core.validation.context import ValidationContext
 
 RUNG_CONTRADICTION = "RUNG_CONTRADICTION"
 RUNG_TAUTOLOGY = "RUNG_TAUTOLOGY"
@@ -368,7 +369,11 @@ class RungConditionReport:
 # ---------------------------------------------------------------------------
 
 
-def validate_rung_conditions(program: Program) -> RungConditionReport:
+def validate_rung_conditions(
+    program: Program,
+    *,
+    _context: ValidationContext | None = None,
+) -> RungConditionReport:
     """Validate rung conditions for contradictions and tautological Or terms.
 
     One pass emitting three codes:
@@ -381,13 +386,12 @@ def validate_rung_conditions(program: Program) -> RungConditionReport:
     Both grades of a single rung are reported: the buggy guard rung is both a
     contradiction and carries a tautological Or term.
     """
-    from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.value_domains import closed_value_domains
+    from pyrung.core.validation.context import ValidationContext
 
-    graph = build_program_graph(program)
+    context = _context or ValidationContext(program)
     domains: DomainMap = {
         name: set(values)
-        for name, values in closed_value_domains(program, graph).items()
+        for name, values in context.closed_domains.items()
         if all(isinstance(value, (int, float)) for value in values)
     }
     findings: list[RungConditionFinding] = []

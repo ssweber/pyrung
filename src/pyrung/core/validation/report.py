@@ -149,6 +149,7 @@ def _validator_dispatch(
     from pyrung.core.validation.call_graph import validate_call_graph
     from pyrung.core.validation.choices_violation import validate_choices
     from pyrung.core.validation.cmp_conditions import validate_cmp_conditions
+    from pyrung.core.validation.context import ValidationContext
     from pyrung.core.validation.dead_write import validate_dead_writes
     from pyrung.core.validation.duplicate_out import validate_conflicting_outputs
     from pyrung.core.validation.final_writers import validate_final_writers
@@ -160,18 +161,24 @@ def _validator_dispatch(
     from pyrung.core.validation.stuck_bits import validate_stuck_bits
     from pyrung.core.validation.wait_escape import validate_wait_escapes
 
+    context = ValidationContext(program)
+
     return {
         "stuck": lambda: _as_findings(validate_stuck_bits(program).findings),
         "conflicting": lambda: _as_findings(validate_conflicting_outputs(program).findings),
         "readonly": lambda: _as_findings(validate_readonly_writes(program).findings),
-        "dead_write": lambda: _as_findings(validate_dead_writes(program).findings),
-        "pointer": lambda: _as_findings(validate_pointer_defaults(program).findings),
+        "dead_write": lambda: _as_findings(
+            validate_dead_writes(program, _context=context).findings
+        ),
+        "pointer": lambda: _as_findings(
+            validate_pointer_defaults(program, _context=context).findings
+        ),
         "choices": lambda: _as_findings(validate_choices(program).findings),
         "final": lambda: _as_findings(validate_final_writers(program).findings),
         "physical": lambda: _as_findings(validate_physical_realism(program, dt=dt).findings),
-        "rung": lambda: _as_findings(validate_rung_conditions(program).findings),
-        "cmp": lambda: _as_findings(validate_cmp_conditions(program).findings),
-        "call": lambda: _as_findings(validate_call_graph(program).findings),
-        "math": lambda: _as_findings(validate_math_conditions(program).findings),
+        "rung": lambda: _as_findings(validate_rung_conditions(program, _context=context).findings),
+        "cmp": lambda: _as_findings(validate_cmp_conditions(program, _context=context).findings),
+        "call": lambda: _as_findings(validate_call_graph(program, _context=context).findings),
+        "math": lambda: _as_findings(validate_math_conditions(program, _context=context).findings),
         "wait": lambda: _as_findings(validate_wait_escapes(program).findings),
     }

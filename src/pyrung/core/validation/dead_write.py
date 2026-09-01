@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
     from pyrung.core.rung import Rung
+    from pyrung.core.validation.context import ValidationContext
 
 
 TAG_DEAD_WRITE = "TAG_DEAD_WRITE"
@@ -138,11 +139,16 @@ def _ambiguous_between(program: Program, start: int, end: int) -> bool:
     return False
 
 
-def validate_dead_writes(program: Program) -> DeadWriteReport:
+def validate_dead_writes(
+    program: Program,
+    *,
+    _context: ValidationContext | None = None,
+) -> DeadWriteReport:
     """Report simple direct writes guaranteed to be overwritten before a read."""
-    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.validation.context import ValidationContext
 
-    graph = build_program_graph(program)
+    context = _context or ValidationContext(program)
+    graph = context.graph
     sites = _simple_sites(program, graph)
     findings: list[DeadWriteFinding] = []
 

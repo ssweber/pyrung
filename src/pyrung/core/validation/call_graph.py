@@ -12,6 +12,7 @@ from pyrung.core.validation.severity import Severity
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import CallSite, ProgramGraph
     from pyrung.core.program import Program
+    from pyrung.core.validation.context import ValidationContext
 
 
 CALL_NEVER_CALLED = "CALL_NEVER_CALLED"
@@ -135,11 +136,16 @@ def _site_location(graph: ProgramGraph, site: CallSite) -> str:
     return compact_location(node.scope, node.subroutine, node.rung_index, node.branch_path)
 
 
-def validate_call_graph(program: Program) -> CallGraphReport:
+def validate_call_graph(
+    program: Program,
+    *,
+    _context: ValidationContext | None = None,
+) -> CallGraphReport:
     """Report subroutines unreachable from Main and recursive call components."""
-    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.validation.context import ValidationContext
 
-    graph = build_program_graph(program)
+    context = _context or ValidationContext(program)
+    graph = context.graph
     sites = graph.call_sites()
     names = tuple(sorted(program.subroutines))
     reached = _reachable_from_main(sites)

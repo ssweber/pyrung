@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.analysis.return_guards import ReachChain
     from pyrung.core.program import Program
+    from pyrung.core.validation.context import ValidationContext
 
 
 PTR_DEFAULT_BEFORE_BLOCK_START = "PTR_DEFAULT_BEFORE_BLOCK_START"
@@ -143,19 +144,23 @@ def _bad_values_at_site(
     )
 
 
-def validate_pointer_defaults(program: Program) -> PointerDefaultReport:
+def validate_pointer_defaults(
+    program: Program,
+    *,
+    _context: ValidationContext | None = None,
+) -> PointerDefaultReport:
     """Validate pointer defaults and complete domains at indirect dereferences."""
-    from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.return_guards import effective_reach_chains, scope_reach_chains
-    from pyrung.core.analysis.value_domains import closed_value_domains
+    from pyrung.core.analysis.return_guards import effective_reach_chains
+    from pyrung.core.validation.context import ValidationContext
 
     grouped = _grouped_pointer_facts(program)
     if not grouped:
         return PointerDefaultReport(findings=())
 
-    graph = build_program_graph(program)
-    domains = closed_value_domains(program, graph)
-    reach = scope_reach_chains(program, graph)
+    context = _context or ValidationContext(program)
+    graph = context.graph
+    domains = context.closed_domains
+    reach = context.scope_reach_chains
     findings: list[PointerDefaultFinding] = []
 
     for block_name, pointer_name in sorted(grouped):

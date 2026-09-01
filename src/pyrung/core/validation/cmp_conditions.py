@@ -58,10 +58,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.affine import extract_forward_affine
-from pyrung.core.analysis.value_domains import (
-    closed_value_domains,
-    produced_value_domains,
-)
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -105,6 +101,7 @@ if TYPE_CHECKING:
     from pyrung.core.condition import Condition
     from pyrung.core.instruction.advance import AdvanceProfile
     from pyrung.core.program import Program
+    from pyrung.core.validation.context import ValidationContext
     from pyrung.core.validation.severity import Severity
 
 CMP_EQ_ON_MONOTONE = "CMP_EQ_ON_MONOTONE"
@@ -977,7 +974,11 @@ def _static_on_left_finding(
 # ---------------------------------------------------------------------------
 
 
-def validate_cmp_conditions(program: Program) -> CmpConditionReport:
+def validate_cmp_conditions(
+    program: Program,
+    *,
+    _context: ValidationContext | None = None,
+) -> CmpConditionReport:
     """Validate comparison semantics and zero-valued operands/presets.
 
     Each comparison is reported at most once.  The preset rule is instruction-
@@ -985,18 +986,19 @@ def validate_cmp_conditions(program: Program) -> CmpConditionReport:
     ``Acc >= same_preset`` completion comparison so the same zero is not reported
     twice.
     """
-    from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.prove.classify import (
         _compute_stepping_tags,
     )
+    from pyrung.core.validation.context import ValidationContext
 
     acc = _acc_index(program)
     written = _written_names(program)
     calc = _calc_derived_names(program)
-    graph = build_program_graph(program)
+    context = _context or ValidationContext(program)
+    graph = context.graph
     stepping = _compute_stepping_tags(program, graph)
-    produced_domains = produced_value_domains(program, graph)
-    closed_domains = closed_value_domains(program, graph)
+    produced_domains = context.produced_domains
+    closed_domains = context.closed_domains
 
     compares = list(_iter_compares(program))
     claimed: set[int] = set()

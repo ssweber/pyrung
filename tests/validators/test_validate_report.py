@@ -68,6 +68,83 @@ class TestValidateAllRuns:
         assert "TAG_READONLY_WRITE" in codes
 
 
+class TestValidationContext:
+    def test_shared_analyses_run_once_per_check(self, monkeypatch):
+        import pyrung.core.analysis.pdg as pdg
+        import pyrung.core.analysis.return_guards as return_guards
+        import pyrung.core.analysis.value_domains as value_domains
+
+        btn = Bool("Btn")
+        motor = Bool("Motor")
+        with Program() as prog:
+            with Rung(btn):
+                out(motor)
+
+        calls = {"graph": 0, "produced": 0, "reach": 0}
+        original_graph = pdg.build_program_graph
+        original_produced = value_domains.produced_value_domains
+        original_reach = return_guards.scope_reach_chains
+
+        def counted_graph(program):
+            calls["graph"] += 1
+            return original_graph(program)
+
+        def counted_produced(program, graph):
+            calls["produced"] += 1
+            return original_produced(program, graph)
+
+        def counted_reach(program, graph):
+            calls["reach"] += 1
+            return original_reach(program, graph)
+
+        monkeypatch.setattr(pdg, "build_program_graph", counted_graph)
+        monkeypatch.setattr(value_domains, "produced_value_domains", counted_produced)
+        monkeypatch.setattr(return_guards, "scope_reach_chains", counted_reach)
+
+        validate(
+            prog,
+            select={
+                "CALL_NEVER_CALLED",
+                "CMP_ALWAYS_FALSE",
+                "MATH_DIV_ZERO",
+                "RUNG_REDUNDANT_TERM",
+            },
+        )
+
+        assert calls == {"graph": 1, "produced": 1, "reach": 1}
+
+    def test_unselected_analyses_stay_lazy(self, monkeypatch):
+        import pyrung.core.analysis.pdg as pdg
+        import pyrung.core.analysis.return_guards as return_guards
+        import pyrung.core.analysis.value_domains as value_domains
+
+        with Program() as prog:
+            pass
+
+        calls = {"graph": 0, "produced": 0, "reach": 0}
+        original_graph = pdg.build_program_graph
+
+        def counted_graph(program):
+            calls["graph"] += 1
+            return original_graph(program)
+
+        def counted_produced(program, graph):
+            calls["produced"] += 1
+            return {}
+
+        def counted_reach(program, graph):
+            calls["reach"] += 1
+            return {}
+
+        monkeypatch.setattr(pdg, "build_program_graph", counted_graph)
+        monkeypatch.setattr(value_domains, "produced_value_domains", counted_produced)
+        monkeypatch.setattr(return_guards, "scope_reach_chains", counted_reach)
+
+        validate(prog, select={"CALL_NEVER_CALLED"})
+
+        assert calls == {"graph": 1, "produced": 0, "reach": 0}
+
+
 class TestSelectIgnore:
     def _stuck_program(self):
         go = Bool("Go")

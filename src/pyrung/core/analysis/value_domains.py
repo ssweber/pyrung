@@ -60,9 +60,12 @@ def produced_value_domains(
 def closed_value_domains(
     program: Program,
     graph: ProgramGraph,
+    *,
+    produced: dict[str, tuple[Any, ...]] | None = None,
 ) -> dict[str, tuple[Any, ...]]:
     """Return complete finite domains from contracts or understood producers."""
-    produced = produced_value_domains(program, graph)
+    if produced is None:
+        produced = produced_value_domains(program, graph)
     domains: dict[str, tuple[Any, ...]] = {}
     for name, tag in graph.tags.items():
         declared = declared_value_domain(tag)
