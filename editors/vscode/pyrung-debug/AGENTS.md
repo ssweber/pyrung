@@ -48,4 +48,4 @@ Step handlers (next/stepIn/stepOut/pyrungStepScan) emit `pyrungTrace` events syn
 - Package with PowerShell from this folder:
   `& "$env:APPDATA\npm\vsce.cmd" package`
 - If `code` is not on `PATH`, reinstall with:
-  `& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension "$PWD\pyrung-debug-0.11.0.vsix" --force`
+  `& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension "$PWD\pyrung-debug-0.12.0.vsix" --force`

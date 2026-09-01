@@ -372,7 +372,7 @@ def _generate_readme(workspace_kind: WorkspaceKind) -> str:
    Download `pyrung-debug-*.vsix` from the
    [latest release](https://github.com/ssweber/pyrung/releases), then:
 
-       code --install-extension pyrung-debug-0.11.0.vsix
+       code --install-extension pyrung-debug-0.12.0.vsix
 
 4. Open this folder in VS Code, press F5 to debug.
 

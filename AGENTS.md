@@ -107,7 +107,7 @@ src/pyrung/
 ## VS Code Extension (`editors/vscode/pyrung-debug/`)
 
 - Package: `cd editors/vscode/pyrung-debug && npx @vscode/vsce package`
-- Install: `code --install-extension /absolute/path/to/pyrung-debug-0.11.0.vsix`
+- Install: `code --install-extension /absolute/path/to/pyrung-debug-0.12.0.vsix`
 - No `npm install` needed — plain JS, no dependencies
 
 ## Gotchas
