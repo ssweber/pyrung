@@ -37,10 +37,11 @@ module.
   states, and retained landing states. `unlink=` deliberately makes named
   harness feedback steerable for fault injection.
 
-The public `how()` docstring calls the result a minimum input-change sequence.
-Internally, PILOT uses deterministic preference and bounded search rather than
-an evident global shortest-path proof. Do not strengthen or rely on global
-optimality without making that contract and proof explicit.
+The public `how()` docstring calls the result an input-change sequence, not a
+minimum one (the pre-v0.11 BFS engine did return shortest paths). Internally,
+PILOT uses deterministic preference and bounded search rather than an evident
+global shortest-path proof. Do not strengthen or rely on global optimality
+without making that contract and proof explicit.
 
 ## Authority chain
 

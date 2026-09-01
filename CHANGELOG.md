@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- `how()` documentation describes the result as a verified input-change sequence rather than a minimum-length path, and the Diagnosis guide states what `Reached`, `Stopped`, and the experimental label do and do not promise.
+
 ## v0.12.0 (2026-09-01)
 
 ### Breaking Changes

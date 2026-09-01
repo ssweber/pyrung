@@ -1985,7 +1985,7 @@ class PLC:
         unlink: list[str] | None = None,
         on_event: Any = None,
     ) -> Any:
-        """Find the minimum input-change sequence to reach a target state.
+        """Find an input-change sequence that reaches a target state.
 
         For a target with more than one route — a Bool (``Running``,
         ``Running == False``) or a word value (``State == 5``) — PILOT never
