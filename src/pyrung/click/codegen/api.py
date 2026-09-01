@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pyrung.click.codegen.analyzer import _analyze_rungs
 from pyrung.click.codegen.collector import _collect_operands
@@ -13,6 +13,8 @@ from pyrung.click.codegen.parser import (
     _parse_subroutines,
 )
 from pyrung.core.structure import resolve_default
+
+WorkspaceKind = Literal["temporary", "persistent"]
 
 if TYPE_CHECKING:
     from pyrung.click.codegen.models import _AnalyzedRung, _OperandCollection, _SubroutineInfo
@@ -247,6 +249,7 @@ def ladder_to_pyrung_project(
     index: bool = False,
     overwrite: bool = False,
     machine_name: str = "PLC",
+    workspace_kind: WorkspaceKind = "temporary",
     validate: bool = True,
 ) -> dict[str, str]:
     """Convert Click ladder data to a multi-file pyrung project.
@@ -268,6 +271,8 @@ def ladder_to_pyrung_project(
             Logic files under src/plc/ are always written.
         machine_name: Human-readable machine name for AGENTS.md
             header (e.g. from the .ckp filename).
+        workspace_kind: Whether generated lifecycle guidance describes a
+            temporary CLICK project folder or a configured persistent workspace.
         validate: When *True* (default), run codegen self-checks (see
             :func:`ladder_to_pyrung`): a structure-default identity check
             (raises :class:`CodegenIdentityError`) and a dropped-contact check
@@ -278,6 +283,9 @@ def ladder_to_pyrung_project(
         ``{"src/plc/main.py": "...", "src/plc/tags.py": "..."}``.
     """
     from pyrung.click.codegen.project_emitter import _SCAFFOLDING_FILES, _generate_project
+
+    if workspace_kind not in {"temporary", "persistent"}:
+        raise ValueError("workspace_kind must be 'temporary' or 'persistent'")
 
     analyzed, collection, nick_map, subroutines, structured_map = _prepare_codegen(
         source, nickname_csv=nickname_csv, nicknames=nicknames, validate=validate
@@ -294,6 +302,7 @@ def ladder_to_pyrung_project(
         structured_map=structured_map,
         index=index,
         machine_name=machine_name,
+        workspace_kind=workspace_kind,
     )
 
     # Include nickname CSV in output for round-trip support

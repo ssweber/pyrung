@@ -9,8 +9,10 @@ from pathlib import Path
 from pyrung.click import (
     ClickBlocks,
     TagMap,
+    WorkspaceKind,
     ladder_to_pyrung_project,
     pyrung_to_ladder,
+    refresh_workspace_lifecycle_guidance,
 )
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
@@ -49,12 +51,17 @@ def _project_from_program(
     tmp_path: Path,
     *,
     nicknames: dict[str, str] | None = None,
+    workspace_kind: WorkspaceKind = "temporary",
 ) -> dict[str, str]:
     """Program -> CSV -> ladder_to_pyrung_project -> files dict."""
     bundle = pyrung_to_ladder(program, tag_map)
     csv_dir = tmp_path / "csv"
     bundle.write(csv_dir)
-    return ladder_to_pyrung_project(csv_dir, nicknames=nicknames)
+    return ladder_to_pyrung_project(
+        csv_dir,
+        nicknames=nicknames,
+        workspace_kind=workspace_kind,
+    )
 
 
 def _exec_project(files: dict[str, str], tmp_path: Path) -> dict:
@@ -141,6 +148,8 @@ class TestProjectBasic:
         assert files[f"{_PLC_DIR}/__init__.py"] == ""
         assert files["CLAUDE.md"] == "@AGENTS.md\n"
         assert "# Machine: PLC" in files["AGENTS.md"]
+        assert "assert plc.state.scan_id == 1" in files["tests/test_smoke.py"]
+        assert "current_state" not in files["tests/test_smoke.py"]
         assert f"{_SUBROUTINES_DIR}/__init__.py" not in files
 
     def test_release_scaffolding_and_experimental_how_guidance(self, tmp_path: Path):
@@ -247,6 +256,54 @@ class TestProjectBasic:
             "does not mean the program is broken or the target is unreachable"
             in normalized_guidance
         )
+
+    def test_persistent_workspace_guidance_and_legacy_refresh(self, tmp_path: Path):
+        """Persistent projects survive CLICK and migrate only known generated prose."""
+        Button = Bool("Button")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with rung(Button):
+                out(Light)
+
+        mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
+        temporary = _project_from_program(logic, mapping, tmp_path / "temporary")
+        persistent = _project_from_program(
+            logic,
+            mapping,
+            tmp_path / "persistent",
+            workspace_kind="persistent",
+        )
+
+        for path in ("README.md", "AGENTS.md"):
+            persistent_text = persistent[path]
+            normalized = " ".join(persistent_text.split())
+            assert "<!-- pyrung:workspace-lifecycle:start -->" in persistent_text
+            assert "<!-- pyrung:workspace-lifecycle:end -->" in persistent_text
+            assert "does not delete" in normalized
+            assert "configured active workspace" in normalized
+            assert "closing the CLICK application deletes" not in normalized
+            assert "temporary backup is gone" not in normalized
+
+            legacy = (
+                temporary[path]
+                .replace(
+                    "<!-- pyrung:workspace-lifecycle:start -->\n",
+                    "",
+                )
+                .replace(
+                    "\n<!-- pyrung:workspace-lifecycle:end -->",
+                    "",
+                )
+            )
+            existing = f"{legacy}\nUser-authored footer.\n"
+            refreshed = refresh_workspace_lifecycle_guidance(existing, persistent_text)
+            assert "User-authored footer." in refreshed
+            assert "<!-- pyrung:workspace-lifecycle:start -->" in refreshed
+            assert "closing the CLICK application deletes" not in " ".join(refreshed.split())
+
+        user_docs = "# My machine\n\nClosing notes written by the engineer.\n"
+        assert refresh_workspace_lifecycle_guidance(user_docs, persistent["README.md"]) == user_docs
 
     def test_export_file_passes_blocks_to_nickname_file(self, tmp_path: Path):
         """project_to_csv.py must pass the ``blocks`` set to to_nickname_file.

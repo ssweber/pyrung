@@ -16,6 +16,7 @@
 
 ### Features
 
+- Generated Click workspaces can describe temporary or persistent storage explicitly, and integrations can refresh only the marked lifecycle guidance without replacing user-authored documentation.
 - Timer and Counter clones accept independent `Done` and `Acc` nickname overrides, and Click reverse codegen preserves existing timer/counter nicknames while supplying address-based names for unnamed pairs.
 - Choice-backed tags provide `tag.choice(label)` for explicit readable values, and Click reverse codegen reconstructs recognized comparison and `copy()` literals with that form.
 - Click ladder bundles include `rung_sources.json`, which maps exported rungs back to their contributing Python source spans for downstream previews.
@@ -27,6 +28,7 @@
 
 ### Fixes
 
+- Generated Click project smoke tests use the preferred `PLC.state` property.
 - `pyrung live check` uses the loaded runner's configured scan period for timing-sensitive physical checks instead of assuming 10 ms.
 - Generated Click projects preserve empty-project and edited-rung round trips, validate exports for address-identity conflicts, and resolve digit-ending slot names to their actual hardware addresses.
 - Click validation recognizes named DS pointer slots without redundant `TagMap` entries and treats numeric `==`/`!= 0`/`1` conditions as Boolean conventions instead of reporting their operands as stuck at zero.
