@@ -1305,6 +1305,11 @@ def _cmd_structures(adapter: Any, expression: str) -> ConsoleResult:
 # ---------------------------------------------------------------------------
 
 
+def _format_simplified_form(form: Any) -> str:
+    permissives = ", ".join(form.permissives) or "none"
+    return f"{form}\n  permissives: {permissives}"
+
+
 @register("simplified", usage="simplified [tag]", group="analysis")
 def _cmd_simplified(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
@@ -1321,11 +1326,11 @@ def _cmd_simplified(adapter: Any, expression: str) -> ConsoleResult:
                 f"'{tag_name}' is not a terminal tag. Only terminals have simplified forms."
             )
         stats = f"  ({form.writer_count} writer(s), {form.pivot_count} pivot(s) resolved, depth {form.depth})"
-        return ConsoleResult(f"{form}\n{stats}")
+        return ConsoleResult(f"{_format_simplified_form(form)}\n{stats}")
 
     if not forms:
         return ConsoleResult("No terminal tags found")
-    lines = [str(f) for f in forms.values()]
+    lines = [_format_simplified_form(form) for form in forms.values()]
     return ConsoleResult(f"{len(forms)} terminal(s):\n" + "\n".join(lines))
 
 

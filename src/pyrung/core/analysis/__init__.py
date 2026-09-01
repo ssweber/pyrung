@@ -44,7 +44,7 @@ from pyrung.core.analysis.return_guards import (
     return_early_guard_exprs,
     scope_reach_chains,
 )
-from pyrung.core.analysis.simplified import TerminalForm, simplified_forms
+from pyrung.core.analysis.simplified import PermissiveSet, TerminalForm, simplified_forms
 from pyrung.core.analysis.value_domains import (
     closed_value_domains,
     declared_value_domain,
@@ -61,6 +61,7 @@ __all__ = [
     "Intractable",
     "Plan",
     "PlanStatus",
+    "PermissiveSet",
     "ProgramGraph",
     "Proven",
     "RouteAlt",

@@ -146,6 +146,47 @@ str(form)
 # 'MotorOut = Or(And(RunPermit, ~EStop, Or(StartBtn, Running)), MaintOverride)'
 ```
 
+### Assert inferred permissives
+
+```python
+SafetyOK = Bool()
+Start = Bool()
+Jog = Bool()
+Motor = Bool()
+
+with Program() as logic:
+    with rung(SafetyOK):
+        with branch(Start):
+            out(Motor)
+        with branch(Jog):
+            out(Motor)
+
+form = logic.simplified()["Motor"]
+assert SafetyOK in form.permissives
+```
+
+`.permissives` contains the positive Boolean tags required by every path that
+can make the terminal true. It resolves combinational pivots first, so the set
+describes the effective form rather than only the contacts on the final rung.
+Membership accepts a `Tag` or its logical name.
+
+An alternate path removes a tag from the inferred set:
+
+```python
+assert RunPermit not in forms["MotorOut"].permissives  # MaintOverride bypasses it
+```
+
+`pyrung live` includes the same set in `simplified` output:
+
+```text
+Motor = And(SafetyOK, Or(Start, Jog))
+  permissives: SafetyOK
+  (2 writer(s), 0 pivot(s) resolved, depth 0)
+```
+
+These are inferred properties of the current program, not stored tag metadata,
+and they do not add contacts or otherwise change execution.
+
 ### What it tells you
 
 The simplified form strips away organizational structure — the intermediate tags that exist to break logic into reviewable chunks — and shows the actual dependency. A 14-rung → 2-term reduction tells you: 8 inputs matter, there are 2 independent paths, and `MaintOverride` bypasses everything.

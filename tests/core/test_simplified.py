@@ -547,6 +547,84 @@ def test_realistic_motor_circuit() -> None:
 
 
 # ---------------------------------------------------------------------------
+# TerminalForm.permissives
+# ---------------------------------------------------------------------------
+
+
+class TestTerminalFormPermissives:
+    def test_tag_membership_uses_inferred_positive_requirements(self) -> None:
+        SafetyOK = Bool("SafetyOK")
+        Start = Bool("Start")
+        Motor = Bool("Motor")
+        with Program(strict=False) as logic:
+            with Rung(SafetyOK, Start):
+                out(Motor)
+
+        assert SafetyOK in logic.simplified()["Motor"].permissives
+        assert "Start" in logic.simplified()["Motor"].permissives
+
+    def test_or_keeps_only_requirements_shared_by_every_path(self) -> None:
+        SafetyOK = Bool("SafetyOK")
+        Start = Bool("Start")
+        Jog = Bool("Jog")
+        Motor = Bool("Motor")
+        with Program(strict=False) as logic:
+            with Rung(SafetyOK):
+                with branch(Start):
+                    out(Motor)
+                with branch(Jog):
+                    out(Motor)
+
+        permissives = logic.simplified()["Motor"].permissives
+        assert SafetyOK in permissives
+        assert Start not in permissives
+        assert Jog not in permissives
+        assert repr(permissives) == "{'SafetyOK'}"
+
+    def test_bypass_path_removes_permissive(self) -> None:
+        SafetyOK = Bool("SafetyOK")
+        Start = Bool("Start")
+        MaintenanceOverride = Bool("MaintenanceOverride")
+        Motor = Bool("Motor")
+        with Program(strict=False) as logic:
+            with Rung():
+                with branch(SafetyOK, Start):
+                    out(Motor)
+                with branch(MaintenanceOverride):
+                    out(Motor)
+
+        assert SafetyOK not in logic.simplified()["Motor"].permissives
+
+    def test_resolves_combinational_permissive_pivot(self) -> None:
+        SafetyOK = Bool("SafetyOK")
+        GuardClosed = Bool("GuardClosed")
+        Ready = Bool("Ready")
+        Start = Bool("Start")
+        Motor = Bool("Motor")
+        with Program(strict=False) as logic:
+            with Rung(SafetyOK, GuardClosed):
+                out(Ready)
+            with Rung(Ready, Start):
+                out(Motor)
+
+        permissives = logic.simplified()["Motor"].permissives
+        assert tuple(permissives) == ("GuardClosed", "SafetyOK", "Start")
+        assert Ready not in permissives
+
+    def test_negative_contact_is_not_a_positive_permissive(self) -> None:
+        SafetyOK = Bool("SafetyOK")
+        Fault = Bool("Fault")
+        Motor = Bool("Motor")
+        with Program(strict=False) as logic:
+            with Rung(SafetyOK, ~Fault):
+                out(Motor)
+
+        permissives = logic.simplified()["Motor"].permissives
+        assert SafetyOK in permissives
+        assert Fault not in permissives
+
+
+# ---------------------------------------------------------------------------
 # expr_requires
 # ---------------------------------------------------------------------------
 

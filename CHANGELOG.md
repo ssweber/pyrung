@@ -16,6 +16,7 @@
 
 ### Features
 
+- Simplified terminal forms expose inferred positive permissives for tag-first assertions, and `pyrung live simplified` displays them alongside each expression.
 - Generated Click workspaces can describe temporary or persistent storage explicitly, and integrations can refresh only the marked lifecycle guidance without replacing user-authored documentation.
 - Timer and Counter clones accept independent `Done` and `Acc` nickname overrides, and Click reverse codegen preserves existing timer/counter nicknames while supplying address-based names for unnamed pairs.
 - Choice-backed tags provide `tag.choice(label)` for explicit readable values, and Click reverse codegen reconstructs recognized comparison and `copy()` literals with that form.

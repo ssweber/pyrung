@@ -7,6 +7,7 @@ it as a human-readable formula.
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Set
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
@@ -97,6 +98,38 @@ class Const:
 Expr = Atom | And | Or | Const
 
 
+class PermissiveSet(Set[str]):
+    """Positive Boolean tags required by every path through a terminal form.
+
+    Iteration yields logical tag names. Membership accepts either a logical name
+    or a :class:`Tag`, keeping assertions tag-first without retaining Tag object
+    identity in the simplified expression tree.
+    """
+
+    __slots__ = ("_names",)
+
+    def __init__(self, names: frozenset[str]) -> None:
+        self._names = names
+
+    def __contains__(self, item: object) -> bool:
+        from pyrung.core.tag import Tag
+
+        if isinstance(item, Tag):
+            return item.name in self._names
+        return isinstance(item, str) and item in self._names
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(sorted(self._names))
+
+    def __len__(self) -> int:
+        return len(self._names)
+
+    def __repr__(self) -> str:
+        if not self._names:
+            return "set()"
+        return "{" + ", ".join(repr(name) for name in sorted(self._names)) + "}"
+
+
 @dataclass(frozen=True)
 class TerminalForm:
     """Resolved Boolean expression for one terminal tag."""
@@ -106,6 +139,11 @@ class TerminalForm:
     writer_count: int
     pivot_count: int
     depth: int
+
+    @property
+    def permissives(self) -> PermissiveSet:
+        """Positive Boolean tags required on every path that makes this form true."""
+        return PermissiveSet(_required_tags(self.expr, form="xic"))
 
     def __str__(self) -> str:
         return f"{self.tag} = {render(self.expr)}"
@@ -951,17 +989,23 @@ def expr_requires(expr: Expr, tag: str, *, negated: bool = False) -> bool:
     Or:  required only if ALL disjuncts require it (any branch could fire).
     """
     form = "xio" if negated else "xic"
-    return _check_required(expr, tag, form)
+    return tag in _required_tags(expr, form=form)
 
 
-def _check_required(expr: Expr, tag: str, form: str) -> bool:
+def _required_tags(expr: Expr, *, form: str) -> frozenset[str]:
+    """Return tags with *form* on every path that can make *expr* true."""
     if isinstance(expr, Atom):
-        return expr.tag == tag and expr.form == form
+        if expr.form == form and expr.unsupported is None:
+            return frozenset({expr.tag})
+        return frozenset()
     if isinstance(expr, And):
-        return any(_check_required(t, tag, form) for t in expr.terms)
+        return frozenset().union(*(_required_tags(term, form=form) for term in expr.terms))
     if isinstance(expr, Or):
-        return all(_check_required(t, tag, form) for t in expr.terms)
-    return False
+        required = [_required_tags(term, form=form) for term in expr.terms]
+        if not required:
+            return frozenset()
+        return frozenset.intersection(*required)
+    return frozenset()
 
 
 def reset_dominance(

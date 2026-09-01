@@ -1099,6 +1099,7 @@ class TestSimplifiedVerb:
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Light = Button" in result
+        assert "permissives: Button" in result
         assert "writer(s)" in result
 
     def test_simplified_all(self, tmp_path: Path):
@@ -1108,6 +1109,7 @@ class TestSimplifiedVerb:
         result = resp["body"]["result"]
         assert "terminal(s)" in result
         assert "Light" in result
+        assert "permissives: Button" in result
 
     def test_simplified_non_terminal(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
