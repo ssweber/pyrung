@@ -64,6 +64,10 @@ def _cmd_lock(args: argparse.Namespace) -> None:
         write_lock,
     )
 
+    if args.check:
+        _cmd_lock_check(args)
+        return
+
     program, mod = _find_program(args.module)
     lock_path = Path(args.output)
 
@@ -99,11 +103,15 @@ def _cmd_lock(args: argparse.Namespace) -> None:
     print(f"Wrote {lock_path} ({len(states)} reachable states)")
 
 
-def _cmd_check(args: argparse.Namespace) -> None:
+def _cmd_lock_check(args: argparse.Namespace) -> None:
     from pyrung.core.analysis.prove import check_lock
 
     program, mod = _find_program(args.module)
-    lock_path = Path(args.lock)
+    lock_path = Path(args.output)
+
+    if args.project:
+        print("--project cannot be used with --check", file=sys.stderr)
+        raise SystemExit(2)
 
     if not lock_path.exists():
         print(f"Lock file not found: {lock_path}", file=sys.stderr)
@@ -130,6 +138,28 @@ def _cmd_check(args: argparse.Namespace) -> None:
             print(f"  {len(diff.added)} new reachable state(s)", file=sys.stderr)
         if diff.removed:
             print(f"  {len(diff.removed)} lost reachable state(s)", file=sys.stderr)
+        raise SystemExit(1)
+
+
+def _cmd_check(args: argparse.Namespace) -> None:
+    program, _mod = _find_program(args.module)
+    report = program.check(
+        select=set(args.select) if args.select else None,
+        ignore=set(args.ignore) if args.ignore else None,
+        dt=args.dt,
+    )
+
+    if not report:
+        print("No findings.")
+        return
+
+    for index, finding in enumerate(report):
+        if index:
+            print()
+        print(finding)
+    print()
+    print(report.summary())
+    if report.has_errors():
         raise SystemExit(1)
 
 
@@ -219,10 +249,15 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command")
 
     # -- lock --
-    lock_p = sub.add_parser("lock", help="Compute reachable states and write pyrung.lock")
+    lock_p = sub.add_parser("lock", help="Write or check a behavioral lock file")
     lock_p.add_argument("module", help="Python module containing the Program")
     lock_p.add_argument("-o", "--output", default="pyrung.lock", help="Output path")
     lock_p.add_argument("--project", nargs="*", help="Tags to project onto")
+    lock_p.add_argument(
+        "--check",
+        action="store_true",
+        help="Compare the program with the lock file instead of writing it",
+    )
     lock_p.add_argument(
         "--depth-budget",
         type=int,
@@ -237,20 +272,21 @@ def main() -> None:
     lock_p.set_defaults(func=_cmd_lock)
 
     # -- check --
-    check_p = sub.add_parser("check", help="Verify program matches pyrung.lock")
+    check_p = sub.add_parser("check", help="Run static ladder checks")
     check_p.add_argument("module", help="Python module containing the Program")
-    check_p.add_argument("--lock", default="pyrung.lock", help="Lock file path")
     check_p.add_argument(
-        "--depth-budget",
-        type=int,
-        default=50,
-        help="Abstract BFS depth budget; hidden-event acceleration may cover more concrete scans",
+        "--select",
+        nargs="+",
+        metavar="RULE",
+        help="Run only these rule codes or categories",
     )
-    check_p.add_argument("--max-states", type=int, default=100_000)
     check_p.add_argument(
-        "--profile",
-        help="Write cProfile stats to FILE; dumped even if interrupted",
+        "--ignore",
+        nargs="+",
+        metavar="RULE",
+        help="Skip these rule codes or categories",
     )
+    check_p.add_argument("--dt", type=float, default=0.010, help="Scan interval in seconds")
     check_p.set_defaults(func=_cmd_check)
 
     # -- dap --

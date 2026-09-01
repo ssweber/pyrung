@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.12.0 - 2026-09-01
+
+- Align the packaged debugger version with pyrung 0.12.0.
+
 ## 0.11.0 - 2026-08-24
 
 - **Tag flag badges** — `RO` and `P` badges next to tag names in the Data View

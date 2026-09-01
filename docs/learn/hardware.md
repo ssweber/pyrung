@@ -14,18 +14,18 @@ Everything from here is about taking what you've built and connecting it to the 
 
     Real installations must follow all applicable local and national codes (NEC, NFPA, NEMA, and the codes of your jurisdiction). pyrung verifies your *logic*; it cannot verify your wiring, your safety circuit, or your machine. Get a review from a qualified controls engineer before energizing anything that can move, heat, pinch, or otherwise hurt someone.
 
-## `StopBtn` was the warm-up. Now meet the E-stop.
+## `StopCircuitOK` was the warm-up. Now meet the E-stop.
 
-You've been writing `~StopBtn` since [Lesson 3](latch-reset.md). That's the same NC wiring convention real stop buttons use -- the bit is HIGH when healthy, LOW when pressed or broken. So you already know how fail-safe inputs read in code. The wiring is the easy part.
+You've been writing `~StopCircuitOK` since [Lesson 3](latch-reset.md). That's the same NC wiring convention real stop buttons use -- the bit is HIGH when healthy, LOW when pressed or broken. So you already know how fail-safe inputs read in code. The wiring is the easy part.
 
-The hard part is **who owns the stop.** When you wired `StopBtn` to the PLC, the PLC was in charge: it read the bit, decided to call `reset(Running)`, and stopped the motor as a software decision. That works for a conveyor in the lab. It does *not* work on a machine that can hurt someone, because the PLC is not a safety device. If your scan halts, your watchdog hangs, your firmware glitches, or your output transistor welds shut, the PLC's "decision" to stop never reaches the actuator.
+The hard part is **who owns the stop.** When you wired the circuit represented by `StopCircuitOK` to the PLC, the PLC was in charge: it read the bit, decided to call `reset(Running)`, and stopped the motor as a software decision. That works for a conveyor in the lab. It does *not* work on a machine that can hurt someone, because the PLC is not a safety device. If your scan halts, your watchdog hangs, your firmware glitches, or your output transistor welds shut, the PLC's "decision" to stop never reaches the actuator.
 
 A real E-stop takes the PLC *out of the chain of command*. The red mushroom button wires to a dedicated **safety relay** (Pilz, Banner, ABB Jokab) rated to ISO 13849 / IEC 62061. The safety relay handles dual-channel monitoring, contact welding detection, and the actual stop circuit that drops power to dangerous outputs. The PLC reads the relay's permission contact as `EstopOK` and is *informed* -- but not in charge. If the PLC dies, the safety relay still drops the contactor.
 
-- **`StopBtn`** -- operator says "please stop." PLC handles it in software. It's a control input.
+- **`StopCircuitOK`** -- the operator stop circuit is healthy. PLC handles it in software. It's a control permission input.
 - **`EstopOK`** -- safety relay says "the world is OK to run." PLC obeys it as a gate. It's a permission input.
 
-Both are NC wired, but the naming tells you which is which. `~StopBtn` reads as "stop is asserted." `EstopOK` reads as "safety is satisfied" -- no negation needed because the name encodes the polarity. Same NC wiring, opposite naming, because they encode different *meanings*.
+Both are NC wired, and both names encode their healthy polarity. `StopCircuitOK` means the operator stop circuit is closed; `EstopOK` means the safety relay grants permission to run. The names also preserve the important distinction between a software stop circuit and a safety-rated E-stop circuit.
 
 In the example code, `EstopOK` gates all outputs through `with rung(EstopOK):` -- read that as a *demonstration* of the pattern, not a safety design.
 
@@ -67,7 +67,7 @@ x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = Click
 
 mapping = TagMap({
     StartBtn:       x[1],       # Physical input terminal 1
-    StopBtn:        x[2],       # NC stop button
+    StopCircuitOK:  x[2],       # NC stop circuit
     EstopOK:        x[3],       # NC safety relay permission
     Auto:           x[4],
     Manual:         x[5],

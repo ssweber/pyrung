@@ -133,6 +133,13 @@ def test_mapped_slots_use_canonical_default_metadata():
     assert slots[0].default == 5
 
 
+def test_mapped_slots_reuses_frozen_snapshot():
+    value = Tag("Value", TagType.INT)
+    mapping = TagMap({value: ds[1]}, include_system=False)
+
+    assert mapping.mapped_slots() is mapping.mapped_slots()
+
+
 def test_contains_block():
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
     mapping = TagMap({alarms: c.select(101, 102)})

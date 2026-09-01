@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import functools
 import io
+import json
 import re
 import textwrap
 from pathlib import Path
@@ -126,6 +127,54 @@ def test_header_and_width_invariants():
     assert all(len(row) == 33 for row in bundle.main_rows)
 
 
+def test_named_click_slots_ending_in_digits_export_as_hardware_addresses():
+    blocks = ClickBlocks()
+    blocks.x.slot(1, name="Pedal1", external=True)
+    blocks.x.slot(2, name="Motor10", external=True)
+    blocks.c.slot(1, name="RecordTopThickness")
+
+    with Program() as logic:
+        with Rung(blocks.x[1], blocks.x[2]):
+            out(blocks.c[1])
+
+    bundle = pyrung_to_ladder(logic, TagMap({}, include_system=False))
+
+    assert normalize_csv(tuple(bundle.main_rows)) == _literal_csv_rows(
+        """
+        R,X001,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(C1)
+        """
+    )
+
+
+def test_unmapped_raw_click_address_name_still_exports():
+    RawInput = Bool("X001")
+    RawOutput = Bool("C1")
+
+    with Program() as logic:
+        with Rung(RawInput):
+            out(RawOutput)
+
+    bundle = pyrung_to_ladder(logic, TagMap({}, include_system=False))
+
+    assert normalize_csv(tuple(bundle.main_rows)) == _literal_csv_rows(
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(C1)
+        """
+    )
+
+
+def test_unmapped_numbered_nickname_is_not_treated_as_click_address():
+    Motor10 = Bool("Motor10")
+    RawOutput = Bool("C1")
+
+    with Program() as logic:
+        with Rung(Motor10):
+            out(RawOutput)
+
+    with pytest.raises(LadderExportError, match="Tag 'Motor10' is not mapped"):
+        pyrung_to_ladder(logic, TagMap({}, include_system=False))
+
+
 def test_export_roundtrip_guard_rejects_missing_pin_row():
     from pyrung.click.ladder._exporter import _LadderExporter
     from pyrung.click.ladder.types import _RenderError
@@ -138,7 +187,7 @@ def test_export_roundtrip_guard_rejects_missing_pin_row():
     )
 
     exporter = _LadderExporter(tag_map=mapping, program=logic)
-    rendered_rows = exporter._render_scope(logic.rungs, scope="main", subroutine_name=None)
+    rendered_rows, _ = exporter._render_scope(logic.rungs, scope="main", subroutine_name=None)
     mutated_rows = [row for row in rendered_rows if row[-1] != ".reset()"]
 
     with pytest.raises(_RenderError, match="pin count mismatch"):
@@ -467,6 +516,44 @@ def test_subroutine_files_sorted_and_return_tailed(tmp_path: Path):
     assert (out_dir / "main.csv").exists()
     assert (out_dir / "subroutines" / "alpha.csv").exists()
     assert (out_dir / "subroutines" / "beta-two.csv").exists()
+
+
+def test_bundle_writes_rung_source_manifest_and_groups_continued_rungs(tmp_path: Path):
+    Enable = Bool("Enable")
+    Light1 = Bool("Light1")
+    Light2 = Bool("Light2")
+
+    with Program() as logic:
+        with Rung(Enable):
+            out(Light1)
+        with Rung(Enable).continued():
+            out(Light2)
+
+    mapping = TagMap(
+        {Enable: x[1], Light1: y[1], Light2: y[2]},
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+
+    assert len(bundle.main_sources) == 2
+    assert bundle.main_sources[0].rung == 1
+    assert len(bundle.main_sources[0].sources) == 2
+    assert bundle.main_sources[1].rung == 2
+    assert bundle.main_sources[1].sources == ()  # Synthetic end().
+    for source in bundle.main_sources[0].sources:
+        assert source.source_file is not None
+        assert Path(source.source_file).samefile(__file__)
+        assert source.source_line is not None
+        assert source.end_line is not None
+        assert source.end_line >= source.source_line
+
+    out_dir = tmp_path / "ladder"
+    bundle.write(out_dir)
+    manifest = json.loads((out_dir / "rung_sources.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == 1
+    assert [entry["rung"] for entry in manifest["main"]] == [1, 2]
+    assert len(manifest["main"][0]["sources"]) == 2
+    assert manifest["main"][1]["sources"] == []
 
 
 def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():

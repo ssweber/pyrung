@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Callable, Iterable, Sized
+from collections.abc import Callable, Iterable, Mapping, Sized
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any, ClassVar, Literal, Protocol, get_origin
@@ -425,13 +425,14 @@ class _DoneAccRuntime(_StructRuntime):
         name: str,
         *,
         count: int | None = None,
+        nicknames: Mapping[str, str] | None = None,
         readonly: bool | None = None,
         external: bool | None = None,
         final: bool | None = None,
         public: bool | None = None,
         lock: bool | None = None,
     ) -> _DoneAccRuntime:
-        return _DoneAccRuntime(
+        clone = _DoneAccRuntime(
             name=name,
             count=self.count if count is None else count,
             field_specs=self._original_field_specs,
@@ -443,6 +444,20 @@ class _DoneAccRuntime(_StructRuntime):
             lock=self.lock if lock is None else lock,
             kind=self._structure_kind,
         )
+        if nicknames:
+            if clone.count != 1:
+                raise ValueError("Timer/Counter nickname overrides require count=1.")
+            unknown = set(nicknames) - {"Done", "Acc"}
+            if unknown:
+                fields = ", ".join(sorted(unknown))
+                raise ValueError(f"Unknown Timer/Counter nickname fields: {fields}.")
+            for field_name, nickname in nicknames.items():
+                if not isinstance(nickname, str) or nickname == "":
+                    raise ValueError(
+                        f"Timer/Counter nickname for {field_name} must be a non-empty string."
+                    )
+                clone._blocks[field_name].slot(1, name=nickname)
+        return clone
 
 
 class _NamedArrayRuntime(_StructRuntime):

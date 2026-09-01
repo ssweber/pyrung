@@ -29,7 +29,7 @@ from pyrung.core.validation._common import (
     _instruction_write_targets,
     site_frame,
 )
-from pyrung.core.validation.display import FindingDisplay
+from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
 from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
@@ -46,7 +46,7 @@ OutputSite = WriteSite
 
 
 @dataclass(frozen=True)
-class ConflictingOutputFinding:
+class ConflictingOutputFinding(_FindingTextMixin):
     """A set of instruction sites that target the same tag without mutual exclusivity."""
 
     code: str

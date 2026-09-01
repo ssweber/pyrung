@@ -189,6 +189,7 @@ runner.reboot()  # all tags reset
 ```python
 runner.state            # SystemState snapshot at latest committed scan
 runner.simulation_time  # shorthand for state.timestamp
+runner.dt               # configured scan period in seconds
 runner.time_mode        # current TimeMode
 runner.forces           # read-only view of active force overrides
 ```

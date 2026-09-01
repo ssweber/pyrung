@@ -218,7 +218,7 @@ The lock file captures your program's full reachable behavior as a committed art
 
 ```bash
 pyrung lock my_program        # compute reachable states, write pyrung.lock
-pyrung check my_program       # recompute, diff against pyrung.lock, exit 1 if changed
+pyrung lock my_program --check  # recompute, diff against pyrung.lock, exit 1 if changed
 ```
 
 The lock projects to tags marked `lock=True` by default — the outputs that define your program's observable behavior. Programs using Click `TagMap` get this automatically (output-mapped tags are stamped `lock=True`). Programs without `TagMap` need explicit `lock=True` on output tags, or use `__lock__` or `--project`:
@@ -385,9 +385,9 @@ pyrung lock <module> --project Running MotorOut  # explicit projection
 pyrung lock <module> --depth-budget 100          # allow more abstract BFS work
 pyrung lock <module> --profile out.prof          # write cProfile stats
 
-pyrung check <module>             # diff against pyrung.lock, exit 1 on change
-pyrung check <module> --lock custom.lock         # custom lock path
-pyrung check <module> --profile out.prof         # write cProfile stats
+pyrung lock <module> --check                  # diff against pyrung.lock, exit 1 on change
+pyrung lock <module> --check -o custom.lock   # custom lock path
+pyrung lock <module> --check --profile out.prof  # write cProfile stats
 ```
 
 `--profile` dumps cProfile stats even on `KeyboardInterrupt`. Analyze with `pstats.Stats("out.prof")` or `uvx snakeviz out.prof`.

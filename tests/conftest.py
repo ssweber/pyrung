@@ -197,6 +197,11 @@ class _RunnerPair:
         return self._interpreted.simulation_time
 
     @property
+    def dt(self) -> float:
+        assert self._interpreted.dt == self._compiled.dt
+        return self._interpreted.dt
+
+    @property
     def forces(self):  # noqa: ANN201
         assert dict(self._interpreted.forces) == dict(self._compiled.forces)
         return self._interpreted.forces

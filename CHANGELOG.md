@@ -10,6 +10,34 @@
 
 ## Unreleased
 
+## v0.12.0 (2026-09-01)
+
+### Breaking Changes
+
+- **`pyrung check` now runs ladder lints.** Replace behavioral lock comparisons with `pyrung lock <module> --check`; use `pyrung check <module>` for static ladder findings, `pyrung live check` for the loaded program, and `Program.check()` in Python. `Program.validate()` without a dialect remains a compatibility alias, while dialect validation is unchanged.
+
+### Features
+
+- Simplified terminal forms expose inferred positive permissives for tag-first assertions, and `pyrung live simplified` displays them alongside each expression.
+- Generated Click workspaces guide agents through the complete ClickNick proposal workflow, distinguish temporary from persistent storage, and let integrations refresh marked lifecycle guidance without replacing user-authored documentation.
+- Timer and Counter clones accept independent `Done` and `Acc` nickname overrides, and Click reverse codegen preserves existing timer/counter nicknames while supplying address-based names for unnamed pairs.
+- Choice-backed tags provide `tag.choice(label)` for explicit readable values, and Click reverse codegen reconstructs recognized comparison and `copy()` literals with that form.
+- Click ladder bundles include `rung_sources.json`, which maps exported rungs back to their contributing Python source spans for downstream previews.
+- The new Ladder Lints guide grounds static checks in ladder-logic practice and documents all 28 core rules, diagnostic output, rule selection, and command-line usage.
+- Ladder checks now emit complete compiler-style diagnostics for constant comparisons, unsafe pointer domains, unreachable or recursive subroutines, definite zero divisors, redundant condition terms, overwritten writes, and literal comparisons better expressed as named read-only references or decoded Bool status tags.
+
+### Fixes
+
+- `pyrung live check` uses the loaded runner's configured scan period for timing-sensitive physical checks instead of assuming 10 ms.
+- Generated Click projects preserve empty-project and edited-rung round trips, validate exports for address-identity conflicts, resolve digit-ending slot names to their actual hardware addresses, and use the preferred `PLC.state` property in smoke tests.
+- Click validation recognizes named DS pointer slots without redundant `TagMap` entries and treats numeric `==`/`!= 0`/`1` conditions as Boolean conventions instead of reporting their operands as stuck at zero.
+- `Program.check()` consistently ranks operand-order suggestions as advisories and labels the common uninitialized indirect-address problem as `Pointer Can Be 0`.
+- PILOT plans and live progress describe exploratory input changes as set or try operations instead of incorrectly calling them pulses.
+
+### Performance
+
+- Core ladder checks share static-analysis facts, while Click validation reuses frozen tag-map slots and operand resolutions, checks each unique memory-bank pair once, and collects address identities without building a dependency graph.
+
 ## v0.11.0 (2026-08-24)
 
 ### Breaking Changes

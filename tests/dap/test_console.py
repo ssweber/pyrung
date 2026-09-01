@@ -54,7 +54,7 @@ def _stopped_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [msg for msg in messages if msg.get("type") == "event" and msg.get("event") == "stopped"]
 
 
-def _runner_script() -> str:
+def _runner_script(*, dt: float = 0.010) -> str:
     return (
         "from pyrung.core import Bool, Int, PLC, Program, Rung, out, copy\n"
         "\n"
@@ -68,7 +68,7 @@ def _runner_script() -> str:
         "    with Rung():\n"
         "        copy(0, counter)\n"
         "\n"
-        "runner = PLC(prog, dt=0.010)\n"
+        f"runner = PLC(prog, dt={dt!r})\n"
     )
 
 
@@ -171,10 +171,10 @@ def _setup_how(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
     return adapter, out_stream
 
 
-def _setup(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
+def _setup(tmp_path: Path, *, dt: float = 0.010) -> tuple[DAPAdapter, io.BytesIO]:
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
-    script = _write_script(tmp_path, "logic.py", _runner_script())
+    script = _write_script(tmp_path, "logic.py", _runner_script(dt=dt))
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _send_request(adapter, out_stream, seq=2, command="configurationDone")
     _drain_messages(out_stream)
@@ -524,7 +524,7 @@ class TestCausalVerbs:
             PilotEvent("candidate_accepted", 11, {"applied": (("Start", True),)})
         )
 
-        assert trying == "\nPulse Start=True..."
+        assert trying == "\nTrying Start=True..."
         assert accepted == " done.\n"
 
     def test_how_progress_streams_an_atomic_widening_batch(self):
@@ -537,7 +537,7 @@ class TestCausalVerbs:
         trying = progress.format(PilotEvent("candidate_try", 10, {"applied": actions}))
         accepted = progress.format(PilotEvent("widening_accepted", 11, {"applied": actions}))
 
-        assert trying == "\nPulse ModeRequest=True, Production=True..."
+        assert trying == "\nTrying ModeRequest=True, Production=True..."
         assert accepted == " done.\n"
 
     def test_how_progress_streams_an_exact_crossing_as_one_atomic_pulse(self):
@@ -550,7 +550,7 @@ class TestCausalVerbs:
         trying = progress.format(PilotEvent("crossing_try", 10, {"actions": actions}))
         accepted = progress.format(PilotEvent("crossing_accepted", 11, {"applied": actions}))
 
-        assert trying == "\nPulse ModeRequest=True, Production=True..."
+        assert trying == "\nTrying ModeRequest=True, Production=True..."
         assert accepted == " done.\n"
 
     def test_how_progress_closes_a_rejected_exact_crossing(self):
@@ -563,7 +563,7 @@ class TestCausalVerbs:
         trying = progress.format(PilotEvent("crossing_try", 10, {"actions": actions}))
         rejected = progress.format(PilotEvent("crossing_rejected", 11, {"actions": actions}))
 
-        assert trying == "\nPulse ModeRequest=True, Production=True..."
+        assert trying == "\nTrying ModeRequest=True, Production=True..."
         assert rejected == " no useful change.\n"
 
     def test_how_progress_calls_prerequisite_controls_set_and_explains_why(self):
@@ -613,9 +613,9 @@ class TestCausalVerbs:
 
         fragment = progress.format(PilotEvent("candidate_try", 11, {"applied": (("Start", True),)}))
 
-        assert fragment == " valid.\n\nPulse Start=True..."
+        assert fragment == " valid.\n\nTrying Start=True..."
 
-    def test_how_progress_does_not_call_a_sustained_control_a_pulse(self):
+    def test_how_progress_excludes_a_sustained_control_from_the_trial(self):
         from pyrung import Bool, Int
         from pyrung.core.analysis.pilot.overlay import PilotRung
         from pyrung.core.analysis.pilot.types import PilotEvent
@@ -642,7 +642,7 @@ class TestCausalVerbs:
             )
         )
 
-        assert fragment == "\nPulse Start=True..."
+        assert fragment == "\nTrying Start=True..."
 
     def test_how_progress_resumes_without_repeating_the_wait_target(self):
         from pyrung.core.analysis.pilot.types import PilotEvent
@@ -1043,6 +1043,51 @@ class TestMonitorVerbs:
 
 
 # ---------------------------------------------------------------------------
+# Ladder checks
+# ---------------------------------------------------------------------------
+
+
+class TestCheckVerb:
+    def test_check_clean_program(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "check")
+        assert resp["success"] is True
+        assert resp["body"]["result"] == "No findings."
+
+    def test_check_prints_finding(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        resp, _ = _repl(adapter, out, "check COIL_STUCK_HIGH")
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "[COIL_STUCK_HIGH] warning" in result
+        assert "never reset" in result
+        assert "COIL_STUCK_HIGH: 1" in result
+
+    def test_check_rejects_unknown_selector(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "check NOT_A_RULE")
+        assert resp["success"] is False
+        assert "Unknown rule code or category" in resp["message"]
+
+    def test_check_uses_runner_scan_period(self, tmp_path: Path, monkeypatch):
+        adapter, out = _setup(tmp_path, dt=0.05)
+        program = adapter._runner.program
+        original_check = program.check
+        observed: dict[str, float] = {}
+
+        def recording_check(**kwargs):
+            observed["dt"] = kwargs["dt"]
+            return original_check(**kwargs)
+
+        monkeypatch.setattr(program, "check", recording_check)
+
+        resp, _ = _repl(adapter, out, "check")
+
+        assert resp["success"] is True
+        assert observed["dt"] == 0.05
+
+
+# ---------------------------------------------------------------------------
 # Simplified
 # ---------------------------------------------------------------------------
 
@@ -1054,6 +1099,7 @@ class TestSimplifiedVerb:
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Light = Button" in result
+        assert "permissives: Button" in result
         assert "writer(s)" in result
 
     def test_simplified_all(self, tmp_path: Path):
@@ -1063,6 +1109,7 @@ class TestSimplifiedVerb:
         result = resp["body"]["result"]
         assert "terminal(s)" in result
         assert "Light" in result
+        assert "permissives: Button" in result
 
     def test_simplified_non_terminal(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
@@ -1096,6 +1143,7 @@ class TestHelpAndErrors:
             "run",
             "cause",
             "effect",
+            "check",
             "monitor",
             "simplified",
             "help",

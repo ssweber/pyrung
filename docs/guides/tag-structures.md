@@ -268,9 +268,27 @@ ds.slot(10).reset()        # Clear all overrides for slot 10
 ds.slot(20, 30).reset()    # Clear all overrides for range 20–30
 ```
 
+## Choice labels
+
+Use `choice()` when a label should produce the tag's stored value rather than a
+text literal:
+
+```python
+State = Int(choices={0: "IDLE", 1: "RUNNING", 2: "FAULTED"})
+
+with rung(State == State.choice("IDLE")):
+    copy(State.choice("RUNNING"), State)
+
+assert State.value == State.choice("RUNNING")
+```
+
+Comparisons also accept the shorter `State == "IDLE"` form. The explicit form
+works in writes and assertions, and Click reverse codegen uses it when nickname
+metadata supplies a matching choice label.
+
 ## Tag flags
 
-Tags carry metadata flags that control validation, presentation, and lock file projection. Three semantic flags are enforced by static validators; two metadata flags control presentation and verification.
+Tags carry metadata flags that control validation, presentation, and lock file projection. Three semantic flags are enforced by [ladder lints](ladder-lints.md); two metadata flags control presentation and verification.
 
 ### Semantic flags
 

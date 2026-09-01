@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from pyrung.core.program import Program
     from pyrung.core.validation.display import FindingDisplay
 
-__all__ = ["ALL_RULES", "Finding", "ValidationReport", "validate"]
+__all__ = ["ALL_RULES", "Finding", "ValidationReport", "check", "validate"]
 
 
 class Finding(Protocol):
@@ -94,14 +94,14 @@ class ValidationReport:
         return iter(self.findings)
 
 
-def validate(
+def check(
     program: Program,
     *,
     select: set[str] | None = None,
     ignore: set[str] | None = None,
     dt: float = 0.010,
 ) -> ValidationReport:
-    """Run core validators, optionally filtered by rule code or category.
+    """Run core ladder checks, optionally filtered by rule code or category.
 
     With no arguments, every default-on validator runs.  ``select`` limits to
     the given codes or category prefixes (e.g. ``{"COIL"}``); ``ignore``
@@ -127,6 +127,17 @@ def validate(
     return ValidationReport(findings=tuple(findings))
 
 
+def validate(
+    program: Program,
+    *,
+    select: set[str] | None = None,
+    ignore: set[str] | None = None,
+    dt: float = 0.010,
+) -> ValidationReport:
+    """Compatibility alias for :func:`check`."""
+    return check(program, select=select, ignore=ignore, dt=dt)
+
+
 def _validator_dispatch(
     program: Program, dt: float
 ) -> dict[str, Callable[[], tuple[Finding, ...]]]:
@@ -135,10 +146,14 @@ def _validator_dispatch(
     Imports are local so importing this module never eagerly loads the validator
     modules — matching the historical import profile of :func:`validate`.
     """
+    from pyrung.core.validation.call_graph import validate_call_graph
     from pyrung.core.validation.choices_violation import validate_choices
     from pyrung.core.validation.cmp_conditions import validate_cmp_conditions
+    from pyrung.core.validation.context import ValidationContext
+    from pyrung.core.validation.dead_write import validate_dead_writes
     from pyrung.core.validation.duplicate_out import validate_conflicting_outputs
     from pyrung.core.validation.final_writers import validate_final_writers
+    from pyrung.core.validation.math_conditions import validate_math_conditions
     from pyrung.core.validation.physical_realism import validate_physical_realism
     from pyrung.core.validation.pointer_default import validate_pointer_defaults
     from pyrung.core.validation.readonly_write import validate_readonly_writes
@@ -146,15 +161,24 @@ def _validator_dispatch(
     from pyrung.core.validation.stuck_bits import validate_stuck_bits
     from pyrung.core.validation.wait_escape import validate_wait_escapes
 
+    context = ValidationContext(program)
+
     return {
         "stuck": lambda: _as_findings(validate_stuck_bits(program).findings),
         "conflicting": lambda: _as_findings(validate_conflicting_outputs(program).findings),
         "readonly": lambda: _as_findings(validate_readonly_writes(program).findings),
-        "pointer": lambda: _as_findings(validate_pointer_defaults(program).findings),
+        "dead_write": lambda: _as_findings(
+            validate_dead_writes(program, _context=context).findings
+        ),
+        "pointer": lambda: _as_findings(
+            validate_pointer_defaults(program, _context=context).findings
+        ),
         "choices": lambda: _as_findings(validate_choices(program).findings),
         "final": lambda: _as_findings(validate_final_writers(program).findings),
         "physical": lambda: _as_findings(validate_physical_realism(program, dt=dt).findings),
-        "rung": lambda: _as_findings(validate_rung_conditions(program).findings),
-        "cmp": lambda: _as_findings(validate_cmp_conditions(program).findings),
+        "rung": lambda: _as_findings(validate_rung_conditions(program, _context=context).findings),
+        "cmp": lambda: _as_findings(validate_cmp_conditions(program, _context=context).findings),
+        "call": lambda: _as_findings(validate_call_graph(program, _context=context).findings),
+        "math": lambda: _as_findings(validate_math_conditions(program, _context=context).findings),
         "wait": lambda: _as_findings(validate_wait_escapes(program).findings),
     }

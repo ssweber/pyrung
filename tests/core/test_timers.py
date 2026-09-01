@@ -36,6 +36,54 @@ from pyrung.core import (
 Timer2 = Timer.clone("Timer2")
 
 
+def test_timer_clone_accepts_done_and_acc_nickname_overrides():
+    timer = Timer.clone(
+        "OvenTimer",
+        nicknames={"Done": "HeatingComplete", "Acc": "HeatingElapsedMs"},
+    )
+
+    assert timer.Done.name == "HeatingComplete"
+    assert timer.Acc.name == "HeatingElapsedMs"
+    assert timer.EN.name == "OvenTimer_EN"
+    assert timer.TT.name == "OvenTimer_TT"
+
+
+def test_timer_clone_nickname_overrides_flow_through_runtime_and_analysis(runner_factory):
+    from pyrung.core.analysis.pilot.advance import build_advance_index
+
+    enable = Bool("CustomTimerEnable")
+    timer = Timer.clone(
+        "CustomTimer",
+        nicknames={"Done": "HeatingComplete", "Acc": "HeatingElapsedMs"},
+    )
+
+    with Program() as logic:
+        with Rung(enable):
+            on_delay(timer, preset=10)
+
+    advance = build_advance_index(logic)
+    assert advance.resolve("HeatingComplete").profile.accumulator is timer.Acc
+    assert advance.resolve("HeatingElapsedMs").profile.done is timer.Done
+
+    runner = runner_factory(logic, dt=0.010)
+    runner.patch({enable: True})
+    runner.step()
+
+    assert runner.current_state.tags["HeatingComplete"] is True
+    assert runner.current_state.tags["HeatingElapsedMs"] == 10
+
+
+def test_timer_clone_nickname_overrides_require_singleton():
+    with pytest.raises(ValueError, match="require count=1"):
+        Timer.clone("Timers", count=2, nicknames={"Done": "TimerDone"})
+
+
+@pytest.mark.parametrize("nicknames", [{"Other": "Name"}, {"Done": ""}])
+def test_timer_clone_rejects_invalid_nickname_overrides(nicknames):
+    with pytest.raises(ValueError, match="Timer/Counter nickname"):
+        Timer.clone("InvalidTimer", nicknames=nicknames)
+
+
 class TestOnDelayTON:
     """Test On-Delay Timer (TON) - on_delay without .reset()."""
 

@@ -24,7 +24,7 @@ from pyrung import (
 # -- Tags (full conveyor from lessons 3-9) --
 
 StartBtn = Bool()
-StopBtn = Bool()
+StopCircuitOK = Bool()
 EstopOK = Bool()
 Auto = Bool()
 Manual = Bool()
@@ -64,7 +64,7 @@ with Program() as logic:
     comment("Start/stop")
     with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with rung(~StopBtn):
+    with rung(~StopCircuitOK):
         reset(Running)
     with rung(~EstopOK):
         reset(Running)
@@ -116,7 +116,7 @@ x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = Click
 mapping = TagMap(
     {
         StartBtn: x[1],  # Physical input terminal 1
-        StopBtn: x[2],  # NC stop button
+        StopCircuitOK: x[2],  # NC stop circuit
         EstopOK: x[3],  # NC safety relay permission
         Auto: x[4],
         Manual: x[5],

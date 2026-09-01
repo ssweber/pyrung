@@ -66,6 +66,7 @@ _GROUP_ORDER = ["execution", "data", "analysis", "capture", "review", ""]
 
 _GROUP_LAYOUT: dict[str, list[str | None]] = {
     "analysis": [
+        "check",
         "log",
         None,
         "dataview",
@@ -620,7 +621,7 @@ class _PilotProgressFormatter:
 
         if kind in {"candidate_try", "crossing_try"}:
             # Exact same-scan operations use the crossing lifecycle, but they
-            # are still one atomic pulse from the operator's point of view.
+            # are still one atomic trial from the operator's point of view.
             actions = data.get("applied", data.get("actions", ()))
             if not actions:
                 return None
@@ -634,9 +635,9 @@ class _PilotProgressFormatter:
             if self._retry_open:
                 return prefix + "\nRetrying..."
             # Prerequisite rungs are already reported as sustained temporary
-            # logic.  Do not mislabel their witness values as momentary pulses.
+            # logic. Do not repeat their witness values as trial assignments.
             pulsed = tuple(action for action in actions if action not in self._last_holds)
-            return prefix + f"\nPulse {_pilot_assignments(pulsed or actions)}..."
+            return prefix + f"\nTrying {_pilot_assignments(pulsed or actions)}..."
 
         if kind in {
             "candidate_rejected",
@@ -1102,8 +1103,24 @@ def _parse_value(raw: str) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# DataView verbs
+# Static checks and DataView verbs
 # ---------------------------------------------------------------------------
+
+
+@register("check", usage="check [RULE_OR_CATEGORY ...]", group="analysis")
+def _cmd_check(adapter: Any, expression: str) -> ConsoleResult:
+    selectors = set(expression.strip().split()[1:]) or None
+    runner = adapter._require_runner_locked()
+    try:
+        report = runner.program.check(select=selectors, dt=runner.dt)
+    except ValueError as exc:
+        raise adapter.DAPAdapterError(f"check: {exc}") from exc
+
+    if not report:
+        return ConsoleResult("No findings.")
+
+    diagnostics = "\n\n".join(str(finding) for finding in report)
+    return ConsoleResult(f"{diagnostics}\n\n{report.summary()}")
 
 
 @register("dataview", usage="dataview <text | i: | p: | t: | upstream:tag>", group="analysis")
@@ -1288,6 +1305,11 @@ def _cmd_structures(adapter: Any, expression: str) -> ConsoleResult:
 # ---------------------------------------------------------------------------
 
 
+def _format_simplified_form(form: Any) -> str:
+    permissives = ", ".join(form.permissives) or "none"
+    return f"{form}\n  permissives: {permissives}"
+
+
 @register("simplified", usage="simplified [tag]", group="analysis")
 def _cmd_simplified(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
@@ -1304,11 +1326,11 @@ def _cmd_simplified(adapter: Any, expression: str) -> ConsoleResult:
                 f"'{tag_name}' is not a terminal tag. Only terminals have simplified forms."
             )
         stats = f"  ({form.writer_count} writer(s), {form.pivot_count} pivot(s) resolved, depth {form.depth})"
-        return ConsoleResult(f"{form}\n{stats}")
+        return ConsoleResult(f"{_format_simplified_form(form)}\n{stats}")
 
     if not forms:
         return ConsoleResult("No terminal tags found")
-    lines = [str(f) for f in forms.values()]
+    lines = [_format_simplified_form(form) for form in forms.values()]
     return ConsoleResult(f"{len(forms)} terminal(s):\n" + "\n".join(lines))
 
 

@@ -80,7 +80,7 @@ Size = SizeAnalog.clone("Size")
 # Tags — inputs
 # ---------------------------------------------------------------------------
 StartBtn = Bool("StartBtn", public=True)
-StopBtn = Bool("StopBtn", public=True)
+StopCircuitOK = Bool("StopCircuitOK", public=True)
 EstopOK = Bool("EstopOK", public=True, external=True)
 Auto = Bool("Auto", public=True)
 Manual = Bool("Manual", public=True)
@@ -124,7 +124,7 @@ mapping = TagMap(
     [
         # Inputs
         StartBtn.map_to(x[1]),
-        StopBtn.map_to(x[2]),
+        StopCircuitOK.map_to(x[2]),
         EstopOK.map_to(x[3]),
         Auto.map_to(x[4]),
         Manual.map_to(x[5]),
@@ -173,7 +173,7 @@ def logic():
     comment("Start/stop — NC stop button resets when pressed or wire broken")
     with Rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with Rung(~StopBtn):
+    with Rung(~StopCircuitOK):
         reset(Running)
     with Rung(~EstopOK):
         reset(Running)

@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import resolve_rung
-from pyrung.core.analysis.return_guards import _return_early_guard_exprs
+from pyrung.core.analysis.return_guards import return_early_guard_exprs
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -84,7 +84,7 @@ def _literal_write(ro: Any, tag: str) -> Any | None:
 def _rung_unconditional(rung_node: Any, pdg: ProgramGraph, program: Any, _depth: int = 0) -> bool:
     """Whether *rung_node* fires on every scan — no gate, no upstream return_early,
     and (if in a subroutine) reached only through unconditional callers."""
-    if rung_node.condition_reads or _return_early_guard_exprs(program, rung_node):
+    if rung_node.condition_reads or return_early_guard_exprs(program, rung_node):
         return False
     if rung_node.subroutine is None:
         return True

@@ -142,7 +142,8 @@ assert chain.mode != "unreachable", chain
 
 ## Next steps
 
-- [Program Structure](analysis-structure.md) — DataView, simplified forms, static validators
+- [Program Structure](analysis-structure.md) — DataView and simplified forms
+- [Ladder Lints](ladder-lints.md) — static checks for ladder logic
 - [Diagnosis](analysis-diagnosis.md) — snapshot-only debugging with `why()` and `how()`
 - [Test Coverage](analysis-coverage.md) — cold rungs, stranded bits, pytest plugin
 - [Runner Guide](runner.md) — execution methods, history, time travel

@@ -19,6 +19,7 @@ from pyrung.click.validation import (
     CLK_PROFILE_UNAVAILABLE,
     validate_click_program,
 )
+from pyrung.click.validation import resolve as click_resolve
 from pyrung.core import Bool, Char, Dint, Int, Timer, to_ascii, to_binary, to_text, to_value
 from pyrung.core.program import (
     Program,
@@ -128,6 +129,46 @@ def test_r8_copy_family_compatible_pair():
     assert CLK_COPY_BANK_INCOMPATIBLE not in _codes(report)
 
 
+def test_r8_blockcopy_reports_each_incompatible_bank_pair_once():
+    def logic():
+        with Rung():
+            blockcopy(x.select(1, 16), ds.select(1, 16))
+
+    prog = _build_program(logic)
+    report = validate_click_program(prog, TagMap(include_system=False), mode="warn")
+    findings = [
+        finding
+        for finding in (*report.errors, *report.warnings, *report.hints)
+        if finding.code == CLK_COPY_BANK_INCOMPATIBLE
+    ]
+
+    assert len(findings) == 1
+
+
+def test_validation_reuses_operand_resolutions_within_each_invocation(monkeypatch):
+    direct_resolution_calls = 0
+    original_resolve_direct_tag = click_resolve._resolve_direct_tag
+
+    def count_direct_resolution(tag, tag_map):
+        nonlocal direct_resolution_calls
+        direct_resolution_calls += 1
+        return original_resolve_direct_tag(tag, tag_map)
+
+    monkeypatch.setattr(click_resolve, "_resolve_direct_tag", count_direct_resolution)
+
+    def logic():
+        with Rung():
+            blockcopy(ds.select(1, 16), dd.select(1, 16))
+
+    prog = _build_program(logic)
+    tag_map = TagMap(include_system=False)
+
+    validate_click_program(prog, tag_map, mode="warn")
+    validate_click_program(prog, tag_map, mode="warn")
+
+    assert direct_resolution_calls == 64
+
+
 def test_stage3_recurses_into_forloop_children_for_r6():
     target = Bool("Target")
 
@@ -235,7 +276,12 @@ def test_pack_text_stage3_incompatible_source_bank():
     tag_map = TagMap([dest.map_to(ds[2])], include_system=False)
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_PACK_TEXT_BANK_INCOMPATIBLE in _codes(report)
+    findings = [
+        finding
+        for finding in (*report.errors, *report.warnings, *report.hints)
+        if finding.code == CLK_PACK_TEXT_BANK_INCOMPATIBLE
+    ]
+    assert len(findings) == 1
 
 
 def test_wrapped_copy_source_keeps_copy_context_rules():
@@ -648,7 +694,12 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([dest.map_to(ds[10])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+        findings = [
+            finding
+            for finding in (*report.errors, *report.warnings, *report.hints)
+            if finding.code == CLK_COPY_CONVERTER_INCOMPATIBLE
+        ]
+        assert len(findings) == 1
 
     def test_converter_finding_includes_suggestion(self):
         source = Int("Source")

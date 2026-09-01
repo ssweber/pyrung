@@ -28,7 +28,7 @@ from .resolve import (
     _bank_label,
     _format_location,
     _instruction_location,
-    _resolve_operand_slots,
+    _ResolutionCache,
     _unresolved_finding,
 )
 
@@ -110,6 +110,7 @@ def _evaluate_write_targets(
     tag_map: TagMap,
     profile: HardwareProfile,
     mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
@@ -119,7 +120,7 @@ def _evaluate_write_targets(
             continue
 
         location = _instruction_location(base_location, f"instruction.{field_name}")
-        resolution = _resolve_operand_slots(getattr(instruction, field_name), tag_map)
+        resolution = resolver.resolve_operand_slots(getattr(instruction, field_name))
 
         if resolution.unresolved:
             findings.append(_unresolved_finding(location, mode, "mapping missing or ambiguous"))
@@ -155,6 +156,7 @@ def _evaluate_role_assignments(
     tag_map: TagMap,
     profile: HardwareProfile,
     mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
@@ -168,7 +170,7 @@ def _evaluate_role_assignments(
             continue
 
         location = _instruction_location(base_location, f"instruction.{field_name}")
-        resolution = _resolve_operand_slots(value, tag_map)
+        resolution = resolver.resolve_operand_slots(value)
 
         if resolution.unresolved:
             findings.append(_unresolved_finding(location, mode, "mapping missing or ambiguous"))
@@ -198,6 +200,7 @@ def _evaluate_copy_compatibility(
     tag_map: TagMap,
     profile: HardwareProfile,
     mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
@@ -209,8 +212,8 @@ def _evaluate_copy_compatibility(
     source_location = _instruction_location(base_location, f"instruction.{source_field}")
     dest_location = _instruction_location(base_location, f"instruction.{dest_field}")
 
-    source_resolution = _resolve_operand_slots(getattr(instruction, source_field), tag_map)
-    dest_resolution = _resolve_operand_slots(getattr(instruction, dest_field), tag_map)
+    source_resolution = resolver.resolve_operand_slots(getattr(instruction, source_field))
+    dest_resolution = resolver.resolve_operand_slots(getattr(instruction, dest_field))
 
     if source_resolution.unresolved:
         findings.append(_unresolved_finding(source_location, mode, "source bank unresolved"))
@@ -222,11 +225,12 @@ def _evaluate_copy_compatibility(
     if not source_resolution.slots or not dest_resolution.slots:
         return findings
 
-    for source_slot in source_resolution.slots:
-        for dest_slot in dest_resolution.slots:
-            if not profile.copy_compatible(
-                operation, source_slot.memory_type, dest_slot.memory_type
-            ):
+    source_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in source_resolution.slots))
+    dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in dest_resolution.slots))
+
+    for source_memory_type in source_memory_types:
+        for dest_memory_type in dest_memory_types:
+            if not profile.copy_compatible(operation, source_memory_type, dest_memory_type):
                 location_text = _format_location(dest_location)
                 findings.append(
                     ClickFinding(
@@ -234,7 +238,7 @@ def _evaluate_copy_compatibility(
                         severity=_route_severity(CLK_COPY_BANK_INCOMPATIBLE, mode),
                         message=(
                             f"Copy operation {operation} is incompatible for "
-                            f"{source_slot.memory_type} -> {dest_slot.memory_type} "
+                            f"{source_memory_type} -> {dest_memory_type} "
                             f"at {location_text}."
                         ),
                         location=location_text,
@@ -247,8 +251,8 @@ def _evaluate_copy_compatibility(
         compat = CONVERTER_COMPATIBILITY.get(converter.mode)
         if compat is not None:
             valid_sources, valid_dests = compat
-            for source_slot in source_resolution.slots:
-                if source_slot.memory_type not in valid_sources:
+            for source_memory_type in source_memory_types:
+                if source_memory_type not in valid_sources:
                     location_text = _format_location(source_location)
                     findings.append(
                         ClickFinding(
@@ -256,7 +260,7 @@ def _evaluate_copy_compatibility(
                             severity=_route_severity(CLK_COPY_CONVERTER_INCOMPATIBLE, mode),
                             message=(
                                 f"Converter to_{converter.mode} requires source bank in "
-                                f"{sorted(valid_sources)}, got {source_slot.memory_type} "
+                                f"{sorted(valid_sources)}, got {source_memory_type} "
                                 f"at {location_text}."
                             ),
                             location=location_text,
@@ -265,8 +269,8 @@ def _evaluate_copy_compatibility(
                             ),
                         )
                     )
-            for dest_slot in dest_resolution.slots:
-                if dest_slot.memory_type not in valid_dests:
+            for dest_memory_type in dest_memory_types:
+                if dest_memory_type not in valid_dests:
                     location_text = _format_location(dest_location)
                     findings.append(
                         ClickFinding(
@@ -274,7 +278,7 @@ def _evaluate_copy_compatibility(
                             severity=_route_severity(CLK_COPY_CONVERTER_INCOMPATIBLE, mode),
                             message=(
                                 f"Converter to_{converter.mode} requires destination bank in "
-                                f"{sorted(valid_dests)}, got {dest_slot.memory_type} "
+                                f"{sorted(valid_dests)}, got {dest_memory_type} "
                                 f"at {location_text}."
                             ),
                             location=location_text,
@@ -292,6 +296,7 @@ def _evaluate_pack_text(
     base_location: ProgramLocation,
     tag_map: TagMap,
     mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     if type(instruction).__name__ != "PackTextInstruction":
         return []
@@ -300,8 +305,8 @@ def _evaluate_pack_text(
     source_location = _instruction_location(base_location, "instruction.source_range")
     dest_location = _instruction_location(base_location, "instruction.dest")
 
-    source_resolution = _resolve_operand_slots(instruction.source_range, tag_map)
-    dest_resolution = _resolve_operand_slots(instruction.dest, tag_map)
+    source_resolution = resolver.resolve_operand_slots(instruction.source_range)
+    dest_resolution = resolver.resolve_operand_slots(instruction.dest)
 
     if source_resolution.unresolved:
         findings.append(_unresolved_finding(source_location, mode, "source bank unresolved"))
@@ -314,9 +319,11 @@ def _evaluate_pack_text(
         return findings
 
     allowed_dest_banks = {"DS", "DD", "DH", "DF", "TD", "CTD"}
-    for source_slot in source_resolution.slots:
-        for dest_slot in dest_resolution.slots:
-            if source_slot.memory_type == "TXT" and dest_slot.memory_type in allowed_dest_banks:
+    source_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in source_resolution.slots))
+    dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in dest_resolution.slots))
+    for source_memory_type in source_memory_types:
+        for dest_memory_type in dest_memory_types:
+            if source_memory_type == "TXT" and dest_memory_type in allowed_dest_banks:
                 continue
             location_text = _format_location(dest_location)
             findings.append(
@@ -325,7 +332,7 @@ def _evaluate_pack_text(
                     severity=_route_severity(CLK_PACK_TEXT_BANK_INCOMPATIBLE, mode),
                     message=(
                         "pack_text is incompatible for "
-                        f"{source_slot.memory_type} -> {dest_slot.memory_type} at {location_text}."
+                        f"{source_memory_type} -> {dest_memory_type} at {location_text}."
                     ),
                     location=location_text,
                 )
@@ -371,6 +378,7 @@ def _evaluate_drums(
     tag_map: TagMap,
     profile: HardwareProfile,
     mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     instruction_type = type(instruction).__name__
     if instruction_type not in {"EventDrumInstruction", "TimeDrumInstruction"}:
@@ -384,7 +392,7 @@ def _evaluate_drums(
         location: ProgramLocation,
         unresolved_reason: str,
     ) -> None:
-        resolution = _resolve_operand_slots(value, tag_map)
+        resolution = resolver.resolve_operand_slots(value)
         if resolution.unresolved:
             findings.append(_unresolved_finding(location, mode, unresolved_reason))
             return
@@ -406,7 +414,7 @@ def _evaluate_drums(
     outputs = getattr(instruction, "outputs", ())
     for idx, output in enumerate(outputs):
         location = _instruction_location(base_location, f"instruction.outputs[{idx}]")
-        resolution = _resolve_operand_slots(output, tag_map)
+        resolution = resolver.resolve_operand_slots(output)
         if resolution.unresolved:
             findings.append(_unresolved_finding(location, mode, "drum output bank unresolved"))
             continue

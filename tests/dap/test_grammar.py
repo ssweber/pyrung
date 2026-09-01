@@ -49,6 +49,10 @@ class TestCommandGrammar:
         flags = {s.choices[0] for s in grammar["prove"].slots if s.kind == "flag"}
         assert flags == {"--settled", "--paced"}
 
+    def test_check_is_an_analysis_command(self, grammar: dict):
+        assert grammar["check"].group == "analysis"
+        assert grammar["check"].slots[0].required is False
+
     def test_no_command_degenerates_to_all_text(self, grammar: dict):
         """A usage naming <tag>/<expression> must yield a completable slot.
 

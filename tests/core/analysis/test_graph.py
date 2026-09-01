@@ -340,7 +340,7 @@ class TestPlanDisplay:
 
         assert "Jump ahead: set Soak.Acc=900." in str(plan)
 
-    def test_pulse_keeps_its_observed_transition(self):
+    def test_pulse_step_renders_as_set_and_keeps_its_observed_transition(self):
         plan = Plan(
             reachable=True,
             target_tag="Target",
@@ -358,7 +358,7 @@ class TestPlanDisplay:
             ),
         )
 
-        assert str(plan).endswith("1. Pulse CmdStart=True.\n   Observed: State 2 -> 3.")
+        assert str(plan).endswith("1. Set CmdStart=True.\n   Observed: State 2 -> 3.")
 
 
 # ---------------------------------------------------------------------------

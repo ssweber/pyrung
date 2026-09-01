@@ -204,9 +204,38 @@ class Tag:
             for k, v in self.choices.items():
                 if v == value:
                     return k
+            if value not in self.choices:
+                self.choice(value)
         if self.type == TagType.CHAR and value == "":
             return "\x00"
         return value
+
+    def choice(self, label: str) -> ChoiceKey:
+        """Return the stored value for a choice label.
+
+        This is the explicit counterpart to the string-label shorthand accepted
+        by tag comparisons.  It is especially useful for writes and assertions,
+        where a bare string would otherwise be interpreted as text::
+
+            copy(State.choice("RUNNING"), State)
+            assert State.value == State.choice("RUNNING")
+
+        Args:
+            label: A label from this tag's ``choices`` mapping.
+
+        Raises:
+            ValueError: If the tag has no choices or the label is unknown.
+        """
+        if self.choices is None:
+            raise ValueError(f"Tag {self.name!r} has no choices.")
+        for value, candidate in self.choices.items():
+            if candidate == label:
+                return value
+        available = ", ".join(repr(candidate) for candidate in self.choices.values())
+        raise ValueError(
+            f"Choice label {label!r} not found in choices for tag {self.name!r}. "
+            f"Available: {available}."
+        )
 
     def __eq__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
         """Create equality comparison condition."""

@@ -21,7 +21,7 @@ from pyrung.core.validation._common import (
     _resolve_tag_names,
     site_frame,
 )
-from pyrung.core.validation.display import FindingDisplay
+from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
 from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
@@ -39,7 +39,7 @@ TAG_READONLY_WRITE = "TAG_READONLY_WRITE"
 
 
 @dataclass(frozen=True)
-class ReadonlyWriteFinding:
+class ReadonlyWriteFinding(_FindingTextMixin):
     """A write site targeting a readonly tag."""
 
     code: str

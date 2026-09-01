@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.validation.display import FindingDisplay, Frame
+from pyrung.core.validation.display import FindingDisplay, Frame, _FindingTextMixin
 from pyrung.core.validation.render import caret_of, render_condition, with_rung_line
 from pyrung.core.validation.severity import Severity
 
@@ -121,7 +121,7 @@ def _display(finding: WaitEscapeFinding) -> FindingDisplay:
 
 
 @dataclass(frozen=True)
-class StepEscapeFinding:
+class StepEscapeFinding(_FindingTextMixin):
     """One wait-shaped step with no fireable escape."""
 
     code: str

@@ -1,4 +1,4 @@
-"""Tests for Program.validate dialect facade."""
+"""Tests for Program.check and the Program.validate dialect facade."""
 
 from __future__ import annotations
 

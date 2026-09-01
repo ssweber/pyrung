@@ -216,6 +216,22 @@ def _enrich_with_ownership(
 ) -> None:
     """Build semantic ownership metadata for structures and plain named blocks."""
 
+    # Keep a direct hardware-operand lookup for context-aware rendering.  CLICK
+    # stores choice-backed values as scalars, but the nickname metadata retains
+    # their labels, allowing the emitter to reconstruct ``Tag.choice(...)``.
+    for entry in structured_map.tags():
+        choices = entry.logical.choices
+        if choices is not None:
+            collection.choice_maps[_hw_address_name(entry.hardware)] = choices
+    for entry in structured_map.blocks():
+        for logical_addr, hardware_addr in zip(
+            entry.logical_addresses, entry.hardware_addresses, strict=True
+        ):
+            choices = entry.logical[logical_addr].choices
+            if choices is not None:
+                hardware = entry.hardware.block[hardware_addr]
+                collection.choice_maps[_hw_address_name(hardware)] = choices
+
     seen_structures: dict[str, _StructureDecl] = {}
     seen_plain_blocks: dict[str, _PlainBlockDecl] = {}
     used_symbol_names = (
@@ -790,7 +806,8 @@ _TC_NICK_SUFFIXES = ("_Done", "_Acc")
 def _register_timer_counter_clone(
     done_operand: str,
     acc_operand: str,
-    nick: str | None,
+    done_nick: str | None,
+    acc_nick: str | None,
     func_name: str,
     collection: _OperandCollection,
 ) -> None:
@@ -805,13 +822,15 @@ def _register_timer_counter_clone(
     if any(d.done_operand == done_operand for d in collection.timer_counter_clones):
         return
 
-    # Determine the clone name: nickname (suffix-stripped) or operand prefix+index
-    if nick:
+    # Determine the clone name from either explicit nickname, preferring the
+    # Done address. Strip Pyrung's conventional field suffix when present.
+    source_nick = done_nick or acc_nick
+    if source_nick:
+        raw_name = source_nick
         for suffix in _TC_NICK_SUFFIXES:
-            if nick.endswith(suffix) and len(nick) > len(suffix):
-                nick = nick[: -len(suffix)]
+            if raw_name.endswith(suffix) and len(raw_name) > len(suffix):
+                raw_name = raw_name[: -len(suffix)]
                 break
-        raw_name = nick
     else:
         raw_name = f"{prefix}{index}"
 
@@ -822,6 +841,19 @@ def _register_timer_counter_clone(
     )
     var_name = _make_safe_identifier(raw_name, used_names=used_var_names)
 
+    field_nicknames: dict[str, str] = {}
+    if done_nick:
+        field_nicknames["Done"] = done_nick
+    if acc_nick:
+        field_nicknames["Acc"] = acc_nick
+    if not field_nicknames:
+        # With no user naming intent, make both physical CLICK addresses
+        # visible instead of deriving T1_Acc / CT1_Acc from the clone base.
+        field_nicknames = {
+            "Done": f"{done_operand}_Done",
+            "Acc": f"{acc_operand}_Acc",
+        }
+
     collection.timer_counter_clones.append(
         _TimerCounterCloneDecl(
             var_name=var_name,
@@ -829,6 +861,7 @@ def _register_timer_counter_clone(
             index=index,
             done_operand=done_operand,
             acc_operand=acc_operand,
+            nicknames=field_nicknames,
         )
     )
     # Register semantic operands so condition references resolve:
@@ -885,8 +918,16 @@ def _scan_af_token(
             collection.timer_counter_operands.add(tc_args[0])
             collection.timer_counter_operands.add(tc_args[1])
 
-            nick = nicknames.get(tc_args[0]) if nicknames else None
-            _register_timer_counter_clone(tc_args[0], tc_args[1], nick, func_name, collection)
+            done_nick = nicknames.get(tc_args[0]) if nicknames else None
+            acc_nick = nicknames.get(tc_args[1]) if nicknames else None
+            _register_timer_counter_clone(
+                tc_args[0],
+                tc_args[1],
+                done_nick,
+                acc_nick,
+                func_name,
+                collection,
+            )
 
     if func_name in {"send", "receive"}:
         if "ModbusTcpTarget(" in args_str:

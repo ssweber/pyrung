@@ -118,6 +118,18 @@ class TestIndirectRef:
         assert dest.metadata["block_end"] == 100
         assert dest.metadata["pointer_default"] == 0
 
+    def test_indirect_ref_records_pointer_owning_block(self):
+        pointer = DS[5]
+
+        with Program() as prog:
+            with Rung():
+                copy(DD[pointer], Result)
+
+        facts = walk_program(prog)
+        source = _first(facts, "instruction.source")
+
+        assert source.metadata["pointer_block_name"] == "DS"
+
 
 # ---------------------------------------------------------------------------
 # 3. IndirectExprRef

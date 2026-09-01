@@ -136,6 +136,7 @@ class _TimerCounterCloneDecl:
     index: int  # 1-based block index
     done_operand: str  # original done-bit operand (e.g. "T1")
     acc_operand: str  # original accumulator operand (e.g. "TD1")
+    nicknames: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -253,6 +254,7 @@ class _OperandCollection:
     """All operands found in the program."""
 
     tags: dict[str, _TagDecl] = field(default_factory=dict)  # keyed by operand
+    choice_maps: dict[str, dict[int | float | str, str]] = field(default_factory=dict)
     ranges: dict[str, _RangeDecl] = field(default_factory=dict)  # keyed by range string
     used_types: set[str] = field(default_factory=set)  # tag types used
     used_blocks: set[str] = field(default_factory=set)  # block vars used

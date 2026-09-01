@@ -8,13 +8,14 @@ program-written tag, self-advancing register, or inline computed expression;
 tag.  The verdict is driven by the writer-membership index; calc-derived
 provenance only sharpens the message.
 
-Three tiers, plus the escalation into CMP_TRUE_AT_RESET when the right operand is
-a monotone-from-zero register:
+Two advisory wording tiers, plus the escalation into CMP_TRUE_AT_RESET when the
+right operand is a monotone-from-zero register:
 
-1. ``==`` / ``!=`` static-left → info (same predicate either way).
-2. ordered operator, dynamic right → warning (flip, which reverses the operator).
-3. ordered operator, monotone register right → CMP_TRUE_AT_RESET when true at
-   reset, else the tier-2 flip warning.
+1. ordered operator, dynamic right → hedged flip with the operator reversed.
+2. ordered operator, monotone register right → CMP_TRUE_AT_RESET when true at
+   reset, else a direct advisory because the accumulator is known to change.
+
+``==`` / ``!=`` are exempt because their order conveys no direction.
 
 Note: Python reflects comparison operators (``5 < tag`` becomes ``tag > 5``), so
 the meaningful case is a static *tag* on the left, which ``Tag.__lt__`` preserves.
@@ -33,7 +34,7 @@ def _codes(report, code):
 # --- Tier 1: == / != static-left -------------------------------------------
 
 
-def _eq_info_program() -> Program:
+def _eq_exempt_program() -> Program:
     lo_limit = Int("LoLimit", default=1, readonly=True)  # explicit static constant
     running = Int("Running")  # program-written below → dynamic
     out = Bool("Out", external=True)
@@ -45,13 +46,10 @@ def _eq_info_program() -> Program:
     return prog
 
 
-class TestTier1Info:
-    def test_static_eq_dynamic_is_info(self):
-        report = validate(_eq_info_program())
-        sol = _codes(report, "CMP_STATIC_ON_LEFT")
-        assert len(sol) == 1
-        assert sol[0].severity == "info"
-        assert "Running == LoLimit" in sol[0].message
+class TestEqualityExemption:
+    def test_static_eq_dynamic_stays_quiet(self):
+        report = validate(_eq_exempt_program())
+        assert not _codes(report, "CMP_STATIC_ON_LEFT")
 
 
 # --- Tier 2: ordered, dynamic right ----------------------------------------
@@ -92,6 +90,7 @@ class TestTier2Maybe:
         assert len(sol) == 1
         assert sol[0].severity == "advisory"
         assert "calculated" in sol[0].message
+        assert "if CalcOut changes" in sol[0].message
         assert "CalcOut > LoLimit" in sol[0].message
 
     def test_inline_computed_right_is_advisory(self):
@@ -119,7 +118,7 @@ def _escalation_program() -> Program:
 
 
 def _fallback_program() -> Program:
-    """``LoLimit < Acc`` — false at reset, so it falls back to the flip warning."""
+    """``LoLimit < Acc`` is false at reset, so it gets the flip advisory."""
     lo_limit = Int("LoLimit", default=5, readonly=True)  # static constant and preset
     tmr = Timer.clone("Tmr")
     out = Bool("Out", external=True)
@@ -138,13 +137,15 @@ class TestTier3Escalation:
         # The behavioral finding subsumes the operand-order nit — no double report.
         assert not _codes(report, "CMP_STATIC_ON_LEFT")
 
-    def test_not_true_at_reset_is_known_warning_on_accumulator(self):
-        # Right side is provably the accumulator — a KNOWN order issue, warning.
+    def test_not_true_at_reset_is_advisory_on_accumulator(self):
+        # Right side is provably the accumulator, sharpening the advisory wording.
         report = validate(_fallback_program())
         assert not _codes(report, "CMP_TRUE_AT_RESET")
         sol = _codes(report, "CMP_STATIC_ON_LEFT")
         assert len(sol) == 1
-        assert sol[0].severity == "warning"
+        assert sol[0].severity == "advisory"
+        assert "Tmr.Acc changes, but it is on the right" in sol[0].message
+        assert "write the changing value first" in sol[0].message
         assert "Tmr.Acc > LoLimit" in sol[0].message
 
 

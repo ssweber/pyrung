@@ -131,9 +131,9 @@ def _cv_plc(cv):
 
 
 def test_conveyor_motor_reachable():
-    """ConveyorMotor should be reachable: hold StopBtn/EstopOK healthy and Auto,
+    """ConveyorMotor should be reachable: hold StopCircuitOK/EstopOK healthy and Auto,
     pulse StartBtn to latch Running, which gates the motor.  Preserve-tracing
-    surfaces the NC-reset interlocks (``StopBtn``/``EstopOK`` held healthy) as
+    surfaces the NC-reset interlocks (``StopCircuitOK``/``EstopOK`` held healthy) as
     prerequisites of the latch persisting, so the establish + preserve actions
     widen into one pulse instead of wandering the sort state machine."""
     cv = _conveyor()
@@ -146,7 +146,7 @@ def test_running_route_ambiguous_resolves():
     """Running's latch is gated ``StartBtn ∧ Or(Auto, Manual)``.  The OR is over
     directly-steerable inputs, so PILOT collapses it (no ``choice=`` needed)
     rather than reporting ambiguous, and preserve-tracing holds the NC resets
-    (``StopBtn``/``EstopOK``) healthy so the latch sticks."""
+    (``StopCircuitOK``/``EstopOK``) healthy so the latch sticks."""
     cv = _conveyor()
     path = pilot_how(_cv_plc(cv), cv.Running)
     assert path.reachable

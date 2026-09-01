@@ -82,7 +82,7 @@ Size = SizeAnalog.clone("Size")
 # Tags — inputs
 # ---------------------------------------------------------------------------
 StartBtn = Bool(public=True)
-StopBtn = Bool(public=True)
+StopCircuitOK = Bool(public=True)
 EstopOK = Bool(public=True, external=True)
 Auto = Bool(public=True)
 Manual = Bool(public=True)
@@ -97,6 +97,7 @@ BinBSensor = Bool()
 Running = Bool(public=True)
 IsLarge = Bool()
 CountReset = Bool(public=True)
+
 
 @named_array(Int, stride=4, readonly=True)
 class SortState:
@@ -125,7 +126,7 @@ mapping = TagMap(
     [
         # Inputs
         StartBtn.map_to(x[1]),
-        StopBtn.map_to(x[2]),
+        StopCircuitOK.map_to(x[2]),
         EstopOK.map_to(x[3]),
         Auto.map_to(x[4]),
         Manual.map_to(x[5]),
@@ -174,7 +175,7 @@ def logic():
     comment("Start/stop — NC stop button resets when pressed or wire broken")
     with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with rung(~StopBtn):
+    with rung(~StopCircuitOK):
         reset(Running)
     with rung(~EstopOK):
         reset(Running)
@@ -237,7 +238,7 @@ if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
 
     with runner:
         # NC inputs: True simulates healthy wiring
-        StopBtn.value = True
+        StopCircuitOK.value = True
         EstopOK.value = True
         Auto.value = True
         Size.Threshold.value = 100

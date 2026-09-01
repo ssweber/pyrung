@@ -11,7 +11,7 @@ from pyrung import PLC
 @pytest.fixture
 def plc():
     r = PLC(logic, dt=0.010)
-    r.force(StopBtn, True)            # NC inputs: healthy wiring
+    r.force(StopCircuitOK, True)      # Stop circuit is healthy
     r.force(EstopOK, True)
     r.force(Auto, True)               # Default to auto mode
     return r

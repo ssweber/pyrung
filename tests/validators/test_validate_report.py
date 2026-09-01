@@ -4,7 +4,7 @@ import pytest
 
 from pyrung.core import Bool, Program, Rung, latch, out
 from pyrung.core.validation.registry import RULES, VALIDATOR_ORDER
-from pyrung.core.validation.report import ALL_RULES, ValidationReport, validate
+from pyrung.core.validation.report import ALL_RULES, ValidationReport, check, validate
 
 
 def _error_and_warning_program():
@@ -68,6 +68,83 @@ class TestValidateAllRuns:
         assert "TAG_READONLY_WRITE" in codes
 
 
+class TestValidationContext:
+    def test_shared_analyses_run_once_per_check(self, monkeypatch):
+        import pyrung.core.analysis.pdg as pdg
+        import pyrung.core.analysis.return_guards as return_guards
+        import pyrung.core.analysis.value_domains as value_domains
+
+        btn = Bool("Btn")
+        motor = Bool("Motor")
+        with Program() as prog:
+            with Rung(btn):
+                out(motor)
+
+        calls = {"graph": 0, "produced": 0, "reach": 0}
+        original_graph = pdg.build_program_graph
+        original_produced = value_domains.produced_value_domains
+        original_reach = return_guards.scope_reach_chains
+
+        def counted_graph(program):
+            calls["graph"] += 1
+            return original_graph(program)
+
+        def counted_produced(program, graph):
+            calls["produced"] += 1
+            return original_produced(program, graph)
+
+        def counted_reach(program, graph):
+            calls["reach"] += 1
+            return original_reach(program, graph)
+
+        monkeypatch.setattr(pdg, "build_program_graph", counted_graph)
+        monkeypatch.setattr(value_domains, "produced_value_domains", counted_produced)
+        monkeypatch.setattr(return_guards, "scope_reach_chains", counted_reach)
+
+        validate(
+            prog,
+            select={
+                "CALL_NEVER_CALLED",
+                "CMP_ALWAYS_FALSE",
+                "MATH_DIV_ZERO",
+                "RUNG_REDUNDANT_TERM",
+            },
+        )
+
+        assert calls == {"graph": 1, "produced": 1, "reach": 1}
+
+    def test_unselected_analyses_stay_lazy(self, monkeypatch):
+        import pyrung.core.analysis.pdg as pdg
+        import pyrung.core.analysis.return_guards as return_guards
+        import pyrung.core.analysis.value_domains as value_domains
+
+        with Program() as prog:
+            pass
+
+        calls = {"graph": 0, "produced": 0, "reach": 0}
+        original_graph = pdg.build_program_graph
+
+        def counted_graph(program):
+            calls["graph"] += 1
+            return original_graph(program)
+
+        def counted_produced(program, graph):
+            calls["produced"] += 1
+            return {}
+
+        def counted_reach(program, graph):
+            calls["reach"] += 1
+            return {}
+
+        monkeypatch.setattr(pdg, "build_program_graph", counted_graph)
+        monkeypatch.setattr(value_domains, "produced_value_domains", counted_produced)
+        monkeypatch.setattr(return_guards, "scope_reach_chains", counted_reach)
+
+        validate(prog, select={"CALL_NEVER_CALLED"})
+
+        assert calls == {"graph": 1, "produced": 0, "reach": 0}
+
+
 class TestSelectIgnore:
     def _stuck_program(self):
         go = Bool("Go")
@@ -127,6 +204,11 @@ class TestSelectIgnore:
 
 
 class TestProgramValidateMethod:
+    def test_check_runs_core(self):
+        report = _error_and_warning_program().check(select={"COIL_STUCK_HIGH"})
+        assert report
+        assert all(f.code == "COIL_STUCK_HIGH" for f in report)
+
     def test_no_args_runs_core(self):
         btn = Bool("Btn")
         motor = Bool("Motor")
@@ -136,6 +218,11 @@ class TestProgramValidateMethod:
         report = prog.validate()
         assert isinstance(report, ValidationReport)
         assert not report
+
+    def test_validate_without_dialect_is_check_alias(self):
+        prog = _error_and_warning_program()
+        assert prog.validate().findings == prog.check().findings
+        assert validate(prog).findings == check(prog).findings
 
     def test_select_kwarg(self):
         go = Bool("Go")
@@ -178,27 +265,43 @@ class TestValidationReport:
         findings_list = list(report)
         assert len(findings_list) == len(report)
 
+    def test_finding_str_renders_complete_diagnostic(self):
+        report = validate(_error_and_warning_program(), select={"TAG_READONLY_WRITE"})
+        (finding,) = report.findings
+        expected = f"[{finding.code}] {finding.severity}\n{finding.message}"
+        assert str(finding) == expected
+        assert str(finding.display) == expected
+
     def test_all_rules_constant_complete(self):
         expected = {
             "PHYS_ANTITOGGLE",
+            "CALL_NEVER_CALLED",
+            "CALL_RECURSION",
+            "CMP_ALWAYS_FALSE",
+            "CMP_ALWAYS_TRUE",
             "TAG_CHOICES_VIOLATION",
             "COIL_CONFLICTING_OUTPUT",
             "TAG_FINAL_MULTIPLE_WRITERS",
             "PHYS_MISSING_PROFILE",
             "PTR_DEFAULT_BEFORE_BLOCK_START",
+            "PTR_MAY_ESCAPE_BLOCK",
             "TAG_RANGE_VIOLATION",
             "TAG_READONLY_WRITE",
             "COIL_STUCK_HIGH",
             "COIL_STUCK_LOW",
             "RUNG_CONTRADICTION",
+            "RUNG_REDUNDANT_TERM",
             "RUNG_TAUTOLOGY",
             "CMP_EQ_ON_MONOTONE",
             "CMP_OPERAND_STAYS_ZERO",
             "CMP_PRESET_STAYS_ZERO",
+            "CMP_REPEATED_STATE_VALUE",
             "CMP_STEPPER_VALUE_NOT_SET",
             "CMP_TRUE_AT_RESET",
             "CMP_STATIC_ON_LEFT",
             "STEP_NO_ESCAPE",
+            "MATH_DIV_ZERO",
+            "TAG_DEAD_WRITE",
         }
         assert ALL_RULES == expected
 

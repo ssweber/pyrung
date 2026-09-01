@@ -21,6 +21,17 @@ c = Counter[1]
 
 Use `Timer.clone("Name")` for production code — `OvenTimer_Done` in a fault log tells you everything; `Timer1_Done` tells you nothing.
 
+Use `nicknames=` when the two field tags must keep an existing naming scheme:
+
+```python
+HeatTimer = Timer.clone(
+    "HeatTimer",
+    nicknames={"Done": "HeatingComplete", "Acc": "HeatingElapsedMs"},
+)
+```
+
+Unspecified fields retain the normal `{name}_Done` or `{name}_Acc` name. Nickname overrides are supported on single-instance Timer and Counter clones.
+
 ### Status bits
 
 Timers and counters also have status bits that reflect instruction state each scan. These are available in the runner API (`.when()`, `.monitor()`, `.value`) but cannot be used in `with rung()` — Click PLCs manage these bits internally.

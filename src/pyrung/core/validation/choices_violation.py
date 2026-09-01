@@ -17,7 +17,7 @@ from pyrung.core.validation._common import (
     _resolve_tag_names,
     site_frame,
 )
-from pyrung.core.validation.display import FindingDisplay
+from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
 from pyrung.core.validation.render import operand_name
 from pyrung.core.validation.severity import Severity
 
@@ -36,7 +36,7 @@ TAG_CHOICES_VIOLATION = "TAG_CHOICES_VIOLATION"
 
 
 @dataclass(frozen=True)
-class ChoicesViolationFinding:
+class ChoicesViolationFinding(_FindingTextMixin):
     """A write site that writes a literal value outside the tag's choices."""
 
     code: str

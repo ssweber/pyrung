@@ -278,6 +278,11 @@ class CompiledPLC:
         return self._state.timestamp
 
     @property
+    def dt(self) -> float:
+        """Configured scan period in seconds."""
+        return self._dt
+
+    @property
     def forces(self) -> Mapping[str, bool | int | float | str]:
         return self._input_overrides.forces
 

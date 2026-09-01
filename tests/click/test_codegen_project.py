@@ -9,8 +9,10 @@ from pathlib import Path
 from pyrung.click import (
     ClickBlocks,
     TagMap,
+    WorkspaceKind,
     ladder_to_pyrung_project,
     pyrung_to_ladder,
+    refresh_workspace_lifecycle_guidance,
 )
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
@@ -49,12 +51,17 @@ def _project_from_program(
     tmp_path: Path,
     *,
     nicknames: dict[str, str] | None = None,
+    workspace_kind: WorkspaceKind = "temporary",
 ) -> dict[str, str]:
     """Program -> CSV -> ladder_to_pyrung_project -> files dict."""
     bundle = pyrung_to_ladder(program, tag_map)
     csv_dir = tmp_path / "csv"
     bundle.write(csv_dir)
-    return ladder_to_pyrung_project(csv_dir, nicknames=nicknames)
+    return ladder_to_pyrung_project(
+        csv_dir,
+        nicknames=nicknames,
+        workspace_kind=workspace_kind,
+    )
 
 
 def _exec_project(files: dict[str, str], tmp_path: Path) -> dict:
@@ -111,6 +118,19 @@ def _exec_project(files: dict[str, str], tmp_path: Path) -> dict:
 class TestProjectBasic:
     """Basic project generation (no subroutines)."""
 
+    def test_empty_project_defines_blocks_for_export(self, tmp_path: Path):
+        with Program() as logic:
+            pass
+
+        files = _project_from_program(
+            logic,
+            TagMap({}, include_system=False),
+            tmp_path,
+        )
+
+        assert "blocks = ClickBlocks()" in files[_TAGS_PATH]
+        assert "from plc.tags import mapping, blocks" in files["project_to_csv.py"]
+
     def test_basic_files(self, tmp_path: Path):
         """Program with no subroutines produces main.py and tags.py only."""
         Button = Bool("Button")
@@ -128,6 +148,8 @@ class TestProjectBasic:
         assert files[f"{_PLC_DIR}/__init__.py"] == ""
         assert files["CLAUDE.md"] == "@AGENTS.md\n"
         assert "# Machine: PLC" in files["AGENTS.md"]
+        assert "assert plc.state.scan_id == 1" in files["tests/test_smoke.py"]
+        assert "current_state" not in files["tests/test_smoke.py"]
         assert f"{_SUBROUTINES_DIR}/__init__.py" not in files
 
     def test_release_scaffolding_and_experimental_how_guidance(self, tmp_path: Path):
@@ -142,7 +164,7 @@ class TestProjectBasic:
         mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
         files = _project_from_program(logic, mapping, tmp_path)
 
-        assert '"pyrung>=0.11.0"' in files["pyproject.toml"]
+        assert '"pyrung>=0.12.0"' in files["pyproject.toml"]
         assert '"Private :: Do Not Upload"' in files["pyproject.toml"]
         assert '"pytest>=8.3.5"' in files["pyproject.toml"]
         assert 'packages = ["src/plc"]' in files["pyproject.toml"]
@@ -153,13 +175,35 @@ class TestProjectBasic:
         assert "generated folder as its editable working branch" in normalized_guidance
         assert "propose finished changes to the engineer" in normalized_guidance
         assert "tag apply` stages tag changes and opens the Address Editor" in normalized_guidance
-        assert "rung apply` writes the ladder CSVs" in normalized_guidance
-        assert "rung preview` then opens the Rung Preview" in normalized_guidance
+        assert "rung apply` validates and stages the ladder CSVs" in normalized_guidance
+        assert "then opens the Rung Preview" in normalized_guidance
+        assert "Rungs remain `staged`" in normalized_guidance
+        assert "copying to the clipboard is not treated as proof" in normalized_guidance
         assert "engineer accepts the proposal" in normalized_guidance
+        assert "Python-only constants in them do not survive a save" in normalized_guidance
+        assert 'copy(State.choice("RUNNING"), State)' in guidance
+        assert "Import `State` from `plc.tags`, not constants from `plc.main`" in guidance
         assert (
-            "`tests/`, `pyproject.toml`, `uv.lock`, and `.venv/` survive regeneration"
+            "`backup/`, `tests/`, `pyproject.toml`, `uv.lock`, and `.venv/` survive regeneration"
             in normalized_guidance
         )
+        assert "automatically snapshots the complete active `src/plc/` tree" in normalized_guidance
+        assert "`clicknick-cli backup`" in guidance
+        assert "`clicknick-cli restore`" in guidance
+        assert (
+            "keep editing and applying from `src/plc/`, not from `backup/`" in normalized_guidance
+        )
+        assert (
+            "If ClickNick restarts or the generated project refreshes after `rung apply`"
+            in normalized_guidance
+        )
+        assert "Run `clicknick-cli restore`, then rerun `rung apply`" in normalized_guidance
+        assert "clicknick-cli rung preview" not in guidance
+        assert "clicknick-cli rung apply main --select r3" in guidance
+        assert "Rerun `rung apply`" in normalized_guidance
+        assert "If CLICK Programming Software itself was closed" in normalized_guidance
+        assert "temporary backup is gone" in normalized_guidance
+        assert "`backup/src/plc/` — latest source snapshot" in guidance
         assert "closing the CLICK application deletes the entire folder" in normalized_guidance
         assert "Copy the whole folder elsewhere before closing CLICK" in normalized_guidance
         assert "A copied folder is an offline project" in normalized_guidance
@@ -169,16 +213,41 @@ class TestProjectBasic:
         )
         assert "Copy offline source edits back into the active folder" in normalized_guidance
         assert "Names beginning with `Example` below are placeholders" in normalized_guidance
+        assert "ClickNick itself provides the live `clicknick-cli` session" in normalized_guidance
+        assert (
+            "Console is the engineer's active consent gate for `pyrung live`" in normalized_guidance
+        )
+        assert "Closing the Console ends the pyrung live session" in normalized_guidance
+        assert "does not end `clicknick-cli`" in normalized_guidance
+        assert "No active ClickNick session found" in guidance
+        assert "verify that ClickNick is open and connected" in normalized_guidance
         assert "uv run pyrung live" in guidance
+        assert "clicknick-cli check" in guidance
+        assert "same rules as Tools → Check Program" in guidance
+        assert "lint-style program findings" in normalized_guidance
+        assert "does not replace `rung apply`" in normalized_guidance
         assert "clicknick-cli rung list main" in guidance
+        assert "save the empty subroutine before editing Python" in normalized_guidance
+        assert "Add New Subroutine Program" in guidance
+        assert "(`Ctrl+U`)" in guidance
+        assert "Wait for ClickNick to regenerate this folder" in normalized_guidance
+        assert "Do not predict its Python filename" in normalized_guidance
+        assert "appends the terminal `return()` automatically" in normalized_guidance
         assert "`csv/` — regenerated reference snapshot" in guidance
         assert "`csv_output/` — proposed ladder export" in guidance
         readme = files["README.md"]
         normalized_readme = " ".join(readme.split())
         assert "closing the CLICK application deletes" in normalized_readme
+        assert "most recent `rung apply` source snapshot" in normalized_readme
+        assert "`clicknick-cli backup`" in readme
+        assert "`clicknick-cli restore`" in readme
+        assert "backup is temporary too and disappears when CLICK closes" in normalized_readme
         assert "The copied folder is useful offline" in normalized_readme
         assert "every command targets ClickNick's active temporary workspace" in normalized_readme
         assert "copy those source edits back into the active temporary folder" in normalized_readme
+        assert "ClickNick itself provides the `clicknick-cli` session" in normalized_readme
+        assert "choose **Tools → Console**" in readme
+        assert "closing the Console ends that pyrung live session" in normalized_readme
         assert "`csv/` is the regenerated snapshot" in normalized_readme
         assert "`csv_output/` is the proposed ladder export" in normalized_readme
         assert "clicknick-cli rung list main" in normalized_readme
@@ -187,6 +256,54 @@ class TestProjectBasic:
             "does not mean the program is broken or the target is unreachable"
             in normalized_guidance
         )
+
+    def test_persistent_workspace_guidance_and_legacy_refresh(self, tmp_path: Path):
+        """Persistent projects survive CLICK and migrate only known generated prose."""
+        Button = Bool("Button")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with rung(Button):
+                out(Light)
+
+        mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
+        temporary = _project_from_program(logic, mapping, tmp_path / "temporary")
+        persistent = _project_from_program(
+            logic,
+            mapping,
+            tmp_path / "persistent",
+            workspace_kind="persistent",
+        )
+
+        for path in ("README.md", "AGENTS.md"):
+            persistent_text = persistent[path]
+            normalized = " ".join(persistent_text.split())
+            assert "<!-- pyrung:workspace-lifecycle:start -->" in persistent_text
+            assert "<!-- pyrung:workspace-lifecycle:end -->" in persistent_text
+            assert "does not delete" in normalized
+            assert "configured active workspace" in normalized
+            assert "closing the CLICK application deletes" not in normalized
+            assert "temporary backup is gone" not in normalized
+
+            legacy = (
+                temporary[path]
+                .replace(
+                    "<!-- pyrung:workspace-lifecycle:start -->\n",
+                    "",
+                )
+                .replace(
+                    "\n<!-- pyrung:workspace-lifecycle:end -->",
+                    "",
+                )
+            )
+            existing = f"{legacy}\nUser-authored footer.\n"
+            refreshed = refresh_workspace_lifecycle_guidance(existing, persistent_text)
+            assert "User-authored footer." in refreshed
+            assert "<!-- pyrung:workspace-lifecycle:start -->" in refreshed
+            assert "closing the CLICK application deletes" not in " ".join(refreshed.split())
+
+        user_docs = "# My machine\n\nClosing notes written by the engineer.\n"
+        assert refresh_workspace_lifecycle_guidance(user_docs, persistent["README.md"]) == user_docs
 
     def test_export_file_passes_blocks_to_nickname_file(self, tmp_path: Path):
         """project_to_csv.py must pass the ``blocks`` set to to_nickname_file.
@@ -210,6 +327,8 @@ class TestProjectBasic:
 
         export = files["project_to_csv.py"]
         assert "from plc.tags import mapping, blocks" in export
+        assert "pyrung_to_ladder(logic, mapping)" in export
+        assert "validate=False" not in export
         assert 'mapping.to_nickname_file(output_dir / "nicknames.csv", blocks=blocks)' in export
 
     def test_tags_file_has_declarations_and_mapping(self, tmp_path: Path):

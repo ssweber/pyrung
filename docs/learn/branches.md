@@ -18,7 +18,7 @@ from pyrung import Bool, Int, Program, rung, branch, comment, out, latch, reset,
 
 Auto          = Bool()
 Manual        = Bool()
-StopBtn       = Bool()     # NC contact
+StopCircuitOK = Bool()     # NC stop circuit: True when healthy
 StartBtn      = Bool()
 EstopOK       = Bool()     # NC safety relay permission
 Running       = Bool()
@@ -58,7 +58,7 @@ with Program() as logic:
     comment("Start/stop — NC stop resets when pressed or wire broken")
     with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with rung(~StopBtn):
+    with rung(~StopCircuitOK):
         reset(Running)
     with rung(~EstopOK):
         reset(Running)
@@ -71,7 +71,7 @@ with Program() as logic:
             out(StatusLight)
 ```
 
-This is the **gate pattern**. The parent rung holds your master condition, and every branch inside inherits that permission automatically. Lose the gate, lose all the outputs — atomically, in one scan. `EstopOK` reads as "safety is satisfied" so the gate uses the raw tag with no `~`. The reset rungs use `~StopBtn` and `~EstopOK` because those fire when the NC circuits open — same `~` convention from [Lesson 3](latch-reset.md).
+This is the **gate pattern**. The parent rung holds your master condition, and every branch inside inherits that permission automatically. Lose the gate, lose all the outputs — atomically, in one scan. `EstopOK` reads as "safety is satisfied" so the gate uses the raw tag with no `~`. The reset rungs use `~StopCircuitOK` and `~EstopOK` because those fire when the NC circuits open — same `~` convention from [Lesson 3](latch-reset.md).
 
 The gate pattern is *the* textbook ladder structure for any permission or interlock — guard doors, light curtains, machine-enabled flags. Real fail-safe E-stop wiring lives in [Lesson 11](hardware.md); here, the gate is general-purpose.
 
@@ -102,12 +102,12 @@ The diverter rung reads `State` and `IsLarge` directly from the state machine in
 [Lesson 3](latch-reset.md) used `latch`/`reset` for start/stop control. The classic ladder alternative is a **seal-in** — a single rung where the output feeds back into its own branch:
 
 ```python
-with rung(~StopBtn):
+with rung(~StopCircuitOK):
     with branch(Or(StartBtn, Running)):
         out(Running)
 ```
 
-`Running` appears in its own branch condition. Press `StartBtn` and `Running` energizes; release it and `Running` still powers the branch — it holds itself in. Open `~StopBtn` and the parent rung drops, breaking the seal. Reach for `latch`/`reset` when clarity matters; expect seal-in in every legacy ladder you inherit.
+`Running` appears in its own branch condition. Press `StartBtn` and `Running` energizes; release it and `Running` still powers the branch — it holds itself in. Open the stop circuit and `StopCircuitOK` goes False, so the parent rung drops and breaks the seal. Reach for `latch`/`reset` when clarity matters; expect seal-in in every legacy ladder you inherit.
 
 ## Try it
 
@@ -115,7 +115,7 @@ with rung(~StopBtn):
 from pyrung import PLC
 
 with PLC(logic) as plc:
-    StopBtn.value = True             # NC inputs: True = healthy
+    StopCircuitOK.value = True       # Stop circuit is healthy
     EstopOK.value = True
 
     Auto.value = True

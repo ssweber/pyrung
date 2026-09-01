@@ -1104,6 +1104,7 @@ class PLC:
         current_state: The current SystemState snapshot.
         history: Query interface for retained SystemState snapshots.
         simulation_time: Current simulation clock (seconds).
+        dt: Configured scan period in seconds.
         time_mode: Current time mode (FIXED_STEP or REALTIME).
     """
 
@@ -3379,6 +3380,11 @@ class PLC:
     def simulation_time(self) -> float:
         """Current simulation clock in seconds."""
         return self._state.timestamp
+
+    @property
+    def dt(self) -> float:
+        """Configured scan period in seconds."""
+        return self._dt
 
     @property
     def time_mode(self) -> TimeMode:

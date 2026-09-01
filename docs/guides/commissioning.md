@@ -19,7 +19,7 @@ class ConveyorIO:
     )
 ```
 
-`physical=` describes timing — how long the real device takes to respond. `link=` tells the harness which command drives this feedback. Tag flags (`public`, `external`, `readonly`, `final`) declare intent and are enforced by static validators. Standalone tags can use `link=` too — useful for process-level physics like "diverter fires → box arrives at sensor."
+`physical=` describes timing — how long the real device takes to respond. `link=` tells the harness which command drives this feedback. Tag flags (`public`, `external`, `readonly`, `final`) declare intent and are enforced by ladder lints. Standalone tags can use `link=` too — useful for process-level physics like "diverter fires → box arrives at sensor."
 
 See [Physical Annotations and Autoharness](physical-harness.md) for the full guide: standalone tags, value triggers, profile functions, validation, and forces override behavior.
 
@@ -41,7 +41,7 @@ with PLC(logic) as plc:
 - **`plc.cause()` / `plc.effect()`** — causal chain analysis. What caused a transition, what it caused downstream, and what-if projections with `assume=`.
 - **`plc.query`** — test coverage surveys. Cold rungs, hot rungs, stranded bits with blocker diagnostics. Merge across a test suite with the pytest plugin.
 
-Static validators run at build time via `logic.validate()` — conflicting outputs, stuck bits, readonly writes, pointer defaults below block starts, choices violations, and physical realism checks.
+[Ladder lints](ladder-lints.md) run at build time via `logic.check()` — contradictory rungs, conflicting outputs, stuck bits, readonly writes, suspicious comparisons, and physical realism checks.
 
 See [Analysis](analysis.md) for the full guide — program structure, diagnosis, cause/effect, and test coverage.
 
@@ -67,7 +67,7 @@ conditions = [
 results = never(logic, conditions)
 ```
 
-Lock files capture reachable behavior as a committed artifact. `pyrung lock` writes it; `pyrung check` diffs against it in CI. Behavioral changes show up in PRs.
+Lock files capture reachable behavior as a committed artifact. `pyrung lock` writes it; `pyrung lock --check` diffs against it in CI. Behavioral changes show up in PRs.
 
 See [Verification](verification.md) for the full guide: condition syntax, result types, fault coverage workflows, lock file configuration, and CLI reference.
 

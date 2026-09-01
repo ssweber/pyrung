@@ -43,7 +43,7 @@ HoldTimer = Timer.clone("HoldTimer")
 
 Auto = Bool()
 Manual = Bool()
-StopBtn = Bool()
+StopCircuitOK = Bool()
 StartBtn = Bool()
 EstopOK = Bool()
 Running = Bool()
@@ -59,7 +59,7 @@ with Program() as logic:
     comment("Start/stop — NC stop resets when pressed or wire broken")
     with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with rung(~StopBtn):
+    with rung(~StopCircuitOK):
         reset(Running)
     with rung(~EstopOK):
         reset(Running)
@@ -113,7 +113,7 @@ with Program() as logic:
 @pytest.fixture
 def plc():
     r = PLC(logic, dt=0.010)
-    r.force(StopBtn, True)  # NC inputs: healthy wiring
+    r.force(StopCircuitOK, True)  # Stop circuit is healthy
     r.force(EstopOK, True)
     r.force(Auto, True)  # Default to auto mode
     return r
