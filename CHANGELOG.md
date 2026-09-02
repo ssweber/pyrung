@@ -10,6 +10,12 @@
 
 ## Unreleased
 
+## v0.13.0 (2026-09-02)
+
+### Breaking Changes
+
+- Generated CLICK project subroutine modules and functions now use private `_sub_<name>` identifiers to prevent collisions with tag nicknames; the `@subroutine` decorator and CLICK-visible name are unchanged.
+
 ### Fixes
 
 - CLICK nickname imports now surface documented vendor system-name corrections as a structured repair error instead of failing later with a generic duplicate-name exception.

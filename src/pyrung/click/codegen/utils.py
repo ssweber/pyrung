@@ -512,19 +512,27 @@ def _make_safe_identifier(
 
 def _build_sub_name_map(
     subroutines: list[_SubroutineInfo],
+    *,
+    reserved_names: set[str] | frozenset[str] = frozenset(),
 ) -> dict[str, str]:
     """Map subroutine display names to Python function identifiers.
 
-    Returns ``{"Alarm Handler": "alarm_handler", "startup": "startup", ...}``.
+    Returns ``{"Alarm Handler": "_sub_alarm_handler", "startup": "_sub_startup", ...}``.
 
-    If a slug collides with a reserved pyrung import name (e.g. a
-    subroutine named "calc" would shadow the ``calc`` instruction),
-    the identifier is prefixed with ``sub_``.
+    Generated subroutine functions always live in a private ``_sub_`` namespace
+    so legal Click nicknames cannot shadow them. Any remaining collision with a
+    generated Python symbol, or between normalized subroutine names, receives a
+    numeric suffix.
     """
     result: dict[str, str] = {}
+    used_names = set(_CODEGEN_RESERVED_IDENTIFIERS) | set(reserved_names)
     for sub in subroutines:
-        slug = _slugify(sub.name)
-        if slug in _RESERVED_IMPORT_NAMES:
-            slug = f"sub_{slug}"
-        result[sub.name] = slug
+        slug = f"_sub_{_slugify(sub.name)}"
+        candidate = slug
+        suffix = 2
+        while candidate in used_names:
+            candidate = f"{slug}_{suffix}"
+            suffix += 1
+        result[sub.name] = candidate
+        used_names.add(candidate)
     return result

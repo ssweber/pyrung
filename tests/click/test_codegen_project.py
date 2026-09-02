@@ -164,7 +164,7 @@ class TestProjectBasic:
         mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
         files = _project_from_program(logic, mapping, tmp_path)
 
-        assert '"pyrung>=0.12.0"' in files["pyproject.toml"]
+        assert '"pyrung>=0.13.0"' in files["pyproject.toml"]
         assert '"Private :: Do Not Upload"' in files["pyproject.toml"]
         assert '"pytest>=8.3.5"' in files["pyproject.toml"]
         assert 'packages = ["src/plc"]' in files["pyproject.toml"]
@@ -175,8 +175,8 @@ class TestProjectBasic:
         assert "generated folder as its editable working branch" in normalized_guidance
         assert "propose finished changes to the engineer" in normalized_guidance
         assert "tag apply` stages tag changes and opens the Address Editor" in normalized_guidance
-        assert "rung apply` validates and stages the ladder CSVs" in normalized_guidance
-        assert "then opens the Rung Preview" in normalized_guidance
+        assert "rung apply` validates and exports the proposed ladder CSVs" in normalized_guidance
+        assert "then opens Preview Changes" in normalized_guidance
         assert "Rungs remain `staged`" in normalized_guidance
         assert "copying to the clipboard is not treated as proof" in normalized_guidance
         assert "engineer accepts the proposal" in normalized_guidance
@@ -187,23 +187,32 @@ class TestProjectBasic:
             "`backup/`, `tests/`, `pyproject.toml`, `uv.lock`, and `.venv/` survive regeneration"
             in normalized_guidance
         )
-        assert "automatically snapshots the complete active `src/plc/` tree" in normalized_guidance
+        assert "`backup/src/plc/` is a recovery snapshot" in normalized_guidance
+        assert (
+            "writes it immediately before regeneration replaces a modified `src/plc/`"
+            in normalized_guidance
+        )
+        assert "opens Preview Changes without touching it" in normalized_guidance
         assert "`clicknick-cli backup`" in guidance
         assert "`clicknick-cli restore`" in guidance
         assert (
-            "keep editing and applying from `src/plc/`, not from `backup/`" in normalized_guidance
+            "Keep editing and applying from `src/plc/`, not from `backup/`" in normalized_guidance
         )
         assert (
-            "If ClickNick restarts or the generated project refreshes after `rung apply`"
+            "If regeneration lands after `rung apply` but before the engineer pastes"
             in normalized_guidance
         )
-        assert "Run `clicknick-cli restore`, then rerun `rung apply`" in normalized_guidance
+        assert "run `clicknick-cli restore`, then rerun `rung apply`" in normalized_guidance
+        assert "A ClickNick restart alone does not replace `src/plc/`" in normalized_guidance
         assert "clicknick-cli rung preview" not in guidance
         assert "clicknick-cli rung apply main --select r3" in guidance
         assert "Rerun `rung apply`" in normalized_guidance
         assert "If CLICK Programming Software itself was closed" in normalized_guidance
         assert "temporary backup is gone" in normalized_guidance
-        assert "`backup/src/plc/` — latest source snapshot" in guidance
+        assert "snapshot of `src/plc/` taken before regeneration replaced it" in normalized_guidance
+        assert "or set by `clicknick-cli backup`" in normalized_guidance
+        assert "automatically snapshots" not in normalized_guidance
+        assert "back up `src/plc/`" not in normalized_guidance
         assert "closing the CLICK application deletes the entire folder" in normalized_guidance
         assert "Copy the whole folder elsewhere before closing CLICK" in normalized_guidance
         assert "A copied folder is an offline project" in normalized_guidance
@@ -238,9 +247,15 @@ class TestProjectBasic:
         readme = files["README.md"]
         normalized_readme = " ".join(readme.split())
         assert "closing the CLICK application deletes" in normalized_readme
-        assert "most recent `rung apply` source snapshot" in normalized_readme
+        assert "`backup/src/plc/` is a recovery snapshot" in normalized_readme
+        assert (
+            "writes it immediately before regeneration replaces a modified `src/plc/`"
+            in normalized_readme
+        )
+        assert "`rung apply` does not touch it" in normalized_readme
         assert "`clicknick-cli backup`" in readme
         assert "`clicknick-cli restore`" in readme
+        assert "most recent `rung apply` source snapshot" not in normalized_readme
         assert "backup is temporary too and disappears when CLICK closes" in normalized_readme
         assert "The copied folder is useful offline" in normalized_readme
         assert "every command targets ClickNick's active temporary workspace" in normalized_readme
@@ -257,8 +272,8 @@ class TestProjectBasic:
             in normalized_guidance
         )
 
-    def test_persistent_workspace_guidance_and_legacy_refresh(self, tmp_path: Path):
-        """Persistent projects survive CLICK and migrate only known generated prose."""
+    def test_persistent_workspace_guidance_and_marked_refresh(self, tmp_path: Path):
+        """Persistent projects survive CLICK and refresh only the marked section."""
         Button = Bool("Button")
         Light = Bool("Light")
 
@@ -284,20 +299,19 @@ class TestProjectBasic:
             assert "configured active workspace" in normalized
             assert "closing the CLICK application deletes" not in normalized
             assert "temporary backup is gone" not in normalized
-
-            legacy = (
-                temporary[path]
-                .replace(
-                    "<!-- pyrung:workspace-lifecycle:start -->\n",
-                    "",
-                )
-                .replace(
-                    "\n<!-- pyrung:workspace-lifecycle:end -->",
-                    "",
-                )
+            assert "`backup/src/plc/` is a recovery snapshot" in normalized
+            assert (
+                "writes it immediately before regeneration replaces a modified `src/plc/`"
+                in normalized
             )
-            existing = f"{legacy}\nUser-authored footer.\n"
-            refreshed = refresh_workspace_lifecycle_guidance(existing, persistent_text)
+            assert "`clicknick-cli backup`" in persistent_text
+            assert "`clicknick-cli restore`" in persistent_text
+            assert "automatically snapshots" not in normalized
+            assert "most recent `rung apply` source snapshot" not in normalized
+
+            # Only the marked section refreshes; surrounding edits survive.
+            marked = f"{temporary[path]}\nUser-authored footer.\n"
+            refreshed = refresh_workspace_lifecycle_guidance(marked, persistent_text)
             assert "User-authored footer." in refreshed
             assert "<!-- pyrung:workspace-lifecycle:start -->" in refreshed
             assert "closing the CLICK application deletes" not in " ".join(refreshed.split())
@@ -597,7 +611,7 @@ class TestProjectWithSubroutines:
         assert _MAIN_PATH in files
         assert _TAGS_PATH in files
         assert f"{_SUBROUTINES_DIR}/__init__.py" in files
-        assert f"{_SUBROUTINES_DIR}/init.py" in files
+        assert f"{_SUBROUTINES_DIR}/_sub_init.py" in files
         assert files[f"{_SUBROUTINES_DIR}/__init__.py"] == ""
 
     def test_subroutine_has_decorator(self, tmp_path: Path):
@@ -605,9 +619,9 @@ class TestProjectWithSubroutines:
         logic, mapping = self._make_program_with_sub()
         files = _project_from_program(logic, mapping, tmp_path)
 
-        sub_py = files[f"{_SUBROUTINES_DIR}/init.py"]
+        sub_py = files[f"{_SUBROUTINES_DIR}/_sub_init.py"]
         assert '@subroutine("init")' in sub_py
-        assert "def init():" in sub_py
+        assert "def _sub_init():" in sub_py
         assert "from ..tags import" in sub_py
 
     def test_main_calls_func_not_string(self, tmp_path: Path):
@@ -616,9 +630,9 @@ class TestProjectWithSubroutines:
         files = _project_from_program(logic, mapping, tmp_path)
 
         main_py = files[_MAIN_PATH]
-        assert "call(init)" in main_py
+        assert "call(_sub_init)" in main_py
         assert 'call("init")' not in main_py
-        assert "from .subroutines.init import init" in main_py
+        assert "from .subroutines._sub_init import _sub_init" in main_py
 
     def test_exec_round_trip_with_subroutine(self, tmp_path: Path):
         """Full exec round-trip with subroutine."""
@@ -636,6 +650,60 @@ class TestProjectWithSubroutines:
         reproduced_rows = list(reproduced_bundle.main_rows)
 
         assert original_rows == reproduced_rows
+
+    def test_subroutine_name_does_not_shadow_tag(self, tmp_path: Path):
+        """A subroutine and tag may share a Click nickname without breaking imports."""
+        Start = Bool("Start")
+        rotate = Bool("rotate")
+        sub_rotate = Bool("sub_rotate")
+
+        with Program() as logic:
+            with rung(Start):
+                call("rotate")
+
+            with subroutine("rotate"):
+                with rung():
+                    out(rotate)
+                    out(sub_rotate)
+
+        mapping = TagMap(
+            {Start: c[1], rotate: c[2], sub_rotate: c[3]},
+            include_system=False,
+        )
+        original_bundle = pyrung_to_ladder(logic, mapping)
+        files = _project_from_program(
+            logic,
+            mapping,
+            tmp_path,
+            nicknames={"C1": "Start", "C2": "rotate", "C3": "sub_rotate"},
+        )
+
+        sub_path = f"{_SUBROUTINES_DIR}/_sub_rotate.py"
+        assert sub_path in files
+        assert "from ..tags import rotate, sub_rotate" in files[sub_path]
+        assert "def _sub_rotate():" in files[sub_path]
+        assert "out(rotate)" in files[sub_path]
+        assert "out(sub_rotate)" in files[sub_path]
+        assert "from .subroutines._sub_rotate import _sub_rotate" in files[_MAIN_PATH]
+        assert "call(_sub_rotate)" in files[_MAIN_PATH]
+
+        ns = _exec_project(files, tmp_path)
+        reproduced_bundle = pyrung_to_ladder(ns["logic"], ns["mapping"])
+        assert list(original_bundle.main_rows) == list(reproduced_bundle.main_rows)
+
+    def test_private_subroutine_name_uses_numeric_collision_fallback(self):
+        """Private names remain unique if another generated symbol already uses one."""
+        from pyrung.click.codegen.models import _SubroutineInfo
+        from pyrung.click.codegen.utils import _build_sub_name_map
+
+        subroutines = [_SubroutineInfo(name="rotate", analyzed=[])]
+
+        names = _build_sub_name_map(
+            subroutines,
+            reserved_names={"_sub_rotate", "_sub_rotate_2"},
+        )
+
+        assert names == {"rotate": "_sub_rotate_3"}
 
     def test_subroutine_with_conditions(self, tmp_path: Path):
         """Subroutine with conditional rungs round-trips."""
@@ -701,8 +769,8 @@ class TestPerFileImports:
         )
         files = _project_from_program(logic, mapping, tmp_path)
 
-        sub1 = files[f"{_SUBROUTINES_DIR}/sub1.py"]
-        sub2 = files[f"{_SUBROUTINES_DIR}/sub2.py"]
+        sub1 = files[f"{_SUBROUTINES_DIR}/_sub_sub1.py"]
+        sub2 = files[f"{_SUBROUTINES_DIR}/_sub_sub2.py"]
 
         # sub1 imports X1, Y1 but not X2, Y2
         assert "X001" in sub1 or "X1" in sub1
@@ -767,7 +835,7 @@ class TestPerFileImports:
             include_system=False,
         )
         files = _project_from_program(logic, mapping, tmp_path)
-        sub_py = files[f"{_SUBROUTINES_DIR}/worker.py"]
+        sub_py = files[f"{_SUBROUTINES_DIR}/_sub_worker.py"]
 
         # Must have a tags import that includes 'c'
         tags_import = [ln for ln in sub_py.splitlines() if ln.startswith("from ..tags import")]
@@ -807,7 +875,7 @@ class TestPerFileImports:
         collection.has_subroutine = True
 
         files = _generate_project([main_rung], collection, None, subroutines)
-        sub_py = files[f"{_SUBROUTINES_DIR}/worker.py"]
+        sub_py = files[f"{_SUBROUTINES_DIR}/_sub_worker.py"]
 
         # Blocks come from tags.py, not pyrung.click
         tags_import = [ln for ln in sub_py.splitlines() if ln.startswith("from ..tags import")]
@@ -867,9 +935,9 @@ class TestSubroutineCallsSubroutine:
 
         files = _generate_project([main_rung], collection, None, subroutines)
 
-        sub_a = files[f"{_SUBROUTINES_DIR}/sub_a.py"]
-        assert "from .sub_b import sub_b" in sub_a
-        assert "call(sub_b)" in sub_a
+        sub_a = files[f"{_SUBROUTINES_DIR}/_sub_sub_a.py"]
+        assert "from ._sub_sub_b import _sub_sub_b" in sub_a
+        assert "call(_sub_sub_b)" in sub_a
 
 
 class TestNicknames:
@@ -907,7 +975,7 @@ class TestNicknames:
         assert "Button" in main_py
         assert "Light" in main_py
 
-        sub_py = files[f"{_SUBROUTINES_DIR}/init.py"]
+        sub_py = files[f"{_SUBROUTINES_DIR}/_sub_init.py"]
         assert "SubLight" in sub_py
 
 
