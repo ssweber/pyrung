@@ -113,7 +113,7 @@ This DSL follows Click PLC instruction naming as closely as possible, departing 
 | `MATH` | `calc` | Shadows Python stdlib `math` |
 | `RET` | `return_early` | Normal return is implicit; only early exit needs a call |
 
-The CSV ladder export uses Click-facing token names: `calc` emits as `math(...)`, `return_early` as `return()`, and `forloop` as `for(...)`. See the [laddercodec CSV format guide](https://ssweber.github.io/laddercodec/guides/csv-format/) for the full token grammar.
+The CSV ladder export uses Click-facing token names: `calc` emits as `math(...)`, `return_early` as `return()`, and `forloop` as `for(...)`. See the [laddercodec CSV format guide](https://pyrung.com/laddercodec/guides/csv-format/) for the full token grammar.
 
 ## Writing a Click program
 
@@ -427,7 +427,7 @@ bundle.main_rows          # inspect rows in-memory
 bundle.write("./output")  # write main.csv + subroutines/*.csv to disk
 ```
 
-For the consumer-facing CSV decode contract (files, row semantics, token formats, branch wiring, and supported tokens), see the [laddercodec CSV format guide](https://ssweber.github.io/laddercodec/guides/csv-format/).
+For the consumer-facing CSV decode contract (files, row semantics, token formats, branch wiring, and supported tokens), see the [laddercodec CSV format guide](https://pyrung.com/laddercodec/guides/csv-format/).
 
 To convert ladder CSV back into pyrung Python source, see [Click Python Codegen](click-codegen.md).
 

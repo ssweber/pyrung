@@ -113,7 +113,7 @@ For details on `@named_array` and `@udt` syntax, see the [Tag Structures guide](
 
 Tag types from operand prefixes (`X`→Bool, `DS`→Int, etc.), block ranges from `DS100..DS102` notation, OR expansion via `Or()`, branch conditions, timer/counter pin chains, `for`/`next` loops, and comments.
 
-For the CSV format that codegen reads, see the [laddercodec CSV format guide](https://ssweber.github.io/laddercodec/guides/csv-format/).
+For the CSV format that codegen reads, see the [laddercodec CSV format guide](https://pyrung.com/laddercodec/guides/csv-format/).
 
 ### Round-trip guarantee
 
