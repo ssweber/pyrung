@@ -10,7 +10,7 @@ import pytest
 from pyclickplc.addresses import AddressRecord, get_addr_key
 from pyclickplc.banks import DataType
 
-from pyrung.click import ClickBlocks, TagMap
+from pyrung.click import ClickBlocks, SystemNicknameRepairRequired, TagMap
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click.tag_map._parsers import (
@@ -30,6 +30,26 @@ def test_resolve_standalone_tag():
 
     assert mapping.resolve(valve) == "C1"
     assert mapping.resolve("Valve") == "C1"
+
+
+def test_from_nickname_file_surfaces_documented_system_repairs(tmp_path):
+    path = tmp_path / "nicknames.csv"
+    path.write_text(
+        "Address,Data Type,Nickname,Initial Value,Retentive,Address Comment\n"
+        'SD132,INT,"_Port1_AL_Denied_Count",0,No,""\n'
+        'SD133,INT,"_WLAN_AL_Denied_Count",0,No,""\n'
+        'SD134,INT,"",0,No,""\n'
+        'SD135,INT,"",0,No,""\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemNicknameRepairRequired) as exc_info:
+        TagMap.from_nickname_file(path)
+
+    repairs = exc_info.value.repairs
+    assert [repair.display_address for repair in repairs] == ["SD132", "SD133", "SD134", "SD135"]
+    assert repairs[0].replacement == "_Port1_AL_Denied_No1_Cnt"
+    assert "CLICK system nicknames need repair" in str(exc_info.value)
 
 
 def test_resolve_block_slot():

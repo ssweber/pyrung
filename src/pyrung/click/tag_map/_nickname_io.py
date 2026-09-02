@@ -19,6 +19,7 @@ from pyrung.core import Block, Physical, Tag
 from pyrung.core.physical import parse_profile_spec, profile_to_token
 from pyrung.core.tag import MappingEntry, _normalize_choices
 
+from ._errors import SystemNicknameRepair, SystemNicknameRepairRequired
 from ._parsers import (
     _HARDWARE_BLOCK_CACHE,
     TagMeta,
@@ -172,6 +173,23 @@ def tag_map_from_nickname_file(
         records.values(),
         key=lambda row: (MEMORY_TYPE_BASES[row.memory_type], row.address),
     )
+    system_repairs = tuple(
+        SystemNicknameRepair(
+            memory_type=row.memory_type,
+            address=row.address,
+            current=row.nickname,
+            replacement=replacement,
+        )
+        for row in rows
+        if (
+            replacement := pyclickplc.canonicalize_system_nickname(
+                row.memory_type, row.address, row.nickname
+            )
+        )
+        != row.nickname
+    )
+    if system_repairs:
+        raise SystemNicknameRepairRequired(system_repairs)
     ranges = compute_all_block_ranges(cast(list, rows))
 
     mappings: list[MappingEntry] = []
