@@ -3,8 +3,9 @@
 # Note GitHub Actions call uv directly, not this Makefile.
 
 .DEFAULT_GOAL := default
+DOCS_ADDR ?= localhost:8000
 
-.PHONY: default install lint test test-prove test-pilot test-tumbler watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-serve docs-build docs-check bench
+.PHONY: default install lint test test-prove test-pilot test-tumbler watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
 
 default: install verify
 
@@ -70,29 +71,40 @@ endif
 ifeq ($(WINDOWS),1)
 	# Windows commands
 	RM = powershell -Command "Remove-Item -Recurse -Force"
-	RM_SITE = powershell -Command "if (Test-Path 'site') { Remove-Item -Recurse -Force 'site' }"
+	RM_SITE = powershell -NoProfile -Command "if (Test-Path 'site') { Remove-Item -Recurse -Force 'site' }"
 	FIND_PYCACHE = powershell -Command "Get-ChildItem -Path . -Filter '__pycache__' -Recurse -Directory | Remove-Item -Recurse -Force"
-	DOCS_ENV = set DISABLE_MKDOCS_2_WARNING=true&&
+	RM_GENERATED_DOCS = powershell -NoProfile -Command "if (Test-Path '.docs-build') { Remove-Item -Recurse -Force '.docs-build' }; if (Test-Path 'generated-docs') { Remove-Item -Recurse -Force 'generated-docs' }; if (Test-Path 'docs/reference') { Remove-Item -Recurse -Force 'docs/reference' }; if (Test-Path 'docs/llms.txt') { Remove-Item -Force 'docs/llms.txt' }; if (Test-Path 'docs/__pycache__') { Remove-Item -Recurse -Force 'docs/__pycache__' }"
 	PROVE_SNAPSHOT_ENV = set PYRUNG_PROVE_VERIFY_SNAPSHOT=1&&
 else
     # Unix commands
     RM = rm -rf
     RM_SITE = rm -rf site/
     FIND_PYCACHE = find . -type d -name "__pycache__" -exec rm -rf {} +
-    DOCS_ENV = DISABLE_MKDOCS_2_WARNING=true
-    PROVE_SNAPSHOT_ENV = PYRUNG_PROVE_VERIFY_SNAPSHOT=1
+	RM_GENERATED_DOCS = rm -rf .docs-build/ generated-docs/ docs/reference/ docs/llms.txt docs/__pycache__/
+	PROVE_SNAPSHOT_ENV = PYRUNG_PROVE_VERIFY_SNAPSHOT=1
 endif
 
+docs-generate:
+	uv run --group docs python devtools/stage_docs.py docs generated-docs
+
 docs-serve:
-	$(DOCS_ENV) uv run --group docs mkdocs serve
+	uv run --group docs python devtools/serve_docs.py --dev-addr $(DOCS_ADDR)
 
 docs-clean:
 	$(RM_SITE)
+	$(RM_GENERATED_DOCS)
+
+docs-generated-clean:
+	$(RM_GENERATED_DOCS)
 
 docs-build: docs-clean
-	$(DOCS_ENV) uv run --group docs mkdocs build --strict
+	uv run --group docs python devtools/stage_docs.py docs generated-docs
+	uv run --group docs zensical build --clean --strict
+	uv run --group docs python devtools/finalize_docs_site.py generated-docs site
 
 docs-check: docs-build
+	uv run --group docs python devtools/check_docs_site.py generated-docs site
+	uv run --group docs python .github/scripts/check_public_site.py site
 
 clean:
 	$(RM) dist/

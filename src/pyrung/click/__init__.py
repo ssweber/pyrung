@@ -230,7 +230,7 @@ from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.ladder import LadderBundle, LadderExportError, pyrung_to_ladder
 from pyrung.click.nop import NopInstruction, nop
 from pyrung.click.raw import RawInstruction, raw
-from pyrung.click.tag_map import TagMap
+from pyrung.click.tag_map import SystemNicknameRepair, SystemNicknameRepairRequired, TagMap
 from pyrung.click.validation import (
     ValidationMode,
     validate_click_program,
@@ -271,6 +271,8 @@ __all__ = [
     "ClickBlocks",
     "ClickBlockSet",
     "TagMap",
+    "SystemNicknameRepair",
+    "SystemNicknameRepairRequired",
     "LadderBundle",
     "LadderExportError",
     "ClickDataProvider",

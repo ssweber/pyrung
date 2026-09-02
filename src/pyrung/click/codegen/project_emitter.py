@@ -11,8 +11,8 @@ Generates a Python project layout::
         tags.py
         subroutines/
             __init__.py
-            startup.py
-            alarm_handler.py
+            _sub_startup.py
+            _sub_alarm_handler.py
     tests/
         conftest.py
         test_smoke.py
@@ -57,16 +57,17 @@ _WORKSPACE_LIFECYCLE_END = "<!-- pyrung:workspace-lifecycle:end -->"
 
 WorkspaceKind = Literal["temporary", "persistent"]
 
-_LEGACY_README_WORKSPACE_LIFECYCLE = """\
+_TEMPORARY_README_WORKSPACE_LIFECYCLE = """\
 > **Temporary workspace:** This folder exists inside CLICK's temporary project
 > directory. It survives CLICK saves, but closing the CLICK application deletes
 > the entire folder. Copy the whole folder elsewhere before closing CLICK if you
 > want to keep your tests, backup, environment, or other work.
 
-ClickNick keeps the most recent `rung apply` source snapshot under
-`backup/src/plc/`. Use `clicknick-cli backup` to replace that snapshot manually
-and `clicknick-cli restore` to replace the active `src/plc/` tree from it. This
-backup is temporary too and disappears when CLICK closes.
+`backup/src/plc/` is a recovery snapshot. ClickNick writes it immediately before
+regeneration replaces a modified `src/plc/`; `rung apply` does not touch it.
+`clicknick-cli backup` replaces the snapshot by hand and `clicknick-cli restore`
+copies it back to `src/plc/`. This backup is temporary too and disappears when
+CLICK closes.
 
 The copied folder is useful offline: `uv run pytest`, `uv run python run.py`,
 VS Code debugging, and `uv run python project_to_csv.py` continue to work.
@@ -76,7 +77,7 @@ workspace, not whichever directory your terminal is in. To use `tag apply` or
 temporary folder. You can always export the copied project and load its
 `csv_output/` through Guided Paste instead."""
 
-_LEGACY_AGENTS_WORKSPACE_LIFECYCLE = """\
+_TEMPORARY_AGENTS_WORKSPACE_LIFECYCLE = """\
 A Click save regenerates this folder from the accepted project, like refreshing
 the working branch from the repository. Propose work you want accepted before
 the engineer saves.
@@ -87,18 +88,18 @@ in CLICK's temporary project folder: closing the CLICK application deletes the
 entire folder, including those preserved files. Copy the whole folder elsewhere
 before closing CLICK if you want to keep it.
 
-`clicknick-cli rung apply` automatically snapshots the complete active
-`src/plc/` tree to `backup/src/plc/` before exporting. Use
-`clicknick-cli backup` to replace that recovery snapshot at any other time, and
-`clicknick-cli restore` to replace active `src/plc/` from it. The backup is for
-recovering a proposal after regeneration or a failed export; keep editing and
-applying from `src/plc/`, not from `backup/`.
+`backup/src/plc/` is a recovery snapshot. ClickNick writes it immediately before
+regeneration replaces a modified `src/plc/`; `rung apply` validates and exports
+the proposed ladder CSVs and opens Preview Changes without touching it.
+`clicknick-cli backup` replaces the snapshot by hand and `clicknick-cli restore`
+copies it back to `src/plc/`. Keep editing and applying from `src/plc/`, not
+from `backup/`.
 
-If ClickNick restarts or the generated project refreshes after `rung apply` but
-before the engineer pastes, the proposal is still recoverable. Run
-`clicknick-cli restore`, then rerun `rung apply`. If CLICK
-Programming Software itself was closed, the temporary backup is gone unless
-the project folder was copied or exported elsewhere.
+If regeneration lands after `rung apply` but before the engineer pastes, run
+`clicknick-cli restore`, then rerun `rung apply`. A ClickNick restart alone does
+not replace `src/plc/`. If CLICK Programming Software itself was closed, the
+temporary backup is gone unless the project folder was copied or exported
+elsewhere.
 
 A copied folder is an offline project, not the active ClickNick workspace. Its
 tests, `run.py`, VS Code debugger, and `project_to_csv.py` continue to work.
@@ -147,7 +148,10 @@ def _generate_project(
     # Pre-scan expression functions so imports are complete.
     _prescan_expr_funcs(rungs, collection, subroutines or None)
 
-    sub_name_map = _build_sub_name_map(subroutines)
+    sub_name_map = _build_sub_name_map(
+        subroutines,
+        reserved_names=_tag_module_symbol_names(collection),
+    )
     # call_func_map: subroutine display name → Python function identifier
     call_func_map = sub_name_map
 
@@ -224,6 +228,23 @@ def _generate_project(
     return files
 
 
+def _tag_module_symbol_names(collection: _OperandCollection) -> set[str]:
+    """Return names that a generated subroutine function must not shadow."""
+    names = {"blocks", "mapping"}
+    names.update(collection.used_blocks)
+    names.update(decl.var_name for decl in collection.tags.values())
+    names.update(decl.var_name for decl in collection.timer_counter_clones)
+    names.update(decl.var_name for decl in collection.plain_blocks)
+    names.update(decl.name for decl in collection.structures)
+    names.update(decl.var_name for decl in collection.physical_decls.values())
+    names.update(collection.range_aliases.values())
+    for decl in collection.plain_blocks:
+        names.update(
+            slot.alias_var_name for slot in decl.slots.values() if slot.alias_var_name is not None
+        )
+    return names
+
+
 # ---------------------------------------------------------------------------
 # run.py
 # ---------------------------------------------------------------------------
@@ -240,7 +261,7 @@ classifiers = [
     "Private :: Do Not Upload",
 ]
 dependencies = [
-    "pyrung>=0.12.0",
+    "pyrung>=0.13.0",
 ]
 
 [dependency-groups]
@@ -277,40 +298,33 @@ def _marked_workspace_lifecycle(content: str) -> str | None:
 def refresh_workspace_lifecycle_guidance(existing: str, generated: str) -> str:
     """Refresh pyrung-owned workspace guidance while preserving surrounding edits.
 
-    Marked lifecycle sections are replaceable generated content. Exact legacy
-    sections emitted before the markers were introduced are migrated once; any
-    other unmarked content is treated as user-authored and left unchanged.
+    Marked lifecycle sections are replaceable generated content; unmarked
+    content is treated as user-authored and left unchanged.
     """
     replacement = _marked_workspace_lifecycle(generated)
     if replacement is None:
         return existing
 
     current = _marked_workspace_lifecycle(existing)
-    if current is not None:
-        return existing.replace(current, replacement, 1)
-
-    for legacy in (
-        _LEGACY_README_WORKSPACE_LIFECYCLE,
-        _LEGACY_AGENTS_WORKSPACE_LIFECYCLE,
-    ):
-        if legacy in existing:
-            return existing.replace(legacy, replacement, 1)
-    return existing
+    if current is None:
+        return existing
+    return existing.replace(current, replacement, 1)
 
 
 def _readme_workspace_lifecycle(workspace_kind: WorkspaceKind) -> str:
     if workspace_kind == "temporary":
-        body = _LEGACY_README_WORKSPACE_LIFECYCLE
+        body = _TEMPORARY_README_WORKSPACE_LIFECYCLE
     else:
         body = """\
 > **Persistent workspace:** ClickNick stores this folder outside CLICK's
 > temporary project directory. Closing CLICK ends the active connection but
 > does not delete this workspace, its tests, or its recovery snapshot.
 
-ClickNick keeps the most recent `rung apply` source snapshot under
-`backup/src/plc/`. Use `clicknick-cli backup` to replace that snapshot manually
-and `clicknick-cli restore` to replace the active `src/plc/` tree from it. The
-snapshot remains in this workspace after CLICK closes.
+`backup/src/plc/` is a recovery snapshot. ClickNick writes it immediately before
+regeneration replaces a modified `src/plc/`; `rung apply` does not touch it.
+`clicknick-cli backup` replaces the snapshot by hand and `clicknick-cli restore`
+copies it back to `src/plc/`. The snapshot stays in this workspace after CLICK
+closes.
 
 Offline tools such as `uv run pytest`, `uv run python run.py`, VS Code debugging,
 and `uv run python project_to_csv.py` work directly from this folder.
@@ -322,7 +336,7 @@ and connected to the matching CLICK project."""
 
 def _agents_workspace_lifecycle(workspace_kind: WorkspaceKind) -> str:
     if workspace_kind == "temporary":
-        body = _LEGACY_AGENTS_WORKSPACE_LIFECYCLE
+        body = _TEMPORARY_AGENTS_WORKSPACE_LIFECYCLE
     else:
         body = """\
 A Click save regenerates `src/plc/` from the accepted project, like refreshing
@@ -333,17 +347,17 @@ the engineer saves.
 regeneration and remain on disk after CLICK closes. Closing CLICK ends the live
 connection; it does not delete this configured workspace.
 
-`clicknick-cli rung apply` automatically snapshots the complete active
-`src/plc/` tree to `backup/src/plc/` before exporting. Use
-`clicknick-cli backup` to replace that recovery snapshot at any other time, and
-`clicknick-cli restore` to replace active `src/plc/` from it. The backup is for
-recovering a proposal after regeneration or a failed export; keep editing and
-applying from `src/plc/`, not from `backup/`.
+`backup/src/plc/` is a recovery snapshot. ClickNick writes it immediately before
+regeneration replaces a modified `src/plc/`; `rung apply` validates and exports
+the proposed ladder CSVs and opens Preview Changes without touching it.
+`clicknick-cli backup` replaces the snapshot by hand and `clicknick-cli restore`
+copies it back to `src/plc/`. Keep editing and applying from `src/plc/`, not
+from `backup/`.
 
-If ClickNick restarts, CLICK closes, or the generated project refreshes after
-`rung apply` but before the engineer pastes, the proposal remains in this
-workspace. Reopen the matching CLICK project and reconnect ClickNick, then run
-`clicknick-cli restore` and rerun `rung apply`.
+If regeneration lands after `rung apply` but before the engineer pastes, run
+`clicknick-cli restore`, then rerun `rung apply`. A ClickNick restart alone does
+not replace `src/plc/`. If CLICK closes, the workspace and its snapshot remain
+on disk.
 
 Every `clicknick-cli` command is routed to ClickNick's configured active
 workspace, regardless of the terminal's current directory. The files remain
@@ -603,7 +617,7 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
 
 
 # ---------------------------------------------------------------------------
-# src/plc/subroutines/<name>.py
+# src/plc/subroutines/_sub_<name>.py
 # ---------------------------------------------------------------------------
 
 
@@ -861,9 +875,9 @@ editable working branch. Read, test, and change the Python files here.
 
 Use the apply workflows to propose finished changes to the engineer.
 `clicknick-cli tag apply` stages tag changes and opens the Address Editor.
-`clicknick-cli rung apply` validates and stages the ladder CSVs, then opens the
-Rung Preview for Copy/paste. The engineer accepts the proposal by Syncing or
-pasting it, then decides when to save in Click.
+`clicknick-cli rung apply` validates and exports the proposed ladder CSVs, then
+opens Preview Changes for Copy/paste. The engineer accepts the proposal by
+Syncing or pasting it, then decides when to save in Click.
 
 The CLI reports only state it can know. Tags move from `staged` to `synced`
 before the engineer saves. Rungs remain `staged` while they differ from the
@@ -1086,10 +1100,11 @@ exit path.
 Edit `src/plc/main.py` or an existing `src/plc/subroutines/*.py` directly. Then:
 
 1. `clicknick-cli check` — review lint-style program findings
-2. `clicknick-cli rung apply <file>` — back up `src/plc/`, validate and stage
-   ladder CSVs in `csv_output/`, then open the paste window with the diff
+2. `clicknick-cli rung apply <file>` — validate and export proposed ladder CSVs
+   to `csv_output/`, then open Preview Changes
 3. Engineer clicks Copy, pastes in Click, and saves
-4. ScrWatcher detects the save and auto-regenerates `pyrung_project/`
+4. ScrWatcher detects the save and regenerates `pyrung_project/`, snapshotting
+   a modified `src/plc/` to `backup/src/plc/` first
 
 Use `--select` for a focused proposal, for example
 `clicknick-cli rung apply main --select r3`. Rerun `rung apply` whenever the
@@ -1102,7 +1117,8 @@ finds a path, but its failure to find one is not a failed verification.
 ## Reference
 
 - `src/plc/` — importable pyrung model of this machine's logic
-- `backup/src/plc/` — latest source snapshot from `rung apply` or `clicknick-cli backup`
+- `backup/src/plc/` — snapshot of `src/plc/` taken before regeneration replaced
+  it, or set by `clicknick-cli backup`
 - `tests/` — smoke test and focused behavioral tests
 - `csv/` — regenerated reference snapshot of the ladder accepted in CLICK
 - `csv_output/` — proposed ladder export produced from edits in `src/plc/`

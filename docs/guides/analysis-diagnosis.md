@@ -107,6 +107,14 @@ This loop — load dump, `why()`, force a tag, `why()` again — is the core int
 
 ## `how()` — how do I reach a target state?
 
+!!! note "Experimental"
+
+    `how()` is experimental. When it finds a path, the path is a real recording you can replay. On real programs it sometimes stops without one, and it can take a minute. `Stopped` is not a proof that no path exists — see the headline meanings below.
+
+    The `Plan`/`Path`/route API may still change; `avoid=` semantics and `via=` already changed between v0.10 and v0.11.
+
+    `how()` was rewritten in v0.11. Earlier versions searched breadth-first and returned the shortest path. PILOT returns a path it verified, not necessarily the shortest — which is what lets it wait through timer dwells and navigate multi-step machines.
+
 `how()` drives the PLC to a target state the way an engineer would — it reads the program backward to find what needs to change, tests each command on a fork, verifies what moved, and adapts when the program pushes back. It waits through timer dwells, navigates multi-step state machines, and returns to the last good state after a regression. Use it after `why()` to turn a diagnosis into action, or on its own to answer "how do I even start this machine?"
 
 Given a state machine with IDLE, RUNNING, and FAULTED states:

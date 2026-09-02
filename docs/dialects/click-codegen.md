@@ -148,8 +148,8 @@ tags.py                  # slot aliases, structures, TagMap
 main.py                  # Program context, main rungs, call() statements
 subroutines/
   __init__.py
-  startup.py             # @subroutine("startup") decorated function
-  alarm_handler.py
+  _sub_startup.py        # @subroutine("startup") decorated function
+  _sub_alarm_handler.py
 ```
 
 ### How subroutines are represented
@@ -157,12 +157,12 @@ subroutines/
 Each subroutine file defines a decorated function that auto-registers with the Program when called:
 
 ```python
-# subroutines/startup.py
+# subroutines/_sub_startup.py
 from pyrung import rung, subroutine, out
-from tags import SubLight
+from ..tags import SubLight
 
 @subroutine("startup")
-def startup():
+def _sub_startup():
     with rung():
         out(SubLight)
 ```
@@ -170,12 +170,15 @@ def startup():
 `main.py` imports and calls it by reference (not by string name):
 
 ```python
-from subroutines.startup import startup
+from .subroutines._sub_startup import _sub_startup
 
 with Program() as logic:
     with rung(Button):
-        call(startup)
+        call(_sub_startup)
 ```
+
+The private `_sub_` prefix keeps generated function and module names separate
+from CLICK nicknames. The decorator retains the original CLICK subroutine name.
 
 ### Per-file imports
 

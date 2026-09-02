@@ -1,15 +1,15 @@
-"""Generate curated MkDocs API reference pages for pyrung public exports."""
+"""Generate curated API reference pages for the pyrung documentation build."""
 
 from __future__ import annotations
 
+import argparse
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 
-import mkdocs_gen_files
-
 PUBLIC_MODULES = ("pyrung", "pyrung.click", "pyrung.circuitpy")
+DOCS_DIR = Path(__file__).resolve().parent
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,8 @@ CLICK_BLOCK_SYMBOLS: tuple[str, ...] = (
 
 CLICK_HELPER_SYMBOLS: tuple[str, ...] = (
     "pyrung.click.TagMap",
+    "pyrung.click.SystemNicknameRepair",
+    "pyrung.click.SystemNicknameRepairRequired",
     "pyrung.click.LadderBundle",
     "pyrung.click.LadderExportError",
     "pyrung.click.CodegenIdentityError",
@@ -252,7 +254,13 @@ def _validate_manifest() -> None:
         raise RuntimeError(message)
 
 
-def _write_curated_page(page: ReferencePage) -> None:
+def _write_text(output_dir: Path, relative_path: Path, text: str) -> None:
+    destination = output_dir / relative_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(text.rstrip() + "\n", encoding="utf-8")
+
+
+def _write_curated_page(page: ReferencePage, output_dir: Path) -> None:
     doc_rel_path = Path("reference/api") / f"{page.slug}.md"
     lines = [
         f"# {page.title}",
@@ -299,12 +307,10 @@ def _write_curated_page(page: ReferencePage) -> None:
             lines.append(f"::: {symbol}")
             lines.append("")
 
-    with mkdocs_gen_files.open(doc_rel_path, "w") as fd:
-        fd.write("\n".join(lines).rstrip() + "\n")
-    mkdocs_gen_files.set_edit_path(doc_rel_path, Path("docs/gen_reference.py"))
+    _write_text(output_dir, doc_rel_path, "\n".join(lines))
 
 
-def _write_index() -> None:
+def _write_index(output_dir: Path) -> None:
     stable = [page for page in PAGES if page.tier == "Stable Core"]
     dialect = [page for page in PAGES if page.tier == "Dialect Surface"]
 
@@ -323,12 +329,34 @@ def _write_index() -> None:
     for page in dialect:
         lines.append(f"- [{page.title}](api/{page.slug}.md)")
 
-    with mkdocs_gen_files.open("reference/index.md", "w") as fd:
-        fd.write("\n".join(lines).rstrip() + "\n")
-    mkdocs_gen_files.set_edit_path("reference/index.md", Path("docs/gen_reference.py"))
+    _write_text(output_dir, Path("reference/index.md"), "\n".join(lines))
 
 
-_validate_manifest()
-for reference_page in PAGES:
-    _write_curated_page(reference_page)
-_write_index()
+def generate(output_dir: Path = DOCS_DIR) -> tuple[Path, ...]:
+    """Generate the curated reference Markdown and return the written paths."""
+    _validate_manifest()
+    paths: list[Path] = []
+    for reference_page in PAGES:
+        _write_curated_page(reference_page, output_dir)
+        paths.append(output_dir / "reference" / "api" / f"{reference_page.slug}.md")
+    _write_index(output_dir)
+    paths.append(output_dir / "reference" / "index.md")
+    return tuple(paths)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DOCS_DIR,
+        help="Documentation source directory to receive generated files",
+    )
+    args = parser.parse_args()
+    paths = generate(args.output_dir.resolve())
+    print(f"Generated {len(paths)} API reference page(s).")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
