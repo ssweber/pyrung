@@ -40,7 +40,7 @@ classifiers = [
 
 dependencies = [
     "pyrsistent>=0.20.0",
-    "pyclickplc>=0.3.0",
+    "pyclickplc>=0.3.4",
     "executing>=2.2.0",
 ]
 
@@ -56,11 +56,9 @@ dev = [
     "ty>=0.0.65",
 ]
 docs = [
-    "mkdocs>=1.6.1,<2",
-    "mkdocs-material>=9.6.0,<9.7.6",
+    "zensical==0.0.57",
     "mkdocstrings[python]>=0.30.0",
-    "mkdocs-gen-files>=0.5.0",
-    "mkdocs-llmstxt>=0.3.0",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
