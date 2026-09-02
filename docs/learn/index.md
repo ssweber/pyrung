@@ -1,6 +1,6 @@
 # Know Python? Learn Ladder Logic.
 
-> A guided introduction to PLC programming for Python developers, using [pyrung](https://ssweber.github.io/pyrung/).
+> A guided introduction to PLC programming for Python developers, using [pyrung](https://pyrung.com/pyrung/).
 
 You know Python. You've never touched a PLC. This guide teaches you ladder logic, the dominant programming language of industrial automation, using tools you already have: Python, VS Code, and pytest. No hardware required.
 

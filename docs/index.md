@@ -18,7 +18,7 @@ with PLC(logic) as plc:
     assert Light.value is True
 ```
 
-- LLM docs index: https://ssweber.github.io/pyrung/llms.txt
+- LLM docs index: https://pyrung.com/pyrung/llms.txt
 - New to ladder logic? [Know Python? Learn Ladder Logic.](learn/index.md)
 
 ## What it does
