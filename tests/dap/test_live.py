@@ -12,7 +12,7 @@ import pytest
 
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.cancel import CancelToken, ConsoleCancelled
-from pyrung.dap.live import list_sessions, send_command
+from pyrung.dap.live import _build_command_epilog, list_sessions, send_command
 from pyrung.dap.protocol import read_message
 
 # ---------------------------------------------------------------------------
@@ -122,6 +122,13 @@ def slow_verb():
 # ---------------------------------------------------------------------------
 # Server lifecycle
 # ---------------------------------------------------------------------------
+
+
+def test_cli_help_includes_review_commands():
+    help_text = _build_command_epilog()
+    assert "review:" in help_text
+    assert "candidates [list]" in help_text
+    assert "spec [list] | spec test <filepath>" in help_text
 
 
 class TestServerLifecycle:

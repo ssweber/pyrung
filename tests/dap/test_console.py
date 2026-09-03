@@ -1163,6 +1163,22 @@ class TestHelpAndErrors:
         assert resp["success"] is False
         assert "Watch" in resp["message"]
 
+    def test_documented_command_reference_matches_runtime_help(self):
+        from pyrung.dap.console import _format_grouped_help
+        from pyrung.dap.grammar import command_grammar
+
+        command_grammar()  # Import every module that contributes console verbs.
+        source = (Path(__file__).parents[2] / "docs/guides/dap-vscode.md").read_text(
+            encoding="utf-8"
+        )
+        start = "<!-- dap-console-help:start -->"
+        end = "<!-- dap-console-help:end -->"
+        payload = source.split(start, 1)[1].split(end, 1)[0].strip()
+        assert payload.startswith("```text\n")
+        assert payload.endswith("\n```")
+        documented = payload.removeprefix("```text\n").removesuffix("\n```")
+        assert documented == _format_grouped_help()
+
 
 # ---------------------------------------------------------------------------
 # Enriched dataview output

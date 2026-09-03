@@ -1,7 +1,8 @@
 """Hot-reload console commands for the DAP adapter.
 
-Provides ``reload``, ``watch``, and ``unwatch`` commands that re-execute the
-program file while preserving PLC state (tags, memory, forces, time mode).
+Provides ``reload`` and ``autoreload [off]`` commands that re-execute the
+program while preserving PLC state (tags, memory, forces, time mode).  The
+watcher covers every Python file under the program directory.
 """
 
 from __future__ import annotations
