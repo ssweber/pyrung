@@ -18,10 +18,10 @@ pyrung includes a Debug Adapter Protocol (DAP) server that exposes PLC scan exec
 
 - VS Code with the Python extension
 - `pyrung` installed: `pip install pyrung`
-- The pyrung VS Code extension — download `pyrung-debug-0.1.0.vsix` from the [GitHub releases](https://github.com/ssweber/pyrung/releases) page, then install:
+- The pyrung VS Code extension — download `pyrung-debug-0.12.0.vsix` from the [GitHub releases](https://github.com/ssweber/pyrung/releases) page, then install:
 
 ```bash
-code --install-extension pyrung-debug-0.1.0.vsix
+code --install-extension pyrung-debug-0.12.0.vsix
 ```
 
 ## Launch configuration
@@ -98,15 +98,77 @@ Watch evaluation uses the same visible state as the Variables panel during stepp
 
 ## Debug Console
 
-The Debug Console accepts typed commands for all PLC operations. Use `help` to list them, or `Watch` for predicate evaluation.
+The Debug Console accepts typed commands for PLC execution, inspection, analysis, and session capture. Use `help` to print this catalog, or the VS Code `Watch` panel for read-only predicate evaluation.
 
-### Forces and patches
+### Command reference
+
+<!-- dap-console-help:start -->
+```text
+execution:
+  autoreload [off]
+  continue
+  pause
+  reload
+  run <N | duration>  (e.g. 10, 500ms, 2 s)
+  step [N]
+  stop                                                  (cancels a running analysis)
+
+data:
+  bounds [clear]                                        (runtime constraint log)
+  clear_forces
+  force <tag> <value>
+  get <tag> [tag2 ...]
+  monitor <tag>
+  note <text>
+  patch <tag> <value>
+  unforce <tag>
+  unmonitor <tag>
+
+analysis:
+  check [RULE_OR_CATEGORY ...]
+  log [N]
+
+  dataview <text | i: | p: | t: | upstream:tag>
+  downstream <tag>
+  upstream <tag>
+  structures
+
+  cause <tag>[@scan|:value]
+  effect <tag>[@scan|:value]
+  recovers <tag>
+  why <tag> [tag2 ...]
+  how <expression>[, <expression>...] [avoid <expression>[, <expression>...]]  (runs planner)
+  prove always|never <expression> [--settled] [--paced]  (exhaustive, needs annotations)
+
+  simplified [tag]
+
+capture:
+  harness <install|remove|status>                       needs physical+link=
+  record <action> | record stop
+  replay <filepath> [--harness current|recorded|off]
+
+review:
+  accept <id>
+  candidates [list]
+  deny <id>
+  spec [list] | spec test <filepath>
+  suppress <id>
+
+other:
+  help
+```
+<!-- dap-console-help:end -->
+
+### Values, forces, patches, and bounds
 
 ```text
+get Button Counter        # read one or more current values
 force Button true          # persistent override, held across scans
 unforce Button             # remove a force
 clear_forces               # remove all forces
 patch Button true          # one-shot input, consumed after one scan
+bounds                     # review runtime min/max/choices violations
+bounds clear               # clear the accumulated violation log
 ```
 
 ### Stepping and running
@@ -121,9 +183,11 @@ continue                   # run continuously (background)
 pause                      # stop a running continue
 ```
 
-`step` and `run` process breakpoints and logpoints during execution. If a breakpoint fires, the command stops early and reports it. Duration parsing accepts `ms`, `s`, `min`, `h` — same format as Physical delay declarations.
+`step` and `run` process breakpoints and logpoints during execution. If a breakpoint fires, the command stops early and reports it. Duration parsing accepts `ms`, `s`, `m`, `min`, `h`, and `d`, including compact compound durations such as `1h30min`.
 
 `continue` starts a background scan loop (same as the VS Code Continue button). `pause` signals it to stop after the current scan.
+
+Long-running `how` and `prove` requests hold the Debug Console's state lock. Cancel them from another terminal with `pyrung live stop`; entering `stop` in the same Debug Console cannot preempt its active request.
 
 ### Causal queries
 
@@ -134,6 +198,18 @@ cause Light:true           # how could Light reach true? (projected)
 effect Button              # what did Button's last change cause?
 effect Button:true         # what would happen if Button became true?
 recovers Light             # can Light return to its resting value?
+why Light Button           # explain current values without scan history
+how Running avoid Fault    # find a verified input-change sequence
+```
+
+### Program inspection and verification
+
+```text
+check                      # run every static ladder check
+check COIL TAG             # select rules or categories
+structures                 # list UDTs and named arrays
+prove always ~Fault        # exhaustively verify an invariant
+prove never MotorA, MotorB # verify a bad combination is unreachable
 ```
 
 ### DataView queries
@@ -186,8 +262,8 @@ scan 10:
   # testing startup sequence
 scan 11:  (live)
   patch StartBtn True
-  ConveyorMotor: False → True
-  Running: False → True
+  ConveyorMotor: False -> True
+  Running: False -> True
 ```
 
 ### Session capture
@@ -208,22 +284,35 @@ On stop, the transcript is printed as plain text — one command per line with a
 If forces are active when recording starts, a warning is printed.
 
 ```text
-replay session.txt         # feed a transcript file back through the console
+replay session.txt                            # use the current program harness
+replay session.txt --harness recorded         # replay recorded harness inputs
+replay session.txt --harness off              # ignore harness inputs
 ```
 
-Replay reads the file, skips `#` comment lines and blank lines, and executes each command in order. If a breakpoint fires or a command fails, replay halts and reports the line.
+Replay reads the file, skips `#` comment lines and blank lines, and executes each command in order. If a breakpoint fires or a command fails, replay halts and reports the line. The default `current` harness mode installs the harness declared by the current program and skips recorded harness inputs. `recorded` removes the current harness and applies provenance-tagged harness inputs from the transcript. `off` removes the harness and skips those inputs.
 
-Commands executed during replay are captured normally — if a recording is active, they appear in the transcript. The `record`, `replay`, and `help` verbs themselves are never captured.
+Commands executed during replay are captured normally — if a recording is active, they appear in the transcript. The `record`, `replay`, `help`, `pause`, `continue`, and `spec` verbs themselves are never captured.
+
+Stopping a recording also mines candidate invariants from the captured scan range. Review them before turning accepted formulas into tests:
+
+```text
+candidates                     # list mined candidates and their IDs
+accept c-01                    # keep a candidate
+deny c-02                      # discard this occurrence
+suppress c-03                  # discard and suppress the formula in later captures
+spec                           # list accepted formulas
+spec test tests/test_specs.py  # generate pytest tests for accepted formulas
+```
 
 ### Autoharness in the debug session
 
 If your program uses [Physical annotations](physical-harness.md) with `physical=` and `link=` declarations, the adapter installs the autoharness automatically at launch. A banner appears in the Debug Console:
 
 ```text
-Harness: 3 feedback loop(s) (2 bool, 1 analog) — `harness status` for details
+Harness: 3 feedback loop(s) (2 bool, 1 analog); `harness status` for details
 ```
 
-No configuration needed — if you annotated your UDTs, the harness activates. Feedback patches land at the same pre-scan phase as manual patches and forces. Forces still win: force a feedback tag to hold it regardless of what the harness schedules.
+No configuration is needed — if you annotated your tags or UDTs, the harness activates. It lowers the declared feedback into synthesized plant rungs that execute before the program logic. Forces still win: force a feedback tag to hold it regardless of what the plant rungs calculate.
 
 ```text
 harness status             # show couplings, pending patches, active state
@@ -242,26 +331,24 @@ Harness: active
   analog  Oven_Mode==2 -> Oven_Temp  profile=approach:toward=180.0|rate=0.3
 ```
 
-When the harness applies patches, they appear in the Debug Console output prefixed with `[harness]`:
+Bool feedback transitions appear in the Debug Console output prefixed with `[harness]`:
 
 ```text
 [harness] Gripper_Fb_Contact=True
-[harness] Heater_Fb_Temp=25.3
 ```
 
-If a session recording is active, harness patches are captured with provenance tags (`harness:nominal` for bool feedback, `harness:analog:<profile>` for analog). In the transcript they appear as comment lines — visible for review, skipped on replay:
+If a session recording is active, Bool feedback transitions are captured as `harness:nominal` inputs. Analog feedback is deterministic plant-rung state and is not recorded as a separate input:
 
 ```text
 # action: test_gripper_cycle
 patch Cmd true
 run 100ms
-# harness:nominal: patch Gripper_Fb_Contact True
-# harness:nominal: patch Gripper_Fb_Vacuum True
-# harness:analog:generic_thermal: patch Heater_Fb_Temp 25.3
+harness:nominal: patch Gripper_Fb_Contact True
+harness:nominal: patch Gripper_Fb_Vacuum True
 step 5
 ```
 
-On replay, the harness re-synthesizes its own patches from the program state — the comment lines are documentation, not inputs.
+With the default `--harness current` mode, replay skips those recorded inputs because the current harness reproduces them from program state. Use `--harness recorded` to remove the current harness and apply the captured inputs instead.
 
 ## pyrung live
 
@@ -309,10 +396,10 @@ One person drives VS Code (breakpoints, Data View, Graph View), another runs `py
 ```text
 scan 10:
   patch StartBtn True
-  Running: False → True
+  Running: False -> True
 scan 11:  (live)
   force EntrySensor True
-  State: 0 → 1
+  State: 0 -> 1
 ```
 
 The live client can do everything the Debug Console can — forces, patches, causal queries, recording. Stepping from either side advances the same scan counter.
@@ -339,11 +426,11 @@ The reload re-runs your program file, discovers the new runner, and patches the 
 ### Auto-reload on file save
 
 ```text
-watch                          # start watching the program file
-unwatch                        # stop watching
+autoreload                     # watch the program directory
+autoreload off                 # stop watching
 ```
 
-`watch` polls the program file's modification time once per second. When it changes (e.g. you save in your editor), the program reloads automatically. No new dependency — uses `os.stat` polling.
+`autoreload` polls every `.py` file under the program directory once per second. When any of them changes, the program reloads automatically after a short debounce. No new dependency — it uses `os.stat` polling. Set `"autoReload": true` in `launch.json` to enable the same behavior when the session starts.
 
 If `continue` is running when a file change is detected, the watcher skips the reload and logs a message. Pause first, then save to trigger the reload.
 

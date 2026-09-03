@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- The DAP debugger guide now mirrors all registered console commands, documents current replay and autoharness behavior, and uses the renamed `autoreload` commands; `pyrung live -h` also includes invariant-review and spec commands.
+
 ## v0.13.0 (2026-09-02)
 
 ### Breaking Changes
