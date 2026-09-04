@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -147,10 +148,36 @@ def _build_starter_zip(out_dir: Path, version: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _set_extension_version(version: str) -> None:
+    """Write the release version into the extension's package.json.
+
+    The VSIX file name already carries pyrung's version; this keeps the manifest
+    inside it (what VS Code shows) in step with the release tag.
+    """
+    manifest = EXTENSION_DIR / "package.json"
+    with open(manifest, encoding="utf-8", newline="") as f:  # keep CRLF as-is
+        text = f.read()
+    updated, count = re.subn(
+        r'^(\s*"version"\s*:\s*")[^"]*(")',
+        lambda m: f"{m.group(1)}{version}{m.group(2)}",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count != 1:
+        raise RuntimeError(f"Could not find a version field in {manifest}")
+    if updated != text:
+        with open(manifest, "w", encoding="utf-8", newline="") as f:
+            f.write(updated)
+        print(f"Set {manifest.name} version to {version}")
+
+
 def _build_vsix(out_dir: Path, version: str) -> Path:
     """Package the VS Code extension into a .vsix file."""
     vsix_name = f"pyrung-debug-{version}.vsix"
     vsix_path = (out_dir / vsix_name).resolve()
+
+    _set_extension_version(version)
 
     # vsce package writes to cwd; run it in the extension dir, then move.
     try:
