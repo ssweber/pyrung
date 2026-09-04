@@ -98,4 +98,4 @@ with rung((PressureA + PressureB) > 100):
     latch(HighPressureFault)
 ```
 
-Inline expressions work in simulation. The Click dialect validator will flag them if targeting Click hardware — rewrite as `calc()` instructions instead.
+Inline expressions work in simulation. The CLICK dialect validator will flag them if targeting CLICK hardware — rewrite as `calc()` instructions instead.

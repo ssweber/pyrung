@@ -198,7 +198,7 @@ This maps:
 
 The target range must have exactly `count * stride` addresses. Each instance claims `stride` consecutive slots, with fields filling from the front and gaps (if any) at the end.
 
-For UDTs, use `TagMap` to map individual field blocks — see the [Click Dialect](../dialects/click.md) guide.
+For UDTs, use `TagMap` to map individual field blocks — see the [CLICK Dialect](../dialects/click.md) guide.
 
 ## Block configuration
 
@@ -283,7 +283,7 @@ assert State.value == State.choice("RUNNING")
 ```
 
 Comparisons also accept the shorter `State == "IDLE"` form. The explicit form
-works in writes and assertions, and Click reverse codegen uses it when nickname
+works in writes and assertions, and CLICK reverse codegen uses it when nickname
 metadata supplies a matching choice label.
 
 ## Tag flags
@@ -318,7 +318,7 @@ MotorOut = Bool(lock=True)           # tracked in lock file
 
 The absence of `public` means plumbing — not hidden, not forbidden, just not the featured interface. Same convention as Python's `foo` vs `_foo`.
 
-**`lock`** — included in the default `pyrung lock` projection. Tags with `lock=True` define the behavioral contract tracked by the lock file. Unlike the semantic flags, `lock` has no validation constraints and no mutual exclusivity — it can combine freely with any other flag. Programs using Click `TagMap` get this automatically: output-mapped tags are stamped `lock=True` at construction.
+**`lock`** — included in the default `pyrung lock` projection. Tags with `lock=True` define the behavioral contract tracked by the lock file. Unlike the semantic flags, `lock` has no validation constraints and no mutual exclusivity — it can combine freely with any other flag. Programs using CLICK `TagMap` get this automatically: output-mapped tags are stamped `lock=True` at construction.
 
 ### Flags on structures
 
@@ -342,9 +342,9 @@ class SortState:
 BinACounter = Counter.clone("BinACounter", public=True)
 ```
 
-### Click comment convention
+### CLICK comment convention
 
-All flags round-trip through the Click nickname CSV comment parser using bracket syntax:
+All flags round-trip through the CLICK nickname CSV comment parser using bracket syntax:
 
 ```
 [readonly]
@@ -356,4 +356,4 @@ All flags round-trip through the Click nickname CSV comment parser using bracket
 [choices=Bool]
 ```
 
-Use `[choices=Bool]` for int-backed boolean fields stored in Click register memory. It round-trips as the same metadata as `choices={0: "False", 1: "True"}` and replaces the longer `[choices=False:0|True:1]` spelling on export.
+Use `[choices=Bool]` for int-backed boolean fields stored in CLICK register memory. It round-trips as the same metadata as `choices={0: "False", 1: "True"}` and replaces the longer `[choices=False:0|True:1]` spelling on export.

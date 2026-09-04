@@ -65,7 +65,7 @@ with rung(rise(SendOK)):
     out(SendComplete)  # fires for exactly one scan on each success
 ```
 
-This also handles a subtle hardware timing case: on real Click CPUs, if the TCP connection is busy with another Send/Receive, `sending` / `receiving` may not rise immediately — and during that brief delay, the previous cycle's `success` is still latched. `rise()` avoids triggering on the stale value.
+This also handles a subtle hardware timing case: on real CLICK CPUs, if the TCP connection is busy with another Send/Receive, `sending` / `receiving` may not rise immediately — and during that brief delay, the previous cycle's `success` is still latched. `rise()` avoids triggering on the stale value.
 
 ### Verification
 
@@ -73,6 +73,6 @@ This also handles a subtle hardware timing case: on real Click CPUs, if the TCP 
 
 ### Remote addressing
 
-`remote_start` can be a Click address string (e.g. `"DS1"`) for Click-to-Click communication, or a `ModbusAddress` for raw Modbus devices.
+`remote_start` can be a CLICK address string (e.g. `"DS1"`) for CLICK-to-CLICK communication, or a `ModbusAddress` for raw Modbus devices.
 
-For more on the soft-PLC Modbus setup, see [Click PLC — ClickDataProvider](../dialects/click.md).
+For more on the soft-PLC Modbus setup, see [CLICK PLC — ClickDataProvider](../dialects/click.md).

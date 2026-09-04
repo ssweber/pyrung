@@ -69,7 +69,7 @@ with rung(B).continued():
     out(Y)  # B evaluated against pre-X state (same snapshot as A)
 ```
 
-This models the Click ladder editor pattern where a single visual rung has multiple independent wires to the right power rail. Without `.continued()`, splitting into separate `rung` blocks would give each its own snapshot — changing behavior if the first rung's instructions mutate a tag that the second rung's conditions reference.
+This models the CLICK ladder editor pattern where a single visual rung has multiple independent wires to the right power rail. Without `.continued()`, splitting into separate `rung` blocks would give each its own snapshot — changing behavior if the first rung's instructions mutate a tag that the second rung's conditions reference.
 
 Multiple continued rungs chain — they all share the original snapshot:
 

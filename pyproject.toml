@@ -2,8 +2,8 @@
 
 [project.urls]
 Repository = "https://github.com/ssweber/pyrung"
-Homepage = "https://ssweber.github.io/pyrung/"
-Documentation = "https://ssweber.github.io/pyrung/"
+Homepage = "https://pyrung.com/pyrung/"
+Documentation = "https://pyrung.com/pyrung/"
 
 [project]
 name = "pyrung"

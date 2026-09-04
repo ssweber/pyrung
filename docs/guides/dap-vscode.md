@@ -477,13 +477,13 @@ Right-click a tag name in the editor and select **Add to Data View**. Structured
 - **Bool tags**: click True/False buttons to stage, double-click to write immediately.
 - **Choice tags**: selecting from the dropdown writes immediately — no "Write Values" click needed.
 - **Other types**: type a value, then click **Write Values** to patch all pending values in one scan.
-- **Force**: click the Force button to lock a tag to its staged value across scans. Click again to unforce.
+- **Force**: click the Force button to lock a tag to its staged value across scans. CLICK again to unforce.
 
 ### Tag flag badges
 
 Badges appear next to the tag name when flags are set:
 
-- **RO** — read-only tag. Editing controls are locked by default. Click the lock icon to unlock for debugging; click again to re-lock.
+- **RO** — read-only tag. Editing controls are locked by default. CLICK the lock icon to unlock for debugging; click again to re-lock.
 - **P** — public tag. Part of the intended API surface (setpoints, mode commands, status bits).
 
 ### Public filter
@@ -521,7 +521,7 @@ Tags are colored by role: blue for inputs (nothing writes them), amber for pivot
 
 ### Interactions
 
-- **Click** a tag to highlight its direct neighbors.
+- **CLICK** a tag to highlight its direct neighbors.
 - **Double-click** a tag to slice the graph to its upstream and downstream dependencies.
 - **Right-click** a tag for a context menu: slice upstream, slice downstream, add to Data View, add to History, copy name, hide.
 - **Right-click** a rung to go to source or copy rung info.

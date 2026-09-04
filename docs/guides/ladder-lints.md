@@ -244,4 +244,4 @@ logic.validate("click", tag_map=mapping, mode="strict")
 logic.validate("circuitpy", hw=hw, mode="strict")
 ```
 
-`logic.validate()` without a dialect remains a compatibility alias for `logic.check()`. The dialect forms check whether a program can run on that target; they do not also run the ladder lints. See [Click PLC validation](../dialects/click.md#validation) and [CircuitPython validation](../dialects/circuitpy.md#validation) for their rule sets.
+`logic.validate()` without a dialect remains a compatibility alias for `logic.check()`. The dialect forms check whether a program can run on that target; they do not also run the ladder lints. See [CLICK PLC validation](../dialects/click.md#validation) and [CircuitPython validation](../dialects/circuitpy.md#validation) for their rule sets.

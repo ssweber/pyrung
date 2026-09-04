@@ -208,7 +208,7 @@ Multiple `Fb` fields linked to the same `En` are independent timers, each with i
 
 ### How profile-driven feedback works
 
-A `profile=` spec is **declarative data**, not a Python function — the harness lowers it to real plant rungs (a guarded `calc` or timer), so it folds, traces, and round-trips through a Click nickname comment like everything else. There are three specs.
+A `profile=` spec is **declarative data**, not a Python function — the harness lowers it to real plant rungs (a guarded `calc` or timer), so it folds, traces, and round-trips through a CLICK nickname comment like everything else. There are three specs.
 
 **`Ramp`** — a constant-slope analog response. `Fb` moves `up` units per second while `En` is active and `down` units per second otherwise (`down` is usually negative — an ambient decay or bleed-down; `0` means "hold on En fall"). Rates are per **second**, applied against the `sys.dt` system tag, so they're stable across scan periods:
 
@@ -244,7 +244,7 @@ class Conveyor:
 
 A counter instruction in the logic counts the rising edges — the harness produces the pulse train, the program counts it.
 
-In a Click nickname comment the spec is a comma-free token: `profile=ramp:up=0.8|down=-0.05`, `profile=approach:toward=180|rate=0.3`, or `profile=pulse:on_dwell=8ms|off_dwell=8ms`.
+In a CLICK nickname comment the spec is a comma-free token: `profile=ramp:up=0.8|down=-0.05`, `profile=approach:toward=180|rate=0.3`, or `profile=pulse:on_dwell=8ms|off_dwell=8ms`.
 
 ## Validation
 

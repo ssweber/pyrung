@@ -27,7 +27,7 @@ Tags are typed and sized. You can't put a float in a Bool or store a negative nu
     1. **It matches PLC convention** — what you'll see in every vendor's projects.
     2. **Characters are a budget.** Most PLCs cap tag names at 16–40 characters. `EStopPressed` fits everywhere; `e_stop_pressed` might not.
 
-    On flat-namespace PLCs like Click, underscores group related tags into a pseudo-namespace (`Bin1_Count`, `Bin1_Full`) that becomes a real UDT member (`Bin1.Count`) on platforms with structures. More on that in [Structured Tags and Blocks](structured-tags.md).
+    On flat-namespace PLCs like CLICK, underscores group related tags into a pseudo-namespace (`Bin1_Count`, `Bin1_Full`) that becomes a real UDT member (`Bin1.Count`) on platforms with structures. More on that in [Structured Tags and Blocks](structured-tags.md).
 
 ```
   Tag Types

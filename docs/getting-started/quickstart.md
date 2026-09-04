@@ -5,8 +5,8 @@ Build a traffic light that cycles green → yellow → red, then test it.
 ## Install
 
 ```bash
-# Requires Python 3.12+
-pip install -e .
+# Requires Python 3.11+
+pip install pyrung
 ```
 
 ## Your first program

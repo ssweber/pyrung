@@ -19,7 +19,7 @@ Python has dataclasses for structured records and lists for arrays. Ladder logic
 
 Up to now, each bin had its own separate tags: `BinASensor`, `BinAAcc`, `BinBSensor`, `BinBAcc`. That's fine for two bins, but it doesn't scale -- and it doesn't match how real plants are organized. Identical equipment should use identical structures.
 
-pyrung generates the flat identity from the structure: `Bin[1].Sensor` is the Python access path to a tag whose real identity is `Bin1_Sensor`. On Click that's a flat nickname; on Rockwell it's a real UDT member. Your Python stays the same either way.
+pyrung generates the flat identity from the structure: `Bin[1].Sensor` is the Python access path to a tag whose real identity is `Bin1_Sensor`. On CLICK that's a flat nickname; on Rockwell it's a real UDT member. Your Python stays the same either way.
 
 ```python
 from pyrung import udt, Bool, Counter, Program, rung, PLC, out, rise, count_up
@@ -111,7 +111,7 @@ with Program() as logic:
         copy(BoxSize, SortLog[1])                                # Insert at front
 ```
 
-`SortLog.select(1, 4)` gives you SortLog1 through SortLog4 as a range, and `blockcopy` moves the whole thing in one instruction. The oldest value in SortLog5 falls off the end. This is a **shift register** — the canonical FIFO pattern in ladder logic, with dedicated instructions on every platform (`BSL`/`BSR` on Rockwell, `SHIFT` on Click and Do-More). pyrung uses `blockcopy` over `select` for the same effect: no loops, no index arithmetic.
+`SortLog.select(1, 4)` gives you SortLog1 through SortLog4 as a range, and `blockcopy` moves the whole thing in one instruction. The oldest value in SortLog5 falls off the end. This is a **shift register** — the canonical FIFO pattern in ladder logic, with dedicated instructions on every platform (`BSL`/`BSR` on Rockwell, `SHIFT` on CLICK and Do-More). pyrung uses `blockcopy` over `select` for the same effect: no loops, no index arithmetic.
 
 Why `.select(1, 4)` instead of `[1:4]`? Python's `list[1:4]` is `[1, 2, 3]` — exclusive end. PLC ranges like `DS1..DS4` are inclusive on both ends — `[1, 2, 3, 4]`. Reusing slice syntax would silently do the wrong thing exactly half the time. `.select(start, end)` is visibly different because the semantics are different. Both bounds are inclusive, every time.
 

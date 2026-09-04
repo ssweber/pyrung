@@ -1,6 +1,6 @@
-# Click PLC Dialect
+# CLICK PLC Dialect
 
-`pyrung.click` adds Click-PLC-specific blocks, type aliases, address mapping, nickname file I/O, validation, and a soft-PLC adapter on top of the hardware-agnostic core.
+`pyrung.click` adds CLICK-PLC-specific blocks, type aliases, address mapping, nickname file I/O, validation, and a soft-PLC adapter on top of the hardware-agnostic core.
 
 ## Installation
 
@@ -27,15 +27,15 @@ The natural progression:
 
 1. **Write** — define semantic tags (`StartButton`, `MotorRunning`, `Speed`) and express logic in Python
 2. **Simulate** — run tests with a fixed `dt`; set inputs, assert outputs, iterate
-3. **Map** — create a `TagMap` linking semantic tags to Click hardware addresses
-4. **Validate** — `mapping.validate(logic, mode="warn")` surfaces Click-incompatible patterns
+3. **Map** — create a `TagMap` linking semantic tags to CLICK hardware addresses
+4. **Validate** — `mapping.validate(logic, mode="warn")` surfaces CLICK-incompatible patterns
 5. **Iterate** — fix findings, tighten to `mode="strict"` when the program is clean
 
-The validator tells you exactly what Click can't do — inline expressions, unsupported pointer modes, type mismatches — before you discover it at deploy time.
+The validator tells you exactly what CLICK can't do — inline expressions, unsupported pointer modes, type mismatches — before you discover it at deploy time.
 
 ## Pre-built blocks
 
-`pyrung.click` exports pre-built blocks for every Click memory bank:
+`pyrung.click` exports pre-built blocks for every CLICK memory bank:
 
 | Variable | Bank | Type | Block kind |
 |----------|------|------|------------|
@@ -56,7 +56,7 @@ The validator tells you exactly what Click can't do — inline expressions, unsu
 | `xd` | XD (word image) | WORD | InputBlock |
 | `yd` | YD (word image) | WORD | OutputBlock |
 
-Addresses use canonical Click display names:
+Addresses use canonical CLICK display names:
 
 ```python
 x[1].name   # "X001"
@@ -85,13 +85,13 @@ td.slot(1, 5, retentive=False, default=0)
 
 Re-applying identical configuration is a no-op, even after the slot is materialized (`block[n]` accessed). A conflicting second claim — a different name or default for the same slot — raises `ValueError` naming both values. Each call to `ClickBlocks()` returns fresh blocks with no shared state, so multi-project workflows don't need manual cleanup.
 
-Retentive registers ignore their CSV initial value, matching hardware: the Click PLC applies the initial value at project download only, and a retentive register keeps its last value afterward. pyrung therefore models retentive slots with the type zero, and codegen omits `default=` for them.
+Retentive registers ignore their CSV initial value, matching hardware: the CLICK PLC applies the initial value at project download only, and a retentive register keeps its last value afterward. pyrung therefore models retentive slots with the type zero, and codegen omits `default=` for them.
 
 ## Type aliases
 
-Click-style constructor aliases as alternatives to IEC names:
+CLICK-style constructor aliases as alternatives to IEC names:
 
-| Click alias | IEC equivalent |
+| CLICK alias | IEC equivalent |
 |-------------|----------------|
 | `Bit` | `Bool` |
 | `Int2` | `Dint` |
@@ -101,21 +101,21 @@ Click-style constructor aliases as alternatives to IEC names:
 
 ## DSL naming philosophy
 
-This DSL follows Click PLC instruction naming as closely as possible, departing only when a Python conflict exists **and** the replacement name is genuinely better in a Python-hosted context.
+This DSL follows CLICK PLC instruction naming as closely as possible, departing only when a Python conflict exists **and** the replacement name is genuinely better in a Python-hosted context.
 
-1. **Keep the Click name** when it's a clear action verb with no conflict: `out`, `reset`, `fill`, `copy`, `blockcopy`.
-2. **Use a domain synonym** when Click's name shadows a Python builtin or standard library module: `set` → `latch`, `math` → `calc`. Both are well-understood PLC terminology.
-3. **Use clarified intent** when Python's execution model changes the semantics: `return` → `return_early`. In Click, every subroutine needs an explicit `RET`. In this DSL, normal subroutine completion is implicit, so the only use is early exit — and the name should say so.
+1. **Keep the CLICK name** when it's a clear action verb with no conflict: `out`, `reset`, `fill`, `copy`, `blockcopy`.
+2. **Use a domain synonym** when CLICK's name shadows a Python builtin or standard library module: `set` → `latch`, `math` → `calc`. Both are well-understood PLC terminology.
+3. **Use clarified intent** when Python's execution model changes the semantics: `return` → `return_early`. In CLICK, every subroutine needs an explicit `RET`. In this DSL, normal subroutine completion is implicit, so the only use is early exit — and the name should say so.
 
-| Click instruction | pyrung DSL | Reason |
+| CLICK instruction | pyrung DSL | Reason |
 |-------------------|------------|--------|
 | `SET` | `latch` | Shadows Python builtin `set` |
 | `MATH` | `calc` | Shadows Python stdlib `math` |
 | `RET` | `return_early` | Normal return is implicit; only early exit needs a call |
 
-The CSV ladder export uses Click-facing token names: `calc` emits as `math(...)`, `return_early` as `return()`, and `forloop` as `for(...)`. See the [laddercodec CSV format guide](https://pyrung.com/laddercodec/guides/csv-format/) for the full token grammar.
+The CSV ladder export uses CLICK-facing token names: `calc` emits as `math(...)`, `return_early` as `return()`, and `forloop` as `for(...)`. See the [laddercodec CSV format guide](https://pyrung.com/laddercodec/guides/csv-format/) for the full token grammar.
 
-## Writing a Click program
+## Writing a CLICK program
 
 ```python
 from pyrung import Bool, Real, PLC, Program, rung, copy, latch, reset, rise
@@ -149,7 +149,7 @@ with PLC(logic, dt=0.1) as plc:
 
 ## TagMap — mapping to hardware
 
-`TagMap` links semantic tags and blocks to Click hardware addresses. Mapping is separate from logic — write and simulate first, map when ready.
+`TagMap` links semantic tags and blocks to CLICK hardware addresses. Mapping is separate from logic — write and simulate first, map when ready.
 
 ### Dict constructor
 
@@ -182,7 +182,7 @@ mapping = TagMap({
 
 ### Timer/Counter mapping
 
-`Timer` and `Counter` are built-in UDTs. Map them to Click hardware banks explicitly, just like any other block:
+`Timer` and `Counter` are built-in UDTs. Map them to CLICK hardware banks explicitly, just like any other block:
 
 ```python
 OvenTimer = Timer.clone("OvenTimer")
@@ -252,7 +252,7 @@ TagMap({Speed: c[1]})   # raises: INT cannot map to C (BIT)
 
 ### From nickname file
 
-Load an existing Click nickname CSV:
+Load an existing CLICK nickname CSV:
 
 ```python
 mapping = TagMap.from_nickname_file("project.csv")
@@ -336,7 +336,7 @@ If stride exceeds the field count, the extra slots are gaps (empty nicknames):
 | DS105 | `Sensor2_Scaled` | |
 | DS106 | | `</Sensor:named_array(2,3)>` |
 
-Click codegen can round-trip aligned whole-instance spans back into pyrung as `Name.instance(...)` or `Name.instance_select(...)` instead of raw bank ranges. This works for both dense and sparse layouts:
+CLICK codegen can round-trip aligned whole-instance spans back into pyrung as `Name.instance(...)` or `Name.instance_select(...)` instead of raw bank ranges. This works for both dense and sparse layouts:
 
 ```python
 blockcopy(RecipeProfile.instance(2), WorkingRecipe.select(1, 3))
@@ -366,7 +366,7 @@ Nesting is not supported — a UDT field cannot itself be a named array (e.g. `S
 
 ### To nickname file
 
-Export to Click nickname CSV for import into CLICK Programming Software:
+Export to CLICK nickname CSV for import into CLICK Programming Software:
 
 ```python
 mapping.to_nickname_file("project.csv")
@@ -376,7 +376,7 @@ Mapped tags and blocks emit rows with canonical logical names, initial values, r
 
 ## Validation
 
-After mapping, validate your program against Click hardware restrictions:
+After mapping, validate your program against CLICK hardware restrictions:
 
 ```python
 report = mapping.validate(logic, mode="warn")
@@ -388,14 +388,14 @@ for finding in report.findings:
 
 Common findings:
 
-| Issue | pyrung allows | Click requires |
+| Issue | pyrung allows | CLICK requires |
 |-------|--------------|----------------|
 | Pointer in `copy` source | Any block, arithmetic | DS only, no arithmetic |
 | Inline expression in condition | `(A + B) > 100` | Must use `calc()` first |
 
 ### Timer preset limits
 
-Click timer accumulators are 16-bit signed INT (max 32,767). A literal preset exceeding this range silently clamps at runtime. The validator reports `CLK_TIMER_PRESET_OVERFLOW` for out-of-range presets — use a larger time unit instead.
+CLICK timer accumulators are 16-bit signed INT (max 32,767). A literal preset exceeding this range silently clamps at runtime. The validator reports `CLK_TIMER_PRESET_OVERFLOW` for out-of-range presets — use a larger time unit instead.
 
 | Unit | Max preset | Max duration |
 |------|-----------|--------------|
@@ -417,7 +417,7 @@ Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hint
 
 ## Ladder CSV export
 
-`pyrung_to_ladder(program, tag_map)` emits deterministic Click ladder CSV row matrices via `LadderBundle`.
+`pyrung_to_ladder(program, tag_map)` emits deterministic CLICK ladder CSV row matrices via `LadderBundle`.
 
 ```python
 from pyrung.click import pyrung_to_ladder
@@ -429,19 +429,19 @@ bundle.write("./output")  # write main.csv + subroutines/*.csv to disk
 
 For the consumer-facing CSV decode contract (files, row semantics, token formats, branch wiring, and supported tokens), see the [laddercodec CSV format guide](https://pyrung.com/laddercodec/guides/csv-format/).
 
-To convert ladder CSV back into pyrung Python source, see [Click Python Codegen](click-codegen.md).
+To convert ladder CSV back into pyrung Python source, see [CLICK Python Codegen](click-codegen.md).
 
 ### Empty and comment-only rungs
 
-Empty rungs survive the round-trip. A `with rung(): pass` in pyrung exports as `NOP` in the Click CSV AF column and imports back as `pass`.
+Empty rungs survive the round-trip. A `with rung(): pass` in pyrung exports as `NOP` in the CLICK CSV AF column and imports back as `pass`.
 
 ```python
 comment("--- Motor Control Section ---")
 with rung():
-    pass  # becomes NOP in Click ladder CSV
+    pass  # becomes NOP in CLICK ladder CSV
 ```
 
-For Click programs that want to be explicit, `pyrung.click` also provides `nop()`:
+For CLICK programs that want to be explicit, `pyrung.click` also provides `nop()`:
 
 ```python
 from pyrung.click import nop
@@ -455,7 +455,7 @@ Both forms produce identical CSV output.
 
 ## Loading PLC state
 
-Use Click Programming Software's **Data > Read Data from PLC** to dump the live state of a Click PLC to CSV, then load that snapshot into a pyrung runner so it starts right where the PLC was.
+Use CLICK Programming Software's **Data > Read Data from PLC** to dump the live state of a CLICK PLC to CSV, then load that snapshot into a pyrung runner so it starts right where the PLC was.
 
 ```python
 from pyclickplc import read_plc_data
@@ -480,7 +480,7 @@ runner.step()  # applied at the start of this scan
 
 ## ClickDataProvider — soft PLC
 
-`ClickDataProvider` implements the `pyclickplc` `DataProvider` protocol, bridging pyrung's `SystemState` to a Modbus TCP server. This lets pyrung act as a soft PLC accessible from Click Programming Software or any Modbus client.
+`ClickDataProvider` implements the `pyclickplc` `DataProvider` protocol, bridging pyrung's `SystemState` to a Modbus TCP server. This lets pyrung act as a soft PLC accessible from CLICK Programming Software or any Modbus client.
 
 ```python
 from pyrung.click import ClickDataProvider
@@ -505,9 +505,9 @@ If another device on the LAN can't reach the soft PLC, check the Windows Firewal
 
 `send` and `receive` implement Modbus communication with remote devices. Two addressing modes are supported:
 
-### Click addresses (Click-to-Click)
+### CLICK addresses (CLICK-to-CLICK)
 
-Use a Click address string for `remote_start` when talking to another Click PLC:
+Use a CLICK address string for `remote_start` when talking to another CLICK PLC:
 
 ```python
 from pyrung.click import ModbusTcpTarget, send, receive
@@ -535,11 +535,11 @@ receive(
 )
 ```
 
-Click handles word swap and character order natively — no configuration needed on the pyrung side.
+CLICK handles word swap and character order natively — no configuration needed on the pyrung side.
 
 ### Raw Modbus addresses (any device)
 
-Use `ModbusAddress` for `remote_start` when talking to non-Click Modbus devices (VFDs, meters, sensors, etc.):
+Use `ModbusAddress` for `remote_start` when talking to non-CLICK Modbus devices (VFDs, meters, sensors, etc.):
 
 ```python
 from pyrung import ModbusAddress, ModbusTcpTarget, ModbusRtuTarget, RegisterType, send, receive
@@ -572,7 +572,7 @@ receive(
 
 `ModbusAddress` accepts MODBUS 984 addresses (e.g. `400001` for holding, `300001` for input, `100001` for discrete input) or hex strings with an `h` suffix (e.g. `"0h"`, `"FFFEh"`). For 984 addresses, the register type is inferred from the prefix. Hex addresses need an explicit `RegisterType` since the offset alone is ambiguous.
 
-`word_swap` controls how 32-bit values (DINT, REAL) are packed across register pairs. `False` (default) = high word first, `True` = low word first. Only relevant for 32-bit Click types (DD, DF, etc.).
+`word_swap` controls how 32-bit values (DINT, REAL) are packed across register pairs. `False` (default) = high word first, `True` = low word first. Only relevant for 32-bit CLICK types (DD, DF, etc.).
 
 `RegisterType` selects the Modbus function code: `HOLDING` (FC 3/6/16, default), `INPUT` (FC 4, read-only), `COIL` (FC 1/5/15), `DISCRETE_INPUT` (FC 2, read-only). Sending to `INPUT` or `DISCRETE_INPUT` raises `ValueError`.
 
@@ -580,7 +580,7 @@ receive(
 
 | Type | Transport | Live I/O | Codegen |
 |------|-----------|----------|---------|
-| `ModbusTcpTarget` | Ethernet | Yes (pymodbus for raw, pyclickplc for Click addresses) | Yes |
+| `ModbusTcpTarget` | Ethernet | Yes (pymodbus for raw, pyclickplc for CLICK addresses) | Yes |
 | `ModbusRtuTarget` | Serial | Yes (pymodbus) | Not yet |
 | `str` (name only) | — | No (inert) | Yes (resolved via `ModbusClientConfig`) |
 

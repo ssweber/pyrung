@@ -36,14 +36,14 @@ Your pyrung program can reach hardware through three completely different paths.
 | Use case | Option | What runs where |
 |---|---|---|
 | Prototype, HMI integration, lab work | **A: Modbus runtime** | pyrung *is* the controller, running on a laptop or Pi, speaking Modbus TCP |
-| Production PLC, integrate with existing plant | **B: Click codegen** | pyrung translates to Click ladder CSVs; the PLC runs natively |
+| Production PLC, integrate with existing plant | **B: CLICK codegen** | pyrung translates to CLICK ladder CSVs; the PLC runs natively |
 | Standalone embedded, no PLC software | **C: CircuitPython** | pyrung transpiles to a Python scan loop on a P1AM-200 |
 
 These aren't mutually exclusive -- the same pyrung source can target all three.
 
 ## Option A: Connect via Modbus
 
-Your pyrung program runs on your laptop, a Raspberry Pi, or whatever -- and exposes its tags as a Modbus TCP server. Anything that speaks Modbus can connect and read or write tags as if pyrung were a real Click PLC.
+Your pyrung program runs on your laptop, a Raspberry Pi, or whatever -- and exposes its tags as a Modbus TCP server. Anything that speaks Modbus can connect and read or write tags as if pyrung were a real CLICK PLC.
 
 This covers several distinct use cases:
 
@@ -58,7 +58,7 @@ HMIs, SCADA systems, [ClickNick](https://github.com/ssweber/clicknick)'s Data Vi
 
     Modbus TCP is fine for development, monitoring, and HMIs. It's not a substitute for proper fieldbus protocols (EtherNet/IP, ProfiNet, EtherCAT) when you need deterministic timing or cybersecurity. Don't put Modbus on the open internet without a VPN.
 
-## Option B: Map to a Click PLC
+## Option B: Map to a CLICK PLC
 
 ```python
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
@@ -80,7 +80,7 @@ mapping = TagMap({
     StatusLight:    y[3],
 })
 
-mapping.validate(logic)                        # Check against Click constraints
+mapping.validate(logic)                        # Check against CLICK constraints
 pyrung_to_ladder(logic, mapping, "conveyor/")  # Export ladder CSV + nicknames
 ```
 
@@ -88,21 +88,21 @@ The `Bin[1].Sensor` mapping is the [Lesson 9](structured-tags.md) UDT in action 
 
 !!! tip "The validator is the bridge"
 
-    pyrung lets you write rich expressions because the simulator can handle them. Click can't. `mapping.validate(logic)` catches every gap between what you wrote and what your target can run, and tells you exactly what to fix. For example, pyrung lets you write `rung(SizeReading + Offset > Threshold)` with math directly in the condition, but Click requires you to `calc` that into a separate tag first. The validator catches this. By the time `validate()` is clean, the codegen is guaranteed to produce something the PLC can run -- the same behavior as the simulator.
+    pyrung lets you write rich expressions because the simulator can handle them. CLICK can't. `mapping.validate(logic)` catches every gap between what you wrote and what your target can run, and tells you exactly what to fix. For example, pyrung lets you write `rung(SizeReading + Offset > Threshold)` with math directly in the condition, but CLICK requires you to `calc` that into a separate tag first. The validator catches this. By the time `validate()` is clean, the codegen is guaranteed to produce something the PLC can run -- the same behavior as the simulator.
 
-`pyrung_to_ladder` generates a directory with one CSV per program, a nickname file for the tag table, and a manifest. [ClickNick](https://github.com/ssweber/clicknick)'s Guided Paste reads the manifest and walks you through importing each piece into Click Programming Software in the right order.
+`pyrung_to_ladder` generates a directory with one CSV per program, a nickname file for the tag table, and a manifest. [ClickNick](https://github.com/ssweber/clicknick)'s Guided Paste reads the manifest and walks you through importing each piece into CLICK Programming Software in the right order.
 
 **What doesn't port cleanly.** Every codegen target has limits. A few things the validator will flag:
 
 - Inline math in conditions (`SizeReading + Offset > Threshold`) -- must be a separate `calc` rung
-- Complex nested `Or`/`And` beyond Click's branch depth
-- `Real` precision differences -- Click uses 32-bit float; Python uses 64-bit
-- Timer/counter presets that exceed Click's range limits
-- `named_array` structures that don't fit Click's flat memory model without manual address assignment
+- Complex nested `Or`/`And` beyond CLICK's branch depth
+- `Real` precision differences -- CLICK uses 32-bit float; Python uses 64-bit
+- Timer/counter presets that exceed CLICK's range limits
+- `named_array` structures that don't fit CLICK's flat memory model without manual address assignment
 
-The validator teaches you which restrictions matter for *your* code. You don't have to learn Click's limits up front.
+The validator teaches you which restrictions matter for *your* code. You don't have to learn CLICK's limits up front.
 
-For a full reference on memory banks, address mapping, and `named_array` patterns for Click, see the [Click Cheatsheet](../guides/click-cheatsheet.md).
+For a full reference on memory banks, address mapping, and `named_array` patterns for CLICK, see the [CLICK Cheatsheet](../guides/click-cheatsheet.md).
 
 ## Option C: Generate CircuitPython for a P1AM-200
 
@@ -124,7 +124,7 @@ source = generate_circuitpy(logic, hw, target_scan_ms=10.0)
 
     Your simulation was deterministic. Your hardware is not. Sensor noise, contact bounce, ground loops, EMI, and mechanical chatter are real, and pyrung can't simulate them. When something works on the bench but misbehaves in the cabinet, you're back to oscilloscopes and multimeters. [Lesson 5](timers.md)'s `on_delay` and [Lesson 4](assignment.md)'s `rise()` are the building blocks for debounce filters -- the [Testing guide](../guides/testing.md#forces) covers patterns.
 
-    The DAP debugger and forces work against a *running* pyrung program (Option A) -- but for Options B and C, your debugging tools are the vendor's: Click Programming Software's Data View, the P1AM-200's serial console.
+    The DAP debugger and forces work against a *running* pyrung program (Option A) -- but for Options B and C, your debugging tools are the vendor's: CLICK Programming Software's Data View, the P1AM-200's serial console.
 
 ## Exercise
 
@@ -145,7 +145,7 @@ Run `mapping.validate(logic)` on the conveyor program. What does it complain abo
 - [Subroutines and program control](../instructions/program-control.md): `call`, `forloop`, multi-program structure
 - [Communication](../instructions/communication.md): Modbus `send`/`receive`
 - [VS Code debugger](../guides/dap-vscode.md): step through scans, set breakpoints on rungs, watch tags live
-- [Click PLC dialect](../dialects/click.md): full hardware mapping and validation
+- [CLICK PLC dialect](../dialects/click.md): full hardware mapping and validation
 - [CircuitPython deployment](../dialects/circuitpy.md): generate code for P1AM-200
 
 ??? tip "The Zen of Ladder"

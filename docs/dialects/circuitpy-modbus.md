@@ -1,6 +1,6 @@
 # CircuitPython Modbus TCP
 
-`pyrung.circuitpy` can generate a Modbus TCP server, client, or both for the P1AM-200 via the P1AM-ETH shield. The register layout matches a real Click PLC — C-more HMIs, pyclickplc, and SCADA systems connect without translation. See [CircuitPython Dialect](circuitpy.md) for the base hardware model and code generation.
+`pyrung.circuitpy` can generate a Modbus TCP server, client, or both for the P1AM-200 via the P1AM-ETH shield. The register layout matches a real CLICK PLC — C-more HMIs, pyclickplc, and SCADA systems connect without translation. See [CircuitPython Dialect](circuitpy.md) for the base hardware model and code generation.
 
 ## Hardware requirements
 
@@ -29,7 +29,7 @@ with Program() as logic:
     with rung(Button):
         out(Light)
 
-# Map to Click addresses for Modbus visibility
+# Map to CLICK addresses for Modbus visibility
 mapping = TagMap({
     Setpoint: ds[1],
     Light:    c[1],
@@ -45,7 +45,7 @@ source = generate_circuitpy(
 )
 ```
 
-The generated code starts a Modbus TCP listener on the configured IP and port. Any Modbus client reading DS1 gets the current value of `Setpoint`; writing DS1 updates it. Reading coil C1 returns the state of `Light`. The register layout is identical to a real Click PLC — same Modbus addresses, same data encoding.
+The generated code starts a Modbus TCP listener on the configured IP and port. Any Modbus client reading DS1 gets the current value of `Setpoint`; writing DS1 updates it. Reading coil C1 returns the state of `Light`. The register layout is identical to a real CLICK PLC — same Modbus addresses, same data encoding.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -111,11 +111,11 @@ source = generate_circuitpy(
 )
 ```
 
-`send` writes local tag values to a remote Click address. `receive` reads remote Click addresses into local tags. The `target` string must match a `ModbusTcpTarget.name`. Remote addresses use Click address format (`DS1`, `C1`, `X001`, etc.).
+`send` writes local tag values to a remote CLICK address. `receive` reads remote CLICK addresses into local tags. The `target` string must match a `ModbusTcpTarget.name`. Remote addresses use CLICK address format (`DS1`, `C1`, `X001`, etc.).
 
 ### Raw Modbus addresses
 
-When the remote device isn't a Click PLC, use `ModbusAddress` instead of a Click address string. This gives direct control over the register address and register type.
+When the remote device isn't a CLICK PLC, use `ModbusAddress` instead of a CLICK address string. This gives direct control over the register address and register type.
 
 ```python
 from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
@@ -177,11 +177,11 @@ RTU (serial) targets are not yet supported for CircuitPython code generation.
 | `device_id` | `int` | `1` | Modbus unit ID (0–255) |
 | `timeout_ms` | `int` | `1000` | Per-transaction timeout |
 
-Unlike the Click dialect's threaded `send`/`receive`, the CircuitPython versions generate a non-blocking state machine. Each transaction advances one step per scan (connect → send request → wait for response → apply result). The scan loop is never blocked. Status tags (`sending`/`receiving`, `success`, `error`, `exception_response`) update as the transaction progresses. When the rung condition goes false, status tags reset to defaults.
+Unlike the CLICK dialect's threaded `send`/`receive`, the CircuitPython versions generate a non-blocking state machine. Each transaction advances one step per scan (connect → send request → wait for response → apply result). The scan loop is never blocked. Status tags (`sending`/`receiving`, `success`, `error`, `exception_response`) update as the transaction progresses. When the rung condition goes false, status tags reset to defaults.
 
 ## TagMap and mapped_tag_scope
 
-`tag_map` is required when `modbus_server` or `modbus_client` is set. It determines which tags are visible over Modbus — the TagMap maps semantic tags to Click hardware addresses, and the codegen uses those addresses as Modbus register addresses.
+`tag_map` is required when `modbus_server` or `modbus_client` is set. It determines which tags are visible over Modbus — the TagMap maps semantic tags to CLICK hardware addresses, and the codegen uses those addresses as Modbus register addresses.
 
 `mapped_tag_scope` controls how many TagMap entries get backing variables in the generated code:
 
@@ -201,7 +201,7 @@ The default avoids allocating RAM for tags that no rung references and start wit
 5. Service Modbus client
 6. Edge snapshots, watchdog pet, scan sleep
 
-The server and client service calls run unconditionally — including in STOP mode. This matches Click behavior: an HMI can still read tag state and see `sys.mode_run` as `False` while the PLC is stopped.
+The server and client service calls run unconditionally — including in STOP mode. This matches CLICK behavior: an HMI can still read tag state and see `sys.mode_run` as `False` while the PLC is stopped.
 
 ## Both server and client
 

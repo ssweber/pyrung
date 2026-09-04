@@ -86,7 +86,7 @@ state = runner.run_until(~MotorRunning, max_cycles=10000)
 Accepts the same condition expressions used inside `rung()`. Multiple conditions are AND-ed:
 
 ```python
-runner.run_until(Motor & ~Fault)
+runner.run_until(Motor, ~Fault)
 runner.run_until(Temp > 150.0)
 runner.run_until(Or(AlarmA, AlarmB, AlarmC))
 ```

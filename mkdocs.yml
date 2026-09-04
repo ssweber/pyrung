@@ -60,15 +60,15 @@ nav:
         - Test Coverage: guides/analysis-coverage.md
         - Verification: guides/verification.md
       - Platform:
-        - Click Quickstart: guides/click-quickstart.md
-        - Click Cheatsheet: guides/click-cheatsheet.md
+        - CLICK Quickstart: guides/click-quickstart.md
+        - CLICK Cheatsheet: guides/click-cheatsheet.md
         - CircuitPython Quickstart: guides/circuitpy-quickstart.md
       - Tools:
         - VS Code Debugger: guides/dap-vscode.md
         - Architecture: guides/architecture.md
   - Dialects:
-      - Click PLC: dialects/click.md
-      - Click Python Codegen: dialects/click-codegen.md
+      - CLICK PLC: dialects/click.md
+      - CLICK Python Codegen: dialects/click-codegen.md
       - CircuitPython: dialects/circuitpy.md
       - CircuitPython Modbus TCP: dialects/circuitpy-modbus.md
   - API Reference:

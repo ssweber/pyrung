@@ -203,7 +203,7 @@ def test_motor_eventually_stops():
 Conditions compose the same way they do in rungs:
 
 ```python
-runner.run_until(Motor & ~Fault)                  # Motor on, no fault
+runner.run_until(Motor, ~Fault)                   # Motor on, no fault
 runner.run_until(Temp > 150.0)                    # Temperature exceeded
 runner.run_until(Or(AlarmA, AlarmB, AlarmC))  # Any alarm triggered
 ```
