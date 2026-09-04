@@ -21,6 +21,7 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 
 - Bump `pyrung>=` version in `src/pyrung/click/codegen/project_emitter.py` (generated pyproject.toml template)
 - Update `CHANGELOG.md` — move Unreleased to versioned heading with today's date
+- Bump `version` in `editors/vscode/pyrung-debug/package.json` to match (the release script also writes it into the built VSIX)
 
 ## User-Facing Output
 
