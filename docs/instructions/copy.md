@@ -36,7 +36,7 @@ fill(Setpoint, Alarms.select(1, 8)) # Copy tag value to all 8 elements
 
 ## Type conversion (copy converters)
 
-Copy converters handle conversions between numeric and text registers — the same options you see in the Click PLC Copy Single dialog. Pass them as the `convert` argument to `copy()`.
+Copy converters handle conversions between numeric and text registers — the same options you see in the CLICK PLC Copy Single dialog. Pass them as the `convert` argument to `copy()`.
 
 ### Text → Numeric
 
@@ -56,11 +56,11 @@ copy(DS[1], Txt[1], convert=to_text(termination_code="$0D"))   # "123" + CR     
 copy(DS[1], Txt[1], convert=to_binary)                         # raw byte: 123 → '{' (Copy Binary)
 ```
 
-`termination_code` appends a single ASCII character after the converted text. Pass an int (0–127), a one-character string, or a `$XX` hex string matching Click's native notation (e.g. `"$0D"` for carriage return). This matches the Click PLC Termination Code option (C0-1x and C2-x CPUs).
+`termination_code` appends a single ASCII character after the converted text. Pass an int (0–127), a one-character string, or a `$XX` hex string matching CLICK's native notation (e.g. `"$0D"` for carriage return). This matches the CLICK PLC Termination Code option (C0-1x and C2-x CPUs).
 
 ### Leading zeros with string literals
 
-In Click's programming software you can type `00026` directly into the source field to copy fixed-width text into text registers. Python won't allow leading zeros on integer literals — `00026` is a syntax error. Use a string instead:
+In CLICK's programming software you can type `00026` directly into the source field to copy fixed-width text into text registers. Python won't allow leading zeros on integer literals — `00026` is a syntax error. Use a string instead:
 
 ```python
 copy("00026", Txt[1])          # Txt1..Txt5 = "0", "0", "0", "2", "6"
@@ -68,7 +68,7 @@ copy("00026", Txt[1])          # Txt1..Txt5 = "0", "0", "0", "2", "6"
 
 ### blockcopy and fill
 
-`blockcopy()` supports `convert=` but only for text→numeric conversions (`to_value` and `to_ascii`). This matches Click PLC hardware, which limits block copy to those two modes.
+`blockcopy()` supports `convert=` but only for text→numeric conversions (`to_value` and `to_ascii`). This matches CLICK PLC hardware, which limits block copy to those two modes.
 
 ```python
 blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_value)
@@ -79,7 +79,7 @@ blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_ascii)
 
 ### Converter reference
 
-| Converter | Direction | Click PLC equivalent | `copy` | `blockcopy` | `fill` |
+| Converter | Direction | CLICK PLC equivalent | `copy` | `blockcopy` | `fill` |
 |-----------|-----------|---------------------|--------|-------------|--------|
 | `to_value` | Text → Numeric | Copy Character Value (Option 4b) | yes | yes | no |
 | `to_ascii` | Text → Numeric | Copy ASCII Code Value (Option 4b) | yes | yes | no |

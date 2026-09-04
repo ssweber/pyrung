@@ -1,6 +1,6 @@
-# Click Python Codegen
+# CLICK Python Codegen
 
-`ladder_to_pyrung()` and `ladder_to_pyrung_project()` convert Click ladder data back into executable pyrung Python source. This is the reverse of [`pyrung_to_ladder()`](click.md#ladder-csv-export) — import from Click instead of export to Click.
+`ladder_to_pyrung()` and `ladder_to_pyrung_project()` convert CLICK ladder data back into executable pyrung Python source. This is the reverse of [`pyrung_to_ladder()`](click.md#ladder-csv-export) — import from CLICK instead of export to CLICK.
 
 ## Single-file codegen
 
@@ -30,7 +30,7 @@ code = ladder_to_pyrung(bundle)          # no CSV files needed
 
 Three ways to provide nicknames for readable variable names:
 
-1. `nickname_csv=` — path to a Click nickname CSV (Address.csv). Recommended, because it also enables structured type inference (see below).
+1. `nickname_csv=` — path to a CLICK nickname CSV (Address.csv). Recommended, because it also enables structured type inference (see below).
 2. `nicknames=` — pre-parsed `{operand: nickname}` dict (e.g. `{"X001": "start_button"}`).
 3. Neither — raw operand names used as-is (`X001`, `DS1`, etc.).
 
@@ -119,9 +119,9 @@ For the CSV format that codegen reads, see the [laddercodec CSV format guide](ht
 
 The generated code is designed to round-trip: `exec()` the output, then `pyrung_to_ladder(logic, mapping)` reproduces the original ladder CSV. This is tested extensively.
 
-Note that codegen always emits the Click-first style (slot aliases, no standalone tag constructors). If you started with pyrung-first code (hand-written `Int("SpeedCmd")` + `TagMap`), exporting to Click and re-importing produces the Click-first form. This is intentional — once the Click project is the source of truth, the generated code reflects that. The two styles represent different ownership models, not interchangeable formats.
+Note that codegen always emits the CLICK-first style (slot aliases, no standalone tag constructors). If you started with pyrung-first code (hand-written `Int("SpeedCmd")` + `TagMap`), exporting to CLICK and re-importing produces the CLICK-first form. This is intentional — once the CLICK project is the source of truth, the generated code reflects that. The two styles represent different ownership models, not interchangeable formats.
 
-Range instructions use integer addresses (`ds.select(1, 100)`) with boundary nickname comments (`# SpeedCmd..SpeedFbk`) when the endpoints have nicknames. This reflects reality: a Click Copy Block with source DS1 and destination DS100 is address-bound. You can't move `SpeedCmd` to `DS501` without rewriting every range instruction that spans it. The nicknames are context, not structure. If you want remappable ranges, add `:named_array` markers to the nickname CSV — that's the explicit act of design that gives you `RecipeProfile.instance_select(1, 2)` instead of raw addresses.
+Range instructions use integer addresses (`ds.select(1, 100)`) with boundary nickname comments (`# SpeedCmd..SpeedFbk`) when the endpoints have nicknames. This reflects reality: a CLICK Copy Block with source DS1 and destination DS100 is address-bound. You can't move `SpeedCmd` to `DS501` without rewriting every range instruction that spans it. The nicknames are context, not structure. If you want remappable ranges, add `:named_array` markers to the nickname CSV — that's the explicit act of design that gives you `RecipeProfile.instance_select(1, 2)` instead of raw addresses.
 
 ## Multi-file project codegen
 

@@ -120,7 +120,7 @@ result.runtime  # pyrung_rt.py content (str) — for maintainer use
 | `runstop` | `RunStopConfig \| None` | Optional board-switch RUN/STOP mapping with debounce |
 | `modbus_server` | `ModbusServerConfig \| None` | Modbus TCP server config; see [Modbus TCP](circuitpy-modbus.md) |
 | `modbus_client` | `ModbusClientConfig \| None` | Modbus TCP client config; see [Modbus TCP](circuitpy-modbus.md) |
-| `tag_map` | `TagMap \| None` | Click address mapping for Modbus-visible tags; required with server/client |
+| `tag_map` | `TagMap \| None` | CLICK address mapping for Modbus-visible tags; required with server/client |
 | `mapped_tag_scope` | `MappedTagScope` | `"referenced_only"` (default) or `"all_mapped"` |
 
 The generator runs strict validation internally and checks the generated source for syntax errors before returning.

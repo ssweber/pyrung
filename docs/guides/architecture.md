@@ -31,7 +31,7 @@ class SystemState(PRecord):
 Every `step()` executes exactly one complete scan cycle through nine phases:
 
 ```
-Phase 0  SCAN START     Dialect resets (e.g., Click auto-clears SC40/SC43/SC44)
+Phase 0  SCAN START     Dialect resets (e.g., CLICK auto-clears SC40/SC43/SC44)
 Phase 1  APPLY PATCH    One-shot inputs from patch() written to context
 Phase 2  READ INPUTS    InputBlock values copied from external source
 Phase 3  APPLY FORCES   Pre-logic force pass (debug overrides)

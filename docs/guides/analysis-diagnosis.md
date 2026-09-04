@@ -8,14 +8,14 @@ See also: [Program Structure](analysis-structure.md) (static analysis), [Cause &
 
 ## Loading a snapshot
 
-The starting point is a tag dump. For Click PLCs, export via **Data > Read Data from PLC > All > Save** in Click Programming Software, then load with `TagMap.load_snapshot()`:
+The starting point is a tag dump. For CLICK PLCs, export via **Data > Read Data from PLC > All > Save** in CLICK Programming Software, then load with `TagMap.load_snapshot()`:
 
 ```python
 state = mapping.load_snapshot("data.csv")
 plc = PLC(logic, initial_state=state)
 ```
 
-See [Loading PLC state](../dialects/click.md#loading-plc-state) for the full Click workflow. For other targets, build the state directly:
+See [Loading PLC state](../dialects/click.md#loading-plc-state) for the full CLICK workflow. For other targets, build the state directly:
 
 ```python
 from pyrung.core.state import SystemState

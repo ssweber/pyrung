@@ -87,7 +87,7 @@ with Program() as logic:
         reset(Running)
 ```
 
-This isn't a Python `#` comment — it's rung metadata that travels with the program. When you export to a Click PLC, these appear above each rung in the ladder editor. From here on, we'll use `comment()` to label rungs as the logic gets more complex.
+This isn't a Python `#` comment — it's rung metadata that travels with the program. When you export to a CLICK PLC, these appear above each rung in the ladder editor. From here on, we'll use `comment()` to label rungs as the logic gets more complex.
 
 By [Lesson 11](hardware.md) you'll meet `EstopOK` — same NC wiring, different governance story. The wiring direction you're learning here is the easy part; the hard part is who *owns* the stop.
 

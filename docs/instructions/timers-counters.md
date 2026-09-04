@@ -34,7 +34,7 @@ Unspecified fields retain the normal `{name}_Done` or `{name}_Acc` name. Nicknam
 
 ### Status bits
 
-Timers and counters also have status bits that reflect instruction state each scan. These are available in the runner API (`.when()`, `.monitor()`, `.value`) but cannot be used in `with rung()` — Click PLCs manage these bits internally.
+Timers and counters also have status bits that reflect instruction state each scan. These are available in the runner API (`.when()`, `.monitor()`, `.value`) but cannot be used in `with rung()` — CLICK PLCs manage these bits internally.
 
 | Type | Bit | Meaning |
 |------|-----|---------|

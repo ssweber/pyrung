@@ -1,6 +1,6 @@
-# Your First Click PLC Program
+# Your First CLICK PLC Program
 
-Write a motor start/stop circuit, test it, map it to Click hardware addresses, export ladder CSV, and load it into Click via [ClickNick](https://github.com/ssweber/clicknick).
+Write a motor start/stop circuit, test it, map it to CLICK hardware addresses, export ladder CSV, and load it into CLICK via [ClickNick](https://github.com/ssweber/clicknick).
 
 ## The program
 
@@ -69,9 +69,9 @@ def test_motor_start_stop():
 
 Same logic, deterministic timing, real assertions. Run with `pytest`.
 
-## Map to Click hardware
+## Map to CLICK hardware
 
-Once the logic is correct, map semantic tags to Click memory addresses:
+Once the logic is correct, map semantic tags to CLICK memory addresses:
 
 ```python
 mapping = TagMap({
@@ -83,7 +83,7 @@ mapping = TagMap({
 })
 ```
 
-Validate that the program fits Click's constraints:
+Validate that the program fits CLICK's constraints:
 
 ```python
 report = mapping.validate(logic, mode="warn")
@@ -101,21 +101,21 @@ bundle = pyrung_to_ladder(logic, mapping)
 bundle.write("./output")  # writes main.csv + subroutines/*.csv
 ```
 
-This produces deterministic Click ladder CSV files ready for import.
+This produces deterministic CLICK ladder CSV files ready for import.
 
-## Load into Click via ClickNick
+## Load into CLICK via ClickNick
 
-[ClickNick](https://github.com/ssweber/clicknick) loads the exported CSV into Click Programming Software via the clipboard. In the GUI, use **Ladder → Open in Guided Paste...** and point it at the output folder. Or from the command line:
+[ClickNick](https://github.com/ssweber/clicknick) loads the exported CSV into CLICK Programming Software via the clipboard. In the GUI, use **Ladder → Open in Guided Paste...** and point it at the output folder. Or from the command line:
 
 ```
 clicknick-rung program load ./output
 ```
 
-Either way, ClickNick walks you through pasting each rung and subroutine into Click. The addresses, nicknames, and logic are all wired up.
+Either way, ClickNick walks you through pasting each rung and subroutine into CLICK. The addresses, nicknames, and logic are all wired up.
 
 ## Next steps
 
-- [Click PLC Dialect](../dialects/click.md) — pre-built blocks, TagMap details, validation findings, nickname CSV I/O
-- [Click Python Codegen](../dialects/click-codegen.md) — round-trip: import Click ladder CSV back into pyrung
+- [CLICK PLC Dialect](../dialects/click.md) — pre-built blocks, TagMap details, validation findings, nickname CSV I/O
+- [CLICK Python Codegen](../dialects/click-codegen.md) — round-trip: import CLICK ladder CSV back into pyrung
 - [Testing Guide](testing.md) — forces, time travel, forking, pytest patterns
-- [ClickNick](https://github.com/ssweber/clicknick) — the companion tool for Click clipboard I/O and nickname management
+- [ClickNick](https://github.com/ssweber/clicknick) — the companion tool for CLICK clipboard I/O and nickname management

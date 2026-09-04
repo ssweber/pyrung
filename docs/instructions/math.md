@@ -34,7 +34,7 @@ calc(DH[1] | DH[2], DH[3])              # WORD-only math infers hex mode
 | WORD-only | `"hex"` (unsigned 16-bit wrap) |
 | Any non-WORD present | `"decimal"` (signed arithmetic) |
 
-For Click portability, do not mix WORD and non-WORD math in the same `calc()` expression. Click validation reports `CLK_CALC_MODE_MIXED` for mixed-family expressions.
+For CLICK portability, do not mix WORD and non-WORD math in the same `calc()` expression. CLICK validation reports `CLK_CALC_MODE_MIXED` for mixed-family expressions.
 
 ## Numeric behavior summary
 
@@ -64,4 +64,4 @@ with rung(DS.select(1, 10).sum() > 1000):
 
 Mode inference applies normally: WORD-only ranges infer hex mode, anything else infers decimal.
 
-Click ladder export renders as `SUM ( DS1 : DS10 )` with the native colon-range syntax.
+CLICK ladder export renders as `SUM ( DS1 : DS10 )` with the native colon-range syntax.
