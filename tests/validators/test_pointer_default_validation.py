@@ -29,7 +29,8 @@ class TestPointerDefaultValidator:
         assert finding.block_end == 100
         assert len(finding.sites) == 1
         assert finding.sites[0].arg_path == "instruction.source"
-        assert "set Ptr to 1..100 before using DS[Ptr]" in finding.message
+        assert "defaults to 0; valid DS addresses are 1..100" in finding.message
+        assert "set Ptr's default to 1..100, or write it before using DS[Ptr]" in finding.message
         # Location is the compact traceback form, 1-indexed (rung_index 0 → "R1").
         assert finding.sites[0].rung_index == 0
         assert "Main:R1" in finding.message

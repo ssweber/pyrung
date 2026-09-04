@@ -91,6 +91,7 @@ class TestTier2Maybe:
         assert sol[0].severity == "advisory"
         assert "calculated" in sol[0].message
         assert "if CalcOut changes" in sol[0].message
+        assert "put it on the left" in sol[0].message
         assert "CalcOut > LoLimit" in sol[0].message
 
     def test_inline_computed_right_is_advisory(self):
@@ -145,7 +146,7 @@ class TestTier3Escalation:
         assert len(sol) == 1
         assert sol[0].severity == "advisory"
         assert "Tmr.Acc changes, but it is on the right" in sol[0].message
-        assert "write the changing value first" in sol[0].message
+        assert "put the changing value on the left" in sol[0].message
         assert "Tmr.Acc > LoLimit" in sol[0].message
 
 

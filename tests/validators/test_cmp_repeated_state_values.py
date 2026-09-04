@@ -36,11 +36,11 @@ def test_single_value_volume_threshold() -> None:
     assert len(findings) == 1
     assert findings[0].target_name == "VolumeState"
     assert findings[0].severity == "advisory"
-    assert f"3 on {_REPEATED_STATE_SINGLE_VALUE_MIN_RUNGS} rungs" in findings[0].message
     assert (
-        f"3 appears on {_REPEATED_STATE_SINGLE_VALUE_MIN_RUNGS} separate rungs "
-        f"(limit: {_REPEATED_STATE_SINGLE_VALUE_MIN_RUNGS})" in findings[0].message
+        f"VolumeState compares 3 on {_REPEATED_STATE_SINGLE_VALUE_MIN_RUNGS} rungs."
+        in findings[0].message
     )
+    assert all(frame.caret_label == "repeated raw value" for frame in findings[0].display.frames)
 
 
 def test_two_repeated_values_trigger_breadth_once_per_tag() -> None:
@@ -54,8 +54,7 @@ def test_two_repeated_values_trigger_breadth_once_per_tag() -> None:
 
     findings = _findings(program)
     assert len(findings) == 1
-    assert "2 on 2 rungs; 3 on 2 rungs" in findings[0].message
-    assert "2 values are each compared on at least 2 separate rungs" in findings[0].message
+    assert "BreadthState compares 2 on 2 rungs; 3 on 2 rungs." in findings[0].message
 
 
 def test_zero_one_only_convention_stays_quiet_at_high_volume() -> None:
@@ -78,9 +77,8 @@ def test_interleaved_value_is_dispersed() -> None:
 
     findings = _findings(program)
     assert len(findings) == 1
-    assert "2 on 2 rungs" in findings[0].message
+    assert "InterleavedState compares 2 on 2 rungs." in findings[0].message
     assert "3 on" not in findings[0].message
-    assert "2 is compared on both sides of another value (3)" in findings[0].message
 
 
 def test_far_apart_value_is_dispersed() -> None:
@@ -95,10 +93,7 @@ def test_far_apart_value_is_dispersed() -> None:
         _comparison_rung(state, 4, result)
 
     finding = _findings(program)[0]
-    assert (
-        f"4 is compared again after {_REPEATED_STATE_MIN_INTERVENING_RUNGS} intervening rungs"
-        in finding.message
-    )
+    assert "FarApartState compares 4 on 2 rungs." in finding.message
 
 
 def test_same_value_in_main_and_subroutine_is_dispersed() -> None:
@@ -115,7 +110,7 @@ def test_same_value_in_main_and_subroutine_is_dispersed() -> None:
         "Main:R1",
         "check_state:R1",
     }
-    assert "5 is compared in Main, check_state" in finding.message
+    assert "ScopedState compares 5 on 2 rungs." in finding.message
 
 
 def test_parallel_branches_count_as_one_top_level_rung() -> None:
@@ -163,5 +158,6 @@ def test_choice_label_is_included_in_advice() -> None:
 
     finding = _findings(program)[0]
     assert "2 ('STARTING')" in finding.message
-    assert "read-only reference tag" in finding.message
+    assert "read-only tag" in finding.message
+    assert "map it once" in finding.message
     assert "Bool status tag" in finding.message

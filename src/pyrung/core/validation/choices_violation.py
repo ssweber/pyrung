@@ -171,7 +171,7 @@ def validate_choices(program: Program) -> ChoicesViolationReport:
                 frames=(
                     site_frame(site, caret_token=token, caret_label=f"not in ({allowed_txt})"),
                 ),
-                hint="use an allowed value, or add it to choices",
+                hint=(f"use an allowed value, or add {token} to {site.target_name}'s choices"),
             )
             findings.append(
                 ChoicesViolationFinding(

@@ -47,6 +47,65 @@ def test_comparison_constant_over_declared_bounds() -> None:
         CMP_ALWAYS_FALSE,
         CMP_ALWAYS_TRUE,
     ]
+    false_finding = next(
+        finding
+        for finding in program.check(select={CMP_ALWAYS_FALSE})
+        if finding.code == CMP_ALWAYS_FALSE
+    )
+    assert false_finding.severity == "warning"
+
+
+def _messages(program: Program, *codes: str) -> list[str]:
+    return [finding.message for finding in program.check(select=set(codes))]
+
+
+def test_comparison_constant_names_declared_bounds() -> None:
+    laser = Int("DelayedLaser", min=0, max=90, external=True)
+    with Program() as program:
+        with Rung(laser >= 95):
+            out(Bool("Result"))
+
+    (message,) = _messages(program, CMP_ALWAYS_FALSE)
+    assert "always false: DelayedLaser is only 0..90" in message
+    assert "DelayedLaser is declared min=0, max=90" in message
+    assert "widen DelayedLaser's min/max" in message
+
+
+def test_comparison_constant_names_choices() -> None:
+    mode = Int("Mode", choices={0: "Idle", 1: "Run"}, external=True)
+    with Program() as program:
+        with Rung(mode == 7):
+            out(Bool("Result"))
+
+    (message,) = _messages(program, CMP_ALWAYS_FALSE)
+    assert "Mode is only 0 ('Idle'), 1 ('Run')" in message
+    assert "add the value to Mode's choices" in message
+
+
+def test_comparison_constant_names_producer_rungs() -> None:
+    count = Int("Count")
+    with Program() as program:
+        with Rung():
+            copy(3, count)
+        with Rung(Bool("Bump")):
+            copy(5, count)
+        with Rung(count > 10):
+            out(Bool("Result"))
+
+    (message,) = _messages(program, CMP_ALWAYS_FALSE)
+    assert "always false: Count is only 0, 3, 5" in message
+    assert "Count is only written at Main:R1, Main:R2" in message
+
+
+def test_comparison_constant_true_keeps_removal_hint() -> None:
+    speed = Int("Speed", min=0, max=10, external=True)
+    with Program() as program:
+        with Rung(speed >= 0):
+            out(Bool("Result"))
+
+    (message,) = _messages(program, CMP_ALWAYS_TRUE)
+    assert "always true: Speed is only 0..10" in message
+    assert message.endswith("Speed is declared min=0, max=10; remove the redundant comparison")
 
 
 def test_comparison_punts_on_open_external_domain() -> None:
@@ -123,7 +182,8 @@ def test_pointer_closed_domain_can_escape_block() -> None:
     assert len(report.findings) == 1
     finding = report.findings[0]
     assert finding.bad_values == (0, 11, 12, 13)  # type: ignore[attr-defined]
-    assert "outside values: 0, 11..13" in finding.message
+    assert "can use an invalid Data address" in finding.message
+    assert "possible invalid values: 0, 11..13" in finding.message
 
 
 def test_pointer_open_domain_punts() -> None:
@@ -164,6 +224,7 @@ def test_uncalled_subroutine_and_indirect_recursion() -> None:
     assert [finding.code for finding in report] == [CALL_NEVER_CALLED, CALL_RECURSION]
     recursion = report.findings[1]
     assert recursion.cycle == ("first", "second", "first")  # type: ignore[attr-defined]
+    assert "remove or redirect one of these calls to break the cycle" in recursion.message
 
 
 def test_direct_recursion_is_reported() -> None:
@@ -329,7 +390,11 @@ def test_duplicate_and_subsumed_terms_are_redundant() -> None:
         with Rung(And(speed < 20, speed < 30)):
             out(Bool("Nested"))
 
-    assert _codes(program, RUNG_REDUNDANT_TERM) == [RUNG_REDUNDANT_TERM] * 4
+    findings = program.check(select={RUNG_REDUNDANT_TERM}).findings
+    assert [finding.code for finding in findings] == [RUNG_REDUNDANT_TERM] * 4
+    assert all(
+        finding.display.frames[0].caret_label == "does not affect rung" for finding in findings
+    )
 
 
 def test_contradiction_owns_diagnostic_over_redundancy() -> None:

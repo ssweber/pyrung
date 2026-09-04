@@ -191,7 +191,7 @@ def _redundant_display(
                 location=loc.compact,
                 lines=(header,),
                 caret=(0, span[0], span[1]) if span else None,
-                caret_label="redundant term" if span else "",
+                caret_label="does not affect rung" if span else "",
             ),
         ),
         hint=f"remove {token}; it does not change this condition",

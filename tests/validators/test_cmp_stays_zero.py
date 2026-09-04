@@ -1,4 +1,4 @@
-"""Specification tests for zero comparison operands and timer/counter presets."""
+"""Specification tests for comparison sources and zero timer/counter presets."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from pyrung.core import (
 )
 from pyrung.core.system_points import system
 from pyrung.core.validation import (
-    CMP_OPERAND_STAYS_ZERO,
+    CMP_OPERAND_NO_WRITER,
     CMP_PRESET_STAYS_ZERO,
     validate,
 )
@@ -38,36 +38,36 @@ def _comparison_program(limit: Tag) -> Program:
     return program
 
 
-class TestOperandStaysZero:
-    def test_unwritten_zero_operand_is_reported(self) -> None:
+class TestOperandNoWriter:
+    def test_unwritten_operand_is_reported(self) -> None:
         limit = Int("Limit")
-        findings = _codes(_comparison_program(limit), CMP_OPERAND_STAYS_ZERO)
+        findings = _codes(_comparison_program(limit), CMP_OPERAND_NO_WRITER)
 
         assert len(findings) == 1
-        assert findings[0].severity == "warning"
+        assert findings[0].severity == "advisory"
         assert findings[0].target_name == "Limit"
         assert "Limit" in findings[0].message
-        assert "stays 0" in findings[0].message
+        assert "no ladder writer" in findings[0].message
         assert "mark it external" in findings[0].message
 
     def test_nonzero_default_is_clean(self) -> None:
         limit = Int("Limit", default=5)
-        assert not _codes(_comparison_program(limit), CMP_OPERAND_STAYS_ZERO)
+        assert not _codes(_comparison_program(limit), CMP_OPERAND_NO_WRITER)
 
     def test_explicit_zero_default_is_clean(self) -> None:
         zero_constant = Int("Idle", default=0)
-        assert not _codes(_comparison_program(zero_constant), CMP_OPERAND_STAYS_ZERO)
+        assert not _codes(_comparison_program(zero_constant), CMP_OPERAND_NO_WRITER)
 
-    def test_plain_memory_slot_keeps_implicit_zero_provenance(self) -> None:
+    def test_plain_memory_slot_without_writer_is_reported(self) -> None:
         data = Block("DS", TagType.INT, 1, 1)
-        assert _codes(_comparison_program(data[1]), CMP_OPERAND_STAYS_ZERO)
+        assert _codes(_comparison_program(data[1]), CMP_OPERAND_NO_WRITER)
 
     def test_explicit_zero_memory_slot_is_clean(self) -> None:
         data = Block("DS", TagType.INT, 1, 1)
         data.slot(1, default=0)
-        assert not _codes(_comparison_program(data[1]), CMP_OPERAND_STAYS_ZERO)
+        assert not _codes(_comparison_program(data[1]), CMP_OPERAND_NO_WRITER)
 
-    def test_first_scan_write_means_the_tag_does_not_stay_zero(self) -> None:
+    def test_first_scan_write_means_the_tag_has_a_writer(self) -> None:
         limit = Int("Limit")
         value = Int("Value", default=1, readonly=True)
         result = Bool("Result", external=True)
@@ -77,14 +77,14 @@ class TestOperandStaysZero:
             with Rung(value >= limit):
                 copy(1, result)
 
-        assert not _codes(program, CMP_OPERAND_STAYS_ZERO)
+        assert not _codes(program, CMP_OPERAND_NO_WRITER)
 
-    def test_external_and_readonly_zero_tags_are_explicit(self) -> None:
+    def test_external_and_readonly_tags_are_declared_sources(self) -> None:
         external = Int("ExternalLimit", external=True)
         constant = Int("ZeroConstant", readonly=True)
 
-        assert not _codes(_comparison_program(external), CMP_OPERAND_STAYS_ZERO)
-        assert not _codes(_comparison_program(constant), CMP_OPERAND_STAYS_ZERO)
+        assert not _codes(_comparison_program(external), CMP_OPERAND_NO_WRITER)
+        assert not _codes(_comparison_program(constant), CMP_OPERAND_NO_WRITER)
 
     def test_literal_zero_is_intentional(self) -> None:
         value = Int("Value", default=1, readonly=True)
@@ -93,7 +93,7 @@ class TestOperandStaysZero:
             with Rung(value >= 0):
                 copy(1, result)
 
-        assert not _codes(program, CMP_OPERAND_STAYS_ZERO)
+        assert not _codes(program, CMP_OPERAND_NO_WRITER)
 
     def test_boolish_numeric_equality_is_clean(self) -> None:
         flag = Int("NumericFlag")
@@ -104,7 +104,7 @@ class TestOperandStaysZero:
             with Rung(flag != 0):
                 copy(1, result)
 
-        assert not _codes(program, CMP_OPERAND_STAYS_ZERO)
+        assert not _codes(program, CMP_OPERAND_NO_WRITER)
 
     def test_non_boolish_numeric_equality_is_still_reported(self) -> None:
         state = Int("State")
@@ -113,7 +113,7 @@ class TestOperandStaysZero:
             with Rung(state == 7):
                 copy(1, result)
 
-        findings = _codes(program, CMP_OPERAND_STAYS_ZERO)
+        findings = _codes(program, CMP_OPERAND_NO_WRITER)
         assert [finding.target_name for finding in findings] == ["State"]
 
 
@@ -178,7 +178,7 @@ class TestPresetStaysZero:
 
         findings = _codes(
             program,
-            CMP_OPERAND_STAYS_ZERO,
+            CMP_OPERAND_NO_WRITER,
             CMP_PRESET_STAYS_ZERO,
         )
         assert [finding.code for finding in findings] == [CMP_PRESET_STAYS_ZERO]

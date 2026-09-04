@@ -41,7 +41,7 @@ class FinalWritersFinding(_FindingTextMixin):
     target_name: str
     sites: tuple[WriteSite, ...]
     display: FindingDisplay
-    severity: Severity = "warning"
+    severity: Severity = "error"
 
     @property
     def message(self) -> str:
@@ -83,10 +83,13 @@ def validate_final_writers(program: Program) -> FinalWritersReport:
             continue
         display = FindingDisplay(
             code=TAG_FINAL_MULTIPLE_WRITERS,
-            severity="warning",
-            frames=tuple(site_frame(s) for s in target_sites),
+            severity="error",
+            frames=tuple(
+                site_frame(s, caret_label=f"writer {index} of {len(target_sites)}")
+                for index, s in enumerate(target_sites, start=1)
+            ),
             problem=f"{tag_name} is final but has {len(target_sites)} writers.",
-            hint="leave one writer, or remove final=True",
+            hint=f"leave one writer for {tag_name}, or remove final=True",
         )
         findings.append(
             FinalWritersFinding(

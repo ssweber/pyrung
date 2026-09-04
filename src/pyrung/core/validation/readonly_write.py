@@ -140,9 +140,9 @@ def validate_readonly_writes(program: Program) -> ReadonlyWriteReport:
         display = FindingDisplay(
             code=TAG_READONLY_WRITE,
             severity="error",
-            frames=tuple(site_frame(s) for s in target_sites),
-            problem=f"{tag_name} is read-only.",
-            hint="don't write it, or remove readonly=True",
+            frames=tuple(site_frame(s, caret_label="readonly") for s in target_sites),
+            problem=f"{tag_name} is readonly.",
+            hint=f"remove this write, or remove readonly=True from {tag_name}",
         )
         findings.append(
             ReadonlyWriteFinding(

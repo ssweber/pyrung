@@ -180,14 +180,17 @@ def validate_pointer_defaults(
 
         default_reported = pointer_default < block_start and not written_before_read
         if default_reported:
-            label = f"can be {pointer_default}, before {block_name}[{block_start}]"
+            label = (
+                f"defaults to {pointer_default}; valid {block_name} addresses are "
+                f"{block_start}..{block_end}"
+            )
             display = FindingDisplay(
                 code=PTR_DEFAULT_BEFORE_BLOCK_START,
                 severity="warning",
                 frames=tuple(_location_frame(f.location, target_name, span, label) for f in facts),
                 hint=(
-                    f"set {pointer_name} to {block_start}..{block_end} before using "
-                    f"{block_name}[{pointer_name}]"
+                    f"set {pointer_name}'s default to {block_start}..{block_end}, or write it "
+                    f"before using {block_name}[{pointer_name}]"
                 ),
             )
             findings.append(
@@ -259,12 +262,13 @@ def validate_pointer_defaults(
                     fact.location,
                     target_name,
                     span,
-                    f"can address outside {block_start}..{block_end}",
+                    f"can use an invalid {block_name} address",
                 )
                 for fact in unsafe_facts
             ),
             hint=(
-                f"restrict {pointer_name} to {block_start}..{block_end}; outside values: {values}"
+                f"restrict {pointer_name} to {block_start}..{block_end}; "
+                f"possible invalid values: {values}"
             ),
         )
         findings.append(
