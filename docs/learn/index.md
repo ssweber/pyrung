@@ -14,7 +14,7 @@ Every lesson adds a feature to the same project: a **conveyor sorting station**.
 
 Each lesson follows the same arc: start with the Python you'd instinctively reach for, see why it doesn't work for a machine that controls physical things, then learn the ladder logic way. Every lesson ends with an exercise you can run and test.
 
-**Prerequisites:** Python 3.12+, basic pytest knowledge, a text editor. Code samples use PLC-style `TitleCase` for tag names -- more on that in [Lesson 2](tags.md).
+**Prerequisites:** Python 3.11+, basic pytest knowledge, a text editor. Code samples use PLC-style `TitleCase` for tag names -- more on that in [Lesson 2](tags.md).
 
 ```bash
 pip install pyrung
@@ -32,7 +32,7 @@ pip install pyrung
 8. [Branches and OR Logic](branches.md) -- Auto and manual modes.
 9. [Structured Tags and Blocks](structured-tags.md) -- A Bin UDT and a sort log.
 10. [Testing](testing.md) -- A pytest suite for the whole system.
-11. [From Simulation to Hardware](hardware.md) -- Map your project to a real Click PLC or P1AM-200.
+11. [From Simulation to Hardware](hardware.md) -- Map your project to a real CLICK PLC or P1AM-200.
 
 ---
 

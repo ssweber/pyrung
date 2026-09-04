@@ -1,8 +1,8 @@
 # pyrung
 
-**Ladder logic in Python that reads like ladder, scans like a PLC, and deploys to real hardware.**
+**Write ladder logic in Python. Test it. Deploy it to CLICK.**
 
-pyrung turns Python's `with` block into a ladder rung — condition on the rail, instructions in the body.
+pyrung turns a Python `with` block into a ladder rung: condition on the rail, instruction in the body. Same rungs, same scan order, same timers as the CLICK PLC, with git, pytest, and a debugger around them.
 
 ```python
 from pyrung import Bool, PLC, Program, rung, out
@@ -20,27 +20,22 @@ with PLC(logic) as plc:
     assert Light.value is True
 ```
 
-- Documentation: https://ssweber.github.io/pyrung/
-- LLM docs index: https://ssweber.github.io/pyrung/llms.txt
-- New to ladder logic? [Know Python? Learn Ladder Logic.](https://ssweber.github.io/pyrung/learn/)
+- Documentation: https://pyrung.com/pyrung/
+- Know Python? [Learn Ladder Logic.](https://pyrung.com/pyrung/learn/)
 
-## Why?
+## Why
 
-Ladder is still the dominant programming language in North American manufacturing, but ladder programmers have no git, no pytest, no CI. They draw logic in a vendor GUI, download to hardware, and hope. pyrung lets you write and test logic in Python first, then deploy it — same source, three paths:
+CLICK PLCs ship with no simulator, no version control beyond copies of a `.ckp`, and no way to test a program short of downloading it to a real PLC. You draw the ladder in CLICK Programming Software, download it to hardware, and hope. The Structured Text crowd has options. The ladder crowd doesn't. pyrung is that option: write and test the logic in Python first, then move the same rungs into CLICK.
 
-- `pyrung_to_ladder()` encodes your rungs for [ClickNick](https://github.com/ssweber/clicknick), a companion editor for Click Programming Software
-- Generate a self-contained CircuitPython scan loop for a P1AM-200
-- Run as an emulated Click over Modbus — spin up two pyrung programs and test them talking to each other, no hardware required
+Same source, three paths: `pyrung_to_ladder()` encodes your rungs for [ClickNick](https://pyrung.com/clicknick/) to paste into CLICK Programming Software; the CircuitPython dialect generates a scan loop for a P1AM-200; or run it as an emulated CLICK over Modbus and test two programs talking to each other with no hardware.
 
-The code reads like a ladder diagram. `with rung(Or(Start, Motor), ~Stop): out(Motor)` is a seal-in circuit, and it looks like one. There's no `if/else`. Power flows through the rung or it doesn't. The scan cycle is deterministic, timers accumulate the same way, rung order matters the same way. What you learn in pyrung transfers directly to a real ladder editor.
+## Who it's for
 
-## Who's this for?
+**Controls engineers** who want to test CLICK logic without hardware. Write with plain tag names, map them to X, Y, C, and DS addresses when you're ready, and let the validator tell you what CLICK's memory banks will and won't accept before you find out at the PLC.
 
-**Controls engineers** who want to test Click PLC logic without hardware. The [Click dialect](https://ssweber.github.io/pyrung/dialects/click/) handles address mapping, memory bank validation, and nickname and ladder file export. Have an existing project? [ClickNick](https://github.com/ssweber/clicknick) imports it.
+**Python developers** entering industrial automation. pyrung teaches ladder logic in the language and tools you already have: Python, pytest, and VS Code. Start with [Know Python? Learn Ladder Logic.](https://pyrung.com/pyrung/learn/)
 
-**Python developers** entering industrial automation. pyrung teaches you ladder logic in the language and tools you already have. The [VS Code debugger](https://ssweber.github.io/pyrung/guides/dap-vscode/) lets you step through scans and watch power flow rung by rung. Start with the [learning guide](https://ssweber.github.io/pyrung/learn/).
-
-**Makers and P1AM-200 users** who want a real scan loop without writing the plumbing. The [CircuitPython dialect](https://ssweber.github.io/pyrung/dialects/circuitpy/) generates a complete program from the same logic you write and test on your laptop.
+**Makers and P1AM-200 users** who want a real scan cycle without writing the plumbing. The same program you tested on your laptop generates a CircuitPython scan loop with timers, counters, Modbus TCP, and SD-backed retentive state.
 
 ## Quick start
 
@@ -49,7 +44,7 @@ The code reads like a ladder diagram. `with rung(Or(Start, Motor), ~Stop): out(M
 uv add pyrung
 ```
 
-Download the [starter project](https://github.com/ssweber/pyrung/releases) (`pyrung-starter-VERSION.zip`) from the GitHub releases page for ready-to-run examples with Click CSV round-trip. For the VS Code debugger, grab `pyrung-debug-VERSION.vsix` from the same page and install it:
+Download the [starter project](https://github.com/ssweber/pyrung/releases) (`pyrung-starter-VERSION.zip`) from the GitHub releases page for ready-to-run examples with CLICK CSV round-trip. For the VS Code debugger, grab `pyrung-debug-VERSION.vsix` from the same page and install it:
 
 ```bash
 code --install-extension pyrung-debug-VERSION.vsix
@@ -91,7 +86,7 @@ with PLC(logic) as plc:
     assert Running.value is False
 ```
 
-### Map to Click hardware when you're ready
+### Map to CLICK hardware when you're ready
 
 ```python
 from pyrung.click import ClickBlocks, TagMap
@@ -104,33 +99,33 @@ mapping = TagMap({
     Running: y[1],    # Physical output → Y001
 })
 
-mapping.validate(logic)                # Checks against Click constraints
-mapping.to_nickname_file("motor.csv")  # For Click programming software
+mapping.validate(logic)                # Checks against CLICK constraints
+mapping.to_nickname_file("motor.csv")  # For CLICK programming software
 ```
 
 ## What's included
 
-### [Core engine](https://ssweber.github.io/pyrung/instructions/)
+### [Core engine](https://pyrung.com/pyrung/instructions/)
 
-Coils, latches, timers, counters, branching, subroutines, structured tags, and edge detection. Every scan is a pure function — same inputs, same outputs — so you can fork, rewind, and diff any state in history.
+Coils, latches, timers, counters, branching, subroutines, structured tags, and edge detection. Every scan is a pure function, so you can fork, rewind, and diff any state in history.
 
-### [Click PLC dialect](https://ssweber.github.io/pyrung/dialects/click/)
+### [CLICK dialect](https://pyrung.com/pyrung/dialects/click/)
 
-Hardware address mapping, memory bank validation, Modbus instructions, and nickname and ladder file export.
+Map tags to X, Y, C, DS, and the other CLICK banks. The validator checks the program against CLICK's memory rules and instruction set. Export the nickname CSV and the ladder for ClickNick to paste. Import an existing project the other way.
 
-### [CircuitPython dialect](https://ssweber.github.io/pyrung/dialects/circuitpy/)
+### [CircuitPython dialect](https://pyrung.com/pyrung/dialects/circuitpy/)
 
 Generate a self-contained scan loop for the P1AM-200 with 35 supported I/O modules, SD-backed retentive storage, watchdog, and Modbus TCP.
 
-### [Analysis](https://ssweber.github.io/pyrung/guides/analysis/) and [verification](https://ssweber.github.io/pyrung/guides/verification/)
+### [Analysis](https://pyrung.com/pyrung/guides/analysis/)
 
-`plc.cause()` and `plc.effect()` trace causal chains through scan history — why did this tag change, and what would it take to recover? `always()` exhaustively checks a property over all reachable states, with counterexample traces when it fails. `never()` proves a bad state is unreachable. Automated fault coverage proves every device has an alarm path. Lock files catch behavioral regressions in PRs.
+`logic.simplified()["Motor"]` resolves a 14-rung interlock chain to the handful of inputs that actually decide it. `plc.cause(Running)` names why a tag changed. `plc.why(Alarm)` does it from a tag dump off a faulted machine. `plc.how(Running)` finds the input changes that reach a state, or says why none can. `how()` is experimental; the rest is stable.
 
-### [VS Code debugger](https://ssweber.github.io/pyrung/guides/dap-vscode/)
+### [VS Code debugger](https://pyrung.com/pyrung/guides/dap-vscode/)
 
-Step through scans rung by rung, set breakpoints, force tags, diff states, and time-travel through scan history. Data View for live tag watching, Graph View for dependency visualization, and session capture for mining invariants into pytest tests.
+Step through scans rung by rung, set breakpoints on rungs, force tags, and time-travel through history. Watch tags live, see the dependency graph, and turn a captured session into pytest invariants.
 
 ## Disclaimers
 
-- **Simulation is best-effort.** pyrung models Click PLC behavior as closely as practical, but it is not a certified simulator. You are responsible for verifying your program on real hardware before production use.
-- **Modbus is unauthenticated.** The emulated Click Modbus interface and CircuitPython Modbus TCP server listen on the network with no encryption or access control — standard for Modbus, but keep them off untrusted networks.
+- **Simulation is best-effort.** pyrung models CLICK PLC behavior as closely as practical, but it is not a certified simulator. You are responsible for verifying your program on real hardware before production use.
+- **Modbus is unauthenticated.** The emulated CLICK Modbus interface and CircuitPython Modbus TCP server listen on the network with no encryption or access control — standard for Modbus, but keep them off untrusted networks.

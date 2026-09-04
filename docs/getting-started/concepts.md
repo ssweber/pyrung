@@ -51,7 +51,7 @@ This reads like a ladder diagram: `Button` is the contact on the left rail, `lat
 Conditions can be combined and compared:
 
 ```python
-with rung(Button & ~EStop):       # AND + NOT
+with rung(Button, ~EStop):        # AND + NOT
     latch(MotorRunning)
 
 with rung(Temp > 150.0):          # Comparison
@@ -283,7 +283,7 @@ with rung(system.fault.division_error):
 
 **`system.rtc`** — real-time clock: `year4`, `month`, `day`, `hour`, `minute`, `second` (read-only). Writable counterparts (`new_hour`, etc.) with `apply_date`/`apply_time` triggers. Use for time-of-day logic like shift changes.
 
-The [Click cheatsheet](../guides/click-cheatsheet.md#system-points) has the full point-to-address mapping.
+The [CLICK cheatsheet](../guides/click-cheatsheet.md#system-points) has the full point-to-address mapping.
 
 ## What's next as your programs grow
 
