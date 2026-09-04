@@ -305,6 +305,8 @@ class TestChoicesViolationValidator:
         assert len(report.findings) == 1
         assert report.findings[0].code == TAG_CHOICES_VIOLATION
         assert report.findings[0].value == 99
+        assert "not in (0, 1, 2)" in report.findings[0].message
+        assert "add 99 to Mode's choices" in report.findings[0].message
 
     def test_literal_in_choices_clean(self):
         from pyrung.core.validation.choices_violation import validate_choices
@@ -370,6 +372,14 @@ class TestFinalWritersValidator:
         assert report.findings[0].code == TAG_FINAL_MULTIPLE_WRITERS
         assert report.findings[0].target_name == "Total"
         assert len(report.findings[0].sites) == 2
+        assert report.findings[0].severity == "error"
+        assert [frame.caret_label for frame in report.findings[0].display.frames] == [
+            "writer 1 of 2",
+            "writer 2 of 2",
+        ]
+        assert report.findings[0].display.hint == (
+            "leave one writer for Total, or remove final=True"
+        )
 
     def test_non_final_multiple_writers_clean(self):
         from pyrung.core.validation.final_writers import validate_final_writers

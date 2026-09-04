@@ -192,7 +192,7 @@ def validate_call_graph(
                     severity="error",
                     frames=frames,
                     problem=f"Recursive subroutine cycle: {route}.",
-                    hint="break the cycle; subroutine calls must form an acyclic graph",
+                    hint="remove or redirect one of these calls to break the cycle",
                 ),
                 severity="error",
                 cycle=cycle,

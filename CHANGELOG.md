@@ -10,8 +10,18 @@
 
 ## Unreleased
 
+## v0.14.0 (2026-09-04)
+
+### Breaking Changes
+
+- `CMP_OPERAND_STAYS_ZERO` is now `CMP_OPERAND_NO_WRITER`, an advisory that reports the known modeling gap without claiming an HMI-, device-, test-, or retained value remains zero.
+
 ### Fixes
 
+- `TAG_FINAL_MULTIPLE_WRITERS` is now an error, matching the explicit `final=True` single-writer contract.
+- Ladder lint diagnostics now use declared `min`/`max`, valid pointer addresses, possible coil states, and feedback timing directly, and give clearer repairs for physical commands, recursive calls, waiting steps, readonly writes, tag choices, and redundant rung conditions.
+- `CMP_ALWAYS_FALSE` is now a warning instead of an error. `CMP_ALWAYS_FALSE` / `CMP_ALWAYS_TRUE` findings now name the operand's closed values (`DelayedLaser is only 0..90`) and say where that domain comes from: declared `min`/`max` or `choices`, a read-only or never-written default, or the rungs that write it.
+- `CMP_EQ_ON_MONOTONE` is now a warning instead of an error, calls out Timer/Counter behavior directly, and no longer suggests `>=` for `!=` comparisons.
 - The DAP debugger guide now mirrors all registered console commands, documents current replay and autoharness behavior, and uses the renamed `autoreload` commands; `pyrung live -h` also includes invariant-review and spec commands.
 
 ## v0.13.0 (2026-09-02)
@@ -39,7 +49,7 @@
 - Choice-backed tags provide `tag.choice(label)` for explicit readable values, and Click reverse codegen reconstructs recognized comparison and `copy()` literals with that form.
 - Click ladder bundles include `rung_sources.json`, which maps exported rungs back to their contributing Python source spans for downstream previews.
 - The new Ladder Lints guide grounds static checks in ladder-logic practice and documents all 28 core rules, diagnostic output, rule selection, and command-line usage.
-- Ladder checks now emit complete compiler-style diagnostics for constant comparisons, unsafe pointer domains, unreachable or recursive subroutines, definite zero divisors, redundant condition terms, overwritten writes, and literal comparisons better expressed as named read-only references or decoded Bool status tags.
+- Ladder checks now emit complete compiler-style diagnostics for constant comparisons, unsafe pointer domains, unreachable or recursive subroutines, definite zero divisors, redundant condition terms, overwritten writes, and literal comparisons better expressed as named read-only references or mapped Bool status tags.
 
 ### Fixes
 

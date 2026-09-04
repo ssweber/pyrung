@@ -5,12 +5,12 @@ subroutines + branches, both the ``Compare*`` leaf family and the expression-tre
 ``ExprCompare``):
 
 * ``CMP_ALWAYS_FALSE`` / ``CMP_ALWAYS_TRUE`` — a comparison has one truth value
-  over complete declared or producer-derived domains. **error** / **info**.
+  over complete declared or producer-derived domains. **warning** / **info**.
 
 * ``CMP_EQ_ON_MONOTONE`` — ``==`` / ``!=`` against a self-advancing register
   (``Timer.Acc``, a counter accumulator).  The register steps by ``rate_per_scan``
   each scan and can jump *over* the compared value between scans, so the equality
-  may never latch.  **error**.  The ``== 0`` / ``!= 0`` floor check is edge-safe and
+  may never latch.  **warning**.  The ``== 0`` / ``!= 0`` floor check is edge-safe and
   exempt.
 
 * ``CMP_TRUE_AT_RESET`` — an ordered comparison that is TRUE at the accumulator's
@@ -26,10 +26,10 @@ subroutines + branches, both the ``Compare*`` leaf family and the expression-tre
   direction.  A monotone register on the right that is true at reset escalates
   through ``CMP_TRUE_AT_RESET`` instead.
 
-* ``CMP_OPERAND_STAYS_ZERO`` — a numeric tag used directly in a comparison has an
-  implicit zero start and no ladder writer, so it stays zero.  Explicit defaults,
-  external inputs, physical inputs, read-only zero constants, and numeric
-  ``==``/``!= 0``/``1`` Boolean conventions are exempt.  **warning**.
+* ``CMP_OPERAND_NO_WRITER`` — a numeric tag used directly in a comparison has no
+  ladder writer.  Explicit defaults, external inputs, physical inputs, read-only
+  constants, and numeric ``==``/``!= 0``/``1`` Boolean conventions are exempt.
+  The missing source may be intentional, so this is an **advisory**.
 
 * ``CMP_PRESET_STAYS_ZERO`` — the same high-confidence check for a tag-valued
   timer/counter preset.  Literal zero remains an intentional, supported elapsed-
@@ -42,7 +42,7 @@ subroutines + branches, both the ``Compare*`` leaf family and the expression-tre
 
 * ``CMP_REPEATED_STATE_VALUE`` — repeated equality checks against the same
   discrete numeric values have become hard to read or maintain as raw numbers.
-  Suggests a named read-only reference or one decoded Bool status tag.  **advisory**.
+  Suggests a named read-only reference or one mapped Bool status tag.  **advisory**.
 
 "Dynamic" (belongs on the left) is any program-written tag, self-advancing register,
 or inline computed expression; "static" is a literal, an ``S.`` constant, or any
@@ -107,7 +107,7 @@ if TYPE_CHECKING:
 CMP_EQ_ON_MONOTONE = "CMP_EQ_ON_MONOTONE"
 CMP_TRUE_AT_RESET = "CMP_TRUE_AT_RESET"
 CMP_STATIC_ON_LEFT = "CMP_STATIC_ON_LEFT"
-CMP_OPERAND_STAYS_ZERO = "CMP_OPERAND_STAYS_ZERO"
+CMP_OPERAND_NO_WRITER = "CMP_OPERAND_NO_WRITER"
 CMP_PRESET_STAYS_ZERO = "CMP_PRESET_STAYS_ZERO"
 CMP_STEPPER_VALUE_NOT_SET = "CMP_STEPPER_VALUE_NOT_SET"
 CMP_REPEATED_STATE_VALUE = "CMP_REPEATED_STATE_VALUE"
@@ -282,16 +282,113 @@ def _constant_result(
     return next(iter(outcomes)) if outcomes else None
 
 
-def _constant_display(cmp: _Compare, result: bool) -> FindingDisplay:
+def _format_domain_values(domain: tuple[Any, ...], tag: Tag | None = None) -> str:
+    """Render a closed domain compactly: ``0..90``, ``1, 3, 5``, or an elided list.
+
+    A small ``choices`` domain keeps its labels (``0 ('Idle'), 1 ('Run')``) so the
+    reader sees the named states rather than bare numbers.
+    """
+    values = list(domain)
+    if tag is not None and tag.choices and len(values) <= 8:
+        return ", ".join(_choice_value(tag, v) for v in values)
+    ints = [v for v in values if isinstance(v, int) and not isinstance(v, bool)]
+    if len(ints) == len(values) and len(values) > 1:
+        ordered = sorted(ints)
+        if ordered[-1] - ordered[0] == len(ordered) - 1:
+            return f"{ordered[0]}..{ordered[-1]}"
+        values = ordered
+    if len(values) <= 8:
+        return ", ".join(str(v) for v in values)
+    shown = (*values[:5], "...", *values[-2:])
+    return f"{', '.join(str(v) for v in shown)} ({len(values)} values)"
+
+
+def _writer_locations(name: str, graph: Any) -> str:
+    """``Main:R2, Main:R7`` for the rungs that write *name* (``...`` past three)."""
+    from pyrung.core.validation._common import compact_location
+
+    nodes = sorted(graph.writers_of.get(name) or ())
+    locs = [
+        compact_location(n.scope, n.subroutine, n.rung_index, n.branch_path)
+        for n in (graph.rung_nodes[i] for i in nodes)
+    ]
+    if len(locs) > 3:
+        locs = [*locs[:3], "..."]
+    return ", ".join(locs)
+
+
+def _domain_provenance(tag: Tag, domain: tuple[Any, ...], graph: Any) -> tuple[str, str]:
+    """``(why the domain is closed, how to widen it)`` for one operand tag.
+
+    The domain is closed either by a declaration on the tag (``choices``,
+    ``min``/``max``, Bool) or because every ladder writer is understood.  The
+    hint names which, so the engineer knows whether to fix the declaration or the
+    writers.
+    """
+    from pyrung.core.analysis.value_domains import declared_value_domain
+
+    name = operand_name(tag)
+    values = _format_domain_values(domain, tag)
+    if declared_value_domain(tag) is not None:
+        if tag.type is TagType.BOOL:
+            return f"{name} is a Bool", "change the comparison"
+        if tag.choices:
+            return (
+                f"{name}'s choices are declared on the tag",
+                f"change the comparison or add the value to {name}'s choices",
+            )
+        return (
+            f"{name} is declared min={tag.min}, max={tag.max}",
+            f"change the comparison or widen {name}'s min/max",
+        )
+    if tag.readonly:
+        return f"{name} is readonly and always {values}", "change the comparison"
+    writers = _writer_locations(tag.name, graph)
+    if not writers:
+        return (
+            f"{name} is never written, so it keeps its default {values}",
+            f"change the comparison, write {name} from the ladder, or mark it external",
+        )
+    return (
+        f"{name} is only written at {writers}",
+        f"change the comparison or write the expected value to {name}",
+    )
+
+
+def _constant_display(
+    cmp: _Compare,
+    result: bool,
+    domains: dict[str, tuple[Any, ...]],
+    graph: Any,
+) -> FindingDisplay:
+    """Explain a one-valued comparison by naming each operand's closed domain."""
+    verdict = "always true" if result else "always false"
+    seen: set[str] = set()
+    reasons: list[str] = []
+    fixes: list[str] = []
+    labels: list[str] = []
+    for operand in (cmp.left, cmp.right):
+        tag = _operand_tag(operand)
+        if tag is None or tag.name in seen or tag.name not in domains:
+            continue
+        seen.add(tag.name)
+        domain = domains[tag.name]
+        reason, fix = _domain_provenance(tag, domain, graph)
+        reasons.append(reason)
+        fixes.append(fix)
+        labels.append(f"{operand_name(tag)} is only {_format_domain_values(domain, tag)}")
+    label = f"{verdict}: {'; '.join(labels)}" if labels else verdict
+    if result:
+        hint = "remove the redundant comparison"
+    else:
+        hint = fixes[0] if len(fixes) == 1 else "change the comparison or the operands' domains"
+    if reasons:
+        hint = f"{'; '.join(reasons)}; {hint}"
     return FindingDisplay(
         code=CMP_ALWAYS_TRUE if result else CMP_ALWAYS_FALSE,
-        severity="info" if result else "error",
-        frames=(_cmp_frame(cmp, "always true" if result else "always false"),),
-        hint=(
-            "remove the redundant comparison"
-            if result
-            else "change the comparison or the operand's closed domain"
-        ),
+        severity="info" if result else "warning",
+        frames=(_cmp_frame(cmp, label),),
+        hint=hint,
     )
 
 
@@ -416,7 +513,7 @@ def _is_calc(op: _Operand, calc: set[str]) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Zero-value establishment
+# Operand sources and zero-preset establishment
 # ---------------------------------------------------------------------------
 
 
@@ -449,13 +546,22 @@ def _tag_stays_zero(tag: Tag, graph: Any) -> bool:
     return not graph.writers_of.get(tag.name)
 
 
-def _zero_operand(cmp: _Compare, graph: Any) -> tuple[_Operand, Tag] | None:
+def _tag_has_no_writer(tag: Tag, graph: Any) -> bool:
+    """Whether *tag* is an undeclared numeric source with no ladder writer."""
+    if tag.type not in _NUMERIC_TAG_TYPES or getattr(tag, "has_explicit_default", False):
+        return False
+    if tag.external or tag.readonly or graph.is_physical_input(tag.name):
+        return False
+    return not graph.writers_of.get(tag.name)
+
+
+def _no_writer_operand(cmp: _Compare, graph: Any) -> tuple[_Operand, Tag] | None:
     """Prefer the conventional right-hand bound, then check the left operand."""
     if _is_boolish_numeric_compare(cmp):
         return None
     for operand in (cmp.right, cmp.left):
         tag = _operand_tag(operand)
-        if tag is not None and _tag_stays_zero(tag, graph):
+        if tag is not None and _tag_has_no_writer(tag, graph):
             return operand, tag
     return None
 
@@ -516,7 +622,7 @@ def _preset_display(site: Any, preset: Tag) -> FindingDisplay:
     )
 
 
-def _zero_operand_display(cmp: _Compare, operand: _Operand, tag: Tag) -> FindingDisplay:
+def _no_writer_operand_display(cmp: _Compare, operand: _Operand, tag: Tag) -> FindingDisplay:
     header = with_rung_line(cmp.rung_conds)
     token = _render(operand)
     span = caret_of(header, token)
@@ -524,14 +630,16 @@ def _zero_operand_display(cmp: _Compare, operand: _Operand, tag: Tag) -> Finding
         location=cmp.loc,
         lines=(header,),
         caret=(0, span[0], span[1]) if span else None,
-        caret_label="stays 0" if span else "",
+        caret_label="no ladder writer" if span else "",
     )
     name = operand_name(tag)
     return FindingDisplay(
-        code=CMP_OPERAND_STAYS_ZERO,
-        severity="warning",
+        code=CMP_OPERAND_NO_WRITER,
+        severity="advisory",
         frames=(frame,),
-        hint=f"set {name} before using it here, or mark it external",
+        hint=(
+            f"set {name} in the ladder, or mark it external if an HMI, device, or test supplies it"
+        ),
     )
 
 
@@ -724,23 +832,12 @@ def _repeated_state_findings(compares: list[_Compare]) -> list[CmpConditionFindi
             for value, sites in by_value.items()
             if len(sites) >= _REPEATED_STATE_SINGLE_VALUE_MIN_RUNGS
         }
-        reasons = [
-            f"{_choice_value(tag, value)} appears on {len(by_value[value])} separate rungs "
-            f"(limit: {_REPEATED_STATE_SINGLE_VALUE_MIN_RUNGS})"
-            for value in sorted(qualifying)
-        ]
         if len(repeated) >= _REPEATED_STATE_BREADTH_MIN_VALUES:
             qualifying.update(repeated)
-            reasons.append(
-                f"{len(repeated)} values are each compared on at least "
-                f"{_REPEATED_STATE_BREADTH_MIN_RUNGS_PER_VALUE} separate rungs "
-                f"(limit: {_REPEATED_STATE_BREADTH_MIN_VALUES} values)"
-            )
         for value, sites in by_value.items():
             dispersion_reasons = _state_value_dispersion_reasons(value, sites, by_value, tag)
             if dispersion_reasons:
                 qualifying.add(value)
-                reasons.extend(dispersion_reasons)
         if not qualifying:
             continue
 
@@ -749,23 +846,18 @@ def _repeated_state_findings(compares: list[_Compare]) -> list[CmpConditionFindi
             f"{_choice_value(tag, value)} on {len(by_value[value])} rungs"
             for value in ordered_values
         ]
-        problem = (
-            f"{tag_name} repeats equals comparisons (==): "
-            + "; ".join(descriptions)
-            + ". Why: "
-            + "; ".join(reasons)
-            + "."
+        problem = f"{tag_name} compares {'; '.join(descriptions)}."
+        frames = tuple(
+            _cmp_frame(cmp, "repeated raw value")
+            for value in ordered_values
+            for cmp in by_value[value]
         )
-        frames = tuple(_cmp_frame(cmp) for value in ordered_values for cmp in by_value[value])
         display = FindingDisplay(
             code=CMP_REPEATED_STATE_VALUE,
             severity="advisory",
             frames=frames,
             problem=problem,
-            hint=(
-                f"give each repeated {tag_name} value a name: use a read-only reference tag, "
-                "or compare it once and reuse the resulting Bool status tag"
-            ),
+            hint="name the value with a read-only tag, or map it once to a Bool status tag",
         )
         findings.append(
             CmpConditionFinding(CMP_REPEATED_STATE_VALUE, tag_name, display, "advisory")
@@ -829,11 +921,16 @@ def _eq_display(
 ) -> FindingDisplay:
     assert profile.linear is not None
     order = ">=" if profile.linear.direction > 0 else "<="
+    hint = (
+        f"use < or > to say which side of {_render(comparand)} should be true"
+        if cmp.op == "!="
+        else f"use {_render(reg)} {order} {_render(comparand)}{_done_hint(profile)}"
+    )
     return FindingDisplay(
         code=CMP_EQ_ON_MONOTONE,
-        severity="error",
+        severity="warning",
         frames=(_cmp_frame(cmp, f"can skip past {_render(comparand)}"),),
-        hint=f"use {_render(reg)} {order} {_render(comparand)}{_done_hint(profile)}",
+        hint=hint,
     )
 
 
@@ -912,7 +1009,7 @@ def _true_at_reset_finding(
 def _true_at_reset_display(
     cmp: _Compare, reg: _Operand, comparand: _Operand, profile: AdvanceProfile
 ) -> FindingDisplay:
-    label = "true at reset"
+    label = f"true when {_render(reg)} is 0"
     return FindingDisplay(
         code=CMP_TRUE_AT_RESET,
         severity="warning",
@@ -950,7 +1047,7 @@ def _static_on_left_finding(
             code=CMP_STATIC_ON_LEFT,
             severity="advisory",
             frames=(_cmp_frame(cmp, f"{changing} changes, but it is on the right"),),
-            hint=f"write the changing value first: {flip}",
+            hint=f"put the changing value on the left: {flip}",
         )
         return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, display, "advisory")
 
@@ -964,7 +1061,7 @@ def _static_on_left_finding(
         code=CMP_STATIC_ON_LEFT,
         severity="advisory",
         frames=(_cmp_frame(cmp, label),),
-        hint=f"if {changing} changes, write it first: {flip}",
+        hint=f"if {changing} changes, put it on the left: {flip}",
     )
     return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, display, "advisory")
 
@@ -1018,7 +1115,7 @@ def validate_cmp_conditions(
             )
         )
 
-    # 1. Equality against a self-advancing register (error). The reset-floor check
+    # 1. Equality against a self-advancing register (warning). The reset-floor check
     #    (== 0 / != 0) is edge-safe and exempt.
     for cmp in compares:
         if cmp.op not in ("==", "!="):
@@ -1031,20 +1128,23 @@ def validate_cmp_conditions(
             continue
         findings.append(
             CmpConditionFinding(
-                CMP_EQ_ON_MONOTONE, cmp.loc, _eq_display(cmp, reg, comparand, profile), "error"
+                CMP_EQ_ON_MONOTONE,
+                cmp.loc,
+                _eq_display(cmp, reg, comparand, profile),
+                "warning",
             )
         )
         claimed.add(id(cmp.cond))
 
-    # 2. A numeric operand that has no writer stays at zero.  A comparison that
-    #    simply mirrors a zero timer/counter preset belongs to the preset finding.
+    # 2. A numeric operand has no declared source.  A comparison that mirrors a
+    #    zero timer/counter preset belongs to the more specific preset finding.
     for cmp in compares:
         if id(cmp.cond) in claimed:
             continue
-        zero = _zero_operand(cmp, graph)
-        if zero is None:
+        no_writer = _no_writer_operand(cmp, graph)
+        if no_writer is None:
             continue
-        operand, tag = zero
+        operand, tag = no_writer
         operand_names = {
             op.name for op in (cmp.left, cmp.right) if op.kind == "tag" and op.name is not None
         }
@@ -1054,10 +1154,10 @@ def validate_cmp_conditions(
         if not mirrors_zero_preset:
             findings.append(
                 CmpConditionFinding(
-                    CMP_OPERAND_STAYS_ZERO,
+                    CMP_OPERAND_NO_WRITER,
                     tag.name,
-                    _zero_operand_display(cmp, operand, tag),
-                    "warning",
+                    _no_writer_operand_display(cmp, operand, tag),
+                    "advisory",
                 )
             )
         claimed.add(id(cmp.cond))
@@ -1090,9 +1190,11 @@ def validate_cmp_conditions(
         if result is None:
             continue
         code = CMP_ALWAYS_TRUE if result else CMP_ALWAYS_FALSE
-        severity: Severity = "info" if result else "error"
+        severity: Severity = "info" if result else "warning"
         findings.append(
-            CmpConditionFinding(code, cmp.loc, _constant_display(cmp, result), severity)
+            CmpConditionFinding(
+                code, cmp.loc, _constant_display(cmp, result, closed_domains, graph), severity
+            )
         )
         claimed.add(id(cmp.cond))
 

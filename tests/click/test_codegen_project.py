@@ -164,7 +164,7 @@ class TestProjectBasic:
         mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
         files = _project_from_program(logic, mapping, tmp_path)
 
-        assert '"pyrung>=0.13.0"' in files["pyproject.toml"]
+        assert '"pyrung>=0.14.0"' in files["pyproject.toml"]
         assert '"Private :: Do Not Upload"' in files["pyproject.toml"]
         assert '"pytest>=8.3.5"' in files["pyproject.toml"]
         assert 'packages = ["src/plc"]' in files["pyproject.toml"]

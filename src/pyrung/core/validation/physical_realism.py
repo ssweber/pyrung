@@ -238,6 +238,12 @@ def _validate_ranges(program: Program, tag_map: dict[str, Tag]) -> list[Physical
         too_high = tag.max is not None and value > tag.max
         if not too_low and not too_high:
             continue
+        if tag.min is not None and tag.max is not None:
+            min_max_label = f"outside min={tag.min}, max={tag.max}"
+        elif too_low:
+            min_max_label = f"below min={tag.min}"
+        else:
+            min_max_label = f"above max={tag.max}"
         display = FindingDisplay(
             code=TAG_RANGE_VIOLATION,
             severity="error",
@@ -245,10 +251,10 @@ def _validate_ranges(program: Program, tag_map: dict[str, Tag]) -> list[Physical
                 site_frame(
                     site,
                     caret_token=operand_name(value),
-                    caret_label=f"outside {tag.min}..{tag.max}",
+                    caret_label=min_max_label,
                 ),
             ),
-            hint="use a value in range, or widen it",
+            hint=(f"use a value allowed by {site.target_name}'s min/max, or widen those limits"),
         )
         findings.append(
             PhysicalRealismFinding(
@@ -339,10 +345,10 @@ def _validate_antitoggle(
                             severity="warning",
                             frames=(site_frame(site),),
                             problem=(
-                                f"{command_name} switches every {dt_ms:g} ms; "
+                                f"{command_name} can pulse for {dt_ms:g} ms; "
                                 f"feedback needs ~{cycle_floor:g} ms."
                             ),
-                            hint="drive it slower than the feedback",
+                            hint=(f"hold {command_name} long enough for feedback to respond"),
                         ),
                     )
                 )
@@ -367,7 +373,10 @@ def _validate_antitoggle(
                                 f"{command_name} is set on and off in one scan, faster than "
                                 f"the ~{cycle_floor:g} ms feedback."
                             ),
-                            hint="gate the two writes exclusively",
+                            hint=(
+                                "track the desired state separately, then drive "
+                                f"{command_name} from one out()"
+                            ),
                         ),
                     )
                 )

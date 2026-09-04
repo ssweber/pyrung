@@ -38,11 +38,11 @@ def _timer_eq_program() -> Program:
 
 
 class TestEqOnTimer:
-    def test_equality_reported_as_error(self):
+    def test_equality_reported_as_warning(self):
         report = validate(_timer_eq_program())
         eq = [f for f in report if f.code == "CMP_EQ_ON_MONOTONE"]
         assert len(eq) == 1
-        assert eq[0].severity == "error"
+        assert eq[0].severity == "warning"
 
     def test_message_suggests_ge_and_done_bit(self):
         report = validate(_timer_eq_program())
@@ -66,6 +66,26 @@ class TestResetFloorExempt:
     def test_ne_zero_is_not_flagged(self):
         report = validate(_reset_floor_program())
         assert not [f for f in report if f.code == "CMP_EQ_ON_MONOTONE"]
+
+
+def _timer_ne_program() -> Program:
+    tmr = Timer.clone("Tmr")
+    out = Bool("Out", external=True)
+    with Program(strict=False) as prog:
+        with Rung():
+            on_delay(tmr, 5, "sec")
+        with Rung(tmr.Acc != 5):
+            copy(1, out)
+    return prog
+
+
+def test_nonzero_inequality_asks_which_side_should_be_true():
+    report = validate(_timer_ne_program())
+    finding = next(f for f in report if f.code == "CMP_EQ_ON_MONOTONE")
+
+    assert finding.severity == "warning"
+    assert "can skip past 5" in finding.message
+    assert "use < or > to say which side of 5 should be true" in finding.message
 
 
 def _count_up_program() -> Program:

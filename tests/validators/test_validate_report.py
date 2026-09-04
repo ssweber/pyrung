@@ -66,6 +66,10 @@ class TestValidateAllRuns:
         report = validate(prog)
         codes = {f.code for f in report}
         assert "TAG_READONLY_WRITE" in codes
+        finding = next(f for f in report if f.code == "TAG_READONLY_WRITE")
+        assert finding.display.frames[0].caret_label == "readonly"
+        assert "ReadonlyTag is readonly." in finding.message
+        assert "remove readonly=True from ReadonlyTag" in finding.message
 
 
 class TestValidationContext:
@@ -293,7 +297,7 @@ class TestValidationReport:
             "RUNG_REDUNDANT_TERM",
             "RUNG_TAUTOLOGY",
             "CMP_EQ_ON_MONOTONE",
-            "CMP_OPERAND_STAYS_ZERO",
+            "CMP_OPERAND_NO_WRITER",
             "CMP_PRESET_STAYS_ZERO",
             "CMP_REPEATED_STATE_VALUE",
             "CMP_STEPPER_VALUE_NOT_SET",
@@ -409,6 +413,35 @@ class TestRegistry:
 
     def test_every_rule_has_a_nonempty_title(self):
         assert all(spec.title and isinstance(spec.title, str) for spec in RULES.values())
+
+    def test_range_violation_title_uses_declared_metadata_names(self):
+        assert RULES["TAG_RANGE_VIOLATION"].title == "Value Outside Tag's Declared Min/Max"
+
+    def test_final_multiple_writers_metadata(self):
+        spec = RULES["TAG_FINAL_MULTIPLE_WRITERS"]
+        assert spec.severity == "error"
+        assert spec.title == "Final Tag Has Multiple Writers"
+
+    def test_stuck_high_title_describes_possible_retention(self):
+        assert RULES["COIL_STUCK_HIGH"].title == "Coil Can Stay High"
+
+    def test_stuck_low_title_describes_possible_state(self):
+        assert RULES["COIL_STUCK_LOW"].title == "Coil Can Stay Low"
+
+    def test_pointer_default_title_uses_operator_terminology(self):
+        assert RULES["PTR_DEFAULT_BEFORE_BLOCK_START"].title == ("Pointer Default Can Be Invalid")
+
+    def test_pointer_value_title_uses_operator_terminology(self):
+        assert RULES["PTR_MAY_ESCAPE_BLOCK"].title == "Pointer Value Can Be Invalid"
+
+    def test_physical_timing_title_describes_feedback_mismatch(self):
+        assert RULES["PHYS_ANTITOGGLE"].title == "Command Changes Too Fast for Feedback"
+
+    def test_tautology_title_uses_dsl_terminology(self):
+        assert RULES["RUNG_TAUTOLOGY"].title == "Or() Condition Is Always True"
+
+    def test_redundant_condition_title_uses_ladder_terminology(self):
+        assert RULES["RUNG_REDUNDANT_TERM"].title == "Redundant Rung Condition"
 
     def test_ordered_rules_is_severity_first_and_complete(self):
         from pyrung.core.validation import ordered_rules

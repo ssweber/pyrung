@@ -142,10 +142,10 @@ pyrung live check RUNG
 
 | Code | Severity | What it detects |
 |---|---|---|
-| `CMP_ALWAYS_FALSE` | Error | A comparison that is false for every value in its complete Bool, choices, bounded-integer, or fully understood producer domain. Open domains are left alone. |
+| `CMP_ALWAYS_FALSE` | Warning | A comparison that is false for every value in its complete Bool, choices, bounded-integer, or fully understood producer domain. The finding names the operand's values and whether they come from a declaration or from its writer rungs. Open domains are left alone. |
 | `CMP_ALWAYS_TRUE` | Info | A comparison that is true for every value in the same complete domains and therefore does not gate its rung. |
-| `CMP_EQ_ON_MONOTONE` | Error | Equality against a timer or counter accumulator that can step past the exact value. |
-| `CMP_OPERAND_STAYS_ZERO` | Warning | A numeric comparison operand has an implicit zero start and no ladder writer, so it stays zero. Configured defaults, external inputs, and read-only zero constants are left alone. |
+| `CMP_EQ_ON_MONOTONE` | Warning | Equality against a timer or counter accumulator that can step past the exact value. |
+| `CMP_OPERAND_NO_WRITER` | Advisory | A numeric comparison operand has no ladder writer or declared outside source. Configured defaults, external and physical inputs, read-only constants, and numeric `0`/`1` Boolean conventions are left alone. |
 | `CMP_PRESET_STAYS_ZERO` | Warning | A tag-valued timer or counter preset has an implicit zero start and no ladder writer, so completion is immediate. Configured and literal zero presets are left alone. |
 | `CMP_STEPPER_VALUE_NOT_SET` | Warning | A discrete stepping tag is compared with a value that none of its understood producers can establish. Dynamic, external, and unresolved producer paths are left alone. |
 | `CMP_REPEATED_STATE_VALUE` | Advisory | Literal equality comparisons against the same discrete values are repeated heavily or spread across the program. Numeric `0`/`1`-only conventions are left alone. |
@@ -156,10 +156,10 @@ pyrung live check RUNG
 
 | Code | Severity | What it detects |
 |---|---|---|
-| `TAG_READONLY_WRITE` | Error | A write instruction targets a tag declared with `readonly=True`. |
+| `TAG_READONLY_WRITE` | Error | A write instruction targets a readonly tag declared with `readonly=True`. |
 | `TAG_CHOICES_VIOLATION` | Error | A literal write is not present in the target tag's `choices` keys. |
-| `TAG_RANGE_VIOLATION` | Error | A literal write falls outside the target tag's declared `min`/`max` range. |
-| `TAG_FINAL_MULTIPLE_WRITERS` | Warning | More than one write site targets a tag declared with `final=True`. Mutual exclusivity does not exempt the writers. |
+| `TAG_RANGE_VIOLATION` | Error | A literal write falls outside the target tag's declared `min`/`max` limits. |
+| `TAG_FINAL_MULTIPLE_WRITERS` | Error | More than one write site targets a tag declared with `final=True`. Mutual exclusivity does not exempt the writers. |
 | `TAG_DEAD_WRITE` | Warning | A resolved direct scalar write that ordered scan analysis proves is overwritten before any read. The first implementation deliberately punts on loops, branches, calls, subroutine returns, indirect targets, one-shots, and conditional overwrites. |
 
 ### Pointers
@@ -167,7 +167,7 @@ pyrung live check RUNG
 | Code | Severity | What it detects |
 |---|---|---|
 | `PTR_DEFAULT_BEFORE_BLOCK_START` | Warning | An exact indirect dereference such as `DS[Ptr]` uses a pointer whose default is below the block start. This usually means a 1-based block is indexed by a tag with the implicit `default=0`. |
-| `PTR_MAY_ESCAPE_BLOCK` | Warning | A pointer's complete domain contains concrete out-of-block values compatible with the dereference's effective guards. Guard narrowing is used only for scan-stable pointers; open domains and pointers sanitized by a proven unconditional write-before-read are left alone. |
+| `PTR_MAY_ESCAPE_BLOCK` | Warning | A pointer's complete domain contains invalid addresses compatible with the dereference's effective guards. Guard narrowing is used only for scan-stable pointers; open domains and pointers sanitized by a proven unconditional write-before-read are left alone. |
 
 This rule checks the actual dereference tag used in `Block[Ptr]`. It does not infer that an earlier rung computed a different intermediate pointer.
 
@@ -184,7 +184,7 @@ This rule checks the actual dereference tag used in `Block[Ptr]`. It does not in
 | Code | Severity | What it detects |
 |---|---|---|
 | `PHYS_MISSING_PROFILE` | Info | A tag has a `Physical` relationship through `link`, but the linked tag has no physical profile. |
-| `PHYS_ANTITOGGLE` | Warning | Opposing writes to a feedback-linked tag pair occur within one scan and risk physical oscillation. |
+| `PHYS_ANTITOGGLE` | Warning | A feedback-linked command can pulse or change state faster than its declared feedback timing. |
 
 The physical checks, including `TAG_RANGE_VIOLATION`, use the scan interval passed as `dt`:
 
