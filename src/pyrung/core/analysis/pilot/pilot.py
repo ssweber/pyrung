@@ -35,6 +35,7 @@ from pyrung.core.analysis.pilot.departure_state import (
     _trial_checkpoint,
 )
 from pyrung.core.analysis.pilot.earned_work import (
+    EarnedWork,
     build_earned_work,
 )
 from pyrung.core.analysis.pilot.intrascan_research import (
@@ -121,6 +122,7 @@ from pyrung.core.analysis.pilot.working_theory import (
 )
 from pyrung.core.analysis.pilot.world import _CausalCheckpoint, _World
 from pyrung.core.analysis.pilot.world_key import (
+    ReadIdentity,
     _physical_world_key,
     _pilot_world_key,
 )
@@ -526,17 +528,23 @@ def _pilot_loop_events(
     # for the loop's life; knowledge side (never reverted). Best-effort: an
     # empty model leaves target-relative coordinates uncredited.
     try:
-        state.earned_work = build_earned_work(
-            ctx.pdg,
-            ctx.program,
-            ctx.target.tag,
-            ctx.key_config,
-            steerable=ctx.steerable,
-            clear_only=ctx.clear_only,
-            edge_tags=frozenset(ctx.edge_tags),
-            pipeline_internal_tags=ctx.pipeline_internal_tags,
-            channel_tags=frozenset(role.channel_tag for role in ctx.pipeline_roles),
-            harness=getattr(plc, "_harness", None),
+        models = tuple(
+            build_earned_work(
+                ctx.pdg,
+                ctx.program,
+                member.tag,
+                ctx.key_config,
+                steerable=ctx.steerable,
+                clear_only=ctx.clear_only,
+                edge_tags=frozenset(ctx.edge_tags),
+                pipeline_internal_tags=ctx.pipeline_internal_tags,
+                channel_tags=frozenset(role.channel_tag for role in ctx.pipeline_roles),
+                harness=getattr(plc, "_harness", None),
+            )
+            for member in (ctx.target.members or (ctx.target,))
+        )
+        state.earned_work = EarnedWork(
+            tuple(dict.fromkeys(component for model in models for component in model.components))
         )
     except Exception:  # noqa: BLE001 — diagnostics must not break the drive
         logger.debug("pilot: earned-work build failed", exc_info=True)
@@ -1057,6 +1065,12 @@ def _pilot_loop_events(
         if isinstance(result, NeedProbe):
             request = result.request
             if isinstance(request, ExploratoryTrialRequest):
+                if request.bearing.read_identity != ReadIdentity.capture(
+                    state.work, ctx.compass.knowledge
+                ):
+                    from pyrung.core.analysis.pilot.steer import StaleBearingError
+
+                    raise StaleBearingError("cannot clone an exploratory trial from a stale read")
                 checkpoint = _CausalCheckpoint(
                     key=frame.key,
                     world=state.snapshot_world(),
@@ -1064,12 +1078,19 @@ def _pilot_loop_events(
                     configured_inputs=(ctx.configured_inputs | _configured_input_names(state.work)),
                 )
                 probe_state = _disposable_requirement_state(state, checkpoint)
+                # This clone is a disposable evidence experiment. Bind its one
+                # immediate trial to the cloned execution owner; production
+                # Bearings retain their original current-read authority.
+                probe_bearing = replace(
+                    request.bearing,
+                    read_identity=ReadIdentity.capture(probe_state.work, ctx.compass.knowledge),
+                )
                 transition = _attempt_transition.transition_once(
                     probe_state,
                     ctx,
                     target,
                     constraints,
-                    oriented=request.bearing,
+                    oriented=probe_bearing,
                     resolve_excursion=False,
                     derive_requirements=False,
                     defer_adoption=True,

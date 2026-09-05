@@ -212,7 +212,10 @@ def _constraint_condition(
 
 def _atom_condition(plc: PLC, atom: Any, *, unresolved: bool = False) -> Any:
     """Lower an atom to its stated or still-unresolved condition."""
+    from pyrung.core.analysis.simplified import And, Or
     from pyrung.core.condition import (
+        AllCondition,
+        AnyCondition,
         CompareEq,
         CompareGe,
         CompareGt,
@@ -222,6 +225,11 @@ def _atom_condition(plc: PLC, atom: Any, *, unresolved: bool = False) -> Any:
     )
     from pyrung.core.crossing import AffineCmp, Cmp, Eq
     from pyrung.core.tag import Bool
+
+    if isinstance(atom, (And, Or)):
+        conjunction = isinstance(atom, And) != unresolved
+        combine = AllCondition if conjunction else AnyCondition
+        return combine(*(_atom_condition(plc, term, unresolved=unresolved) for term in atom.terms))
 
     if isinstance(atom, (Eq, Cmp, AffineCmp)):
         condition = _constraint_condition(plc, atom, unresolved=unresolved)

@@ -1,9 +1,9 @@
-"""Conservatively classify and order multiple requested targets.
+"""Read compatibility and input preferences for a simultaneous goal.
 
 The static pre-pass proves only direct same-tag conflicts and mutual retentive
-clobber across every establish route. A one-directional clobber determines
-clobberer-first order. Anything not proved is left for concrete driving and the
-final all-target check; this module performs no simulation or probing.
+clobber across every establish route. Input supports rank current-world
+alternatives only; this module never orders a sequence of target drives.
+Anything not proved is left for joint concrete execution and verification.
 """
 
 from __future__ import annotations
@@ -18,6 +18,56 @@ from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag
 
 # (tag, value, predicate)
 TargetSpec = tuple[str, Any, Any]
+
+
+def input_preferences(
+    targets: Any, program: Any, steerable: frozenset[str]
+) -> tuple[tuple[str, Any], ...]:
+    """Rank joint routes by common input supports, without excluding detours.
+
+    Simplified terminal forms supply static proposals only. Retentive and
+    temporal program behavior still passes through ordinary trace/execution;
+    a conflicting input remains available when no preferred route survives.
+    """
+    from pyrung.core.analysis.simplified import And, Atom, Or, _negate, simplified_forms
+    from pyrung.core.analysis.sp_values import _required_from_atom
+
+    forms = simplified_forms(program)
+
+    def required(expr: Any) -> set[tuple[str, Any]]:
+        if isinstance(expr, Atom):
+            pairs = _required_from_atom(expr) or ()
+            return {(tag, value) for tag, value in pairs if tag in steerable}
+        if isinstance(expr, And):
+            return set().union(*(required(term) for term in expr.terms))
+        if isinstance(expr, Or) and expr.terms:
+            branches = [required(term) for term in expr.terms]
+            return branches[0].intersection(*branches[1:])
+        return set()
+
+    preferences: set[tuple[str, Any]] = set()
+    for target in targets:
+        if target.predicate is not None:
+            preferences.update(required(target.predicate))
+        elif target.tag in steerable:
+            preferences.add((target.tag, target.value))
+        elif type(target.value) is bool and target.tag in forms:
+            expr = forms[target.tag].expr
+            preferences.update(required(expr if target.value else _negate(expr)))
+    # Contradictory supports are unresolved alternatives, never exclusions.
+    return tuple(
+        sorted(
+            (
+                (tag, value)
+                for tag, value in preferences
+                if all(
+                    other_tag != tag or _values_match(value, other)
+                    for other_tag, other in preferences
+                )
+            ),
+            key=repr,
+        )
+    )
 
 
 def _all_writer_rungs(node: Any, out: set[int]) -> None:
@@ -120,63 +170,45 @@ def _me_reason(env: Any, a: TargetSpec, b: TargetSpec, ev_ab: list, ev_ba: list)
     )
 
 
-def _order(env: Any, targets: list[TargetSpec]) -> list[TargetSpec]:
-    """Clobberer-first: if establishing i drives j off-value, i precedes j."""
-    n = len(targets)
-    before = [[False] * n for _ in range(n)]
-    for i in range(n):
-        for j in range(n):
-            if i == j:
-                continue
-            clob, _ = _clobbers_universally(env, targets[i][:2], targets[j][:2])
-            if clob:
-                before[i][j] = True
-    remaining = list(range(n))
-    order: list[int] = []
-    while remaining:
-        pick = next(
-            (idx for idx in remaining if not any(before[k][idx] for k in remaining if k != idx)),
-            remaining[0],  # cycle (shouldn't survive the ME check) — break arbitrarily
-        )
-        order.append(pick)
-        remaining.remove(pick)
-    return [targets[i] for i in order]
-
-
 def analyze(
     snapshot: dict[str, Any],
     pdg: Any,
     program: Any,
     steerable: frozenset[str],
     targets: list[TargetSpec],
-) -> tuple[bool, str | None, list[TargetSpec]]:
-    """Return ``(ok, reason, ordered)``.
+) -> tuple[bool, str | None]:
+    """Prove direct incompatibility, otherwise leave joint navigation open.
 
-    ``ok=False`` with a ``reason`` when a sound prune fires (same-tag / mutual
-    retentive clobber).  Otherwise ``ok=True`` and ``ordered`` is a
-    clobberer-first establish order for the drive loop.
+    Relational operands are live predicates, never equality values. Static
+    writer-clobber evidence applies only to concrete equality targets.
     """
     env = _env_for(snapshot, pdg, program, steerable)
 
     for i in range(len(targets)):
         for j in range(i + 1, len(targets)):
             ti, tj = targets[i], targets[j]
-            if ti[0] == tj[0] and not _values_match(ti[1], tj[1]):
+            if (
+                ti[2] is None
+                and tj[2] is None
+                and ti[0] == tj[0]
+                and not _values_match(ti[1], tj[1])
+            ):
                 return (
                     False,
                     f"pilot: {ti[0]} is one register; cannot be both "
                     f"{ti[1]!r} and {tj[1]!r} in the same scan.",
-                    list(targets),
                 )
 
     for i in range(len(targets)):
         for j in range(i + 1, len(targets)):
             a, b = targets[i], targets[j]
+            if a[0] == b[0] or a[2] is not None or b[2] is not None:
+                continue
             ab, ev_ab = _clobbers_universally(env, a[:2], b[:2])
             if not ab:
                 continue
             ba, ev_ba = _clobbers_universally(env, b[:2], a[:2])
             if ba:
-                return False, _me_reason(env, a, b, ev_ab, ev_ba), list(targets)
+                return False, _me_reason(env, a, b, ev_ab, ev_ba)
 
-    return True, None, _order(env, targets)
+    return True, None

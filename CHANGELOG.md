@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- Multi-target `how()` steers toward all goals together, preserving relational bounds and allowing temporary detours instead of driving targets in a fixed order.
+
 ## v0.14.0 (2026-09-04)
 
 ### Breaking Changes

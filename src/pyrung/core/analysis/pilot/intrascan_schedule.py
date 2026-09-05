@@ -278,6 +278,19 @@ def compile_scalar_schedule(
             return ScheduleCompilation(detail="tag-relative scalar lowering is unsupported")
         by_tag.setdefault(condition.tag, []).append(condition)
 
+    # A joint goal's unresolved guard is a disjunction. Keep only branches
+    # independent of every repair destination. This narrows the lifetime;
+    # it never lets a correction authorize itself through its own value.
+    from pyrung.core.condition import AnyCondition
+
+    if isinstance(guard, AnyCondition):
+        independent = tuple(
+            term
+            for term in guard.conditions
+            if not (_extract_condition_reads(term) & by_tag.keys())
+        )
+        if independent:
+            guard = AnyCondition(*independent)
     guard_names = _extract_condition_reads(guard)
     assignments: list[tuple[str, Any]] = []
     for name, conditions in sorted(by_tag.items()):

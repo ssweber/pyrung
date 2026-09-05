@@ -596,6 +596,9 @@ class Plan:
     lever_notes: dict[str, str] = field(default_factory=dict)
     avoid_names: tuple[str, ...] = ()
     status: PlanStatus | None = None
+    # Preserve relational and conjunctive goal semantics in the public result;
+    # the scalar pairs above are display representatives for such predicates.
+    target_predicate: Any = None
 
     def __post_init__(self) -> None:
         status = self.status
@@ -688,7 +691,16 @@ class Plan:
         return getattr(self.fork, "_dt", None) if self.fork is not None else None
 
     def __str__(self) -> str:
-        if self.targets:
+        if self.target_predicate is not None:
+            from pyrung.core.analysis.simplified import And, render
+
+            predicate = self.target_predicate
+            goal = (
+                " & ".join(render(term) for term in predicate.terms)
+                if isinstance(predicate, And)
+                else render(predicate)
+            )
+        elif self.targets:
             goal = " & ".join(f"{t}={_format_value(v)}" for t, v in self.targets)
         else:
             goal = f"{self.target_tag}={_format_value(self.target_value)}"

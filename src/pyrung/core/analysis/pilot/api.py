@@ -7,14 +7,14 @@ requested conditions into that engine's inputs and assembles public plans.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import pyrung.core.analysis.pilot.drive_setup as _drive_setup
 import pyrung.core.analysis.pilot.pilot as _engine
 import pyrung.core.analysis.pilot.target_route as _target_route
 from pyrung.core.analysis.graph import Plan, PlanStatus, RouteTaken
-from pyrung.core.analysis.pilot.navigation_contracts import _ActionPair
-from pyrung.core.analysis.pilot.trace import target_reached
+from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
 from pyrung.core.analysis.pilot.types import PilotEvent
 
 if TYPE_CHECKING:
@@ -110,20 +110,19 @@ def _parse_target(*conditions: Any) -> tuple[str, Any, Any]:
     return _parse_one(conditions[0])
 
 
-def _single_target_plan(
+def _plan_from_outcome(
     setup: _drive_setup.DriveSetup,
     outcome: _engine._DriveOutcome,
-    target_tag: str,
-    target_value: Any,
+    target: TargetSpec,
     route_taken: RouteTaken | None,
-    *,
-    include_journal: bool,
 ) -> Plan:
-    """Assemble the common fork/live single-target result without policy drift."""
+    """Assemble one complete drive, including every joint goal's diagnostics."""
+    target_tag, target_value = target.tag, target.value
+    targets = tuple((member.tag, member.value) for member in target.members)
 
     linked_block = (
         None
-        if outcome.reached
+        if outcome.reached or target.predicate is not None
         else _target_route.linked_feedback_block(
             target_tag,
             target_value,
@@ -138,6 +137,8 @@ def _single_target_plan(
         reachable=outcome.reached,
         target_tag=target_tag,
         target_value=target_value,
+        targets=targets,
+        target_predicate=target.predicate,
         fork=outcome.work if outcome.reached else None,
         reason=linked_block or outcome.reason,
         status=(
@@ -152,7 +153,7 @@ def _single_target_plan(
             if outcome.reached
             else None
         ),
-        journal=outcome.journal if include_journal else (),
+        journal=outcome.journal,
         anchor_scan=setup.anchor_scan,
         journey=outcome.journey,
         hold_log=outcome.knowledge.get("hold_log", ()),
@@ -208,17 +209,27 @@ def pilot_how(
     out of reach (e.g. a dead flow sensor with the valve open).
     """
     targets = _parse_targets(*conditions)
-    if len(targets) > 1:
-        return _pilot_how_multi(
-            plc,
-            targets,
-            max_scans=max_scans,
-            avoid_pred=avoid_pred,
-            unlink=unlink,
-            on_event=on_event,
-        )
-    target_tag, target_value, target_predicate = targets[0]
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)
+    goal = TargetSpec.conjunction(tuple(TargetSpec(*target) for target in targets))
+    goal_pairs = tuple((tt, tv) for tt, tv, _ in targets) if len(targets) > 1 else ()
+    if goal.members:
+        from pyrung.core.analysis.pilot import multitarget
+
+        ok, reason = multitarget.analyze(
+            setup.diag_snapshot, setup.pdg, setup.program, setup.steerable, targets
+        )
+        if not ok:
+            return Plan(
+                reachable=False,
+                target_tag=goal.tag,
+                target_value=goal.value,
+                targets=goal_pairs,
+                target_predicate=goal.predicate,
+                reason=reason,
+                status=PlanStatus.CANNOT_REACH,
+                anchor_scan=setup.anchor_scan,
+            )
+    target_tag, target_value, target_predicate = goal.tag, goal.value, goal.predicate
     ctx, route_taken = _drive_setup.prepare_target_context(
         setup,
         target_tag,
@@ -227,149 +238,11 @@ def pilot_how(
         max_scans=max_scans,
         avoid_pred=avoid_pred,
     )
+    ctx = replace(ctx, target=goal)
     outcome = _engine._pilot_loop(
         setup.work,
         ctx,
         on_event=on_event,
     )
 
-    return _single_target_plan(
-        setup,
-        outcome,
-        target_tag,
-        target_value,
-        route_taken,
-        include_journal=True,
-    )
-
-
-def _failed_multi_plan(
-    label: str,
-    targets: tuple[_ActionPair, ...],
-    reason: str | None,
-    status: PlanStatus,
-    anchor_scan: int,
-) -> Plan:
-    """Build the one unreachable multi-target result shape."""
-
-    return Plan(
-        reachable=False,
-        target_tag=label,
-        target_value=True,
-        targets=targets,
-        reason=reason,
-        status=status,
-        anchor_scan=anchor_scan,
-    )
-
-
-def _pilot_how_multi(
-    plc: PLC,
-    targets: list[tuple[str, Any, Any]],
-    *,
-    max_scans: int = 3000,
-    avoid_pred: Any = None,
-    unlink: list[str] | None = None,
-    on_event: Callable[[PilotEvent], None] | None = None,
-) -> Plan:
-    """Multi-target ``how(A, B, …)`` — reach one committed scan where every target holds.
-
-    Static read only (``pilot/multitarget.py``): a sound mutual-exclusion prune +
-    a clobberer-first order, then the single-target drive loop is run
-    sequentially per target on ONE fork.  The fork's recording is the artifact —
-    it replays to a state with every target true.  When the static read cannot
-    prove ME it falls open to this drive; the final all-targets check is the
-    honest oracle (the drive loop is execution truth, never a skiff probe).
-    """
-    from pyrung.core.analysis.pilot import multitarget as _mt  # noqa: PLC0415
-
-    label = " & ".join(f"{tt}={tv!r}" for tt, tv, _ in targets)
-    setup = _drive_setup.prepare_drive(plc, unlink=unlink)
-
-    goal_pairs = tuple((tt, tv) for tt, tv, _ in targets)
-
-    ok, reason, ordered = _mt.analyze(
-        setup.diag_snapshot,
-        setup.pdg,
-        setup.program,
-        setup.steerable,
-        targets,
-    )
-    if not ok:
-        return _failed_multi_plan(
-            label,
-            goal_pairs,
-            reason,
-            PlanStatus.CANNOT_REACH,
-            setup.anchor_scan,
-        )
-
-    work = setup.work
-    compass = setup.compass
-    last_knowledge: dict[str, Any] = {}
-    last_journey: tuple[Any, ...] = ()
-    # The per-target drives run sequentially on ONE fork, so their journals are already
-    # in scan order — concatenating them gives the whole passage, not the last leg only.
-    journal_steps: list[Any] = []
-    for t_tag, t_val, t_pred in ordered:
-        if target_reached(dict(work.state.tags), t_tag, t_val, t_pred):
-            continue  # already pulled in by an earlier target's drive
-        # Same route discipline as single-target how(): infer every admissible
-        # current-world route and let Orientation choose among them. ``avoid=``
-        # is not tied to any one target, so it constrains every target uniformly.
-        ctx, _route_taken = _drive_setup.prepare_target_context(
-            setup,
-            t_tag,
-            t_val,
-            t_pred,
-            compass=compass,
-            max_scans=max_scans,
-            avoid_pred=avoid_pred,
-            work=work,
-        )
-        outcome = _engine._pilot_loop(work, ctx, on_event=on_event)
-        work = outcome.work
-        last_knowledge = outcome.knowledge
-        compass = outcome.knowledge.get("compass", compass)
-        last_journey = outcome.journey
-        journal_steps.extend(outcome.journal)
-        if not outcome.reached:
-            detail = f"; {outcome.reason}" if outcome.reason else ""
-            return _failed_multi_plan(
-                label,
-                goal_pairs,
-                (
-                    f"pilot: could not establish {t_tag}={t_val!r} while holding the "
-                    f"other target(s){detail}"
-                ),
-                PlanStatus.STOPPED,
-                setup.anchor_scan,
-            )
-
-    final = dict(work.state.tags)
-    unmet = [(tt, tv) for tt, tv, tp in targets if not target_reached(final, tt, tv, tp)]
-    if unmet:
-        names = ", ".join(f"{tt}={tv!r}" for tt, tv in unmet)
-        return _failed_multi_plan(
-            label,
-            goal_pairs,
-            f"pilot: reached each target individually but {names} did not hold "
-            "simultaneously (clobbered during co-establishment).",
-            PlanStatus.STOPPED,
-            setup.anchor_scan,
-        )
-    # recording: threaded from the LAST target's drive only (multi runs the loop
-    # sequentially per target; the last drive's Knowledge is what survives on ``work``).
-    return Plan(
-        reachable=True,
-        target_tag=label,
-        target_value=True,
-        targets=goal_pairs,
-        fork=work,
-        anchor_scan=setup.anchor_scan,
-        journal=tuple(journal_steps),
-        journey=last_journey,
-        hold_log=last_knowledge.get("hold_log", ()),
-        lever_notes=last_knowledge.get("lever_notes", {}),
-        avoid_names=last_knowledge.get("avoid_names", ()),
-    )
+    return _plan_from_outcome(setup, outcome, goal, route_taken)

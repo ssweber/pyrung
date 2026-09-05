@@ -29,10 +29,11 @@ module.
 - `Plan.journal`, `journey`, and the event stream explain the drive. They do not
   determine the verdict.
 - A multi-target `how(A, B, ...)` succeeds only when all targets hold in one
-  final committed state. The targets are driven sequentially on one fork and
-  then checked together.
+  final committed state. One drive carries their conjunction through every
+  fresh read and verification. There is no sequence of target waypoints; a
+  satisfied member may temporarily become false on the way to the joint goal.
 - `pilot_events()` is currently a single-target diagnostic stream;
-  `pilot_how()` also owns the multi-target composition policy.
+  `pilot_how()` also accepts conjunctive goals.
 - `avoid=` constrains route selection, applied actions, transient execution
   states, and retained landing states. `unlink=` deliberately makes named
   harness feedback steerable for fault injection.
@@ -91,6 +92,18 @@ A `Bearing` authorizes exactly one immediate act. Its world key, objective,
 policy, prerequisites, and effect expectation belong to that read. Execution
 must reject a stale Bearing. After any observation, execution, correction, or
 restore, return to Compass and read again.
+
+`ReadIdentity` binds that authority to the exact execution state, input
+configuration, synthesis, and navigation knowledge. The projected search key
+can alias accumulator values and is insufficient for freshness. Read identity
+is ephemeral; never use its Epoch/clock identity for cycle detection or retain
+it as recovery state. A disposable exploratory clone explicitly binds its own
+trial identity and supplies evidence only.
+
+Joint-goal input supports are static preferences for the current trace. They
+do not exclude detours, create holds, or survive as a selected route. Public
+goal conjunction is a condition on the retained landing, not a requirement
+that sibling producers read each other's targets in the same scan.
 
 Never retain a route suffix, candidate cursor, future Bearing, executable
 callable, fork, or World as recovery/theory state. Reporting provenance may

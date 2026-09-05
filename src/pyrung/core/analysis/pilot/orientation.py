@@ -52,6 +52,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryTemporalIntent,
 )
 from pyrung.core.analysis.pilot.world_key import (
+    ReadIdentity,
     wait_edge_nogood,
 )
 
@@ -382,6 +383,10 @@ def _orient_read(
 
     if world.frame is None:
         raise ValueError("single-alternative orientation requires a complete frame")
+    if world.read_identity is None:
+        read_identity = ReadIdentity.capture(getattr(world.state, "work", None), compass.knowledge)
+        if read_identity is not None:
+            world = replace(world, read_identity=read_identity)
     read = OrientationRead(
         world_key=world.world_key,
         world=world,

@@ -19,6 +19,7 @@ from pyrung.core.analysis.pilot.execution import (
     StopCondition,
 )
 from pyrung.core.analysis.pilot.world_key import (
+    ReadIdentity,
     _pilot_world_key,
     _semantic_key,
     _StateKey,
@@ -126,6 +127,36 @@ class TargetSpec:
     tag: str
     value: Any
     predicate: Any = None
+    members: tuple[TargetSpec, ...] = ()
+
+    @classmethod
+    def conjunction(cls, targets: tuple[TargetSpec, ...]) -> TargetSpec:
+        """Keep every terminal in one jointly evaluated navigation objective."""
+        from pyrung.core.analysis.simplified import And, Atom, render
+
+        if not targets:
+            raise ValueError("pilot: a goal requires at least one target")
+        targets = tuple(dict.fromkeys(targets))
+        if len(targets) == 1:
+            return targets[0]
+        return cls(
+            tag=" & ".join(
+                render(target.predicate)
+                if target.predicate is not None
+                else f"{target.tag}={target.value!r}"
+                for target in targets
+            ),
+            value=True,
+            predicate=And(
+                tuple(
+                    target.predicate
+                    if target.predicate is not None
+                    else Atom(target.tag, "eq", target.value)
+                    for target in targets
+                )
+            ),
+            members=targets,
+        )
 
 
 @dataclass(frozen=True)
@@ -203,6 +234,7 @@ class OrientationWorld:
     # read receipt used for execution/reporting, never a retained navigation
     # commitment or suffix of alternatives.
     root_route: TraceChoice | None = None
+    read_identity: ReadIdentity | None = None
 
 
 class ActSource(StrEnum):
@@ -557,6 +589,7 @@ class Bearing:
     stop_condition: StopCondition | None = None
     rationale: str = ""
     orientation: OrientationRead | None = None
+    read_identity: ReadIdentity | None = None
     # Ambient maintenance may be claim-free. Orientation owns enforcing that
     # every selected causal Bearing carries this detached producer claim.
     claim: TheoryClaim | None = None

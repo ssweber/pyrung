@@ -197,6 +197,9 @@ class TraceNode:
     # Alternative proposal branches are intentionally not ordinary children:
     # each inner conjunction must survive into navigation as one atomic act.
     crossing_branches: tuple[TraceCrossingBranch, ...] = ()
+    # Public conjunction: the children must hold at the retained landing, not
+    # at each other's producer occurrence. This node is not a program register.
+    goal_group: bool = False
 
     def iter_nodes(
         self,
@@ -236,6 +239,7 @@ class TraceNode:
             and not self.satisfied
             and not self.is_steerable
             and not self.pipeline_internal
+            and not self.goal_group
         )
 
     def leaves(self) -> list[TraceNode]:
@@ -359,7 +363,7 @@ class TraceNode:
         for child in self.children:
             child_guard_atoms = list(guard_atoms)
             for sibling in self.children:
-                if sibling is child:
+                if sibling is child or self.goal_group:
                     continue
                 atom = sibling.predicate or Atom(sibling.tag, "eq", sibling.value)
                 if atom not in child_guard_atoms:

@@ -33,7 +33,7 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
     _configured_input_names,
     _derive_attempt_requirements,
     _retain_expectation_receipt,
-    _selected_terminal_target_expectation,
+    _selected_terminal_target_expectations,
 )
 from pyrung.core.analysis.pilot.steer import execute
 from pyrung.core.analysis.pilot.theory_evidence import (
@@ -190,7 +190,7 @@ def transition_once(
     if not isinstance(result, Bearing):
         return AttemptTransition(result=result, frame=frame)
 
-    terminal_target_expectation = _selected_terminal_target_expectation(
+    terminal_target_expectations = _selected_terminal_target_expectations(
         frame,
         target,
         ctx,
@@ -206,7 +206,7 @@ def transition_once(
         attempt_source_checkpoint
         if (
             result.expectation is not None
-            or terminal_target_expectation is not None
+            or terminal_target_expectations
             or isinstance(result.act, (ObserveScan, ProgramScan, IntrascanPulse))
         )
         else None
@@ -220,7 +220,7 @@ def transition_once(
             ctx,
             attempt_source_checkpoint,
         )
-    if terminal_target_expectation is not None:
+    for terminal_target_expectation in terminal_target_expectations:
         result, attempt = _attempt_verification.promote_transient_target_failure(
             result,
             attempt,

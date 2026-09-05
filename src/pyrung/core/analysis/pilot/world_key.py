@@ -2,13 +2,63 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pyrung.core.runner import EpochRef
+    from pyrung.core.state import SystemState
 
 _StateKey = tuple[Any, ...]
 
 _THRESHOLD_DOWN_KINDS = frozenset({"count_down", "int_down", "real_down"})
 _THRESHOLD_FORM_GT = "gt"
+
+
+@dataclass(frozen=True)
+class ReadIdentity:
+    """Exact, short-lived authority for a current-world read.
+
+    The abstract search key intentionally aliases concrete states. It cannot
+    certify freshness. This stamp retains immutable state plus the source
+    execution/configuration and knowledge identities. It is never a cycle
+    key, a checkpoint, or durable recovery knowledge.
+    """
+
+    epoch: EpochRef
+    state: SystemState
+    program_owner: int
+    synthesis_owners: tuple[int, ...]
+    dt: float
+    time_mode: Any
+    dt_override: float | None
+    pending: tuple[tuple[str, Any], ...]
+    forces: tuple[tuple[str, Any], ...]
+    knowledge_owner: int
+    # Keep identity owners alive for the stamp's lifetime: Python may recycle
+    # an id after its object is collected. These references grant no replay.
+    _owners: tuple[Any, ...] = field(compare=False, repr=False)
+
+    @classmethod
+    def capture(cls, work: Any, knowledge: Any) -> ReadIdentity | None:
+        """Capture the live runner; structural read-only fixtures have no stamp."""
+        lineage = getattr(work, "_causal_lineage", None)
+        if lineage is None:
+            return None
+        synthesis = tuple(work._synthesis.all_rungs()) if work._synthesis is not None else ()
+        return cls(
+            epoch=lineage._current_epoch_ref,
+            state=work.state,
+            program_owner=id(work.program),
+            synthesis_owners=tuple(id(rung) for rung in synthesis),
+            dt=work._dt,
+            time_mode=work._time_mode,
+            dt_override=work._dt_override_for_next_scan,
+            pending=tuple(sorted(work._input_overrides.pending_patches.items())),
+            forces=tuple(sorted(work._input_overrides.forces.items())),
+            knowledge_owner=id(knowledge),
+            _owners=(work.program, knowledge, *synthesis),
+        )
 
 
 @dataclass(frozen=True)

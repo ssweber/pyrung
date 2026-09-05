@@ -45,14 +45,14 @@ from pyrung.core.analysis.pilot.overlay import (
 )
 from pyrung.core.analysis.pilot.trace import (
     target_reached,
-    trace_back,
-    trace_relational,
+    trace_target,
 )
 from pyrung.core.analysis.pilot.trace_read import TraceChoice, TraceReadConstraints
 from pyrung.core.analysis.pilot.trace_routes import rank_trace_choices
 from pyrung.core.analysis.pilot.trace_tree import TraceAction, TraceNode, frontier_pairs
 from pyrung.core.analysis.pilot.types import _IterationFrame
 from pyrung.core.analysis.pilot.world_key import (
+    ReadIdentity,
     _pilot_world_key,
     _StateKeyConfig,
 )
@@ -80,18 +80,8 @@ def _trace_for_route(
         avoid_pred=constraints.avoid_predicate,
         rejected_actions=rejected_actions,
     )
-    if target.predicate is not None:
-        return trace_relational(
-            target.predicate,
-            snapshot,
-            ctx.pdg,
-            ctx.program,
-            ctx.steerable,
-            constraints=read,
-        )
-    return trace_back(
-        target.tag,
-        target.value,
+    return trace_target(
+        target,
         snapshot,
         ctx.pdg,
         ctx.program,
@@ -284,7 +274,11 @@ def _read_worlds(
     """Read all current alternatives against one snapshot and one world key."""
 
     snapshot = dict(world.state.work.state.tags)
-    seed = replace(world, snapshot=snapshot)
+    seed = replace(
+        world,
+        snapshot=snapshot,
+        read_identity=ReadIdentity.capture(world.state.work, world.context.compass.knowledge),
+    )
     route_trees = _read_route_trees(seed, target, constraints)
     key_config = world.state.key_config
     if key_config is None:
@@ -427,6 +421,7 @@ def _bearing(
         rationale=rationale,
         orientation=read,
         investigation_selection=investigation_selection,
+        read_identity=world.read_identity,
     )
 
 
