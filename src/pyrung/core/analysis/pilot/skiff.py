@@ -287,6 +287,11 @@ def probe_live_guard_frontiers(
 
         # Control run: context alone.  If the frontier moves without any probe,
         # the stall is not this frontier — attributing edges to probes would lie.
+        work_budget = getattr(state, "budget", None)
+        if work_budget is not None:
+            if work_budget.remaining(ctx.max_scans) < 2 * scans:
+                return tuple(observations)
+            work_budget.charge(scans)
         control = run_pinned_scan(
             state.work,
             allowed,
@@ -301,6 +306,8 @@ def probe_live_guard_frontiers(
         # Pass 1: single actions.
         edge_found = False
         budget = max_probes
+        if work_budget is not None:
+            budget = min(budget, work_budget.remaining(ctx.max_scans) // scans)
         for probe in ctx.compass.knowledge.unprobed_actions(
             node.tag,
             cur_val,
@@ -410,6 +417,8 @@ def _send_probe(
     """Run one isolated probe and return its unapplied observation."""
     actions = dict(context)
     actions.update(probe_actions)
+    if (work_budget := getattr(state, "budget", None)) is not None:
+        work_budget.charge(scans)
     result = run_pinned_scan(
         state.work,
         allowed,

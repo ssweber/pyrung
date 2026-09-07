@@ -130,13 +130,14 @@ evidence-backed Bearing. Once that world's probe budget is exhausted, Compass
 continues considering lower-precedence evidence-backed proposals and otherwise
 returns a detached `GuidanceRequest` for an external guidance layer.
 
-The first external guidance strategy should be a bounded breadth-first survey
-of current-scan assignments over the declared steerable set: start with single
-assignments, then the smallest combinations, and ask what can change a
-target- or frontier-relevant program fact. Keep it cheap with finite declared
-domains and strict width/fork budgets. This is still an evidence request, not a
-candidate plan or permission to adopt a fork; its useful observations return
-to Compass for a fresh read and normal Bearing admission.
+Before returning external guidance, `guidance.py` performs a bounded survey
+of current-scan assignments over relevant declared steerable inputs. It tries
+single assignments, then simultaneous pairs, from the same exact source. The
+prover's compiled snapshot machinery screens at most 64 evaluations; ordinary
+forked control/intervention scans confirm useful effects. There is no successor
+queue, accumulated route, or adopted survey fork. Confirmed observations return
+to Compass for a fresh read and normal Bearing admission. Exhaustion remains
+`STOPPED`, never a proof of unreachability.
 
 Trace is the common happy-path instrument, not the fallback owner. One
 `CandidateRead` collects the applicable cheap current-world readings; ordinary
@@ -209,8 +210,13 @@ not imply that the landing still owns its progress; `ScanProgressReceipt`
 records that distinction. Logical coast folding is an execution optimization,
 not permission to invent physical occurrences.
 
-Search scans and productive program dwell are separate budgets. Accepted
-productive dwell is credited; sterile search remains bounded.
+Invocation search work and productive simulated dwell are separate quantities.
+`SearchBudget` is shared by disposable experiments and lives outside `_World`:
+discarding an attempt or restoring a checkpoint never refunds work. Receipted
+kernel scans are charged once by epoch ownership; folded logical time is not a
+kernel evaluation. Research requests consume at least one work unit and retain
+their local caps. The allowance is not a wall-clock deadline. The assignment
+survey and frontier probes check the remaining allowance before scans.
 
 ## Attempt transaction
 
@@ -232,6 +238,13 @@ substitute for what actually executed.
 Rejections are narrowly scoped. A failed joint act does not reject its members
 individually, and the same act may remain admissible in another world. Proof
 rejections and empirical nogoods remain distinct evidence.
+
+Runtime empirical act nogoods carry a detached concrete source scope including
+raw tags, scan memory, time, pending patches, and forces. The abstract cycle key
+alone cannot apply those failures to another accumulator or edge state. Queries
+without a concrete source see only explicitly broad exclusions. Restoring the
+same concrete source restores applicability without retaining an Epoch or fork.
+A failed singleton experiment also does not reject a confirmed joint artifact.
 
 ## Progress, departure, and recovery
 

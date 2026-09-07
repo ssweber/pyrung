@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -38,6 +39,27 @@ class ReadIdentity:
     # Keep identity owners alive for the stamp's lifetime: Python may recycle
     # an id after its object is collected. These references grant no replay.
     _owners: tuple[Any, ...] = field(compare=False, repr=False)
+
+    @cached_property
+    def rejection_scope(self) -> tuple[Any, ...]:
+        """Concrete applicability of a failure, detached from Epoch ownership.
+
+        Restoring the same concrete source restores applicability. Changing a
+        masked accumulator, instruction memory, or input configuration does
+        not. This conservative scope is never a cycle-detection key.
+        """
+        return (
+            _semantic_key(dict(self.state.tags)),
+            _semantic_key(dict(self.state.memory)),
+            self.state.scan_id,
+            self.state.timestamp,
+            self.program_owner,
+            self.dt,
+            _semantic_key(self.time_mode),
+            self.dt_override,
+            _semantic_key(self.pending),
+            _semantic_key(self.forces),
+        )
 
     @classmethod
     def capture(cls, work: Any, knowledge: Any) -> ReadIdentity | None:

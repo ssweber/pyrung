@@ -376,9 +376,7 @@ def _read_learned_fallback(
         separated.trace.actions or route_candidates or route_and_wait.charted_wait is not None
     )
     probed_leaf_states: set[tuple[str, Any]] = set()
-    nodes = (
-        () if separated.trace.establish_pending or local_bearing_open else frame.tree.iter_nodes()
-    )
+    nodes = () if separated.trace.establish_pending else frame.tree.iter_nodes()
     for node in nodes:
         unreadable = getattr(node, "live_guard", False) or (
             getattr(node, "pipeline_internal", False)
@@ -390,8 +388,7 @@ def _read_learned_fallback(
             )
         )
         if (
-            (node.children and not unreadable)
-            or node.satisfied
+            node.satisfied
             or node.is_steerable
             or (getattr(node, "pipeline_internal", False) and not unreadable)
         ):
@@ -421,7 +418,14 @@ def _read_learned_fallback(
                 knowledge=ctx.compass.knowledge,
                 context=ctx,
                 blocked_actions=ctx.blocked_actions,
-                pair_nogoods=key_nogoods,
+                # A failed singleton experiment does not disprove a joint
+                # cause. Broad exclusions still constrain every member;
+                # ordinary admission checks the complete batch's nogood.
+                pair_nogoods=(
+                    ctx.compass.knowledge.nogood_pairs(frame.key)
+                    if is_composite_action(cause)
+                    else key_nogoods
+                ),
             )
 
         path = ctx.compass.knowledge.find_path(
@@ -435,6 +439,14 @@ def _read_learned_fallback(
         if not path:
             continue
         first_step = path[0]
+        # A confirmed simultaneous assignment can explain a producer even
+        # while its static trace still offers individual inputs. Read that
+        # direct edge in the ordinary learned-batch slot; never import a
+        # multi-edge route to override the current trace.
+        if (local_bearing_open or (node.children and not unreadable)) and not (
+            len(path) == 1 and is_composite_action(first_step)
+        ):
+            continue
         first_destination = ctx.compass.knowledge.transition_dest(
             node.tag,
             current_value,
@@ -1075,7 +1087,7 @@ def _build_candidates(
     frame = world.frame
     state = world.state
     ctx = world.context
-    key_nogoods = set(ctx.compass.knowledge.nogood_pairs(frame.key))
+    key_nogoods = set(ctx.compass.knowledge.nogood_pairs(frame.key, scope=world.rejection_scope))
     route_and_wait = _read_route_and_wait(world, key_nogoods)
     separated = _separate_prerequisites(route_and_wait, frame, state, ctx)
     learned = _read_learned_fallback(

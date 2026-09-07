@@ -236,6 +236,10 @@ class OrientationWorld:
     root_route: TraceChoice | None = None
     read_identity: ReadIdentity | None = None
 
+    @property
+    def rejection_scope(self) -> tuple[Any, ...] | None:
+        return self.read_identity.rejection_scope if self.read_identity is not None else None
+
 
 class ActSource(StrEnum):
     """The one provenance category Orientation assigned to an act."""

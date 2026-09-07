@@ -154,7 +154,8 @@ def _read_route_trees(
                 key_config,
                 world.state.pilot_rungs,
                 getattr(world.state, "active_requirements", ()),
-            )
+            ),
+            scope=world.rejection_scope,
         )
         if key_config is not None
         else frozenset()
@@ -257,6 +258,7 @@ def _assemble_world(
         distance_before=tree.unsatisfied_count(),
         raw_trace_actions=tuple(dict.fromkeys(detail.pair for detail in details)),
         raw_trace_action_details=details,
+        rejection_scope=world.rejection_scope,
     )
     return replace(
         world,
@@ -320,7 +322,9 @@ def _probe_or_stuck(
     world = read.world
     frontier = _frontier(read)
     count = compass.knowledge.probe_count(world.world_key)
-    exclusions = tuple(compass.knowledge.nogood_identities(world.world_key))
+    exclusions = tuple(
+        compass.knowledge.nogood_identities(world.world_key, scope=world.rejection_scope)
+    )
     if count < _PROBE_BUDGET:
         request = ProbeRequest(frontier=frontier, reason=reason)
         return NeedProbe(

@@ -124,7 +124,6 @@ def import_adjacent_entry_scan(
         return None
     state.invocation_checkpoint = checkpoint
     state.bootstrap_execution = receipt
-    state.search_start_scan = checkpoint.world.work.state.scan_id
     return receipt
 
 
@@ -147,7 +146,6 @@ def retain_entry_bearing_execution(
     )
     state.invocation_checkpoint = checkpoint
     state.bootstrap_execution = receipt
-    state.search_start_scan = checkpoint.world.work.state.scan_id
 
 
 def bind_entry_execution_to_route(

@@ -1026,7 +1026,7 @@ def _disposable_requirement_state(
         temporal_checkpoints=list(state.temporal_checkpoints),
         theory_state=state.theory_state,
         proof_rejected_acts=set(state.proof_rejected_acts),
-        search_start_scan=state.search_start_scan,
+        budget=state.budget,
         earned_work=state.earned_work,
     )
     clone.load_world(checkpoint.world)

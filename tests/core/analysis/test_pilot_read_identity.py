@@ -100,3 +100,53 @@ def test_production_bearing_requires_exact_read_identity():
     bearing, world = _oriented_world()
     with pytest.raises(StaleBearingError):
         execute(replace(bearing, read_identity=None), world)
+
+
+@pytest.mark.parametrize("change", ["count", "memory", "patch", "force"])
+def test_empirical_rejection_applies_only_to_its_concrete_source(change):
+    from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
+    from pyrung.core.analysis.pilot.world_key import ReadIdentity
+
+    bearing, world = _oriented_world()
+    scope = world.rejection_scope
+    assert scope is not None
+    key, act = bearing.world_key, ("pulse", (("Count", 3),))
+    compass, _ = world.context.compass.apply((ActionNogoodObservation(key, act, scope),))
+    assert compass.knowledge.act_is_nogood(key, act, scope=scope)
+    checkpoint = world.state.snapshot_world()
+    work = world.state.work
+    if change == "count":
+        work._state = work.state.with_tags({"Count": 2})
+    elif change == "memory":
+        work._state = work.state.with_memory({"spent_edge": True})
+    elif change == "patch":
+        work.patch({"Count": 2})
+    else:
+        work.force("Count", 2)
+    identity = ReadIdentity.capture(work, compass.knowledge)
+    assert identity is not None
+    assert not compass.knowledge.act_is_nogood(key, act, scope=identity.rejection_scope)
+    world.state.load_world(checkpoint)
+    restored = ReadIdentity.capture(world.state.work, compass.knowledge)
+    assert restored is not None
+    assert compass.knowledge.act_is_nogood(key, act, scope=restored.rejection_scope)
+
+
+def test_disposable_work_and_rollback_cannot_refund_shared_budget():
+    from pyrung.core.analysis.pilot.requirement_evidence import _disposable_requirement_state
+    from pyrung.core.analysis.pilot.world import _CausalCheckpoint
+
+    bearing, world = _oriented_world()
+    state = world.state
+    checkpoint = _CausalCheckpoint(
+        key=bearing.world_key, world=state.snapshot_world(), objective=bearing.objective
+    )
+    probe = _disposable_requirement_state(state, checkpoint)
+    probe.budget.charge(7)
+    state.load_world(checkpoint.world)
+    assert probe.budget is state.budget
+    assert state.search_scans == 7
+    state.budget.charge(2, dwell_scans=10_000)
+    state.load_world(checkpoint.world)
+    assert state.search_scans == 9
+    assert state.budget.dwell == 10_000

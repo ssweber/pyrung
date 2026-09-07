@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pyrsistent import PVector, pvector
 
 import pyrung.core.analysis.pilot.world as _world
+from pyrung.core.analysis.pilot.budget import SearchBudget
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
 from pyrung.core.analysis.pilot.execution import (
@@ -232,8 +233,8 @@ class _PilotContext:
     # Public ``how()`` supplies none; other navigation clients may constrain an
     # exact action without implying a retained route choice.
     blocked_actions: frozenset[_ActionPair]
-    # Relative count of new PILOT search scans allowed for this invocation.
-    # Accepted productive dwell does not consume it.
+    # Invocation work allowance for kernel scans and bounded research requests.
+    # Folded simulated dwell is separate; discarded work is never refunded.
     max_scans: int
     key_config: _StateKeyConfig | None = None
     avoid_pred: Any = None
@@ -398,10 +399,9 @@ class _PilotState:
     # Invocation-local knowledge: reverting a handled transition must not
     # authorize the same source/action/evidence occurrence for another lap.
     consumed_revisits: set[RevisitCredential] = field(default_factory=set)
-    # Physical scan where this PILOT invocation began. Search budgets are
-    # relative to this anchor; accepted productive dwell is removed separately
-    # by ``dwell_scans`` as the world advances and reverts.
-    search_start_scan: int = 0
+    # Invocation work is shared by disposable experiments and never restored.
+    budget: SearchBudget = field(default_factory=SearchBudget)
+    surveyed_contexts: set[tuple[Any, ...]] = field(default_factory=set)
     # Reporting-only provenance from the most recently selected current-world
     # bearing. It never feeds Orientation or constrains a later read.
     recorded_root_route: TraceChoice | None = None
@@ -474,6 +474,7 @@ class _PilotState:
         if coast.start_scan != last.scan_after or coast.end_scan != settled_work.state.scan_id:
             raise ValueError("settlement receipt does not match its executable landing")
         final_step = replace(last, scan_after=coast.end_scan)
+        self.budget.charge_execution(settlement_execution, dwell_scans=coast.logical_scans)
         final_act = replace(
             act,
             steps=(*act.steps[:-1], final_step),
@@ -537,14 +538,13 @@ class _PilotState:
 
     @property
     def search_scans(self) -> int:
-        """New scans spent searching during this PILOT invocation."""
-
-        return self.search_scans_at(self.work.state.scan_id)
+        """Nonrefundable work spent during this invocation, including experiments."""
+        return self.budget.spent
 
     def search_scans_at(self, scan_id: int) -> int:
         """Search scans spent by the time a live or tentative fork reaches *scan_id*."""
 
-        return scan_id - self.search_start_scan - self.dwell_scans
+        return self.budget.spent + max(0, scan_id - self.work.state.scan_id)
 
     def remaining_search_scans(self, max_scans: int, *, scan_id: int | None = None) -> int:
         """Search budget remaining at the live world or a tentative fork scan."""
@@ -586,6 +586,7 @@ class _IterationFrame:
     distance_before: int
     raw_trace_actions: tuple[_ActionPair, ...]
     raw_trace_action_details: tuple[TraceAction, ...]
+    rejection_scope: tuple[Any, ...] | None = None
 
 
 # ---------------------------------------------------------------------------

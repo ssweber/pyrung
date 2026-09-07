@@ -207,6 +207,15 @@ def pilot_how(
     injection: the Harness stops driving them and they become steerable, so
     PILOT can reach faults that the intact physical link would otherwise hold
     out of reach (e.g. a dead flow sensor with the valve open).
+
+    ``max_scans`` bounds invocation search work, including discarded attempts,
+    probe scans, and bounded research requests; restoring a checkpoint never
+    refunds it. Folded simulated dwell is reported separately. Research tools
+    also keep their local caps; this is not a wall-clock deadline.
+
+    When ordinary steering lacks evidence, a bounded survey tries single and
+    paired input assignments for one scan from the same current source. Only
+    confirmed observations return to a fresh Compass read.
     """
     targets = _parse_targets(*conditions)
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)

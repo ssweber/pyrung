@@ -190,7 +190,9 @@ def test_candidate_orchestration_carries_the_exact_orientation_world(monkeypatch
     state = SimpleNamespace()
     context = SimpleNamespace(
         compass=SimpleNamespace(
-            knowledge=SimpleNamespace(nogood_pairs=lambda _key: frozenset({("Blocked", True)}))
+            knowledge=SimpleNamespace(
+                nogood_pairs=lambda _key, **_kwargs: frozenset({("Blocked", True)})
+            )
         )
     )
     world = _candidate_world(frame, context, state)

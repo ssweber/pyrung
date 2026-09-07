@@ -10,8 +10,13 @@
 
 ## Unreleased
 
+### Features
+
+- `how()` can resolve stalled guidance with a bounded one-scan survey of single and paired input changes, confirming useful effects before steering from a fresh read.
+
 ### Fixes
 
+- PILOT retains spent search work across discarded attempts and rollback, and scopes empirical action failures to their concrete source so abstractly similar states can still be tried.
 - Multi-target `how()` steers toward all goals together, preserving relational bounds and allowing temporary detours instead of driving targets in a fixed order.
 
 ## v0.14.0 (2026-09-04)
