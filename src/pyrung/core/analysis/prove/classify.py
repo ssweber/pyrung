@@ -1349,6 +1349,8 @@ def collect_produced_value_domains(
     from pyrung.core.memory_block import IndirectRef
     from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
 
+    from .passes import _collect_receive_dest_names
+
     by_target: dict[str, list[Any]] = {}
     for instr in walk_instructions(program):
         for target_name, _itype in _all_write_targets(instr):
@@ -1363,12 +1365,19 @@ def collect_produced_value_domains(
         for name, tag in graph.tags.items()
         if getattr(tag, "_pyrung_block", None) in opaque_dest_blocks
     }
-    incomplete_targets = opaque_targets | {
-        name
-        for name, tag in graph.tags.items()
-        if graph.writers_of.get(name)
-        and (tag.external or tag.readonly or graph.is_physical_input(name))
-    }
+    # Receive payloads are external producers even without an explicit external
+    # annotation. The prover write-target helper lists their status outputs,
+    # not their payloads; a ladder reset must not become the only known writer.
+    incomplete_targets = (
+        opaque_targets
+        | _collect_receive_dest_names(program)
+        | {
+            name
+            for name, tag in graph.tags.items()
+            if graph.writers_of.get(name)
+            and (tag.external or tag.readonly or graph.is_physical_input(name))
+        }
+    )
 
     known: dict[str, tuple[Any, ...]] = {}
     for name, tag in graph.tags.items():

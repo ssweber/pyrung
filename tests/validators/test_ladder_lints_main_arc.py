@@ -45,7 +45,6 @@ def test_comparison_constant_over_declared_bounds() -> None:
 
     assert _codes(program, CMP_ALWAYS_FALSE, CMP_ALWAYS_TRUE) == [
         CMP_ALWAYS_FALSE,
-        CMP_ALWAYS_TRUE,
     ]
     false_finding = next(
         finding
@@ -97,15 +96,29 @@ def test_comparison_constant_names_producer_rungs() -> None:
     assert "Count is only written at Main:R1, Main:R2" in message
 
 
-def test_comparison_constant_true_keeps_removal_hint() -> None:
+def test_comparison_constant_true_preserves_boundary_guard() -> None:
     speed = Int("Speed", min=0, max=10, external=True)
     with Program() as program:
         with Rung(speed >= 0):
             out(Bool("Result"))
 
-    (message,) = _messages(program, CMP_ALWAYS_TRUE)
-    assert "always true: Speed is only 0..10" in message
-    assert message.endswith("Speed is declared min=0, max=10; remove the redundant comparison")
+    assert not _messages(program, CMP_ALWAYS_TRUE)
+
+
+def test_declared_bounds_do_not_make_a_defensive_range_redundant():
+    state = Int("State", min=0, max=99, external=True)
+    with Program() as program:
+        with Rung(state > 1, state < 100):
+            out(Bool("Result"))
+    assert not _codes(program, CMP_ALWAYS_TRUE, RUNG_REDUNDANT_TERM)
+
+
+def test_missing_writer_is_reported_once_for_a_range_guard():
+    state = Int("State")
+    with Program() as program:
+        with Rung(state > 1, state < 100):
+            out(Bool("Result"))
+    assert _codes(program, "CMP_OPERAND_NO_WRITER") == ["CMP_OPERAND_NO_WRITER"]
 
 
 def test_comparison_punts_on_open_external_domain() -> None:
@@ -340,7 +353,7 @@ def test_same_rung_branch_return_conservatively_hides_div_zero_finding() -> None
     assert not _codes(program, MATH_DIV_ZERO)
 
 
-def test_same_rung_branch_return_conservatively_hides_pointer_escape() -> None:
+def test_conditional_branch_return_does_not_hide_reachable_pointer_escape() -> None:
     data = Block("ReturnData", TagType.INT, 1, 10)
     pointer = Int("ReturnPointer", default=1, choices={1: "safe", 11: "outside"})
     stop = Bool("PointerStop", external=True)
@@ -353,7 +366,7 @@ def test_same_rung_branch_return_conservatively_hides_pointer_escape() -> None:
                     return_early()
                 copy(data[pointer], Int("ReadValue"))
 
-    assert not _codes(program, PTR_MAY_ESCAPE_BLOCK)
+    assert _codes(program, PTR_MAY_ESCAPE_BLOCK) == [PTR_MAY_ESCAPE_BLOCK]
 
 
 def test_return_sensitive_nonzero_call_path_blocks_guard_only_div_zero_proof() -> None:

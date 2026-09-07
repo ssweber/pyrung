@@ -302,10 +302,12 @@ def _redundant_terms(
         for right_index, right in enumerate(terms):
             if left_index == right_index or left_index in redundant or right_index in redundant:
                 continue
-            left_implies_right = _implies(left, right, domains)
+            # Declarations and inferred producers do not make defensive guards
+            # unnecessary. Only remove terms implied by the condition itself.
+            left_implies_right = _implies(left, right, {})
             if not left_implies_right:
                 continue
-            right_implies_left = _implies(right, left, domains)
+            right_implies_left = _implies(right, left, {})
             if right_implies_left:
                 redundant.add(max(left_index, right_index))
             elif conjunction:

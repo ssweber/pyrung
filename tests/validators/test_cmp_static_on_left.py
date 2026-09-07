@@ -48,7 +48,7 @@ def _eq_exempt_program() -> Program:
 
 class TestEqualityExemption:
     def test_static_eq_dynamic_stays_quiet(self):
-        report = validate(_eq_exempt_program())
+        report = validate(_eq_exempt_program(), select={"CMP"})
         assert not _codes(report, "CMP_STATIC_ON_LEFT")
 
 
@@ -85,7 +85,7 @@ class TestTier2Maybe:
     threshold, so these are advisory 'maybe' findings, not warnings."""
 
     def test_calc_tag_right_is_advisory_and_calls_it_calculated(self):
-        report = validate(_calc_right_program())
+        report = validate(_calc_right_program(), select={"CMP"})
         sol = _codes(report, "CMP_STATIC_ON_LEFT")
         assert len(sol) == 1
         assert sol[0].severity == "advisory"
@@ -95,7 +95,7 @@ class TestTier2Maybe:
         assert "CalcOut > LoLimit" in sol[0].message
 
     def test_inline_computed_right_is_advisory(self):
-        report = validate(_computed_right_program())
+        report = validate(_computed_right_program(), select={"CMP"})
         sol = _codes(report, "CMP_STATIC_ON_LEFT")
         assert len(sol) == 1
         assert sol[0].severity == "advisory"
@@ -133,14 +133,14 @@ def _fallback_program() -> Program:
 
 class TestTier3Escalation:
     def test_true_at_reset_claims_the_comparison(self):
-        report = validate(_escalation_program())
+        report = validate(_escalation_program(), select={"CMP"})
         assert _codes(report, "CMP_TRUE_AT_RESET")
         # The behavioral finding subsumes the operand-order nit — no double report.
         assert not _codes(report, "CMP_STATIC_ON_LEFT")
 
     def test_not_true_at_reset_is_advisory_on_accumulator(self):
         # Right side is provably the accumulator, sharpening the advisory wording.
-        report = validate(_fallback_program())
+        report = validate(_fallback_program(), select={"CMP"})
         assert not _codes(report, "CMP_TRUE_AT_RESET")
         sol = _codes(report, "CMP_STATIC_ON_LEFT")
         assert len(sol) == 1
@@ -200,7 +200,7 @@ def _external_sensor_program() -> Program:
 
 class TestNoFalsePositive:
     def test_correct_and_exempt_forms_produce_no_finding(self):
-        report = validate(_correct_forms_program())
+        report = validate(_correct_forms_program(), select={"CMP"})
         assert not _codes(report, "CMP_STATIC_ON_LEFT")
 
 
@@ -208,7 +208,7 @@ class TestMaybeGrading:
     def test_external_sensor_is_advisory_not_a_gate_failure(self):
         # No accumulator to anchor the verdict, so `sensor < band` surfaces as a
         # hedged advisory — visible, but never in the error/warning CI gate.
-        report = validate(_external_sensor_program())
+        report = validate(_external_sensor_program(), select={"CMP"})
         sol = _codes(report, "CMP_STATIC_ON_LEFT")
         assert len(sol) == 1
         assert sol[0].severity == "advisory"

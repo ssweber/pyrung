@@ -45,19 +45,19 @@ def _tag_preset_program() -> Program:
 
 class TestTrueAtReset:
     def test_literal_preset_reported_as_warning(self):
-        report = validate(_literal_preset_program())
+        report = validate(_literal_preset_program(), select={"CMP"})
         far = [f for f in report if f.code == "CMP_TRUE_AT_RESET"]
         assert len(far) == 1
         assert far[0].severity == "warning"
 
     def test_message_describes_reset_behavior_and_repair(self):
-        report = validate(_literal_preset_program())
+        report = validate(_literal_preset_program(), select={"CMP"})
         far = next(f for f in report if f.code == "CMP_TRUE_AT_RESET")
         assert "true when Tmr.Acc is 0" in far.message
         assert "Tmr.Acc >= 5" in far.message
 
     def test_tag_preset_match_reported(self):
-        report = validate(_tag_preset_program())
+        report = validate(_tag_preset_program(), select={"CMP"})
         far = [f for f in report if f.code == "CMP_TRUE_AT_RESET"]
         assert len(far) == 1
         assert "Setpoint" in far[0].message
@@ -89,9 +89,9 @@ def _early_window_program() -> Program:
 
 class TestNoFalsePositive:
     def test_completion_form_not_flagged(self):
-        report = validate(_completion_check_program())
+        report = validate(_completion_check_program(), select={"CMP"})
         assert not [f for f in report if f.code == "CMP_TRUE_AT_RESET"]
 
     def test_early_window_stays_quiet(self):
-        report = validate(_early_window_program())
+        report = validate(_early_window_program(), select={"CMP"})
         assert not [f for f in report if f.code == "CMP_TRUE_AT_RESET"]

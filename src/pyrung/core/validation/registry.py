@@ -35,17 +35,18 @@ class RuleSpec:
     severity: Severity
     validator: str
     title: str
-    default_on: bool = True
+    default_on: bool = False
 
 
 _SPECS: tuple[RuleSpec, ...] = (
-    RuleSpec("TAG_READONLY_WRITE", "TAG", "error", "readonly", "Write to Readonly Tag"),
+    RuleSpec("TAG_READONLY_WRITE", "TAG", "error", "readonly", "Write to Readonly Tag", True),
     RuleSpec(
         "TAG_CHOICES_VIOLATION",
         "TAG",
         "error",
         "choices",
         "Value Not Declared in Tag Choices",
+        True,
     ),
     RuleSpec(
         "TAG_RANGE_VIOLATION",
@@ -53,16 +54,20 @@ _SPECS: tuple[RuleSpec, ...] = (
         "error",
         "physical",
         "Value Outside Tag's Declared Min/Max",
+        True,
     ),
-    RuleSpec("TAG_DEAD_WRITE", "TAG", "warning", "dead_write", "Write Overwritten Before Read"),
+    RuleSpec(
+        "TAG_DEAD_WRITE", "TAG", "warning", "dead_write", "Write Overwritten Before Read", True
+    ),
     RuleSpec(
         "TAG_FINAL_MULTIPLE_WRITERS",
         "TAG",
         "error",
         "final",
         "Final Tag Has Multiple Writers",
+        True,
     ),
-    RuleSpec("COIL_CONFLICTING_OUTPUT", "COIL", "error", "conflicting", "Conflicting Output"),
+    RuleSpec("COIL_CONFLICTING_OUTPUT", "COIL", "error", "conflicting", "Conflicting Output", True),
     RuleSpec("COIL_STUCK_HIGH", "COIL", "warning", "stuck", "Coil Can Stay High"),
     RuleSpec("COIL_STUCK_LOW", "COIL", "warning", "stuck", "Coil Can Stay Low"),
     RuleSpec(
@@ -71,8 +76,14 @@ _SPECS: tuple[RuleSpec, ...] = (
         "warning",
         "pointer",
         "Pointer Default Can Be Invalid",
+        True,
     ),
-    RuleSpec("PTR_MAY_ESCAPE_BLOCK", "PTR", "warning", "pointer", "Pointer Value Can Be Invalid"),
+    RuleSpec(
+        "PTR_MAY_ESCAPE_BLOCK", "PTR", "warning", "pointer", "Pointer Value Can Be Invalid", True
+    ),
+    RuleSpec(
+        "PTR_UNGUARDED_ACCESS", "PTR", "advisory", "pointer", "Pointer Bounds Not Established"
+    ),
     RuleSpec("PHYS_MISSING_PROFILE", "PHYS", "info", "physical", "Missing Physical Profile"),
     RuleSpec(
         "PHYS_ANTITOGGLE",
@@ -81,13 +92,15 @@ _SPECS: tuple[RuleSpec, ...] = (
         "physical",
         "Command Changes Too Fast for Feedback",
     ),
-    RuleSpec("RUNG_CONTRADICTION", "RUNG", "error", "rung", "Rung Never Fires (Contradiction)"),
-    RuleSpec("RUNG_TAUTOLOGY", "RUNG", "warning", "rung", "Or() Condition Is Always True"),
+    RuleSpec(
+        "RUNG_CONTRADICTION", "RUNG", "error", "rung", "Rung Never Fires (Contradiction)", True
+    ),
+    RuleSpec("RUNG_TAUTOLOGY", "RUNG", "warning", "rung", "Or() Condition Is Always True", True),
     RuleSpec("RUNG_REDUNDANT_TERM", "RUNG", "info", "rung", "Redundant Rung Condition"),
-    RuleSpec("CMP_ALWAYS_FALSE", "CMP", "warning", "cmp", "Comparison Always False"),
+    RuleSpec("CMP_ALWAYS_FALSE", "CMP", "warning", "cmp", "Comparison Always False", True),
     RuleSpec("CMP_ALWAYS_TRUE", "CMP", "info", "cmp", "Comparison Always True"),
     RuleSpec(
-        "CMP_EQ_ON_MONOTONE", "CMP", "warning", "cmp", "Timer/Counter Can Skip Compared Value"
+        "CMP_EQ_ON_MONOTONE", "CMP", "warning", "cmp", "Timer/Counter Can Skip Compared Value", True
     ),
     RuleSpec(
         "CMP_OPERAND_NO_WRITER",
@@ -132,8 +145,8 @@ _SPECS: tuple[RuleSpec, ...] = (
         "Comparison May Read Backwards",
     ),
     RuleSpec("CALL_NEVER_CALLED", "CALL", "info", "call", "Subroutine Never Called"),
-    RuleSpec("CALL_RECURSION", "CALL", "error", "call", "Recursive Subroutine Cycle"),
-    RuleSpec("MATH_DIV_ZERO", "MATH", "error", "math", "Definite Division by Zero"),
+    RuleSpec("CALL_RECURSION", "CALL", "error", "call", "Recursive Subroutine Cycle", True),
+    RuleSpec("MATH_DIV_ZERO", "MATH", "error", "math", "Definite Division by Zero", True),
     RuleSpec("STEP_NO_ESCAPE", "STEP", "warning", "wait", "Step Can Wait Forever"),
 )
 
@@ -169,29 +182,46 @@ VALIDATOR_ORDER: tuple[str, ...] = (
 
 
 def default_on_rules() -> frozenset[str]:
-    """Codes active when ``select`` is not given (advisories opt out)."""
+    """The curated core checks active when ``select`` is not given."""
     return frozenset(code for code, spec in RULES.items() if spec.default_on)
 
 
 def _expand(tokens: set[str]) -> set[str]:
-    """Resolve each token to concrete codes: an exact code or a category."""
+    """Resolve exact codes, prefixes, and ALL to concrete codes."""
     out: set[str] = set()
     for tok in tokens:
-        if tok in RULES:
-            out.add(tok)
-        elif tok in CATEGORIES:
-            out |= {code for code, spec in RULES.items() if spec.category == tok}
-        else:
+        matches = set(RULES) if tok == "ALL" else {code for code in RULES if code.startswith(tok)}
+        if not tok or not matches:
             raise ValueError(f"Unknown rule code or category: {tok!r}")
+        out.update(matches)
     return out
 
 
-def resolve_rules(select: set[str] | None, ignore: set[str] | None) -> frozenset[str]:
-    """Resolve ``select``/``ignore`` (codes or categories) to active codes.
+def resolve_rules(
+    select: set[str] | None,
+    ignore: set[str] | None,
+    extend_select: set[str] | None = None,
+) -> frozenset[str]:
+    """Resolve selectors to active codes, with the most specific selector winning.
 
     ``select=None`` means every default-on rule.  Unknown tokens raise
-    ``ValueError``.
+    ``ValueError``. ``extend_select`` adds to the selection; ignore wins ties.
     """
-    selected = _expand(select) if select is not None else set(default_on_rules())
-    excluded = _expand(ignore) if ignore is not None else set()
-    return frozenset(selected) - excluded
+    explicit = set(select or ()) | set(extend_select or ())
+    selected = (set(select) if select is not None else set(default_on_rules())) | explicit
+    ignored = set(ignore or ())
+    candidates = _expand(selected)
+    _expand(ignored)  # Validate even selectors that match no selected rules.
+
+    def specificity(token: str) -> int:
+        return 0 if token == "ALL" else len(token)
+
+    def matches(token: str, code: str) -> bool:
+        return token == "ALL" or code.startswith(token)
+
+    return frozenset(
+        code
+        for code in candidates
+        if max(specificity(t) if t in explicit else 0 for t in selected if matches(t, code))
+        > max((specificity(t) for t in ignored if matches(t, code)), default=-1)
+    )

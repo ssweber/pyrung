@@ -27,7 +27,7 @@ class TestValidateAllRuns:
         with Program() as prog:
             with Rung(btn):
                 out(motor)
-        report = validate(prog)
+        report = validate(prog, select={"ALL"})
         assert isinstance(report, ValidationReport)
         assert len(report) == 0
         assert not report
@@ -39,7 +39,7 @@ class TestValidateAllRuns:
         with Program() as prog:
             with Rung(go):
                 latch(latch_bit)
-        report = validate(prog)
+        report = validate(prog, select={"ALL"})
         assert report
         codes = {f.code for f in report}
         assert "COIL_STUCK_HIGH" in codes
@@ -53,7 +53,7 @@ class TestValidateAllRuns:
                 out(motor)
             with Rung(b):
                 out(motor)
-        report = validate(prog)
+        report = validate(prog, select={"ALL"})
         codes = {f.code for f in report}
         assert "COIL_CONFLICTING_OUTPUT" in codes
 
@@ -63,7 +63,7 @@ class TestValidateAllRuns:
         with Program() as prog:
             with Rung(btn):
                 out(ro)
-        report = validate(prog)
+        report = validate(prog, select={"ALL"})
         codes = {f.code for f in report}
         assert "TAG_READONLY_WRITE" in codes
         finding = next(f for f in report if f.code == "TAG_READONLY_WRITE")
@@ -171,8 +171,8 @@ class TestSelectIgnore:
 
     def test_ignore_excludes_rules(self):
         prog = self._stuck_program()
-        full = validate(prog)
-        ignored = validate(prog, ignore={"COIL_STUCK_HIGH"})
+        full = validate(prog, select={"ALL"})
+        ignored = validate(prog, select={"ALL"}, ignore={"COIL_STUCK_HIGH"})
         assert len(ignored) < len(full)
         assert "COIL_STUCK_HIGH" not in {f.code for f in ignored}
 
@@ -289,6 +289,7 @@ class TestValidationReport:
             "PHYS_MISSING_PROFILE",
             "PTR_DEFAULT_BEFORE_BLOCK_START",
             "PTR_MAY_ESCAPE_BLOCK",
+            "PTR_UNGUARDED_ACCESS",
             "TAG_RANGE_VIOLATION",
             "TAG_READONLY_WRITE",
             "COIL_STUCK_HIGH",
@@ -325,7 +326,7 @@ class TestSeverity:
         return prog
 
     def test_every_finding_carries_a_known_severity(self):
-        report = self._mixed_program().validate()
+        report = self._mixed_program().validate(select={"ALL"})
         assert report
         assert all(f.severity in self._LEVELS for f in report)
 
@@ -346,21 +347,21 @@ class TestSeverity:
         assert all(f.severity == "warning" for f in report)
 
     def test_errors_warnings_partition_the_report(self):
-        report = self._mixed_program().validate()
+        report = self._mixed_program().validate(select={"ALL"})
         buckets = report.errors() + report.warnings() + report.infos() + report.advisories()
         assert len(buckets) == len(report)
         assert {f.code for f in report.errors()} == {"TAG_READONLY_WRITE"}
         assert "COIL_STUCK_HIGH" in {f.code for f in report.warnings()}
 
     def test_has_errors_reflects_error_findings(self):
-        assert self._mixed_program().validate().has_errors() is True
+        assert self._mixed_program().validate(select={"ALL"}).has_errors() is True
 
     def test_clean_program_has_no_errors(self):
         btn, motor = Bool("Btn"), Bool("Motor")
         with Program() as prog:
             with Rung(btn):
                 out(motor)
-        report = validate(prog)
+        report = validate(prog, select={"ALL"})
         assert not report.errors()  # the new recommended CI idiom
         assert report.has_errors() is False
 
@@ -371,7 +372,7 @@ class TestSeverity:
         assert not report.errors()  # ...but none are errors
 
     def test_summary_breaks_down_by_severity(self):
-        summary = self._mixed_program().validate().summary()
+        summary = self._mixed_program().validate(select={"ALL"}).summary()
         assert "error: 1" in summary
         assert "warning: 1" in summary
 
@@ -396,7 +397,7 @@ class TestRegistry:
         assert "TAG_READONLY_WRITE" not in {f.code for f in report}  # TAG bucket
 
     def test_ignore_by_category(self):
-        report = validate(_error_and_warning_program(), ignore={"TAG"})
+        report = validate(_error_and_warning_program(), select={"ALL"}, ignore={"TAG"})
         codes = {f.code for f in report}
         assert "TAG_READONLY_WRITE" not in codes  # TAG, excluded
         assert "COIL_STUCK_HIGH" in codes  # COIL, kept
