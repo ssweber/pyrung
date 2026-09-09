@@ -35,6 +35,7 @@ from pyrung.core.analysis.pilot.departure_state import (
     _trial_checkpoint,
 )
 from pyrung.core.analysis.pilot.earned_work import (
+    EarnedWork,
     build_earned_work,
 )
 from pyrung.core.analysis.pilot.intrascan_research import (
@@ -121,6 +122,7 @@ from pyrung.core.analysis.pilot.working_theory import (
 )
 from pyrung.core.analysis.pilot.world import _CausalCheckpoint, _World
 from pyrung.core.analysis.pilot.world_key import (
+    ReadIdentity,
     _physical_world_key,
     _pilot_world_key,
 )
@@ -248,11 +250,15 @@ def _retire_temporal_hypothesis(
             ),
         ),
     )
+    source_read = ReadIdentity.capture(state.work, ctx.compass.knowledge)
+    if source_read is None:
+        raise ValueError("temporal rejection requires its concrete executable source")
     ctx.compass, _ = ctx.compass.apply(
         (
             ActionNogoodObservation(
                 _physical_world_key(world_key),
                 temporal_request.trigger_act_identity,
+                source_read.rejection_scope,
             ),
         )
     )
@@ -503,7 +509,6 @@ def _pilot_loop_events(
         seen_keys=set(),
         checkpoints=[],
         watch_tags=[],
-        search_start_scan=plc.state.scan_id,
     )
     invocation_snapshot = dict(state.work.state.tags)
     state.invocation_checkpoint = _CausalCheckpoint(
@@ -526,17 +531,23 @@ def _pilot_loop_events(
     # for the loop's life; knowledge side (never reverted). Best-effort: an
     # empty model leaves target-relative coordinates uncredited.
     try:
-        state.earned_work = build_earned_work(
-            ctx.pdg,
-            ctx.program,
-            ctx.target.tag,
-            ctx.key_config,
-            steerable=ctx.steerable,
-            clear_only=ctx.clear_only,
-            edge_tags=frozenset(ctx.edge_tags),
-            pipeline_internal_tags=ctx.pipeline_internal_tags,
-            channel_tags=frozenset(role.channel_tag for role in ctx.pipeline_roles),
-            harness=getattr(plc, "_harness", None),
+        models = tuple(
+            build_earned_work(
+                ctx.pdg,
+                ctx.program,
+                member.tag,
+                ctx.key_config,
+                steerable=ctx.steerable,
+                clear_only=ctx.clear_only,
+                edge_tags=frozenset(ctx.edge_tags),
+                pipeline_internal_tags=ctx.pipeline_internal_tags,
+                channel_tags=frozenset(role.channel_tag for role in ctx.pipeline_roles),
+                harness=getattr(plc, "_harness", None),
+            )
+            for member in (ctx.target.members or (ctx.target,))
+        )
+        state.earned_work = EarnedWork(
+            tuple(dict.fromkeys(component for model in models for component in model.components))
         )
     except Exception:  # noqa: BLE001 — diagnostics must not break the drive
         logger.debug("pilot: earned-work build failed", exc_info=True)
@@ -579,15 +590,12 @@ def _pilot_loop_events(
     # to progress.py, which may checkpoint it, keep a departure pending, or
     # investigate and revert it. Rejected modes fall through to the next mode in
     # the same turn.
-    # ``max_scans`` counts new search scans from this invocation's start.
-    # Accepted productive coasts credit their dwell back (see
-    # ``_World.dwell_scans``); tentative fork scans still count until their
-    # operation is accepted. An armed self-advancing dwell — a 39k-scan dry
-    # timer the coast rides — is the machine doing its own work, not the pilot
-    # spending effort.
+    # The invocation ledger charges executed kernel scans and bounded research
+    # dispatches, including discarded work. Folded logical dwell is reported
+    # separately; restoring a checkpoint never replenishes the allowance.
     last_frame: _IterationFrame | None = None
     last_frontier: tuple[_ActionPair, ...] = ()
-    while state.search_scans < ctx.max_scans:
+    while True:
         requirements_before_rebase = tuple(state.active_requirements)
         rebased_requirements = _requirement_repair.derive_program_guard_rebases(state, ctx)
         if rebased_requirements:
@@ -749,6 +757,12 @@ def _pilot_loop_events(
         last_frame = frame
         frontier = result.objective.frontier if isinstance(result, Bearing) else result.frontier
         last_frontier = frontier
+        # Finish observing the preceding execution even at the limit. The
+        # next fork-consuming act, rather than its bookkeeping, is bounded.
+        if state.search_scans >= ctx.max_scans:
+            break
+        if not isinstance(result, (Bearing, Stuck, GuidanceRequest)):
+            state.budget.charge()
         _attempt_transition.prepare_oriented_result(state, result, orientation_world, frame)
         state.watch_tags.extend(sorted(frame.tree.pivot_tags() - set(state.watch_tags)))
         frame_lever_notes: dict[str, str] = {}
@@ -1057,6 +1071,12 @@ def _pilot_loop_events(
         if isinstance(result, NeedProbe):
             request = result.request
             if isinstance(request, ExploratoryTrialRequest):
+                if request.bearing.read_identity != ReadIdentity.capture(
+                    state.work, ctx.compass.knowledge
+                ):
+                    from pyrung.core.analysis.pilot.steer import StaleBearingError
+
+                    raise StaleBearingError("cannot clone an exploratory trial from a stale read")
                 checkpoint = _CausalCheckpoint(
                     key=frame.key,
                     world=state.snapshot_world(),
@@ -1064,12 +1084,19 @@ def _pilot_loop_events(
                     configured_inputs=(ctx.configured_inputs | _configured_input_names(state.work)),
                 )
                 probe_state = _disposable_requirement_state(state, checkpoint)
+                # This clone is a disposable evidence experiment. Bind its one
+                # immediate trial to the cloned execution owner; production
+                # Bearings retain their original current-read authority.
+                probe_bearing = replace(
+                    request.bearing,
+                    read_identity=ReadIdentity.capture(probe_state.work, ctx.compass.knowledge),
+                )
                 transition = _attempt_transition.transition_once(
                     probe_state,
                     ctx,
                     target,
                     constraints,
-                    oriented=request.bearing,
+                    oriented=probe_bearing,
                     resolve_excursion=False,
                     derive_requirements=False,
                     defer_adoption=True,
@@ -1104,6 +1131,26 @@ def _pilot_loop_events(
             continue
 
         if isinstance(result, GuidanceRequest):
+            from pyrung.core.analysis.pilot.guidance import survey_current_inputs
+
+            survey_scope = (frame.key, frame.rejection_scope)
+            if survey_scope not in state.surveyed_contexts:
+                state.surveyed_contexts.add(survey_scope)
+                survey = survey_current_inputs(orientation_world)
+                ctx.compass, changed = ctx.compass.apply(survey.observations)
+                yield PilotEvent(
+                    "guidance_surveyed",
+                    state.work.state.scan_id,
+                    {
+                        "evaluations": survey.evaluations,
+                        "confirmations": survey.confirmations,
+                        "observations": len(survey.observations),
+                        "reason": survey.reason,
+                        "search_work": state.budget.spent,
+                    },
+                )
+                if changed:
+                    continue
             terminal_reason = (
                 "Compass found only exploratory input hypotheses; external guidance "
                 "is required before executing them"
@@ -1553,7 +1600,8 @@ def _pilot_loop_events(
     if not reached:
         frame = last_frame
         reason = _with_avoid_reason(
-            f"budget exhausted ({state.search_scans} scans searched + {state.dwell_scans} waited)",
+            f"budget exhausted ({state.search_scans} search work units + "
+            f"{state.budget.dwell} productive dwell scans)",
             state,
             ctx,
             frame,

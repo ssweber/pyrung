@@ -212,6 +212,7 @@ class Program:
         *,
         select: set[str] | None = None,
         ignore: set[str] | None = None,
+        extend_select: set[str] | None = None,
         dt: float = 0.010,
     ) -> ValidationReport:
         """Run core ladder checks and return their findings.
@@ -221,7 +222,7 @@ class Program:
         """
         from pyrung.core.validation.report import check as _check_core
 
-        return _check_core(self, select=select, ignore=ignore, dt=dt)
+        return _check_core(self, select=select, ignore=ignore, extend_select=extend_select, dt=dt)
 
     def validate(
         self,
@@ -230,6 +231,7 @@ class Program:
         mode: str = "warn",
         select: set[str] | None = None,
         ignore: set[str] | None = None,
+        extend_select: set[str] | None = None,
         dt: float = 0.010,
         **kwargs: Any,
     ) -> Any:
@@ -250,7 +252,7 @@ class Program:
                     f"Import the dialect package first (example: import pyrung.{dialect})."
                 )
             return validator(self, mode=mode, **kwargs)
-        return self.check(select=select, ignore=ignore, dt=dt)
+        return self.check(select=select, ignore=ignore, extend_select=extend_select, dt=dt)
 
     def dataview(self) -> DataView:
         """Return a chainable query over this program's tag dependency graph.

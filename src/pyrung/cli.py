@@ -142,15 +142,33 @@ def _cmd_lock_check(args: argparse.Namespace) -> None:
 
 
 def _cmd_check(args: argparse.Namespace) -> None:
+    from dataclasses import replace
+    from pathlib import Path
+
+    from pyrung.core.validation.config import CheckConfig, find_check_config, load_check_config
+
+    if args.config:
+        path = Path(args.config)
+        if not path.is_file():
+            raise ValueError(f"Check configuration not found: {path}")
+        config = load_check_config(path) or CheckConfig()
+    else:
+        config, _ = find_check_config(Path.cwd())
+    if args.select is not None:
+        config = replace(config, select=tuple(args.select))
+    if args.ignore is not None:
+        config = replace(config, ignore=tuple(args.ignore))
+    if args.extend_select is not None:
+        config = replace(config, extend_select=(*config.extend_select, *args.extend_select))
+    selected = config.resolve()
     program, _mod = _find_program(args.module)
     report = program.check(
-        select=set(args.select) if args.select else None,
-        ignore=set(args.ignore) if args.ignore else None,
+        select=set(selected),
         dt=args.dt,
     )
 
     if not report:
-        print("No findings.")
+        print("No checks selected." if not selected else "No findings.")
         return
 
     for index, finding in enumerate(report):
@@ -274,6 +292,10 @@ def main() -> None:
     # -- check --
     check_p = sub.add_parser("check", help="Run static ladder checks")
     check_p.add_argument("module", help="Python module containing the Program")
+    check_p.add_argument("--config", help="Read check settings from this pyproject.toml")
+    check_p.add_argument(
+        "--extend-select", nargs="+", metavar="RULE", help="Add rule codes or prefixes"
+    )
     check_p.add_argument(
         "--select",
         nargs="+",

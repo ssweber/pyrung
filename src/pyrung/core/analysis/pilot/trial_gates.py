@@ -26,7 +26,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     TargetSpec,
     _ActionPair,
 )
-from pyrung.core.analysis.pilot.trace import trace_back
+from pyrung.core.analysis.pilot.trace import trace_target
 from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints
 from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
@@ -261,9 +261,8 @@ def _gate_dead_end(
     accept_override = (
         channel_reached or channel_moved or earned_work_is_useful_motion(earned_work_receipt)
     )
-    new_tree = trace_back(
-        target.tag,
-        target.value,
+    new_tree = trace_target(
+        target,
         trial.snap,
         ctx.pdg,
         ctx.program,

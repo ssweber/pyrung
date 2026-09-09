@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
 from pyclickplc.addresses import format_address_display
@@ -146,9 +146,15 @@ def _collect_operands(
     nicknames: dict[str, str] | None,
     *,
     structured_map: TagMap | None = None,
+    analog_inputs: Iterable[str] = (),
 ) -> _OperandCollection:
     """Scan all rungs and collect operand declarations."""
+    from pyclickplc.addresses import format_address_display, parse_address
+
+    inputs = frozenset(format_address_display(*parse_address(addr)) for addr in analog_inputs)
     collection = _OperandCollection()
+    for address in sorted(inputs):
+        _scan_token_for_operands(address, collection, nicknames)
 
     for rung in rungs:
         if _tree_uses_Or(rung.condition_tree):
@@ -192,8 +198,12 @@ def _collect_operands(
 
     # Enrich with semantic ownership metadata if available
     if structured_map is not None:
-        _enrich_with_ownership(collection, structured_map)
+        _enrich_with_ownership(collection, structured_map, inputs)
 
+    for address in inputs:
+        decl = collection.tags.get(address)
+        if decl is not None and not decl.metadata.readonly:
+            decl.metadata.external = True
     return collection
 
 
@@ -213,6 +223,7 @@ def _hw_address_name(tag: Any) -> str:
 def _enrich_with_ownership(
     collection: _OperandCollection,
     structured_map: TagMap,
+    analog_inputs: frozenset[str] = frozenset(),
 ) -> None:
     """Build semantic ownership metadata for structures and plain named blocks."""
 
@@ -283,10 +294,12 @@ def _enrich_with_ownership(
         )
 
     def _metadata_from_tag(tag: Any) -> _TagMetadata:
+        hardware = _resolve_hw_tag(tag)
+        is_input = hardware is not None and _hw_address_name(hardware) in analog_inputs
         return _TagMetadata(
             choices=getattr(tag, "choices", None),
             readonly=getattr(tag, "readonly", False),
-            external=getattr(tag, "external", False),
+            external=getattr(tag, "external", False) or (is_input and not tag.readonly),
             final=getattr(tag, "final", False),
             public=getattr(tag, "public", False),
             lock=getattr(tag, "lock", False),
@@ -502,7 +515,7 @@ def _enrich_with_ownership(
                 readonly=metadata.readonly,
                 readonly_overridden=slot.readonly_overridden,
                 external=metadata.external,
-                external_overridden=slot.external_overridden,
+                external_overridden=slot.external_overridden or metadata.external != slot.external,
                 final=metadata.final,
                 final_overridden=slot.final_overridden,
                 public=metadata.public,

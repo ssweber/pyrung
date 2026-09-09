@@ -1063,10 +1063,15 @@ def _investigate_and_revert(
     # remains naturally eligible in the corrected executable world.
     regression_nogoods = set(policy.regression_nogoods)
     observations = [
-        ActionNogoodObservation(frame.key, ("pair", pair)) for pair in regression_nogoods
+        ActionNogoodObservation(frame.key, ("pair", pair), getattr(frame, "rejection_scope", None))
+        for pair in regression_nogoods
     ]
     if len(policy.applied) > 1:
-        observations.append(ActionNogoodObservation(frame.key, act_identity(bearing_owner.act)))
+        observations.append(
+            ActionNogoodObservation(
+                frame.key, act_identity(bearing_owner.act), getattr(frame, "rejection_scope", None)
+            )
+        )
     if observations:
         ctx.compass, _ = ctx.compass.apply(tuple(observations))
     # A regression inside pending motion returns to its local checkpoint

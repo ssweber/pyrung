@@ -438,7 +438,9 @@ def _iteration_payload(
         "still_need": tuple(still_need),
         "raw_trace_actions": frame.raw_trace_actions,
         "raw_trace_action_details": frame.raw_trace_action_details,
-        "nogoods": ctx.compass.knowledge.nogood_pairs(frame.key),
+        "nogoods": ctx.compass.knowledge.nogood_pairs(
+            frame.key, scope=getattr(frame, "rejection_scope", None)
+        ),
         "pilot_rungs": tuple(state.pilot_rungs),
         "seen_key_count": len(state.seen_keys),
         "checkpoint_count": len(state.checkpoints),
@@ -628,6 +630,8 @@ def _knowledge_payload(
         "lever_notes": dict(state.lever_notes),
         "avoid_names": tuple(sorted(state.avoid_names)),
         "compass": compass,
+        "search_work": state.budget.spent,
+        "productive_dwell_scans": state.budget.dwell,
     }
 
 

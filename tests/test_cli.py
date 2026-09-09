@@ -180,7 +180,9 @@ def test_check_prints_findings_and_exits_on_errors(
         with Rung():
             out(read_only)
     monkeypatch.setattr(cli, "_find_program", lambda _module: (program, SimpleNamespace()))
-    args = argparse.Namespace(module="main", select=None, ignore=None, dt=0.010)
+    args = argparse.Namespace(
+        module="main", select=None, ignore=None, extend_select=None, config=None, dt=0.010
+    )
 
     with pytest.raises(SystemExit, match="1"):
         cli._cmd_check(args)
@@ -199,8 +201,42 @@ def test_check_clean_program_succeeds(
         with Rung(button):
             out(light)
     monkeypatch.setattr(cli, "_find_program", lambda _module: (program, SimpleNamespace()))
-    args = argparse.Namespace(module="main", select=None, ignore=None, dt=0.010)
+    args = argparse.Namespace(
+        module="main", select=None, ignore=None, extend_select=None, config=None, dt=0.010
+    )
 
     cli._cmd_check(args)
 
     assert capsys.readouterr().out == "No findings.\n"
+
+
+def test_check_uses_project_config_and_explicit_config_override(tmp_path, monkeypatch, capsys):
+    from pyrung.core.validation.config import CheckConfig, save_check_config
+
+    read_only = Bool("ReadOnly", readonly=True)
+    with Program() as program:
+        with Rung():
+            out(read_only)
+    monkeypatch.setattr(cli, "_find_program", lambda _module: (program, SimpleNamespace()))
+    monkeypatch.chdir(tmp_path)
+    save_check_config(tmp_path / "pyproject.toml", CheckConfig(select=()))
+    args = argparse.Namespace(
+        module="main", select=None, ignore=None, extend_select=None, config=None, dt=0.010
+    )
+    cli._cmd_check(args)
+    assert capsys.readouterr().out == "No checks selected.\n"
+    save_check_config(tmp_path / "explicit.toml", CheckConfig(select=("TAG_READONLY_WRITE",)))
+    args.config = str(tmp_path / "explicit.toml")
+    with pytest.raises(SystemExit, match="1"):
+        cli._cmd_check(args)
+    assert "TAG_READONLY_WRITE" in capsys.readouterr().out
+    args.ignore = ["TAG_READONLY_WRITE"]
+    cli._cmd_check(args)
+    assert capsys.readouterr().out == "No checks selected.\n"
+    args.ignore = None
+    args.select = ["PTR"]
+    cli._cmd_check(args)
+    assert capsys.readouterr().out == "No findings.\n"
+    args.extend_select = ["TAG_READONLY_WRITE"]
+    with pytest.raises(SystemExit, match="1"):
+        cli._cmd_check(args)

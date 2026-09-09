@@ -29,10 +29,11 @@ module.
 - `Plan.journal`, `journey`, and the event stream explain the drive. They do not
   determine the verdict.
 - A multi-target `how(A, B, ...)` succeeds only when all targets hold in one
-  final committed state. The targets are driven sequentially on one fork and
-  then checked together.
+  final committed state. One drive carries their conjunction through every
+  fresh read and verification. There is no sequence of target waypoints; a
+  satisfied member may temporarily become false on the way to the joint goal.
 - `pilot_events()` is currently a single-target diagnostic stream;
-  `pilot_how()` also owns the multi-target composition policy.
+  `pilot_how()` also accepts conjunctive goals.
 - `avoid=` constrains route selection, applied actions, transient execution
   states, and retained landing states. `unlink=` deliberately makes named
   harness feedback steerable for fault injection.
@@ -92,6 +93,18 @@ policy, prerequisites, and effect expectation belong to that read. Execution
 must reject a stale Bearing. After any observation, execution, correction, or
 restore, return to Compass and read again.
 
+`ReadIdentity` binds that authority to the exact execution state, input
+configuration, synthesis, and navigation knowledge. The projected search key
+can alias accumulator values and is insufficient for freshness. Read identity
+is ephemeral; never use its Epoch/clock identity for cycle detection or retain
+it as recovery state. A disposable exploratory clone explicitly binds its own
+trial identity and supplies evidence only.
+
+Joint-goal input supports are static preferences for the current trace. They
+do not exclude detours, create holds, or survive as a selected route. Public
+goal conjunction is a condition on the retained landing, not a requirement
+that sibling producers read each other's targets in the same scan.
+
 Never retain a route suffix, candidate cursor, future Bearing, executable
 callable, fork, or World as recovery/theory state. Reporting provenance may
 describe an earlier route, but it must not constrain a later read.
@@ -117,13 +130,14 @@ evidence-backed Bearing. Once that world's probe budget is exhausted, Compass
 continues considering lower-precedence evidence-backed proposals and otherwise
 returns a detached `GuidanceRequest` for an external guidance layer.
 
-The first external guidance strategy should be a bounded breadth-first survey
-of current-scan assignments over the declared steerable set: start with single
-assignments, then the smallest combinations, and ask what can change a
-target- or frontier-relevant program fact. Keep it cheap with finite declared
-domains and strict width/fork budgets. This is still an evidence request, not a
-candidate plan or permission to adopt a fork; its useful observations return
-to Compass for a fresh read and normal Bearing admission.
+Before returning external guidance, `guidance.py` performs a bounded survey
+of current-scan assignments over relevant declared steerable inputs. It tries
+single assignments, then simultaneous pairs, from the same exact source. The
+prover's compiled snapshot machinery screens at most 64 evaluations; ordinary
+forked control/intervention scans confirm useful effects. There is no successor
+queue, accumulated route, or adopted survey fork. Confirmed observations return
+to Compass for a fresh read and normal Bearing admission. Exhaustion remains
+`STOPPED`, never a proof of unreachability.
 
 Trace is the common happy-path instrument, not the fallback owner. One
 `CandidateRead` collects the applicable cheap current-world readings; ordinary
@@ -196,8 +210,13 @@ not imply that the landing still owns its progress; `ScanProgressReceipt`
 records that distinction. Logical coast folding is an execution optimization,
 not permission to invent physical occurrences.
 
-Search scans and productive program dwell are separate budgets. Accepted
-productive dwell is credited; sterile search remains bounded.
+Invocation search work and productive simulated dwell are separate quantities.
+`SearchBudget` is shared by disposable experiments and lives outside `_World`:
+discarding an attempt or restoring a checkpoint never refunds work. Receipted
+kernel scans are charged once by epoch ownership; folded logical time is not a
+kernel evaluation. Research requests consume at least one work unit and retain
+their local caps. The allowance is not a wall-clock deadline. The assignment
+survey and frontier probes check the remaining allowance before scans.
 
 ## Attempt transaction
 
@@ -219,6 +238,13 @@ substitute for what actually executed.
 Rejections are narrowly scoped. A failed joint act does not reject its members
 individually, and the same act may remain admissible in another world. Proof
 rejections and empirical nogoods remain distinct evidence.
+
+Runtime empirical act nogoods carry a detached concrete source scope including
+raw tags, scan memory, time, pending patches, and forces. The abstract cycle key
+alone cannot apply those failures to another accumulator or edge state. Queries
+without a concrete source see only explicitly broad exclusions. Restoring the
+same concrete source restores applicability without retaining an Epoch or fork.
+A failed singleton experiment also does not reject a confirmed joint artifact.
 
 ## Progress, departure, and recovery
 

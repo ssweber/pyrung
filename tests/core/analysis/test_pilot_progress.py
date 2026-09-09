@@ -1147,7 +1147,6 @@ def test_instruction_owned_dwell_does_not_expire_pending_search_budget():
         best_trend=5,
         checkpoints=[checkpoint],
         work=work,
-        search_start_scan=40,
         dwell_scans=100,
     )
     state.pending_departure = _pending_departure(
@@ -1172,10 +1171,10 @@ def test_credited_dwell_preserves_remaining_search_budget_for_tentative_scans():
         best_trend=5,
         checkpoints=[_cp(("src",), _oneshot_plc(), 5)],
         work=work,
-        search_start_scan=40,
         dwell_scans=90,
     )
 
+    state.budget.charge(10)
     assert state.search_scans == 10
     assert state.remaining_search_scans(50) == 40
     assert state.remaining_search_scans(50, scan_id=work.state.scan_id + 7) == 33

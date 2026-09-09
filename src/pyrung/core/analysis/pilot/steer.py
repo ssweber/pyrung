@@ -94,7 +94,7 @@ from pyrung.core.analysis.pilot.types import (
     _PulseState,
 )
 from pyrung.core.analysis.pilot.verify import verify_gates
-from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _rung_identity
+from pyrung.core.analysis.pilot.world_key import ReadIdentity, _pilot_world_key, _rung_identity
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -1007,6 +1007,12 @@ def execute(
         raise StaleBearingError(
             f"bearing world {bearing.world_key!r} is stale; current world is {live_key!r}"
         )
+
+    live_read = ReadIdentity.capture(
+        state.work, getattr(getattr(ctx, "compass", None), "knowledge", None)
+    )
+    if live_read != bearing.read_identity:
+        raise StaleBearingError("bearing's execution state, configuration, or knowledge changed")
 
     if bearing.prerequisites:
         _install_prerequisites(state, tuple(bearing.prerequisites))

@@ -1026,11 +1026,33 @@ def _disposable_requirement_state(
         temporal_checkpoints=list(state.temporal_checkpoints),
         theory_state=state.theory_state,
         proof_rejected_acts=set(state.proof_rejected_acts),
-        search_start_scan=state.search_start_scan,
+        budget=state.budget,
         earned_work=state.earned_work,
     )
     clone.load_world(checkpoint.world)
     return clone
+
+
+def _selected_terminal_target_expectations(
+    frame: _IterationFrame,
+    target: TargetSpec,
+    ctx: _PilotContext,
+) -> tuple[EffectExpectation, ...]:
+    """Designate current terminal writers without an order of future goals."""
+    if not target.members:
+        expectation = _selected_terminal_target_expectation(frame, target, ctx)
+        return (expectation,) if expectation is not None else ()
+    expectations = []
+    for member in target.members:
+        for child in frame.tree.children:
+            if child.tag != member.tag or not _values_match(child.value, member.value):
+                continue
+            expectation = _selected_terminal_target_expectation(
+                replace(frame, tree=child), member, ctx
+            )
+            if expectation is not None and expectation not in expectations:
+                expectations.append(expectation)
+    return tuple(expectations)
 
 
 def _selected_terminal_target_expectation(

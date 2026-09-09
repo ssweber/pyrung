@@ -86,7 +86,7 @@ def test_orientation_queries_nogoods_with_active_requirement_world_key(monkeypat
     seen_keys: list[tuple[object, ...]] = []
 
     class Knowledge:
-        def nogood_identities(self, world_key):
+        def nogood_identities(self, world_key, *, scope=None):
             seen_keys.append(world_key)
             return frozenset()
 
@@ -97,6 +97,7 @@ def test_orientation_queries_nogoods_with_active_requirement_world_key(monkeypat
     )
     world = SimpleNamespace(
         snapshot={"State": 7},
+        rejection_scope=None,
         state=state,
         context=SimpleNamespace(
             compass=SimpleNamespace(knowledge=Knowledge()),

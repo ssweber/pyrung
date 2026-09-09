@@ -50,6 +50,8 @@ class ValidationReport:
     """Unified report from all core validators."""
 
     findings: tuple[Finding, ...]
+    # None preserves compatibility with reports constructed by callers without run metadata.
+    checked_rules: frozenset[str] | None = None
 
     def summary(self) -> str:
         if not self.findings:
@@ -99,20 +101,21 @@ def check(
     *,
     select: set[str] | None = None,
     ignore: set[str] | None = None,
+    extend_select: set[str] | None = None,
     dt: float = 0.010,
 ) -> ValidationReport:
     """Run core ladder checks, optionally filtered by rule code or category.
 
     With no arguments, every default-on validator runs.  ``select`` limits to
     the given codes or category prefixes (e.g. ``{"COIL"}``); ``ignore``
-    excludes them.  Both may be combined (``select - ignore``).  Unknown tokens
-    raise ``ValueError``.
+    excludes them. ``extend_select`` adds rules. The most specific selector wins,
+    with ignore winning ties. Unknown tokens raise ``ValueError``.
 
     ``dt`` is forwarded to the physical-realism validator.
     """
-    active = resolve_rules(select, ignore)
+    active = resolve_rules(select, ignore, extend_select)
     if not active:
-        return ValidationReport(findings=())
+        return ValidationReport(findings=(), checked_rules=active)
 
     needed = {RULES[code].validator for code in active}
     dispatch = _validator_dispatch(program, dt)
@@ -124,7 +127,7 @@ def check(
         for f in dispatch[key]():
             if f.code in active:
                 findings.append(f)
-    return ValidationReport(findings=tuple(findings))
+    return ValidationReport(findings=tuple(findings), checked_rules=active)
 
 
 def validate(
@@ -132,10 +135,11 @@ def validate(
     *,
     select: set[str] | None = None,
     ignore: set[str] | None = None,
+    extend_select: set[str] | None = None,
     dt: float = 0.010,
 ) -> ValidationReport:
     """Compatibility alias for :func:`check`."""
-    return check(program, select=select, ignore=ignore, dt=dt)
+    return check(program, select=select, ignore=ignore, extend_select=extend_select, dt=dt)
 
 
 def _validator_dispatch(

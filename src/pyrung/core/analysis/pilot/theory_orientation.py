@@ -614,8 +614,7 @@ def _theory_temporal_retry_bearing(
                             _act_preserves_requirements(world, act)
                             and not _avoid_forces(world.context, actions, world.snapshot)
                             and not world.context.compass.knowledge.act_is_nogood(
-                                world.world_key,
-                                act_identity(act),
+                                world.world_key, act_identity(act), scope=world.rejection_scope
                             )
                         ):
                             return _orientation_reading._bearing(
@@ -730,8 +729,7 @@ def _theory_temporal_retry_bearing(
                         world.snapshot,
                     )
                     and not world.context.compass.knowledge.act_is_nogood(
-                        world.world_key,
-                        act_identity(act),
+                        world.world_key, act_identity(act), scope=world.rejection_scope
                     )
                 ):
                     return _orientation_reading._bearing(
@@ -832,8 +830,7 @@ def _theory_temporal_retry_bearing(
             if _act_preserves_requirements(
                 world, act
             ) and not world.context.compass.knowledge.act_is_nogood(
-                world.world_key,
-                act_identity(act),
+                world.world_key, act_identity(act), scope=world.rejection_scope
             ):
                 return _orientation_reading._bearing(
                     read,
@@ -939,7 +936,9 @@ def _theory_rearm_bearing(
         pulse_horizon=PulseHorizon.ASSERTION_SCAN,
     )
     act = Pulse(policy) if len(actions) == 1 else BatchPulse(policy)
-    if world.context.compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
+    if world.context.compass.knowledge.act_is_nogood(
+        world.world_key, act_identity(act), scope=world.rejection_scope
+    ):
         return None
     return _orientation_reading._bearing(
         read,
@@ -1236,8 +1235,7 @@ def _theory_intrascan_bearing(
                 _act_preserves_requirements(world, act)
                 and not _avoid_forces(world.context, assignments, world.snapshot)
                 and not world.context.compass.knowledge.act_is_nogood(
-                    world.world_key,
-                    act_identity(act),
+                    world.world_key, act_identity(act), scope=world.rejection_scope
                 )
             ):
                 return _orientation_reading._bearing(
@@ -1317,7 +1315,9 @@ def _theory_intrascan_frontier_bearing(
         avoid_predicate=getattr(ctx, "avoid_pred", None),
         active_requirements=tuple(getattr(ctx, "active_requirements", ())),
     )
-    exclusions = frozenset(ctx.compass.knowledge.nogood_identities(world.world_key))
+    exclusions = frozenset(
+        ctx.compass.knowledge.nogood_identities(world.world_key, scope=world.rejection_scope)
+    )
     rejected_actions = _orientation_reading._exact_rejected_actions(exclusions)
     from pyrung.core.analysis.prove.expr import _eval_expr_from_state
     from pyrung.core.analysis.sp_values import writer_value_facts
@@ -1701,8 +1701,7 @@ def _theory_setup_bearing(
         if _act_preserves_requirements(
             world, act
         ) and not world.context.compass.knowledge.act_is_nogood(
-            world.world_key,
-            act_identity(act),
+            world.world_key, act_identity(act), scope=world.rejection_scope
         ):
             return _orientation_reading._bearing(
                 read,
@@ -2037,8 +2036,7 @@ def _theory_pending_configuration_bearing(
         ),
     )
     if not _act_preserves_requirements(world, act) or world.context.compass.knowledge.act_is_nogood(
-        world.world_key,
-        act_identity(act),
+        world.world_key, act_identity(act), scope=world.rejection_scope
     ):
         return None
     return _orientation_reading._bearing(

@@ -134,6 +134,19 @@ def adopt_trial(
     return trial
 
 
+def productive_dwell(trial: _AcceptedTrial, state: _PilotState) -> bool:
+    """Classify a verified coast once for work accounting and retained dwell."""
+    if not trial.attempt.bearing.act.policy.motion.is_coast:
+        return False
+    verified = trial.verification
+    key_was_seen = isinstance(verified, AssessedMotion) and verified.new_key in state.seen_keys
+    return (
+        not key_was_seen
+        or trial.execution.channel_motion.reached
+        or earned_work_is_useful_motion(trial.earned_work_receipt)
+    )
+
+
 def commit_trial(
     trial: _AcceptedTrial,
     frame: _IterationFrame,
@@ -146,7 +159,7 @@ def commit_trial(
     policy = bearing.act.policy
     execution = trial.execution
     verified = trial.verification
-    key_was_seen = isinstance(verified, AssessedMotion) and verified.new_key in state.seen_keys
+    is_productive_dwell = productive_dwell(trial, state)
     if isinstance(verified, AssessedMotion):
         state.seen_keys.add(verified.new_key)
     # Record what was physically applied — the candidate plus its co-actions (the
@@ -236,18 +249,7 @@ def commit_trial(
     # The world record reverts; the flattened journey is the append-only public
     # history of every physical step, including later-reverted operations.
     state.journey.extend(steps)
-    # Waiting is not searching: an accepted coast's span is dwell — the machine
-    # advancing itself while the pilot holds heading — so it must not drain the
-    # invocation's search budget. A revert rewinds this credit with the world.
-    # The credit is earned only when the machine actually moved its own work —
-    # the coast reached its channel target or advanced earned work; a
-    # coast that parks with nothing moving is the *search* failing. Sterile laps
-    # must still drain the budget so a parked machine has a terminating force.
-    if policy.motion.is_coast:
-        productive = (
-            not key_was_seen
-            or execution.channel_motion.reached
-            or earned_work_is_useful_motion(trial.earned_work_receipt)
-        )
-        if productive:
-            state.dwell_scans += state.work.state.scan_id - pulse.scan_before
+    # Retained productive dwell belongs to the revertible World. Invocation
+    # work was already charged by the transition and survives any rollback.
+    if is_productive_dwell:
+        state.dwell_scans += state.work.state.scan_id - pulse.scan_before

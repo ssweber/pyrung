@@ -121,6 +121,9 @@ class ActionNogoodObservation:
 
     world_key: tuple[Any, ...]
     identity: tuple[Any, ...]
+    # None is a deliberately region-wide exclusion (e.g. a seeded proof).
+    # Runtime empirical producers carry the exact detached source scope.
+    scope: tuple[Any, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -432,10 +435,17 @@ class CompassKnowledge:
     continuation_receipts: PMap = field(default_factory=pmap)
     static_overlays: PMap = field(default_factory=pmap)
 
-    def nogood_identities(self, world_key: tuple[Any, ...]) -> frozenset[tuple[Any, ...]]:
-        return self.act_nogoods.get(world_key, frozenset())
+    def nogood_identities(
+        self, world_key: tuple[Any, ...], *, scope: tuple[Any, ...] | None = None
+    ) -> frozenset[tuple[Any, ...]]:
+        broad = self.act_nogoods.get(world_key, frozenset())
+        if scope is None:
+            return broad
+        return broad | self.act_nogoods.get(("concrete", world_key, scope), frozenset())
 
-    def nogood_pairs(self, world_key: tuple[Any, ...]) -> frozenset[ActionPair]:
+    def nogood_pairs(
+        self, world_key: tuple[Any, ...], *, scope: tuple[Any, ...] | None = None
+    ) -> frozenset[ActionPair]:
         """Pair-level rejections proven in *world_key*.
 
         An explicit pair identity and a singleton Pulse both disprove one
@@ -444,7 +454,7 @@ class CompassKnowledge:
         """
 
         pairs: set[ActionPair] = set()
-        for identity in self.nogood_identities(world_key):
+        for identity in self.nogood_identities(world_key, scope=scope):
             if len(identity) == 2 and identity[0] == "pair":
                 pairs.add(identity[1])
             elif len(identity) >= 2 and identity[0] == "pulse":
@@ -453,8 +463,14 @@ class CompassKnowledge:
                     pairs.add(applied[0])
         return frozenset(pairs)
 
-    def act_is_nogood(self, world_key: tuple[Any, ...], identity: tuple[Any, ...]) -> bool:
-        return identity in self.nogood_identities(world_key)
+    def act_is_nogood(
+        self,
+        world_key: tuple[Any, ...],
+        identity: tuple[Any, ...],
+        *,
+        scope: tuple[Any, ...] | None = None,
+    ) -> bool:
+        return identity in self.nogood_identities(world_key, scope=scope)
 
     def probe_count(self, world_key: tuple[Any, ...]) -> int:
         return int(self.probe_counts.get(world_key, 0))
@@ -466,9 +482,10 @@ class CompassKnowledge:
         """Expire empirical negatives scoped to a pre-setup input context.
 
         Runtime transition entries retain their full snapshot context. Act
-        nogoods, probe counts, and continuation receipts deliberately use the
-        projected world key, which omits steerable values; an accepted stable
-        setup therefore makes only those negative receipts stale.
+        empirical nogoods retain their concrete source scope and apply again
+        only if that source is restored. Legacy broad negatives, probe counts,
+        and continuation receipts use the projected key, which omits steerable
+        values; an accepted stable setup expires those context assumptions.
         """
 
         return replace(
@@ -746,10 +763,15 @@ class CompassKnowledge:
         changed = False
         for observation in observations:
             if isinstance(observation, ActionNogoodObservation):
-                current = act_nogoods.get(observation.world_key, frozenset())
+                key = (
+                    observation.world_key
+                    if observation.scope is None
+                    else ("concrete", observation.world_key, observation.scope)
+                )
+                current = act_nogoods.get(key, frozenset())
                 if observation.identity not in current:
                     act_nogoods = act_nogoods.set(
-                        observation.world_key,
+                        key,
                         current | {observation.identity},
                     )
                     changed = True

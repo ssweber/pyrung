@@ -145,6 +145,7 @@ def test_program_scan_executes_exactly_one_disposable_scan(monkeypatch) -> None:
         world_key=key,
         act=act,
         objective=BearingObjective(context.target),
+        read_identity=steer.ReadIdentity.capture(source, None),
     )
     monkeypatch.setattr(steer, "_pilot_world_key", lambda *_args: key)
     monkeypatch.setattr(steer, "verify_gates", lambda attempt, *_args: attempt)
@@ -195,6 +196,7 @@ def test_scan_entry_configuration_is_applied_only_to_the_execution_fork(monkeypa
         ),
         objective=BearingObjective(context.target),
         entry_configurations=(configuration,),
+        read_identity=steer.ReadIdentity.capture(source, None),
     )
     monkeypatch.setattr(steer, "_pilot_world_key", lambda *_args: key)
     monkeypatch.setattr(steer, "verify_gates", lambda attempt, *_args: attempt)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -84,6 +85,7 @@ def _prepare_codegen(
     *,
     nickname_csv: str | Path | None = None,
     nicknames: dict[str, str] | None = None,
+    analog_inputs: Iterable[str] = (),
     validate: bool = False,
 ) -> tuple[
     list[_AnalyzedRung],
@@ -149,7 +151,9 @@ def _prepare_codegen(
     all_analyzed = list(analyzed)
     for sub in subroutines:
         all_analyzed.extend(sub.analyzed)
-    collection = _collect_operands(all_analyzed, nick_map, structured_map=structured_map)
+    collection = _collect_operands(
+        all_analyzed, nick_map, structured_map=structured_map, analog_inputs=analog_inputs
+    )
 
     if subroutines:
         collection.has_subroutine = True
@@ -162,6 +166,7 @@ def ladder_to_pyrung(
     *,
     nickname_csv: str | Path | None = None,
     nicknames: dict[str, str] | None = None,
+    analog_inputs: Iterable[str] = (),
     output_path: str | Path | None = None,
     validate: bool = True,
 ) -> str:
@@ -176,6 +181,8 @@ def ladder_to_pyrung(
             pairs for variable name substitution.
         nicknames: Optional pre-parsed ``{operand: nickname}`` dict. Alternative
             to ``nickname_csv``; useful when the caller already has the map.
+        analog_inputs: Analog input DF addresses supplied by project channel
+            parameters; their generated tags are marked external.
         output_path: Optional path to write the generated Python file.
             If ``None``, the code is returned as a string only.
         validate: When *True* (default), run codegen self-checks: a decl-level
@@ -198,7 +205,11 @@ def ladder_to_pyrung(
             would not reconstruct the source project's per-slot values.
     """
     analyzed, collection, nick_map, subroutines, structured_map = _prepare_codegen(
-        source, nickname_csv=nickname_csv, nicknames=nicknames, validate=validate
+        source,
+        nickname_csv=nickname_csv,
+        nicknames=nicknames,
+        analog_inputs=analog_inputs,
+        validate=validate,
     )
 
     if validate:
@@ -245,6 +256,7 @@ def ladder_to_pyrung_project(
     *,
     nickname_csv: str | Path | None = None,
     nicknames: dict[str, str] | None = None,
+    analog_inputs: Iterable[str] = (),
     output_dir: str | Path | None = None,
     index: bool = False,
     overwrite: bool = False,
@@ -264,6 +276,8 @@ def ladder_to_pyrung_project(
             :class:`LadderBundle` for in-memory round-trip without disk I/O.
         nickname_csv: Optional path to a Click nickname CSV file (Address.csv).
         nicknames: Optional pre-parsed ``{operand: nickname}`` dict.
+        analog_inputs: Analog input DF addresses supplied by project channel
+            parameters; their generated tags are marked external.
         output_dir: Optional directory to write the project files into.
             If ``None``, files are returned as strings only.
         overwrite: When *False* (default), scaffolding files (pyproject.toml,
@@ -288,7 +302,11 @@ def ladder_to_pyrung_project(
         raise ValueError("workspace_kind must be 'temporary' or 'persistent'")
 
     analyzed, collection, nick_map, subroutines, structured_map = _prepare_codegen(
-        source, nickname_csv=nickname_csv, nicknames=nicknames, validate=validate
+        source,
+        nickname_csv=nickname_csv,
+        nicknames=nicknames,
+        analog_inputs=analog_inputs,
+        validate=validate,
     )
 
     if validate:

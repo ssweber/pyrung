@@ -64,7 +64,7 @@ from pyrung.core.analysis.pilot.outcome import (
 from pyrung.core.analysis.pilot.requirement_admission import active_requirement_violations
 from pyrung.core.analysis.pilot.trace import (
     target_reached,
-    trace_back,
+    trace_target,
 )
 from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints
 from pyrung.core.analysis.pilot.types import (
@@ -135,9 +135,8 @@ def _selected_route_landing_tree(
     """Read the landing against the same chart route that selected the act."""
 
     try:
-        tree = trace_back(
-            ctx.target.tag,
-            ctx.target.value,
+        tree = trace_target(
+            ctx.target,
             trial.snap,
             ctx.pdg,
             ctx.program,

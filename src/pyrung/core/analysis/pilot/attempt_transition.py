@@ -33,7 +33,7 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
     _configured_input_names,
     _derive_attempt_requirements,
     _retain_expectation_receipt,
-    _selected_terminal_target_expectation,
+    _selected_terminal_target_expectations,
 )
 from pyrung.core.analysis.pilot.steer import execute
 from pyrung.core.analysis.pilot.theory_evidence import (
@@ -102,7 +102,12 @@ def record_attempt(
         )
     knowledge_observations = [
         *observations,
-        *(ActionNogoodObservation(frame.key, ("pair", pair)) for pair in attempt.nogood_pairs),
+        *(
+            ActionNogoodObservation(
+                frame.key, ("pair", pair), getattr(frame, "rejection_scope", None)
+            )
+            for pair in attempt.nogood_pairs
+        ),
     ]
     ctx.compass, _ = ctx.compass.apply(knowledge_observations)
     if attempt.avoid_names:
@@ -190,7 +195,7 @@ def transition_once(
     if not isinstance(result, Bearing):
         return AttemptTransition(result=result, frame=frame)
 
-    terminal_target_expectation = _selected_terminal_target_expectation(
+    terminal_target_expectations = _selected_terminal_target_expectations(
         frame,
         target,
         ctx,
@@ -206,7 +211,7 @@ def transition_once(
         attempt_source_checkpoint
         if (
             result.expectation is not None
-            or terminal_target_expectation is not None
+            or terminal_target_expectations
             or isinstance(result.act, (ObserveScan, ProgramScan, IntrascanPulse))
         )
         else None
@@ -220,7 +225,7 @@ def transition_once(
             ctx,
             attempt_source_checkpoint,
         )
-    if terminal_target_expectation is not None:
+    for terminal_target_expectation in terminal_target_expectations:
         result, attempt = _attempt_verification.promote_transient_target_failure(
             result,
             attempt,
@@ -291,6 +296,20 @@ def transition_once(
         logger.debug("pilot: working theory observation failed", exc_info=True)
     record_attempt(attempt, frame, state, ctx)
 
+    executed = attempt.executed_attempt
+    dwell_scans = (
+        executed.pulse.fork.state.scan_id - executed.pulse.scan_before
+        if executed is not None
+        and not defer_adoption
+        and attempt.trial is not None
+        and _trial_commit.productive_dwell(attempt.trial, state)
+        else 0
+    )
+    if executed is not None and executed.execution is not None and executed.execution.spans:
+        state.budget.charge_execution(executed.execution, dwell_scans=dwell_scans)
+    else:
+        state.budget.charge(dwell_scans=dwell_scans)
+
     if isinstance(act, ProgramContinuation) and act.mode == "seek":
         stop_reason = (
             attempt.stall_receipt.stop_reason
@@ -313,7 +332,11 @@ def transition_once(
             # WorkingTheory must not keep retrying a path the user's constraint
             # has already ruled out.
             ctx.compass, _ = ctx.compass.apply(
-                (ActionNogoodObservation(result.world_key, act_identity(act)),)
+                (
+                    ActionNogoodObservation(
+                        result.world_key, act_identity(act), getattr(frame, "rejection_scope", None)
+                    ),
+                )
             )
         elif not record_rejection:
             pass
@@ -334,7 +357,11 @@ def transition_once(
             )
         else:
             ctx.compass, _ = ctx.compass.apply(
-                (ActionNogoodObservation(result.world_key, act_identity(act)),)
+                (
+                    ActionNogoodObservation(
+                        result.world_key, act_identity(act), getattr(frame, "rejection_scope", None)
+                    ),
+                )
             )
         return AttemptTransition(
             result=result,

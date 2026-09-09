@@ -39,13 +39,13 @@ def _timer_eq_program() -> Program:
 
 class TestEqOnTimer:
     def test_equality_reported_as_warning(self):
-        report = validate(_timer_eq_program())
+        report = validate(_timer_eq_program(), select={"CMP"})
         eq = [f for f in report if f.code == "CMP_EQ_ON_MONOTONE"]
         assert len(eq) == 1
         assert eq[0].severity == "warning"
 
     def test_message_suggests_ge_and_done_bit(self):
-        report = validate(_timer_eq_program())
+        report = validate(_timer_eq_program(), select={"CMP"})
         eq = next(f for f in report if f.code == "CMP_EQ_ON_MONOTONE")
         assert "Tmr.Acc >= 5" in eq.message
         assert "Tmr.Done" in eq.message
@@ -64,7 +64,7 @@ def _reset_floor_program() -> Program:
 
 class TestResetFloorExempt:
     def test_ne_zero_is_not_flagged(self):
-        report = validate(_reset_floor_program())
+        report = validate(_reset_floor_program(), select={"CMP"})
         assert not [f for f in report if f.code == "CMP_EQ_ON_MONOTONE"]
 
 
@@ -80,7 +80,7 @@ def _timer_ne_program() -> Program:
 
 
 def test_nonzero_inequality_asks_which_side_should_be_true():
-    report = validate(_timer_ne_program())
+    report = validate(_timer_ne_program(), select={"CMP"})
     finding = next(f for f in report if f.code == "CMP_EQ_ON_MONOTONE")
 
     assert finding.severity == "warning"
@@ -114,13 +114,13 @@ def _count_down_program() -> Program:
 
 class TestEqOnCounter:
     def test_count_up_equality_error_suggests_ge(self):
-        report = validate(_count_up_program())
+        report = validate(_count_up_program(), select={"CMP"})
         eq = [f for f in report if f.code == "CMP_EQ_ON_MONOTONE"]
         assert len(eq) == 1
         assert ">=" in eq[0].message
 
     def test_count_down_equality_suggests_le(self):
-        report = validate(_count_down_program())
+        report = validate(_count_down_program(), select={"CMP"})
         eq = next(f for f in report if f.code == "CMP_EQ_ON_MONOTONE")
         assert "<=" in eq.message
 
@@ -138,5 +138,5 @@ def _correct_program() -> Program:
 
 class TestNoFalsePositive:
     def test_done_bit_use_is_clean(self):
-        report = validate(_correct_program())
+        report = validate(_correct_program(), select={"CMP"})
         assert not [f for f in report if f.code == "CMP_EQ_ON_MONOTONE"]

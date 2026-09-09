@@ -41,6 +41,12 @@ from pyrung.core.validation.cmp_conditions import (
     CmpConditionReport,
     validate_cmp_conditions,
 )
+from pyrung.core.validation.config import (
+    CheckConfig,
+    find_check_config,
+    load_check_config,
+    save_check_config,
+)
 from pyrung.core.validation.dead_write import (
     TAG_DEAD_WRITE,
     DeadWriteFinding,
@@ -81,6 +87,7 @@ from pyrung.core.validation.physical_realism import (
 from pyrung.core.validation.pointer_default import (
     PTR_DEFAULT_BEFORE_BLOCK_START,
     PTR_MAY_ESCAPE_BLOCK,
+    PTR_UNGUARDED_ACCESS,
     PointerDefaultFinding,
     PointerDefaultReport,
     validate_pointer_defaults,
@@ -135,6 +142,11 @@ from pyrung.core.validation.walker import (
 )
 
 __all__ = [
+    "CheckConfig",
+    "find_check_config",
+    "load_check_config",
+    "save_check_config",
+    "PTR_UNGUARDED_ACCESS",
     "ALL_RULES",
     "CATEGORIES",
     "RULES",

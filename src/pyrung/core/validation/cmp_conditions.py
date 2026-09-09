@@ -317,6 +317,10 @@ def _writer_locations(name: str, graph: Any) -> str:
     return ", ".join(locs)
 
 
+def _missing_writer_hint(tag: Tag) -> str:
+    return f"set {operand_name(tag)} in the ladder, or mark it external"
+
+
 def _domain_provenance(tag: Tag, domain: tuple[Any, ...], graph: Any) -> tuple[str, str]:
     """``(why the domain is closed, how to widen it)`` for one operand tag.
 
@@ -345,10 +349,7 @@ def _domain_provenance(tag: Tag, domain: tuple[Any, ...], graph: Any) -> tuple[s
         return f"{name} is readonly and always {values}", "change the comparison"
     writers = _writer_locations(tag.name, graph)
     if not writers:
-        return (
-            f"{name} is never written, so it keeps its default {values}",
-            f"change the comparison, write {name} from the ladder, or mark it external",
-        )
+        return "", _missing_writer_hint(tag)
     return (
         f"{name} is only written at {writers}",
         f"change the comparison or write the expected value to {name}",
@@ -374,7 +375,8 @@ def _constant_display(
         seen.add(tag.name)
         domain = domains[tag.name]
         reason, fix = _domain_provenance(tag, domain, graph)
-        reasons.append(reason)
+        if reason:
+            reasons.append(reason)
         fixes.append(fix)
         labels.append(f"{operand_name(tag)} is only {_format_domain_values(domain, tag)}")
     label = f"{verdict}: {'; '.join(labels)}" if labels else verdict
@@ -584,6 +586,22 @@ def _is_boolish_numeric_compare(cmp: _Compare) -> bool:
     return False
 
 
+def _is_default_only_boolish_compare(cmp: _Compare, graph: Any) -> bool:
+    """An unwritten zero default alone does not make a writable numeric flag constant."""
+    from pyrung.core.analysis.value_domains import declared_value_domain
+
+    if not _is_boolish_numeric_compare(cmp):
+        return False
+    return any(
+        tag is not None
+        and not tag.readonly
+        and tag.default == 0
+        and not graph.writers_of.get(tag.name)
+        and declared_value_domain(tag) is None
+        for tag in (_operand_tag(cmp.left), _operand_tag(cmp.right))
+    )
+
+
 def _preset_sites(program: Program, graph: Any) -> list[tuple[Any, Tag, Any]]:
     """``(write_site, preset_tag, instruction)`` for zero timer/counter presets."""
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
@@ -632,14 +650,11 @@ def _no_writer_operand_display(cmp: _Compare, operand: _Operand, tag: Tag) -> Fi
         caret=(0, span[0], span[1]) if span else None,
         caret_label="no ladder writer" if span else "",
     )
-    name = operand_name(tag)
     return FindingDisplay(
         code=CMP_OPERAND_NO_WRITER,
         severity="advisory",
         frames=(frame,),
-        hint=(
-            f"set {name} in the ladder, or mark it external if an HMI, device, or test supplies it"
-        ),
+        hint=_missing_writer_hint(tag),
     )
 
 
@@ -1138,8 +1153,13 @@ def validate_cmp_conditions(
 
     # 2. A numeric operand has no declared source.  A comparison that mirrors a
     #    zero timer/counter preset belongs to the more specific preset finding.
+    no_writer_sites: set[tuple[str, str]] = set()
     for cmp in compares:
         if id(cmp.cond) in claimed:
+            continue
+        if _is_default_only_boolish_compare(cmp, graph):
+            # Preserve the no-writer exemption through the later constant pass.
+            claimed.add(id(cmp.cond))
             continue
         no_writer = _no_writer_operand(cmp, graph)
         if no_writer is None:
@@ -1151,7 +1171,9 @@ def validate_cmp_conditions(
         mirrors_zero_preset = any(
             {acc_name, preset_name} == operand_names for acc_name, preset_name in zero_preset_pairs
         )
-        if not mirrors_zero_preset:
+        site_key = (tag.name, cmp.loc)
+        if not mirrors_zero_preset and site_key not in no_writer_sites:
+            no_writer_sites.add(site_key)
             findings.append(
                 CmpConditionFinding(
                     CMP_OPERAND_NO_WRITER,
@@ -1188,6 +1210,11 @@ def validate_cmp_conditions(
             continue
         result = _constant_result(cmp, closed_domains)
         if result is None:
+            continue
+        if result and cmp.op in ("<", "<=", ">", ">="):
+            # Boundary checks remain useful defenses even when current domains
+            # make them true. Do not let later style rules reclaim the guard.
+            claimed.add(id(cmp.cond))
             continue
         code = CMP_ALWAYS_TRUE if result else CMP_ALWAYS_FALSE
         severity: Severity = "info" if result else "warning"

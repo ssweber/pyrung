@@ -167,6 +167,9 @@ class _TraceEnv:
     # ModeChangeRequest plus SimulateFirstScan).  The first ranked caller is the
     # route; subsequent occurrences reuse it, matching root writer/OR locks.
     caller_locks: dict[str, int] = field(default_factory=dict)
+    # Joint terminal supports rank alternatives only; they never authorize an
+    # assignment or reject the temporary detour needed by a retentive target.
+    preferred_actions: tuple[tuple[str, Any], ...] = ()
 
 
 def _env_for(
@@ -884,6 +887,42 @@ def _advance_frontier(
     )
 
 
+def trace_target(
+    target: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    *,
+    constraints: _trace_read.TraceReadConstraints | None = None,
+) -> TraceNode:
+    """Read an entire objective, retaining all conjunctive terminal demands."""
+    if target.members:
+        from pyrung.core.analysis.pilot.multitarget import input_preferences
+
+        read = constraints or _trace_read.TraceReadConstraints()
+        env = _env_from_constraints(read, snapshot, pdg, program, steerable, max_depth=15)
+        env = replace(env, preferred_actions=input_preferences(target.members, program, steerable))
+        children = _trace_expression(env, target.predicate, target.tag, _visited=set(), _depth=0)
+        root = TraceNode(
+            tag=target.tag,
+            value=True,
+            predicate=target.predicate,
+            satisfied=target_reached(snapshot, target.tag, target.value, target.predicate),
+            children=children,
+            goal_group=True,
+        )
+        _reconcile_relational(root, snapshot)
+        return root
+    if target.predicate is not None:
+        return trace_relational(
+            target.predicate, snapshot, pdg, program, steerable, constraints=constraints
+        )
+    return trace_back(
+        target.tag, target.value, snapshot, pdg, program, steerable, constraints=constraints
+    )
+
+
 def trace_relational(
     predicate: Atom,
     snapshot: dict[str, Any],
@@ -1096,6 +1135,17 @@ def _trace_alternative(
 ) -> _TraceAlternative[_TraceChoicePayload]:
     """Read the common selection facts for one caller-ranked alternative."""
 
+    if env.preferred_actions:
+        conflicts = sum(
+            1
+            for node in nodes
+            for tag, value in node.ordered_actions()
+            if any(
+                tag == preferred_tag and not _values_match(value, preferred_value)
+                for preferred_tag, preferred_value in env.preferred_actions
+            )
+        )
+        rank = (conflicts, *rank)
     return _TraceAlternative(
         choice=choice,
         rank=rank,

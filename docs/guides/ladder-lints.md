@@ -36,7 +36,7 @@ with rung(Or(ModeCommand < 1, ModeCommand > 3)):
     out(InvalidMode)
 ```
 
-`logic.check()` runs this kind of check across the whole ladder. It reports contradictory rungs, conflicting outputs, stuck coils, suspicious comparisons, invalid tag writes, and other patterns that can be established from the program alone.
+`logic.check()` runs a core set across the whole ladder: contradictory rungs, always-true OR conditions, always-false comparisons, timer/counter equality hazards, conflicting outputs, invalid tag writes, overwritten writes, invalid pointer addresses, recursive calls, and definite division by zero. Broader checks such as stuck coils and comparison style are opt-in.
 
 For a CI gate that fails on errors:
 
@@ -77,12 +77,15 @@ Findings involving several sites lead with the shared problem and then show one 
 
 ## Selecting rules
 
-All default rules run when `select` is omitted. `select` and `ignore` accept either a complete rule code or a category:
+The fourteen core rules run when `select` is omitted. `select` replaces that set, `extend_select` adds to it, and `ignore` excludes rules. Selectors accept complete codes, prefixes, or `ALL`:
 
 ```python
 logic.check(select={"RUNG"})
 logic.check(select={"COIL_STUCK_HIGH", "COIL_STUCK_LOW"})
 logic.check(ignore={"CMP_STATIC_ON_LEFT"})
+logic.check(extend_select={"CMP"})
+logic.check(select={"ALL"})
+logic.check(select=set())  # Explicitly run no checks.
 ```
 
 Categories are the prefixes before the first underscore:
@@ -99,7 +102,23 @@ Categories are the prefixes before the first underscore:
 | `PHYS` | Physical-link completeness and realism |
 | `STEP` | State-machine steps with no available escape |
 
-Unknown codes and categories raise `ValueError`.
+The most specific matching selector wins; `ignore` wins a tie. Unknown selectors raise `ValueError`. `report.checked_rules` records the actual selection, including checks that produced no findings.
+
+The core set is `TAG_READONLY_WRITE`, `TAG_CHOICES_VIOLATION`, `TAG_RANGE_VIOLATION`, `TAG_FINAL_MULTIPLE_WRITERS`, `TAG_DEAD_WRITE`, `COIL_CONFLICTING_OUTPUT`, `PTR_DEFAULT_BEFORE_BLOCK_START`, `PTR_MAY_ESCAPE_BLOCK`, `RUNG_CONTRADICTION`, `RUNG_TAUTOLOGY`, `CMP_ALWAYS_FALSE`, `CMP_EQ_ON_MONOTONE`, `CALL_RECURSION`, and `MATH_DIV_ZERO`. Registry entries expose `default_on` for integrations.
+
+### Project settings
+
+```toml
+[tool.pyrung.check]
+extend-select = ["CMP", "PTR_UNGUARDED_ACCESS"]
+ignore = ["CMP_STATIC_ON_LEFT", "CMP_REPEATED_STATE_VALUE"]
+```
+
+Omit `select` to retain core defaults, or use `select = ["ALL"]` to enable everything. Prefixes also select matching checks added in later versions.
+
+`pyrung check` reads the nearest ancestor `pyproject.toml` containing this section, starting from the current directory. `--config path/to/pyproject.toml` chooses a file explicitly. Command-line `--select` and `--ignore` replace their project values; `--extend-select` adds to the project extensions.
+
+The Python API never reads a working-directory configuration implicitly. Integrations can share the same policy through `pyrung.core.validation.CheckConfig`, `load_check_config`, and `save_check_config`; saving preserves unrelated TOML settings and comments.
 
 ## Command line
 
@@ -143,7 +162,7 @@ pyrung live check RUNG
 | Code | Severity | What it detects |
 |---|---|---|
 | `CMP_ALWAYS_FALSE` | Warning | A comparison that is false for every value in its complete Bool, choices, bounded-integer, or fully understood producer domain. The finding names the operand's values and whether they come from a declaration or from its writer rungs. Open domains are left alone. |
-| `CMP_ALWAYS_TRUE` | Info | A comparison that is true for every value in the same complete domains and therefore does not gate its rung. |
+| `CMP_ALWAYS_TRUE` | Info | An equality or inequality comparison that is true for every value in a complete domain. Ordered range comparisons are retained as defensive guards. |
 | `CMP_EQ_ON_MONOTONE` | Warning | Equality against a timer or counter accumulator that can step past the exact value. |
 | `CMP_OPERAND_NO_WRITER` | Advisory | A numeric comparison operand has no ladder writer or declared outside source. Configured defaults, external and physical inputs, read-only constants, and numeric `0`/`1` Boolean conventions are left alone. |
 | `CMP_PRESET_STAYS_ZERO` | Warning | A tag-valued timer or counter preset has an implicit zero start and no ladder writer, so completion is immediate. Configured and literal zero presets are left alone. |
@@ -152,7 +171,13 @@ pyrung live check RUNG
 | `CMP_TRUE_AT_RESET` | Warning | A timer or counter completion comparison is already true when the accumulator resets. |
 | `CMP_STATIC_ON_LEFT` | Advisory | An ordered comparison may read backwards because the changing value is on the right. Equality and inequality comparisons are left alone. |
 
+Writable numeric flags compared with `0` or `1` are not treated as constant merely
+because they start at zero and have no ladder writer. Readonly constants, declared
+choices or bounds, and known ladder writes can still establish an impossible
+comparison. A default is initialization, not a declaration that a flag cannot change.
+
 ### Tags
+
 
 | Code | Severity | What it detects |
 |---|---|---|
@@ -167,9 +192,17 @@ pyrung live check RUNG
 | Code | Severity | What it detects |
 |---|---|---|
 | `PTR_DEFAULT_BEFORE_BLOCK_START` | Warning | An exact indirect dereference such as `DS[Ptr]` uses a pointer whose default is below the block start. This usually means a 1-based block is indexed by a tag with the implicit `default=0`. |
-| `PTR_MAY_ESCAPE_BLOCK` | Warning | A pointer's complete domain contains invalid addresses compatible with the dereference's effective guards. Guard narrowing is used only for scan-stable pointers; open domains and pointers sanitized by a proven unconditional write-before-read are left alone. |
+| `PTR_MAY_ESCAPE_BLOCK` | Warning | Possible values at an access include invalid addresses compatible with its still-valid guards. Merely writing the pointer does not establish safety: the assigned value must be in bounds. |
+| `PTR_UNGUARDED_ACCESS` | Advisory | The pointer domain is open and its guards do not establish both block bounds. This optional check reports missing evidence, rather than claiming an invalid address is certain. |
 
-This rule checks the actual dereference tag used in `Block[Ptr]`. It does not infer that an earlier rung computed a different intermediate pointer.
+These checks cover scalar `Block[Ptr]` accesses. Direct copies and simple affine calculations propagate known values; unknown writes, calls, and loops invalidate local evidence. This is conservative static analysis, not a complete reachability proof.
+
+```python
+with rung(Ptr >= 1, Ptr <= 100):
+    copy(Data[Ptr], Result)
+```
+
+Conditions on a rung, its branches, and its `.continued()` rungs share the pre-instruction snapshot. Writing `Ptr` before the access invalidates a guard evaluated against that snapshot. An indirect read inside a condition can only use earlier short-circuit AND terms as guards. Declared or inferred bounds alone do not make a defensive range guard redundant.
 
 ### Calls and arithmetic
 

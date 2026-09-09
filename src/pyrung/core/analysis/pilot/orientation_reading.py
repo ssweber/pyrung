@@ -45,14 +45,14 @@ from pyrung.core.analysis.pilot.overlay import (
 )
 from pyrung.core.analysis.pilot.trace import (
     target_reached,
-    trace_back,
-    trace_relational,
+    trace_target,
 )
 from pyrung.core.analysis.pilot.trace_read import TraceChoice, TraceReadConstraints
 from pyrung.core.analysis.pilot.trace_routes import rank_trace_choices
 from pyrung.core.analysis.pilot.trace_tree import TraceAction, TraceNode, frontier_pairs
 from pyrung.core.analysis.pilot.types import _IterationFrame
 from pyrung.core.analysis.pilot.world_key import (
+    ReadIdentity,
     _pilot_world_key,
     _StateKeyConfig,
 )
@@ -80,18 +80,8 @@ def _trace_for_route(
         avoid_pred=constraints.avoid_predicate,
         rejected_actions=rejected_actions,
     )
-    if target.predicate is not None:
-        return trace_relational(
-            target.predicate,
-            snapshot,
-            ctx.pdg,
-            ctx.program,
-            ctx.steerable,
-            constraints=read,
-        )
-    return trace_back(
-        target.tag,
-        target.value,
+    return trace_target(
+        target,
         snapshot,
         ctx.pdg,
         ctx.program,
@@ -164,7 +154,8 @@ def _read_route_trees(
                 key_config,
                 world.state.pilot_rungs,
                 getattr(world.state, "active_requirements", ()),
-            )
+            ),
+            scope=world.rejection_scope,
         )
         if key_config is not None
         else frozenset()
@@ -267,6 +258,7 @@ def _assemble_world(
         distance_before=tree.unsatisfied_count(),
         raw_trace_actions=tuple(dict.fromkeys(detail.pair for detail in details)),
         raw_trace_action_details=details,
+        rejection_scope=world.rejection_scope,
     )
     return replace(
         world,
@@ -284,7 +276,11 @@ def _read_worlds(
     """Read all current alternatives against one snapshot and one world key."""
 
     snapshot = dict(world.state.work.state.tags)
-    seed = replace(world, snapshot=snapshot)
+    seed = replace(
+        world,
+        snapshot=snapshot,
+        read_identity=ReadIdentity.capture(world.state.work, world.context.compass.knowledge),
+    )
     route_trees = _read_route_trees(seed, target, constraints)
     key_config = world.state.key_config
     if key_config is None:
@@ -326,7 +322,9 @@ def _probe_or_stuck(
     world = read.world
     frontier = _frontier(read)
     count = compass.knowledge.probe_count(world.world_key)
-    exclusions = tuple(compass.knowledge.nogood_identities(world.world_key))
+    exclusions = tuple(
+        compass.knowledge.nogood_identities(world.world_key, scope=world.rejection_scope)
+    )
     if count < _PROBE_BUDGET:
         request = ProbeRequest(frontier=frontier, reason=reason)
         return NeedProbe(
@@ -427,6 +425,7 @@ def _bearing(
         rationale=rationale,
         orientation=read,
         investigation_selection=investigation_selection,
+        read_identity=world.read_identity,
     )
 
 

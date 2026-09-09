@@ -52,6 +52,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryTemporalIntent,
 )
 from pyrung.core.analysis.pilot.world_key import (
+    ReadIdentity,
     wait_edge_nogood,
 )
 
@@ -112,7 +113,9 @@ def _wait_proposals(compass: Any, read: OrientationRead) -> Iterator[_ActProposa
         if wait_channel is not None
         else None
     )
-    if wait_nogood is not None and wait_nogood in compass.knowledge.nogood_pairs(world.world_key):
+    if wait_nogood is not None and wait_nogood in compass.knowledge.nogood_pairs(
+        world.world_key, scope=world.rejection_scope
+    ):
         return
     expectation = prescription.expectation
     yield (
@@ -285,7 +288,9 @@ def _admit_ordinary_proposal(
     act = _orientation_reading._classify_admission(read, act, target)
     if not _theory_orientation._act_preserves_requirements(read.world, act):
         return None
-    if compass.knowledge.act_is_nogood(read.world_key, act_identity(act)):
+    if compass.knowledge.act_is_nogood(
+        read.world_key, act_identity(act), scope=read.world.rejection_scope
+    ):
         return None
     if act.policy.admission_basis is AdmissionBasis.EXPLORATORY:
         candidate = GuidanceCandidate(
@@ -311,7 +316,9 @@ def _admit_ordinary_proposal(
         rationale = "establish selected ladder activation before rereading Compass"
     if not _theory_orientation._act_preserves_requirements(read.world, act):
         return None
-    if compass.knowledge.act_is_nogood(read.world_key, act_identity(act)):
+    if compass.knowledge.act_is_nogood(
+        read.world_key, act_identity(act), scope=read.world.rejection_scope
+    ):
         return None
     return _orientation_reading._bearing(
         read,
@@ -382,6 +389,10 @@ def _orient_read(
 
     if world.frame is None:
         raise ValueError("single-alternative orientation requires a complete frame")
+    if world.read_identity is None:
+        read_identity = ReadIdentity.capture(getattr(world.state, "work", None), compass.knowledge)
+        if read_identity is not None:
+            world = replace(world, read_identity=read_identity)
     read = OrientationRead(
         world_key=world.world_key,
         world=world,

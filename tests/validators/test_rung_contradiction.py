@@ -94,12 +94,12 @@ class TestFixtureReproducesBug:
 
 class TestRungContradiction:
     def test_contradiction_reported(self):
-        report = validate(_buggy_guard_program())
+        report = validate(_buggy_guard_program(), select={"RUNG"})
         codes = {f.code for f in report}
         assert "RUNG_CONTRADICTION" in codes
 
     def test_finding_names_blocking_pair(self):
-        report = validate(_buggy_guard_program())
+        report = validate(_buggy_guard_program(), select={"RUNG"})
         contradiction = next(f for f in report if f.code == "RUNG_CONTRADICTION")
         # The diagnostic must surface the contradictory pair by name/value.
         assert "UnitModeCmd" in contradiction.message
@@ -109,12 +109,12 @@ class TestRungContradiction:
 
 class TestRungTautology:
     def test_tautology_reported_on_or_term(self):
-        report = validate(_buggy_guard_program())
+        report = validate(_buggy_guard_program(), select={"RUNG"})
         codes = {f.code for f in report}
         assert "RUNG_TAUTOLOGY" in codes
 
     def test_tautology_reports_residual(self):
-        report = validate(_buggy_guard_program())
+        report = validate(_buggy_guard_program(), select={"RUNG"})
         tautology = next(f for f in report if f.code == "RUNG_TAUTOLOGY")
         # Half the value is showing the real gate: the residual after the
         # always-true Or term is stripped out.

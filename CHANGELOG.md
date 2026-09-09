@@ -8,7 +8,26 @@
      Review and condense before release — entries accumulate during development and
      should be edited into shape before moving from Unreleased to a version heading. -->
 
-## Unreleased
+## v0.15.0 (2026-09-09)
+
+### Breaking Changes
+
+- Static checks now default to fourteen core rules, including always-true OR conditions, always-false comparisons, timer/counter equality hazards, and overwritten writes; use `select={"ALL"}` or `pyrung check --select ALL` to opt into the full registry.
+
+### Features
+
+- CLICK code generation accepts `analog_inputs` from hardware channel parameters and preserves external-input metadata for raw addresses, nicknames, blocks, and structures.
+- `how()` can resolve stalled guidance with a bounded one-scan survey of single and paired input changes, confirming useful effects before steering from a fresh read.
+- `[tool.pyrung.check]` supports `select`, `extend-select`, and `ignore` with rule prefixes and `ALL`, and reports expose `checked_rules` so integrations distinguish unselected checks from passed checks.
+- Pointer checks account for ordered assignments and guards at each scalar indirect access, including branch and continued-rung condition snapshots, with optional `PTR_UNGUARDED_ACCESS` advice when valid bounds cannot be established.
+
+### Fixes
+
+- PILOT retains spent search work across discarded attempts and rollback, and scopes empirical action failures to their concrete source so abstractly similar states can still be tried.
+- Comparison checks recognize Modbus receive payloads as external values even when the ladder also resets them, preserving uncertainty through sampled copies and calculations.
+- Comparisons of writable numeric flags with `0` or `1` no longer produce constant-comparison findings from an unwritten zero default alone, and no-writer hints share a concise repair message.
+- Multi-target `how()` steers toward all goals together, preserving relational bounds and allowing temporary detours instead of driving targets in a fixed order.
+- Defensive range comparisons are no longer called redundant solely because of declared or inferred tag bounds, and no-writer advice appears once per operand per rung.
 
 ## v0.14.0 (2026-09-04)
 
