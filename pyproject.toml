@@ -40,7 +40,7 @@ classifiers = [
 
 dependencies = [
     "pyrsistent>=0.20.0",
-    "pyclickplc>=0.3.4",
+    "pyclickplc>=0.4.0",
     "executing>=2.2.0",
     "tomlkit>=0.13.3",
 ]
