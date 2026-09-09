@@ -38,7 +38,7 @@ jobs:
 
       - name: Cache-bust extra assets
         run: |
-          sed -i -E "s#^(\s*- (stylesheets|javascripts)/[^?[:space:]]+)\$#?v=${GITHUB_SHA::8}#" mkdocs.yml
+          sed -i -E "s#^(\s*- (stylesheets|javascripts)/[^?[:space:]]+)\$#\1?v=${GITHUB_SHA::8}#" mkdocs.yml
           grep -E '\?v=' mkdocs.yml
 
       - name: Build docs
