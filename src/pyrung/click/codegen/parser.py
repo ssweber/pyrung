@@ -5,6 +5,7 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
+from pyrung.click.codegen._syntax import _csv_string_value
 from pyrung.click.codegen.analyzer import _analyze_rungs
 from pyrung.click.codegen.constants import _HEADER_WIDTH
 from pyrung.click.codegen.models import _RawRung, _SubroutineInfo
@@ -104,7 +105,7 @@ def _find_call_names(raw_rungs: list[_RawRung]) -> dict[str, str]:
             af = row[-1] if row else ""
             m = call_re.match(af)
             if m:
-                name = m.group(1)
+                name = _csv_string_value(f'"{m.group(1)}"')
                 call_names[_slugify(name)] = name
     return call_names
 

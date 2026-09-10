@@ -49,6 +49,9 @@ _COMPARE_RE = re.compile(r"^(.+?)(==|!=|<=|>=|<|>)(.+)$")
 # Matches a pin row like .reset() or .jump(5)
 _PIN_RE = re.compile(r"^\.(\w+)\((.*)\)$")
 
+# Additional input pins emitted by timers, counters, shift registers, and drums.
+_PIN_NAMES = frozenset({"reset", "clock", "jump", "jog", "down"})
+
 # Condition wrappers
 _CONDITION_WRAPPERS = {"rise", "fall", "immediate"}
 
