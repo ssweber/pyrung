@@ -16,12 +16,15 @@ _TYPE_NAME_DEFAULT_RETENTIVE: dict[str, bool] = {
     "Char": True,
 }
 
+from pyrung.click.codegen._syntax import _csv_string_value, _string_literal
 from pyrung.click.codegen.constants import (
     _COMPARE_RE,
     _CONDITION_WRAPPERS,
     _DROP_KWARGS,
     _FUNC_RE,
+    _INSTRUCTION_NAMES,
     _OPERAND_PREFIXES,
+    _PIN_NAMES,
     _RANGE_RE,
 )
 from pyrung.click.codegen.models import (
@@ -505,7 +508,12 @@ def _emit_plain_block_decl(
     collection: _OperandCollection,
 ) -> None:
     """Emit one first-class plain named block."""
-    block_args = [f'"{decl.name}"', f"TagType.{decl.tag_type}", str(decl.start), str(decl.end)]
+    block_args = [
+        _string_literal(decl.name),
+        f"TagType.{decl.tag_type}",
+        str(decl.start),
+        str(decl.end),
+    ]
     block_retentive = bool(decl.slots) and all(slot.retentive for slot in decl.slots.values())
     if block_retentive:
         block_args.append("retentive=True")
@@ -699,7 +707,7 @@ def _emit_program(
             if sub_rungs and _is_trailing_return(sub_rungs[-1]):
                 sub_rungs = sub_rungs[:-1]
             lines.append("")
-            lines.append(f'    with subroutine("{sub.name}"):')
+            lines.append(f"    with subroutine({_string_literal(sub.name)}):")
             if sub_rungs:
                 _emit_rung_sequence(
                     lines,
@@ -1029,6 +1037,8 @@ def _parse_choice_literal(text: str) -> object:
     hex_match = _CLICK_HEX_RE.fullmatch(text.strip())
     if hex_match is not None:
         return int(hex_match.group(1), 16)
+    if text.strip().startswith('"'):
+        return _csv_string_value(text.strip())
     try:
         value = ast.literal_eval(text.strip())
     except (SyntaxError, ValueError):
@@ -1252,7 +1262,10 @@ def _render_af_token(
         # Safeguard: reject unknown bare text that isn't a recognised operand.
         # Known operands are substituted normally; anything else is an error
         # that would produce invalid Python (bare undefined names).
-        sub = _sub_operand(token, collection, nicknames, structured_map)
+        try:
+            sub = _sub_operand(token, collection, nicknames, structured_map)
+        except ValueError as exc:
+            raise ValueError(f"Unrecognised AF token {token!r}") from exc
         if sub == token and token not in collection.tags:
             raise ValueError(
                 f"Unrecognised AF token {token!r}; not a known instruction or operand. "
@@ -1263,6 +1276,9 @@ def _render_af_token(
     func_name = match.group(2)
     args_str = match.group(3) or ""
 
+    if func_name not in _INSTRUCTION_NAMES:
+        raise ValueError(f"Unrecognised AF instruction: {func_name!r}")
+
     # Map CSV token names → Python DSL names
     _CSV_TO_DSL = {"return": "return_early", "math": "calc"}
     py_func = _CSV_TO_DSL.get(func_name, func_name)
@@ -1270,7 +1286,7 @@ def _render_af_token(
     # In project mode, call("name") → call(func_name) using bare identifier
     if func_name == "call" and call_func_map is not None and args_str:
         # Strip surrounding quotes from the subroutine name
-        sub_name = args_str.strip().strip('"')
+        sub_name = _csv_string_value(args_str.strip())
         func_id = call_func_map.get(sub_name)
         if func_id is not None:
             return f"call({func_id})"
@@ -1281,7 +1297,7 @@ def _render_af_token(
         parts = args_str.split(",", 1)
         class_name = parts[0].strip()
         fields = parts[1].strip() if len(parts) > 1 else ""
-        return f"""raw("{class_name}", '{fields}')"""
+        return f"raw({_string_literal(class_name)}, {fields!r})"
 
     if not args_str:
         return f"{py_func}()"
@@ -1332,6 +1348,8 @@ def _render_pin(
     structured_map: TagMap | None = None,
 ) -> str:
     """Render a pin as a chained method call."""
+    if pin.name not in _PIN_NAMES:
+        raise ValueError(f"Unrecognised instruction pin: {pin.name!r}")
     cond: str | None = None
     if pin.condition_tree is not None:
         cond = _render_sp_node(pin.condition_tree, collection, nicknames, structured_map)
@@ -1475,7 +1493,7 @@ def _emit_slot_overrides(lines: list[str], collection: _OperandCollection) -> No
         parsed = _parse_operand_prefix(hw_addr)
         if parsed:
             _, _, block_var, index = parsed
-            out.append(f'{block_var}.slot({index}, name="{nickname}")')
+            out.append(f"{block_var}.slot({index}, name={_string_literal(nickname)})")
     if out:
         lines.extend(out)
         lines.append("")

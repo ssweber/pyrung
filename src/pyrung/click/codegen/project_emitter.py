@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from pyrung.click.codegen._syntax import _string_literal
 from pyrung.click.codegen.collector import _scan_file_refs
 from pyrung.click.codegen.emitter import (
     _emit_physical_declarations,
@@ -261,7 +262,7 @@ classifiers = [
     "Private :: Do Not Upload",
 ]
 dependencies = [
-    "pyrung>=0.15.0",
+    "pyrung>=0.15.1",
 ]
 
 [dependency-groups]
@@ -655,7 +656,7 @@ def _generate_subroutine_file(
     lines.append("")
 
     # @subroutine("name") decorator + function
-    lines.append(f'@subroutine("{sub.name}")')
+    lines.append(f"@subroutine({_string_literal(sub.name)})")
     lines.append(f"def {func_name}():")
     if sub_rungs:
         _emit_rung_sequence(

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, cast
 from pyclickplc.addresses import format_address_display
 
 from pyrung.click._topology import Leaf, Parallel, Series, SPNode
+from pyrung.click.codegen._syntax import _csv_string_value
 from pyrung.click.codegen.constants import (
     _COMPARE_RE,
     _CONDITION_WRAPPERS,
@@ -1038,6 +1039,10 @@ def _register_operands_from_text(
                 if start_nick is not None or end_nick is not None:
                     start_label = start_nick if start_nick is not None else start_display
                     end_label = end_nick if end_nick is not None else end_display
+                    # Source comments must stay on one physical line even when
+                    # imported nicknames contain line endings.
+                    start_label = start_label.replace("\r", "\\r").replace("\n", "\\n")
+                    end_label = end_label.replace("\r", "\\r").replace("\n", "\\n")
                     collection.range_comments[range_str] = f"# {start_label}..{end_label}"
 
     # Find individual operands (skip those covered by a range)
@@ -1199,7 +1204,7 @@ def _ref_af_token(
 
     if func_name == "call":
         # Extract subroutine name for cross-file import tracking
-        sub_name = args_str.strip().strip('"')
+        sub_name = _csv_string_value(args_str.strip())
         if sub_name:
             if call_func_map and sub_name in call_func_map:
                 refs.subroutine_func_names.add(call_func_map[sub_name])

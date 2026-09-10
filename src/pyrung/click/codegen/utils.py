@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import ast
 import keyword
 import re
 from typing import TYPE_CHECKING
 
+from pyrung.click.codegen._syntax import (
+    _csv_string_value,
+    _pythonize_csv_strings,
+    _string_literal,
+    _validate_expression,
+)
 from pyrung.click.codegen.constants import (
+    _COPY_CONVERTERS,
     _FUNC_RE,
     _OPERAND_PREFIXES,
     _OPERAND_RE,
@@ -127,8 +135,18 @@ def _parse_af_args(args_str: str) -> tuple[list[str], list[tuple[str, str]]]:
 
     depth = 0
     current = ""
+    quote = ""
 
     for ch in args_str:
+        if quote:
+            current += ch
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            current += ch
+            continue
         if ch in ("(", "["):
             depth += 1
             current += ch
@@ -178,17 +196,53 @@ def _sub_operand_kwarg(
 ) -> str:
     """Substitute a kwarg value, quoting string enum values."""
     if key in _STRING_KWARGS:
-        return f'"{value}"'
+        return _string_literal(value)
     # oneshot=1 → oneshot=True
     if key == "oneshot" and value == "1":
         return "True"
     # word_swap=1 → word_swap=True, word_swap=0 → word_swap=False
     if key == "word_swap":
         return "True" if value == "1" else "False"
-    # convert=to_value or convert=to_text(suppress_zero=0,...) — pass through
+    # Conversion syntax is source too; validate it before passing it through.
     if key == "convert":
-        return value
+        _validate_operand(value)
+        return _pythonize_csv_strings(value)
     return _sub_operand(value, collection, nicknames, structured_map)
+
+
+def _validate_operand(text: str) -> ast.expr:
+    """Validate Click syntax before substituting trusted generated references."""
+    normalized = _pythonize_csv_strings(text)
+    normalized = _CLICK_HEX_RE.sub(lambda m: f"0x{m.group(1)}", normalized)
+    normalized = _SUM_RE.sub(
+        lambda m: f"_range_sum({m.group(1)}{m.group(2)}, {m.group(3)}{m.group(4)})",
+        normalized,
+    )
+    normalized = _RANGE_RE.sub(
+        lambda m: f"_range({m.group(1)}{m.group(2)}, {m.group(3)}{m.group(4)})",
+        normalized,
+    )
+    normalized = _click_expr_to_python(normalized)
+    return _validate_expression(
+        normalized,
+        functions=set(_CLICK_FUNC_TO_PYTHON.values())
+        | _COPY_CONVERTERS
+        | {
+            "all",
+            "any",
+            "ModbusTcpTarget",
+            "ModbusRtuTarget",
+            "ModbusAddress",
+            "_range",
+            "_range_sum",
+            "immediate",
+            "rise",
+            "fall",
+        },
+        constants={"PI", "none"} | _COPY_CONVERTERS,
+        operand_pattern=_OPERAND_RE,
+        blocks=set(_PREFIX_TO_BLOCK),
+    )
 
 
 def _sub_operand(
@@ -203,6 +257,8 @@ def _sub_operand(
     """
     if not text:
         return text
+
+    expression = _validate_operand(text)
 
     # System operands (SC/SD → system.* path)
     if text in SYSTEM_OPERAND_PATHS:
@@ -223,9 +279,9 @@ def _sub_operand(
         r = collection.ranges[text]
         return _render_inline_range(r.prefix, r.start, r.end)
 
-    # Check for quoted strings — pass through
-    if text.startswith('"') and text.endswith('"'):
-        return text
+    # Decode the CSV string grammar before rendering a Python literal.
+    if text.startswith('"'):
+        return _string_literal(_csv_string_value(text))
 
     # Check for numeric literal
     try:
@@ -245,7 +301,7 @@ def _sub_operand(
 
     # Check for function-call operands
     match = _FUNC_RE.match(text)
-    if match:
+    if match and isinstance(expression, ast.Call):
         func_name = match.group(2)
         inner_args_str = match.group(3) or ""
         if func_name == "ModbusTcpTarget":
@@ -264,7 +320,7 @@ def _sub_operand(
             args, kwargs = _parse_af_args(inner_args_str)
             rendered: list[str] = []
             for k, v in kwargs:
-                rendered.append(f"{k}={v}")
+                rendered.append(f"{k}={_sub_operand(v, collection, nicknames, structured_map)}")
             return f"ModbusAddress({', '.join(rendered)})"
         if func_name in {"all", "any"}:
             args, kwargs = _parse_af_args(inner_args_str)
@@ -288,7 +344,7 @@ def _sub_operand(
             return f"{py_name}({', '.join(rendered)})"
 
     # Check for list/array: [C1,C2,C3]
-    if text.startswith("[") and text.endswith("]"):
+    if text.startswith("[") and text.endswith("]") and isinstance(expression, ast.List):
         inner = text[1:-1]
         if not inner:
             return "[]"
@@ -298,7 +354,7 @@ def _sub_operand(
 
     # Pointer/indirect addressing: DH[DS134] → dh[tag_var_name]
     ptr_match = _POINTER_RE.fullmatch(text)
-    if ptr_match:
+    if ptr_match and isinstance(expression, ast.Subscript):
         prefix = ptr_match.group(1)
         block_var = _PREFIX_TO_BLOCK[prefix]
         collection.used_blocks.add(block_var)
@@ -306,7 +362,7 @@ def _sub_operand(
         return f"{block_var}[{inner}]"
 
     # Check for ranges like DS100..DS102
-    range_match = _RANGE_RE.match(text)
+    range_match = _RANGE_RE.fullmatch(text)
     if range_match:
         prefix = range_match.group(1)
         start_num = int(range_match.group(2))
@@ -318,7 +374,7 @@ def _sub_operand(
 
     # Hex literals first, while text is still raw Click (uppercase operand
     # names like DH001 won't false-match because H is not a hex digit).
-    result = _CLICK_HEX_RE.sub(lambda m: f"0x{m.group(1).upper()}", text)
+    result = _CLICK_HEX_RE.sub(lambda m: f"0x{m.group(1).upper()}", _pythonize_csv_strings(text))
 
     # Convert SUM colon-ranges (before general expression conversion)
     def _sub_sum(m: re.Match[str]) -> str:

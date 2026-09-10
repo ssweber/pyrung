@@ -8,6 +8,12 @@
      Review and condense before release — entries accumulate during development and
      should be edited into shape before moving from Unreleased to a version heading. -->
 
+## v0.15.1 (2026-09-10)
+
+### Fixes
+
+- CLICK CSV imports reject unsupported executable expressions and preserve imported names and text as data in generated Python.
+
 ## v0.15.0 (2026-09-09)
 
 ### Breaking Changes
