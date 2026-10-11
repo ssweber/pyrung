@@ -2361,6 +2361,24 @@ def test_tags_from_plc_data_includes_system_tags():
     assert "_PLC_Mode" in result or len(result) == 1
 
 
+def test_tags_from_plc_data_blocks_seed_unmapped_bank_slots():
+    """Bank slots used without a TagMap entry resolve through *blocks*."""
+    blocks = ClickBlocks()
+    blocks.x.slot(1, name="Start")
+    valve = Bool("Valve")
+    mapping = TagMap({valve: blocks.c[1]})
+
+    data = {"C1": True, "X001": True, "DS5": 7, "T1": True, "DS99999": 1, "bogus": 1}
+
+    assert mapping.tags_from_plc_data(data) == {"Valve": True}
+    # Mapped slots keep their logical name; timer banks and bad addresses are skipped.
+    assert mapping.tags_from_plc_data(data, blocks=blocks) == {
+        "Valve": True,
+        "Start": True,
+        "DS5": 7,
+    }
+
+
 # ── load_snapshot ──────────────────────────────────────────────────
 
 

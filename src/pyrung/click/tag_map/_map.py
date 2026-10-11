@@ -19,7 +19,11 @@ from pyrung.core import Block, BlockRange, Tag
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import MappingEntry
 
-from ._nickname_io import tag_map_from_nickname_file, write_tag_map_to_nickname_file
+from ._nickname_io import (
+    _PLAIN_DATA_BANKS,
+    tag_map_from_nickname_file,
+    write_tag_map_to_nickname_file,
+)
 from ._parsers import (
     _tag_type_for_memory_type,
 )
@@ -391,13 +395,15 @@ class TagMap:
     def tags_from_plc_data(
         self,
         data: Mapping[str, bool | int | float | str],
+        *,
+        blocks: Iterable[Any] | None = None,
     ) -> dict[str, bool | int | float | str]:
         """Return logical tag values from a PLC data dump.
 
         Accepts a dict keyed by Click display addresses (e.g. from
         ``pyclickplc.read_plc_data``) and returns a dict keyed by the
         logical tag names in this mapping.  Unmapped addresses are
-        silently skipped.
+        silently skipped unless *blocks* covers them.
 
         .. code-block:: python
 
@@ -410,10 +416,15 @@ class TagMap:
         Args:
             data: ``{hardware_address: value}`` dict — keys are normalised
                 Click display addresses such as ``"X001"`` or ``"DS3"``.
+            blocks: Click bank blocks whose slots the program uses directly,
+                without a TagMap entry (``x.slot(1, name="Button")`` or a
+                bare ``ds[5]``).  Accepts a ``ClickBlockSet`` or any iterable
+                of blocks; non-Block items are silently skipped.  When
+                omitted, only addresses mapped by this TagMap are returned.
 
         Returns:
             ``{logical_name: value}`` dict containing only the addresses
-            that appear in both *data* and this TagMap.
+            that appear in both *data* and this TagMap (or *blocks*).
         """
         reverse: dict[str, str] = {}
         for slot in self.mapped_slots():
@@ -421,13 +432,37 @@ class TagMap:
                 continue
             reverse[slot.hardware_address] = slot.logical_name
 
-        return {reverse[addr]: value for addr, value in data.items() if addr in reverse}
+        tags = {reverse[addr]: value for addr, value in data.items() if addr in reverse}
+        if blocks is None:
+            return tags
+
+        banks = {
+            blk.name: blk
+            for blk in blocks
+            if isinstance(blk, Block) and blk.name in _PLAIN_DATA_BANKS
+        }
+        for addr, value in data.items():
+            if addr in reverse:
+                continue
+            try:
+                memory_type, index = parse_address(addr)
+            except ValueError:
+                continue
+            bank = banks.get(memory_type)
+            if bank is None:
+                continue
+            try:
+                tags[bank[index].name] = value
+            except IndexError:
+                continue
+        return tags
 
     def load_snapshot(
         self,
         path: str | Path,
         *,
         skip_default: bool = True,
+        blocks: Iterable[Any] | None = None,
     ) -> SystemState:
         """Load a Click CSV data dump and return a :class:`SystemState`.
 
@@ -440,9 +475,12 @@ class TagMap:
 
         Args:
             path: Path to a CSV file exported via Click Programming
-                Software's *Data → Read Data from PLC → All → Save*.
+                Software's *PLC → Read Data from PLC → All → Save*.
             skip_default: If ``True`` (default), omit addresses that
                 still hold their power-on default.
+            blocks: Click bank blocks to seed for slots used without a
+                TagMap entry; see :meth:`tags_from_plc_data`.  Generated
+                projects export this as ``blocks`` beside ``mapping``.
 
         Returns:
             A :class:`SystemState` seeded with the mapped tag values.
@@ -452,7 +490,7 @@ class TagMap:
         from pyrung.core.state import SystemState
 
         data = read_plc_data(path, skip_default=skip_default)
-        tags = self.tags_from_plc_data(data)
+        tags = self.tags_from_plc_data(data, blocks=blocks)
         return SystemState().with_tags(tags)
 
     @property
