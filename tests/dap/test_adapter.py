@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 import queue
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -752,6 +753,127 @@ def test_launch_with_snapshot_seeds_initial_state(tmp_path: Path, monkeypatch: A
     state = adapter._runner._state
     assert state.tags["Sensor"] is True
     assert state.tags["Level"] == 42
+
+
+def test_launch_with_snapshot_finds_tag_map_in_generated_package(tmp_path: Path, monkeypatch: Any):
+    """snapshotPath works for the generated ``src/plc`` layout, not just flat ``tags.py``."""
+    package_dir = tmp_path / "src" / "plc"
+    package_dir.mkdir(parents=True)
+    monkeypatch.syspath_prepend(str(tmp_path / "src"))
+    # A top-level ``tags`` left behind by another test must not stand in for
+    # this project's ``plc.tags``.
+    for name in ("tags", "plc", "plc.tags", "plc.main"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    _write_script(package_dir, "__init__.py", "")
+    _write_script(
+        package_dir,
+        "tags.py",
+        "from pyrung.click import ClickBlocks, TagMap\n"
+        "from pyrung.core import Bool, Tag, TagType\n"
+        "blocks = ClickBlocks()\n"
+        "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = blocks\n"
+        # Plain nicknames live on the bank slot, with no TagMap entry.
+        "x.slot(1, name='Start')\n"
+        "Start = x[1]\n"
+        "Pump = Bool('Pump')\n"
+        "Speed = Tag('Speed', TagType.INT)\n"
+        "mapping = TagMap({Pump: c[1], Speed: ds[1]})\n",
+    )
+    _write_script(
+        package_dir,
+        "main.py",
+        "from pyrung.core import Program, Rung, copy, out\n"
+        "from .tags import Pump, Speed, Start, ds, mapping\n"
+        "with Program(strict=False) as logic:\n"
+        "    with Rung(Start, Pump):\n"
+        "        out(Speed)\n"
+        "        copy(ds[5], ds[6])\n",
+    )
+    _write_script(
+        tmp_path,
+        "run.py",
+        "from pyrung import PLC\nfrom plc.main import logic\nrunner = PLC(logic)\n",
+    )
+
+    csv_path = tmp_path / "snapshot.csv"
+    csv_path.write_text("")
+    monkeypatch.setattr(
+        "pyclickplc.read_plc_data",
+        lambda path, **kw: {"C1": True, "DS1": 42, "X001": True, "DS5": 7},
+    )
+
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+
+    try:
+        messages = _send_request(
+            adapter,
+            out_stream,
+            seq=1,
+            command="launch",
+            arguments={"program": str(tmp_path / "run.py"), "snapshotPath": str(csv_path)},
+        )
+    finally:
+        for name in ("plc", "plc.tags", "plc.main"):
+            sys.modules.pop(name, None)
+
+    response = _single_response(messages)
+    assert response["success"] is True, response.get("message")
+    assert adapter._runner is not None
+    state = adapter._runner._state
+    assert state.tags["Pump"] is True
+    assert state.tags["Speed"] == 42
+    assert state.tags["Start"] is True
+    assert state.tags["DS5"] == 7
+
+
+def test_launch_with_snapshot_rejects_file_without_plc_data(tmp_path: Path, monkeypatch: Any):
+    """A CSV that is not a PLC data dump fails loudly instead of seeding nothing."""
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, "tags", raising=False)
+    _write_script(
+        tmp_path,
+        "tags.py",
+        "from pyrung.click import ClickBlocks, TagMap\n"
+        "from pyrung.core import Bool\n"
+        "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()\n"
+        "Sensor = Bool('Sensor')\n"
+        "mapping = TagMap({Sensor: c[1]})\n",
+    )
+    _write_script(
+        tmp_path,
+        "run.py",
+        "from pyrung.core import PLC, Program, Rung, out\n"
+        "from tags import Sensor\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(Sensor):\n"
+        "        out(Sensor)\n"
+        "runner = PLC(prog)\n",
+    )
+    nicknames = tmp_path / "nicknames.csv"
+    nicknames.write_text(
+        "Address,Data Type,Nickname,Initial Value,Retentive,Address Comment\n"
+        'C1,BIT,"Sensor",0,No,""\n'
+    )
+
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+
+    try:
+        messages = _send_request(
+            adapter,
+            out_stream,
+            seq=1,
+            command="launch",
+            arguments={"program": str(tmp_path / "run.py"), "snapshotPath": str(nicknames)},
+        )
+    finally:
+        sys.modules.pop("tags", None)
+
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "no PLC data found in nicknames.csv" in response["message"]
 
 
 def test_variables_non_object_arguments_keep_legacy_internal_error_shape(tmp_path: Path):

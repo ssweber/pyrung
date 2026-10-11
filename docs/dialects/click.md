@@ -455,7 +455,7 @@ Both forms produce identical CSV output.
 
 ## Loading PLC state
 
-Use CLICK Programming Software's **Data > Read Data from PLC** to dump the live state of a CLICK PLC to CSV, then load that snapshot into a pyrung runner so it starts right where the PLC was.
+Use CLICK Programming Software's **PLC > Read Data from PLC** to dump the live state of a CLICK PLC to CSV, then load that snapshot into a pyrung runner so it starts right where the PLC was.
 
 ```python
 from pyclickplc import read_plc_data
@@ -469,6 +469,12 @@ runner = PLC(logic, initial_state=SystemState().with_tags(tags))
 `read_plc_data` (from `pyclickplc`) parses the CSV and returns `{hardware_address: value}`. `tags_from_plc_data` translates the hardware keys to logical tag names using the TagMap, silently skipping any addresses that aren't mapped. The result is ready for `SystemState.with_tags()` or `runner.patch()`.
 
 `skip_default=True` omits zero/false/empty values — useful since PLC dumps are exhaustive and most addresses are at their default.
+
+Programs that use Click bank slots directly — `x.slot(1, name="Button")` or a bare `ds[5]`, as generated projects do for plain nicknames — have no TagMap entry for those addresses. Pass the bank set as `blocks` to seed them too:
+
+```python
+tags = mapping.tags_from_plc_data(data, blocks=blocks)
+```
 
 You can also inject a PLC snapshot mid-run:
 

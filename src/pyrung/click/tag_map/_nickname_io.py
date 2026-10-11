@@ -39,6 +39,11 @@ from ._types import StructuredImport, _BlockEntry, _BlockImportSpec
 if TYPE_CHECKING:
     from ._map import TagMap
 
+#: Banks whose slots can carry identity without a TagMap entry.  XD/YD use
+#: display-indexed addressing, and timer/counter/system banks are always
+#: reached through TagMap entries.
+_PLAIN_DATA_BANKS = frozenset({"X", "Y", "C", "DS", "DD", "DH", "DF", "TXT"})
+
 
 def _tag_meta_from_hints(
     *,
@@ -992,9 +997,7 @@ def write_tag_map_to_nickname_file(
     # Bank-resident scalars carry identity on the public Click bank slots
     # (installed by generated ``bank.slot(...)`` config or ``map_to`` stamping)
     # and may have no TagMap entry — emit rows for configured slots not already
-    # covered.  XD/YD use display-indexed addressing, and timer/counter/system
-    # banks keep TagMap-entry emission, so only plain data banks are scanned.
-    scanned_banks = {"X", "Y", "C", "DS", "DD", "DH", "DF", "TXT"}
+    # covered.  Only the plain data banks are scanned.
     seen_block_ids: set[int] = set()
     all_blocks: list[Block] = []
     for entry in self._block_entries_tuple:
@@ -1011,7 +1014,7 @@ def write_tag_map_to_nickname_file(
                 seen_block_ids.add(bid)
                 all_blocks.append(blk)
     for bank in all_blocks:
-        if bank.name not in scanned_banks:
+        if bank.name not in _PLAIN_DATA_BANKS:
             continue
         for address in sorted(bank._configured_addresses()):
             addr_key = get_addr_key(bank.name, address)

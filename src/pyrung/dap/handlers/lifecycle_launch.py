@@ -8,11 +8,17 @@ from __future__ import annotations
 
 import os
 import runpy
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core import PLC, Program
+
+if TYPE_CHECKING:
+    from types import ModuleType
+
+    from pyrung.click.tag_map import TagMap
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
@@ -49,22 +55,66 @@ def on_threads(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
     return {"threads": [{"id": adapter.THREAD_ID, "name": "PLC Scan"}]}, []
 
 
-def _apply_snapshot(runner: PLC, snapshot_path: str, project_dir: Path) -> PLC:
-    """Reconstruct *runner* with initial state loaded from a Click CSV snapshot."""
+def _find_project_tags_module(project_dir: Path) -> ModuleType | None:
+    """Return the launched project's module exporting a ``mapping`` TagMap, if any.
+
+    Generated projects keep it in ``plc.tags`` while hand-written ones often use
+    a top-level ``tags`` module, so search by location rather than module name.
+    """
     import sys
 
     from pyrung.click.tag_map import TagMap
 
+    root = os.path.normcase(os.path.abspath(str(project_dir))) + os.sep
+    fallback: ModuleType | None = None
+    for name, mod in list(sys.modules.items()):
+        if not isinstance(getattr(mod, "mapping", None), TagMap):
+            continue
+        mod_file = getattr(mod, "__file__", None)
+        if not isinstance(mod_file, str):
+            continue
+        if not os.path.normcase(os.path.abspath(mod_file)).startswith(root):
+            continue
+        # Other project modules re-import ``mapping``; prefer where it is defined.
+        if name.rpartition(".")[2] == "tags":
+            return mod
+        if fallback is None:
+            fallback = mod
+    if fallback is not None:
+        return fallback
+
+    # A ``tags`` module importable from outside the program directory.
     tags_mod = sys.modules.get("tags")
-    mapping = getattr(tags_mod, "mapping", None) if tags_mod is not None else None
-    if not isinstance(mapping, TagMap):
+    return tags_mod if isinstance(getattr(tags_mod, "mapping", None), TagMap) else None
+
+
+def _apply_snapshot(runner: PLC, snapshot_path: str, project_dir: Path) -> PLC:
+    """Reconstruct *runner* with initial state loaded from a Click CSV snapshot."""
+    tags_mod = _find_project_tags_module(project_dir)
+    if tags_mod is None:
         raise ValueError("Cannot load snapshot: no TagMap found in project")
+    mapping: TagMap = tags_mod.mapping
+    # Generated projects name plain addresses on the Click banks themselves
+    # rather than in the TagMap, so seed those slots too.
+    blocks = getattr(tags_mod, "blocks", None)
+    if not isinstance(blocks, Iterable):
+        blocks = None
 
     resolved = Path(snapshot_path).expanduser()
     if not resolved.is_absolute():
         resolved = project_dir / resolved
 
-    state = mapping.load_snapshot(resolved)
+    # A real dump lists every address, so an empty parse means some other CSV
+    # (a nickname export, say) that would otherwise seed nothing without a word.
+    from pyclickplc import read_plc_data
+
+    if not read_plc_data(resolved):
+        raise ValueError(
+            f"Cannot load snapshot: no PLC data found in {resolved.name}. "
+            "Expected a CSV saved from PLC > Read Data from PLC in CLICK."
+        )
+
+    state = mapping.load_snapshot(resolved, blocks=blocks)
     logic = runner._program if runner._program is not None else list(runner._logic)
     return PLC(logic, initial_state=state)
 

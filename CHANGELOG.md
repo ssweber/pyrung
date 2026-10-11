@@ -8,6 +8,13 @@
      Review and condense before release — entries accumulate during development and
      should be edited into shape before moving from Unreleased to a version heading. -->
 
+## v0.15.2 (2026-10-11)
+
+### Fixes
+
+- Launching the debugger with `snapshotPath` now seeds PLC state for generated `src/plc` projects, including plain nicknamed addresses, instead of failing with "no TagMap found in project"; a CSV that is not a PLC data dump is rejected with a clear error.
+- `TagMap.load_snapshot()` and `tags_from_plc_data()` accept `blocks` to seed Click bank slots that have no TagMap entry.
+
 ## v0.15.1 (2026-09-10)
 
 ### Fixes
