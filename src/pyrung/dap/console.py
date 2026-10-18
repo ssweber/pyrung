@@ -176,7 +176,7 @@ def _cmd_force(adapter: Any, expression: str) -> ConsoleResult:
     raw_value = parts[2]
     value = adapter._parse_literal(raw_value)
     runner = adapter._require_runner_locked()
-    runner.force(tag, value)
+    runner.force(adapter._resolve_target_locked(tag), value)
     execution_flow.invalidate_mid_scan(adapter)
     return ConsoleResult(f"Forced {tag}={value!r}")
 
@@ -188,7 +188,7 @@ def _cmd_unforce(adapter: Any, expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError("Usage: unforce <tag>")
     tag = parts[1]
     runner = adapter._require_runner_locked()
-    runner.unforce(tag)
+    runner.unforce(adapter._resolve_target_locked(tag))
     execution_flow.invalidate_mid_scan(adapter)
     return ConsoleResult(f"Removed force {tag}")
 
@@ -215,7 +215,7 @@ def _cmd_patch(adapter: Any, expression: str) -> ConsoleResult:
     raw_value = parts[2]
     value = adapter._parse_literal(raw_value)
     runner = adapter._require_runner_locked()
-    runner.patch({tag: value})
+    runner.patch({adapter._resolve_target_locked(tag): value})
     execution_flow.invalidate_mid_scan(adapter)
     return ConsoleResult(f"Patched {tag}={value!r}")
 
@@ -244,6 +244,51 @@ def _cmd_pause(adapter: Any, _expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError("Not running")
     adapter._pause_event.set()
     return ConsoleResult("Pausing after current scan")
+
+
+@register("mode", usage="mode [run|stop]", group="execution", hint="(PLC RUN/STOP mode)")
+def _cmd_mode(adapter: Any, expression: str) -> ConsoleResult:
+    from pyrung.dap.handlers.simulation import set_mode_locked
+
+    parts = expression.strip().split()
+    runner = adapter._require_runner_locked()
+    if len(parts) == 1:
+        return ConsoleResult(f"Mode: {runner.mode.upper()}")
+    mode = parts[1].lower()
+    if len(parts) > 2 or mode not in ("run", "stop"):
+        raise adapter.DAPAdapterError("Usage: mode [run|stop]")
+    set_mode_locked(adapter, mode)
+    if mode == "stop" and adapter._pending_stop:
+        return ConsoleResult("Pausing, then entering STOP")
+    return ConsoleResult(f"Mode: {runner.mode.upper()}")
+
+
+@register(
+    "speed",
+    usage="speed [N|max]",
+    group="execution",
+    hint="(1 = real time; 0 or max = unpaced)",
+    slots=(Slot(kind="text", label="N|max", required=False),),
+)
+def _cmd_speed(adapter: Any, expression: str) -> ConsoleResult:
+    from pyrung.dap.handlers.simulation import parse_speed
+
+    parts = expression.strip().split()
+    if len(parts) > 2:
+        raise adapter.DAPAdapterError("Usage: speed [N|max]")
+    if len(parts) == 2:
+        if parts[1].lower() == "max":
+            raw: Any = 0.0
+        else:
+            try:
+                raw = float(parts[1])
+            except ValueError:
+                raw = parts[1]
+        adapter._speed = parse_speed(adapter, raw, prefix="speed")
+    speed = adapter._speed
+    if speed <= 0:
+        return ConsoleResult("Speed: unpaced")
+    return ConsoleResult(f"Speed: {speed:g}x real time")
 
 
 @register("stop", usage="stop", group="execution", hint="(cancels a running analysis)")

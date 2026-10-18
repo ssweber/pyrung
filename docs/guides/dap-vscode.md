@@ -107,9 +107,11 @@ The Debug Console accepts typed commands for PLC execution, inspection, analysis
 execution:
   autoreload [off]
   continue
+  mode [run|stop]                                       (PLC RUN/STOP mode)
   pause
   reload
   run <N | duration>  (e.g. 10, 500ms, 2 s)
+  speed [N|max]                                         (1 = real time; 0 or max = unpaced)
   step [N]
   stop                                                  (cancels a running analysis)
 
@@ -449,6 +451,60 @@ New tags added to the program get their defaults. Removed tags become harmless o
 ### Errors
 
 If the program file has a syntax error or the runner can't be discovered, the reload aborts and the old runner stays active. Fix the file and reload again.
+
+## Simulator controls
+
+A debug session can stand in for a CLICK PLC: other tools read and write it over Modbus TCP and drive it through a few custom DAP requests. All of it is off unless asked for.
+
+Launch arguments (all optional):
+
+```json
+{
+  "type": "pyrung",
+  "request": "launch",
+  "program": "${workspaceFolder}/run.py",
+  "modbus": {"host": "127.0.0.1", "port": 502, "allowInputWrites": true},
+  "speed": 1.0,
+  "startMode": "stop",
+  "keepForcesOnRun": true
+}
+```
+
+- `modbus` starts a Modbus TCP server inside the session. Reads return the current tag values; writes are one-scan patches, so a value sticks until logic writes it, as on a real PLC. `allowInputWrites` lets clients write X inputs, which a real CLICK refuses. Addresses map through the program's TagMap: a `mapping` in the launched file, or the `mapping` and `blocks` that generated projects keep in `plc/tags.py`. If the port cannot be bound the launch still succeeds; the reason is printed to the Debug Console and reported by `pyrungModbusInfo`.
+- `speed` paces Continue so simulation time runs at wall time x `speed` (the scan period itself never changes). `0`, the default, runs unpaced. When the program cannot keep up, pacing does not burst to catch up. Stepping and `run N` / `run <duration>` are never paced.
+- `startMode` puts the PLC in `"stop"` or `"run"` mode at launch. Without it the runner keeps the mode it was built with.
+- `keepForcesOnRun` sets `PLC.keep_forces_on_run`, so forces survive STOP -> RUN. Without it the program's own setting is kept (off by default). Reloads keep it.
+
+Custom requests:
+
+| Request | Arguments | Response body |
+|---|---|---|
+| `pyrungSetMode` | `{mode: "run" or "stop", patches?: {target: value}, forces?: {target: value}}` | `{mode, forces, pendingPatches}` |
+| `pyrungSetSpeed` | `{speed}` | `{speed}` |
+| `pyrungModbusInfo` | none | `{running, host, port, allowInputWrites, clients, error}` |
+
+`pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition (non-retentive tags reset, patches cleared, forces cleared unless `keepForcesOnRun`) without executing a scan, then applies the given forces and patches, so the first scan sees them; execution stays paused until the client continues or steps. `stop` enters STOP mode; the next step or Continue performs STOP -> RUN again. Writing the STOP command bit (SC50) over Modbus pauses Continue and enters STOP the same way.
+
+Wherever a request or console command takes a tag (`pyrungForce`, `pyrungUnforce`, `pyrungPatch`, `pyrungSetMode`, and the `force` / `unforce` / `patch` verbs), a CLICK address such as `X001` or `DS10` works too. Tag names are tried first, so a tag literally named `X003` keeps working. A target that is neither a tag nor a mapped address is an error.
+
+Anyone can drive and the last command wins: a step or `run` from VS Code or `pyrung live` while Continue runs pauses it first, then executes.
+
+The Debug Console verbs `mode [run|stop]` and `speed [N|max]` mirror the requests.
+
+### State frames
+
+`pyrungScanFrame` is sent while Continue runs and also after any state change: a step, run, force, patch, mode or speed change, or reload, whether it came from a DAP request, a `pyrung live` command, a Modbus write, or auto-reload. Besides `trace` (whose `forces` always holds the full force map), `changes`, `monitors`, `snapshots`, and `outputs`, each frame carries:
+
+| Field | Meaning |
+|---|---|
+| `mode` | `"run"` or `"stop"` |
+| `running` | Continue is executing |
+| `speed` | Requested pacing, `0` = unpaced |
+| `actualSpeed` | Measured simulation time / wall time while running, else `null` |
+| `pendingPatches` | Patches not yet in the committed state (queued, or taken by a scan still being stepped) |
+| `source` | Who caused the frame: `{origin, command}`, origin one of `dap`, `live`, `worker`, `modbus`, `autoreload` |
+
+Frames sent outside Continue carry an empty `changes` list and, when paused, the same trace as the latest `pyrungTrace`.
 
 ## DAP to runner mapping
 

@@ -175,3 +175,104 @@ def test_register_known_tag_conflict_on_same_name_raises():
 
     with pytest.raises(ValueError, match="Conflicting tag metadata"):
         runner.patch({second: 2})
+
+
+def _mode_program() -> tuple[Program, Bool, Bool, Int]:
+    button = Bool("ModeButton")
+    lamp = Bool("ModeLamp")
+    level = Int("ModeLevel", retentive=False)
+    latched = Int("ModeLatched")
+    with Program() as program:
+        with Rung(button):
+            out(lamp)
+        with Rung():
+            copy(level, latched)
+    return program, button, lamp, level
+
+
+def test_mode_and_start_transition_without_scanning(runner_factory):
+    program, button, lamp, level = _mode_program()
+    runner = runner_factory(program)
+    assert runner.mode == "run"
+    runner.step()
+    runner.stop()
+    assert runner.mode == "stop"
+
+    runner.start()
+    assert runner.mode == "run"
+    assert runner.current_state.scan_id == 0  # transition only, no scan
+    runner.start()  # no-op in RUN
+    assert runner.current_state.scan_id == 0
+
+    # Overrides applied after start() reach the first scan.
+    runner.force(button, True)
+    runner.patch({level: 5})
+    assert dict(runner.pending_patches) == {level.name: 5}
+    runner.step()
+    assert runner.current_state.tags[lamp.name] is True
+    assert runner.current_state.tags[level.name] == 5
+    assert dict(runner.pending_patches) == {}
+
+
+def test_forces_and_patches_cleared_on_stop_to_run_by_default(runner_factory):
+    program, button, _lamp, level = _mode_program()
+    runner = runner_factory(program)
+    assert runner.keep_forces_on_run is False
+    runner.force(button, True)
+    runner.stop()
+    runner.patch({level: 3})
+    runner.step()
+    assert dict(runner.forces) == {}
+    assert runner.current_state.tags[level.name] == 0
+
+
+def test_keep_forces_on_run_keeps_forces_but_still_resets(runner_factory):
+    program, button, lamp, level = _mode_program()
+    runner = runner_factory(program)
+    runner.keep_forces_on_run = True
+    runner.force(button, True)
+    runner.patch({level: 3})
+    runner.step()
+    runner.stop()
+    runner.patch({level: 9})
+
+    runner.start()
+    assert dict(runner.forces) == {button.name: True}
+    assert dict(runner.pending_patches) == {}
+    assert runner.current_state.tags[level.name] == 0  # non-retentive reset
+    runner.step()
+    assert runner.current_state.tags[lamp.name] is True
+
+
+def test_keep_forces_on_run_applies_to_implicit_restart_and_not_to_reboot():
+    program, button, _lamp, _level = _mode_program()
+    runner = PLC(program, keep_forces_on_run=True)
+    runner.force(button, True)
+    runner.stop()
+    runner.step()  # implicit STOP -> RUN
+    assert dict(runner.forces) == {button.name: True}
+
+    runner.reboot()
+    assert dict(runner.forces) == {}
+
+
+def test_keep_forces_on_run_is_inherited_by_forks():
+    program, _button, _lamp, _level = _mode_program()
+    runner = PLC(program, keep_forces_on_run=True)
+    runner.step()
+    assert runner.fork().keep_forces_on_run is True
+
+
+def test_abandoned_debug_scan_requeues_its_patches():
+    program, _button, _lamp, level = _mode_program()
+    runner = PLC(program)
+    runner.patch({level: 4})
+    steps = runner.debug.scan_steps_debug()
+    next(steps)
+    assert dict(runner.pending_patches) == {level.name: 4}  # taken, not committed
+    runner.patch({level: 6})
+    steps.close()
+    runner.debug.abandon_scan()
+    assert dict(runner.pending_patches) == {level.name: 6}  # newer patch wins
+    runner.step()
+    assert runner.current_state.tags[level.name] == 6

@@ -140,6 +140,12 @@ def on_evaluate(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     context = parsed.context
     evaluate_context = context if isinstance(context, str) else "repl"
 
+    if evaluate_context != "watch":
+        # The last command wins: step/run pause a running continue first.
+        from pyrung.dap.handlers.simulation import pause_before_console_command
+
+        pause_before_console_command(adapter, expression)
+
     with adapter._state_lock:
         adapter._require_runner_locked()
         if evaluate_context == "watch":

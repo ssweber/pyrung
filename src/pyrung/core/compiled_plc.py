@@ -11,7 +11,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime, timedelta
-from typing import Any, cast
+from types import MappingProxyType
+from typing import Any, Literal, cast
 
 from pyrung.core.context import ScanContext
 from pyrung.core.input_overrides import InputOverrideManager
@@ -205,6 +206,7 @@ class CompiledPLC:
         *,
         dt: float = 0.010,
         compiled: CompiledKernel | None = None,
+        keep_forces_on_run: bool = False,
     ) -> None:
         from pyrung.circuitpy.codegen.render_kernel import compile_kernel
         from pyrung.core.program import Program
@@ -218,6 +220,7 @@ class CompiledPLC:
         self._time_mode = TimeMode.FIXED_STEP
         self._running = True
         self._battery_present = True
+        self._keep_forces_on_run = bool(keep_forces_on_run)
         self._rtc_base = self._normalize_rtc_datetime(datetime.now())
         self._rtc_base_sim_time = 0.0
         self._system_runtime = SystemPointRuntime(
@@ -363,6 +366,29 @@ class CompiledPLC:
         self._battery_present = bool(value)
         self._kernel.memory[_BATTERY_PRESENT_KEY] = self._battery_present
         self._state = self._state.with_memory({_BATTERY_PRESENT_KEY: self._battery_present})
+
+    @property
+    def mode(self) -> Literal["run", "stop"]:
+        """PLC mode: ``"run"`` or ``"stop"``."""
+        return "run" if self._running else "stop"
+
+    def start(self) -> None:
+        """Transition STOP -> RUN now, without executing a scan (see ``PLC.start``)."""
+        self._ensure_running()
+
+    @property
+    def keep_forces_on_run(self) -> bool:
+        """Whether active forces survive a STOP -> RUN transition."""
+        return self._keep_forces_on_run
+
+    @keep_forces_on_run.setter
+    def keep_forces_on_run(self, value: bool) -> None:
+        self._keep_forces_on_run = bool(value)
+
+    @property
+    def pending_patches(self) -> Mapping[str, bool | int | float | str]:
+        """Read-only view of patches queued for the next scan."""
+        return MappingProxyType(self._pending_patches)
 
     def stop(self) -> None:
         if not self._running:
@@ -763,10 +789,12 @@ class CompiledPLC:
     def _stop_to_run_transition(self) -> None:
         if self._running:
             return
+        kept_forces = dict(self._forces) if self._keep_forces_on_run else {}
         tag_values = self._rebuild_tags_for_reset(preserve_all=False, preserve_retentive=True)
         self._reset_runtime_scope(
             tag_values=tag_values, mode_run=True, preserve_rtc_continuity=True
         )
+        self._forces.update(kept_forces)
         self._running = True
 
     def _rebuild_tags_for_reset(

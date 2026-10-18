@@ -8,6 +8,19 @@
      Review and condense before release — entries accumulate during development and
      should be edited into shape before moving from Unreleased to a version heading. -->
 
+## Unreleased
+
+### Features
+
+- The debugger can act as a simulated CLICK PLC: a `modbus` launch argument serves the session over Modbus TCP (optionally with writable X inputs), `speed` paces Continue to real time, and `startMode` plus the `pyrungSetMode`, `pyrungSetSpeed`, and `pyrungModbusInfo` requests (and the `mode` and `speed` console verbs) control RUN/STOP and pacing.
+- Force, unforce, and patch accept CLICK addresses such as `X001` or `DS10` in DAP requests and console commands, and reject targets that are neither a tag nor a mapped address instead of creating an unused tag.
+- `pyrungScanFrame` is now sent after every state change, including `pyrung live` commands and Modbus writes, and reports mode, running, speed, measured speed, pending patches, and what caused it; `pyrung live` commands also notify the debugger with their stop and trace events.
+- A `step` or `run` sent while Continue runs pauses it and then executes instead of failing.
+- `PLC.start()` enters RUN without executing a scan, `PLC.mode` reads `"run"` or `"stop"`, and `PLC.pending_patches` shows patches not yet committed; the same API is on `CompiledPLC`.
+- `PLC(keep_forces_on_run=True)` (or the `keep_forces_on_run` property, or the debugger's `keepForcesOnRun` launch argument) keeps forces across STOP -> RUN; by default they are still cleared.
+- `plc.debug.abandon_scan()` re-queues the patches a partially stepped scan had taken, and the debugger uses it so a patch sent while paused mid-scan is never lost.
+- `ClickDataProvider` accepts a runner getter, Click bank `blocks` for slots without a TagMap entry, and an `on_stop` hook, and can report the tag served at an address.
+
 ## v0.15.2 (2026-10-11)
 
 ### Fixes

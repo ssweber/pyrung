@@ -5,6 +5,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+import time
 from collections.abc import Callable, Generator
 from typing import Any, BinaryIO, ClassVar, TypeVar
 
@@ -28,6 +29,7 @@ from pyrung.dap.handlers import (
     history_seek,
     lifecycle_launch,
     monitor_data_breakpoints,
+    simulation,
     stack_variables_evaluate,
 )
 from pyrung.dap.protocol import (
@@ -99,6 +101,26 @@ class DAPAdapter:
         self._miner_candidates: list[Any] = []
         self._miner_accepted: list[Any] = []
         self._miner_suppressed: set[str] = set()
+
+        # Simulator controls: real-time pacing, STOP requests from Modbus,
+        # Click address resolution, and the optional Modbus TCP server.
+        self._speed: float = 0.0
+        self._clock: Callable[[], float] = time.monotonic
+        self._pace_wait: Callable[[float], object] = self._pause_event.wait
+        self._pending_stop = False
+        # launch.keepForcesOnRun; None leaves the program's own setting.
+        self._keep_forces_on_run: bool | None = None
+        self._click_provider: Any = None
+        self._modbus_fallback: Any = None
+        self._has_tag_map = False
+        self._modbus: Any = None
+        self._actual_speed: float | None = None
+        self._state_frame_lock = threading.Lock()
+        self._state_frame_queued = False
+        self._state_frame_source: dict[str, Any] | None = None
+        # Whether the client's latest trace is a step ``pyrungTrace`` (True)
+        # or a merged scan from a continue frame (False).
+        self._last_trace_was_step = False
 
         import pyrung.dap.bounds_console  # noqa: F401
         import pyrung.dap.harness_console  # noqa: F401
@@ -206,6 +228,9 @@ class DAPAdapter:
             if kind == "internal_event":
                 self._send_event(item["event"], item.get("body"))
                 continue
+            if kind == "state_frame":
+                self._send_state_frame()
+                continue
             if kind == "eof":
                 self._stop_event.set()
 
@@ -239,6 +264,10 @@ class DAPAdapter:
             self._send_response(request, success=False, message=f"Unsupported command: {command}")
             return
 
+        check_state = command not in simulation.LOCK_FREE_COMMANDS
+        if check_state:
+            with self._state_lock:
+                before = self._state_fingerprint_locked()
         try:
             body, events = handler(request.get("arguments") or {})
             self._send_response(request, success=True, body=body)
@@ -250,6 +279,12 @@ class DAPAdapter:
             self._send_response(request, success=False, message=str(exc))
         except Exception as exc:  # pragma: no cover - defensive fail-safe path
             self._send_response(request, success=False, message=f"Internal adapter error: {exc}")
+        if not check_state:
+            return
+        with self._state_lock:
+            changed = self._state_fingerprint_locked() != before
+        if changed:
+            self._send_state_frame(simulation.request_source(command, request.get("arguments")))
 
     def _send_response(
         self,
@@ -275,11 +310,52 @@ class DAPAdapter:
     def _enqueue_internal_event(self, event: str, body: dict[str, Any] | None = None) -> None:
         self._queue.put({"kind": "internal_event", "event": event, "body": body})
 
+    def _state_fingerprint_locked(self) -> tuple[Any, ...] | None:
+        return simulation.state_fingerprint_locked(self)
+
+    def _send_state_frame(self, source: dict[str, Any] | None = None) -> None:
+        """Send a ``pyrungScanFrame`` describing the current state now.
+
+        Without *source*, sends the queued frame with its latest source.
+        """
+        if source is None:
+            with self._state_frame_lock:
+                self._state_frame_queued = False
+                source = self._state_frame_source
+                self._state_frame_source = None
+        with self._state_lock:
+            body = simulation.state_frame_body_locked(self, source)
+        if body is not None:
+            self._send_event("pyrungScanFrame", body)
+
+    def _request_state_frame(self, source: dict[str, Any]) -> None:
+        """Queue one ``pyrungScanFrame`` from any thread.
+
+        Requests coalesce until the frame is sent; the last *source* wins.
+        """
+        with self._state_frame_lock:
+            self._state_frame_source = source
+            if self._state_frame_queued:
+                return
+            self._state_frame_queued = True
+        self._queue.put({"kind": "state_frame"})
+
+    def _pause_executor(self) -> None:
+        simulation.pause_executor(self)
+
+    def _executor_running_locked(self) -> bool:
+        """True while the continue worker runs and no pause is pending."""
+        return self._thread_running_locked() and not self._pause_event.is_set()
+
+    def _resolve_target_locked(self, target: str) -> str:
+        return simulation.resolve_target_locked(self, target)
+
     def _emit_trace_event(self) -> None:
         with self._state_lock:
             body = self._current_trace_body_locked()
-        if body is None:
-            return
+            if body is None:
+                return
+            self._last_trace_was_step = True
         self._send_event("pyrungTrace", body)
 
     def _parse_request_args(self, model: type[ParsedArgs], args: Any) -> ParsedArgs:
@@ -410,6 +486,15 @@ class DAPAdapter:
 
     def _on_pyrungListForces(self, _args: dict[str, Any]) -> HandlerResult:
         return force_patch.on_pyrung_list_forces(self, _args)
+
+    def _on_pyrungSetMode(self, args: dict[str, Any]) -> HandlerResult:
+        return simulation.on_pyrung_set_mode(self, args)
+
+    def _on_pyrungSetSpeed(self, args: dict[str, Any]) -> HandlerResult:
+        return simulation.on_pyrung_set_speed(self, args)
+
+    def _on_pyrungModbusInfo(self, _args: dict[str, Any]) -> HandlerResult:
+        return simulation.on_pyrung_modbus_info(self, _args)
 
     def _on_pyrungGraph(self, _args: dict[str, Any]) -> HandlerResult:
         return graph_slice.on_pyrung_graph(self, _args)
@@ -584,8 +669,12 @@ class DAPAdapter:
             body["tagGroups"] = self._tag_groups_locked(runner)
         return body
 
-    def _live_trace_body_locked(self) -> dict[str, Any] | None:
-        """Build a single merged trace body from the last committed scan."""
+    def _live_trace_body_locked(self, *, allow_empty: bool = False) -> dict[str, Any] | None:
+        """Build a single merged trace body from the last committed scan.
+
+        Returns ``None`` when no rung has a trace yet, unless *allow_empty*,
+        which returns a body with no regions so values and forces still flow.
+        """
         runner = self._runner
         if runner is None:
             return None
@@ -610,7 +699,7 @@ class DAPAdapter:
             )
             if body is not None:
                 all_regions.extend(body.get("regions", []))
-        if not all_regions:
+        if not all_regions and not allow_empty:
             return None
         return {
             "traceVersion": self.TRACE_VERSION,
@@ -747,6 +836,10 @@ class DAPAdapter:
                 break
             if item.get("kind") == "internal_event":
                 self._send_event(item["event"], item.get("body"))
+                processed += 1
+                continue
+            if item.get("kind") == "state_frame":
+                self._send_state_frame()
                 processed += 1
                 continue
             pending.append(item)

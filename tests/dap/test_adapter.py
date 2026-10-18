@@ -3278,7 +3278,7 @@ def test_continue_scan_frame_requires_configuration_done(tmp_path: Path):
     assert frames == [], "No scan frames should emit without configurationDone"
 
 
-def test_scan_frame_not_emitted_during_step(tmp_path: Path):
+def test_step_frames_carry_the_step_trace(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "logic.py", _runner_script())
@@ -3296,7 +3296,13 @@ def test_scan_frame_not_emitted_during_step(tmp_path: Path):
             assert trace["body"]["step"] is not None, (
                 "Step commands should never emit traces with step=None"
             )
-        assert _scan_frame_events(messages) == [], "Step commands should never emit pyrungScanFrame"
+        # The state frame after a step must not replace the step trace (editor
+        # decorations follow the latest trace of either event).
+        frames = _scan_frame_events(messages)
+        assert len(frames) == 1
+        assert frames[0]["body"]["trace"] == traces[-1]["body"]
+        assert frames[0]["body"]["changes"] == []
+        assert frames[0]["body"]["running"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -3508,7 +3514,22 @@ def test_pyrung_force_accepts_string_value(tmp_path: Path):
     assert adapter._runner.forces["Mode"] == "Z"
 
 
-def test_pyrung_unforce_unknown_tag_succeeds_idempotent(tmp_path: Path):
+def test_pyrung_unforce_unforced_tag_succeeds_idempotent(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungUnforce", arguments={"tag": "Button"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+
+
+def test_pyrung_unforce_unknown_tag_returns_error(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "logic.py", _runner_script())
@@ -3520,7 +3541,8 @@ def test_pyrung_unforce_unknown_tag_succeeds_idempotent(tmp_path: Path):
         adapter, out_stream, seq=2, command="pyrungUnforce", arguments={"tag": "Nonexistent"}
     )
     response = _single_response(messages)
-    assert response["success"] is True
+    assert response["success"] is False
+    assert response["message"] == "unknown tag: Nonexistent"
 
 
 def test_pyrung_unforce_requires_tag(tmp_path: Path):

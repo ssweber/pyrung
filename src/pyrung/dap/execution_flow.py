@@ -17,6 +17,7 @@ HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
 
 def on_next(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
+    adapter._pause_executor()
     with adapter._state_lock:
         adapter._assert_can_step_locked()
         adapter._step_until(
@@ -26,6 +27,7 @@ def on_next(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
 
 
 def on_step_in(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
+    adapter._pause_executor()
     with adapter._state_lock:
         adapter._assert_can_step_locked()
         adapter._step_until(
@@ -35,6 +37,7 @@ def on_step_in(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
 
 
 def on_step_out(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
+    adapter._pause_executor()
     with adapter._state_lock:
         adapter._assert_can_step_locked()
         origin_step = adapter._current_step
@@ -56,6 +59,7 @@ def on_step_out(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
 
 
 def on_pyrung_step_scan(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
+    adapter._pause_executor()
     with adapter._state_lock:
         adapter._assert_can_step_locked()
         origin_ctx = adapter._current_ctx
@@ -96,17 +100,101 @@ def on_pause(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
     return {}, []
 
 
+#: Furthest real-time pacing may fall behind before it stops catching up.
+PACE_MAX_LAG_SECONDS = 0.1
+
+#: Minimum wall time between two continue-mode scan frames.
+FRAME_INTERVAL_SECONDS = 0.033
+
+
+class ScanPacer:
+    """Keep simulation time ~= wall time x speed while continue runs.
+
+    ``delay()`` is called once per committed scan and returns how long to wait
+    before the next one.  The scan period (dt) is never changed; pacing only
+    inserts waits.  When the simulation falls more than
+    ``PACE_MAX_LAG_SECONDS`` behind, the baseline is reset instead of
+    bursting scans to catch up.
+    """
+
+    def __init__(self, clock: Callable[[], float]) -> None:
+        self._clock = clock
+        self._speed = 0.0
+        self._wall0: float | None = None
+        self._sim0 = 0.0
+
+    def delay(self, speed: float, sim_time: float) -> float:
+        now = self._clock()
+        if speed <= 0:
+            self._wall0 = None
+            return 0.0
+        if self._wall0 is None or speed != self._speed or sim_time < self._sim0:
+            self._reset(now, sim_time, speed)
+            return 0.0
+        ahead = self._wall0 + (sim_time - self._sim0) / speed - now
+        if ahead > 0:
+            return ahead
+        if -ahead > PACE_MAX_LAG_SECONDS:
+            self._reset(now, sim_time, speed)
+        return 0.0
+
+    def _reset(self, now: float, sim_time: float, speed: float) -> None:
+        self._wall0 = now
+        self._sim0 = sim_time
+        self._speed = speed
+
+
+class SpeedMeter:
+    """Measured simulation-time / wall-time ratio while continue runs.
+
+    Updated at most every ``WINDOW_SECONDS`` of wall time so the reading is
+    steady enough to display ("6.3x" when the PLC cannot keep up).
+    """
+
+    WINDOW_SECONDS = 0.5
+
+    def __init__(self, clock: Callable[[], float]) -> None:
+        self._clock = clock
+        self._wall0: float | None = None
+        self._sim0 = 0.0
+        self.value: float | None = None
+
+    def sample(self, sim_time: float) -> float | None:
+        now = self._clock()
+        if self._wall0 is None or sim_time < self._sim0:
+            self._wall0, self._sim0 = now, sim_time
+            return self.value
+        elapsed = now - self._wall0
+        if elapsed >= self.WINDOW_SECONDS:
+            self.value = (sim_time - self._sim0) / elapsed
+            self._wall0, self._sim0 = now, sim_time
+        return self.value
+
+
+#: ``source`` of frames emitted by the continue worker.
+WORKER_SOURCE: dict[str, Any] = {"origin": "worker", "command": "continue"}
+
+
 def continue_worker(adapter: Any) -> None:
+    from pyrung.dap.bounds_console import emit_bounds_violations
+    from pyrung.dap.handlers.simulation import enter_stop_locked, frame_body_locked
     from pyrung.dap.session import ScanFrameBuffer
 
-    last_emit_time = 0.0
+    clock = adapter._clock
+    pacer = ScanPacer(clock)
+    meter = SpeedMeter(clock)
+    last_emit_time: float | None = None
 
-    def _emit_scan_frame(*, force: bool = False) -> None:
+    def _emit_scan_frame(*, force: bool = False, running: bool = True) -> None:
         nonlocal last_emit_time
         if not adapter._configuration_done:
             return
-        now = time.monotonic()
-        if not force and (now - last_emit_time) < 0.033:
+        now = clock()
+        if (
+            not force
+            and last_emit_time is not None
+            and (now - last_emit_time) < FRAME_INTERVAL_SECONDS
+        ):
             return
 
         buffer = adapter._session.scan_frame_buffer
@@ -114,33 +202,38 @@ def continue_worker(adapter: Any) -> None:
             return
 
         with adapter._state_lock:
-            trace_body = adapter._live_trace_body_locked()
-            if trace_body is None and not force:
+            if adapter._runner is None:
+                return
+            trace_body = adapter._live_trace_body_locked(allow_empty=force)
+            if trace_body is None:
                 return
             current_tags = dict(adapter._runner.current_state.tags)
 
-        changes: list[dict[str, Any]] = []
-        prev = buffer.previous_tags
-        for tag_name in set(prev.keys()) | set(current_tags.keys()):
-            old_val = prev.get(tag_name)
-            new_val = current_tags.get(tag_name)
-            if old_val != new_val:
-                changes.append(
-                    {
-                        "tag": tag_name,
-                        "previous": adapter._format_value(old_val),
-                        "current": adapter._format_value(new_val),
-                    }
-                )
+            changes: list[dict[str, Any]] = []
+            prev = buffer.previous_tags
+            for tag_name in set(prev.keys()) | set(current_tags.keys()):
+                old_val = prev.get(tag_name)
+                new_val = current_tags.get(tag_name)
+                if old_val != new_val:
+                    changes.append(
+                        {
+                            "tag": tag_name,
+                            "previous": adapter._format_value(old_val),
+                            "current": adapter._format_value(new_val),
+                        }
+                    )
 
-        frame_body: dict[str, Any] = {
-            "scanId": trace_body.get("scanId") if trace_body else None,
-            "trace": trace_body,
-            "monitors": buffer.monitors,
-            "changes": changes,
-            "snapshots": buffer.snapshots,
-            "outputs": buffer.outputs,
-        }
+            adapter._last_trace_was_step = False
+            frame_body = frame_body_locked(
+                adapter,
+                running=running,
+                trace_body=trace_body,
+                changes=changes,
+                monitors=buffer.monitors,
+                snapshots=buffer.snapshots,
+                outputs=buffer.outputs,
+                source=WORKER_SOURCE,
+            )
 
         adapter._enqueue_internal_event("pyrungScanFrame", frame_body)
         last_emit_time = now
@@ -162,7 +255,10 @@ def continue_worker(adapter: Any) -> None:
 
         while not adapter._stop_event.is_set():
             if adapter._pause_event.is_set():
-                _emit_scan_frame(force=True)
+                with adapter._state_lock:
+                    if adapter._pending_stop and adapter._runner is not None:
+                        enter_stop_locked(adapter)
+                _emit_scan_frame(force=True, running=False)
                 adapter._enqueue_internal_event("stopped", adapter._stopped_body("pause"))
                 return
 
@@ -170,6 +266,7 @@ def continue_worker(adapter: Any) -> None:
                 if adapter._runner is None:
                     return
                 old_scan_id = adapter._current_scan_id
+                old_state = adapter._runner.current_state
                 advanced = adapter._advance_one_step_locked()
                 adapter._flush_pending_snapshots_locked()
                 hit_breakpoint = adapter._current_rung_hits_breakpoint_locked()
@@ -180,31 +277,41 @@ def continue_worker(adapter: Any) -> None:
                 scan_completed = (
                     advanced and old_scan_id is not None and adapter._current_scan_id != old_scan_id
                 )
+                committed = adapter._runner is not None and (
+                    adapter._runner.current_state is not old_state
+                )
+                speed = adapter._speed
+                sim_time = adapter._runner.current_state.timestamp if adapter._runner else 0.0
 
             if scan_completed:
                 _emit_scan_frame()
-                from pyrung.dap.bounds_console import emit_bounds_violations
-
                 emit_bounds_violations(adapter)
 
             if hit_breakpoint:
-                _emit_scan_frame(force=True)
+                _emit_scan_frame(force=True, running=False)
                 adapter._enqueue_internal_event("stopped", adapter._stopped_body("breakpoint"))
                 return
 
             if hit_data_breakpoint:
-                _emit_scan_frame(force=True)
+                _emit_scan_frame(force=True, running=False)
                 adapter._enqueue_internal_event("stopped", adapter._stopped_body("data breakpoint"))
                 return
 
-            if not advanced:
+            if committed:
+                adapter._actual_speed = meter.sample(sim_time)
+            wait = pacer.delay(speed, sim_time) if committed else 0.0
+            if wait > 0:
+                adapter._pace_wait(wait)
+            elif not advanced and speed <= 0:
                 time.sleep(0.005)
 
-        _emit_scan_frame(force=True)
+        _emit_scan_frame(force=True, running=False)
     finally:
         with adapter._state_lock:
             adapter._continue_thread = None
             adapter._pending_predicate_pause = False
+            adapter._pending_stop = False
+            adapter._actual_speed = None
             adapter._session.scan_frame_buffer = None
         adapter._pause_event.clear()
 
@@ -217,8 +324,14 @@ def invalidate_mid_scan(adapter: Any) -> None:
     Without this, the override misses the current scan's ``prepare_scan``
     and only takes effect on the *following* scan — a 1-scan lag that
     diverges from pure ``PLC.force()`` + ``step()`` behaviour.
+
+    The abandoned scan already drained the pending patches into its context
+    (``prepare_scan``), so they are queued again: without that they would
+    vanish without ever being committed.
     """
     if adapter._scan_gen is not None:
+        if adapter._runner is not None:
+            adapter._runner.debug.abandon_scan()
         adapter._scan_gen = None
         adapter._current_step = None
         adapter._current_rung_index = None

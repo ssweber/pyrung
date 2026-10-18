@@ -40,6 +40,8 @@ def on_initialize(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
 
 def on_configuration_done(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
     adapter._configuration_done = True
+    # The first state frame: mode, forces, and values before any scan runs.
+    adapter._request_state_frame({"origin": "dap", "command": "configurationDone"})
     return {}, []
 
 
@@ -88,6 +90,53 @@ def _find_project_tags_module(project_dir: Path) -> ModuleType | None:
     return tags_mod if isinstance(getattr(tags_mod, "mapping", None), TagMap) else None
 
 
+def discover_click_project(
+    namespace: dict[str, Any], project_dir: Path
+) -> tuple[TagMap | None, Iterable[Any] | None]:
+    """Return the launched program's ``(TagMap, blocks)``; either may be ``None``.
+
+    A ``mapping`` TagMap in the program's own namespace wins (single-file
+    programs).  Otherwise the project's tags module is used: generated CLICK
+    projects define ``mapping`` and ``blocks`` (the ``ClickBlocks()`` set) in
+    ``plc/tags.py``.
+    """
+    from pyrung.click.tag_map import TagMap
+
+    source: Any = None
+    if isinstance(namespace.get("mapping"), TagMap):
+        source = namespace
+    else:
+        tags_mod = _find_project_tags_module(project_dir)
+        if tags_mod is not None:
+            source = vars(tags_mod)
+    if source is None:
+        return None, None
+    blocks = source.get("blocks")
+    return source["mapping"], blocks if isinstance(blocks, Iterable) else None
+
+
+def bind_click_project_locked(adapter: Any, namespace: dict[str, Any], project_dir: Path) -> None:
+    """Point address resolution and the Modbus provider at the program's TagMap."""
+    from pyclickplc.server import MemoryDataProvider
+
+    from pyrung.click.data_provider import ClickDataProvider
+    from pyrung.click.tag_map import TagMap
+    from pyrung.dap.handlers.simulation import request_stop_locked
+
+    mapping, blocks = discover_click_project(namespace, project_dir)
+    adapter._has_tag_map = mapping is not None
+    if adapter._modbus_fallback is None:
+        # Unmapped Modbus values survive reloads.
+        adapter._modbus_fallback = MemoryDataProvider()
+    adapter._click_provider = ClickDataProvider(
+        lambda: adapter._require_runner_locked(),
+        mapping if mapping is not None else TagMap(),
+        fallback=adapter._modbus_fallback,
+        blocks=blocks,
+        on_stop=lambda: request_stop_locked(adapter),
+    )
+
+
 def _apply_snapshot(runner: PLC, snapshot_path: str, project_dir: Path) -> PLC:
     """Reconstruct *runner* with initial state loaded from a Click CSV snapshot."""
     tags_mod = _find_project_tags_module(project_dir)
@@ -121,6 +170,19 @@ def _apply_snapshot(runner: PLC, snapshot_path: str, project_dir: Path) -> PLC:
 
 def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     parsed = adapter._parse_request_args(_LaunchRequestArgs, args)
+    from pyrung.dap.handlers.simulation import parse_speed
+    from pyrung.dap.modbus import parse_modbus_config, start_modbus
+
+    modbus_config = parse_modbus_config(adapter, parsed.modbus)
+    speed = (
+        parse_speed(adapter, parsed.speed, prefix="launch.speed")
+        if parsed.speed is not None
+        else 0.0
+    )
+    if parsed.startMode not in (None, "run", "stop"):
+        raise adapter.DAPAdapterError('launch.startMode must be "run" or "stop"')
+    if parsed.keepForcesOnRun is not None and not isinstance(parsed.keepForcesOnRun, bool):
+        raise adapter.DAPAdapterError("launch.keepForcesOnRun must be a boolean")
     program_arg = parsed.program
     if not isinstance(program_arg, str) or not program_arg.strip():
         raise adapter.DAPAdapterError("launch.program must be a Python file path")
@@ -159,11 +221,32 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         adapter._breakpoints.clear()
         adapter._pending_predicate_pause = False
         adapter._rebuild_breakpoint_index_locked()
+        adapter._speed = speed
+        adapter._pending_stop = False
+        adapter._keep_forces_on_run = parsed.keepForcesOnRun
+        if parsed.keepForcesOnRun is not None:
+            runner.keep_forces_on_run = parsed.keepForcesOnRun
+        bind_click_project_locked(adapter, namespace, program_path.parent)
+        if parsed.startMode == "stop":
+            runner.stop()
+        elif parsed.startMode == "run":
+            runner.start()
 
     session_name = parsed.session or program_path.stem
     adapter._session.session_name = session_name
     _start_live_server(adapter, session_name)
     _try_auto_install_harness(adapter)
+    if modbus_config is not None:
+        if not adapter._has_tag_map:
+            adapter._enqueue_internal_event(
+                "output",
+                {
+                    "category": "console",
+                    "output": "Modbus: no TagMap found in the project; "
+                    "only system addresses and plain memory are served\n",
+                },
+            )
+        start_modbus(adapter, modbus_config)
 
     if parsed.autoReload:
         from pyrung.dap.reload_console import start_autoreload
@@ -199,8 +282,15 @@ def discover_runner(adapter: Any, namespace: dict[str, Any]) -> PLC:
 def shutdown(adapter: Any) -> HandlerResult:
     from pyrung.dap.reload_console import stop_autoreload
 
+    # Ask a long console command (``how``, ``prove``) to give up the state
+    # lock that the cleanup below needs.
+    adapter._cancel.request()
+
     stop_autoreload(adapter)
 
+    from pyrung.dap.modbus import stop_modbus
+
+    stop_modbus(adapter)
     _stop_live_server(adapter)
     _uninstall_harness(adapter)
     with adapter._state_lock:
@@ -213,6 +303,8 @@ def shutdown(adapter: Any) -> HandlerResult:
         adapter._current_rung = None
         adapter._current_ctx = None
         adapter._configuration_done = False
+        adapter._click_provider = None
+        adapter._pending_stop = False
     adapter._stop_event.set()
     adapter._pause_event.set()
     return {}, [("terminated", {})]
@@ -258,3 +350,7 @@ class _LaunchRequestArgs:
     session: Any = None
     snapshotPath: Any = None
     autoReload: Any = False
+    modbus: Any = None
+    speed: Any = None
+    startMode: Any = None
+    keepForcesOnRun: Any = None

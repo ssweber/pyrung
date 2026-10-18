@@ -408,6 +408,16 @@ class _DebugNamespace:
         """Execute one scan cycle yielding fine-grained debug steps."""
         return self._plc._scan_steps_debug()
 
+    def abandon_scan(self) -> None:
+        """Forget a partially stepped scan without committing it.
+
+        Call this when dropping a ``scan_steps()`` / ``scan_steps_debug()``
+        generator before it is exhausted.  The scan already took the pending
+        patches; they are queued again (ahead of any newer patch for the same
+        tag) so the next scan applies them instead of losing them.
+        """
+        self._plc._requeue_drained_patches()
+
     def rung_trace(self, rung_id: int) -> RungTrace:
         """Return rung-level debug trace for the most recently committed scan.
 
@@ -644,6 +654,7 @@ class Epoch:
     causal_initial_tags: Mapping[str, Any]
     rtc_base: datetime
     rtc_base_sim_time: float
+    keep_forces_on_run: bool
 
     @classmethod
     def seal(
@@ -708,6 +719,7 @@ class Epoch:
             causal_initial_tags=MappingProxyType(dict(plc._causal_initial_tags)),
             rtc_base=plc._rtc_base,
             rtc_base_sim_time=plc._rtc_base_sim_time,
+            keep_forces_on_run=plc._keep_forces_on_run,
         )
 
 
@@ -740,6 +752,7 @@ class EpochQuery:
             history_budget=epoch.recent_state_cache_budget,
             checkpoint_interval=epoch.checkpoint_interval,
             record_all_tags=epoch.record_all_tags,
+            keep_forces_on_run=epoch.keep_forces_on_run,
             _tag_index=(
                 dict(epoch.known_tags_by_name),
                 epoch.edge_tag_names,
@@ -1120,6 +1133,7 @@ class PLC:
         history_budget: int | float | None = None,
         checkpoint_interval: int | None = None,
         record_all_tags: bool = False,
+        keep_forces_on_run: bool = False,
         _tag_index: tuple[dict[str, Tag], frozenset[str], dict[str, TagConstraint]] | None = None,
     ) -> None:
         """Create a new PLC.
@@ -1147,6 +1161,8 @@ class PLC:
                 don't need them.  Set this to True when a diagnostic
                 session needs the unfiltered firing history (e.g. when
                 the PDG is suspected of misclassifying a consumer).
+            keep_forces_on_run: Keep active forces across STOP -> RUN
+                transitions (see :attr:`keep_forces_on_run`).
             _tag_index: Internal (``fork()``).  A ``(known_tags_by_name,
                 edge_tag_names, constrained_tags)`` triple from a runner
                 sharing the same program object.  The dicts are copied
@@ -1208,6 +1224,7 @@ class PLC:
         self._state_tags_read_cache_state: SystemState | None = None
         self._running = True
         self._battery_present = True
+        self._keep_forces_on_run = bool(keep_forces_on_run)
         self._state = self._apply_runtime_memory_flags(
             self._state,
             mode_run=self._running,
@@ -2202,6 +2219,7 @@ class PLC:
             history_budget=effective_budget,
             checkpoint_interval=self._checkpoint_interval,
             record_all_tags=self._record_all_tags,
+            keep_forces_on_run=self._keep_forces_on_run,
             _tag_index=(
                 self._known_tags_by_name,
                 self._edge_tag_names,
@@ -2593,6 +2611,7 @@ class PLC:
             history_budget=self._recent_state_cache_budget,
             checkpoint_interval=self._checkpoint_interval,
             record_all_tags=self._record_all_tags,
+            keep_forces_on_run=self._keep_forces_on_run,
             # Reuse the parent's tag/edge/constraint index: same program, so
             # re-walking the object graph in __init__ (a ~hundreds-of-ms BFS) is
             # pure waste — and the default-seeding it gates is overwritten by
@@ -3396,6 +3415,37 @@ class PLC:
         """Debugger-facing methods and internal runtime access."""
         return self._debug_ns
 
+    @property
+    def mode(self) -> Literal["run", "stop"]:
+        """PLC mode: ``"run"`` or ``"stop"``."""
+        return "run" if self._running else "stop"
+
+    def start(self) -> None:
+        """Transition STOP -> RUN now, without executing a scan.
+
+        Performs the same transition the next ``step()`` would: non-retentive
+        tags reset, ``scan_id`` and ``timestamp`` restart at 0, pending patches
+        are dropped, and forces are cleared unless :attr:`keep_forces_on_run`.
+        Patches and forces applied afterwards reach the first scan.  Does
+        nothing in RUN mode.
+        """
+        self._ensure_running()
+
+    @property
+    def keep_forces_on_run(self) -> bool:
+        """Whether active forces survive a STOP -> RUN transition.
+
+        Off by default: entering RUN clears forces along with patches, like a
+        fresh start.  When on, forces are kept (and apply from the first scan);
+        tags and pending patches still reset.  ``reboot()`` clears forces
+        either way.
+        """
+        return self._keep_forces_on_run
+
+    @keep_forces_on_run.setter
+    def keep_forces_on_run(self, value: bool) -> None:
+        self._keep_forces_on_run = bool(value)
+
     def stop(self) -> None:
         """Transition PLC to STOP mode."""
         if not self._running:
@@ -3646,6 +3696,7 @@ class PLC:
     def _stop_to_run_transition(self) -> None:
         if self._running:
             return
+        kept_forces = dict(self._forces) if self._keep_forces_on_run else {}
         tag_values = self._rebuild_tags_for_reset(
             preserve_all=False,
             preserve_retentive=True,
@@ -3655,7 +3706,17 @@ class PLC:
             mode_run=True,
             preserve_rtc_continuity=True,
         )
+        self._forces.update(kept_forces)
         self._running = True
+
+    def _requeue_drained_patches(self) -> None:
+        drained = self._this_scan_drained_patches
+        if not drained:
+            return
+        restored = {**drained, **self._pending_patches}
+        self._pending_patches.clear()
+        self._pending_patches.update(restored)
+        self._this_scan_drained_patches = {}
 
     def _ensure_running(self) -> None:
         if not self._running:
@@ -3777,6 +3838,19 @@ class PLC:
     def forces(self) -> Mapping[str, bool | int | float | str]:
         """Read-only view of active persistent overrides."""
         return self._input_overrides.forces
+
+    @property
+    def pending_patches(self) -> Mapping[str, bool | int | float | str]:
+        """Read-only view of patches not yet in the committed state.
+
+        Holds the patches queued for the next scan, plus any already taken
+        by a scan still being stepped (``debug.scan_steps_debug()``) that has
+        not committed.
+        """
+        drained = self._this_scan_drained_patches
+        if not drained:
+            return MappingProxyType(self._pending_patches)
+        return MappingProxyType({**drained, **self._pending_patches})
 
     def monitor(self, tag: str | Tag, callback: Callable[[Any, Any], None]) -> _RunnerHandle:
         """Call ``callback(current, previous)`` after commit when tag value changes."""

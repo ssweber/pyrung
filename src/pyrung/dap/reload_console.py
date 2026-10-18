@@ -114,6 +114,11 @@ def _reload_locked(
         history_budget=new_runner._recent_state_cache_budget,
         checkpoint_interval=new_runner._checkpoint_interval,
         record_all_tags=new_runner._record_all_tags,
+        keep_forces_on_run=(
+            new_runner.keep_forces_on_run
+            if adapter._keep_forces_on_run is None
+            else adapter._keep_forces_on_run
+        ),
     )
     reloaded._set_time_mode(old_time_mode, dt=old_dt)
     reloaded._set_rtc_internal(old_rtc, reloaded.current_state.timestamp)
@@ -136,6 +141,11 @@ def _reload_locked(
     adapter._breakpoints.clear()
     adapter._pending_predicate_pause = False
     adapter._rebuild_breakpoint_index_locked()
+    adapter._pending_stop = False
+
+    from pyrung.dap.handlers.lifecycle_launch import bind_click_project_locked
+
+    bind_click_project_locked(adapter, namespace, path.parent)
 
     adapter._bounds_accumulator.clear()
     adapter._notes.clear()
@@ -219,6 +229,7 @@ def _autoreload_loop(adapter: Any, program_dir: Path, stop_event: threading.Even
         )
         for event_name, event_body in events:
             adapter._enqueue_internal_event(event_name, event_body)
+        adapter._request_state_frame({"origin": "autoreload", "command": "reload"})
 
 
 def start_autoreload(adapter: Any) -> str | None:

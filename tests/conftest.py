@@ -275,6 +275,31 @@ class _RunnerPair:
         self._compiled.stop()
         _assert_states_match(self._interpreted, self._compiled)
 
+    def start(self) -> None:
+        self._interpreted.start()
+        self._compiled.start()
+        _assert_states_match(self._interpreted, self._compiled)
+
+    @property
+    def mode(self) -> str:
+        assert self._interpreted.mode == self._compiled.mode
+        return self._interpreted.mode
+
+    @property
+    def pending_patches(self):  # noqa: ANN201
+        assert dict(self._interpreted.pending_patches) == dict(self._compiled.pending_patches)
+        return self._interpreted.pending_patches
+
+    @property
+    def keep_forces_on_run(self) -> bool:
+        assert self._interpreted.keep_forces_on_run == self._compiled.keep_forces_on_run
+        return self._interpreted.keep_forces_on_run
+
+    @keep_forces_on_run.setter
+    def keep_forces_on_run(self, value: bool) -> None:
+        self._interpreted.keep_forces_on_run = value
+        self._compiled.keep_forces_on_run = value
+
     def reboot(self) -> SystemState:
         self._interpreted.reboot()
         self._compiled.reboot()

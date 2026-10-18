@@ -156,7 +156,7 @@ For force usage patterns in tests, see [Testing — Forces](testing.md#forces).
 runner.stop()
 ```
 
-Sets PLC mode to STOP. Does not clear tags. Idempotent.
+Sets PLC mode to STOP. Does not clear tags. Idempotent. `runner.mode` reads `"run"` or `"stop"`.
 
 ### Auto-restart from STOP
 
@@ -165,6 +165,26 @@ Any execution method (`step`, `run`, `run_for`, `run_until`) performs a STOP→R
 - Non-retentive tags reset to defaults
 - Retentive tags preserve values
 - Runtime scope resets (`scan_id=0`, `timestamp=0.0`, history/patches/forces cleared)
+
+### `start()` — enter RUN without scanning
+
+```python
+runner.start()
+runner.force(AutoMode, True)   # applies from the first scan
+runner.patch({Setpoint: 50})
+runner.step()
+```
+
+Performs the STOP→RUN transition now instead of at the next `step()`, so forces and patches set afterwards reach the first scan. Does nothing in RUN mode.
+
+### Keeping forces across STOP→RUN
+
+```python
+runner = PLC(logic, keep_forces_on_run=True)
+# or later: runner.keep_forces_on_run = True
+```
+
+Off by default. When on, the STOP→RUN transition keeps active forces; tags and pending patches still reset. `reboot()` clears forces either way. Forks inherit the setting.
 
 ### `reboot()` — power-cycle
 
@@ -192,6 +212,8 @@ runner.simulation_time  # shorthand for state.timestamp
 runner.dt               # configured scan period in seconds
 runner.time_mode        # current TimeMode
 runner.forces           # read-only view of active force overrides
+runner.pending_patches  # read-only view of patches not yet committed
+runner.mode             # "run" or "stop"
 ```
 
 `SystemState` fields:

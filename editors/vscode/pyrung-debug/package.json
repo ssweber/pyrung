@@ -124,6 +124,42 @@
                 "type": "boolean",
                 "description": "Automatically reload when .py files in the program directory change.",
                 "default": false
+              },
+              "modbus": {
+                "type": "object",
+                "description": "Serve the session as a simulated CLICK PLC over Modbus TCP.",
+                "properties": {
+                  "host": {
+                    "type": "string",
+                    "default": "127.0.0.1"
+                  },
+                  "port": {
+                    "type": "integer",
+                    "default": 502
+                  },
+                  "allowInputWrites": {
+                    "type": "boolean",
+                    "description": "Let Modbus clients write X inputs (simulator only).",
+                    "default": false
+                  }
+                }
+              },
+              "speed": {
+                "type": "number",
+                "description": "Pace Continue to wall time x speed. 0 runs unpaced.",
+                "default": 0
+              },
+              "startMode": {
+                "type": "string",
+                "enum": [
+                  "run",
+                  "stop"
+                ],
+                "description": "PLC mode at launch. Omit to keep the runner's own mode."
+              },
+              "keepForcesOnRun": {
+                "type": "boolean",
+                "description": "Keep forces across STOP -> RUN transitions. Omit to keep the program's own setting."
               }
             }
           }

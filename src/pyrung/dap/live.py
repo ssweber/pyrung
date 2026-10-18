@@ -139,8 +139,15 @@ class LiveServer:
 
         from pyrung.dap.console import dispatch
 
+        adapter = self._adapter
+        changed = False
         try:
-            with self._adapter._state_lock:
+            # The last command wins: step/run pause a running continue first.
+            from pyrung.dap.handlers.simulation import pause_before_console_command
+
+            pause_before_console_command(adapter, command)
+            with adapter._state_lock:
+                before = adapter._state_fingerprint_locked()
                 # Patch _send_event under the lock: two concurrent connections
                 # would otherwise capture each other's wrapper as "original"
                 # and leak progress onto the wrong socket.
@@ -164,8 +171,26 @@ class LiveServer:
                     self._adapter._send_event = original_send  # type: ignore[assignment]
                     with self._inflight_lock:
                         self._inflight = None
+                    changed = adapter._state_fingerprint_locked() != before
+                trace_body = (
+                    adapter._current_trace_body_locked()
+                    if any(name == "stopped" for name, _body in result.events)
+                    else None
+                )
+                if trace_body is not None:
+                    adapter._last_trace_was_step = True
+            # Tell the DAP client what a live command did, as a DAP request
+            # would: its events, the trace that follows a stop, and a frame.
+            for event_name, event_body in result.events:
+                adapter._enqueue_internal_event(event_name, event_body)
+                if event_name == "stopped" and trace_body is not None:
+                    adapter._enqueue_internal_event("pyrungTrace", trace_body)
+            if changed:
+                adapter._request_state_frame({"origin": "live", "command": command})
             conn.send_bytes(result.text.encode("utf-8"))
         except Exception as exc:
+            if changed:
+                adapter._request_state_frame({"origin": "live", "command": command})
             conn.send_bytes(f"ERROR: {exc}".encode())
 
 
