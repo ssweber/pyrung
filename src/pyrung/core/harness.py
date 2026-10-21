@@ -302,6 +302,24 @@ class Harness:
             self._bool_mid_transition(c, snap) for c in self._bool_couplings if c.fb_name == fb_name
         )
 
+    def pending_ms(self) -> dict[str, int]:
+        """Simulated ms left before each mid-transition bool feedback flips.
+
+        Keyed by feedback name; a feedback that agrees with its enable is
+        absent. Rising, the on-delay is counting; falling, the off-delay is.
+        """
+        snap = self._plc.current_state.tags
+        left: dict[str, int] = {}
+        for c in self._bool_couplings:
+            if not self._bool_mid_transition(c, snap):
+                continue
+            if snap.get(c.fb_name, False):
+                remaining = c.off_delay_ms - int(snap.get(c.tof_acc_name, 0) or 0)
+            else:
+                remaining = c.on_delay_ms - int(snap.get(c.ton_acc_name, 0) or 0)
+            left[c.fb_name] = max(0, remaining)
+        return left
+
     @property
     def pending_count(self) -> int:
         """How many bool couplings are mid-transition this scan.

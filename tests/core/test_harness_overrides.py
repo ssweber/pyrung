@@ -161,6 +161,24 @@ def test_pending_while_the_dwell_counts():
     assert harness.pending("Aux") is False
 
 
+def test_pending_ms_counts_down_in_simulated_time():
+    plc = _plc()
+    harness = _installed(plc)
+    assert harness.pending_ms() == {}
+    plc.patch({Cmd: True})
+    plc.step()
+    first = harness.pending_ms()["Aux"]
+    plc.step()
+    assert harness.pending_ms()["Aux"] == first - 10, "one 10 ms scan later"
+    plc.run_for(0.1)
+    assert harness.pending_ms() == {}
+
+    plc.patch({Cmd: False})  # the off-delay counts down from 10 ms
+    plc.step()
+    plc.step()
+    assert 0 <= harness.pending_ms().get("Aux", 0) <= 10
+
+
 class TestLinkProblem:
     def test_valid_link(self):
         plc = _plc()

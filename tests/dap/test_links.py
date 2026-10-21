@@ -331,6 +331,15 @@ class TestRequests:
         ]
         assert frames and frames[-1]["linksRevision"] > before
 
+    def test_frames_carry_the_time_left_on_a_running_delay(self, tmp_path: Path):
+        from pyrung.dap.handlers.simulation import frame_body_locked
+
+        adapter, out = _launch(tmp_path)
+        assert frame_body_locked(adapter, running=False)["linksPending"] == {}
+        _say(adapter, out, "patch Cmd true")
+        _say(adapter, out, "step 1")
+        assert 0 < frame_body_locked(adapter, running=False)["linksPending"]["Aux"] <= 20
+
 
 class TestCapture:
     def test_requests_are_recorded_as_console_commands(self, tmp_path: Path):

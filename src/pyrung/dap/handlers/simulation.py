@@ -338,6 +338,7 @@ def frame_body_locked(
         "actualSpeed": adapter._actual_speed if running else None,
         "pendingPatches": json_safe_forces(runner.pending_patches),
         "linksRevision": adapter._links_revision,
+        "linksPending": adapter._harness.pending_ms() if adapter._harness is not None else {},
         "source": source,
     }
 

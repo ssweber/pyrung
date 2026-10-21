@@ -515,7 +515,7 @@ Custom requests:
 
 Wherever a request or console command takes a tag (`pyrungForce`, `pyrungUnforce`, `pyrungPatch`, `pyrungSetMode`, and the `force` / `unforce` / `patch` verbs), a CLICK address such as `X001` or `DS10` works too. Tag names are tried first, so a tag literally named `X003` keeps working. A target that is neither a tag nor a mapped address is an error.
 
-The link requests mirror the [bench link](#bench-links) console verbs. `source` is `"project"` for a link the program declares and `"bench"` for a session change; `active` says whether it runs now. Each `pyrungScanFrame` carries `linksRevision`, which changes whenever the wiring does, so a client refetches `pyrungListLinks` only then.
+The link requests mirror the [bench link](#bench-links) console verbs. `source` is `"project"` for a link the program declares and `"bench"` for a session change; `active` says whether it runs now. Each `pyrungScanFrame` carries `linksRevision`, which changes whenever the wiring does, so a client refetches `pyrungListLinks` only then. It also carries `linksPending`: for each bool feedback whose on- or off-delay is counting, the simulated milliseconds left before it flips.
 
 Anyone can drive and the last command wins: a step or `run` from VS Code or `pyrung live` while Continue runs pauses it first, then executes.
 
