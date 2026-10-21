@@ -242,6 +242,26 @@ def test_continue_worker_paces_with_injected_clock(tmp_path: Path):
     _shutdown(adapter, out_stream)
 
 
+def test_continue_sends_frames_for_a_program_with_no_rungs(tmp_path: Path):
+    source = """\
+from pyrung.core import PLC, Program
+
+with Program(strict=False) as prog:
+    pass
+
+runner = PLC(prog, dt=0.010)
+"""
+    adapter, out_stream = _launch(tmp_path, source, speed=0)
+    _request(adapter, out_stream, "continue")
+    body, _seen = _wait_for(
+        adapter, out_stream, "pyrungScanFrame", lambda b: b["running"] and b["scanId"] >= 5
+    )
+    assert body["scanId"] >= 5
+    _request(adapter, out_stream, "pause")
+    _wait_for(adapter, out_stream, "stopped")
+    _shutdown(adapter, out_stream)
+
+
 def test_set_speed_request_and_console_verb(tmp_path: Path):
     adapter, out_stream = _launch(tmp_path)
     assert adapter._speed == 0.0

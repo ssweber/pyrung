@@ -18,6 +18,7 @@
 
 - The debugger can act as a simulated CLICK PLC: a `modbus` launch argument serves the session over Modbus TCP (X inputs stay read-only, as on a real CLICK), `speed` paces Continue to real time, and `startMode` plus the `pyrungSetMode`, `pyrungSetSpeed`, and `pyrungModbusInfo` requests (and the `mode` and `speed` console verbs) control RUN/STOP and pacing.
 - Force, unforce, and patch accept CLICK addresses such as `X001` or `DS10` in DAP requests and console commands, and reject targets that are neither a tag nor a mapped address instead of creating an unused tag.
+- A program with no rungs sends scan frames while it runs, so clients see its scan count advance.
 - `pyrungScanFrame` is now sent after every state change, including `pyrung live` commands and Modbus writes, and reports mode, running, speed, measured speed, pending patches, and what caused it; `pyrung live` commands also notify the debugger with their stop and trace events.
 - A `step` or `run` sent while Continue runs pauses it and then executes instead of failing.
 - `PLC.start()` enters RUN without executing a scan, `PLC.mode` reads `"run"` or `"stop"`, and `PLC.pending_patches` shows patches not yet committed; the same API is on `CompiledPLC`.

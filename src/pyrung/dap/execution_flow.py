@@ -204,7 +204,9 @@ def continue_worker(adapter: Any) -> None:
         with adapter._state_lock:
             if adapter._runner is None:
                 return
-            trace_body = adapter._live_trace_body_locked(allow_empty=force)
+            # A program with no rungs has no trace; its frames still carry the scan.
+            no_rungs = not adapter._top_level_rungs(adapter._runner)
+            trace_body = adapter._live_trace_body_locked(allow_empty=force or no_rungs)
             if trace_body is None:
                 return
             current_tags = dict(adapter._runner.current_state.tags)
@@ -274,12 +276,13 @@ def continue_worker(adapter: Any) -> None:
                 hit_data_breakpoint = adapter._pending_predicate_pause
                 if hit_data_breakpoint:
                     adapter._pending_predicate_pause = False
-                scan_completed = (
-                    advanced and old_scan_id is not None and adapter._current_scan_id != old_scan_id
-                )
                 committed = adapter._runner is not None and (
                     adapter._runner.current_state is not old_state
                 )
+                # With no rungs to step through, each advance is a whole committed scan.
+                scan_completed = (
+                    advanced and old_scan_id is not None and adapter._current_scan_id != old_scan_id
+                ) or (not advanced and committed)
                 speed = adapter._speed
                 sim_time = adapter._runner.current_state.timestamp if adapter._runner else 0.0
 
