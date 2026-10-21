@@ -407,8 +407,9 @@ from edits in `src/plc/`; this is the folder you load through Guided Paste.
    ClickNick itself provides the `clicknick-cli` session. The simulation is
    not required for those commands. For simulation and analysis through
    `uv run pyrung live`, ask the engineer to click **Simulate** in ClickNick.
-   The simulation keeps running after the Simulator window closes; **Stop** on
-   the Simulation line in ClickNick's main window ends that pyrung live session.
+   The simulation keeps running after the Simulator window closes; **Stop**
+   beside the Test heading in ClickNick's main window ends that pyrung live
+   session.
 
    This lists `main` and the available subroutine files. Use
    `clicknick-cli rung list main` to list the main program's rung numbers and
@@ -929,7 +930,7 @@ ClickNick itself provides the live `clicknick-cli` session while the application
 is open and connected to the CLICK project. Starting the simulation is the
 engineer's active consent gate for `pyrung live`: before starting simulation or
 analysis, ask the engineer to click **Simulate** in ClickNick. The simulation
-keeps running after the Simulator window closes. **Stop** on the Simulation line
+keeps running after the Simulator window closes. **Stop** beside the Test heading
 in ClickNick's main window ends the pyrung live session but does not end
 `clicknick-cli`. If a CLI command reports
 `No active ClickNick session found`, ask the engineer to verify that ClickNick is
