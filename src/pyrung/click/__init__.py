@@ -224,7 +224,6 @@ from pyrung.click.codegen import (
     WorkspaceKind,
     ladder_to_pyrung,
     ladder_to_pyrung_project,
-    refresh_workspace_lifecycle_guidance,
 )
 from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.ladder import LadderBundle, LadderExportError, pyrung_to_ladder
@@ -293,7 +292,6 @@ __all__ = [
     "WorkspaceKind",
     "ladder_to_pyrung",
     "ladder_to_pyrung_project",
-    "refresh_workspace_lifecycle_guidance",
     "pyrung_to_ladder",
     "validate_click_program",
     "ValidationMode",

@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Breaking Changes
+
+- Generated CLICK projects put pyrung's guidance in `AGENTS.pyrung.md` and `README.pyrung.md`, rewritten on every generation, while `AGENTS.md` and `README.md` become the user's files with a `<!-- pyrung:guidance -->` line pointing at them; `refresh_workspace_lifecycle_guidance()` and the lifecycle markers are removed.
+
 ### Features
 
 - The debugger can act as a simulated CLICK PLC: a `modbus` launch argument serves the session over Modbus TCP (X inputs stay read-only, as on a real CLICK), `speed` paces Continue to real time, and `startMode` plus the `pyrungSetMode`, `pyrungSetSpeed`, and `pyrungModbusInfo` requests (and the `mode` and `speed` console verbs) control RUN/STOP and pacing.
@@ -23,6 +27,10 @@
 - Bench links: the `link`, `unlink`, `restore`, and `links` console verbs and the `pyrungLink`, `pyrungUnlink`, `pyrungRestoreLink`, `pyrungSetLinks`, and `pyrungListLinks` requests add, replace, or cut feedback links for the debug session without editing the program. They survive `reload`, can be set aside together (`links bench off`) or one at a time, are recorded by captures, and are refused when the program writes the feedback. Frames carry `linksRevision`.
 - `Harness.set_overrides()` replaces or cuts declared couplings, or adds new ones, by feedback tag; `Harness.declared()` lists the program's own couplings, `Harness.pending()` reports a bool feedback still counting toward a flip, and `link_problem()` explains why a coupling cannot run. `Harness.unlink()` is now a cut override.
 - In a CLICK nickname comment, `link=` accepts a CLICK address (`link=Y001`, read as the nickname at that address) and a value trigger (`link=State:SORTING`).
+
+### Fixes
+
+- Generated CLICK workspace guidance asks for **Simulate** in ClickNick before `pyrung live` (Stop in ClickNick's main window ends the session), points PLC data loading at the Simulator's **PLC Data...**, and no longer names a fixed debugger extension version.
 
 ## v0.15.2 (2026-10-11)
 

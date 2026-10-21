@@ -49,7 +49,6 @@ CLICK_HELPER_SYMBOLS: tuple[str, ...] = (
     "pyrung.click.WorkspaceKind",
     "pyrung.click.ladder_to_pyrung",
     "pyrung.click.ladder_to_pyrung_project",
-    "pyrung.click.refresh_workspace_lifecycle_guidance",
     "pyrung.click.pyrung_to_ladder",
     "pyrung.click.send",
     "pyrung.click.receive",

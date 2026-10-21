@@ -12,7 +12,6 @@ from pyrung.click import (
     WorkspaceKind,
     ladder_to_pyrung_project,
     pyrung_to_ladder,
-    refresh_workspace_lifecycle_guidance,
 )
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
@@ -148,6 +147,7 @@ class TestProjectBasic:
         assert files[f"{_PLC_DIR}/__init__.py"] == ""
         assert files["CLAUDE.md"] == "@AGENTS.md\n"
         assert "# Machine: PLC" in files["AGENTS.md"]
+        assert "# Machine: PLC (pyrung guidance)" in files["AGENTS.pyrung.md"]
         assert "assert plc.state.scan_id == 1" in files["tests/test_smoke.py"]
         assert "current_state" not in files["tests/test_smoke.py"]
         assert f"{_SUBROUTINES_DIR}/__init__.py" not in files
@@ -169,7 +169,7 @@ class TestProjectBasic:
         assert '"pytest>=8.3.5"' in files["pyproject.toml"]
         assert 'packages = ["src/plc"]' in files["pyproject.toml"]
         assert files["CLAUDE.md"] == "@AGENTS.md\n"
-        guidance = files["AGENTS.md"]
+        guidance = files["AGENTS.pyrung.md"]
         normalized_guidance = " ".join(guidance.split())
         assert "Click project as the repository" in normalized_guidance
         assert "generated folder as its editable working branch" in normalized_guidance
@@ -224,9 +224,12 @@ class TestProjectBasic:
         assert "Names beginning with `Example` below are placeholders" in normalized_guidance
         assert "ClickNick itself provides the live `clicknick-cli` session" in normalized_guidance
         assert (
-            "Console is the engineer's active consent gate for `pyrung live`" in normalized_guidance
+            "Starting the simulation is the engineer's active consent gate for `pyrung live`"
+            in normalized_guidance
         )
-        assert "Closing the Console ends the pyrung live session" in normalized_guidance
+        assert "click **Simulate** in ClickNick" in normalized_guidance
+        assert "ends the pyrung live session" in normalized_guidance
+        assert "Tools → Console" not in guidance
         assert "does not end `clicknick-cli`" in normalized_guidance
         assert "No active ClickNick session found" in guidance
         assert "verify that ClickNick is open and connected" in normalized_guidance
@@ -244,9 +247,10 @@ class TestProjectBasic:
         assert "appends the terminal `return()` automatically" in normalized_guidance
         assert "`csv/` — regenerated reference snapshot" in guidance
         assert "`csv_output/` — proposed ladder export" in guidance
-        readme = files["README.md"]
+        readme = files["README.pyrung.md"]
         normalized_readme = " ".join(readme.split())
         assert "closing the CLICK application deletes" in normalized_readme
+        assert "pyrung-debug-<version>.vsix" in readme
         assert "`backup/src/plc/` is a recovery snapshot" in normalized_readme
         assert (
             "writes it immediately before regeneration replaces a modified `src/plc/`"
@@ -261,8 +265,9 @@ class TestProjectBasic:
         assert "every command targets ClickNick's active temporary workspace" in normalized_readme
         assert "copy those source edits back into the active temporary folder" in normalized_readme
         assert "ClickNick itself provides the `clicknick-cli` session" in normalized_readme
-        assert "choose **Tools → Console**" in readme
-        assert "closing the Console ends that pyrung live session" in normalized_readme
+        assert "click **Simulate** in ClickNick" in normalized_readme
+        assert "ends that pyrung live session" in normalized_readme
+        assert "Tools → Console" not in readme
         assert "`csv/` is the regenerated snapshot" in normalized_readme
         assert "`csv_output/` is the proposed ladder export" in normalized_readme
         assert "clicknick-cli rung list main" in normalized_readme
@@ -272,8 +277,8 @@ class TestProjectBasic:
             in normalized_guidance
         )
 
-    def test_persistent_workspace_guidance_and_marked_refresh(self, tmp_path: Path):
-        """Persistent projects survive CLICK and refresh only the marked section."""
+    def test_persistent_workspace_guidance(self, tmp_path: Path):
+        """Persistent projects describe a workspace that survives CLICK."""
         Button = Bool("Button")
         Light = Bool("Light")
 
@@ -282,7 +287,6 @@ class TestProjectBasic:
                 out(Light)
 
         mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
-        temporary = _project_from_program(logic, mapping, tmp_path / "temporary")
         persistent = _project_from_program(
             logic,
             mapping,
@@ -290,11 +294,9 @@ class TestProjectBasic:
             workspace_kind="persistent",
         )
 
-        for path in ("README.md", "AGENTS.md"):
+        for path in ("README.pyrung.md", "AGENTS.pyrung.md"):
             persistent_text = persistent[path]
             normalized = " ".join(persistent_text.split())
-            assert "<!-- pyrung:workspace-lifecycle:start -->" in persistent_text
-            assert "<!-- pyrung:workspace-lifecycle:end -->" in persistent_text
             assert "does not delete" in normalized
             assert "configured active workspace" in normalized
             assert "closing the CLICK application deletes" not in normalized
@@ -309,15 +311,58 @@ class TestProjectBasic:
             assert "automatically snapshots" not in normalized
             assert "most recent `rung apply` source snapshot" not in normalized
 
-            # Only the marked section refreshes; surrounding edits survive.
-            marked = f"{temporary[path]}\nUser-authored footer.\n"
-            refreshed = refresh_workspace_lifecycle_guidance(marked, persistent_text)
-            assert "User-authored footer." in refreshed
-            assert "<!-- pyrung:workspace-lifecycle:start -->" in refreshed
-            assert "closing the CLICK application deletes" not in " ".join(refreshed.split())
+    def test_user_guidance_files_point_at_pyrungs(self, tmp_path: Path):
+        """README.md and AGENTS.md are the user's: one pointer line, then notes."""
+        Button = Bool("Button")
+        Light = Bool("Light")
 
-        user_docs = "# My machine\n\nClosing notes written by the engineer.\n"
-        assert refresh_workspace_lifecycle_guidance(user_docs, persistent["README.md"]) == user_docs
+        with Program() as logic:
+            with rung(Button):
+                out(Light)
+
+        mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
+        files = _project_from_program(logic, mapping, tmp_path)
+
+        for user, generated in (
+            ("README.md", "README.pyrung.md"),
+            ("AGENTS.md", "AGENTS.pyrung.md"),
+        ):
+            [pointer] = [
+                line
+                for line in files[user].splitlines()
+                if line.startswith("<!-- pyrung:guidance -->")
+            ]
+            assert generated in pointer
+            assert "ClickNick rewrites" in pointer
+            assert "Generated by pyrung" in files[generated]
+            assert "pyrung:workspace-lifecycle" not in files[generated]
+        assert "@AGENTS.pyrung.md" in files["AGENTS.md"]
+        assert "## Notes for this machine" in files["AGENTS.md"]
+        assert "## Workspace model" not in files["AGENTS.md"]
+
+    def test_existing_user_guidance_survives_regeneration(self, tmp_path: Path):
+        """Without overwrite, the user's files stay; pyrung's are rewritten."""
+        Button = Bool("Button")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with rung(Button):
+                out(Light)
+
+        mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv"
+        bundle.write(csv_dir)
+        out_dir = tmp_path / "output"
+        out_dir.mkdir()
+        (out_dir / "AGENTS.md").write_text("# My notes\n", encoding="utf-8")
+        (out_dir / "AGENTS.pyrung.md").write_text("stale\n", encoding="utf-8")
+
+        files = ladder_to_pyrung_project(csv_dir, output_dir=out_dir)
+
+        assert (out_dir / "AGENTS.md").read_text(encoding="utf-8") == "# My notes\n"
+        written = (out_dir / "AGENTS.pyrung.md").read_text(encoding="utf-8")
+        assert written == files["AGENTS.pyrung.md"]
 
     def test_export_file_passes_blocks_to_nickname_file(self, tmp_path: Path):
         """project_to_csv.py must pass the ``blocks`` set to to_nickname_file.

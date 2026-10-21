@@ -137,11 +137,17 @@ files = ladder_to_pyrung_project("ladder_dir/", nickname_csv="Address.csv")
 files = ladder_to_pyrung_project("ladder_dir/", output_dir="pump_project_py/")
 ```
 
-Generated `README.md` and `AGENTS.md` guidance describes a temporary CLICK
-workspace by default. When an integration stores the project in a durable
-location, pass `workspace_kind="persistent"`. Pyrung marks the lifecycle
-section in each file so an integration can refresh that generated section
-without replacing surrounding user documentation.
+Guidance comes in two pairs. `README.pyrung.md` and `AGENTS.pyrung.md` belong
+to pyrung: setup, the ClickNick workflow, and the program's shape, rewritten on
+every generation. `README.md` and `AGENTS.md` belong to the user: they are
+written once, as a line pointing at pyrung's file (starting
+`<!-- pyrung:guidance -->`) and an empty notes section, and skipped after that
+unless `overwrite=True`. An integration that regenerates into an existing folder
+can copy that line back when the user's file lacks it.
+
+The guidance describes a temporary CLICK workspace by default. When an
+integration stores the project in a durable location, pass
+`workspace_kind="persistent"`.
 
 The return value is a `dict[str, str]` mapping relative paths to content:
 
