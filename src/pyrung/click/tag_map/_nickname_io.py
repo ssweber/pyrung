@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pyclickplc
-from pyclickplc.addresses import AddressRecord, format_address_display, get_addr_key
+from pyclickplc.addresses import (
+    AddressRecord,
+    format_address_display,
+    get_addr_key,
+    parse_address,
+)
 from pyclickplc.banks import BANKS, DEFAULT_RETENTIVE, MEMORY_TYPE_BASES
 from pyclickplc.blocks import compute_all_block_ranges, format_block_tag
 from pyclickplc.validation import validate_nickname
@@ -244,6 +249,31 @@ def tag_map_from_nickname_file(
             )
         return physical
 
+    nickname_at = {
+        format_address_display(row.memory_type, row.address): row.nickname
+        for row in rows
+        if row.nickname
+    }
+    nicknames = frozenset(nickname_at.values())
+
+    def link_for_meta(tag_meta: TagMeta | None) -> str | None:
+        """The meta's ``link=``, with a Click-address enable named by its nickname.
+
+        ``link=Y001`` reads as the nickname at Y001.  Nicknames win, so one that
+        looks like an address is kept; an address with no nickname keeps its
+        display form, which is the name codegen gives that slot.
+        """
+        if tag_meta is None or tag_meta.link is None:
+            return None
+        enable, sep, trigger = tag_meta.link.partition(":")
+        if enable in nicknames:
+            return tag_meta.link
+        try:
+            display = format_address_display(*parse_address(enable))
+        except ValueError:
+            return tag_meta.link
+        return f"{nickname_at.get(display, display)}{sep}{trigger}"
+
     def physical_owner_name(logical_block: Block, slot_name: str) -> str:
         struct_name = getattr(logical_block, "_pyrung_structure_name", None)
         field_name = getattr(logical_block, "_pyrung_structure_field", None)
@@ -320,7 +350,7 @@ def tag_map_from_nickname_file(
                 tag_meta,
                 owner_name=physical_owner_name(logical_block, sv.name),
             )
-            link = tag_meta.link if tag_meta is not None else None
+            link = link_for_meta(tag_meta)
             min_val = tag_meta.min if tag_meta is not None else None
             max_val = tag_meta.max if tag_meta is not None else None
             uom = tag_meta.uom if tag_meta is not None else None
@@ -657,7 +687,7 @@ def tag_map_from_nickname_file(
                         tag_meta,
                         owner_name=physical_owner_name(block, sv.name),
                     )
-                    link = tag_meta.link if tag_meta is not None else None
+                    link = link_for_meta(tag_meta)
                     min_val = tag_meta.min if tag_meta is not None else None
                     max_val = tag_meta.max if tag_meta is not None else None
                     uom = tag_meta.uom if tag_meta is not None else None
@@ -846,7 +876,7 @@ def tag_map_from_nickname_file(
             public=tag_meta.public if tag_meta is not None else False,
             lock=tag_meta.lock if tag_meta is not None else False,
             physical=physical_for_meta(tag_meta, owner_name=row.nickname),
-            link=tag_meta.link if tag_meta is not None else None,
+            link=link_for_meta(tag_meta),
             min=tag_meta.min if tag_meta is not None else None,
             max=tag_meta.max if tag_meta is not None else None,
             uom=tag_meta.uom if tag_meta is not None else None,

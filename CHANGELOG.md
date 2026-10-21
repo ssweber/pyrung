@@ -12,7 +12,7 @@
 
 ### Features
 
-- The debugger can act as a simulated CLICK PLC: a `modbus` launch argument serves the session over Modbus TCP (optionally with writable X inputs), `speed` paces Continue to real time, and `startMode` plus the `pyrungSetMode`, `pyrungSetSpeed`, and `pyrungModbusInfo` requests (and the `mode` and `speed` console verbs) control RUN/STOP and pacing.
+- The debugger can act as a simulated CLICK PLC: a `modbus` launch argument serves the session over Modbus TCP (X inputs stay read-only, as on a real CLICK), `speed` paces Continue to real time, and `startMode` plus the `pyrungSetMode`, `pyrungSetSpeed`, and `pyrungModbusInfo` requests (and the `mode` and `speed` console verbs) control RUN/STOP and pacing.
 - Force, unforce, and patch accept CLICK addresses such as `X001` or `DS10` in DAP requests and console commands, and reject targets that are neither a tag nor a mapped address instead of creating an unused tag.
 - `pyrungScanFrame` is now sent after every state change, including `pyrung live` commands and Modbus writes, and reports mode, running, speed, measured speed, pending patches, and what caused it; `pyrung live` commands also notify the debugger with their stop and trace events.
 - A `step` or `run` sent while Continue runs pauses it and then executes instead of failing.
@@ -20,6 +20,9 @@
 - `PLC(keep_forces_on_run=True)` (or the `keep_forces_on_run` property, or the debugger's `keepForcesOnRun` launch argument) keeps forces across STOP -> RUN; by default they are still cleared.
 - `plc.debug.abandon_scan()` re-queues the patches a partially stepped scan had taken, and the debugger uses it so a patch sent while paused mid-scan is never lost.
 - `ClickDataProvider` accepts a runner getter, Click bank `blocks` for slots without a TagMap entry, and an `on_stop` hook, and can report the tag served at an address.
+- Bench links: the `link`, `unlink`, `restore`, and `links` console verbs and the `pyrungLink`, `pyrungUnlink`, `pyrungRestoreLink`, `pyrungSetLinks`, and `pyrungListLinks` requests add, replace, or cut feedback links for the debug session without editing the program. They survive `reload`, can be set aside together (`links bench off`) or one at a time, are recorded by captures, and are refused when the program writes the feedback. Frames carry `linksRevision`.
+- `Harness.set_overrides()` replaces or cuts declared couplings, or adds new ones, by feedback tag; `Harness.declared()` lists the program's own couplings, `Harness.pending()` reports a bool feedback still counting toward a flip, and `link_problem()` explains why a coupling cannot run. `Harness.unlink()` is now a cut override.
+- In a CLICK nickname comment, `link=` accepts a CLICK address (`link=Y001`, read as the nickname at that address) and a value trigger (`link=State:SORTING`).
 
 ## v0.15.2 (2026-10-11)
 

@@ -403,6 +403,19 @@ def test_tag_meta_parser_round_trips_physical_metadata():
     )
 
 
+def test_tag_meta_link_takes_a_trigger():
+    meta, remaining = parse_tag_meta("[link=State:SORTING, on_delay=1s] Sorted")
+
+    assert remaining == "Sorted"
+    assert meta == TagMeta(link="State:SORTING", on_delay="1s")
+    assert format_tag_meta(meta) == "[link=State:SORTING, on_delay=1s]"
+
+
+def test_tag_meta_link_rejects_a_second_trigger():
+    with pytest.raises(ValueError, match="Invalid TagMeta link value"):
+        parse_tag_meta("[link=State:A:B, on_delay=1s] Sorted")
+
+
 def test_tag_meta_rejects_system_without_physical_details():
     with pytest.raises(ValueError, match="system requires"):
         parse_tag_meta("[system=Line1] Feedback")
@@ -2527,3 +2540,34 @@ def test_named_array_map_to_stamps_slot_identity_onto_bank():
 
     assert ds[1001] is Alarm[1].id
     assert ds[1002] is Alarm[2].id
+
+
+def test_from_nickname_file_names_an_address_link_by_its_nickname(tmp_path):
+    path = tmp_path / "address_link.csv"
+
+    def bit(memory_type: str, address: int, nickname: str, comment: str = "") -> AddressRecord:
+        return AddressRecord(
+            memory_type=memory_type,
+            address=address,
+            nickname=nickname,
+            comment=comment,
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        )
+
+    records = {
+        get_addr_key("Y", 1): bit("Y", 1, "Motor_Run"),
+        get_addr_key("X", 2): bit("X", 2, "Motor_Aux", "[on_delay=2s, link=Y001]"),
+        get_addr_key("X", 3): bit("X", 3, "Valve_Open", "[on_delay=1s, link=y5]"),
+        get_addr_key("X", 4): bit("X", 4, "Pump_Aux", "[on_delay=1s, link=Motor_Run]"),
+    }
+    pyclickplc.write_csv(path, records)
+
+    links = {
+        entry.logical.name: entry.logical.link for entry in TagMap.from_nickname_file(path).tags()
+    }
+
+    assert links["Motor_Aux"] == "Motor_Run"
+    assert links["Valve_Open"] == "Y005"  # no nickname: the name codegen gives the slot
+    assert links["Pump_Aux"] == "Motor_Run"

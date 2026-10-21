@@ -52,6 +52,9 @@ _CHOICE_VALUE_RE = re.compile(r"^[^:,\|\[\]]+$")
 # ``[]`` group brackets) remain forbidden; the reader takes the token raw
 # (see ``_parse_tag_meta_group``) and hands it to ``parse_profile_spec``.
 _PROFILE_VALUE_RE = re.compile(r"^[^,\[\]]+$")
+# A ``link=`` value names the enable — a tag name or a Click address — with an
+# optional ``:trigger`` (a choices label or an integer): ``link=State:SORTING``.
+_LINK_VALUE_RE = re.compile(r"^[^:,\|\[\]]+(?::[^:,\|\[\]]+)?$")
 _BOOL_CHOICE_PRESET: ChoiceMap = {0: "False", 1: "True"}
 _CHOICE_PRESETS: dict[str, ChoiceMap] = {
     "Bool": _BOOL_CHOICE_PRESET,
@@ -502,6 +505,12 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
             # let ``parse_profile_spec`` decode it downstream.
             profile = token.split("=", maxsplit=1)[1].strip()
             continue
+        if token.startswith("link="):
+            # ``Tag:trigger`` fails the scalar grammar on its ``:``; check it whole.
+            link = token.split("=", maxsplit=1)[1].strip()
+            if _LINK_VALUE_RE.fullmatch(link) is None:
+                raise ValueError(f"Invalid TagMeta link value {link!r}.")
+            continue
         key, sep, value = token.partition("=")
         if sep == "=" and key in _VALUE_TOKENS:
             parsed_value = _parse_tag_meta_scalar(value, field_name=key)
@@ -692,7 +701,7 @@ def format_tag_meta(meta: TagMeta | None) -> str:
     if meta.lock:
         tokens.append("lock")
     if meta.link is not None:
-        if _CHOICE_VALUE_RE.fullmatch(meta.link) is None:
+        if _LINK_VALUE_RE.fullmatch(meta.link) is None:
             raise ValueError(f"Invalid TagMeta link value {meta.link!r}.")
         tokens.append(f"link={meta.link}")
     if meta.physical is not None:

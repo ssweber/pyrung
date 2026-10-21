@@ -301,6 +301,7 @@ def state_fingerprint_locked(adapter: Any) -> tuple[Any, ...] | None:
         runner.mode,
         adapter._speed,
         executing,
+        adapter._links_revision,
     )
 
 
@@ -336,6 +337,7 @@ def frame_body_locked(
         "speed": adapter._speed,
         "actualSpeed": adapter._actual_speed if running else None,
         "pendingPatches": json_safe_forces(runner.pending_patches),
+        "linksRevision": adapter._links_revision,
         "source": source,
     }
 

@@ -22,11 +22,18 @@ def install_harness(plc: PLC, unlink: list[str] | None = None) -> frozenset[str]
     become free, steerable inputs.  This is how ``how(..., unlink=[...])``
     lets PILOT reach a fault that is otherwise unreachable while the link
     holds the sensor lockstep with its driver.
+
+    Overrides on a harness *plc* already carries (a debug session's bench
+    links, inherited by the fork) carry over, so PILOT plans with the same
+    wiring the session runs.
     """
     from pyrung.core.harness import Harness
 
+    previous = plc._harness
     harness = Harness(plc)
     harness.install()
+    if previous is not None and previous.overrides:
+        harness.set_overrides(previous.overrides)
     fb_names: set[str] = set()
     has_couplings = False
     for coupling in harness.couplings():

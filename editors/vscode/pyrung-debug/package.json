@@ -136,11 +136,6 @@
                   "port": {
                     "type": "integer",
                     "default": 502
-                  },
-                  "allowInputWrites": {
-                    "type": "boolean",
-                    "description": "Let Modbus clients write X inputs (simulator only).",
-                    "default": false
                   }
                 }
               },

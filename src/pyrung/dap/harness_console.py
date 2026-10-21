@@ -1,7 +1,8 @@
 """Harness integration for the DAP debug session.
 
 Auto-installs the autoharness when Physical+link= annotations are detected
-at launch. Console verbs: ``harness status``, ``harness install``,
+at launch, and keeps the session's bench links (``pyrung.dap.links``) applied
+across reloads. Console verbs: ``harness status``, ``harness install``,
 ``harness remove``.
 """
 
@@ -13,18 +14,28 @@ from pyrung.core.harness import Harness
 from pyrung.dap.console import ConsoleResult, register
 
 
-def try_auto_install(adapter: Any) -> str | None:
-    """If the runner has Physical+link= couplings, install the harness.
+def install_harness(adapter: Any) -> Harness:
+    """Install a harness on the current runner, even one with no declared couplings."""
+    harness = Harness(adapter._require_runner_locked())
+    harness.install()
+    harness.on_patches_applied = _make_patch_listener(adapter)
+    adapter._harness = harness
+    return harness
 
-    Returns a banner string for the debug console, or ``None`` if no
-    couplings were found.
+
+def try_auto_install(adapter: Any) -> str | None:
+    """Install the harness for the program's couplings plus the bench links.
+
+    Returns a banner string for the debug console, or ``None`` if there are
+    no couplings and nothing to report.
     """
-    runner = adapter._runner
-    if runner is None:
+    from pyrung.dap.links import fit_to_harness_locked
+
+    if adapter._runner is None:
         return None
 
-    harness = Harness(runner)
-    harness.install()
+    harness = install_harness(adapter)
+    notes = fit_to_harness_locked(adapter, harness)
 
     summary = harness.coupling_summary()
     n_bool = len(summary["bool_couplings"])
@@ -32,18 +43,20 @@ def try_auto_install(adapter: Any) -> str | None:
     total = n_bool + n_profile
 
     if total == 0:
-        harness.uninstall()
-        return None
-
-    harness.on_patches_applied = _make_patch_listener(adapter)
-    adapter._harness = harness
+        uninstall_harness(adapter)
+        return "\n".join(notes) or None
 
     parts = []
     if n_bool:
         parts.append(f"{n_bool} bool")
     if n_profile:
         parts.append(f"{n_profile} profile")
-    return f"Harness: {total} feedback loop(s) ({', '.join(parts)}); `harness status` for details"
+    banner = f"Harness: {total} feedback loop(s) ({', '.join(parts)}); `harness status` for details"
+    if adapter._bench_links:
+        banner += (
+            f"\n{len(adapter._bench_links)} bench change(s) to the wiring; `links` for details"
+        )
+    return "\n".join([banner, *notes])
 
 
 def uninstall_harness(adapter: Any) -> None:

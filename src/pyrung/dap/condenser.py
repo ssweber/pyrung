@@ -160,6 +160,8 @@ def classify_command(command: str) -> CommandInfo:
 
     if verb == "harness" and len(parts) >= 2 and parts[1].lower() == "status":
         return CommandInfo(kind="query", verb=verb)
+    if verb == "links" and len(parts) == 1:
+        return CommandInfo(kind="query", verb=verb)
     if verb in _QUERY_VERBS:
         return CommandInfo(kind="query", verb=verb)
 

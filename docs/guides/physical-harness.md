@@ -246,6 +246,8 @@ A counter instruction in the logic counts the rising edges — the harness produ
 
 In a CLICK nickname comment the spec is a comma-free token: `profile=ramp:up=0.8|down=-0.05`, `profile=approach:toward=180|rate=0.3`, or `profile=pulse:on_dwell=8ms|off_dwell=8ms`.
 
+In a comment, `link=` names the enable by nickname or by CLICK address, with the same optional trigger: `[on_delay=2s, off_delay=500ms, link=Motor_Run]`, `[on_delay=2s, link=Y001]`, or `[on_delay=1s, link=State:SORTING]`. An address reads as the nickname at that address; an address without a nickname keeps its address name (`Y005`), which is what generated code calls that slot. A nickname wins over an address that looks the same.
+
 ## Validation
 
 pyrung validates UDT and named-array field annotations at construction time:

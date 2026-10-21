@@ -2,10 +2,11 @@
 
 A ``pyclickplc.ClickServer`` serves the session's runner through a
 ``ClickDataProvider``, so ordinary Modbus clients read and write the
-simulated PLC as they would a real CLICK.  The server's asyncio loop runs on
-a background thread owned by this module.  Every provider call takes the
-adapter's ``_state_lock`` and goes to whichever runner the session holds at
-that moment, so the server keeps working across reloads.
+simulated PLC as they would a real CLICK; X inputs stay read-only.  The
+server's asyncio loop runs on a background thread owned by this module.
+Every provider call takes the adapter's ``_state_lock`` and goes to
+whichever runner the session holds at that moment, so the server keeps
+working across reloads.
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ _LOOP_TIMEOUT = 5.0
 class ModbusConfig:
     host: str = "127.0.0.1"
     port: int = 502
-    allow_input_writes: bool = False
 
 
 def parse_modbus_config(adapter: Any, raw: Any) -> ModbusConfig | None:
@@ -40,14 +40,11 @@ def parse_modbus_config(adapter: Any, raw: Any) -> ModbusConfig | None:
         raise adapter.DAPAdapterError("launch.modbus must be an object")
     host = raw.get("host", ModbusConfig.host)
     port = raw.get("port", ModbusConfig.port)
-    allow = raw.get("allowInputWrites", ModbusConfig.allow_input_writes)
     if not isinstance(host, str) or not host.strip():
         raise adapter.DAPAdapterError("launch.modbus.host must be a non-empty string")
     if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65535:
         raise adapter.DAPAdapterError("launch.modbus.port must be an integer 0..65535")
-    if not isinstance(allow, bool):
-        raise adapter.DAPAdapterError("launch.modbus.allowInputWrites must be a boolean")
-    return ModbusConfig(host=host.strip(), port=port, allow_input_writes=allow)
+    return ModbusConfig(host=host.strip(), port=port)
 
 
 class SessionDataProvider:
@@ -101,11 +98,8 @@ class ModbusSimServer:
         thread.start()
         self._loop = loop
         self._thread = thread
-        # Passed only when asked for, so pyclickplc releases without the
-        # option still serve the default (real-PLC) behaviour.
-        options = {"allow_input_writes": True} if config.allow_input_writes else {}
         try:
-            server = ClickServer(self._provider, host=config.host, port=config.port, **options)
+            server = ClickServer(self._provider, host=config.host, port=config.port)
             self._run(server.start())
         except Exception as exc:
             self.error = _bind_error(config, exc)
@@ -194,8 +188,6 @@ def start_modbus(adapter: Any, config: ModbusConfig) -> None:
     adapter._modbus = server
     if server.start():
         text = f"Modbus TCP server listening on {config.host}:{server.port}"
-        if config.allow_input_writes:
-            text += " (X inputs writable)"
     else:
         text = f"Modbus TCP server not started. {server.error}"
     adapter._enqueue_internal_event("output", {"category": "console", "output": f"{text}\n"})
@@ -215,7 +207,6 @@ def modbus_info(server: ModbusSimServer | None) -> dict[str, Any]:
             "running": False,
             "host": None,
             "port": None,
-            "allowInputWrites": False,
             "clients": 0,
             "error": None,
         }
@@ -224,7 +215,6 @@ def modbus_info(server: ModbusSimServer | None) -> dict[str, Any]:
         "running": running,
         "host": server.config.host,
         "port": server.port,
-        "allowInputWrites": server.config.allow_input_writes,
         "clients": server.client_count() if running else 0,
         "error": server.error,
     }

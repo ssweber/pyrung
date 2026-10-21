@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import io
 import socket
 import sys
@@ -13,15 +12,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pyclickplc.server import ClickServer
 
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.execution_flow import PACE_MAX_LAG_SECONDS, ScanPacer, SpeedMeter
 from pyrung.dap.live import send_command
 from pyrung.dap.modbus import SessionDataProvider
 from pyrung.dap.protocol import read_message
-
-_SUPPORTS_INPUT_WRITES = "allow_input_writes" in inspect.signature(ClickServer).parameters
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -677,7 +673,6 @@ def test_modbus_info_without_server(tmp_path: Path):
         "running": False,
         "host": None,
         "port": None,
-        "allowInputWrites": False,
         "clients": 0,
         "error": None,
     }
@@ -717,28 +712,6 @@ def test_modbus_server_round_trip_and_stop(tmp_path: Path):
     # The port is free again.
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", port))
-
-
-@pytest.mark.skipif(not _SUPPORTS_INPUT_WRITES, reason="pyclickplc without allow_input_writes")
-def test_modbus_x_writes_become_patches_when_allowed(tmp_path: Path):
-    from pyclickplc import ClickClient
-
-    adapter, out_stream = _modbus_launch(tmp_path, allowInputWrites=True)
-    info = _response(_request(adapter, out_stream, "pyrungModbusInfo"))["body"]
-    assert info["allowInputWrites"] is True
-
-    # Passed as a mapping: the locked pyclickplc may predate the option.
-    client_options: dict[str, Any] = {"allow_input_writes": True}
-
-    async def write_x() -> None:
-        async with ClickClient("127.0.0.1", info["port"], **client_options) as plc:
-            await plc.addr.write("X001", True)
-
-    asyncio.run(write_x())
-    runner = adapter._runner
-    assert runner is not None
-    assert dict(runner.pending_patches) == {"Start_PB": True}
-    _shutdown(adapter, out_stream)
 
 
 def test_modbus_bind_failure_does_not_fail_launch(tmp_path: Path):

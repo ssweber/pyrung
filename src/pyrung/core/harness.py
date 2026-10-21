@@ -12,7 +12,7 @@ accumulator, so feedback that was never sustained is never fabricated.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -106,6 +106,52 @@ def _resolve_trigger_value(trigger_raw: str, en_tag: Any) -> int | str:
     )
 
 
+def link_problem(plc: PLC, coupling: Coupling) -> str | None:
+    """Why *coupling* cannot run as an override on *plc*, or ``None`` if it can.
+
+    Both ends must be known tags, the feedback must suit the response (bool
+    for on/off delay and pulse, numeric for ramp and approach), and nothing
+    in the program may write the feedback: plant rungs and logic would fight
+    over it every scan.
+    """
+    known = plc._known_tags_by_name
+    fb_tag = known.get(coupling.fb_name)
+    if fb_tag is None:
+        return f"unknown tag: {coupling.fb_name}"
+    if coupling.en_name not in known:
+        return f"unknown tag: {coupling.en_name}"
+    if coupling.en_name == coupling.fb_name:
+        return f"{coupling.fb_name} cannot drive itself"
+    if fb_tag.readonly:
+        return f"{coupling.fb_name} is readonly"
+    if coupling.physical.feedback_type == "bool":
+        if fb_tag.type != TagType.BOOL:
+            return (
+                f"{coupling.fb_name} is {fb_tag.type.value}; "
+                "on_delay/off_delay and pulse drive a bool feedback"
+            )
+    elif fb_tag.type in (TagType.BOOL, TagType.CHAR):
+        return f"{coupling.fb_name} is {fb_tag.type.value}; ramp and approach drive a number"
+    writer = _program_writer(plc, coupling.fb_name)
+    if writer is not None:
+        return f"{coupling.fb_name} is written by the program at {writer}"
+    return None
+
+
+def _program_writer(plc: PLC, tag_name: str) -> str | None:
+    """Location of the first program instruction that writes *tag_name*, if any."""
+    from pyrung.core.validation._common import _collect_write_sites, compact_site_location
+    from pyrung.core.validation.readonly_write import _any_write_targets
+
+    program = plc._program
+    if program is None:
+        return None
+    for site in _collect_write_sites(program, target_extractor=_any_write_targets):
+        if site.target_name == tag_name:
+            return compact_site_location(site)
+    return None
+
+
 @dataclass
 class Harness:
     """Automatic feedback harness driven by Physical + link= declarations.
@@ -115,6 +161,11 @@ class Harness:
     on-delay/off-delay timer pair (bool dwell), and a declarative profile spec
     becomes calc/timer rungs — ``Ramp``/``Approach`` drive an analog register,
     ``Pulse`` drives a bool pulse train.  No Python tick, no monitors.
+
+    The couplings found in the program are the *declared* ones.  Overrides
+    (:meth:`set_overrides`) replace or cut a declared coupling, or add one,
+    keyed by feedback tag, without touching the program; the harness runs
+    declared couplings plus overrides.  ``unlink`` is an override that cuts.
 
     Usage::
 
@@ -127,6 +178,8 @@ class Harness:
     _plc: PLC = field(repr=False)
     _bool_couplings: list[_BoolCoupling] = field(default_factory=list, init=False)
     _profile_couplings: list[_ProfileCoupling] = field(default_factory=list, init=False)
+    _declared: list[Coupling] = field(default_factory=list, init=False)
+    _overrides: dict[str, Coupling | None] = field(default_factory=dict, init=False)
     _monitors: list[Any] = field(default_factory=list, init=False)
     _installed: bool = field(default=False, init=False)
 
@@ -134,6 +187,8 @@ class Harness:
         self._plc = plc
         self._bool_couplings: list[_BoolCoupling] = []
         self._profile_couplings: list[_ProfileCoupling] = []
+        self._declared: list[Coupling] = []
+        self._overrides: dict[str, Coupling | None] = {}
         self._monitors: list[Any] = []
         self._installed = False
         self.on_patches_applied: Callable[[list[tuple[str, Any, str]]], None] | None = None
@@ -143,6 +198,7 @@ class Harness:
             return
         self._installed = True
         self._discover_couplings()
+        self._rebuild_couplings()
         self._refresh_synthesis()
         self._seed_bool_state()
         self._install_monitors()
@@ -163,6 +219,8 @@ class Harness:
         clone._plc = plc
         clone._bool_couplings = [copy(c) for c in self._bool_couplings]
         clone._profile_couplings = [copy(c) for c in self._profile_couplings]
+        clone._declared = list(self._declared)
+        clone._overrides = dict(self._overrides)
         clone._installed = True
         clone._monitors = []
         clone.on_patches_applied = None
@@ -193,6 +251,8 @@ class Harness:
             self._plc._causal_lineage.invalidate_current_epoch()
         self._bool_couplings.clear()
         self._profile_couplings.clear()
+        self._declared.clear()
+        self._overrides.clear()
 
     def unlink(self, tags: list[str]) -> None:
         """Remove couplings for the named feedback tags.
@@ -201,17 +261,46 @@ class Harness:
         these tags — they become free inputs the caller can steer directly.
         Models a broken sensor or fault scenario.
         """
-        drop = set(tags)
-        self._bool_couplings = [c for c in self._bool_couplings if c.fb_name not in drop]
-        self._profile_couplings = [c for c in self._profile_couplings if c.fb_name not in drop]
+        self.set_overrides({**self._overrides, **dict.fromkeys(tags)})
+
+    def declared(self) -> tuple[Coupling, ...]:
+        """The couplings the program declares (``physical=`` + ``link=``), before overrides."""
+        return tuple(self._declared)
+
+    @property
+    def overrides(self) -> Mapping[str, Coupling | None]:
+        """Overrides by feedback tag: a coupling to run instead, or ``None`` to cut."""
+        return dict(self._overrides)
+
+    def set_overrides(self, overrides: Mapping[str, Coupling | None]) -> None:
+        """Replace all overrides and resynthesize.
+
+        Each key is a feedback tag name.  A ``Coupling`` value runs instead of
+        any declared coupling on that feedback (or adds one); ``None`` cuts the
+        declared coupling, leaving the feedback a free input.  A coupling added
+        while its enable is already on starts cold: the feedback follows after
+        its on-delay, as freshly wired hardware would.
+        """
+        for fb_name, coupling in overrides.items():
+            if coupling is not None and coupling.fb_name != fb_name:
+                raise ValueError(f"Override for {fb_name!r} drives {coupling.fb_name!r}.")
+        self._overrides = dict(overrides)
+        self._rebuild_couplings()
         if self._installed:
-            # Rebuild the overlay and monitors so the dropped couplings stop
-            # synthesizing their feedback (the fault-injection point).
+            # Rebuild the overlay and monitors so changed couplings take
+            # effect from the next scan (cut ones stop synthesizing).
             self._refresh_synthesis()
             for handle in self._monitors:
                 handle.remove()
             self._monitors.clear()
             self._install_monitors()
+
+    def pending(self, fb_name: str) -> bool:
+        """True while a bool coupling on *fb_name* is still counting toward a flip."""
+        snap = self._plc.current_state.tags
+        return any(
+            self._bool_mid_transition(c, snap) for c in self._bool_couplings if c.fb_name == fb_name
+        )
 
     @property
     def pending_count(self) -> int:
@@ -368,7 +457,7 @@ class Harness:
         if trigger_raw is not None:
             en_tag = self._plc._known_tags_by_name[en_name]
             trigger_value = _resolve_trigger_value(trigger_raw, en_tag)
-        self._add_coupling(en_name, tag.name, tag.physical, trigger_value=trigger_value)
+        self._declared.append(Coupling(en_name, tag.name, tag.physical, trigger_value))
 
     def _discover_structure_couplings(self, runtime: Any) -> None:
         field_specs = runtime._field_specs
@@ -393,9 +482,20 @@ class Harness:
                 trigger_value = None
                 if trigger_raw is not None:
                     trigger_value = _resolve_trigger_value(trigger_raw, en_tag)
-                self._add_coupling(
-                    en_tag.name, fb_tag.name, spec.physical, trigger_value=trigger_value
+                self._declared.append(
+                    Coupling(en_tag.name, fb_tag.name, spec.physical, trigger_value)
                 )
+
+    def _rebuild_couplings(self) -> None:
+        """Lower the declared couplings plus overrides into the working lists."""
+        self._bool_couplings = []
+        self._profile_couplings = []
+        for c in self._declared:
+            if c.fb_name not in self._overrides:
+                self._add_coupling(c.en_name, c.fb_name, c.physical, trigger_value=c.trigger_value)
+        for c in self._overrides.values():
+            if c is not None:
+                self._add_coupling(c.en_name, c.fb_name, c.physical, trigger_value=c.trigger_value)
 
     def _add_coupling(
         self,
@@ -439,7 +539,7 @@ class Harness:
 
         Idempotent — used at install, on each fork (fresh instructions reading the
         fork's tags; accumulator *state* rides the inherited committed state), and
-        after ``unlink`` drops a coupling.  Preserves any ``holds`` PILOT has
+        after overrides change (``set_overrides`` / ``unlink``).  Preserves any ``holds`` PILOT has
         installed on the same overlay.
         """
         from pyrung.core.condition import BitCondition, CompareEq, CompareNe

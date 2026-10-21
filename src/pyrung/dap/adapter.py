@@ -28,6 +28,7 @@ from pyrung.dap.handlers import (
     graph_slice,
     history_seek,
     lifecycle_launch,
+    link_requests,
     monitor_data_breakpoints,
     simulation,
     stack_variables_evaluate,
@@ -94,6 +95,11 @@ class DAPAdapter:
         self._capture = CaptureBuffer()
         self._live_server: Any = None
         self._harness: Any = None
+        # Bench links (pyrung.dap.links): session wiring over the program's
+        # declared links, kept across reloads.
+        self._bench_links: dict[str, Any] = {}
+        self._bench_links_on = True
+        self._links_revision = 0
         self._bounds_accumulator: dict[str, Any] = {}
         self._notes: dict[int, list[str]] = {}
         self._action_log: list[tuple[int | None, str, str]] = []
@@ -124,6 +130,7 @@ class DAPAdapter:
 
         import pyrung.dap.bounds_console  # noqa: F401
         import pyrung.dap.harness_console  # noqa: F401
+        import pyrung.dap.links  # noqa: F401
         import pyrung.dap.miner_console  # noqa: F401
         import pyrung.dap.reload_console  # noqa: F401
         import pyrung.dap.spec_console  # noqa: F401
@@ -486,6 +493,21 @@ class DAPAdapter:
 
     def _on_pyrungListForces(self, _args: dict[str, Any]) -> HandlerResult:
         return force_patch.on_pyrung_list_forces(self, _args)
+
+    def _on_pyrungLink(self, args: dict[str, Any]) -> HandlerResult:
+        return link_requests.on_pyrung_link(self, args)
+
+    def _on_pyrungUnlink(self, args: dict[str, Any]) -> HandlerResult:
+        return link_requests.on_pyrung_unlink(self, args)
+
+    def _on_pyrungRestoreLink(self, args: dict[str, Any]) -> HandlerResult:
+        return link_requests.on_pyrung_restore_link(self, args)
+
+    def _on_pyrungSetLinks(self, args: dict[str, Any]) -> HandlerResult:
+        return link_requests.on_pyrung_set_links(self, args)
+
+    def _on_pyrungListLinks(self, _args: dict[str, Any]) -> HandlerResult:
+        return link_requests.on_pyrung_list_links(self, _args)
 
     def _on_pyrungSetMode(self, args: dict[str, Any]) -> HandlerResult:
         return simulation.on_pyrung_set_mode(self, args)

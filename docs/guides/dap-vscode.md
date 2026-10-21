@@ -120,10 +120,14 @@ data:
   clear_forces
   force <tag> <value>
   get <tag> [tag2 ...]
+  link <feedback> <enable[:trigger]> on_delay=.. off_delay=.. | profile=..  (bench wiring)
+  links [bench on|off | enable <tag> | disable <tag>]
   monitor <tag>
   note <text>
   patch <tag> <value>
+  restore <tag>                                         (drop a bench change)
   unforce <tag>
+  unlink <tag>                                          (cut on the bench)
   unmonitor <tag>
 
 analysis:
@@ -352,6 +356,25 @@ step 5
 
 With the default `--harness current` mode, replay skips those recorded inputs because the current harness reproduces them from program state. Use `--harness recorded` to remove the current harness and apply the captured inputs instead.
 
+### Bench links
+
+Bench links change the feedback wiring for this session without editing the program: add a link, replace one the program declares, or cut it to simulate a failed sensor or a stuck contactor. They use the comment keys, and tags may be names or CLICK addresses:
+
+```text
+link X002 Y001 on_delay=2s off_delay=500ms     # Y001 drives X002 after 2 s, drops 500 ms after
+link DF5 Y003 profile=ramp:up=0.8|down=-0.05   # analog feedback
+link Sorted State:2 on_delay=1s                # value trigger
+unlink X002        # cut the program's link (X002 is a free input), or remove a bench link
+restore X002       # drop the bench change: back to what the program declares
+links              # list program and bench links
+links bench off    # set every bench change aside without forgetting it; `links bench on` again
+links disable X002 # set one aside; `links enable X002` again
+```
+
+A link is refused when the program writes the feedback (plant rungs and logic would fight over it every scan), when the feedback is readonly, or when its type does not suit the response: on/off delays and `pulse` drive a Bool, `ramp` and `approach` a number. A link added while its enable is already on starts cold, so the feedback follows after its on-delay.
+
+Bench links live in the debug session, not the runner, so `reload` keeps them. After a reload, a bench link the program now declares the same way is dropped (it reached the program), and one that no longer fits the reloaded program is dropped with a note. A recording captures the link verbs; replay runs them only with `--harness current`.
+
 ## pyrung live
 
 Attach to a running debug session from another terminal or process.
@@ -463,14 +486,14 @@ Launch arguments (all optional):
   "type": "pyrung",
   "request": "launch",
   "program": "${workspaceFolder}/run.py",
-  "modbus": {"host": "127.0.0.1", "port": 502, "allowInputWrites": true},
+  "modbus": {"host": "127.0.0.1", "port": 502},
   "speed": 1.0,
   "startMode": "stop",
   "keepForcesOnRun": true
 }
 ```
 
-- `modbus` starts a Modbus TCP server inside the session. Reads return the current tag values; writes are one-scan patches, so a value sticks until logic writes it, as on a real PLC. `allowInputWrites` lets clients write X inputs, which a real CLICK refuses. Addresses map through the program's TagMap: a `mapping` in the launched file, or the `mapping` and `blocks` that generated projects keep in `plc/tags.py`. If the port cannot be bound the launch still succeeds; the reason is printed to the Debug Console and reported by `pyrungModbusInfo`.
+- `modbus` starts a Modbus TCP server inside the session. Reads return the current tag values; writes are one-scan patches, so a value sticks until logic writes it, as on a real PLC. X inputs are read-only over Modbus, as on a real CLICK; drive them with `pyrungPatch` or `pyrungForce`. Addresses map through the program's TagMap: a `mapping` in the launched file, or the `mapping` and `blocks` that generated projects keep in `plc/tags.py`. If the port cannot be bound the launch still succeeds; the reason is printed to the Debug Console and reported by `pyrungModbusInfo`.
 - `speed` paces Continue so simulation time runs at wall time x `speed` (the scan period itself never changes). `0`, the default, runs unpaced. When the program cannot keep up, pacing does not burst to catch up. Stepping and `run N` / `run <duration>` are never paced.
 - `startMode` puts the PLC in `"stop"` or `"run"` mode at launch. Without it the runner keeps the mode it was built with.
 - `keepForcesOnRun` sets `PLC.keep_forces_on_run`, so forces survive STOP -> RUN. Without it the program's own setting is kept (off by default). Reloads keep it.
@@ -481,11 +504,18 @@ Custom requests:
 |---|---|---|
 | `pyrungSetMode` | `{mode: "run" or "stop", patches?: {target: value}, forces?: {target: value}}` | `{mode, forces, pendingPatches}` |
 | `pyrungSetSpeed` | `{speed}` | `{speed}` |
-| `pyrungModbusInfo` | none | `{running, host, port, allowInputWrites, clients, error}` |
+| `pyrungModbusInfo` | none | `{running, host, port, clients, error}` |
+| `pyrungLink` | `{feedback, enable, trigger?, onDelay?, offDelay?, profile?, physical?, system?}` | `{text, command}` |
+| `pyrungUnlink` | `{feedback}` | `{text}` |
+| `pyrungRestoreLink` | `{feedback}` | `{text}` |
+| `pyrungSetLinks` | `{bench?: bool, enabled?: {feedback: bool}}` | same as `pyrungListLinks` |
+| `pyrungListLinks` | none | `{bench, revision, links: [{feedback, enable, trigger, onDelay, offDelay, profile, physical, system, source, active, pending, cut?, enabled?}]}` |
 
 `pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition (non-retentive tags reset, patches cleared, forces cleared unless `keepForcesOnRun`) without executing a scan, then applies the given forces and patches, so the first scan sees them; execution stays paused until the client continues or steps. `stop` enters STOP mode; the next step or Continue performs STOP -> RUN again. Writing the STOP command bit (SC50) over Modbus pauses Continue and enters STOP the same way.
 
 Wherever a request or console command takes a tag (`pyrungForce`, `pyrungUnforce`, `pyrungPatch`, `pyrungSetMode`, and the `force` / `unforce` / `patch` verbs), a CLICK address such as `X001` or `DS10` works too. Tag names are tried first, so a tag literally named `X003` keeps working. A target that is neither a tag nor a mapped address is an error.
+
+The link requests mirror the [bench link](#bench-links) console verbs. `source` is `"project"` for a link the program declares and `"bench"` for a session change; `active` says whether it runs now. Each `pyrungScanFrame` carries `linksRevision`, which changes whenever the wiring does, so a client refetches `pyrungListLinks` only then.
 
 Anyone can drive and the last command wins: a step or `run` from VS Code or `pyrung live` while Continue runs pauses it first, then executes.
 
