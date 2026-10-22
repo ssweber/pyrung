@@ -132,7 +132,20 @@ Follow-ups:
     Repro `rtc/q_churn.py`.
   - (d) Float floor in one aggregate `skip*dt`: ms timers one unit low at dt 0.3/0.7, seconds timers at dt 0.1
     (`run_until` one scan early). Repros `adv-rtc/q_d2_scan.py`, p03.
-- Then the `_LiveInputCache` audit; then features.
+- `_LiveInputCache` audit done: `df8bfd0`. The cache key was fine; pruning read end-of-scan values of keyed tags
+  that a later rung reads after an in-scan write (`Rung(Arm): latch(P)`, `Rung(And(P, Fire))`, `Rung(): reset(P)`
+  proved `always(~Hit)`). Such tags are now hidden from pruning; PackML lock byte-identical, 58-59 s both.
+  Probes + brute-force harness: session scratchpad `prove-cache/`.
+
+## Prover gaps found by the audit (wrong verdicts with every optimization off, so not pruning)
+
+- `sys.first_scan`, `sys.scan_counter` (and likely the clock bits) are constant in the prover's compiled kernel:
+  `Rung(sys.first_scan, I)` and `scan_counter == 3` gates prove unreachable hits.
+- Implicit `fault.*` writes are missing from `writers_of`: `calc(100/DD)` then `Rung(fault.division_error)`.
+- PDG indirect reads: `DS[agg]` with no base tag registers no reads; `DS[Ptr + k]` is narrowed by Ptr's range
+  ignoring k; `DS[Ptr]` with unbounded Ptr registers none. A naive full-block fallback blew PackML from 58 s to over
+  300 s (446 DH tags became ND inputs); a fix needs offset-aware narrowing plus "only elements with a writer" for
+  unbounded reads. The PDG is shared with pilot, causal and lints. Attempt: `prove-cache/pdg_fullblock_attempt.diff`.
 
 ## Known risk, not scheduled
 
