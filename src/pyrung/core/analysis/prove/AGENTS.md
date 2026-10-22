@@ -44,6 +44,7 @@ Each module has a docstring with implementation details. This map is for navigat
 - **`kernel.py`** — Kernel integration. Snapshot/restore, state key extraction, edge compression, live input caching. See docstring for state key composition.
 - **`expr.py`** — Expression tree helpers. Partial evaluation, tag reference collection, atom indexing, edge-bearing input partition.
 - **`independence.py`** — Static independence relation (single-scan commutativity of input actions) and free-input factoring partition. Used by BFS for factored evaluation. Also provides `_find_bridge_tags` for Intractable hint generation.
+- **`system_points.py`** — System-tag model for the kernel: power-on constants, `first_scan` as a stateful bit, scan-start resets of fault/command bits, and which scan-, clock- and time-derived tags BFS explores as free inputs.
 - **`inputs.py`** — Input-group detection and successor enumeration. Cross-product of three dimensions: edge single-flips, encoder-group canonicals, free-input combos.
 - **`elision/`** — Slice-based state-key elision.
   - **`__init__.py`** — Pipeline entry point (delegates to slice.py).
@@ -98,6 +99,7 @@ Tests are in `tests/core/analysis/`, split thematically across `test_prove_*.py`
 - `test_prove_decomposition.py` — split_at validation, always/never/reachable_states integration
 - `test_prove_input_groups.py` — input group detection
 - `test_prove_edge_demotion.py` — edge-source tag demotion (classification, correctness, soundness agreement)
+- `test_prove_system_points.py` — system tags (first_scan, constants, free clocks/counters, scan-start resets)
 - `test_packml_diagnosis.py` — PackML-specific regression tests
 
 **Counterexample replay rule**: every `Counterexample` assertion in the soundness matrix must be followed by `_assert_trace_replays(logic, result, "TagName")`. This is the two-oracle check — always() found a violation, concrete PLC confirms it.

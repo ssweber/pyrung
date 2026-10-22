@@ -114,6 +114,10 @@ assert isinstance(result, Proven)
 
 `settled=True` only suppresses transient violations where settlement produces an alternate state. If the property is violated in a non-timer state, or if settlement diverges, the violation is still reported.
 
+### System tags
+
+System tags read as they do in a fixed-step run at the verifier's `dt`. `sys.first_scan` is True on the first scan only, `sys.always_on` and the scan-time readings are constants, and fault and command bits reset at the start of each scan. The clocks, `sys.scan_counter`, `sys.scan_clock_toggle`, the RTC fields, and `sys.battery_present` depend on how long the PLC has run, so the verifier explores them as free inputs that can take any value on any scan. A `Proven` result holds for every timing; a `Counterexample` that drives one of them carries a caveat, since the PLC may never produce that sequence.
+
 ### Debugging with journals
 
 Pass `journal=True` to get a per-tag decision trail showing how the verifier classified, absorbed, or elided each tag:

@@ -36,6 +36,7 @@ from .kernel import (
 )
 from .passes import _DEFAULT_BFS_CONFIG, _BFSConfig
 from .results import Counterexample, Intractable, Proven, TraceStep, _ParentLink
+from .system_points import FIRST_SCAN, FREE_SYSTEM_CAVEAT
 
 
 def _projected_tuple(kernel: ReplayKernel, project_names: tuple[str, ...]) -> tuple[Any, ...]:
@@ -68,6 +69,17 @@ def _build_intractable_hints(context: _ExploreContext) -> list[str]:
                 f"the state space ({group_count} independent groups)"
             )
     return hints
+
+
+def _free_system_caveat(context: _ExploreContext, trace: list[TraceStep]) -> tuple[str, ...]:
+    """Caveat for a trace that drives system tags explored as free inputs."""
+    free = context.free_system_inputs
+    if not free:
+        return ()
+    used = sorted({name for step in trace for name in step.inputs if name in free})
+    if not used:
+        return ()
+    return (FREE_SYSTEM_CAVEAT.format(names=", ".join(used)),)
 
 
 def _merge_caveats(*groups: tuple[str, ...]) -> tuple[str, ...]:
@@ -195,7 +207,12 @@ def _bfs_explore_gen(
     _mutable = context.mutable_tag_names
     _base_keys = context.base_tag_keys
     _seed_synthetic_presets(context, kernel)
+    if context.system_points is not None:
+        context.system_points.seed(kernel.tags)
     if initial_state is not None:
+        # A supplied state is a running PLC, not power-on.
+        if FIRST_SCAN in kernel.tags and FIRST_SCAN not in initial_state:
+            kernel.tags[FIRST_SCAN] = False
         for tag_name, value in initial_state.items():
             if tag_name in kernel.tags:
                 kernel.tags[tag_name] = value
@@ -287,7 +304,9 @@ def _bfs_explore_gen(
             trace.append(TraceStep(inputs=input_dict, scans=edge_scans, prev=bprev_dict or {}))
             results[i] = Counterexample(
                 trace=trace,
-                caveats=_merge_caveats(trace_caveats, edge_caveats),
+                caveats=_merge_caveats(
+                    trace_caveats, edge_caveats, _free_system_caveat(context, trace)
+                ),
                 journal=context.journal,
             )
 

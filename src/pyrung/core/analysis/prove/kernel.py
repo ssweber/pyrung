@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from . import _ExploreContext
     from .absorb import _ThresholdVectorSpec
     from .events import _StateKeyDoneSpec
+    from .system_points import SystemPointModel
 
 _EDGE_DEAD: Any = object()
 _INPUT_DEAD: Any = object()
@@ -63,18 +64,30 @@ def _step_compiled_kernel(
     kernel: ReplayKernel,
     *,
     dt: float,
+    system: SystemPointModel | None = None,
 ) -> None:
-    """Execute one compiled scan, syncing legacy block arrays only when needed."""
+    """Execute one compiled scan, syncing legacy block arrays only when needed.
+
+    *system* applies the runner's per-scan system-point hooks around the step
+    function (scan-start resets before, ``first_scan`` clear after).
+    """
+    tags = kernel.tags
+    if system is not None:
+        for name, value in system.scan_start:
+            tags[name] = value
     if not compiled.blockless:
         for spec in compiled.block_specs.values():
             kernel.load_block_from_tags(spec)
-    compiled.step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, dt)
+    compiled.step_fn(tags, kernel.blocks, kernel.memory, kernel.prev, dt)
     if not compiled.blockless:
         for spec in compiled.block_specs.values():
             kernel.flush_block_to_tags(spec)
     for name in compiled.edge_tags:
-        if name in kernel.tags:
-            kernel.prev[name] = kernel.tags[name]
+        if name in tags:
+            kernel.prev[name] = tags[name]
+    if system is not None:
+        for name, value in system.after_scan:
+            tags[name] = value
     kernel.advance(dt)
 
 
@@ -153,6 +166,10 @@ def _abstracted_hidden_tags(context: _ExploreContext) -> frozenset[str]:
     # forwarded), so their current value is just as stale.
     hidden.update(name for name in context.elided_tags if name not in exact_stateful)
     hidden.update(name for name in context.demoted_edge_names if name not in exact_stateful)
+    # The runtime resets these before each scan, so the snapshot holds the
+    # previous scan's value, not the one the next scan starts from.
+    if context.system_points is not None:
+        hidden.update(context.system_points.hidden)
     # A tag read after an in-scan write is stale at that reader even when it is
     # tracked exactly: `Rung(J): latch(K)`, `Rung(And(K, I))`, `Rung(): reset(K)`
     # leaves K False in every snapshot although the middle rung sees it True.
@@ -203,7 +220,7 @@ def _step_kernel(
         static_keys = context.compiled._tag_template
         simulation_status = context.simulation_status_tag_names
         before = dict(kernel.tags)
-        _step_compiled_kernel(context.compiled, kernel, dt=context.dt)
+        _step_compiled_kernel(context.compiled, kernel, dt=context.dt, system=context.system_points)
         leaked = [
             name
             for name, value in kernel.tags.items()
@@ -219,7 +236,7 @@ def _step_kernel(
                 f"would drop them): {sorted(leaked)[:20]}"
             )
         return
-    _step_compiled_kernel(context.compiled, kernel, dt=context.dt)
+    _step_compiled_kernel(context.compiled, kernel, dt=context.dt, system=context.system_points)
 
 
 def _seed_synthetic_presets(context: _ExploreContext, kernel: ReplayKernel) -> None:

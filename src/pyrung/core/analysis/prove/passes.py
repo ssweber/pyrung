@@ -62,6 +62,7 @@ from .inputs import (
 )
 from .kernel import _collect_edge_tag_exprs, _step_compiled_kernel
 from .results import Decision, Intractable, Journal, TagEntry
+from .system_points import SystemPointModel, build_system_point_model, free_system_tags
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -336,6 +337,7 @@ class _PassContext:
     _structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None = None
     _pending_infeasible_tags: list[str] = field(default_factory=list)
     _pending_infeasible_hints: list[str] = field(default_factory=list)
+    system_points: SystemPointModel | None = None
 
     def extract_cache(self) -> _PipelineCache | None:
         if self.stateful_dims is None or self.nondeterministic_dims is None:
@@ -628,6 +630,10 @@ class _PassContext:
             functional_dep_projections=dict(self._functional_dep_projections or {}),
             init_constant_projections=dict(self._init_constant_projections or {}),
             stepping_tags=self._stepping_tags or frozenset(),
+            system_points=self.system_points,
+            free_system_inputs=frozenset()
+            if self.domains_only
+            else free_system_tags(self.nondeterministic_dims, self.graph.writers_of),
         )
 
 
@@ -863,6 +869,7 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         unclassified=unclassified,
         stepping_tags_out=stepping,
         threshold_absorptions_out=threshold_absorptions,
+        model_system_points=not ctx.domains_only,
     )
     if profile:
         profile_last = _classify_profile_mark(timings, "classify_from_graph", profile_last)
@@ -1524,6 +1531,14 @@ def _pass_compile_kernel(ctx: _PassContext) -> None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
     assert ctx.stateful_dims is not None
     ctx.stateful_names = tuple(sorted(ctx.stateful_dims))
+    if not ctx.domains_only:
+        referenced = frozenset(ctx.compiled.referenced_tags) & SYSTEM_TAGS_BY_NAME.keys()
+        ctx.system_points = build_system_point_model(
+            referenced,
+            ctx.graph.writers_of if ctx.graph is not None else {},
+            frozenset(ctx.nondeterministic_dims or ()) & referenced,
+            ctx.dt,
+        )
     combinational_edge = set(ctx.compiled.edge_tags) & (ctx._combinational_tags or set())
     demoted = set(ctx.demotable_edge_tag_names or ()) | combinational_edge
     ctx.demotable_edge_tag_names = tuple(sorted(demoted))
@@ -1751,7 +1766,9 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
     pilot = ctx.compiled.create_kernel()
     for name in ctx.absorptions.preset_tags:
         pilot.tags[name] = 1
-    _step_compiled_kernel(ctx.compiled, pilot, dt=ctx.dt)
+    if ctx.system_points is not None:
+        ctx.system_points.seed(pilot.tags)
+    _step_compiled_kernel(ctx.compiled, pilot, dt=ctx.dt, system=ctx.system_points)
     excluded_prefixes = ("_dt", "_frac:", PROVE_EFFECTIVE_PRESET_PREFIX)
     ctx.memory_key_names = tuple(
         sorted(k for k in pilot.memory if not any(k.startswith(p) for p in excluded_prefixes))
@@ -1779,6 +1796,7 @@ def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
         exclusions=exclusions,
         unclassified=unclassified,
         stepping_tags_out=stepping,
+        model_system_points=not ctx.domains_only,
     )
     ctx._stepping_tags = frozenset(stepping)
     if isinstance(result, Intractable):

@@ -96,6 +96,7 @@ from .absorb import (
 from .expr import _build_atom_index, _collect_atoms_for_tag, _referenced_tags
 from .kernel import _restore_kernel, _snapshot_kernel, _step_compiled_kernel
 from .results import PENDING, Intractable
+from .system_points import FIRST_SCAN, free_system_domain, free_system_tags
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph, RungNode
@@ -1186,6 +1187,8 @@ def _collect_structural_domain_info(
     influences_comparison = _comparison_influencing_tags(graph, atom_idx, program)
     if profile:
         profile_last = _classify_profile_mark(timings, "comparison_influence_index", profile_last)
+    # Scan-, clock- and time-derived system tags are not constant storage.
+    free_system = free_system_tags(graph.tags, graph.writers_of)
     for tag_name, tag in graph.tags.items():
         if tag_name in known_domains:
             continue
@@ -1196,6 +1199,7 @@ def _collect_structural_domain_info(
             and tag_name not in graph.writers_of
             and not graph.is_physical_input(tag_name)
             and tag_name not in influences_comparison
+            and tag_name not in free_system
         ):
             known_domains[tag_name] = (tag.default,)
     if profile:
@@ -2263,8 +2267,15 @@ def _classify_dimensions_from_graph(
     unclassified: set[str] | None = None,
     stepping_tags_out: set[str] | None = None,
     threshold_absorptions_out: list[_ThresholdAbsorptions] | None = None,
+    model_system_points: bool = False,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context.
+
+    *model_system_points* applies the BFS system-point model
+    (:mod:`.system_points`): ``sys.first_scan`` becomes a stateful bit and
+    scan-, time- and clock-derived system tags become nondeterministic
+    inputs.  Without it, unwritten system tags are left out (the ``how()``
+    domain prior).
 
     *structural_domain_info* is the ``(domains, blockers)`` pair from
     :func:`_collect_structural_domain_info`; pass it to reuse a fixpoint already
@@ -2444,6 +2455,9 @@ def _classify_dimensions_from_graph(
     combinational: set[str] = set()
     infeasible_tags: list[str] = []
 
+    free_system = (
+        free_system_tags(graph.tags, graph.writers_of) if model_system_points else frozenset()
+    )
     for tag_name, tag in graph.tags.items():
         if tag.readonly:
             if exclusions is not None:
@@ -2475,7 +2489,15 @@ def _classify_dimensions_from_graph(
         is_written = tag_name in graph.writers_of
 
         if tag_name in SYSTEM_TAGS_BY_NAME and not is_written:
-            continue
+            if (
+                model_system_points
+                and tag_name == FIRST_SCAN
+                and (scope_input_tags is None or tag_name in scope_input_tags)
+            ):
+                stateful[tag_name] = (False, True)
+                continue
+            if tag_name not in free_system:
+                continue
 
         if role == TagRole.INPUT or not is_written or tag_name in receive_dest_names:
             if scope_input_tags is not None and tag_name not in scope_input_tags:
@@ -2500,6 +2522,8 @@ def _classify_dimensions_from_graph(
                 declared = _declared_domain(tag)
                 if declared is not None:
                     domain = declared
+            if not domain and tag_name in free_system:
+                domain = free_system_domain(tag_name) or ()
             if not domain:
                 # Unwritten internal tags that never influence a comparison are
                 # constant storage (Block slots, unused tags).  Everything else —
@@ -2515,6 +2539,7 @@ def _classify_dimensions_from_graph(
                     and not graph.is_physical_input(tag_name)
                     and tag_name not in receive_dest_names
                     and tag_name not in influences_comparison
+                    and tag_name not in free_system
                 ):
                     domain = (tag.default,)
                 else:

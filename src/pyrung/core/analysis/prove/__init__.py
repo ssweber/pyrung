@@ -34,6 +34,7 @@ from .results import StateDiff as StateDiff
 from .results import TagEntry as TagEntry
 from .results import TraceStep as TraceStep
 from .results import _ParentLink as _ParentLink
+from .system_points import SystemPointModel
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,10 @@ class _ExploreContext:
     )
     init_constant_projections: dict[str, tuple[str, Any]] = field(default_factory=dict)
     stepping_tags: frozenset[str] = field(default_factory=frozenset)
+    # Kernel hooks for system tags (first_scan, constants, scan-start resets),
+    # and the system tags explored as free inputs.  See system_points.py.
+    system_points: SystemPointModel | None = None
+    free_system_inputs: frozenset[str] = field(default_factory=frozenset)
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec
