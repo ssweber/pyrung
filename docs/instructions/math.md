@@ -46,22 +46,56 @@ For CLICK portability, do not mix WORD and non-WORD math in the same `calc()` ex
 | Counter accumulator | Clamps at DINT min/max |
 | Division by zero | Result = 0, `system.fault.division_error` set |
 
-## `BlockRange.sum()` — sum a range
+## Range aggregates
 
 ```python
-calc(DS.select(1, 10).sum(), Result)    # Result = DS1 + DS2 + … + DS10
-calc(DH.select(1, 5).sum(), HDest)      # hex mode (WORD range)
+calc(DS.select(1, 10).sum(), Total)      # DS1 + DS2 + … + DS10
+calc(DS.select(1, 10).max(), Peak)       # largest value
+calc(DS.select(1, 10).min(), Low)        # smallest value
+calc(DF.select(1, 8).median(), Mid)      # middle value
+calc(DF.select(1, 8).mean(), Avg)        # average
+calc(C.select(1, 16).sum(), OnCount)     # Bool range: counts True bits
 ```
 
-`.sum()` on a `BlockRange` returns a `SumExpr` — a lazy expression node that sums all tag values in the range at scan time. It's a full `Expression`, so it works anywhere expressions are accepted:
+Each method returns a lazy expression over the range, read at scan time. They compose with the rest of the expression:
 
 ```python
-calc(DS.select(1, 10).sum() + Offset, Result)
-copy(DS.select(1, 5).sum(), Total)
-with rung(DS.select(1, 10).sum() > 1000):
-    out(Alarm)
+calc(DS.select(1, 10).max() + abs(Offset), Result)
+calc(DS.select(1, 10).sum() / 10, Result)
 ```
+
+`median()` of an even count is the mean of the two middle values. `mean()` and `median()` are computed exactly; the destination decides what is stored, so an `Int` destination truncates toward zero (`2.5` → `2`, `-4.5` → `-4`) and a `Real` keeps the fraction. On a WORD range (hex mode) values are unsigned 16-bit, so `max()` of `0x0001, 0xFFFF` is `0xFFFF`.
+
+These rules are pyrung's. CLICK's own rounding for `AVG`/`MDN`, its even-count `MDN` rule, and whether `MAX`/`MIN` treat DH as unsigned are **unconfirmed on hardware**.
 
 Mode inference applies normally: WORD-only ranges infer hex mode, anything else infers decimal.
 
-CLICK ladder export renders as `SUM ( DS1 : DS10 )` with the native colon-range syntax.
+## `abs()`
+
+```python
+calc(abs(Error), Magnitude)
+```
+
+Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only, so `abs()` of WORD tags is a portability finding.
+
+## Range aggregates on CLICK
+
+| pyrung | CLICK formula | Hex mode |
+|--------|---------------|----------|
+| `rng.sum()` | `SUM ( DS1 : DS10 )` | yes |
+| `rng.max()` | `MAX ( DS1 : DS10 )` | yes |
+| `rng.min()` | `MIN ( DS1 : DS10 )` | yes |
+| `rng.median()` | `MDN ( DS1 : DS10 )` | yes |
+| `rng.mean()` | `AVG ( DS1 : DS10 )` | yes |
+| `abs(x)` | `ABS(x)` | no |
+
+pyrung spells these the way Python does (`statistics.median`, `statistics.mean`); the exporter writes CLICK's name and the importer reads it back. A sum over bits exports as plain `SUM ( C1 : C16 )`.
+
+In pyrung the aggregates work anywhere an expression does (`copy()` sources, rung comparisons). CLICK accepts them only inside Math, and validation says so (`CLK_EXPR_ONLY_IN_CALC`). CLICK validation also checks each range:
+
+| Finding | Rule |
+|---------|------|
+| `CLK_CALC_RANGE_NOT_CONTIGUOUS` | The range must map to consecutive addresses, low to high (drop `.reverse()`). |
+| `CLK_CALC_RANGE_MIXED_BANKS` | Both ends must be in the same bank. |
+| `CLK_CALC_MEDIAN_RANGE_TOO_LARGE` | `MDN` covers at most 1024 bytes: 512 DS/DH or 256 DD/DF. |
+| `CLK_CALC_BIT_RANGE_AGGREGATE` | Only `SUM` accepts a bit range (X, Y, C, T, CT, SC). |

@@ -19,7 +19,7 @@ Read it like a ladder diagram: conditions go on `rung(...)`, instructions go in 
 ## Data movement
 
 - [Data Movement](copy.md) — `copy`, `blockcopy`, `fill`, converters, `pack_*`, and `unpack_*`
-- [Math](math.md) — `calc()`, overflow behavior, division rules, and range sums
+- [Math](math.md) — `calc()`, overflow behavior, division rules, range aggregates, and `abs()`
 
 ## Time and control
 

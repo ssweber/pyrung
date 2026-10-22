@@ -136,7 +136,9 @@ out(ValveB.immediate)         # immediate I/O (bypasses image table)
 calc(A + B, Result)           # Result = A + B (wraps on overflow)
 calc(A * 2, R, oneshot=True)  # one-shot: execute once per rising edge
 calc(DH[1] | DH[2], DH[3])   # WORD-only → hex mode (unsigned)
-calc(DS.select(1, 10).sum(), Total)  # sum a range
+calc(DS.select(1, 10).sum(), Total)  # SUM ( DS1 : DS10 ); Bool ranges count True bits
+calc(DS.select(1, 10).max(), Peak)   # MAX; also .min() MIN, .median() MDN, .mean() AVG
+calc(abs(Error), Magnitude)          # ABS (decimal mode only)
 ```
 
 - `calc()` wraps on overflow (modular arithmetic). `copy()` clamps.

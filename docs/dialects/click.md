@@ -113,6 +113,8 @@ This DSL follows CLICK PLC instruction naming as closely as possible, departing 
 | `MATH` | `calc` | Shadows Python stdlib `math` |
 | `RET` | `return_early` | Normal return is implicit; only early exit needs a call |
 
+Math formula functions use the Python name where one exists: `LOG` → `log10`, `LN` → `log`, `ABS` → `abs`, `AVG` → `rng.mean()`, `MDN` → `rng.median()`. See [Range aggregates on CLICK](../instructions/math.md#range-aggregates-on-click).
+
 The CSV ladder export uses CLICK-facing token names: `calc` emits as `math(...)`, `return_early` as `return()`, and `forloop` as `for(...)`. See the [laddercodec CSV format guide](https://pyrung.com/laddercodec/guides/csv-format/) for the full token grammar.
 
 ## Writing a CLICK program

@@ -32,9 +32,15 @@
 - In a CLICK nickname comment, `link=` accepts a CLICK address (`link=Y001`, read as the nickname at that address) and a value trigger (`link=State:SORTING`).
 - `link="~Tag"` drives feedback while a Bool enable is off (normally closed), in Python, UDT fields, nickname comments, and the `link` console verb; bench-link text shows it as `~Tag`. `~` on a non-Bool enable is refused.
 - `PHYS_LINK_UNKNOWN` warns when a `link=` names an enable the program never uses, which the harness skipped silently.
+- `rng.max()`, `rng.min()`, `rng.median()`, and `rng.mean()` on block ranges join `rng.sum()` inside `calc()`, export to CLICK as `MAX`, `MIN`, `MDN`, and `AVG`, import back, and run on both backends and in CircuitPython; CLICK validation checks range order, bank, bit-range, and `MDN` size rules (`CLK_CALC_RANGE_NOT_CONTIGUOUS`, `CLK_CALC_RANGE_MIXED_BANKS`, `CLK_CALC_BIT_RANGE_AGGREGATE`, `CLK_CALC_MEDIAN_RANGE_TOO_LARGE`).
 
 ### Fixes
 
+- `abs()` exports to CLICK as `ABS(...)` instead of lowercase `abs(...)`, imports back as Python's `abs`, and is flagged in hex-mode math, where CLICK has no `ABS`.
+- `.sum()` over a Bool range (C, X, Y, ...) exports and imports as plain `SUM ( C1 : C8 )`.
+- Generated CLICK projects import the bank behind a `SUM ( DS1 : DS10 )` range, and math functions such as `sqrt` in the subroutine file that uses them, instead of failing with a `NameError` when run.
+- The verifier no longer reports `Proven` for a property that fails one scan after a `choices` input is copied or computed into a scan-local tag (`copy(Ext, X)` then `Rung(X == 7)`); it skipped enumerating that input.
+- Validation messages show range sums and math functions as source (`DS.select(1, 5).sum()`, `abs(X)`, `sqrt(X)`) instead of class names, and CLICK nesting-depth checks count `SUM ( ... )` as a paren level.
 - Generated CLICK workspace guidance asks for **Simulate** in ClickNick before `pyrung live` (Stop in ClickNick's main window ends the session), points PLC data loading at the Simulator's **PLC Data...**, and no longer names a fixed debugger extension version.
 
 ## v0.15.2 (2026-10-11)
