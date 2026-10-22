@@ -12,6 +12,7 @@ from pyrung.conformance import (
     assert_all_passed,
     build_program,
     case,
+    format_report,
     load_manifest,
     parse_endpoint,
     run,
@@ -220,6 +221,16 @@ def test_run_a_group_in_process_inside_its_subroutine() -> None:
     results = run(group)
     assert_all_passed(results)
     assert results[0].group == "g"
+
+
+def test_report_marks_unconfirmed_cases() -> None:
+    confirmed = case("on hardware", ladder=_prove_constant, expect={"Result1": 7}, confirmed=True)
+    results = run(Group("g", [confirmed, _seven(sentence="not yet")]))
+    report = format_report(results)
+    assert "PASS  g/constant [confirmed] on hardware" in report
+    assert "PASS  g/seven [unconfirmed] not yet" in report
+    assert report.endswith("1 unconfirmed on hardware")
+    assert report.isascii()
 
 
 def test_range_expectation_in_process() -> None:

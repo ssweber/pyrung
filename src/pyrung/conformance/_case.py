@@ -26,6 +26,8 @@ class Case:
     id: str
     scans: int = 2
     in_process_only: str | None = None
+    #: True once the case has passed against a real CLICK.
+    confirmed: bool = False
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,7 @@ def case(
     scans: int = 2,
     in_process_only: str | None = None,
     id: str | None = None,
+    confirmed: bool = False,
 ) -> Case:
     """Define a conformance case.
 
@@ -104,6 +107,7 @@ def case(
             runner reports it as skipped with this reason.
         id: Stable key of the case's slot in the manifest.  Defaults to the
             ladder function's name without a leading ``_`` or ``prove_``.
+        confirmed: True once the case has passed against a real CLICK.
     """
     result_fields = set(SLOT_FIELDS) - {"Cmd"}
     bad = set(expect) - result_fields
@@ -127,6 +131,7 @@ def case(
         id=case_id,
         scans=scans,
         in_process_only=in_process_only,
+        confirmed=confirmed,
     )
 
 

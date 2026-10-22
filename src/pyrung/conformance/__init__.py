@@ -18,7 +18,7 @@ from pyrung.conformance._modbus import (
     parse_endpoint,
     run_modbus,
 )
-from pyrung.conformance._runner import assert_all_passed, run
+from pyrung.conformance._runner import assert_all_passed, format_report, run
 
 __all__ = [
     "BuildMismatchError",
@@ -36,6 +36,7 @@ __all__ = [
     "assert_all_passed",
     "build_program",
     "case",
+    "format_report",
     "load_manifest",
     "parse_endpoint",
     "run",

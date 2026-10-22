@@ -1,4 +1,4 @@
-"""Conformance suite runner (in-process) -- the 8-step protocol."""
+"""Conformance suite runner (in-process) -- the 8-step protocol -- and reporting."""
 
 from __future__ import annotations
 
@@ -93,6 +93,29 @@ def assert_all_passed(results: list[CaseResult]) -> None:
             lines.append(f"  note:     {f.note}")
     if lines:
         raise AssertionError("\n".join(lines))
+
+
+def format_report(results: Sequence[CaseResult]) -> str:
+    """One ASCII line per case (PASS/FAIL/SKIP/STALE, hardware confirmation), then totals."""
+    lines: list[str] = []
+    counts = {"PASS": 0, "FAIL": 0, "SKIP": 0, "STALE": 0}
+    unconfirmed = 0
+    for r in results:
+        if r.stale:
+            status = "STALE"
+        elif r.skipped is not None:
+            status = "SKIP"
+        else:
+            status = "PASS" if r.passed else "FAIL"
+        counts[status] += 1
+        if not r.case.confirmed:
+            unconfirmed += 1
+        mark = "confirmed" if r.case.confirmed else "unconfirmed"
+        lines.append(f"{status:<5} {_label(r)} [{mark}] {r.case.sentence}")
+    words = {"PASS": "passed", "FAIL": "failed", "SKIP": "skipped", "STALE": "stale"}
+    totals = ", ".join(f"{n} {words[k]}" for k, n in counts.items())
+    lines.append(f"{totals}; {unconfirmed} unconfirmed on hardware")
+    return "\n".join(lines)
 
 
 def _label(r: CaseResult) -> str:

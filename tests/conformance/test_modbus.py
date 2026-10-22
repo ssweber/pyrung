@@ -20,6 +20,7 @@ from pyrung.conformance import (
     assert_all_passed,
     build_program,
     case,
+    format_report,
     run_modbus,
 )
 from pyrung.core import Rung, copy
@@ -33,6 +34,7 @@ def test_all_groups_over_modbus(
 ) -> None:
     build = suite.build()
     results = run_modbus(build, conformance_endpoint, groups=conformance_groups)
+    print(format_report(results))
     if conformance_groups is None:
         assert len(results) == sum(len(g.cases) for g in suite.ALL_GROUPS)
     assert_all_passed(results)
@@ -137,6 +139,7 @@ def test_stale_group_is_reported_and_the_rest_run() -> None:
     with pytest.raises(AssertionError, match="STALE: Conf_Alpha is stale: repush") as excinfo:
         assert_all_passed(results)
     assert "Beta" not in str(excinfo.value)
+    assert "STALE alpha/one" in format_report(results)
 
     # Selecting only the fresh group passes.
     with SimServer(loaded) as sim:
