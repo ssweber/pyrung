@@ -3118,6 +3118,26 @@ def fold_run_until(
     return runner._state
 
 
+def _stepped_scans_until(start: float, target: float, dt: float) -> int | None:
+    """Scans an unfolded ``run_for`` takes from *start* to reach *target*.
+
+    Stepping advances the timestamp by repeated ``+ dt``; a fold lands at
+    ``T0 + skip * dt``.  The two float paths differ in their last bits, so
+    stopping when the folded timestamp reaches *target* can take one scan more
+    or fewer than stepping.  Replaying the additions (cheap next to any scan)
+    gives the exact scan count instead.  ``None`` for an unusable *dt* or an
+    implausibly long span.
+    """
+    if dt <= 0 or not math.isfinite(dt) or (target - start) / dt > 5_000_000:
+        return None
+    t = start
+    n = 0
+    while t < target:
+        t += dt
+        n += 1
+    return n
+
+
 def fold_run_for(
     runner: PLC,
     seconds: float,
@@ -3126,32 +3146,50 @@ def fold_run_for(
 ) -> SystemState:
     """Fold-aware ``run_for`` loop.
 
-    Same plateau/fold logic as ``fold_run_until``, but terminates on
+    Same plateau/fold logic as ``fold_run_until``.  In fixed-step mode it runs
+    exactly the scans an unfolded ``run_for`` would (see
+    :func:`_stepped_scans_until`); otherwise it terminates on
     ``state.timestamp >= target_time``.
     """
+    from pyrung.core.time_mode import TimeMode
+
     strategy = _OrdinaryFoldStrategy(fold_ctx)
     target_time = runner._state.timestamp + seconds
-    while runner._state.timestamp < target_time:
+    stop_scans: int | None = None
+    if runner._time_mode == TimeMode.FIXED_STEP and runner._dt == fold_ctx.normal_dt:
+        stop_scans = _stepped_scans_until(runner._state.timestamp, target_time, runner._dt)
+    used = 0
+
+    def reached() -> bool:
+        if stop_scans is not None:
+            return used >= stop_scans
+        return runner._state.timestamp >= target_time
+
+    while not reached():
         # ── Probe: one normal scan ───────────────────────────────
         runner._consume_pause_request()
         probe = strategy.capture(runner)
         runner._run_single_scan(consume_pause_request=False)
+        used += 1
 
         pause_requested = runner._consume_pause_request()
-        if runner._state.timestamp >= target_time or pause_requested:
+        if reached() or pause_requested:
             break
 
         # Constrain so dt doesn't overshoot the time target.
         max_skip = None
-        if fold_ctx.normal_dt > 0:
+        if stop_scans is not None:
+            max_skip = stop_scans - used
+        elif fold_ctx.normal_dt > 0:
             remaining_scans = int((target_time - runner._state.timestamp) / fold_ctx.normal_dt)
             if remaining_scans > 0:
                 max_skip = remaining_scans
 
         advance = strategy.try_fold(runner, probe, max_skip=max_skip)
         if advance is not None:
+            used += advance.logical_scans
             pause_requested = runner._consume_pause_request()
-            if runner._state.timestamp >= target_time or pause_requested:
+            if reached() or pause_requested:
                 break
 
     return runner._state

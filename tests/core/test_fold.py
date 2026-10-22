@@ -2279,3 +2279,34 @@ class TestSoftRtcRefusals:
 
     def test_return_early_before_the_copy_is_not_a_recompute(self) -> None:
         assert self._tm(_rtc_reader_shape("return_early")) is None
+
+
+class TestRunForScanCount:
+    """A folded run_for runs exactly the scans stepping would, although the
+    folded and stepped timestamps differ in their last bits."""
+
+    @pytest.mark.parametrize(("dt", "seconds"), [(0.010, 40.0), (0.3, 12.0), (0.7, 33.0)])
+    def test_folded_run_for_matches_stepped(self, dt: float, seconds: float) -> None:
+        def run(fold: bool) -> PLC:
+            prog, _x = _rtc_latch_program()
+            plc = _rtc_plc(prog, dt=dt)
+            plc.run_for(seconds, fold=fold)
+            return plc
+
+        folded, stepped = run(True), run(False)
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert folded.state.tags["X"] == stepped.state.tags["X"]
+        if dt == 0.010:
+            # At dt 0.3 / 0.7 a millisecond timer folded in one aggregate dt
+            # can floor one unit below its stepped sum (a separate issue).
+            assert _plain_tags(folded) == _plain_tags(stepped)
+
+    def test_stepped_scan_count_replays_the_additions(self) -> None:
+        from pyrung.core.fold import _stepped_scans_until
+
+        t, n = 0.01, 0
+        while t < 40.01:
+            t += 0.01
+            n += 1
+        assert _stepped_scans_until(0.01, 40.01, 0.01) == n
+        assert _stepped_scans_until(0.0, 1.0, 0.0) is None
