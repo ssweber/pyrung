@@ -34,8 +34,13 @@ from pyrung.click.codegen.models import (
     _TimerCounterCloneDecl,
 )
 from pyrung.click.codegen.utils import (
+    _CLICK_FUNC_RE,
+    _CLICK_FUNC_TO_PYTHON,
+    _CLICK_PI_RE,
+    _EXPR_FUNC_IMPORT_NAMES,
     _POINTER_RE,
     _PREFIX_TO_BLOCK,
+    _RANGE_AGG_RE,
     _make_safe_identifier,
     _parse_operand_prefix,
     _strip_quoted_strings,
@@ -1280,6 +1285,28 @@ def _ref_operands_in_text(
             parsed = _parse_operand_prefix(first_operand)
             if parsed is not None:
                 refs.used_click_blocks.add(parsed[2])
+
+    # Range aggregates: SUM ( DS1 : DS10 ) → ds.select(1, 10).sum(); same
+    # semantic-or-block rendering as _render_range_expr in utils.
+    for agg_match in _RANGE_AGG_RE.finditer(text):
+        prefix = agg_match.group(2)
+        start_num = int(agg_match.group(3))
+        end_num = int(agg_match.group(5))
+        render = collection.semantic_ranges.get(f"{prefix}{start_num}..{prefix}{end_num}")
+        if render is not None:
+            _record_semantic_ref(render)
+            continue
+        parsed = _parse_operand_prefix(f"{prefix}{start_num}")
+        if parsed is not None:
+            refs.used_click_blocks.add(parsed[2])
+
+    # Expression functions (SQRT → sqrt, ...) are imported by the file that uses them.
+    for func_match in _CLICK_FUNC_RE.finditer(text):
+        py_name = _CLICK_FUNC_TO_PYTHON[func_match.group(1)]
+        if py_name in _EXPR_FUNC_IMPORT_NAMES:
+            refs.used_expr_funcs.add(py_name)
+    if _CLICK_PI_RE.search(text):
+        refs.used_expr_funcs.add("PI")
 
     # Pointer/indirect addressing: DH[DS134] → need to import dh
     for ptr_match in _POINTER_RE.finditer(text):

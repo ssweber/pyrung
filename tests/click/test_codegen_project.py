@@ -1092,3 +1092,35 @@ class TestTimerCounterInstructions:
         original_bundle = pyrung_to_ladder(logic, mapping)
         reproduced_bundle = pyrung_to_ladder(ns["logic"], ns["mapping"])
         assert list(original_bundle.main_rows) == list(reproduced_bundle.main_rows)
+
+
+class TestMathFormulaImports:
+    def test_aggregates_and_functions_import_where_used(self, tmp_path: Path):
+        """Range aggregates import their bank and math functions import in the file using them.
+
+        ABS is Python's builtin, so no file imports it.
+        """
+        from pyrung.core.expression import sqrt
+        from pyrung.core.program import calc
+
+        with Program() as logic:
+            with rung(x[1]):
+                calc(ds.select(1, 4).mean() + abs(ds[5]), ds[100])
+                call("calc_sub")
+            with subroutine("calc_sub"):
+                with rung(x[2]):
+                    calc(abs(ds[6]) + sqrt(df[1]) + dd.select(1, 3).median(), df[100])
+        mapping = TagMap({}, include_system=False)
+
+        files = _project_from_program(logic, mapping, tmp_path)
+        main_py = files[_MAIN_PATH]
+        sub_py = files[f"{_SUBROUTINES_DIR}/_sub_calc_sub.py"]
+        assert "ds.select(1, 4).mean()" in main_py
+        assert "ds" in main_py.split("from .tags import", 1)[1].splitlines()[0]
+        assert "from pyrung.core.expression import sqrt" in sub_py
+        assert "dd" in sub_py.split("from ..tags import", 1)[1].splitlines()[0]
+        assert all("import abs" not in text for text in files.values())
+
+        original_rows = list(pyrung_to_ladder(logic, mapping).main_rows)
+        ns = _exec_project(files, tmp_path)
+        assert list(pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows) == original_rows
