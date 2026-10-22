@@ -30,7 +30,7 @@ Module structure
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -1227,9 +1227,17 @@ class _OffJudge:
     from the stored one.
     """
 
-    def __init__(self, tm: _TimeMirrors, tag_maps: Sequence[Any]) -> None:
+    def __init__(
+        self,
+        tm: _TimeMirrors,
+        tag_maps: Sequence[Any],
+        forced: frozenset[str] = frozenset(),
+    ) -> None:
         self.tm = tm
         self.maps = tag_maps
+        # A forced tag is re-applied after logic, so its stored value is not
+        # what a rung between a mid-scan writer and the force saw.
+        self.forced = forced
         # Nodes proven off, and nodes some judgement asked about.  Proofs only
         # ever use nodes already proven, so every proof is well founded; the
         # loop in :meth:`all_inactive` repeats until no new proof appears.
@@ -1267,7 +1275,7 @@ class _OffJudge:
 
     def stable(self, name: str, node: int) -> bool:
         tm = self.tm
-        if name in tm.unjudgeable:
+        if name in tm.unjudgeable or name in self.forced:
             return False
         writers = tm.writers.get(name, ())
         if self._one_side(node, writers):
@@ -1403,36 +1411,45 @@ def _judge_condition(cond: Any, view: _OffView) -> bool | None:
         return None
 
 
-def _time_mirrors_off(tm: _TimeMirrors, tag_maps: Sequence[Any]) -> bool:
+def _time_mirrors_off(
+    tm: _TimeMirrors,
+    tag_maps: Sequence[Any],
+    forced: frozenset[str] = frozenset(),
+) -> bool:
     """Whether no rung in ``tm.dead_nodes`` acts on the clock in the window.
 
     *tag_maps* are scan-boundary tag maps of the window (one plateau state, or
     every snapshot of an observed cycle).  A rung is off when one of its own
     conditions is definitely False, or when it is a subroutine rung and every
     call site is off.  A one-shot-only reader is inactive while its enable is
-    judged either way.  Anything not judgeable counts as possibly active.
+    judged either way.  Anything not judgeable counts as possibly active,
+    including every tag in *forced* (forces re-apply after logic, so a forced
+    tag's stored value is not what a mid-scan reader saw).
     """
-    return _OffJudge(tm, tag_maps).all_inactive(tm.dead_nodes)
+    return _OffJudge(tm, tag_maps, forced).all_inactive(tm.dead_nodes)
 
 
 def _rtc_hard_fields(
     ctx: _FoldContext,
     state: Any,
     tag_maps: Sequence[Any],
+    forced: Collection[str] | None,
 ) -> frozenset[str]:
     """The RTC fields whose ticks bound this window.
 
     Every read field, unless the time-mirror proof holds over *tag_maps* (see
     :class:`_TimeMirrors`); then only the fields the run_until condition reads.
-    A pending ``rtc.apply_*`` keeps every field hard.
+    *forced* names the executor's forced tags, which the proof may not read;
+    ``None`` (unknown) keeps every field hard, as does a pending
+    ``rtc.apply_*``.
     """
     tm = ctx.time_mirrors
-    if tm is None or not ctx.rtc_fields:
+    if tm is None or not ctx.rtc_fields or forced is None:
         return ctx.rtc_fields
     tags = state.tags
     if any(tags.get(name) for name in _rtc_apply_names()):
         return ctx.rtc_fields
-    if not _time_mirrors_off(tm, tag_maps):
+    if not _time_mirrors_off(tm, tag_maps, frozenset(forced)):
         return ctx.rtc_fields
     return ctx.rtc_condition_fields
 
@@ -2865,6 +2882,7 @@ class _OrdinaryFoldStrategy:
         harness_scan: int | None = None,
         endpoint_is_boundary: bool = False,
         rtc_at: Callable[[float], datetime] | None = None,
+        forced: Collection[str] | None = None,
     ) -> _FoldPlan | None:
         """Certify a macro landing after a completed probe scan.
 
@@ -2875,7 +2893,8 @@ class _OrdinaryFoldStrategy:
         matters to PILOT's bounded correction lifecycle.
 
         *rtc_at* resolves the executor's RTC at a simulation time.  A program
-        that reads an ``rtc.*`` field cannot fold without it.
+        that reads an ``rtc.*`` field cannot fold without it.  *forced* names
+        the executor's forced tags; without it every RTC tick stays a bound.
         """
         if not _visible_items_match(state, probe.visible, self.exclude):
             self.inert_soft.clear()
@@ -2924,7 +2943,7 @@ class _OrdinaryFoldStrategy:
         )
         if clock_gap is not None:
             skip = min(skip, clock_gap) if skip is not None else clock_gap
-        rtc_gap = self._rtc_gap(state, probe, rtc_at, skip, max_skip, endpoint_is_boundary)
+        rtc_gap = self._rtc_gap(state, probe, rtc_at, skip, max_skip, endpoint_is_boundary, forced)
         if rtc_gap is not None:
             skip = min(skip, rtc_gap) if skip is not None else rtc_gap
         if max_skip is not None:
@@ -2949,6 +2968,7 @@ class _OrdinaryFoldStrategy:
         skip: int | None,
         max_skip: int | None,
         endpoint_is_boundary: bool,
+        forced: Collection[str] | None,
     ) -> int | None:
         """The RTC tick bound for this window (see :func:`_scans_to_rtc_tick`).
 
@@ -2970,7 +2990,7 @@ class _OrdinaryFoldStrategy:
                 cap = max_skip
         if cap is not None and gap >= cap:
             return gap
-        hard = _rtc_hard_fields(ctx, state, (state.tags,))
+        hard = _rtc_hard_fields(ctx, state, (state.tags,), forced)
         if hard == ctx.rtc_fields:
             return gap
         return _scans_to_rtc_tick(ctx, state, probe.timestamp, rtc_at, hard)
@@ -3018,6 +3038,7 @@ class _OrdinaryFoldStrategy:
             min_skip=min_skip,
             harness_scan=harness_scan,
             rtc_at=runner._rtc_at_sim_time,
+            forced=runner._input_overrides.forces_mutable.keys(),
         )
         if plan is None:
             return None

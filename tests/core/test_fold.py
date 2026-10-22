@@ -2310,3 +2310,75 @@ class TestRunForScanCount:
             n += 1
         assert _stepped_scans_until(0.01, 40.01, 0.01) == n
         assert _stepped_scans_until(0.0, 1.0, 0.0) is None
+
+
+def _forced_gate_program(edge: bool) -> Program:
+    """``G`` is written mid-scan and forced the other way at the boundaries.
+
+    The stored (forced) value says the reader of the clock copy is off, but
+    the rung between the writer and the post-logic force sees the written
+    value and copies the second every scan.  With *edge*, the reader is
+    ``fall(G)``, which fires every scan because ``_prev`` is captured after
+    the force.
+    """
+    from pyrung import copy, fall, latch
+
+    Sec, Log, G, Seen = Int("Sec"), Int("Log"), Bool("G"), Bool("Seen")
+    Tmr, Hit = Timer.clone("Tmr"), Bool("Hit")
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(system.rtc.second, Sec)
+        if edge:
+            with Rung(Tmr.Acc < 0):
+                out(G)  # False mid-scan; forced True
+            with Rung(fall(G)):
+                copy(Sec, Log)
+        else:
+            with Rung(Tmr.Acc >= 0):
+                out(G)  # True mid-scan; forced False
+            with Rung(G):
+                copy(Sec, Log)
+        with Rung(Log == 30):
+            latch(Seen)
+        with Rung():
+            on_delay(Tmr, 60, "s")
+        with Rung(Tmr.Done):
+            out(Hit)
+    return prog
+
+
+class TestSoftRtcForcedTags:
+    """A force re-applies after logic, so a forced tag's stored value is not
+    what a rung between a mid-scan writer and the force saw.  The off judgement
+    never reads a forced tag."""
+
+    _START = (2026, 3, 1, 12, 59, 5, 250_000)
+
+    @pytest.mark.parametrize("edge", [False, True], ids=["level", "fall"])
+    def test_forced_gate_folded_matches_stepped(self, edge: bool) -> None:
+        dt = 0.01
+
+        def run(plc: PLC, fold: bool) -> None:
+            plc.force("G", edge)
+            plc.run_until(Bool("Hit"), max_cycles=int(70 / dt) + 10, fold=fold)
+
+        folded, stepped = _folded_and_stepped(
+            lambda: _forced_gate_program(edge), run, dt=dt, start=self._START
+        )
+        assert stepped.state.tags["Seen"] is True
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    def test_replay_seek_over_forced_history(self) -> None:
+        from datetime import datetime
+
+        plc = PLC(_forced_gate_program(False), dt=0.01)
+        plc.set_rtc(datetime(*self._START))
+        plc.force("G", False)
+        for _ in range(4_001):
+            plc.step()
+        for target in (2_490, 2_599):
+            seek = plc._replay_seek(target)
+            ref = plc.replay_to(target)
+            assert _plain_tags(seek) == _plain_tags(ref)
+        assert ref.state.tags["Seen"] is True

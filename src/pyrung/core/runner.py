@@ -2870,6 +2870,7 @@ class PLC:
                 max_skip=max_skip,
                 endpoint_is_boundary=True,
                 rtc_at=replay._rtc_at_sim_time,
+                forced=replay._input_overrides.forces_mutable.keys(),
             )
             if plan is None:
                 continue

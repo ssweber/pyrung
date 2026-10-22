@@ -647,7 +647,12 @@ def cycle_fold_until(
                 and plc.state.scan_id - observed >= 1
                 and (not kernel_budget or kernel_scans < budget)
             ):
-                hard = _rtc_hard_fields(fold_ctx, plc.state, ring[-observed:])
+                hard = _rtc_hard_fields(
+                    fold_ctx,
+                    plc.state,
+                    ring[-observed:],
+                    plc._input_overrides.forces_mutable.keys(),
+                )
             if hard != fold_ctx.rtc_fields:
                 rtc_room = _rtc_jump_room(fold_ctx, plc.state, observed, rtc_at, hard)
                 if not kernel_budget:
