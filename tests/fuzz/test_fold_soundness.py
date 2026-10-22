@@ -8,11 +8,14 @@ but only while the gated output stays frozen, which the observe-before-skip
 plateau guard re-confirms each window.
 
 **Frozen-rung writes:**  A clock-gated rung whose inputs are *structurally*
-unreachable from any varying tag (accumulators, churn, etc.) has its writes
-excluded from the plateau guard entirely — the fixed-point analysis in
-``_frozen_rung_writes`` proves the rung can only emit identical output, so clock
-edges no longer break the plateau window.  Non-frozen tags written by other rungs
-gated by the same clock must still be bit-equal to scan-by-scan.
+unreachable from any varying tag (accumulators, churn, etc.), and whose writes
+are read only by rungs after it, has those writes excluded from the plateau
+guard (``_frozen_rung_writes``): the landing scan rebuilds their exact stepped
+value, so clock edges no longer break the plateau window.  Every tag, frozen or
+not, must still be bit-equal to scan-by-scan.
+
+Both families compare the whole tag image exactly, timer accumulators
+included: a fold replays each timer's per-scan carry recurrence.
 
 Reproducer on failure: the drawn ``spec`` is the reproducer — it is printed via
 ``note`` and embedded in the assertion message, and ``_build(spec)`` /
@@ -99,13 +102,6 @@ def _build(spec: dict):
     return prog, src.Done
 
 
-# Folding a *timed* source (on_delay) rides the dt knob, so its accumulator can
-# land one tick off scan-by-scan at large presets — the documented timed-fold
-# drift (see core/test_fold.py::test_unread_timer_folds_instead_of_stepping,
-# which tolerates <= 10).  Counters are per-scan integers and stay exact.
-_TIMED_ACC_TOLERANCE = 20
-
-
 def _run(spec: dict, *, fold: bool) -> dict:
     prog, done = _build(spec)
     plc = PLC(prog, dt=spec["dt"])
@@ -158,18 +154,6 @@ def test_saturated_heartbeat_fold_is_bit_equal() -> None:
     def inner(spec: dict) -> None:
         folded = _run(spec, fold=True)
         stepped = _run(spec, fold=False)
-        # The timed-source accumulator is allowed its documented one-tick drift;
-        # everything else — the clock-gated logic (Beat / Extent), Done, and the
-        # exact counter accumulator — must be bit-equal.
-        acc = "Tmr_Acc" if spec["src"] == "timer" else "Ctr_Acc"
-        f_acc, s_acc = folded.pop(acc, None), stepped.pop(acc, None)
-        if spec["src"] == "timer" and f_acc is not None and s_acc is not None:
-            assert abs(f_acc - s_acc) <= _TIMED_ACC_TOLERANCE, (
-                f"timer acc drift too large\n  spec={spec}\n  {acc}: {f_acc} vs {s_acc}"
-            )
-        else:
-            folded[acc], stepped[acc] = f_acc, s_acc  # counter: compare exactly
-
         if folded != stepped:
             diffs = {
                 k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
@@ -274,8 +258,8 @@ def _run_frozen(spec: dict, *, fold: bool) -> dict:
     return {k: v for k, v in plc.state.tags.items() if not k.startswith("sys.scan_time")}
 
 
-def test_frozen_write_exclusion_preserves_non_frozen_tags() -> None:
-    """Non-frozen tags must be bit-equal; frozen-write tags may diverge."""
+def test_frozen_write_exclusion_is_bit_equal() -> None:
+    """Frozen and non-frozen tags alike must be bit-equal to scan-by-scan."""
 
     @given(spec=_frozen_write_spec())
     @settings(max_examples=MAX_EXAMPLES, deadline=None)
@@ -296,32 +280,6 @@ def test_frozen_write_exclusion_preserves_non_frozen_tags() -> None:
     def inner(spec: dict) -> None:
         folded = _run_frozen(spec, fold=True)
         stepped = _run_frozen(spec, fold=False)
-
-        _, _, frozen_tags = _build_frozen(spec)
-
-        acc = "Tmr_Acc" if spec["src"] == "timer" else "Ctr_Acc"
-        f_acc, s_acc = folded.pop(acc, None), stepped.pop(acc, None)
-        if spec["src"] == "timer" and f_acc is not None and s_acc is not None:
-            assert abs(f_acc - s_acc) <= _TIMED_ACC_TOLERANCE, (
-                f"timer acc drift too large\n  spec={spec}\n  {acc}: {f_acc} vs {s_acc}"
-            )
-        else:
-            folded[acc], stepped[acc] = f_acc, s_acc
-
-        # AccView snapshots the accumulator on clock edges.  The fold's
-        # dt_override shifts which exact scan a clock edge lands on, so the
-        # snapshot value can differ from scan-by-scan — this is a pre-existing
-        # fold property (not introduced by frozen-write exclusion), present
-        # for both timed and per-scan sources.
-        folded.pop("AccView", None)
-        stepped.pop("AccView", None)
-
-        # Frozen-write tags may legitimately differ (their clock edges are
-        # skipped during fold), so exclude them from the comparison.
-        for tag in frozen_tags:
-            folded.pop(tag, None)
-            stepped.pop(tag, None)
-
         if folded != stepped:
             diffs = {
                 k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
@@ -329,10 +287,9 @@ def test_frozen_write_exclusion_preserves_non_frozen_tags() -> None:
                 if folded.get(k) != stepped.get(k)
             }
             note(f"spec={spec}")
-            note(f"fold != nofold (excluding frozen writes): {diffs}")
+            note(f"fold != nofold: {diffs}")
             raise AssertionError(
-                f"fold disagreed with scan-by-scan on non-frozen tags\n"
-                f"  spec={spec}\n  diffs={diffs}"
+                f"fold disagreed with scan-by-scan\n  spec={spec}\n  diffs={diffs}"
             )
 
     inner()
