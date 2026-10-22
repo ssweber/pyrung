@@ -1746,3 +1746,101 @@ class TestRtcTickBound:
         ref = plc.replay_to(target)
         assert seek.state.scan_id == ref.state.scan_id
         assert _plain_tags(seek) == _plain_tags(ref)
+
+
+def _unbounded_rtc(plc: PLC) -> None:
+    """Drop the RTC tick bound from every cached fold context, so a window can
+    span ticks and the landing scan alone decides what the RTC reads."""
+    from dataclasses import replace
+
+    plc._ensure_fold_context()
+    cache = plc._fold_context_cache
+    assert cache is not None
+    for key, value in list(cache.items()):
+        cache[key] = replace(value, rtc_fields=frozenset())
+
+
+class TestFoldLandingTime:
+    """The landing scan stands in for the last folded scan: it reads the RTC
+    and the clocks at that scan's timestamp, then commits one step later."""
+
+    def test_landing_resolves_rtc_at_the_last_folded_scan(self) -> None:
+        prog, _hit = _rtc_mirror_only_program()
+        stepped = _rtc_plc(prog)
+        _run_scans(stepped, 4_000, fold=False)
+        prog, _hit = _rtc_mirror_only_program()
+        folded = _rtc_plc(prog)
+        _unbounded_rtc(folded)
+        counter = _count_kernel_scans(folded)
+        _run_scans(folded, 4_000, fold=True)
+
+        assert counter["n"] < 10  # one window spans every tick
+        assert folded.state.timestamp == pytest.approx(stepped.state.timestamp)
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    def test_compiled_replay_landing_resolves_rtc(self) -> None:
+        prog, _hit = _rtc_mirror_only_program()
+        plc = _rtc_plc(prog)
+        for _ in range(3_000):
+            plc.step()
+        _unbounded_rtc(plc)
+        # Between checkpoints, so the seek has to fold across ticks.
+        seek = plc._replay_seek(1_950)
+        ref = plc.replay_to(1_950)
+        assert 0 < plc._last_replay_seek_stats["kernel_scans"] < 100
+        assert _plain_tags(seek) == _plain_tags(ref)
+
+    def test_landing_edge_memory_matches_stepping(self) -> None:
+        """rise(clock) after a fold compares against the clock the last folded
+        scan saw, which the landing now reads directly."""
+        from pyrung import latch
+
+        def run(fold: bool) -> PLC:
+            X = Bool("EdgeSeen")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung(rise(system.sys.clock_1s)):
+                    latch(X)
+                with Rung():
+                    on_delay(Tmr, 10_000)
+            plc = PLC(prog, dt=0.010)
+            plc.step()
+            _run_scans(plc, 1_234, fold=fold)
+            return plc
+
+        folded, stepped = run(True), run(False)
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+        assert folded.state.memory.get("_prev:sys.clock_1s") == stepped.state.memory.get(
+            "_prev:sys.clock_1s"
+        )
+
+
+class TestSoftClockInertCount:
+    """A soft clock is confirmed inert only by toggles that scans executed.
+
+    A probe that reads just before a clock edge commits a state past it; that
+    edge has not run.  Counting it once let a ``rise(clock_1s)`` rung, gated by a
+    just-saturated timer comparison, be skipped for the rest of the ramp.
+    """
+
+    def test_unexecuted_edge_is_not_counted_inert(self) -> None:
+        def run(fold: bool) -> PLC:
+            Enable = Bool("Enable", external=True)
+            A, B, Extent = Int("A", external=True), Int("B", external=True), Int("Extent")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung(Enable):
+                    on_delay(Tmr, 19_006, "ms")
+                with Rung(rise(system.sys.clock_1s), Tmr.Acc > 8_505):
+                    calc(A + B, Extent)
+            plc = PLC(prog, dt=0.005)
+            plc.patch({"Enable": True, "A": 0, "B": 1})
+            plc.run_until(Tmr.Done, max_cycles=40_000, fold=fold)
+            return plc
+
+        folded, stepped = run(True), run(False)
+        assert stepped.state.tags["Extent"] == 1
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)

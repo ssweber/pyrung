@@ -531,6 +531,8 @@ class CompiledPLC:
         ``logical_scans > 1`` is reserved for the shared fold proof.  The
         program executes once with aggregate ``dt`` while scan id and clock
         memory land where the equivalent ordinary scans would have left them.
+        The macro scan resolves time-derived reads (system clocks, ``rtc.*``)
+        at the timestamp the last of those ordinary scans would have read.
         """
         if logical_scans < 1:
             raise ValueError("logical_scans must be >= 1")
@@ -546,6 +548,10 @@ class CompiledPLC:
             )
         }
         self._dt = effective_dt
+        start_timestamp = self._kernel.timestamp
+        # The last of the folded ordinary scans starts ``logical_scans - 1``
+        # normal steps in; this one macro scan stands in for it.
+        self._kernel.timestamp = start_timestamp + (logical_scans - 1) * normal_dt
         ctx = _KernelRuntimeContext(
             tags=self._kernel.tags,
             memory=self._kernel.memory,
@@ -577,8 +583,9 @@ class CompiledPLC:
             ctx.blocks_live = False
             self._flush_blocks_tracked(tracked)
 
+            # The kernel clock already sits at the last folded scan's start.
             self._capture_previous_states(
-                effective_dt=effective_dt,
+                effective_dt=normal_dt,
                 normal_dt=normal_dt,
                 ctx=ctx,
             )
@@ -594,7 +601,7 @@ class CompiledPLC:
             self._discover_new_commit_tags()
 
             self._kernel.scan_id += logical_scans
-            self._kernel.timestamp += effective_dt
+            self._kernel.timestamp = start_timestamp + effective_dt
         finally:
             self._dt = normal_dt
             if logical_scans > 1:

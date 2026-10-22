@@ -1825,13 +1825,21 @@ def _mark_inert_soft(
     whenever the plateau breaks, so a polarity that *does* change the state resets
     the run and the clock keeps bounding every edge.  Promoted saturation-
     rescuable clocks are inert-eligible on the same terms.
+
+    *before_ts* and *after_ts* are the timestamps of the states on either side
+    of the span.  A scan reads the clock at its *start*, one normal ``dt``
+    before the state it commits (a fold landing likewise reads at the last
+    folded scan's start), so the toggles a span's scans actually executed lie
+    between ``before_ts - dt`` and ``after_ts - dt``.  A toggle between the
+    last read and the committed timestamp has not run yet and is not counted.
     """
     from pyrung.core.system_points import clock_phase
 
+    dt = ctx.normal_dt
     for name, hp in _window_soft_clocks(ctx, promoted):
         if name in inert_soft:
             continue
-        toggles = clock_phase(after_ts, hp) - clock_phase(before_ts, hp)
+        toggles = clock_phase(after_ts - dt, hp) - clock_phase(before_ts - dt, hp)
         if toggles <= 0:
             continue
         inert_run[name] = inert_run.get(name, 0) + toggles
@@ -1894,6 +1902,12 @@ def _do_fold(
     are patched forward by ``(skip-1)*delta`` and the step's own ``execute``
     supplies the final increment, keeping every source in phase.
 
+    The landing scan stands in for the last of the ``skip`` scans, so it
+    starts at the timestamp that scan would have read, ``T0 + (skip - 1) *
+    dt``: every time-derived read (``rtc.*`` fields, system clocks, edge
+    memory) resolves as it would stepping.  It commits one normal step later,
+    at ``T0 + skip * dt``.
+
     Uses ``_run_single_scan(consume_pause_request=False)`` so the caller
     retains control over pause consumption.
     """
@@ -1901,17 +1915,44 @@ def _do_fold(
     if patches:
         runner.patch(patches)
 
+    start_timestamp = runner._state.timestamp
+    if skip > 1:
+        _replace_tip_state(
+            runner,
+            runner._state.set(timestamp=start_timestamp + (skip - 1) * ctx.normal_dt),
+        )
+        runner._landing_commit_dt = ctx.normal_dt
     runner._dt_override_for_next_scan = skip * ctx.normal_dt
-    runner._run_single_scan(
-        consume_pause_request=False,
-        capture_execution=_capture_requested(capture_kernel_scan),
-        capture_sink=capture_sink,
-    )
+    try:
+        runner._run_single_scan(
+            consume_pause_request=False,
+            capture_execution=_capture_requested(capture_kernel_scan),
+            capture_sink=capture_sink,
+        )
+    finally:
+        runner._landing_commit_dt = None
     if on_kernel_scan is not None:
         on_kernel_scan(runner._state.scan_id)
 
-    runner._state = runner._state.set(scan_id=runner._state.scan_id + skip - 1)
+    _replace_tip_state(
+        runner,
+        runner._state.set(
+            scan_id=runner._state.scan_id + skip - 1,
+            timestamp=start_timestamp + skip * ctx.normal_dt,
+        ),
+    )
     return tuple(patches.items())
+
+
+def _replace_tip_state(runner: PLC, state: SystemState) -> None:
+    """Install *state* (same tags as the tip) as the tip without a scan.
+
+    Keeps the runner's plain-dict read mirror of the tip tags valid, since only
+    the scan id or timestamp changed.
+    """
+    if runner._state_tags_read_cache_state is runner._state:
+        runner._state_tags_read_cache_state = state
+    runner._state = state
 
 
 @dataclass(frozen=True)

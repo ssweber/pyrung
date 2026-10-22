@@ -1283,6 +1283,10 @@ class PLC:
         # REALTIME mode; ``_replay_mode`` suppresses user monitors,
         # breakpoint labels, and the RTC setter during a replay walk.
         self._dt_override_for_next_scan: float | None = None
+        # A time-fold landing scan runs with the aggregate dt (timers) but
+        # starts at the timestamp the last folded scan would have read and
+        # commits one normal step later (see ``fold._do_fold``).
+        self._landing_commit_dt: float | None = None
         self._replay_mode: bool = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
         # Constant-size instrumentation for the most recent sparse point seek.
@@ -4154,7 +4158,10 @@ class PLC:
         state_memory = self._state.memory
         tags_pending = ctx._tags_pending
         state_tags = self._state.tags
-        prior_clock_ts = ctx.timestamp + dt - self._dt
+        # A fold landing already starts at the last folded scan's timestamp.
+        prior_clock_ts = (
+            ctx.timestamp if self._landing_commit_dt is not None else ctx.timestamp + dt - self._dt
+        )
         for name in self._edge_tag_names:
             current = tags_pending.get(name, _SENTINEL)
             if current is _SENTINEL:
@@ -4201,6 +4208,10 @@ class PLC:
         self._input_overrides.apply_post_logic(ctx)
 
         self._capture_previous_states(ctx, dt)
+        commit_dt = dt
+        if self._landing_commit_dt is not None:
+            commit_dt = self._landing_commit_dt
+            self._landing_commit_dt = None
         self._system_runtime.on_scan_end(ctx)
         if self._constrained_tags:
             self._bounds_violations = check_bounds(ctx._tags_pending, self._constrained_tags)
@@ -4208,7 +4219,7 @@ class PLC:
                 warnings.warn(str(v), stacklevel=2)
         else:
             self._bounds_violations = {}
-        self._state = ctx.commit(dt=dt)
+        self._state = ctx.commit(dt=commit_dt)
         if (
             self._state_tags_read_cache is not None
             and ctx._state_tags_read is self._state_tags_read_cache
