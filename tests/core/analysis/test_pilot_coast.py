@@ -511,6 +511,35 @@ class TestCrossingExactness:
         assert receipt.end_scan == landing
         assert plc.state.tags["Counter_Acc"] == n
 
+    def test_self_feeding_calc_lands_on_stepped_scan(self):
+        """``calc(f(X), X)`` moves every scan with no accumulator behind it.
+        The coast must not treat ``X`` as frozen and skip its sequence."""
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        X = Int("X", default=1)
+        Hit = Bool("Hit")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, 1000, "ms")
+            with Rung():
+                calc((X * 3) % 7, X)
+            with Rung(Tmr.Done, X == 5):
+                out(Hit)
+
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+
+        manual = plc.fork()
+        target = value_trigger(plc, "target", TARGET, "Hit", True)
+        receipt = CoastSession(plc).seek([target], budget=500)
+
+        assert receipt.stop_reason == "reached"
+        landing = _step_until(manual, lambda s: s.tags.get("Hit") is True)
+        assert receipt.end_scan == landing
+        assert plc.state.tags["X"] == manual.state.tags["X"] == 5
+        assert plc.state.tags["Tmr_Acc"] == manual.state.tags["Tmr_Acc"]
+
 
 # ---------------------------------------------------------------------------
 # 7. predicate_trigger (opaque callable)

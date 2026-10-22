@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 
 from pyrung import Bool, Counter, Int, Program, Rung, Timer, calc, count_up, on_delay, out
@@ -1261,3 +1264,187 @@ class TestFrozenRungWrites:
         ctx = _build_fold_context(plc, pdg, prog, target_names=frozenset({"Result"}))
 
         assert "Result" not in ctx.frozen_writes
+
+
+# ---------------------------------------------------------------------------
+# Frozen-rung soundness: self-feeding, scan-varying, and back-edge reads
+# ---------------------------------------------------------------------------
+
+
+def _self_feeding_calc():
+    X = Int("X", default=1)
+    with Rung():
+        calc((X * 3) % 7, X)
+    return X == 5
+
+
+def _scan_counter_calc():
+    from pyrung import latch
+
+    X = Int("X")
+    Seen = Bool("Seen")
+    with Rung():
+        calc(system.sys.scan_counter % 50, X)
+    with Rung(X == 40):
+        latch(Seen)
+    return Seen
+
+
+def _sum_expr_calc():
+    from pyrung import Block, TagType
+
+    DS = Block("DS", TagType.INT, 1, 2)
+    with Rung():
+        calc((DS.select(1, 2).sum() + 1) % 7, DS[1])
+    return DS[1] == 5
+
+
+def _shift_func_calc():
+    from pyrung.core.expression import rro
+
+    X = Int("X", default=1)
+    with Rung():
+        calc(rro(X, 1), X)
+    return X == 4
+
+
+def _math_func_calc():
+    from pyrung import Real
+    from pyrung.core.expression import sqrt
+
+    # sqrt(R * R) == |R|: a per-scan +1 ramp the affine matcher cannot see.
+    R = Real("R")
+    with Rung():
+        calc(sqrt(R * R) + 1.0, R)
+    return R >= 503.0
+
+
+def _back_edge_chain():
+    """Each rung reads a coil written further down the scan, so a change at
+    the bottom needs one scan per rung to reach the top."""
+    stages = [Bool(f"Stage{i}") for i in range(8)]
+    Sensor = Bool("Sensor", external=True)
+    with Rung(stages[1]):
+        out(stages[0])
+    with Rung(stages[2]):
+        out(stages[1])
+    with Rung(stages[3]):
+        out(stages[2])
+    with Rung(stages[4]):
+        out(stages[3])
+    with Rung(stages[5]):
+        out(stages[4])
+    with Rung(stages[6]):
+        out(stages[5])
+    with Rung(stages[7]):
+        out(stages[6])
+    with Rung(Sensor):
+        out(stages[7])
+    return stages[0]
+
+
+_SCAN_VARYING_SHAPES = [
+    pytest.param(_self_feeding_calc, id="self_feeding_calc"),
+    pytest.param(_scan_counter_calc, id="scan_counter_calc"),
+    pytest.param(_sum_expr_calc, id="sum_expr_calc"),
+    pytest.param(_shift_func_calc, id="shift_func_calc"),
+    pytest.param(_math_func_calc, id="math_func_calc"),
+    pytest.param(_back_edge_chain, id="back_edge_chain"),
+]
+
+
+def _gated_hit_program(shape: Callable[[], Any]) -> tuple[Program, Bool, Timer]:
+    """A 5 s timer plus *shape*; ``Hit`` needs both the timer and the shape."""
+    Go = Bool("Go", external=True)
+    Hit = Bool("Hit")
+    Tmr = Timer.clone("Tmr")
+    with Program(strict=False) as prog:
+        with Rung(Go):
+            on_delay(Tmr, 5000)
+        gate = shape()
+        with Rung(Tmr.Done, gate):
+            out(Hit)
+    return prog, Hit, Tmr
+
+
+def _plain_tags(plc: PLC) -> dict[str, Any]:
+    # The landing scan is one interpreter pass with an inflated dt, so the
+    # ``sys.scan_time_*`` readouts legitimately differ from stepping.
+    return {k: v for k, v in plc.state.tags.items() if not k.startswith("sys.scan_time")}
+
+
+def _started(shape: Callable[[], Any]) -> tuple[PLC, Bool, Timer]:
+    prog, hit, tmr = _gated_hit_program(shape)
+    plc = PLC(prog, dt=0.010)
+    plc.patch({"Go": True})
+    plc.step()
+    plc.patch({"Sensor": True})
+    return plc, hit, tmr
+
+
+class TestFrozenRungSoundness:
+    """Folded and stepped runs land on the same scan with bit-equal state when
+    a rung's value moves every scan without any accumulator reaching it."""
+
+    @pytest.mark.parametrize("shape", _SCAN_VARYING_SHAPES)
+    def test_run_until_matches_stepped(self, shape: Callable[[], Any]) -> None:
+        folded, hit, _tmr = _started(shape)
+        folded.run_until(hit, max_cycles=10_000, fold=True)
+        stepped, hit2, _tmr2 = _started(shape)
+        stepped.run_until(hit2, max_cycles=10_000, fold=False)
+
+        assert stepped.state.tags["Hit"] is True
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    @pytest.mark.parametrize("shape", _SCAN_VARYING_SHAPES)
+    def test_run_for_matches_stepped(self, shape: Callable[[], Any]) -> None:
+        folded, _hit, _tmr = _started(shape)
+        folded.run_for(2.0, fold=True)
+        stepped, _hit2, _tmr2 = _started(shape)
+        stepped.run_for(2.0, fold=False)
+
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    @pytest.mark.parametrize(
+        ("shape", "tag"),
+        [
+            (_self_feeding_calc, "X"),
+            (_scan_counter_calc, "X"),
+            (_sum_expr_calc, "DS1"),
+            (_shift_func_calc, "X"),
+            (_math_func_calc, "R"),
+            (_back_edge_chain, "Stage3"),
+        ],
+    )
+    def test_scan_varying_write_is_not_frozen(self, shape: Callable[[], Any], tag: str) -> None:
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.fold import _build_fold_context
+
+        prog, _hit, _tmr = _gated_hit_program(shape)
+        plc = PLC(prog, dt=0.010)
+        ctx = _build_fold_context(plc, build_program_graph(prog), prog)
+
+        assert tag not in ctx.frozen_writes
+
+    @pytest.mark.parametrize("form", ["sum", "math", "shift"])
+    def test_self_reference_seen_through_function_expressions(self, form: str) -> None:
+        from pyrung import Block, TagType
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.expression import lsh, sqrt
+        from pyrung.core.fold import _calc_self_referential
+
+        DS = Block("DS", TagType.INT, 1, 2)
+        X = DS[1]
+        expr = {
+            "sum": DS.select(1, 2).sum() + 1,
+            "math": sqrt(X),
+            "shift": lsh(X, 1),
+        }[form]
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(expr, X)
+
+        pdg = build_program_graph(prog)
+        assert _calc_self_referential(X.name, pdg, prog)

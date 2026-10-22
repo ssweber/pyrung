@@ -189,18 +189,14 @@ def _collect_acc_sources(program: Any) -> list[_AccSource]:
 
 def _calc_self_referential(tag: str, pdg: ProgramGraph, program: Any) -> bool:
     """True when *tag* is the dest of a ``calc`` that reads *tag* itself."""
+    from pyrung.core.analysis.pdg import _extract_tag_names
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
-    from pyrung.core.expression import BinaryExpr, TagExpr, UnaryExpr
     from pyrung.core.instruction.calc import CalcInstruction
 
     def reads_tag(expr: Any) -> bool:
-        if isinstance(expr, TagExpr):
-            return getattr(expr.tag, "name", None) == tag
-        if isinstance(expr, BinaryExpr):
-            return reads_tag(expr.left) or reads_tag(expr.right)
-        if isinstance(expr, UnaryExpr):
-            return reads_tag(expr.operand)
-        return False
+        # The PDG's own read walker, so every expression shape (sums, math and
+        # shift functions, indirect refs) counts exactly as the PDG counts it.
+        return tag in _extract_tag_names(expr, dict(pdg.tags))
 
     for ri in pdg.writers_of.get(tag, frozenset()):
         ro = _resolve_rung(program, pdg.rung_nodes[ri])
@@ -480,45 +476,179 @@ def _disjoint_churn_closures(
     return frozenset(excluded - target_names)
 
 
+def _window_constant_names() -> frozenset[str]:
+    """Resolved-on-read system names that cannot move inside a fold window.
+
+    Fixed configuration, plus the system clocks, whose edges the fold bounds
+    on its own (``_scans_to_clock_edge``).  Every other derived name can change
+    between two scans of a window: the scan-id signals, ``first_scan``, the
+    scan-time and ``dt`` readouts (which the one landing scan inflates), the
+    RTC fields and the SD status.
+    """
+    from pyrung.core.system_points import _CLOCK_HALF_PERIODS
+    from pyrung.core.system_points import system as _system
+
+    sys_ = _system.sys
+    firmware = _system.firmware
+    return frozenset(_CLOCK_HALF_PERIODS) | {
+        sys_.always_on.name,
+        sys_.mode_switch_run.name,
+        sys_.mode_run.name,
+        sys_.fixed_scan_mode.name,
+        sys_.battery_present.name,
+        sys_.scan_time_fixed_setup_ms.name,
+        sys_.interrupt_scan_time_ms.name,
+        firmware.main_ver_low.name,
+        firmware.main_ver_high.name,
+        firmware.sub_ver_low.name,
+        firmware.sub_ver_high.name,
+    }
+
+
+def _opaque_indirect_tags(pdg: ProgramGraph) -> frozenset[str]:
+    """Block slots some rung may read or write through an unbounded pointer.
+
+    The PDG cannot name the element an unbounded ``block[ptr]`` touches, so its
+    reader and writer sets for that block are incomplete.  Every known slot of
+    such a block is reported here so the frozen-write pass can refuse it.
+    """
+    opaque_blocks: set[str] = set()
+    for pointer, (block_name, _start, _end) in pdg.pointer_tags.items():
+        ptr = pdg.tags.get(pointer)
+        if ptr is None or (
+            getattr(ptr, "choices", None) is None
+            and (getattr(ptr, "min", None) is None or getattr(ptr, "max", None) is None)
+        ):
+            opaque_blocks.add(block_name)
+    for ref in pdg.indirect_writes:
+        opaque_blocks.add(ref.block.name)
+    if not opaque_blocks:
+        return frozenset()
+    return frozenset(
+        name
+        for name, tag in pdg.tags.items()
+        if getattr(getattr(tag, "_pyrung_block", None), "name", None) in opaque_blocks
+    )
+
+
+def _node_scan_context(
+    pdg: ProgramGraph,
+) -> tuple[list[frozenset[str]], list[frozenset[int]]]:
+    """Per-node effective reads and main-scan positions.
+
+    A subroutine rung runs only when its caller's rung calls it, so it inherits
+    every read of its call sites (transitively), and it executes at those call
+    sites' main rung positions.  A subroutine that no main rung reaches gets no
+    position.
+    """
+    nodes = pdg.rung_nodes
+    own = [_node_reads(node) for node in nodes]
+    sub_members: dict[str, list[int]] = {}
+    for i, node in enumerate(nodes):
+        if node.subroutine is not None:
+            sub_members.setdefault(node.subroutine, []).append(i)
+    callers: dict[str, list[int]] = {}
+    for site in pdg.call_sites():
+        callers.setdefault(site.callee, []).append(site.node_index)
+
+    reads = list(own)
+    pos: list[frozenset[int]] = [
+        frozenset({node.rung_index}) if node.scope == "main" else frozenset() for node in nodes
+    ]
+    changed = True
+    while changed:
+        changed = False
+        for sub, members in sub_members.items():
+            inherited_reads: set[str] = set()
+            inherited_pos: set[int] = set()
+            for ci in callers.get(sub, ()):
+                inherited_reads |= reads[ci]
+                inherited_pos |= pos[ci]
+            for i in members:
+                r = own[i] | inherited_reads
+                p = frozenset(inherited_pos)
+                if r != reads[i] or p != pos[i]:
+                    reads[i] = r
+                    pos[i] = p
+                    changed = True
+    return reads, pos
+
+
 def _frozen_rung_writes(
     pdg: ProgramGraph,
     base_varying: frozenset[str],
-    resolved_on_read: frozenset[str],
+    window_constant: frozenset[str],
     target_names: frozenset[str],
+    protected: frozenset[str] = frozenset(),
 ) -> frozenset[str]:
-    """Tags written exclusively by rungs whose inputs cannot vary in a plateau.
+    """Tags whose value is rebuilt, identically, inside every scan of a plateau.
 
-    Fixed-point: seed *varying* with *base_varying* (accumulators, churn, mirrors,
-    etc.), then propagate through rung read→write edges until stable.  Tags written
-    only by rungs whose reads sit entirely outside the reachable varying set are
-    frozen — their values cannot change between accumulator crossings, so excluding
-    them from the plateau visibility check lets the fold skip through clock-gated
-    recomputations that would otherwise break the plateau with identical writes.
+    Excluding such a tag from the plateau guard lets the fold skip through
+    clock-gated recomputations that would otherwise break the window.  The
+    exclusion is sound only when the landing scan recomputes the tag's exact
+    stepped value from window-constant inputs, so a tag is frozen only when:
 
-    *resolved_on_read* names (system clocks, always_on, scan-derived signals) are
-    stripped from rung reads because they are never stored in ``state.tags`` and
-    thus invisible to the plateau guard's dictionary comparison.
+    * no varying input reaches its writers.  *varying* is seeded with
+      *base_varying* (accumulators, churn, mirrors, scan-varying system names)
+      and propagated through rung read->write edges to a fixed point;
+    * every rung that reads it runs strictly after every rung that writes it.
+      A read of the scan-entry value (a self-read like ``calc(f(X), X)``, a
+      seal-in, or a rung reading a tag written further down the scan) makes the
+      value depend on the previous scan, which the one landing scan cannot
+      replay;
+    * it is not a target, not *protected*, and not a slot an unbounded pointer
+      may reach.
+
+    *window_constant* names are stripped from reads: they are resolved on read,
+    never stored, and cannot move inside a fold window.  Anything uncertain
+    keeps the tag in the guard, where a change it makes declines the fold.
     """
+    reads, pos = _node_scan_context(pdg)
+    reads = [r - window_constant for r in reads]
+    nodes = pdg.rung_nodes
+
     varying: set[str] = set(base_varying)
     changed = True
     while changed:
         changed = False
-        for node in pdg.rung_nodes:
-            reads = _node_reads(node) - resolved_on_read
-            if not reads & varying:
+        for i, node in enumerate(nodes):
+            if not reads[i] & varying:
                 continue
-            for w in node.writes:
+            for w in node.all_writes:
                 if w not in varying:
                     varying.add(w)
                     changed = True
 
-    frozen: set[str] = set()
-    for node in pdg.rung_nodes:
-        reads = _node_reads(node) - resolved_on_read
-        if not reads & varying:
-            frozen |= node.writes
+    writer_pos: dict[str, set[int]] = {}
+    unplaced: set[str] = set()
+    for i, node in enumerate(nodes):
+        for w in node.all_writes:
+            writer_pos.setdefault(w, set()).update(pos[i])
+            if not pos[i]:
+                unplaced.add(w)
+    reader_min: dict[str, int] = {}
+    for i in range(len(nodes)):
+        if not pos[i]:
+            continue
+        first = min(pos[i])
+        for r in reads[i]:
+            if r not in reader_min or first < reader_min[r]:
+                reader_min[r] = first
 
-    return frozenset(frozen - varying - target_names)
+    excluded = set(varying) | target_names | protected | _opaque_indirect_tags(pdg) | unplaced
+    frozen: set[str] = set()
+    for node in nodes:
+        for w in node.writes:
+            if w in excluded or w in frozen:
+                continue
+            written_at = writer_pos.get(w)
+            if not written_at:
+                continue
+            first_read = reader_min.get(w)
+            if first_read is not None and max(written_at) >= first_read:
+                continue
+            frozen.add(w)
+    return frozenset(frozen)
 
 
 # ── 7. Self-calc sources ────────────────────────────────────────────
@@ -972,11 +1102,21 @@ def _build_fold_context(
 
     frozen_writes: frozenset[str] = frozenset()
     if advice is None or advice.has("fold_frozen_writes"):
+        window_constant = _window_constant_names()
         base_varying = (
-            acc_names | modwrap_names | frozenset(mirror_names) | profile_fb_names | churn_excluded
+            acc_names
+            | modwrap_names
+            | frozenset(mirror_names)
+            | profile_fb_names
+            | churn_excluded
+            | (frozenset(_DERIVED_TAG_NAMES) - window_constant)
         )
         frozen_writes = _frozen_rung_writes(
-            pdg, base_varying, frozenset(_DERIVED_TAG_NAMES), target_names
+            pdg,
+            base_varying,
+            window_constant,
+            target_names,
+            protected=_harness_referenced_names(plc),
         )
         if frozen_writes and journal is not None:
             journal.add_note(
