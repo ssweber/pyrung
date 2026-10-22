@@ -358,12 +358,19 @@ def cycle_fold_until(
         _OrdinaryFoldStrategy,
         _rtc_hard_fields,
         _rtc_jump_room,
+        _without_soft_rtc_ticks,
         fold_run_until,
     )
 
     if fold_ctx is None:
         fold_ctx = plc._ensure_fold_context()
     assert fold_ctx is not None
+    mirrors = fold_ctx.time_mirrors
+    if mirrors is not None and (predicate_reads is None or predicate_reads & mirrors.names):
+        # The predicate may read a clock copy (its reads are undeclared, or
+        # declared and include one): keep every RTC tick a bound and every copy
+        # observed.
+        fold_ctx = _without_soft_rtc_ticks(fold_ctx)
     dt = fold_ctx.normal_dt
 
     def _fall_back_to_runner_fold() -> bool:

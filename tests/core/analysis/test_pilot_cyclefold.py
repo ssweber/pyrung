@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
@@ -732,7 +733,14 @@ class TestCycleFoldClockMirrors:
         folded = self._plc(_clock_mirror_cycle_program())
         assert folded._ensure_fold_context().time_mirrors is not None
         stats: dict[str, int] = {}
-        cycle_fold_until(folded, lambda _s: False, budget=budget, kernel_budget=False, stats=stats)
+        cycle_fold_until(
+            folded,
+            lambda _s: False,
+            budget=budget,
+            kernel_budget=False,
+            predicate_reads=frozenset(),
+            stats=stats,
+        )
 
         assert stats["cycle_folds"] >= 1
         assert folded.state.scan_id == ref.state.scan_id
@@ -743,7 +751,13 @@ class TestCycleFoldClockMirrors:
         fold_ctx = replace(plc._ensure_fold_context(), time_mirrors=None)
         stats: dict[str, int] = {}
         cycle_fold_until(
-            plc, lambda _s: False, budget=1_500, kernel_budget=False, fold_ctx=fold_ctx, stats=stats
+            plc,
+            lambda _s: False,
+            budget=1_500,
+            kernel_budget=False,
+            fold_ctx=fold_ctx,
+            predicate_reads=frozenset(),
+            stats=stats,
         )
         assert stats["cycle_folds"] == 0
 
@@ -761,7 +775,14 @@ class TestCycleFoldClockMirrors:
         ref = self._stepped(_clock_mirror_cycle_program(**program), 1_500, **patch)
         plc = self._plc(_clock_mirror_cycle_program(**program), **patch)
         stats: dict[str, int] = {}
-        cycle_fold_until(plc, lambda _s: False, budget=1_500, kernel_budget=False, stats=stats)
+        cycle_fold_until(
+            plc,
+            lambda _s: False,
+            budget=1_500,
+            kernel_budget=False,
+            predicate_reads=frozenset(),
+            stats=stats,
+        )
 
         assert stats.get("cycle_folds", 0) == 0
         assert stats.get("rtc_readers_on", 0) >= 1
@@ -774,12 +795,39 @@ class TestCycleFoldClockMirrors:
     def test_kernel_budget_never_ends_on_a_jump(self, budget: int) -> None:
         plc = self._plc(_clock_mirror_cycle_program())
         stats: dict[str, int] = {}
-        cycle_fold_until(plc, lambda _s: False, budget=budget, kernel_budget=True, stats=stats)
+        cycle_fold_until(
+            plc,
+            lambda _s: False,
+            budget=budget,
+            kernel_budget=True,
+            predicate_reads=frozenset(),
+            stats=stats,
+        )
 
         ref = self._plc(_clock_mirror_cycle_program())
         for _ in range(plc.state.scan_id - ref.state.scan_id):
             ref.step()
         assert stats["cycle_folds"] == (0 if budget == 208 else 1)
+        assert plc.state.tags == ref.state.tags
+
+    @pytest.mark.parametrize("declared", [None, frozenset({"CmSec"})], ids=["undeclared", "copy"])
+    def test_predicate_that_may_read_a_copy_keeps_ticks_hard(
+        self, declared: frozenset[str] | None
+    ) -> None:
+        """A predicate reading a clock copy must see every second it shows."""
+
+        def stop(s: Any) -> bool:
+            return s.tags.get("CmSec") == 55
+
+        ref = self._plc(_clock_mirror_cycle_program())
+        for _ in range(1_500):
+            ref.step()
+            if stop(ref.state):
+                break
+        plc = self._plc(_clock_mirror_cycle_program())
+        cycle_fold_until(plc, stop, budget=1_500, kernel_budget=False, predicate_reads=declared)
+        assert ref.state.tags["CmSec"] == 55
+        assert plc.state.scan_id == ref.state.scan_id
         assert plc.state.tags == ref.state.tags
 
 

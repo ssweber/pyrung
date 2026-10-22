@@ -1454,6 +1454,19 @@ def _rtc_hard_fields(
     return ctx.rtc_condition_fields
 
 
+def _without_soft_rtc_ticks(ctx: _FoldContext) -> _FoldContext:
+    """*ctx* with every RTC tick hard and every clock copy in the plateau guard.
+
+    For a stop predicate whose reads are not declared (a callable): it may read
+    a clock copy, which a soft tick would let change unobserved.
+    """
+    if ctx.time_mirrors is None:
+        return ctx
+    from dataclasses import replace
+
+    return replace(ctx, time_mirrors=None)
+
+
 def _window_constant_names() -> frozenset[str]:
     """Resolved-on-read system names that cannot move inside a fold window.
 

@@ -1962,11 +1962,11 @@ class TestSoftRtcTicks:
 
     @pytest.mark.parametrize("seconds", [5, 12])
     def test_folded_matches_stepped_across_rollovers(self, seconds: int) -> None:
-        """The window crosses second, minute and hour rollovers."""
-        target = seconds * 100
+        """The window crosses second, minute and hour rollovers.  run_for has no
+        stop predicate, so nothing but the program could read a tick."""
 
         def run(plc: PLC, fold: bool) -> None:
-            plc.run_until(lambda s: s.scan_id >= target, max_cycles=target + 10, fold=fold)
+            plc.run_for(float(seconds), fold=fold)
 
         folded, stepped = _folded_and_stepped(lambda: _rtc_mirror_program()[0], run)
         assert stepped.state.tags["HHMM"] == 1300
@@ -2382,3 +2382,40 @@ class TestSoftRtcForcedTags:
             ref = plc.replay_to(target)
             assert _plain_tags(seek) == _plain_tags(ref)
         assert ref.state.tags["Seen"] is True
+
+
+class TestSoftRtcCallablePredicate:
+    """A callable run_until predicate declares no reads, so it may read a clock
+    copy: every RTC tick stays a bound and the copy stays observed."""
+
+    @pytest.mark.parametrize("dt", [0.01, 1.0])
+    def test_callable_reading_a_copy_stops_where_stepping_does(self, dt: float) -> None:
+        from pyrung import copy
+
+        def build() -> Program:
+            Sec, Hit, Req, Log = Int("Sec"), Bool("Hit"), Bool("Req"), Int("Log")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    copy(system.rtc.second, Sec)
+                with Rung(Req):
+                    copy(Sec, Log)
+                with Rung():
+                    on_delay(Tmr, 60, "s")
+                with Rung(Tmr.Done):
+                    out(Hit)
+            return prog
+
+        def run(plc: PLC, fold: bool) -> None:
+            plc.run_until(
+                lambda s: s.tags.get("Sec") == 30 or bool(s.tags.get("Hit")),
+                max_cycles=8_000,
+                fold=fold,
+            )
+
+        folded, stepped = _folded_and_stepped(
+            build, run, dt=dt, start=(2026, 3, 1, 12, 59, 5, 250_000)
+        )
+        assert stepped.state.tags["Sec"] == 30
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)

@@ -4640,13 +4640,17 @@ class PLC:
             protected_reads = reads - clock_reads - scan_derived
         self._ensure_running()
         if fold and self._logic:
-            from pyrung.core.fold import fold_run_until
+            from pyrung.core.fold import _without_soft_rtc_ticks, fold_run_until
 
+            fold_ctx = self._ensure_fold_context(protected_reads, clock_reads, scan_derived)
+            if self._is_fn_predicate(conditions):
+                # A callable may read a clock copy the fold cannot see.
+                fold_ctx = _without_soft_rtc_ticks(fold_ctx)
             return fold_run_until(
                 self,
                 predicate,
                 max_cycles=max_cycles,
-                fold_ctx=self._ensure_fold_context(protected_reads, clock_reads, scan_derived),
+                fold_ctx=fold_ctx,
                 extra_comparisons=extra_comparisons,
             )
         for _ in range(max_cycles):
