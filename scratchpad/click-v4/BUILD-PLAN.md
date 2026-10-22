@@ -80,6 +80,18 @@ Fold follow-ups found by the fix, not yet scheduled:
 - Gates on `rise()`/`fall()` edges of non-clock tags and one-shot copies aren't covered by tests.
 - `tests/fuzz/test_fold_soundness.py` docstring still describes the old frozen rule.
 
+## Conformance status (2026-10-22)
+
+Landed: `b442425..3dc39c2` (one program, a `Conf_<Group>` subroutine per group, per-group hashes, manifest,
+`confirmed=` field) and `7a134db` (CLICK answers recorded). Confirmed in CLICK: pasting a single subroutine
+works; nested subroutine calls are not supported; outputs wired straight to the rail are valid.
+
+Follow-ups:
+- Click exporter doesn't enforce CLICK's 24-character nickname limit (`pyclickplc.validation.NICKNAME_MAX_LENGTH`).
+  Add a validation finding.
+- Subroutine-call cases (checklist "call into subroutine", "subroutines: same rules") need a home called from
+  main, since groups are already subroutines.
+
 ## Known risk, not scheduled
 
 - PILOT's prover context is all-or-nothing (`drive_setup.py:300-385`). Any compile or prover failure silently strips
