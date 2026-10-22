@@ -470,6 +470,14 @@ def rro(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
 # =============================================================================
 
 
+def _range_dsl(block_range: BlockRange) -> str:
+    """DSL spelling of a static block range: ``DS.select(1, 10)``."""
+    text = f"{block_range.block.name}.select({block_range.start}, {block_range.end})"
+    if block_range.reverse_order:
+        text += ".reverse()"
+    return text
+
+
 class SumExpr(Expression):
     """Sum of all tag values in a block range."""
 
@@ -480,7 +488,70 @@ class SumExpr(Expression):
         return sum(ctx.get_tag(tag.name, 0) for tag in self.block_range)
 
     def __repr__(self) -> str:
-        return f"sum({self.block_range!r})"
+        return f"{_range_dsl(self.block_range)}.sum()"
+
+
+#: Range aggregates other than sum, in pyrung spelling (CLICK: MAX, MIN, MDN, AVG).
+RANGE_AGGREGATE_KINDS: tuple[str, ...] = ("max", "min", "median", "mean")
+
+
+def aggregate_values(kind: str, values: list[Any] | tuple[Any, ...]) -> Numeric:
+    """Compute one range aggregate over already-read member values.
+
+    Shared by :class:`RangeAggregateExpr` and crossing forward evaluation so
+    every consumer computes the same number.  The compiled backend emits the
+    same operations inline (``_primitives.py``), in the same member order:
+
+    - ``max`` / ``min``: Python ``max`` / ``min``.
+    - ``mean``: left-to-right ``+`` then ``/ n`` (exact quotient; calc's
+      destination conversion decides truncation).
+    - ``median``: middle of the sorted values; for an even count, the mean of
+      the two middle values.
+
+    An empty range yields 0.
+    """
+    if not values:
+        return 0
+    if kind == "max":
+        return max(values)
+    if kind == "min":
+        return min(values)
+    if kind == "mean":
+        total = values[0]
+        for value in values[1:]:
+            total = total + value
+        return total / len(values)
+    if kind == "median":
+        ordered = sorted(values)
+        mid = len(ordered) // 2
+        if len(ordered) % 2:
+            return ordered[mid]
+        return (ordered[mid - 1] + ordered[mid]) / 2
+    raise ValueError(f"Unknown range aggregate kind: {kind!r}")
+
+
+class RangeAggregateExpr(Expression):
+    """``max`` / ``min`` / ``median`` / ``mean`` of the tag values in a block range.
+
+    A sibling of :class:`SumExpr`, not a subclass: every ``isinstance(x, SumExpr)``
+    arm computes or exports a sum, and must not see these.
+    """
+
+    def __init__(self, kind: str, block_range: BlockRange) -> None:
+        if kind not in RANGE_AGGREGATE_KINDS:
+            raise ValueError(
+                f"Unknown range aggregate kind {kind!r}; expected one of "
+                f"{', '.join(RANGE_AGGREGATE_KINDS)}"
+            )
+        self.kind = kind
+        self.block_range = block_range
+
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
+        values = [ctx.get_tag(tag.name, tag.default) for tag in self.block_range]
+        return aggregate_values(self.kind, values)
+
+    def __repr__(self) -> str:
+        return f"{_range_dsl(self.block_range)}.{self.kind}()"
 
 
 # =============================================================================
@@ -503,9 +574,11 @@ def format_expr(expr: Expression) -> str:
         return expr.tag.name
     if isinstance(expr, LiteralExpr):
         return repr(expr.value)
-    # SumExpr — aggregate over block range
+    # Range aggregates — DSL method form, e.g. DS.select(1, 5).sum()
     if isinstance(expr, SumExpr):
-        return f"sum({expr.block_range!r})"
+        return f"{_range_dsl(expr.block_range)}.sum()"
+    if isinstance(expr, RangeAggregateExpr):
+        return f"{_range_dsl(expr.block_range)}.{expr.kind}()"
     # ShiftFuncExpr — two-argument shift/rotate functions (before MathFuncExpr)
     if isinstance(expr, ShiftFuncExpr):
         return f"{expr.name}({format_expr(expr.value)}, {format_expr(expr.count)})"

@@ -366,6 +366,11 @@ def _instr_code(spec: InstrSpec) -> str:
         return (
             f"calc({a['block'].name}.select({a['start']}, {a['end']}).sum(), {_tag_ref(a['dest'])})"
         )
+    elif spec.kind == "range_agg_calc":
+        return (
+            f"calc({a['block'].name}.select({a['start']}, {a['end']}).{a['agg']}(), "
+            f"{_tag_ref(a['dest'])})"
+        )
     return f"# unknown instruction: {spec.kind}"
 
 

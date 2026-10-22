@@ -65,8 +65,25 @@ _CLICK_PI_RE = re.compile(r"\bPI\b")
 # Used as fullmatch in _sub_operand (standalone) and .sub() in expressions.
 _CLICK_HEX_RE = re.compile(r"\b([0-9A-Fa-f]+)h\b")
 
-# Regex matching SUM with colon-range: SUM ( DS1 : DS10 ) or SUM(DS1:DS10)
-_SUM_RE = re.compile(r"SUM\s*\(\s*([A-Z]+)(\d+)\s*:\s*([A-Z]+)(\d+)\s*\)")
+# Click range aggregates (colon-range argument) -> BlockRange method name.
+_RANGE_AGG_TO_METHOD: dict[str, str] = {
+    "SUM": "sum",
+    "MAX": "max",
+    "MIN": "min",
+    "MDN": "median",
+    "AVG": "mean",
+}
+
+# Regex matching a range aggregate with colon-range: SUM ( DS1 : DS10 ), MAX(DS1:DS10), ...
+# Groups: 1 = function, 2/3 = first operand prefix/number, 4/5 = last operand prefix/number.
+_RANGE_AGG_RE = re.compile(
+    r"\b(" + "|".join(_RANGE_AGG_TO_METHOD) + r")\s*\(\s*([A-Z]+)(\d+)\s*:\s*([A-Z]+)(\d+)\s*\)"
+)
+
+# Placeholder call names used while validating range aggregates as Python syntax.
+_RANGE_AGG_PLACEHOLDERS: dict[str, str] = {
+    name: f"_range_{name.lower()}" for name in _RANGE_AGG_TO_METHOD
+}
 
 # Pointer/indirect addressing: DH[DS134] means "DH at index stored in DS134"
 _POINTER_RE = re.compile(r"(CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\[(.+?)\]")
@@ -219,8 +236,11 @@ def _validate_operand(text: str) -> ast.expr:
     """Validate Click syntax before substituting trusted generated references."""
     normalized = _pythonize_csv_strings(text)
     normalized = _CLICK_HEX_RE.sub(lambda m: f"0x{m.group(1)}", normalized)
-    normalized = _SUM_RE.sub(
-        lambda m: f"_range_sum({m.group(1)}{m.group(2)}, {m.group(3)}{m.group(4)})",
+    normalized = _RANGE_AGG_RE.sub(
+        lambda m: (
+            f"{_RANGE_AGG_PLACEHOLDERS[m.group(1)]}"
+            f"({m.group(2)}{m.group(3)}, {m.group(4)}{m.group(5)})"
+        ),
         normalized,
     )
     normalized = _RANGE_RE.sub(
@@ -239,7 +259,7 @@ def _validate_operand(text: str) -> ast.expr:
             "ModbusRtuTarget",
             "ModbusAddress",
             "_range",
-            "_range_sum",
+            *_RANGE_AGG_PLACEHOLDERS.values(),
             "immediate",
             "rise",
             "fall",
@@ -331,14 +351,11 @@ def _sub_operand(
             args, kwargs = _parse_af_args(inner_args_str)
             rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]
             return f"{func_name}({', '.join(rendered)})"
-        # SUM with colon-range: SUM ( DS1 : DS10 ) → ds.select(1, 10).sum()
-        if func_name == "SUM":
-            sum_match = _SUM_RE.match(text)
-            if sum_match:
-                prefix = sum_match.group(1)
-                start_num = int(sum_match.group(2))
-                end_num = int(sum_match.group(4))
-                return f"{_render_range_expr(prefix, start_num, end_num, collection)}.sum()"
+        # Range aggregate with colon-range: SUM ( DS1 : DS10 ) → ds.select(1, 10).sum()
+        if func_name in _RANGE_AGG_TO_METHOD:
+            agg_match = _RANGE_AGG_RE.fullmatch(text)
+            if agg_match:
+                return _render_range_aggregate(agg_match, collection)
         # Click expression functions (SQRT, LSH, SIN, etc.)
         py_name = _CLICK_FUNC_TO_PYTHON.get(func_name)
         if py_name is not None:
@@ -381,14 +398,8 @@ def _sub_operand(
     # names like DH001 won't false-match because H is not a hex digit).
     result = _CLICK_HEX_RE.sub(lambda m: f"0x{m.group(1).upper()}", _pythonize_csv_strings(text))
 
-    # Convert SUM colon-ranges (before general expression conversion)
-    def _sub_sum(m: re.Match[str]) -> str:
-        prefix = m.group(1)
-        start_num = int(m.group(2))
-        end_num = int(m.group(4))
-        return f"{_render_range_expr(prefix, start_num, end_num, collection)}.sum()"
-
-    result = _SUM_RE.sub(_sub_sum, result)
+    # Convert range-aggregate colon-ranges (before general expression conversion)
+    result = _RANGE_AGG_RE.sub(lambda m: _render_range_aggregate(m, collection), result)
     result = _click_expr_to_python(result)
     result = _RANGE_RE.sub(lambda m: _sub_range(m, collection, nicknames), result)
 
@@ -422,6 +433,15 @@ def _sub_operand(
         collection.used_expr_funcs.add("PI")
 
     return result
+
+
+def _render_range_aggregate(match: re.Match[str], collection: _OperandCollection) -> str:
+    """Render one ``_RANGE_AGG_RE`` match as ``block.select(a, b).<method>()``."""
+    method = _RANGE_AGG_TO_METHOD[match.group(1)]
+    prefix = match.group(2)
+    start_num = int(match.group(3))
+    end_num = int(match.group(5))
+    return f"{_render_range_expr(prefix, start_num, end_num, collection)}.{method}()"
 
 
 def _sub_range(

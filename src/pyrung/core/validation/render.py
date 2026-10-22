@@ -124,7 +124,17 @@ def operand_name(value: Any) -> str:
 
 def render_expr(expr: Any) -> str:
     """Render an :class:`~pyrung.core.expression.Expression` tree as source."""
-    from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr, UnaryExpr
+    from pyrung.core.expression import (
+        BinaryExpr,
+        LiteralExpr,
+        MathFuncExpr,
+        RangeAggregateExpr,
+        ShiftFuncExpr,
+        SumExpr,
+        TagExpr,
+        UnaryExpr,
+        format_expr,
+    )
 
     if isinstance(expr, TagExpr):
         return operand_name(expr.tag)
@@ -133,7 +143,15 @@ def render_expr(expr: Any) -> str:
     if isinstance(expr, BinaryExpr):
         return f"({render_expr(expr.left)} {expr.symbol} {render_expr(expr.right)})"
     if isinstance(expr, UnaryExpr):
+        if expr.symbol == "abs":
+            return f"abs({render_expr(expr.operand)})"
         return f"{expr.symbol}{render_expr(expr.operand)}"
+    if isinstance(expr, MathFuncExpr):
+        return f"{expr.name}({render_expr(expr.operand)})"
+    if isinstance(expr, ShiftFuncExpr):
+        return f"{expr.name}({render_expr(expr.value)}, {render_expr(expr.count)})"
+    if isinstance(expr, (SumExpr, RangeAggregateExpr)):
+        return format_expr(expr)
     return type(expr).__name__
 
 

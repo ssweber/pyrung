@@ -357,6 +357,35 @@ def range_sum_into_compare(pool: TagPool) -> list[RungSpec] | None:
     ]
 
 
+def range_aggregate_into_compare(pool: TagPool) -> list[RungSpec] | None:
+    """Pattern #29b: calc(block.select(start, end).max(), Out) + Rung(Out > 0).
+
+    The non-additive siblings of range_sum_into_compare: the prover must keep
+    every member as a read of the calc (no element-wise sum decomposition).
+    """
+    if pool.int_block is None or not pool.writable_numeric() or not pool.writable_bool():
+        return None
+    blk = pool.int_block
+    out = pool.writable_numeric()[0]
+    start = blk.start
+    end = min(blk.start + 2, blk.end)
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
+            instructions=[
+                InstrSpec(
+                    kind="range_agg_calc",
+                    args={"block": blk, "start": start, "end": end, "dest": out, "agg": "max"},
+                )
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="compare", tag=out, op=">", operand=0)],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
 def band_collapse_pattern(pool: TagPool) -> list[RungSpec] | None:
     """Pattern #30: range-sum drives a one-off band-tagged Int + downstream compare."""
     if pool.int_block is None or not pool.writable_bool():
@@ -918,6 +947,7 @@ TIER1_PATTERNS = [
     timer_chain_advancement,
     multi_hop_copy_chain,
     range_sum_into_compare,
+    range_aggregate_into_compare,
     band_collapse_pattern,
     indirect_oob_source,
     identity_calc,

@@ -551,16 +551,15 @@ def _collect_literal_write_domains(
 
 
 def _expr_reads_tag(expr: Any, tag_name: str) -> bool:
-    """True when *expr* references *tag_name* anywhere in the tree."""
-    from pyrung.core.expression import BinaryExpr, TagExpr, UnaryExpr
+    """True when *expr* references *tag_name* anywhere in the tree.
 
-    if isinstance(expr, TagExpr):
-        return getattr(expr.tag, "name", None) == tag_name
-    if isinstance(expr, BinaryExpr):
-        return _expr_reads_tag(expr.left, tag_name) or _expr_reads_tag(expr.right, tag_name)
-    if isinstance(expr, UnaryExpr):
-        return _expr_reads_tag(expr.operand, tag_name)
-    return False
+    Uses the PDG's own read walker, so every expression shape (range sums and
+    aggregates, math and shift functions, indirect refs) counts exactly as the
+    PDG counts it.
+    """
+    from pyrung.core.analysis.pdg import _extract_tag_names
+
+    return tag_name in _extract_tag_names(expr, {})
 
 
 def _hop_affine_index(
@@ -876,7 +875,17 @@ def _interval_bounds(
     atom_index: dict[str, list[Atom]] | None = None,
 ) -> tuple[float, float] | None:
     """Resolve min/max interval for an expression node, or None if unbounded."""
-    from pyrung.core.expression import BinaryExpr
+    from pyrung.core.expression import BinaryExpr, RangeAggregateExpr
+
+    if isinstance(node, RangeAggregateExpr):
+        # max/min/median/mean all lie in the hull of the member intervals.
+        hull: tuple[float, float] | None = None
+        for member in node.block_range.tags():
+            bounds = _interval_bounds(member, graph, all_exprs, known_domains, atom_index)
+            if bounds is None:
+                return None
+            hull = bounds if hull is None else (min(hull[0], bounds[0]), max(hull[1], bounds[1]))
+        return hull
 
     literal = _literal_value_from_value(node)
     if literal is not None and isinstance(literal, (int, float)):
@@ -945,11 +954,16 @@ def _domain_from_calc_expression(
     if bounds is None:
         return None
     lo, hi = bounds
+    from pyrung.core.expression import RangeAggregateExpr
     from pyrung.core.instruction.conversions import _truncate_to_tag_type
 
     lo_t = _truncate_to_tag_type(lo, target)
     hi_t = _truncate_to_tag_type(hi, target)
     if not isinstance(lo_t, (int, float)) or not isinstance(hi_t, (int, float)):
+        return None
+    if isinstance(expression, RangeAggregateExpr) and (lo_t != int(lo) or hi_t != int(hi)):
+        # The destination wraps part of the member hull (e.g. a DD range into
+        # an INT); the stored values are no longer the interval lo..hi.
         return None
     if isinstance(lo_t, int) and isinstance(hi_t, int):
         return tuple(range(lo_t, hi_t + 1))

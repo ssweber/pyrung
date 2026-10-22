@@ -115,3 +115,89 @@ class TestCalcInstruction:
         runner.patch({"Enable": False, "A": 10, "Result": 0})
         runner.step()
         assert runner.current_state.tags["Result"] == 0
+
+
+class TestCalcRangeAggregates:
+    """max/min/median/mean through calc's destination conversion, both backends."""
+
+    def _run(self, runner_factory, expression_for, dest, values):
+        from pyrung.core import Block, TagType
+
+        Enable = Bool("Enable")
+        DS = Block("DS", TagType.INT, 1, 6)
+        with Program() as logic:
+            with Rung(Enable):
+                calc(expression_for(DS), dest)
+        runner = runner_factory(logic)
+        runner.patch({"Enable": True, **{f"DS{i}": v for i, v in enumerate(values, start=1)}})
+        runner.step()
+        return runner.current_state.tags[dest.name]
+
+    @pytest.mark.parametrize(
+        ("method", "expected"),
+        [("max", 10), ("min", -7), ("median", 3), ("mean", 2)],
+    )
+    def test_int_dest_truncates(self, runner_factory, method, expected):
+        # values 3, -7, 10, 4: median (3 + 4) / 2 = 3.5 -> 3, mean 10 / 4 = 2.5 -> 2
+        result = self._run(
+            runner_factory,
+            lambda ds: getattr(ds.select(1, 4), method)(),
+            Int("Out"),
+            [3, -7, 10, 4],
+        )
+        assert result == expected
+
+    @pytest.mark.parametrize(("method", "expected"), [("median", 3.5), ("mean", 2.5)])
+    def test_real_dest_keeps_fraction(self, runner_factory, method, expected):
+        result = self._run(
+            runner_factory,
+            lambda ds: getattr(ds.select(1, 4), method)(),
+            Real("Out"),
+            [3, -7, 10, 4],
+        )
+        assert result == pytest.approx(expected)
+
+    def test_negative_mean_truncates_toward_zero(self, runner_factory):
+        # -7, -2 -> -4.5 -> -4 (calc's integer store truncates toward zero)
+        result = self._run(runner_factory, lambda ds: ds.select(1, 2).mean(), Int("Out"), [-7, -2])
+        assert result == -4
+
+    def test_composed_with_abs(self, runner_factory):
+        result = self._run(
+            runner_factory,
+            lambda ds: ds.select(1, 4).max() + abs(ds[5]),
+            Int("Out"),
+            [3, -7, 10, 4, -20],
+        )
+        assert result == 30
+
+    def test_word_range_is_unsigned_hex_mode(self, runner_factory):
+        """MAX over WORD treats values as unsigned 16-bit, like the rest of hex mode."""
+        from pyrung.core import Block, TagType, Word
+
+        Enable = Bool("Enable")
+        DH = Block("DH", TagType.WORD, 1, 3)
+        Out = Word("Out")
+        with Program() as logic:
+            with Rung(Enable):
+                calc(DH.select(1, 3).max(), Out)
+        runner = runner_factory(logic)
+        runner.patch({"Enable": True, "DH1": 0x0001, "DH2": 0xFFFF, "DH3": 0x8000})
+        runner.step()
+        assert runner.current_state.tags["Out"] == 0xFFFF
+
+    def test_bool_range_sum_counts_true_bits(self, runner_factory):
+        from pyrung.core import Block, TagType
+
+        Enable = Bool("Enable")
+        C = Block("C", TagType.BOOL, 1, 5)
+        Count = Int("Count")
+        with Program() as logic:
+            with Rung(Enable):
+                calc(C.select(1, 5).sum(), Count)
+                calc(C.select(1, 1).sum(), Int("One"))
+        runner = runner_factory(logic)
+        runner.patch({"Enable": True, "C1": True, "C3": True, "C4": True})
+        runner.step()
+        assert runner.current_state.tags["Count"] == 3
+        assert runner.current_state.tags["One"] == 1

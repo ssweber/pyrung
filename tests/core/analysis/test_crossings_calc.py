@@ -346,3 +346,44 @@ def test_forward_sum_returns_aggregate() -> None:
     assert result.operation == "sum"
     assert result.tags == ("DS1", "DS2", "DS3")
     assert result.storage == StoreTransform("wrap", -(2**31), 2**31 - 1)
+
+
+# --- range aggregates (max / min / median / mean) -----------------------------
+
+
+def test_forward_range_aggregate_carries_its_kind() -> None:
+    """A non-sum aggregate never forwards as a sum (pilot decomposes "sum" element-wise)."""
+    blk = Block("DS", TagType.INT, 1, 5)
+    dest = Int("Out")
+    for kind in ("max", "min", "median", "mean"):
+        instr = CalcInstruction(getattr(blk.select(1, 3), kind)(), dest)
+        claim = _CALC.forward(instr, dest.name, _ctx(dest))
+        assert isinstance(claim, Aggregate)
+        assert claim.operation == kind
+        assert claim.tags == ("DS1", "DS2", "DS3")
+
+
+def test_evaluate_forward_range_aggregate_matches_runtime() -> None:
+    from pyrung.core.crossing import evaluate_forward
+
+    blk = Block("DS", TagType.INT, 1, 5)
+    dest = Int("Out")
+    values = {"DS1": 3, "DS2": -7, "DS3": 10, "DS4": 4}
+    expected = {"max": 10, "min": -7, "median": 3, "mean": 2}
+    for kind, want in expected.items():
+        claim = _CALC.forward(
+            CalcInstruction(getattr(blk.select(1, 4), kind)(), dest), dest.name, _ctx(dest)
+        )
+        assert evaluate_forward(claim, values) == want
+    missing = _CALC.forward(CalcInstruction(blk.select(1, 5).max(), dest), dest.name, _ctx(dest))
+    assert evaluate_forward(missing, values) is UNKNOWN
+
+
+def test_range_aggregate_reverse_falls_through() -> None:
+    """Not additive: no member value follows from the destination."""
+    blk = Block("DS", TagType.INT, 1, 5)
+    dest = Real("Out")
+    for kind in ("max", "min", "median", "mean"):
+        instr = CalcInstruction(getattr(blk.select(1, 3), kind)(), dest)
+        assert _CALC.reverse(instr, None, eq_target("Out", 1), _ctx(dest)).fallthrough
+        assert _CALC.reverse(instr, None, Cmp("Out", ">", 0), _ctx(dest)).fallthrough

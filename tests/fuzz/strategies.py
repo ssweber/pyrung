@@ -318,7 +318,7 @@ def instruction_specs(
             [("fill", 3), ("fill_oneshot", 1), ("blockcopy", 2), ("blockcopy_oneshot", 1)]
         )
     if has_int_block and has_numeric:
-        choices.extend([("indirect_copy", 4), ("range_sum_calc", 2)])
+        choices.extend([("indirect_copy", 4), ("range_sum_calc", 2), ("range_agg_calc", 2)])
     if has_int_block and (pool.int_tags or pool.dint_tags) and has_bool:
         choices.append(("search", 2))
     if has_bool_block and has_bool:
@@ -641,6 +641,15 @@ def instruction_specs(
             kind="range_sum_calc",
             args={"block": blk, "start": r["start"], "end": r["end"], "dest": dest},
         )
+    elif kind == "range_agg_calc":
+        blk = pool.int_block
+        r = _block_range_args(draw, blk)
+        dest = draw(st.sampled_from(writable_numeric))
+        agg = draw(st.sampled_from(["max", "min", "median", "mean"]))
+        return InstrSpec(
+            kind="range_agg_calc",
+            args={"block": blk, "start": r["start"], "end": r["end"], "dest": dest, "agg": agg},
+        )
     elif kind == "event_drum":
         did = _next_drum_id()
         n_outputs = draw(st.integers(1, min(3, len(writable_bool))))
@@ -922,6 +931,10 @@ def emit_instruction(spec: InstrSpec) -> None:
     elif kind == "range_sum_calc":
         blk = args["block"]
         calc(blk.select(args["start"], args["end"]).sum(), args["dest"])
+    elif kind == "range_agg_calc":
+        blk = args["block"]
+        rng = blk.select(args["start"], args["end"])
+        calc(getattr(rng, args["agg"])(), args["dest"])
 
 
 # ---------------------------------------------------------------------------
@@ -1010,6 +1023,7 @@ _WRITE_DEST_KINDS = _CHAIN_DEST_KINDS | {
     "copy_convert",
     "indirect_copy",
     "range_sum_calc",
+    "range_agg_calc",
     "reset",
 }
 

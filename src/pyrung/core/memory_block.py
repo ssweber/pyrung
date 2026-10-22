@@ -31,7 +31,7 @@ if TYPE_CHECKING:
         IndirectCompareLt,
     )
     from pyrung.core.context import ConditionView, ScanContext
-    from pyrung.core.expression import Expression, SumExpr
+    from pyrung.core.expression import Expression, RangeAggregateExpr, SumExpr
     from pyrung.core.state import SystemState
     from pyrung.core.tag import MappingEntry
 
@@ -1182,6 +1182,33 @@ class BlockRange:
         from pyrung.core.expression import SumExpr
 
         return SumExpr(self)
+
+    def max(self) -> RangeAggregateExpr:
+        """Return an expression for the largest tag value in this range (CLICK ``MAX``)."""
+        from pyrung.core.expression import RangeAggregateExpr
+
+        return RangeAggregateExpr("max", self)
+
+    def min(self) -> RangeAggregateExpr:
+        """Return an expression for the smallest tag value in this range (CLICK ``MIN``)."""
+        from pyrung.core.expression import RangeAggregateExpr
+
+        return RangeAggregateExpr("min", self)
+
+    def median(self) -> RangeAggregateExpr:
+        """Return an expression for the median tag value in this range (CLICK ``MDN``).
+
+        An even count gives the mean of the two middle values.
+        """
+        from pyrung.core.expression import RangeAggregateExpr
+
+        return RangeAggregateExpr("median", self)
+
+    def mean(self) -> RangeAggregateExpr:
+        """Return an expression for the mean of the tag values in this range (CLICK ``AVG``)."""
+        from pyrung.core.expression import RangeAggregateExpr
+
+        return RangeAggregateExpr("mean", self)
 
     def __len__(self) -> int:
         return len(self.addresses)

@@ -26,6 +26,7 @@ from pyrung.core.expression import (
     Expression,
     LiteralExpr,
     MathFuncExpr,
+    RangeAggregateExpr,
     ShiftFuncExpr,
     SumExpr,
     TagExpr,
@@ -199,7 +200,47 @@ def _compile_expression_impl(
         ]
         return f"({' + '.join(terms)})"
 
+    if isinstance(expr, RangeAggregateExpr):
+        return _compile_range_aggregate(
+            expr,
+            [
+                _snapshot_tag_symbol(
+                    tag,
+                    ctx,
+                    scalar_snapshots=scalar_snapshots,
+                    block_snapshots=block_snapshots,
+                )
+                for tag in expr.block_range
+            ],
+        )
+
     raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
+
+
+def _compile_range_aggregate(expr: RangeAggregateExpr, terms: list[str]) -> str:
+    """Inline ``max``/``min``/``median``/``mean`` over a static range.
+
+    Mirrors :func:`pyrung.core.expression.aggregate_values` operation for
+    operation (same member order, same left-to-right sum), so the interpreted
+    and compiled backends store identical values. CircuitPython has no
+    ``statistics`` module, so median and mean are spelled out.
+    """
+    if not terms:
+        return "0"
+    count = len(terms)
+    members = f"({', '.join(terms)},)"
+    if expr.kind == "max":
+        return f"max({members})"
+    if expr.kind == "min":
+        return f"min({members})"
+    if expr.kind == "mean":
+        return f"(({' + '.join(terms)}) / {count})"
+    if expr.kind == "median":
+        mid = count // 2
+        if count % 2:
+            return f"sorted({members})[{mid}]"
+        return f"((lambda _s: (_s[{mid - 1}] + _s[{mid}]) / 2)(sorted({members})))"
+    raise TypeError(f"Unsupported range aggregate kind: {expr.kind!r}")
 
 
 _BITWISE_SYMBOLS = frozenset({"&", "|", "^", "<<", ">>"})

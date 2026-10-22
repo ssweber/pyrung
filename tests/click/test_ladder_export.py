@@ -1558,6 +1558,67 @@ def test_calc_sum_expr_decimal_mode():
     assert tokens == ["math(SUM ( DS1 : DS5 ),DS100,mode=decimal)", "end()"]
 
 
+@pytest.mark.parametrize(
+    ("method", "click_name"),
+    [("max", "MAX"), ("min", "MIN"), ("median", "MDN"), ("mean", "AVG")],
+)
+def test_calc_range_aggregate_renders_click_name(method, click_name):
+    """max/min/median/mean render like SUM, with CLICK's MAX/MIN/MDN/AVG names."""
+    Enable = Bool("Enable")
+    DS = Block("DS", TagType.INT, 1, 10)
+    Result = Int("Result")
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(getattr(DS.select(1, 5), method)(), Result)
+
+    mapping = TagMap(
+        {Enable: x[1], Result: ds[100], **{DS[i]: ds[i] for i in range(1, 11)}},
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == [f"math({click_name} ( DS1 : DS5 ),DS100,mode=decimal)", "end()"]
+
+
+def test_calc_range_aggregate_hex_mode():
+    """MAX over a WORD range stays in hex mode (CLICK allows MAX/MIN/MDN/AVG in hex)."""
+    Enable = Bool("Enable")
+    DH = Block("DH", TagType.WORD, 1, 10)
+    Dest = Block("Dest", TagType.WORD, 1, 1)
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(DH.select(1, 3).max(), Dest[1])
+
+    mapping = TagMap(
+        {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == ["math(MAX ( DH1 : DH3 ),DH100,mode=hex)", "end()"]
+
+
+def test_calc_bool_range_sum_renders_plain_sum():
+    """SUM over a bit bank renders as plain SUM; CLICK has no separate spelling."""
+    Enable = Bool("Enable")
+    Flags = Block("Flags", TagType.BOOL, 1, 8)
+    Count = Int("Count")
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(Flags.select(1, 8).sum(), Count)
+
+    mapping = TagMap(
+        {Enable: x[1], Count: ds[100], **{Flags[i]: c[i] for i in range(1, 9)}},
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == ["math(SUM ( C1 : C8 ),DS100,mode=decimal)", "end()"]
+
+
 def test_calc_abs_renders_uppercase():
     """abs(x) renders as CLICK's ABS(x)."""
     Enable = Bool("Enable")
@@ -1577,6 +1638,30 @@ def test_calc_abs_renders_uppercase():
         "math(ABS(DS50 - 5) * 2,DS100,mode=decimal)",
         "end()",
     ]
+
+
+def test_calc_range_aggregate_composes_with_abs():
+    Enable = Bool("Enable")
+    DS = Block("DS", TagType.INT, 1, 10)
+    Delta = Int("Delta")
+    Result = Int("Result")
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(DS.select(1, 5).max() + abs(Delta), Result)
+
+    mapping = TagMap(
+        {
+            Enable: x[1],
+            Delta: ds[50],
+            Result: ds[100],
+            **{DS[i]: ds[i] for i in range(1, 11)},
+        },
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == ["math(MAX ( DS1 : DS5 ) + ABS(DS50),DS100,mode=decimal)", "end()"]
 
 
 # ---- ExportSummary tests ----

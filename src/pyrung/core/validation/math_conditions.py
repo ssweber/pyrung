@@ -6,7 +6,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.condition import CompareNe
-from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr, UnaryExpr
+from pyrung.core.expression import (
+    BinaryExpr,
+    LiteralExpr,
+    MathFuncExpr,
+    ShiftFuncExpr,
+    TagExpr,
+    UnaryExpr,
+)
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.control import ForLoopInstruction
 from pyrung.core.validation._common import (
@@ -57,8 +64,11 @@ def _division_nodes(value: Any) -> Iterator[BinaryExpr]:
         yield from _division_nodes(value.right)
         if value.symbol in ("/", "//", "%"):
             yield value
-    elif isinstance(value, UnaryExpr):
+    elif isinstance(value, (UnaryExpr, MathFuncExpr)):
         yield from _division_nodes(value.operand)
+    elif isinstance(value, ShiftFuncExpr):
+        yield from _division_nodes(value.value)
+        yield from _division_nodes(value.count)
 
 
 def _constant_value(value: Any) -> int | float | None:

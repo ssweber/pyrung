@@ -6,10 +6,14 @@ from pyrung.click import ClickBlocks, TagMap
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click.validation import (
+    CLK_CALC_BIT_RANGE_AGGREGATE,
     CLK_CALC_FLOOR_DIV,
     CLK_CALC_FUNC_MODE_MISMATCH,
+    CLK_CALC_MEDIAN_RANGE_TOO_LARGE,
     CLK_CALC_MODE_MIXED,
     CLK_CALC_NESTING_DEPTH,
+    CLK_CALC_RANGE_MIXED_BANKS,
+    CLK_CALC_RANGE_NOT_CONTIGUOUS,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
@@ -770,6 +774,163 @@ class TestAbsMode:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(f.code == CLK_CALC_FUNC_MODE_MISMATCH for f in _all_findings(report))
+
+
+class TestRangeAggregateModes:
+    def test_aggregates_allowed_in_hex_mode(self):
+        """MAX/MIN/MDN/AVG are on CLICK's hex formula pad too."""
+        H = Block("H", TagType.WORD, 1, 4)
+        dest = Tag("Dest", TagType.WORD)
+
+        def logic():
+            with Rung():
+                calc(H.select(1, 4).max() + H.select(1, 4).median(), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([H.map_to(dh.select(1, 4)), dest.map_to(dh[10])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(f.code.startswith("CLK_CALC") for f in _all_findings(report))
+
+    def test_aggregate_counts_as_paren_level(self):
+        """An aggregate's FUNC ( a : b ) adds one paren level, like SQRT(x)."""
+        V = Block("V", TagType.INT, 1, 4)
+        dest = Tag("Dest", TagType.INT)
+
+        expr = V.select(1, 4).max()
+        for _ in range(8):
+            expr = (expr + 1) * 2
+
+        def logic():
+            with Rung():
+                calc(expr, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([V.map_to(ds.select(1, 4)), dest.map_to(ds[10])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_NESTING_DEPTH for f in report.hints)
+
+
+class TestRangeAggregateRules:
+    def test_contiguous_range_no_finding(self):
+        V = Block("V", TagType.INT, 1, 4)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(V.select(1, 4).mean(), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([V.map_to(ds.select(11, 14)), dest.map_to(ds[1])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert report.errors == ()
+
+    def test_gap_in_mapping_gives_finding(self):
+        """OBJ-1014: the exported FUNC ( first : last ) would read unmapped registers."""
+        V = Block("V", TagType.INT, 1, 3)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(V.select(1, 3).max(), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            {V[1]: ds[1], V[2]: ds[2], V[3]: ds[5], dest: ds[10]}, include_system=False
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_RANGE_NOT_CONTIGUOUS for f in report.hints)
+
+    def test_reversed_range_gives_finding(self):
+        """OBJ-1014: a range must be ordered Low:High."""
+        V = Block("V", TagType.INT, 1, 4)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(V.select(1, 4).reverse().sum(), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([V.map_to(ds.select(1, 4)), dest.map_to(ds[10])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_CALC_RANGE_NOT_CONTIGUOUS for f in report.errors)
+
+    def test_mixed_banks_gives_finding(self):
+        """OBJ-1015: both ends of the range must be in the same address block."""
+        V = Block("V", TagType.INT, 1, 2)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(V.select(1, 2).min(), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap({V[1]: ds[1], V[2]: sd[1], dest: ds[10]}, include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        codes = [f.code for f in report.hints]
+        assert CLK_CALC_RANGE_MIXED_BANKS in codes
+        assert CLK_CALC_RANGE_NOT_CONTIGUOUS not in codes
+
+    def test_median_range_over_1024_bytes_gives_finding(self):
+        """OBJ-1013: MDN accepts at most 1024 bytes (512 DS, 256 DD/DF)."""
+        dest = Tag("Dest", TagType.DINT)
+
+        def logic():
+            with Rung():
+                calc(dd.select(1, 257).median(), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([dest.map_to(dd[1000])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_MEDIAN_RANGE_TOO_LARGE for f in report.hints)
+
+    def test_median_range_at_1024_bytes_no_finding(self):
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(ds.select(1, 512).median(), dest)
+                calc(ds.select(1, 600).mean(), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([dest.map_to(ds[1000])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(f.code == CLK_CALC_MEDIAN_RANGE_TOO_LARGE for f in _all_findings(report))
+
+    def test_bool_range_sum_no_finding(self):
+        """SUM over bits is legal; CLICK spells it plain SUM."""
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(c.select(1, 8).sum(), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([dest.map_to(ds[1])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert report.errors == ()
+
+    def test_bool_range_max_gives_finding(self):
+        """Only SUM accepts a bit range in CLICK."""
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(c.select(1, 8).max(), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([dest.map_to(ds[1])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_BIT_RANGE_AGGREGATE for f in report.hints)
 
 
 class TestTildeExpressionPortability:

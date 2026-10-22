@@ -15,10 +15,14 @@ from .findings import (
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_UNRESOLVED,
     CLK_BANK_WRONG_ROLE,
+    CLK_CALC_BIT_RANGE_AGGREGATE,
     CLK_CALC_FLOOR_DIV,
     CLK_CALC_FUNC_MODE_MISMATCH,
+    CLK_CALC_MEDIAN_RANGE_TOO_LARGE,
     CLK_CALC_MODE_MIXED,
     CLK_CALC_NESTING_DEPTH,
+    CLK_CALC_RANGE_MIXED_BANKS,
+    CLK_CALC_RANGE_NOT_CONTIGUOUS,
     CLK_COPY_BANK_INCOMPATIBLE,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
@@ -62,6 +66,7 @@ from .portability import (
     _evaluate_fact,
     _evaluate_immediate_usage,
     _evaluate_instruction_portability,
+    _evaluate_range_aggregates,
     _evaluate_status_bit_usage,
 )
 from .resolve import _ResolutionCache
@@ -158,6 +163,7 @@ def validate_click_program(
 
     for instruction, base_location in instruction_sites:
         findings.extend(_evaluate_instruction_portability(instruction, base_location, mode))
+        findings.extend(_evaluate_range_aggregates(instruction, base_location, mode, resolver))
         findings.extend(_evaluate_timer_preset_overflow(instruction, base_location, tag_map, mode))
 
     active_profile = profile if profile is not None else _load_default_profile()
@@ -230,6 +236,10 @@ __all__ = [
     "CLK_CALC_FLOOR_DIV",
     "CLK_CALC_FUNC_MODE_MISMATCH",
     "CLK_CALC_NESTING_DEPTH",
+    "CLK_CALC_RANGE_MIXED_BANKS",
+    "CLK_CALC_RANGE_NOT_CONTIGUOUS",
+    "CLK_CALC_MEDIAN_RANGE_TOO_LARGE",
+    "CLK_CALC_BIT_RANGE_AGGREGATE",
     "CLK_PROFILE_UNAVAILABLE",
     "CLK_ADDRESS_IDENTITY_CONFLICT",
     "CLK_BANK_UNRESOLVED",

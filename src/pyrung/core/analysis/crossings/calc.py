@@ -25,6 +25,9 @@ Forms that fall through (add no constraint, defer to the caller):
 
 - ``SumExpr`` (aggregate over a block range) — the Phase 3 sign-oracle seam;
   attributing ``sum != 0`` to "some operand nonzero" needs sign reasoning.
+- ``RangeAggregateExpr`` (max/min/median/mean) — not additive, so no member
+  value follows from the destination; forward still reports the exact
+  ``Aggregate(operation=kind)`` relation.
 - non-affine / unrecognised expressions, multiply and two-tag inequalities,
   ``==``/``!=`` comparison targets, a tag-valued bound, wrapped multiplication
   aliases, and mismatched-width integer equality preimages.
@@ -62,7 +65,14 @@ from pyrung.core.crossing import (
     single,
     unsatisfiable,
 )
-from pyrung.core.expression import BinaryExpr, LiteralExpr, SumExpr, TagExpr, UnaryExpr
+from pyrung.core.expression import (
+    BinaryExpr,
+    LiteralExpr,
+    RangeAggregateExpr,
+    SumExpr,
+    TagExpr,
+    UnaryExpr,
+)
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.conversions import calc_store_transform
 from pyrung.core.tag import TagType
@@ -132,6 +142,11 @@ class CalcCrossing(BaseCrossing):
         expr = instr.expression
         if isinstance(expr, SumExpr):
             return Aggregate(tags=tuple(tag.name for tag in expr.block_range))
+        if isinstance(expr, RangeAggregateExpr):
+            return Aggregate(
+                tags=tuple(tag.name for tag in expr.block_range),
+                operation=expr.kind,
+            )
         edge = calc_reverse_edge(expr)
         if edge is None:
             return UNKNOWN
@@ -224,8 +239,8 @@ class CalcCrossing(BaseCrossing):
             return unsatisfiable(target.tag)
 
         expr = instr.expression
-        if isinstance(expr, SumExpr):
-            return REVERSE_FALLTHROUGH  # Phase 3 sign-oracle seam
+        if isinstance(expr, (SumExpr, RangeAggregateExpr)):
+            return REVERSE_FALLTHROUGH  # Phase 3 sign-oracle seam / non-additive aggregate
         edge = calc_reverse_edge(expr)
         if edge is None:
             return REVERSE_FALLTHROUGH  # non-affine / multi-tag
@@ -265,8 +280,8 @@ class CalcCrossing(BaseCrossing):
             return REVERSE_FALLTHROUGH  # tag-bound / ==,!= / non-numeric -> defer
 
         expr = instr.expression
-        if isinstance(expr, SumExpr):
-            return REVERSE_FALLTHROUGH  # Phase 3 sign-oracle seam
+        if isinstance(expr, (SumExpr, RangeAggregateExpr)):
+            return REVERSE_FALLTHROUGH  # Phase 3 sign-oracle seam / non-additive aggregate
 
         # A linear inequality is not a sound preimage through modular storage:
         # e.g. INT(32767 + 1) < 0 although 32767 < -1 is false.

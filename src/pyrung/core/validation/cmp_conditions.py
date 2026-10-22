@@ -69,12 +69,10 @@ from pyrung.core.condition import (
     CompareNe,
 )
 from pyrung.core.expression import (
-    BinaryExpr,
     ExprCompare,
     Expression,
     LiteralExpr,
     TagExpr,
-    UnaryExpr,
 )
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation._common import (
@@ -210,9 +208,8 @@ def _operand_of_expr(expr: Expression) -> _Operand:
         return _Operand("tag", expr.tag.name, None, expr)
     if isinstance(expr, LiteralExpr):
         return _Operand("literal", None, expr.value, expr)
-    if isinstance(expr, (BinaryExpr, UnaryExpr)):
-        return _Operand("computed", None, None, expr)
-    return _Operand("opaque", None, None, expr)
+    # Arithmetic, math/shift functions and range aggregates: a computed value.
+    return _Operand("computed", None, None, expr)
 
 
 def _render(op: _Operand) -> str:

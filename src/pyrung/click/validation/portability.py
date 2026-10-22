@@ -9,7 +9,9 @@ from pyrung.core.expression import (
     Expression,
     LiteralExpr,
     MathFuncExpr,
+    RangeAggregateExpr,
     ShiftFuncExpr,
+    SumExpr,
     TagExpr,
     UnaryExpr,
 )
@@ -19,10 +21,14 @@ from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation.walker import ProgramLocation
 
 from .findings import (
+    CLK_CALC_BIT_RANGE_AGGREGATE,
     CLK_CALC_FLOOR_DIV,
     CLK_CALC_FUNC_MODE_MISMATCH,
+    CLK_CALC_MEDIAN_RANGE_TOO_LARGE,
     CLK_CALC_MODE_MIXED,
     CLK_CALC_NESTING_DEPTH,
+    CLK_CALC_RANGE_MIXED_BANKS,
+    CLK_CALC_RANGE_NOT_CONTIGUOUS,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
@@ -425,6 +431,10 @@ def _expr_paren_depth(expr: Any) -> int:
     if isinstance(expr, (TagExpr, LiteralExpr)):
         return 0
 
+    # Range aggregates: SUM ( a : b ), MAX ( a : b ), ... — one paren level
+    if isinstance(expr, (SumExpr, RangeAggregateExpr)):
+        return 1
+
     # ShiftFuncExpr: FUNC(val, cnt) — one paren level
     if isinstance(expr, ShiftFuncExpr):
         return max(_expr_paren_depth(expr.value), _expr_paren_depth(expr.count)) + 1
@@ -461,9 +471,9 @@ def _expr_paren_depth(expr: Any) -> int:
 
 
 # Click formula-pad mode restrictions:
-#   decimal: +, -, *, /, MOD, ^, SUM, ABS, SIN, ASIN, COS, ACOS, TAN, ATAN, SQRT, LOG, LN, RAD,
-#            DEG, PI
-#   hex:     +, -, *, /, MOD, SUM, AND, OR, XOR, LSH, RSH, LRO, RRO
+#   decimal: +, -, *, /, MOD, ^, SUM, MAX, MIN, MDN, AVG, ABS,
+#            SIN, ASIN, COS, ACOS, TAN, ATAN, SQRT, LOG, LN, RAD, DEG, PI
+#   hex:     +, -, *, /, MOD, SUM, MAX, MIN, MDN, AVG, AND, OR, XOR, LSH, RSH, LRO, RRO
 # ABS is a UnaryExpr (``abs(x)``), not a MathFuncExpr, so it has its own arm below.
 
 _DECIMAL_ONLY_SYMBOLS = frozenset({"**"})
@@ -521,6 +531,119 @@ def _walk_mode_violations(
 
     for child in vars(expr).values():
         _walk_mode_violations(child, calc_mode, violations, seen)
+
+
+# ---------------------------------------------------------------------------
+# Range aggregates: SUM / MAX / MIN / MDN / AVG ( first : last )
+# ---------------------------------------------------------------------------
+# CLICK's object error table: the range must be ordered Low:High (OBJ-1014),
+# both ends in the same address block (OBJ-1015), and an MDN range is limited
+# to 1024 bytes (OBJ-1013).  The exporter writes ``FUNC ( first : last )`` from
+# the range's first and last mapped tag, so every member in between must map
+# to the addresses CLICK will read.
+
+_BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
+# Banks whose CLICK address space has slot gaps (X001..X016, X101..X116, ...).
+_SLOTTED_BANKS = frozenset({"X", "Y"})
+_MDN_MAX_BYTES = 1024
+_BANK_BYTES: dict[str, int] = {"DD": 4, "DF": 4, "CTD": 4}
+
+
+def _collect_range_aggregates(expr: Any, out: list[tuple[str, BlockRange]], seen: set[int]) -> None:
+    if id(expr) in seen or not isinstance(expr, Expression):
+        return
+    seen.add(id(expr))
+    if isinstance(expr, SumExpr):
+        out.append(("sum", expr.block_range))
+        return
+    if isinstance(expr, RangeAggregateExpr):
+        out.append((expr.kind, expr.block_range))
+        return
+    for child in vars(expr).values():
+        _collect_range_aggregates(child, out, seen)
+
+
+def _evaluate_range_aggregates(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    """Check each calc() range aggregate against CLICK's range rules."""
+    if type(instruction).__name__ != "CalcInstruction":
+        return []
+    from pyrung.click.ladder.translator import _RANGE_AGGREGATE_CLICK_NAME
+
+    aggregates: list[tuple[str, BlockRange]] = []
+    _collect_range_aggregates(instruction.expression, aggregates, set())
+    if not aggregates:
+        return []
+
+    location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
+    findings: list[ClickFinding] = []
+
+    def emit(code: str, message: str, suggestion: str) -> None:
+        findings.append(
+            ClickFinding(
+                code=code,
+                severity=_route_severity(code, mode),
+                message=f"{message} at {location_text}.",
+                location=location_text,
+                suggestion=suggestion,
+            )
+        )
+
+    for kind, block_range in aggregates:
+        click_name = _RANGE_AGGREGATE_CLICK_NAME[kind]
+        slots = [resolver.resolve_direct_tag(tag) for tag in block_range.tags()]
+        if not slots or any(slot is None for slot in slots):
+            continue  # unresolved mappings are reported by the bank checks
+        resolved = [slot for slot in slots if slot is not None]
+        banks = list(dict.fromkeys(slot.memory_type for slot in resolved))
+        if len(banks) > 1:
+            emit(
+                CLK_CALC_RANGE_MIXED_BANKS,
+                f"{click_name} range spans more than one address block ({', '.join(banks)})",
+                f"Map every member of the {click_name} range into one bank, or split the "
+                "calc() into one aggregate per bank.",
+            )
+            continue
+        bank = banks[0]
+        if bank in _BIT_BANKS and kind != "sum":
+            emit(
+                CLK_CALC_BIT_RANGE_AGGREGATE,
+                f"{click_name} over bit bank {bank} is not available in CLICK; "
+                "only SUM accepts a bit range",
+                f"Use .sum() to count the True bits, or copy the bits into a register "
+                f"bank before taking {click_name}.",
+            )
+        addresses = [slot.address for slot in resolved]
+        if any(address is None for address in addresses):
+            continue
+        numbers = [int(address) for address in addresses if address is not None]
+        if bank in _SLOTTED_BANKS:
+            ordered = all(a < b for a, b in zip(numbers, numbers[1:], strict=False))
+        else:
+            ordered = all(a + 1 == b for a, b in zip(numbers, numbers[1:], strict=False))
+        if not ordered:
+            emit(
+                CLK_CALC_RANGE_NOT_CONTIGUOUS,
+                f"{click_name} range does not map to one contiguous low:high run of {bank} "
+                f"addresses (first {bank}{numbers[0]}, last {bank}{numbers[-1]})",
+                "Map the range to consecutive addresses in ascending order, and drop "
+                ".reverse(): the aggregate does not depend on member order.",
+            )
+        if kind == "median":
+            size = len(numbers) * _BANK_BYTES.get(bank, 2)
+            if size > _MDN_MAX_BYTES:
+                emit(
+                    CLK_CALC_MEDIAN_RANGE_TOO_LARGE,
+                    f"MDN range is {size} bytes; CLICK allows at most {_MDN_MAX_BYTES} "
+                    "(512 DS/DH or 256 DD/DF registers)",
+                    "Shrink the median range, or take the median of smaller ranges in "
+                    "separate calc() steps.",
+                )
+    return findings
 
 
 def _is_status_bit_tag(tag: Any) -> bool:

@@ -36,6 +36,7 @@ from pyrung.core.expression import (
     Expression,
     LiteralExpr,
     MathFuncExpr,
+    RangeAggregateExpr,
     ShiftFuncExpr,
     SumExpr,
     TagExpr,
@@ -81,6 +82,15 @@ _MATH_FUNC_CLICK_NAME: dict[str, str] = {
     "degrees": "DEG",
     "log10": "LOG",
     "log": "LN",
+}
+
+#: Range aggregates: pyrung method name -> CLICK formula function.
+_RANGE_AGGREGATE_CLICK_NAME: dict[str, str] = {
+    "sum": "SUM",
+    "max": "MAX",
+    "min": "MIN",
+    "median": "MDN",
+    "mean": "AVG",
 }
 
 _COMPARE_OPS: dict[type[Condition], str] = {
@@ -447,16 +457,23 @@ class _TranslatorMixin:
                 right = f"({right})"
             return f"{left}{symbol}{right}"
         if isinstance(expression, SumExpr):
-            br = expression.block_range
-            tags = br.tags()
-            first = self._resolve_tag(tags[0], path=f"{path}.block_range[0]", source=source)
-            last = self._resolve_tag(tags[-1], path=f"{path}.block_range[-1]", source=source)
-            return f"SUM ( {first} : {last} )"
+            return self._render_range_aggregate("sum", expression.block_range, path, source)
+        if isinstance(expression, RangeAggregateExpr):
+            return self._render_range_aggregate(
+                expression.kind, expression.block_range, path, source
+            )
         self._raise_issue(
             path=path,
             message=f"Unsupported expression type: {type(expression).__name__}.",
             source=source,
         )
+
+    def _render_range_aggregate(self, kind: str, br: Any, path: str, source: Any) -> str:
+        """``SUM ( DS1 : DS10 )`` and its MAX/MIN/MDN/AVG siblings; bit banks pass as-is."""
+        tags = br.tags()
+        first = self._resolve_tag(tags[0], path=f"{path}.block_range[0]", source=source)
+        last = self._resolve_tag(tags[-1], path=f"{path}.block_range[-1]", source=source)
+        return f"{_RANGE_AGGREGATE_CLICK_NAME[kind]} ( {first} : {last} )"
 
     def _render_condition_sequence(self, values: tuple[Any, ...], *, path: str, source: Any) -> str:
         rendered: list[str] = []

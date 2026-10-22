@@ -68,7 +68,12 @@ class Affine:
 
 @dataclass(frozen=True)
 class Aggregate:
-    """Writer produces and stores an aggregate (sum/count) over a block range."""
+    """Writer produces and stores an aggregate over a block range.
+
+    ``operation`` is ``"sum"`` or one of the range-aggregate kinds
+    (``"max"``, ``"min"``, ``"median"``, ``"mean"``).  Only ``"sum"`` is
+    additive; consumers that decompose a sum element-wise must gate on it.
+    """
 
     tags: tuple[str, ...]
     operation: str = "sum"
@@ -119,11 +124,19 @@ def evaluate_forward(
             return UNKNOWN
         return _apply_store(raw, claim.storage)
     if isinstance(claim, Aggregate):
-        if claim.operation != "sum" or any(tag not in values for tag in claim.tags):
+        # Deferred: the expression layer is a peer, kept out of this module's imports.
+        from pyrung.core.expression import RANGE_AGGREGATE_KINDS, aggregate_values
+
+        if any(tag not in values for tag in claim.tags):
             return UNKNOWN
         try:
-            raw = sum(values[tag] for tag in claim.tags)
-        except (OverflowError, TypeError, ValueError):
+            if claim.operation == "sum":
+                raw = sum(values[tag] for tag in claim.tags)
+            elif claim.operation in RANGE_AGGREGATE_KINDS:
+                raw = aggregate_values(claim.operation, [values[tag] for tag in claim.tags])
+            else:
+                return UNKNOWN
+        except (OverflowError, TypeError, ValueError, ZeroDivisionError):
             return UNKNOWN
         return _apply_store(raw, claim.storage)
     return UNKNOWN

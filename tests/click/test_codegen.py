@@ -32,12 +32,14 @@ from pyrung.core import (
     Or,
     Program,
     Real,
+    Rung,
     TagType,
     Timer,
     rung,
 )
 from pyrung.core.program import (
     branch,
+    calc,
     comment,
     copy,
     fill,
@@ -2002,6 +2004,56 @@ class TestRoundTrip:
             """,
         )
 
+    def test_calc_range_aggregates_codegen(self):
+        """MAX/MIN/MDN/AVG import back to .max()/.min()/.median()/.mean()."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    calc(ds.select(1, 5).max(), ds[100])
+                    calc(ds.select(1, 5).min(), ds[101])
+                    calc(dd.select(1, 4).median(), dd[100])
+                    calc(df.select(1, 4).mean(), df[100])
+                    calc(dh.select(1, 3).max(), dh[100])
+            """,
+            """
+            with rung(X001):
+                calc(ds.select(1, 5).max(), DS100)
+                calc(ds.select(1, 5).min(), DS101)
+                calc(dd.select(1, 4).median(), DD100)
+                calc(df.select(1, 4).mean(), DF100)
+                calc(dh.select(1, 3).max(), DH100)
+            """,
+        )
+
+    def test_calc_range_aggregate_in_expression_codegen(self):
+        """Aggregates compose with arithmetic and ABS inside one formula."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    calc(ds.select(1, 5).max() + abs(ds[6]) * 2, ds[100])
+            """,
+            """
+            with rung(X001):
+                calc(ds.select(1, 5).max() + (abs(DS6) * 2), DS100)
+            """,
+        )
+
+    def test_calc_bool_range_sum_codegen(self):
+        """SUM over a bit bank imports back to .sum() on the bit range."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    calc(c.select(1, 8).sum(), ds[100])
+            """,
+            """
+            with rung(X001):
+                calc(c.select(1, 8).sum(), DS100)
+            """,
+        )
+
     def test_calc_abs_codegen(self):
         """ABS imports as the Python builtin abs, with no expression import."""
         logic, mapping = build_program(
@@ -2018,6 +2070,53 @@ class TestRoundTrip:
         assert "pyrung.core.expression" not in code
         ns: dict = {}
         exec_with_source(code, ns)
+
+    def test_calc_aggregates_and_abs_full_round_trip(self, tmp_path: Path):
+        """pyrung -> CSV -> pyrung -> CSV is stable, and the import runs the same."""
+        from pyrung.core import PLC
+
+        with Program() as logic:
+            with Rung(x[1]):
+                calc(ds.select(1, 4).max(), ds[100])
+                calc(ds.select(1, 4).min(), ds[101])
+                calc(ds.select(1, 4).median(), ds[102])
+                calc(ds.select(1, 4).mean(), ds[103])
+                calc(c.select(1, 4).sum(), ds[104])
+                calc(abs(ds[5]) + ds.select(1, 4).max(), ds[105])
+        mapping = TagMap({})
+        code, original_rows, reproduced_rows = _round_trip(logic, mapping, tmp_path)
+        assert original_rows == reproduced_rows
+
+        ns: dict = {}
+        exec_with_source(code, ns)
+        inputs = {
+            "X001": True,
+            "DS1": 3,
+            "DS2": -7,
+            "DS3": 10,
+            "DS4": 4,
+            "DS5": -2,
+            "C1": True,
+            "C3": True,
+        }
+        results = []
+        for program in (logic, ns["logic"]):
+            plc = PLC(program, dt=0.01)
+            plc.patch(inputs)
+            plc.step()
+            results.append({f"DS{n}": plc.current_state.tags[f"DS{n}"] for n in range(100, 106)})
+        assert (
+            results[0]
+            == results[1]
+            == {
+                "DS100": 10,
+                "DS101": -7,
+                "DS102": 3,
+                "DS103": 2,
+                "DS104": 2,
+                "DS105": 12,
+            }
+        )
 
     def test_fill(self):
         """Fill instruction."""

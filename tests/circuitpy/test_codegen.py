@@ -1745,3 +1745,27 @@ class TestRuntimeSplit:
         # generate_circuitpy already compiles internally, but verify here too
         compile(result.code, "code.py", "exec")
         compile(result.runtime, "pyrung_rt.py", "exec")
+
+
+class TestRangeAggregateCodegen:
+    def test_aggregates_emit_inline_without_statistics(self):
+        """CircuitPython has no statistics module: max/min/median/mean are inline."""
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        vals = Block("Vals", TagType.INT, 1, 4)
+        outs = [Int(f"Out{i}") for i in range(5)]
+        with Program(strict=False) as prog:
+            with Rung(Bool("Enable")):
+                calc(vals.select(1, 4).max(), outs[0])
+                calc(vals.select(1, 4).min(), outs[1])
+                calc(vals.select(1, 4).median(), outs[2])
+                calc(vals.select(1, 3).median(), outs[3])
+                calc(vals.select(1, 4).mean() + abs(outs[0]), outs[4])
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        compile(source_code, "code.py", "exec")
+        assert "statistics" not in source_code
+        assert "max((" in source_code
+        assert "min((" in source_code
+        assert "sorted((" in source_code
+        assert ") / 4)" in source_code
