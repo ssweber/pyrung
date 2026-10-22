@@ -781,3 +781,35 @@ class TestCycleFoldClockMirrors:
             ref.step()
         assert stats["cycle_folds"] == (0 if budget == 208 else 1)
         assert plc.state.tags == ref.state.tags
+
+
+class TestCycleJumpPatchesLand:
+    """A cycle jump queues its accumulator edits as patches the next real scan
+    applies, so a logical budget never ends on the jump itself."""
+
+    @pytest.mark.parametrize("unit", ["s", "ms"])
+    def test_budget_end_keeps_a_real_scan_after_the_jump(self, unit: str) -> None:
+        def build() -> Program:
+            T, Hit = Bool("PjT"), Bool("PjHit")
+            Tmr = Timer.clone("PjTmr")
+            with Program(strict=False) as prog:
+                with Rung(~T):
+                    out(T)
+                with Rung():
+                    on_delay(Tmr, 300 if unit == "s" else 300_000, unit)
+                with Rung(Tmr.Done):
+                    out(Hit)
+            return prog
+
+        ref = PLC(build(), dt=0.010)
+        ref.step()
+        for _ in range(6_000):
+            ref.step()
+        plc = PLC(build(), dt=0.010)
+        plc.step()
+        stats: dict[str, int] = {}
+        cycle_fold_until(plc, lambda _s: False, budget=6_000, kernel_budget=False, stats=stats)
+
+        assert stats["cycle_folds"] >= 1
+        assert plc.state.scan_id == ref.state.scan_id
+        assert plc.state.tags == ref.state.tags

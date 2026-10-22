@@ -623,6 +623,10 @@ def cycle_fold_until(
         periods_to_jump = k - 1
         if not kernel_budget:
             logical_room = budget - (plc.state.scan_id - start_scan)
+            if cyc.monotone:
+                # The accumulator edits are queued patches that the next real
+                # scan applies, so the coast must not end on the jump itself.
+                logical_room -= 1
             periods_to_jump = min(periods_to_jump, max(0, logical_room // cyc.period))
         harness_scan = _harness_nearest_scan(plc)
         if harness_scan is not None:
