@@ -123,6 +123,9 @@ class _FoldContext:
     # be promoted soft at runtime (see _runtime_soft_clocks).
     sat_clocks: tuple[tuple[str, float, frozenset[str]], ...] = ()
     frozen_writes: frozenset[str] = frozenset()
+    # Some rung reads ``sys.first_scan``: a probe scan run at scan 0 sees it True
+    # while the window after it sees False, so such a probe cannot certify a fold.
+    reads_first_scan: bool = False
 
 
 # ── 3. Instruction registry ─────────────────────────────────────────
@@ -480,10 +483,17 @@ def _window_constant_names() -> frozenset[str]:
     """Resolved-on-read system names that cannot move inside a fold window.
 
     Fixed configuration, plus the system clocks, whose edges the fold bounds
-    on its own (``_scans_to_clock_edge``).  Every other derived name can change
-    between two scans of a window: the scan-id signals, ``first_scan``, the
-    scan-time and ``dt`` readouts (which the one landing scan inflates), the
-    RTC fields and the SD status.
+    on its own (``_scans_to_clock_edge``), plus ``first_scan``.  Every other
+    derived name can change between two scans of a window: the scan-id
+    signals, the scan-time and ``dt`` readouts (which the one landing scan
+    inflates), the RTC fields and the SD status.
+
+    ``first_scan`` resolves as ``scan_id == 0``.  Every fold is certified
+    after a genuine probe scan (``_FoldPlan``), so its window starts at
+    ``scan_id >= 1``; and :meth:`_OrdinaryFoldStrategy.plan` declines a probe
+    that itself ran at scan 0 when the program reads ``first_scan``
+    (``_FoldContext.reads_first_scan``).  The probe and every scan of the
+    window therefore read ``first_scan`` as False.
     """
     from pyrung.core.system_points import _CLOCK_HALF_PERIODS
     from pyrung.core.system_points import system as _system
@@ -492,6 +502,7 @@ def _window_constant_names() -> frozenset[str]:
     firmware = _system.firmware
     return frozenset(_CLOCK_HALF_PERIODS) | {
         sys_.always_on.name,
+        sys_.first_scan.name,
         sys_.mode_switch_run.name,
         sys_.mode_run.name,
         sys_.fixed_scan_mode.name,
@@ -1143,6 +1154,9 @@ def _build_fold_context(
             sources.append(src)
             acc_names = acc_names | {src.acc_name}
 
+    first_scan_name = _system.sys.first_scan.name
+    reads_first_scan = any(first_scan_name in _node_reads(node) for node in pdg.rung_nodes)
+
     return _FoldContext(
         sources=tuple(sources),
         acc_names=acc_names,
@@ -1160,6 +1174,7 @@ def _build_fold_context(
         soft_clocks=soft_clocks,
         sat_clocks=sat_clocks,
         frozen_writes=frozen_writes,
+        reads_first_scan=reads_first_scan,
     )
 
 
@@ -1733,6 +1748,7 @@ class _FoldProbe:
     totals: dict[str, float]
     visible: Any
     timestamp: float
+    scan_id: int
 
 
 @dataclass(frozen=True)
@@ -1803,6 +1819,7 @@ class _OrdinaryFoldStrategy:
             totals=_acc_totals(state, self.ctx.sources),
             visible=_visible_items(state, self.exclude),
             timestamp=state.timestamp,
+            scan_id=state.scan_id,
         )
 
     def plan(
@@ -1826,6 +1843,10 @@ class _OrdinaryFoldStrategy:
         if not _visible_items_match(state, probe.visible, self.exclude):
             self.inert_soft.clear()
             self.inert_run.clear()
+            return None
+        if probe.scan_id == 0 and self.ctx.reads_first_scan:
+            # The probe read first_scan True; the window would read it False.
+            # Its unchanged state proves nothing about the window's scans.
             return None
 
         promoted = _runtime_soft_clocks(self.ctx, state)

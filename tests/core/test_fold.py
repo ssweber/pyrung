@@ -1448,3 +1448,122 @@ class TestFrozenRungSoundness:
 
         pdg = build_program_graph(prog)
         assert _calc_self_referential(X.name, pdg, prog)
+
+
+# ---------------------------------------------------------------------------
+# first_scan is window-constant: False in every probe and window scan
+# ---------------------------------------------------------------------------
+
+
+def _first_scan_init_program() -> tuple[Program, Bool]:
+    """A first-scan init copy feeding a clock-gated rung, then a 5 s timer."""
+    from pyrung import copy
+
+    Init = Int("Init")
+    Blink = Bool("Blink")
+    Hit = Bool("Hit")
+    Tmr = Timer.clone("Tmr")
+    with Program(strict=False) as prog:
+        with Rung(system.sys.first_scan):
+            copy(7, Init)
+        with Rung(system.sys.clock_1s, Init == 7):
+            out(Blink)
+        with Rung():
+            on_delay(Tmr, 5000)
+        with Rung(Tmr.Done, Blink):
+            out(Hit)
+    return prog, Hit
+
+
+def _not_first_scan_counter_program() -> tuple[Program, Bool]:
+    """``~first_scan`` turns a counter on from scan 1; a timer gives the fold
+    a crossing to aim for."""
+    Z = Bool("Z")
+    Hit = Bool("Hit")
+    Tmr = Timer.clone("Tmr")
+    Ctr = Counter.clone("Ctr")
+    with Program(strict=False) as prog:
+        with Rung():
+            on_delay(Tmr, 1000)
+        with Rung(~system.sys.first_scan):
+            out(Z)
+        with Rung(Z):
+            count_up(Ctr, 10_000).reset(Hit)
+        with Rung(Tmr.Done):
+            out(Hit)
+    return prog, Hit
+
+
+class TestFirstScanWindowConstant:
+    def test_first_scan_init_and_its_readers_are_frozen(self) -> None:
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.fold import _build_fold_context, _window_constant_names
+
+        prog, _hit = _first_scan_init_program()
+        plc = PLC(prog, dt=0.010)
+        ctx = _build_fold_context(plc, build_program_graph(prog), prog)
+
+        assert system.sys.first_scan.name in _window_constant_names()
+        assert ctx.reads_first_scan
+        assert {"Init", "Blink"} <= ctx.frozen_writes
+
+    @pytest.mark.parametrize("warm", [False, True], ids=["from_scan_0", "after_step"])
+    def test_first_scan_init_folded_matches_stepped(self, warm: bool) -> None:
+        def run(fold: bool) -> PLC:
+            prog, hit = _first_scan_init_program()
+            plc = PLC(prog, dt=0.010)
+            if warm:
+                plc.step()
+            plc.run_until(hit, max_cycles=10_000, fold=fold)
+            return plc
+
+        folded, stepped = run(True), run(False)
+        assert stepped.state.tags["Hit"] is True
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    def test_frozen_first_scan_reader_skips_clock_edges(self) -> None:
+        """Blink toggles on clock_1s edges.  Frozen, it no longer breaks a
+        plateau on each edge, so the run takes fewer kernel scans than with
+        Blink in the guard."""
+        from dataclasses import replace
+
+        def kernel_scans(freeze: bool) -> int:
+            prog, hit = _first_scan_init_program()
+            plc = PLC(prog, dt=0.010)
+            plc.step()
+            ctx = plc._ensure_fold_context(frozenset({hit.name}))
+            if not freeze:
+                cache = plc._fold_context_cache
+                assert cache is not None
+                for key, value in list(cache.items()):
+                    cache[key] = replace(value, frozen_writes=frozenset())
+            assert "Blink" in ctx.frozen_writes
+            counter = _count_kernel_scans(plc)
+            plc.run_until(hit, max_cycles=10_000)
+            return counter["n"]
+
+        assert kernel_scans(True) < kernel_scans(False)
+
+    def test_probe_at_scan_zero_does_not_certify_a_fold(self) -> None:
+        """Scan 0 reads first_scan True; scans 1.. read False.  With every tag
+        already present at scan 0, the probe sees an unchanged state (Z stays
+        False), but the window would turn Z on and count every scan."""
+        from pyrung.core.state import SystemState
+
+        prog, _hit = _not_first_scan_counter_program()
+        seed = PLC(prog, dt=0.010)
+        seed.step()
+        tags = dict(seed.state.tags)
+        tags.update({"Z": False, "Ctr_Acc": 0, "Ctr_CU": False, "Tmr_Acc": 0})
+
+        def run(fold: bool) -> PLC:
+            prog, hit = _not_first_scan_counter_program()
+            plc = PLC(prog, dt=0.010, initial_state=SystemState().with_tags(tags))
+            plc.run_until(hit, max_cycles=10_000, fold=fold)
+            return plc
+
+        folded, stepped = run(True), run(False)
+        assert stepped.state.tags["Ctr_Acc"] == 99
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
