@@ -1,19 +1,24 @@
-"""The canonical conformance program and case definitions (no network)."""
+"""The canonical conformance program, the manifest, and case definitions (no network)."""
 
 from __future__ import annotations
 
 import pytest
 
 from pyrung.conformance import (
+    Case,
+    Group,
+    Manifest,
+    ManifestError,
     assert_all_passed,
     build_program,
     case,
+    load_manifest,
     parse_endpoint,
     run,
 )
-from pyrung.conformance._slot import MAX_SLOTS, slot_register
+from pyrung.conformance._slot import DS_LAST, slot_register
 from pyrung.core import PLC, Rung, copy
-from tests.conformance import test_rung_semantics
+from tests.conformance import suite
 
 
 def _prove_constant(slot):
@@ -28,54 +33,193 @@ def _prove_other_constant(slot):
         copy(1, slot.Fired)
 
 
-def test_slots_live_at_fixed_ds_registers() -> None:
-    build = build_program(test_rung_semantics.cases)
+def _seven(id: str = "seven", sentence: str = "c") -> Case:
+    return case(sentence, ladder=_prove_constant, expect={"Result1": 7}, id=id)
+
+
+def _layout(**groups: dict) -> Manifest:
+    return Manifest.from_dict({"groups": groups}, source="test.toml")
+
+
+# --- layout ------------------------------------------------------------------
+
+
+def test_checked_in_manifest_covers_the_suite() -> None:
+    manifest = load_manifest(suite.MANIFEST_PATH)
+    for group in suite.ALL_GROUPS:
+        manifest.layout_for(group)
+
+
+def test_groups_live_at_fixed_ds_registers() -> None:
+    build = suite.build()
     m = build.tag_map
-    assert m.resolve("Conformance_BuildHash") == "DS1"
-    assert m.resolve("Conformance_SlotCount") == "DS2"
-    assert m.resolve(build.slot[1].Cmd.name) == "DS11"
-    assert m.resolve(build.slot[1].Fired.name) == "DS17"
-    assert m.resolve(build.slot[3].Cmd.name) == "DS31"
-    assert m.resolve(build.slot[3].ErrorCode.name) == "DS38"
-    assert slot_register(3, "ErrorCode") == 38
-    assert build.last_register == 40
+    rungs = build.group("rungs")
+    assert rungs.subroutine == "Conf_Rungs"
+    assert m.resolve("Conf_ProgramHash") == "DS1"
+    assert m.resolve(rungs.hash_tag.name) == "DS101"
+    assert m.resolve(rungs.slot[1].Cmd.name) == "DS111"
+    assert m.resolve(rungs.slot[1].Fired.name) == "DS117"
+    assert m.resolve(rungs.slot[3].ErrorCode.name) == "DS138"
+    assert rungs.register(3, "ErrorCode") == 138
+    assert rungs.span == (111, 30)
+    assert rungs.layout.last_register == 300
 
 
-def test_build_hash_is_stable_and_tracks_the_ladder() -> None:
-    one = build_program([case("c", ladder=_prove_constant, expect={"Result1": 7})])
-    again = build_program([case("c", ladder=_prove_constant, expect={"Result1": 7})])
-    other = build_program([case("c", ladder=_prove_other_constant, expect={"Result1": 8})])
-    assert 1 <= one.build_hash <= 32767
-    assert one.build_hash == again.build_hash
-    assert one.build_hash != other.build_hash
+def test_slots_come_from_the_manifest_not_case_order() -> None:
+    manifest = _layout(g={"base": 101, "slots": 9, "cases": {"a": 5, "b": 2}})
+    build = build_program(Group("g", [_seven("a"), _seven("b")]), manifest)
+    g = build.group("g")
+    assert [i for i, _ in g.cases] == [5, 2]
+    assert g.register(5) == 151
+    assert g.span == (121, 40)
 
 
-def test_first_scan_writes_the_header() -> None:
-    build = build_program(test_rung_semantics.cases)
+def test_adding_a_case_moves_nothing_else() -> None:
+    manifest = _layout(
+        a={"base": 101, "slots": 9, "cases": {"one": 1, "two": 2}},
+        b={"base": 201, "slots": 9, "cases": {"one": 1}},
+    )
+    before = build_program([Group("a", [_seven("one")]), Group("b", [_seven("one")])], manifest)
+    after = build_program(
+        [Group("a", [_seven("one"), _seven("two")]), Group("b", [_seven("one")])], manifest
+    )
+    assert after.program_hash == before.program_hash
+    assert after.group("b").group_hash == before.group("b").group_hash
+    assert after.group("a").group_hash != before.group("a").group_hash
+    assert after.group("a").register(1) == before.group("a").register(1)
+
+
+def test_group_hash_is_stable_and_tracks_the_ladder() -> None:
+    def build(ladder):
+        group = Group("g", [case("c", ladder=ladder, expect={"Result1": 7}, id="c")])
+        return build_program(group).group("g").group_hash
+
+    one = build(_prove_constant)
+    assert 1 <= one <= 32767
+    assert one == build(_prove_constant)
+    assert one != build(_prove_other_constant)
+
+
+def test_program_hash_tracks_the_group_table() -> None:
+    a = build_program(Group("a", [_seven()]))
+    b = build_program(Group("b", [_seven()]))
+    ab = build_program([Group("a", [_seven()]), Group("b", [_seven()])])
+    assert len({a.program_hash, b.program_hash, ab.program_hash}) == 3
+
+
+def test_every_scan_writes_the_headers() -> None:
+    build = suite.build()
+    rungs = build.group("rungs")
     plc = PLC(build.program)
     plc.step()
     tags = plc.current_state.tags
-    assert tags["Conformance_BuildHash"] == build.build_hash
-    assert tags["Conformance_SlotCount"] == 3
+    assert tags["Conf_ProgramHash"] == build.program_hash
+    assert tags[rungs.hash_tag.name] == rungs.group_hash
 
 
 def test_in_process_only_cases_are_left_out_of_the_program() -> None:
-    wire = case("wire", ladder=_prove_constant, expect={"Result1": 7})
+    wire = _seven("wire")
     local = case("local", ladder=_prove_constant, expect={"Result1": 7}, in_process_only="why")
-    build = build_program([local, wire])
-    assert build.cases == (wire,)
-    assert build.skipped == (local,)
+    # The local case needs no manifest entry.
+    build = build_program(
+        [Group("g", [local, wire]), Group("only_local", [local])],
+        _layout(g={"base": 101, "slots": 2, "cases": {"wire": 1}}),
+    )
+    assert [c for _, c in build.group("g").cases] == [wire]
+    assert [g.name for g in build.groups] == ["g"]
+    assert build.names == ("g", "only_local")
+    assert build.skipped == (("g", local), ("only_local", local))
     with pytest.raises(ValueError, match="No cases can run over Modbus"):
-        build_program([local])
+        build_program(Group("g", [local]))
 
 
-def test_export_writes_ladder_and_nicknames(tmp_path) -> None:
-    build = build_program(test_rung_semantics.cases)
+def test_export_writes_main_one_subroutine_per_group_and_nicknames(tmp_path) -> None:
+    build = suite.build()
+    rungs = build.group("rungs")
     out = build.export(tmp_path / "conformance")
     main = (out / "main.csv").read_text(encoding="utf-8")
-    assert f"copy({build.build_hash},DS1)" in main
-    assert "DS11!=0" in main
+    assert f"copy({build.program_hash},DS1)" in main
+    assert 'call(""Conf_Rungs"")' in main
+    sub = (out / "subroutines" / "Conf_Rungs.csv").read_text(encoding="utf-8")
+    assert f"copy({rungs.group_hash},DS101)" in sub
+    assert "DS111!=0" in sub
     assert (out / "nicknames.csv").exists()
+
+
+# --- manifest errors -----------------------------------------------------------
+
+
+def test_missing_group_says_what_to_add() -> None:
+    manifest = _layout(a={"base": 101, "slots": 19, "cases": {"seven": 1}})
+    group = Group("math", [_seven("int_wraps"), _seven("div_by_zero")])
+    with pytest.raises(ManifestError) as excinfo:
+        build_program([group], manifest)
+    text = str(excinfo.value)
+    assert "Group 'math' has no block in test.toml" in text
+    assert "[groups.math]\nbase = 301\nslots = 19" in text
+    assert "[groups.math.cases]\nint_wraps = 1\ndiv_by_zero = 2" in text
+
+
+def test_missing_case_says_what_to_add() -> None:
+    manifest = _layout(g={"base": 101, "slots": 3, "cases": {"a": 1, "gone": 3}})
+    group = Group("g", [_seven("a"), _seven("b"), _seven("c")])
+    with pytest.raises(ManifestError) as excinfo:
+        build_program(group, manifest)
+    text = str(excinfo.value)
+    assert "Add under [groups.g.cases]:\n\nb = 4\nc = 5" in text
+    assert "holds 3 slots: raise slots" in text
+
+
+@pytest.mark.parametrize(
+    ("groups", "match"),
+    [
+        ({"g": {"base": 5, "slots": 1}}, "base must be an integer > 10"),
+        ({"g": {"base": 101, "slots": 0}}, "slots must be an integer >= 1"),
+        ({"g": {"base": 101, "slots": 2, "cases": {"a": 3}}}, r"slot must be 1\.\.2"),
+        ({"g": {"base": 101, "slots": 2, "cases": {"a": 1, "b": 1}}}, "share slot 1"),
+        ({"g": {"base": 4401, "slots": 19}}, f"past DS{DS_LAST}"),
+        (
+            {"a": {"base": 101, "slots": 19}, "b": {"base": 251, "slots": 1}},
+            r"\[groups\.a\] \(DS101\.\.DS300\) overlaps \[groups\.b\]",
+        ),
+    ],
+)
+def test_bad_manifest_is_rejected(groups: dict, match: str) -> None:
+    with pytest.raises(ManifestError, match=match):
+        _layout(**groups)
+
+
+def test_long_group_name_is_rejected_before_click_sees_it() -> None:
+    with pytest.raises(ValueError, match="CLICK allows 24"):
+        build_program(Group("rung_semantics_order", [_seven()]))
+
+
+# --- cases and groups ------------------------------------------------------------
+
+
+def test_case_id_defaults_to_the_ladder_name() -> None:
+    def prove_widgets(slot):
+        _prove_constant(slot)
+
+    assert case("x", ladder=prove_widgets, expect={}).id == "widgets"
+    assert case("x", ladder=_prove_constant, expect={}).id == "constant"
+    with pytest.raises(ValueError, match="pass id="):
+        case("x", ladder=lambda slot: None, expect={})
+
+
+def test_group_rejects_bad_names_and_repeated_ids() -> None:
+    with pytest.raises(ValueError, match="snake_case"):
+        Group("Math", [])
+    with pytest.raises(ValueError, match="two cases with id 'seven'"):
+        Group("g", [_seven(), _seven()])
+    assert Group("rung_order", []).subroutine == "Conf_RungOrder"
+
+
+def test_run_a_group_in_process_inside_its_subroutine() -> None:
+    group = Group("g", [_seven()])
+    results = run(group)
+    assert_all_passed(results)
+    assert results[0].group == "g"
 
 
 def test_range_expectation_in_process() -> None:
@@ -102,5 +246,6 @@ def test_parse_endpoint() -> None:
         parse_endpoint("")
 
 
-def test_max_slots_fit_in_ds() -> None:
-    assert slot_register(MAX_SLOTS, "ErrorCode") <= 4500
+def test_slot_register_layout() -> None:
+    assert slot_register(101, 1, "Cmd") == 111
+    assert slot_register(101, 19, "ErrorCode") == 298

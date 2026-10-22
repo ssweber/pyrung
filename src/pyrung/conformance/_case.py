@@ -1,8 +1,9 @@
-"""Case and result types for the conformance suite."""
+"""Case, group, and result types for the conformance suite."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import re
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,14 +13,56 @@ from pyrung.conformance._slot import SLOT_FIELDS
 #: Use a range for anything wall-clock dependent over the wire (timer Acc).
 Expectation = int | range
 
+_CASE_ID = re.compile(r"[A-Za-z0-9_]+")
+_GROUP_NAME = re.compile(r"[a-z][a-z0-9]*(_[a-z0-9]+)*")
+
 
 @dataclass(frozen=True)
 class Case:
     sentence: str
     ladder: Callable[[Any], None]
     expect: dict[str, Expectation]
+    #: Stable key of the case's slot in the manifest.
+    id: str
     scans: int = 2
     in_process_only: str | None = None
+
+
+@dataclass(frozen=True)
+class Group:
+    """A named set of cases that compiles to one CLICK subroutine.
+
+    The subroutine is ``Conf_<Name>`` (``math`` -> ``Conf_Math``,
+    ``rung_order`` -> ``Conf_RungOrder``), and slot nicknames start with
+    ``<Name>``.  Case ids must be unique within the group.
+    """
+
+    name: str
+    cases: tuple[Case, ...]
+
+    def __init__(self, name: str, cases: Iterable[Case]) -> None:
+        if not _GROUP_NAME.fullmatch(name):
+            raise ValueError(
+                f"Group name {name!r} must be snake_case: lowercase letters and digits, "
+                "words joined by '_', starting with a letter."
+            )
+        cases = tuple(cases)
+        seen: set[str] = set()
+        for c in cases:
+            if c.id in seen:
+                raise ValueError(f"Group {name!r} has two cases with id {c.id!r}; pass id=.")
+            seen.add(c.id)
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "cases", cases)
+
+    @property
+    def title(self) -> str:
+        """CamelCase group name, used for the subroutine and slot nicknames."""
+        return "".join(part.capitalize() for part in self.name.split("_"))
+
+    @property
+    def subroutine(self) -> str:
+        return f"Conf_{self.title}"
 
 
 @dataclass(frozen=True)
@@ -33,6 +76,10 @@ class CaseResult:
     note: str = ""
     #: Set when the runner did not run the case; holds the reason.
     skipped: str | None = None
+    #: Name of the case's group ("" for a bare case list run in-process).
+    group: str = ""
+    #: The group's subroutine on the PLC does not match this build; the case did not run.
+    stale: bool = False
 
 
 def case(
@@ -42,6 +89,7 @@ def case(
     expect: Mapping[str, Expectation],
     scans: int = 2,
     in_process_only: str | None = None,
+    id: str | None = None,
 ) -> Case:
     """Define a conformance case.
 
@@ -54,6 +102,8 @@ def case(
             at the nominal 10 ms scan.
         in_process_only: Reason the case cannot run over Modbus.  The Modbus
             runner reports it as skipped with this reason.
+        id: Stable key of the case's slot in the manifest.  Defaults to the
+            ladder function's name without a leading ``_`` or ``prove_``.
     """
     result_fields = set(SLOT_FIELDS) - {"Cmd"}
     bad = set(expect) - result_fields
@@ -64,13 +114,26 @@ def case(
             raise TypeError(f"expect[{field_name!r}] must be an int or a range, got {value!r}")
     if scans < 1:
         raise ValueError(f"scans must be >= 1, got {scans}")
+    case_id = id if id is not None else _default_id(ladder)
+    if not _CASE_ID.fullmatch(case_id):
+        raise ValueError(
+            f"Case id {case_id!r} must be letters, digits, and '_' only "
+            f"(case {sentence!r}); pass id=."
+        )
     return Case(
         sentence=sentence,
         ladder=ladder,
         expect=dict(expect),
+        id=case_id,
         scans=scans,
         in_process_only=in_process_only,
     )
+
+
+def _default_id(ladder: Callable[[Any], None]) -> str:
+    name = getattr(ladder, "__name__", "")
+    name = name.lstrip("_")
+    return name.removeprefix("prove_")
 
 
 def expectation_met(expect: Mapping[str, Expectation], actual: Mapping[str, int]) -> bool:

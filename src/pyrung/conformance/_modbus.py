@@ -1,8 +1,10 @@
 """Conformance runner over Modbus TCP.
 
 The harness sees the implementation only through DS registers: it reads the
-build-hash header, zeroes the slots, writes each slot's ``Cmd``, waits for
-every ``Fired``, and reads the slots back twice.  The same client code talks
+program's layout hash and each selected group's hash, zeroes the slots of the
+groups that match, writes each slot's ``Cmd``, waits for every ``Fired``, and
+reads the slots back twice.  A group whose hash does not match is stale: its
+cases are reported without touching its registers.  The same client code talks
 to pyrung's soft PLC (:class:`SimServer`, the default) or to a real CLICK
 running the exported program; only the endpoint differs.
 
@@ -15,21 +17,15 @@ import asyncio
 import socket
 import threading
 import time
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Callable, Coroutine, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from pyclickplc.server import PlcValue
 
-from pyrung.conformance._build import ConformanceProgram, build_program
-from pyrung.conformance._case import Case, CaseResult, expectation_met
-from pyrung.conformance._slot import (
-    COUNT_REGISTER,
-    HASH_REGISTER,
-    SLOT_BASE,
-    SLOT_FIELDS,
-    SLOT_STRIDE,
-)
+from pyrung.conformance._build import ConformanceProgram, GroupBuild, build_program
+from pyrung.conformance._case import CaseResult, Group, expectation_met
+from pyrung.conformance._slot import PROGRAM_HASH_REGISTER
 
 #: Default Modbus TCP port of a CLICK.
 DEFAULT_PORT = 502
@@ -50,7 +46,7 @@ class ConformanceError(RuntimeError):
 
 
 class BuildMismatchError(ConformanceError):
-    """The program on the endpoint is not the program built from these cases."""
+    """The main program on the endpoint does not have this build's group layout."""
 
 
 @dataclass(frozen=True)
@@ -190,6 +186,11 @@ class SimServer:
                 pass
         self._shutdown_loop()
 
+    @property
+    def plc(self) -> Any:
+        """The running ``PLC``.  It scans on its own thread; read it for checks only."""
+        return self._plc
+
     def raise_if_failed(self) -> None:
         if self.error is not None:
             raise ConformanceError(f"Sim scan failed: {self.error!r}") from self.error
@@ -243,84 +244,140 @@ def _free_port(host: str) -> int:
 
 
 def run_modbus(
-    cases: Sequence[Case] | ConformanceProgram,
+    program: ConformanceProgram | Group | Sequence[Group],
     endpoint: Endpoint | str | None = None,
     *,
+    groups: Iterable[str] | None = None,
     timeout: float = 10.0,
 ) -> list[CaseResult]:
-    """Run *cases* over Modbus TCP and return one result per case.
+    """Run cases over Modbus TCP and return one result per case, in group order.
 
     Args:
-        cases: The cases, or a program already built with :func:`build_program`.
+        program: A program built with :func:`build_program`, or groups to build
+            one from (packed layout, fine for the local sim).
         endpoint: ``host[:port]`` of a CLICK running the exported program.
             ``None`` starts pyrung's soft PLC on a free localhost port.
+        groups: Names of the groups to run; ``None`` runs every group.  The
+            other groups' registers are never touched.
         timeout: Seconds to wait for each phase (header, zeroing, ``Fired``).
 
+    A selected group whose subroutine hash does not match is stale: its cases
+    come back with ``stale=True`` without running, and the other groups still run.
+
     Raises:
-        BuildMismatchError: ``DS1``/``DS2`` do not hold this build's hash and
-            slot count.
+        BuildMismatchError: ``DS1`` does not hold this build's layout hash.
         ConformanceError: The endpoint is unreachable or the phases time out
             before any case can be judged.
+        ValueError: *groups* names a group the program does not have.
     """
-    build = cases if isinstance(cases, ConformanceProgram) else build_program(cases)
+    build = program if isinstance(program, ConformanceProgram) else build_program(program)
+    selected = _select(build, groups)
+    wire = [g for g in build.groups if g.name in selected]
     if isinstance(endpoint, str):
         endpoint = parse_endpoint(endpoint)
 
-    if endpoint is None:
-        with SimServer(build) as sim:
-            assert sim.endpoint is not None
-            try:
-                results = asyncio.run(_drive(build, sim.endpoint, timeout))
-            finally:
-                sim.raise_if_failed()
-    else:
-        results = asyncio.run(_drive(build, endpoint, timeout))
+    by_group: dict[str, list[CaseResult]] = {}
+    if wire:
+        if endpoint is None:
+            with SimServer(build) as sim:
+                assert sim.endpoint is not None
+                try:
+                    by_group = asyncio.run(_drive(build, wire, sim.endpoint, timeout))
+                finally:
+                    sim.raise_if_failed()
+        else:
+            by_group = asyncio.run(_drive(build, wire, endpoint, timeout))
 
-    for c in build.skipped:
-        results.append(
-            CaseResult(
-                case=c,
-                passed=False,
-                actual={},
-                slot_index=0,
-                skipped=f"in-process only: {c.in_process_only}",
-            )
-        )
+    results: list[CaseResult] = []
+    for name in build.names:
+        if name not in selected:
+            continue
+        results.extend(by_group.get(name, []))
+        for group_name, c in build.skipped:
+            if group_name == name:
+                results.append(
+                    CaseResult(
+                        case=c,
+                        passed=False,
+                        actual={},
+                        slot_index=0,
+                        skipped=f"in-process only: {c.in_process_only}",
+                        group=name,
+                    )
+                )
     return results
 
 
-async def _drive(build: ConformanceProgram, endpoint: Endpoint, timeout: float) -> list[CaseResult]:
+def _select(build: ConformanceProgram, groups: Iterable[str] | None) -> set[str]:
+    if groups is None:
+        return set(build.names)
+    wanted = {name.strip() for name in groups if name.strip()}
+    unknown = sorted(wanted - set(build.names))
+    if unknown:
+        raise ValueError(
+            f"Unknown conformance group(s) {', '.join(unknown)}; known: {', '.join(build.names)}"
+        )
+    return wanted
+
+
+async def _drive(
+    build: ConformanceProgram, wire: list[GroupBuild], endpoint: Endpoint, timeout: float
+) -> dict[str, list[CaseResult]]:
     from pyclickplc.client import ClickClient
 
-    n = build.slot_count
-    width = n * SLOT_STRIDE
-    fired_offsets = [_offset(i, "Fired") for i in range(1, n + 1)]
-
+    results: dict[str, list[CaseResult]] = {}
     client = ClickClient(endpoint.host, endpoint.port, timeout=max(1, int(timeout)))
     async with client:
         if not client._client.connected:
             raise ConformanceError(f"Cannot connect to Modbus endpoint {endpoint}")
 
-        # 0. Header: is the right program running?
-        header = await _poll(
-            lambda: _read_ds(client, HASH_REGISTER, COUNT_REGISTER - HASH_REGISTER + 1),
+        # 0. Header: is a program with this group layout running?
+        (found,) = await _poll(
+            lambda: _read_ds(client, PROGRAM_HASH_REGISTER, 1),
             lambda regs: regs[0] != 0,
             timeout,
-            f"DS{HASH_REGISTER} stayed 0 on {endpoint}: the conformance program is not running",
+            f"DS{PROGRAM_HASH_REGISTER} stayed 0 on {endpoint}: "
+            "the conformance program is not running",
         )
-        found = (header[0], header[1])
-        wanted = (build.build_hash, n)
-        if found != wanted:
+        if found != build.program_hash:
             raise BuildMismatchError(
-                f"{endpoint} runs build {found[0]} with {found[1]} slots; "
-                f"these cases are build {wanted[0]} with {wanted[1]} slots. "
-                "Export the program again and load it."
+                f"{endpoint} runs program layout {found}; these groups are layout "
+                f"{build.program_hash} ({', '.join(g.subroutine for g in build.groups)}). "
+                "Export the whole project again and load it."
             )
 
-        # 1-3. Zero every slot (no case stages inputs yet), then read back.
-        await _write_ds(client, SLOT_BASE, [0] * width)
+        # Each selected group's own hash: a mismatch marks the group stale.
+        live: list[GroupBuild] = []
+        for g in wire:
+            (group_hash,) = await _read_ds(client, g.hash_register, 1)
+            if group_hash == g.group_hash:
+                live.append(g)
+                continue
+            note = (
+                f"{g.subroutine} is stale: repush (DS{g.hash_register} reads {group_hash}, "
+                f"this build writes {g.group_hash})"
+            )
+            results[g.name] = [
+                CaseResult(
+                    case=c,
+                    passed=False,
+                    actual={},
+                    slot_index=i,
+                    note=note,
+                    group=g.name,
+                    stale=True,
+                )
+                for i, c in g.cases
+            ]
+        if not live:
+            return results
+
+        # 1-3. Zero the live groups' slots (no case stages inputs yet), then read back.
+        for g in live:
+            start, width = g.span
+            await _write_ds(client, start, [0] * width)
         await _poll(
-            lambda: _read_ds(client, SLOT_BASE, width),
+            lambda: _read_spans(client, live),
             lambda regs: not any(regs),
             timeout,
             f"Slots on {endpoint} did not read back as zero: writes were dropped",
@@ -328,51 +385,72 @@ async def _drive(build: ConformanceProgram, endpoint: Endpoint, timeout: float) 
 
         # 4. Cmd = 1, one single-register write per slot so a slot's other
         # registers are never rewritten after its case has fired.
-        for i in range(1, n + 1):
-            await client.ds.write(SLOT_BASE + _offset(i, "Cmd"), 1)
+        for g in live:
+            for i, _ in g.cases:
+                await client.ds.write(g.register(i, "Cmd"), 1)
 
         # 5. Wait for every Fired (a case that never fires is judged, not raised).
+        fired_registers = [g.register(i, "Fired") for g in live for i, _ in g.cases]
         deadline = time.monotonic() + timeout
         while True:
-            regs = await _read_ds(client, SLOT_BASE, width)
-            if all(regs[o] != 0 for o in fired_offsets) or time.monotonic() >= deadline:
+            regs = _by_register(live, await _read_spans(client, live))
+            if all(regs[r] != 0 for r in fired_registers) or time.monotonic() >= deadline:
                 break
             await asyncio.sleep(POLL_S)
-        settle = max(c.scans for c in build.cases) * NOMINAL_SCAN_S
+        settle = max(c.scans for g in live for _, c in g.cases) * NOMINAL_SCAN_S
         await asyncio.sleep(settle)
 
         # 6. Read every slot twice; both reads must meet the expectation.
-        first = await _read_ds(client, SLOT_BASE, width)
+        first = _by_register(live, await _read_spans(client, live))
         await asyncio.sleep(max(CONFIRM_GAP_S, settle))
-        second = await _read_ds(client, SLOT_BASE, width)
+        second = _by_register(live, await _read_spans(client, live))
 
     # 7. Compare.
-    results: list[CaseResult] = []
-    for i, c in enumerate(build.cases, start=1):
-        actual_first = {f: first[_offset(i, f)] for f in c.expect}
-        actual = {f: second[_offset(i, f)] for f in c.expect}
-        fired = second[_offset(i, "Fired")] != 0
-        met_first = expectation_met(c.expect, actual_first)
-        met_second = expectation_met(c.expect, actual)
-        note = ""
-        if met_first != met_second:
-            note = f"unstable: first read {actual_first}, second read {actual}"
-        results.append(
-            CaseResult(
-                case=c,
-                passed=fired and met_first and met_second,
-                actual=actual,
-                slot_index=i,
-                fired=fired,
-                note=note,
+    for g in live:
+        group_results: list[CaseResult] = []
+        for i, c in g.cases:
+            actual_first = {f: first[g.register(i, f)] for f in c.expect}
+            actual = {f: second[g.register(i, f)] for f in c.expect}
+            fired = second[g.register(i, "Fired")] != 0
+            met_first = expectation_met(c.expect, actual_first)
+            met_second = expectation_met(c.expect, actual)
+            note = ""
+            if met_first != met_second:
+                note = f"unstable: first read {actual_first}, second read {actual}"
+            group_results.append(
+                CaseResult(
+                    case=c,
+                    passed=fired and met_first and met_second,
+                    actual=actual,
+                    slot_index=i,
+                    fired=fired,
+                    note=note,
+                    group=g.name,
+                )
             )
-        )
+        results[g.name] = group_results
     return results
 
 
-def _offset(index: int, field: str) -> int:
-    """Offset of *field* in slot *index* from ``SLOT_BASE``."""
-    return (index - 1) * SLOT_STRIDE + SLOT_FIELDS.index(field)
+async def _read_spans(client: Any, groups: Sequence[GroupBuild]) -> list[int]:
+    """Read every group's used slots, concatenated in group order."""
+    values: list[int] = []
+    for g in groups:
+        start, width = g.span
+        values.extend(await _read_ds(client, start, width))
+    return values
+
+
+def _by_register(groups: Sequence[GroupBuild], values: list[int]) -> dict[int, int]:
+    """Key a :func:`_read_spans` result by DS register."""
+    out: dict[int, int] = {}
+    pos = 0
+    for g in groups:
+        start, width = g.span
+        for offset in range(width):
+            out[start + offset] = values[pos + offset]
+        pos += width
+    return out
 
 
 async def _poll(

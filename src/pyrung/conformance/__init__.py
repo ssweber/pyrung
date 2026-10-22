@@ -1,12 +1,15 @@
 """Conformance suite -- plain-English cases observed only through slot registers.
 
-``run(cases)`` runs them in-process with exact scan counts.  ``run_modbus(cases)``
-runs the same cases over Modbus TCP, against pyrung's soft PLC by default or
-against a real CLICK given its ``host[:port]``.
+Cases live in groups; each group compiles to one CLICK subroutine on a fixed DS
+block from a checked-in manifest.  ``run(group)`` runs a group in-process with
+exact scan counts.  ``run_modbus(build_program(groups, manifest))`` runs the
+same cases over Modbus TCP, against pyrung's soft PLC by default or against a
+real CLICK given its ``host[:port]``, all groups or a chosen subset.
 """
 
-from pyrung.conformance._build import ConformanceProgram, build_program
-from pyrung.conformance._case import Case, CaseResult, case
+from pyrung.conformance._build import ConformanceProgram, GroupBuild, build_program
+from pyrung.conformance._case import Case, CaseResult, Group, case
+from pyrung.conformance._manifest import GroupLayout, Manifest, ManifestError, load_manifest
 from pyrung.conformance._modbus import (
     BuildMismatchError,
     ConformanceError,
@@ -24,10 +27,16 @@ __all__ = [
     "ConformanceError",
     "ConformanceProgram",
     "Endpoint",
+    "Group",
+    "GroupBuild",
+    "GroupLayout",
+    "Manifest",
+    "ManifestError",
     "SimServer",
     "assert_all_passed",
     "build_program",
     "case",
+    "load_manifest",
     "parse_endpoint",
     "run",
     "run_modbus",

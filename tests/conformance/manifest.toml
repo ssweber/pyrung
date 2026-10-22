@@ -1,0 +1,16 @@
+# Fixed DS layout of the conformance program (see AGENTS.md, "Manifest").
+#
+# Each group owns a block: its header at DS<base> (the subroutine writes its
+# hash there every scan), slot N at DS(base + 10*N)..DS(base + 10*N + 7).
+# Never renumber or move anything: a new case takes the next index in its
+# group, a removed case leaves a gap, a new group takes the next free block.
+# `make test-conformance` (and build_program) prints the exact lines to add.
+
+[groups.rungs]
+base = 101 # Conf_Rungs: DS101..DS300
+slots = 19
+
+[groups.rungs.cases]
+memory_is_immediate = 1
+source_order = 2
+global_mutation = 3

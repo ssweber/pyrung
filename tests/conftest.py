@@ -150,6 +150,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "pyrung's local soft PLC (env: PYRUNG_CONFORMANCE_PLC)."
         ),
     )
+    group.addoption(
+        "--conformance-group",
+        action="store",
+        default=None,
+        metavar="NAME[,NAME...]",
+        help=(
+            "Run only these conformance groups over Modbus "
+            "(env: PYRUNG_CONFORMANCE_GROUP); default is every group."
+        ),
+    )
     group = parser.getgroup("pyrung-prove", "pyrung prove debug tools")
     group.addoption(
         "--prove-debug",

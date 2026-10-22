@@ -1,4 +1,10 @@
-"""The canonical conformance program: cases on fixed DS slots plus a build-hash header."""
+"""The canonical conformance program: one CLICK subroutine per group on fixed DS blocks.
+
+The main program writes the layout hash to ``DS1`` every scan and calls every
+group's subroutine unconditionally.  Each subroutine writes its own hash (of
+its exported case rungs) to its group header every scan, then runs its cases,
+each gated by its slot's ``Cmd``/``Fired``.
+"""
 
 from __future__ import annotations
 
@@ -8,55 +14,98 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pyrung.conformance._case import Case
+from pyclickplc.validation import NICKNAME_MAX_LENGTH
+
+from pyrung.conformance._case import Case, Group
+from pyrung.conformance._manifest import GroupLayout, Manifest
 from pyrung.conformance._slot import (
-    COUNT_REGISTER,
-    HASH_REGISTER,
-    MAX_SLOTS,
-    SLOT_BASE,
+    PROGRAM_HASH_REGISTER,
+    SLOT_FIELDS,
     SLOT_STRIDE,
     make_slot,
+    slot_register,
 )
-from pyrung.core import Int, Program, Rung, copy
-from pyrung.core.system_points import system
+from pyrung.core import Int, Program, Rung, call, copy, subroutine
 
 if TYPE_CHECKING:
     from pyrung.click import TagMap
-    from pyrung.click.ladder import LadderBundle
     from pyrung.core.structure import _NamedArrayRuntime
+    from pyrung.core.tag import Tag
+
+#: Bump when the header protocol changes, so an old program bails as a mismatch.
+LAYOUT_VERSION = 2
+
+
+@dataclass(frozen=True)
+class GroupBuild:
+    """One group as built: its subroutine, its DS block, and its hash."""
+
+    group: Group
+    layout: GroupLayout
+    #: Cases that run over the wire, with their slot index, in group order.
+    cases: tuple[tuple[int, Case], ...]
+    slot: _NamedArrayRuntime
+    hash_tag: Tag
+    #: What the subroutine writes to its group header every scan (1..32767).
+    group_hash: int
+
+    @property
+    def name(self) -> str:
+        return self.group.name
+
+    @property
+    def subroutine(self) -> str:
+        return self.group.subroutine
+
+    @property
+    def base(self) -> int:
+        return self.layout.base
+
+    @property
+    def hash_register(self) -> int:
+        return self.layout.base
+
+    def register(self, index: int, field: str = "Cmd") -> int:
+        return slot_register(self.layout.base, index, field)
+
+    @property
+    def span(self) -> tuple[int, int]:
+        """First register of the lowest used slot and register count up to the highest."""
+        indexes = [i for i, _ in self.cases]
+        first = self.register(min(indexes))
+        return first, (max(indexes) - min(indexes) + 1) * SLOT_STRIDE
 
 
 @dataclass(frozen=True)
 class ConformanceProgram:
     """The program a Modbus run talks to, and the layout it was built with.
 
-    ``cases`` are the cases that run over the wire, in slot order (slot 1 is
-    ``cases[0]``).  ``skipped`` are the in-process-only cases left out of the
-    program.  ``build_hash`` is the value the program writes to ``DS1`` on its
-    first scan; the harness reads it before anything else.
+    ``groups`` are the groups with at least one case on the wire, in the order
+    given.  ``skipped`` holds every in-process-only case as
+    ``(group name, case)``; they are left out of the program.  ``names`` is
+    every group name given, wire or not.
     """
 
-    cases: tuple[Case, ...]
-    skipped: tuple[Case, ...]
+    groups: tuple[GroupBuild, ...]
+    skipped: tuple[tuple[str, Case], ...]
+    names: tuple[str, ...]
     program: Program
     tag_map: TagMap
-    slot: _NamedArrayRuntime
-    build_hash: int
+    #: What the main program writes to ``DS1`` every scan (1..32767).
+    program_hash: int
 
-    @property
-    def slot_count(self) -> int:
-        return len(self.cases)
-
-    @property
-    def last_register(self) -> int:
-        """Last DS register the slots occupy."""
-        return SLOT_BASE + self.slot_count * SLOT_STRIDE - 1
+    def group(self, name: str) -> GroupBuild:
+        for g in self.groups:
+            if g.name == name:
+                return g
+        raise KeyError(name)
 
     def export(self, directory: str | Path) -> Path:
-        """Write the CLICK ladder CSVs and nickname CSV for loading on a real PLC.
+        """Write the whole CLICK project: ``main.csv``, one CSV per group subroutine
+        under ``subroutines/``, and ``nicknames.csv``.
 
-        Returns the directory.  Load both into the CLICK software, then point
-        the Modbus runner at the PLC.
+        Returns the directory.  Load it once; afterwards replace one group's
+        subroutine at a time.
         """
         from pyrung.click.ladder import pyrung_to_ladder
 
@@ -67,62 +116,104 @@ class ConformanceProgram:
         return out
 
 
-def build_program(cases: Sequence[Case]) -> ConformanceProgram:
-    """Build the canonical program for *cases* (in-process-only cases are left out).
+def build_program(
+    groups: Group | Sequence[Group], manifest: Manifest | None = None
+) -> ConformanceProgram:
+    """Build the canonical program for *groups* on *manifest*'s fixed DS blocks.
 
-    Slot N lives at ``DS(10*N + 1)`` .. ``DS(10*N + 8)``.  The program's first
-    rung writes the build hash to ``DS1`` and the slot count to ``DS2`` on the
-    first scan.  The hash covers the CLICK export of the case rungs, so it
-    changes whenever the exported ladder would.
+    Without a manifest the groups are packed in order (:meth:`Manifest.packed`),
+    which is fine for a local sim but moves registers whenever a case is added.
+
+    Raises:
+        ManifestError: A wire case or group has no manifest entry; the message
+            says what to add.
+        ValueError: No case can run over Modbus, group names repeat, or a
+            nickname would be longer than CLICK allows.
     """
     from pyrung.click import ClickBlocks, TagMap
     from pyrung.click.ladder import pyrung_to_ladder
 
-    wire = tuple(c for c in cases if c.in_process_only is None)
-    skipped = tuple(c for c in cases if c.in_process_only is not None)
-    if not wire:
+    group_list = [groups] if isinstance(groups, Group) else list(groups)
+    names = tuple(g.name for g in group_list)
+    if len(set(names)) != len(names):
+        raise ValueError(f"Group names repeat: {names}")
+    if manifest is None:
+        manifest = Manifest.packed(group_list)
+
+    skipped = tuple((g.name, c) for g in group_list for c in g.cases if c.in_process_only)
+    wire_groups = [g for g in group_list if any(c.in_process_only is None for c in g.cases)]
+    if not wire_groups:
         raise ValueError("No cases can run over Modbus.")
-    if len(wire) > MAX_SLOTS:
-        raise ValueError(f"At most {MAX_SLOTS} cases fit in DS; got {len(wire)}.")
 
     ds = ClickBlocks().ds
-    slot = make_slot(len(wire))
-    build_hash_tag = Int("Conformance_BuildHash")
-    slot_count_tag = Int("Conformance_SlotCount")
-    tag_map = TagMap(
-        [
-            build_hash_tag.map_to(ds[HASH_REGISTER]),
-            slot_count_tag.map_to(ds[COUNT_REGISTER]),
-            *slot.map_to(ds.select(SLOT_BASE, SLOT_BASE + len(wire) * SLOT_STRIDE - 1)),
-        ]
-    )
+    program_hash_tag = Int("Conf_ProgramHash")
+    mappings = [program_hash_tag.map_to(ds[PROGRAM_HASH_REGISTER])]
+    staged: list[
+        tuple[Group, GroupLayout, tuple[tuple[int, Case], ...], _NamedArrayRuntime, Tag]
+    ] = []
+    for g in wire_groups:
+        layout = manifest.layout_for(g)
+        cases = tuple((layout.cases[c.id], c) for c in g.cases if c.in_process_only is None)
+        slot = make_slot(layout.slots, name=g.title)
+        hash_tag = Int(f"{g.title}_Hash")
+        _check_nicknames(g, hash_tag, slot, layout.slots)
+        first_slot = slot_register(layout.base, 1)
+        mappings.append(hash_tag.map_to(ds[layout.base]))
+        mappings.extend(slot.map_to(ds.select(first_slot, layout.last_register)))
+        staged.append((g, layout, cases, slot, hash_tag))
+    tag_map = TagMap(mappings)
 
-    with Program(strict=False) as body:
-        for i, c in enumerate(wire, start=1):
-            c.ladder(slot[i])
-    # Validated export: a case the CLICK exporter rejects fails here, before any
-    # wire traffic.  Mark such a case ``in_process_only``.
-    build_hash = _hash_export(pyrung_to_ladder(body, tag_map))
+    built: list[GroupBuild] = []
+    for g, layout, cases, slot, hash_tag in staged:
+        with Program(strict=False) as body:
+            with subroutine(g.subroutine):
+                _case_rungs(cases, slot)
+        # Validated export: a case the CLICK exporter rejects fails here, before
+        # any wire traffic.  Mark such a case ``in_process_only``.
+        bundle = pyrung_to_ladder(body, tag_map)
+        group_hash = _fold(repr(bundle.subroutine_rows))
+        built.append(GroupBuild(g, layout, cases, slot, hash_tag, group_hash))
+
+    program_hash = _fold(repr((LAYOUT_VERSION, [(g.subroutine, g.base) for g in built])))
 
     with Program(strict=False) as program:
-        with Rung(system.sys.first_scan):
-            copy(build_hash, build_hash_tag)
-            copy(len(wire), slot_count_tag)
-        for i, c in enumerate(wire, start=1):
-            c.ladder(slot[i])
+        with Rung():
+            copy(program_hash, program_hash_tag)
+        for gb in built:
+            with Rung():
+                call(gb.subroutine)
+        for gb in built:
+            with subroutine(gb.subroutine):
+                with Rung():
+                    copy(gb.group_hash, gb.hash_tag)
+                _case_rungs(gb.cases, gb.slot)
 
     return ConformanceProgram(
-        cases=wire,
+        groups=tuple(built),
         skipped=skipped,
+        names=names,
         program=program,
         tag_map=tag_map,
-        slot=slot,
-        build_hash=build_hash,
+        program_hash=program_hash,
     )
 
 
-def _hash_export(bundle: LadderBundle) -> int:
-    """Fold a ladder export into a nonzero value that fits a DS register (1..32767)."""
-    payload = repr((bundle.main_rows, bundle.subroutine_rows))
+def _case_rungs(cases: Sequence[tuple[int, Case]], slot: _NamedArrayRuntime) -> None:
+    for index, c in cases:
+        c.ladder(slot[index])
+
+
+def _check_nicknames(group: Group, hash_tag: Tag, slot: _NamedArrayRuntime, slots: int) -> None:
+    longest_field = max(SLOT_FIELDS, key=len)
+    for name in (hash_tag.name, getattr(slot[slots], longest_field).name):
+        if len(name) > NICKNAME_MAX_LENGTH:
+            raise ValueError(
+                f"Group {group.name!r} makes nickname {name!r} ({len(name)} chars); CLICK allows "
+                f"{NICKNAME_MAX_LENGTH}. Use a shorter group name."
+            )
+
+
+def _fold(payload: str) -> int:
+    """Fold *payload* into a nonzero value that fits a DS register (1..32767)."""
     digest = hashlib.sha256(payload.encode("utf-8")).digest()
     return int.from_bytes(digest[:4], "big") % 32767 + 1

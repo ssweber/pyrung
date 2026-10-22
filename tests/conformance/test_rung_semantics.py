@@ -1,8 +1,8 @@
-"""First three conformance cases: rung semantics."""
+"""Rung semantics: the ``rungs`` group (subroutine ``Conf_Rungs``)."""
 
 from __future__ import annotations
 
-from pyrung.conformance import assert_all_passed, case, run
+from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, copy
 
 
@@ -29,25 +29,27 @@ def prove_global_mutation(slot):
         copy(1, slot.Fired)
 
 
-cases = [
-    case(
-        "Memory writes are visible to the next instruction on the same scan",
-        ladder=prove_memory_is_immediate,
-        expect={"Result1": 42},
-    ),
-    case(
-        "Rungs evaluate all conditions first, then execute instructions in source order",
-        ladder=prove_source_order,
-        expect={"Result1": 10, "Result2": 20},
-    ),
-    case(
-        "Instructions mutate global memory",
-        ladder=prove_global_mutation,
-        expect={"Result1": 99},
-    ),
-]
+group = Group(
+    "rungs",
+    [
+        case(
+            "Memory writes are visible to the next instruction on the same scan",
+            ladder=prove_memory_is_immediate,
+            expect={"Result1": 42},
+        ),
+        case(
+            "Rungs evaluate all conditions first, then execute instructions in source order",
+            ladder=prove_source_order,
+            expect={"Result1": 10, "Result2": 20},
+        ),
+        case(
+            "Instructions mutate global memory",
+            ladder=prove_global_mutation,
+            expect={"Result1": 99},
+        ),
+    ],
+)
 
 
-def test_rung_semantics():
-    results = run(cases)
-    assert_all_passed(results)
+def test_rungs():
+    assert_all_passed(run(group))
