@@ -14,3 +14,15 @@ slots = 19
 memory_is_immediate = 1
 source_order = 2
 global_mutation = 3
+
+[groups.math]
+base = 301 # Conf_Math: DS301..DS500
+slots = 19
+
+[groups.math.cases]
+avg_mdn_positive = 1
+avg_mdn_negative = 2
+avg_odd_count = 3
+avg_dint_no_overflow = 4
+mdn_even_count = 5
+max_min_word_unsigned = 6
