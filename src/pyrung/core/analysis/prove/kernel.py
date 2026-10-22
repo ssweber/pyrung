@@ -147,6 +147,9 @@ def _abstracted_hidden_tags(context: _ExploreContext) -> frozenset[str]:
         for atom in vector.atoms:
             if isinstance(atom.threshold, str) and atom.threshold not in exact_stateful:
                 hidden.add(atom.threshold)
+    # An elided tag is recomputed every scan from this scan's inputs; the value
+    # left in a restored snapshot is stale, so it must not resolve an atom.
+    hidden.update(name for name in context.elided_tags if name not in exact_stateful)
     return frozenset(hidden)
 
 
