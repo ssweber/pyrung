@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from pyrung import Bool, Counter, Int, Program, Rung, Timer, calc, count_up, on_delay, out
-from pyrung.core import rise, system
+from pyrung.core import fall, rise, system
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -2482,3 +2482,71 @@ class TestLandingScanRaises:
         stepped, folded = tips
         assert folded.timestamp == pytest.approx(folded.scan_id * 0.01)
         assert stepped.timestamp == pytest.approx(stepped.scan_id * 0.01)
+
+
+# ---------------------------------------------------------------------------
+# Exactness against stepping: full state (tags and memory) and scan count
+# ---------------------------------------------------------------------------
+
+
+def _full_state(plc: PLC) -> dict[str, Any]:
+    """Every tag and memory slot except the per-scan diagnostics a landing inflates."""
+    state = _plain_tags(plc)
+    state.update({f"mem:{k}": v for k, v in plc.state.memory.items() if k != "_dt"})
+    return state
+
+
+def _assert_fold_is_exact(
+    build: Callable[[], Program],
+    run: Callable[[PLC, bool], None],
+    *,
+    dt: float = 0.010,
+    patch: dict[str, Any] | None = None,
+) -> PLC:
+    folded, stepped = _folded_and_stepped(build, run, dt=dt, patch=patch)
+    assert folded.state.scan_id == stepped.state.scan_id
+    assert _full_state(folded) == _full_state(stepped)
+    return folded
+
+
+def _scans(n: int) -> Callable[[PLC, bool], None]:
+    def run(plc: PLC, fold: bool) -> None:
+        _run_scans(plc, n, fold=fold)
+
+    return run
+
+
+class TestClockEdgeProbe:
+    """A scan reads the system clock at its start.  The probe certifying a
+    window must have read the phase the window reads, and the edge scan runs
+    as a genuine probe, so per-scan work under a clock level or edge is never
+    extrapolated from the other phase."""
+
+    @staticmethod
+    def _level_gated_counter() -> Program:
+        C = Counter.clone("C")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.clock_1s):
+                count_up(C, 100_000).reset(Bool("CR"))
+        return prog
+
+    @pytest.mark.parametrize("dt", [0.01, 0.03, 0.07])
+    def test_level_gated_counter_counts_every_high_scan(self, dt: float) -> None:
+        folded = _assert_fold_is_exact(self._level_gated_counter, _scans(int(10 / dt)), dt=dt)
+        assert folded.state.tags["C_Acc"] > 0
+
+    @staticmethod
+    def _edge_pulses() -> Program:
+        Tmr = Timer.clone("Tmr")
+        with Program(strict=False) as prog:
+            with Rung(rise(system.sys.clock_1s)):
+                out(Bool("P"))
+            with Rung(fall(system.sys.clock_1s)):
+                out(Bool("Q"))
+            with Rung():
+                on_delay(Tmr, 60_000)
+        return prog
+
+    @pytest.mark.parametrize("n", [49, 50, 51, 52, 99, 100, 101, 150])
+    def test_edge_pulse_stays_on_its_own_scan(self, n: int) -> None:
+        _assert_fold_is_exact(self._edge_pulses, _scans(n))

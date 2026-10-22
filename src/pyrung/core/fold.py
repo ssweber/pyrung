@@ -2597,21 +2597,48 @@ def _window_soft_clocks(
     )
 
 
+def _clock_reads_in_phase(t: float, dt: float, hp: float) -> int:
+    """How many consecutive scans reading at ``t, t + dt, ...`` see the clock's phase at ``t``.
+
+    Scan ``j`` of a window reads the clock at ``t + j * dt`` (the landing scan
+    resolves it at exactly that expression).  The estimate is corrected
+    against :func:`clock_phase` itself, so the count agrees with what each
+    scan resolves.  Always at least ``1``: the scan reading at ``t`` does.
+    """
+    from pyrung.core.system_points import clock_phase
+
+    phase = clock_phase(t, hp)
+    n = max(1, math.ceil(((phase + 1) * hp - t) / dt - _EPS))
+    while n > 1 and clock_phase(t + (n - 1) * dt, hp) != phase:
+        n -= 1
+    while clock_phase(t + n * dt, hp) == phase:
+        n += 1
+    return n
+
+
 def _scans_to_clock_edge(
     ctx: _FoldContext,
     state: Any,
     inert_soft: frozenset[str] = frozenset(),
     promoted: frozenset[str] = frozenset(),
+    probe_timestamp: float | None = None,
 ) -> int | None:
-    """Largest fold skip that won't cross a read system-clock's next edge.
+    """Largest fold skip whose scans all read a bounding clock in one phase.
 
-    A clock toggles when ``int(timestamp / half_period)`` increments.  The
-    next boundary after the current timestamp ``t`` is ``(phase + 1) *
-    half_period``; flooring ``(t_edge - t) / dt`` gives the scans the fold may
-    advance while staying inside the current half-period, so the edge scan
-    runs normally on the following step (the same role the harness gap plays
-    for scheduled feedback).  ``0`` means the edge is within one scan — don't
-    fold.  ``None`` means nothing is read that needs bounding.
+    A clock toggles when ``int(timestamp / half_period)`` increments.  A scan
+    reads the clock at its start, so the window after a probe reads at
+    ``t, t + dt, ...`` from the post-probe timestamp ``t``.  The window is
+    certified only by what the probe scan did, so
+
+    * the probe must have read the same phase the window starts with.  A
+      probe that read just before an edge and committed past it saw the old
+      phase; return ``0`` (*probe_timestamp* is the probe's read time);
+    * every window scan, the landing scan included, must read before the
+      next edge.  The landing state itself sits on or past the edge, so the
+      next genuine scan is the edge scan and runs as an ordinary probe (where
+      a per-edge change breaks the plateau and is never wrongly marked inert).
+
+    ``0`` means don't fold.  ``None`` means nothing is read that needs bounding.
 
     Hard clocks always bound the fold.  Soft (inert-eligible) clocks bound it
     only until the loop confirms an edge inert and adds them to *inert_soft*;
@@ -2638,18 +2665,9 @@ def _scans_to_clock_edge(
     t = state.timestamp
     best: int | None = None
     for hp in half_periods:
-        phase = clock_phase(t, hp)
-        # Largest whole scans that land *strictly before* the next edge, so the
-        # edge itself runs as a single-dt probe (where a per-edge change breaks
-        # the plateau and is never wrongly marked inert).  Using floor here lands
-        # *on* the edge when the gap is an exact integer of scans, letting one
-        # big fold step span the edge — which misses pulse outputs and leaves a
-        # stale ``_prev`` for rise()/fall().  ``ceil(raw - eps) - 1`` is the
-        # largest integer strictly below ``raw`` and is robust to float noise.
-        raw = ((phase + 1) * hp - t) / ctx.normal_dt
-        gap = math.ceil(raw - _EPS) - 1
-        if gap < 0:
-            gap = 0
+        if probe_timestamp is not None and clock_phase(probe_timestamp, hp) != clock_phase(t, hp):
+            return 0
+        gap = _clock_reads_in_phase(t, ctx.normal_dt, hp)
         best = gap if best is None else min(best, gap)
     return best
 
@@ -2965,6 +2983,7 @@ class _OrdinaryFoldStrategy:
             state,
             frozenset(self.inert_soft),
             promoted,
+            probe.timestamp,
         )
         if clock_gap is not None:
             skip = min(skip, clock_gap) if skip is not None else clock_gap
