@@ -4,18 +4,29 @@ Every concrete instruction class is either covered by a crossing
 (``EXPECTED_WITH_CROSSINGS``) or explicitly exempt (``EXEMPT``).  A new
 instruction class in neither set fails ``test_every_instruction_is_covered_or_exempt``,
 forcing a covered-or-fallthrough decision.
+
+Two holes stay closed here:
+
+* ``crossing_for()`` walks the MRO, so a subclass of a registered class inherits
+  its parent's crossing.  ``test_exempt_classes_resolve_no_crossing`` keeps an
+  ``EXEMPT`` entry from silently resolving to a parent's crossing at runtime.
+* Discovery walks ``Instruction.__subclasses__()``, which only sees imported
+  modules.  ``_import_all_pyrung_modules`` imports every ``pyrung`` module first,
+  so the enumeration does not depend on what the session happened to import.
 """
 
 from __future__ import annotations
 
+import functools
+import importlib
+import pkgutil
+import subprocess
+import sys
+import textwrap
+
 import pytest
 
-# Import every module that defines an Instruction subclass so the enumeration
-# below is deterministic regardless of what the rest of the session imported.
-import pyrung.click.nop  # noqa: F401
-import pyrung.click.raw  # noqa: F401
-import pyrung.core.instruction  # noqa: F401
-import pyrung.core.instruction.send_receive._core  # noqa: F401
+import pyrung
 from pyrung import Char, Int
 from pyrung.click.nop import NopInstruction
 from pyrung.click.raw import RawInstruction
@@ -112,7 +123,34 @@ _ALWAYS_FALLTHROUGH = (
 )
 
 
+# Modules skipped by the import walk: ``pyrung.zen`` prints on import and
+# ``__main__`` modules run an entry point.  Neither may define an instruction.
+_IMPORT_WALK_SKIP = frozenset({"pyrung.zen"})
+
+
+def _walk_skipped(name: str) -> bool:
+    return name in _IMPORT_WALK_SKIP or name.rsplit(".", 1)[-1] == "__main__"
+
+
+@functools.cache
+def _import_all_pyrung_modules() -> None:
+    """Import every module under ``pyrung`` so subclass discovery is complete."""
+    for info in pkgutil.walk_packages(pyrung.__path__, prefix="pyrung."):
+        if not _walk_skipped(info.name):
+            importlib.import_module(info.name)
+
+
+def _registered_crossing_by_mro(cls: type) -> object | None:
+    """``crossing_for``'s lookup, at class level (it takes an instance)."""
+    for base in cls.__mro__:
+        crossing = crossings._REGISTRY.get(base)
+        if crossing is not None:
+            return crossing
+    return None
+
+
 def _concrete_instruction_classes() -> frozenset[type]:
+    _import_all_pyrung_modules()
     seen: set[type] = set()
     stack: list[type] = [Instruction]
     while stack:
@@ -145,6 +183,44 @@ def test_every_instruction_is_covered_or_exempt() -> None:
     # The forcing function: a new concrete instruction class lands in neither set
     # and fails here until someone gives it a crossing or marks it exempt.
     assert _concrete_instruction_classes() == EXPECTED_WITH_CROSSINGS | EXEMPT
+
+
+@pytest.mark.parametrize("cls", sorted(EXEMPT, key=lambda c: c.__name__), ids=lambda c: c.__name__)
+def test_exempt_classes_resolve_no_crossing(cls: type) -> None:
+    # An exempt subclass of a registered class would inherit the parent's
+    # crossing through the MRO walk; exempt must mean no crossing at runtime.
+    assert _registered_crossing_by_mro(cls) is None
+
+
+def test_registry_is_complete_from_package_import_alone() -> None:
+    # Production code only imports ``pyrung.core.analysis.crossings``; a
+    # crossing registered in a module that package does not import would be
+    # missing at runtime yet present in a test session that imported it.
+    # Compare a fresh interpreter's registry before and after importing all of
+    # ``pyrung`` so the check does not depend on this session's imports.
+    script = textwrap.dedent(
+        f"""
+        import importlib, pkgutil
+        import pyrung
+        from pyrung.core.analysis.crossings import registered_classes
+
+        def names():
+            return sorted(f"{{c.__module__}}.{{c.__qualname__}}" for c in registered_classes())
+
+        before = names()
+        skip = {sorted(_IMPORT_WALK_SKIP)!r}
+        for info in pkgutil.walk_packages(pyrung.__path__, prefix="pyrung."):
+            if info.name in skip or info.name.rsplit(".", 1)[-1] == "__main__":
+                continue
+            importlib.import_module(info.name)
+        after = names()
+        print(sorted(set(after) - set(before)))
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+    )
+    assert proc.stdout.strip().splitlines()[-1] == "[]", proc.stdout
 
 
 def test_unregistered_type_reverse_is_fallthrough() -> None:
