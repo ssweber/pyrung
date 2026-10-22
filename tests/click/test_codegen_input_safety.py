@@ -152,6 +152,7 @@ def test_subroutine_name_is_data_in_both_output_formats() -> None:
         "DH[DS1] + 1",
         "SQRT(DS1) + SIN(DS2)",
         "DH[DS1] + DH[DS2]",
+        "ABS(DS1)",
     ],
 )
 def test_supported_click_expressions_still_generate(expression: str) -> None:

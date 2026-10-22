@@ -2002,6 +2002,23 @@ class TestRoundTrip:
             """,
         )
 
+    def test_calc_abs_codegen(self):
+        """ABS imports as the Python builtin abs, with no expression import."""
+        logic, mapping = build_program(
+            """
+            with Program() as p:
+                with rung(X1):
+                    calc(abs(ds[1]), ds[2])
+            """
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        assert "math(ABS(DS1),DS2,mode=decimal)" in [row[-1] for row in bundle.main_rows]
+        code = ladder_to_pyrung(bundle)
+        assert "calc(abs(DS1), DS2)" in code
+        assert "pyrung.core.expression" not in code
+        ns: dict = {}
+        exec_with_source(code, ns)
+
     def test_fill(self):
         """Fill instruction."""
         _assert_codegen_body(

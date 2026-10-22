@@ -427,7 +427,7 @@ class _TranslatorMixin:
                 expression.operand, path=f"{path}.operand", source=source
             )
             if expression.symbol == "abs":
-                return self._fn("abs", inner)
+                return self._fn("ABS", inner)
             if isinstance(expression.operand, BinaryExpr):
                 return f"{expression.symbol}({inner})"
             return f"{expression.symbol}{inner}"

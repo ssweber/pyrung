@@ -1558,6 +1558,27 @@ def test_calc_sum_expr_decimal_mode():
     assert tokens == ["math(SUM ( DS1 : DS5 ),DS100,mode=decimal)", "end()"]
 
 
+def test_calc_abs_renders_uppercase():
+    """abs(x) renders as CLICK's ABS(x)."""
+    Enable = Bool("Enable")
+    Delta = Int("Delta")
+    Result = Int("Result")
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(abs(Delta), Result)
+            calc(abs(Delta - 5) * 2, Result)
+
+    mapping = TagMap({Enable: x[1], Delta: ds[50], Result: ds[100]}, include_system=False)
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == [
+        "math(ABS(DS50),DS100,mode=decimal)",
+        "math(ABS(DS50 - 5) * 2,DS100,mode=decimal)",
+        "end()",
+    ]
+
+
 # ---- ExportSummary tests ----
 
 

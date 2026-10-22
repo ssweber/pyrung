@@ -47,7 +47,12 @@ _CLICK_FUNC_TO_PYTHON: dict[str, str] = {
     "RSH": "rsh",
     "LRO": "lro",
     "RRO": "rro",
+    # ABS maps to the Python builtin; it is never imported (see _EXPR_FUNC_IMPORT_NAMES).
+    "ABS": "abs",
 }
+
+# Python builtins in the table above: callable without an import.
+_BUILTIN_EXPR_FUNCS = frozenset({"abs"})
 
 # Regex matching Click function calls like SQRT(, LSH(, etc.
 _CLICK_FUNC_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in _CLICK_FUNC_TO_PYTHON) + r")\(")
@@ -70,7 +75,7 @@ _POINTER_RE = re.compile(r"(CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\[(.+?)\]")
 _PREFIX_TO_BLOCK: dict[str, str] = {p: bv for p, _, bv in _OPERAND_PREFIXES}
 
 # Expression function names that require import from pyrung.core.expression
-_EXPR_FUNC_IMPORT_NAMES = frozenset(_CLICK_FUNC_TO_PYTHON.values()) | {"PI"}
+_EXPR_FUNC_IMPORT_NAMES = (frozenset(_CLICK_FUNC_TO_PYTHON.values()) - _BUILTIN_EXPR_FUNCS) | {"PI"}
 
 # Regex matching Python expression-function calls (lowercase) in generated code
 _PYTHON_EXPR_FUNC_RE = re.compile(
@@ -527,6 +532,7 @@ _RESERVED_IMPORT_NAMES: frozenset[str] = frozenset(
 _CODEGEN_RESERVED_IDENTIFIERS: frozenset[str] = frozenset(
     set(_RESERVED_IMPORT_NAMES)
     | set(_EXPR_FUNC_IMPORT_NAMES)
+    | set(_BUILTIN_EXPR_FUNCS)
     | {block_var for _, _, block_var in _OPERAND_PREFIXES}
     | {
         "TagMap",

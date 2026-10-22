@@ -461,8 +461,10 @@ def _expr_paren_depth(expr: Any) -> int:
 
 
 # Click formula-pad mode restrictions:
-#   decimal: +, -, *, /, MOD, ^, SUM, SIN, ASIN, COS, ACOS, TAN, ATAN, SQRT, LOG, LN, RAD, DEG, PI
+#   decimal: +, -, *, /, MOD, ^, SUM, ABS, SIN, ASIN, COS, ACOS, TAN, ATAN, SQRT, LOG, LN, RAD,
+#            DEG, PI
 #   hex:     +, -, *, /, MOD, SUM, AND, OR, XOR, LSH, RSH, LRO, RRO
+# ABS is a UnaryExpr (``abs(x)``), not a MathFuncExpr, so it has its own arm below.
 
 _DECIMAL_ONLY_SYMBOLS = frozenset({"**"})
 _DECIMAL_ONLY_MATH_FUNCS = frozenset(
@@ -514,6 +516,8 @@ def _walk_mode_violations(
             from pyrung.click.ladder.translator import _MATH_FUNC_CLICK_NAME
 
             violations.append(_MATH_FUNC_CLICK_NAME.get(expr.name, expr.name.upper()))
+    if isinstance(expr, UnaryExpr) and expr.symbol == "abs" and calc_mode == "hex":
+        violations.append("ABS")
 
     for child in vars(expr).values():
         _walk_mode_violations(child, calc_mode, violations, seen)

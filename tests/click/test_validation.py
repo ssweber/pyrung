@@ -735,6 +735,43 @@ class TestCalcNestingDepth:
         )
 
 
+def _all_findings(report: ClickValidationReport):
+    return (*report.errors, *report.warnings, *report.hints)
+
+
+class TestAbsMode:
+    def test_abs_in_hex_mode_gives_finding(self):
+        """ABS is decimal-only in CLICK; abs() is a UnaryExpr, not a MathFuncExpr."""
+        h = Tag("H", TagType.WORD)
+        dest = Tag("Dest", TagType.WORD)
+
+        def logic():
+            with Rung():
+                calc(abs(h), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([h.map_to(dh[1]), dest.map_to(dh[2])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(
+            f.code == CLK_CALC_FUNC_MODE_MISMATCH and "ABS" in f.message for f in report.hints
+        )
+
+    def test_abs_in_decimal_mode_no_finding(self):
+        a = Tag("A", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(abs(a), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([a.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(f.code == CLK_CALC_FUNC_MODE_MISMATCH for f in _all_findings(report))
+
+
 class TestTildeExpressionPortability:
     def test_warn_mode_gives_hint(self):
         A = Tag("A", TagType.INT)
