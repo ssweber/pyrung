@@ -92,6 +92,24 @@ Follow-ups:
 - Subroutine-call cases (checklist "call into subroutine", "subroutines: same rules") need a home called from
   main, since groups are already subroutines.
 
+## Math aggregates status (2026-10-22)
+
+Landed `82b7868..d7f3bdd`. Includes two prover soundness fixes, found while building the feature but present
+since at least 4281d01 (and likely v0.15.2): live-input pruning evaluated atoms against stale snapshot values of
+elided scan-local tags (`82b7868`) and demoted edge sources (`8b20c09`), so `always()` returned Proven for hits
+one or two scans away (`copy(In, B)` -> `Rung(B): out(H)`). Probe: session scratchpad `probe_elide.py` (6/7
+wrong on dev before, 7/7 right after). PackML lock byte-identical, same speed.
+
+Follow-ups:
+- Audit `_LiveInputCache` (`prove/kernel.py`): it keys on stateful tags + the threshold vector only; any other
+  non-input tag still visible to live-input pruning could have the same stale-value problem.
+- Tumbler goldens `test_pilot_golden_skeleton_completed` / `_y_burnerloop` fail on dev since `e6b7e52` (coast
+  `accelerators` empty): handed to fold-perf. `test_pilot_internal_route_progress_skeleton` exceeds 480s on dev
+  (wall budget only checked between pilot events).
+- PDG: an indirect read whose index has no base tag registers no block reads; `DS[agg + Ptr]` is narrowed by
+  `Ptr`'s range alone.
+- Conformance cases M1/M2/M4 (drafts in the agent report): add to a `math` group.
+
 ## Known risk, not scheduled
 
 - PILOT's prover context is all-or-nothing (`drive_setup.py:300-385`). Any compile or prover failure silently strips
