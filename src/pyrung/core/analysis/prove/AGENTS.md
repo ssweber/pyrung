@@ -44,7 +44,7 @@ Each module has a docstring with implementation details. This map is for navigat
 - **`kernel.py`** — Kernel integration. Snapshot/restore, state key extraction, edge compression, live input caching. See docstring for state key composition.
 - **`expr.py`** — Expression tree helpers. Partial evaluation, tag reference collection, atom indexing, edge-bearing input partition.
 - **`independence.py`** — Static independence relation (single-scan commutativity of input actions) and free-input factoring partition. Used by BFS for factored evaluation. Also provides `_find_bridge_tags` for Intractable hint generation.
-- **`system_points.py`** — System-tag model for the kernel: power-on constants, `first_scan` as a stateful bit, scan-start resets of fault/command bits, and which scan-, clock- and time-derived tags BFS explores as free inputs.
+- **`system_points.py`** — System-tag model for the kernel: power-on constants, `first_scan` as a stateful bit, scan-start resets of fault/command bits, and which scan-, clock- and time-derived tags BFS explores as free inputs. Fault flags a property reads but no rung does get their implicit writers from a `build_program_graph(observed_faults=...)` variant (`passes._observed_fault_flags`).
 - **`inputs.py`** — Input-group detection and successor enumeration. Cross-product of three dimensions: edge single-flips, encoder-group canonicals, free-input combos.
 - **`elision/`** — Slice-based state-key elision.
   - **`__init__.py`** — Pipeline entry point (delegates to slice.py).

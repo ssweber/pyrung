@@ -13,11 +13,14 @@ from pyrung.core import (
     Int,
     Program,
     Rung,
+    calc,
+    call,
     copy,
     fall,
     latch,
     out,
     rise,
+    subroutine,
     system,
 )
 from pyrung.core.analysis.prove import (
@@ -31,6 +34,7 @@ from pyrung.core.analysis.prove.passes import _OptConfig
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
 S = system.sys
+F = system.fault
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
@@ -229,6 +233,128 @@ class TestScanStartResets:
                 latch(system.rtc.apply_date)
             with Rung(system.rtc.apply_date):
                 latch(phase)
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+
+def _divisor(name: str, *, zero: bool = True) -> Int:
+    choices = {1: "one", 0: "zero"} if zero else {1: "one", 2: "two"}
+    return Int(name, external=True, choices=choices, default=1)
+
+
+class TestFaultFlags:
+    """Instructions set fault flags; a rung reading one depends on the operands."""
+
+    def test_division_fault_is_reachable(self):
+        divisor = _divisor("Divisor")
+        quotient = Int("Quotient")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(100 / divisor, quotient)
+            with Rung(F.division_error):
+                out(hit)
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_no_division_fault_without_a_zero_divisor(self):
+        divisor = _divisor("Divisor", zero=False)
+        quotient = Int("Quotient")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(100 / divisor, quotient)
+            with Rung(F.division_error):
+                out(hit)
+        assert isinstance(always(logic, ~hit), Proven)
+
+    def test_fault_flag_is_the_property(self):
+        first = _divisor("First", zero=False)
+        second = _divisor("Second")
+        q1 = Int("Q1")
+        q2 = Int("Q2")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(100 / first, q1)
+            with Rung():
+                calc(100 / second, q2)
+        result = always(logic, ~F.division_error)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "fault.division_error")
+
+    def test_fault_flag_clears_before_the_next_scan(self):
+        divisor = _divisor("Divisor")
+        quotient = Int("Quotient")
+        seen = Bool("Seen")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung(~F.division_error, seen):
+                out(hit)
+            with Rung():
+                calc(100 / divisor, quotient)
+            with Rung(F.division_error):
+                latch(seen)
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_rise_of_a_fault_flag(self):
+        divisor = _divisor("Divisor")
+        quotient = Int("Quotient")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(100 / divisor, quotient)
+            with Rung(rise(F.division_error)):
+                out(hit)
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_out_of_range_fault_from_calc(self):
+        scale = Int("Scale", external=True, choices={1: "one", 100: "big"}, default=1)
+        product = Int("Product")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(scale * 1000, product)
+            with Rung(F.out_of_range):
+                out(hit)
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_division_fault_inside_a_subroutine(self):
+        divisor = _divisor("Divisor")
+        quotient = Int("Quotient")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with subroutine("work"):
+                with Rung():
+                    calc(100 / divisor, quotient)
+            with Rung():
+                call("work")
+            with Rung(F.division_error):
+                out(hit)
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_faults_from_independent_inputs_compose(self):
+        first = _divisor("First")
+        second = _divisor("Second")
+        q1 = Int("Q1")
+        q2 = Int("Q2")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(100 / first, q1)
+            with Rung():
+                calc(100 / second, q2)
+            with Rung(F.division_error):
+                out(hit)
         result = always(logic, ~hit)
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "Hit")

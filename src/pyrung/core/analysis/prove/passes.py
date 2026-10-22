@@ -52,7 +52,12 @@ from .classify import (
 )
 from .elision import _elide_scan_local_stateful_dims
 from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
-from .expr import _build_atom_index, _collect_atoms_for_tag, _partition_edge_bearing_inputs
+from .expr import (
+    _build_atom_index,
+    _collect_atoms_for_tag,
+    _partition_edge_bearing_inputs,
+    _referenced_tags,
+)
 from .inputs import (
     _detect_auto_joint_inputs,
     _detect_exclusive_input_groups,
@@ -62,7 +67,12 @@ from .inputs import (
 )
 from .kernel import _collect_edge_tag_exprs, _step_compiled_kernel
 from .results import Decision, Intractable, Journal, TagEntry
-from .system_points import SystemPointModel, build_system_point_model, free_system_tags
+from .system_points import (
+    FAULT_FLAGS,
+    SystemPointModel,
+    build_system_point_model,
+    free_system_tags,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -793,8 +803,24 @@ _OPT_TOGGLE_FIELDS = tuple(f for f in _OptConfig.__dataclass_fields__ if f != "d
 _DEFAULT_OPT_CONFIG = _OptConfig()
 
 
+def _observed_fault_flags(ctx: _PassContext) -> frozenset[str]:
+    """Fault flags the property or projection reads.
+
+    A callable property (no scope, no projection) may read any of them.  The
+    ``how()`` domain prior keeps the program's own graph.
+    """
+    if ctx.domains_only:
+        return frozenset()
+    if ctx.scope is None and ctx.project is None:
+        return FAULT_FLAGS
+    observed = set(ctx.scope or ()) | set(ctx.project or ())
+    for expr in ctx.extra_exprs or ():
+        observed.update(_referenced_tags(expr))
+    return FAULT_FLAGS & observed
+
+
 def _pass_build_graph(ctx: _PassContext) -> None:
-    ctx.graph = build_program_graph(ctx.program)
+    ctx.graph = build_program_graph(ctx.program, observed_faults=_observed_fault_flags(ctx))
     ctx.all_exprs = _collect_all_exprs(ctx.program, ctx.graph, scope=ctx.scope)
     if ctx.extra_exprs:
         ctx.all_exprs = ctx.all_exprs + ctx.extra_exprs

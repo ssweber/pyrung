@@ -615,7 +615,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"BlockCopyEnable"}),
         data_reads=frozenset({"BlockSrc1", "BlockSrc2"}),
         writes=frozenset({"BlockDest1", "BlockDest2"}),
-        implicit_writes=frozenset({"fault.out_of_range"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "blockcopy:to_value",
@@ -624,7 +624,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"BlockValueEnable"}),
         data_reads=frozenset({"BlockValueChars1", "BlockValueChars2"}),
         writes=frozenset({"BlockValueDest1", "BlockValueDest2"}),
-        implicit_writes=frozenset({"fault.out_of_range"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "blockcopy:to_ascii",
@@ -633,7 +633,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"BlockAsciiEnable"}),
         data_reads=frozenset({"BlockAsciiChars1", "BlockAsciiChars2"}),
         writes=frozenset({"BlockAsciiDest1", "BlockAsciiDest2"}),
-        implicit_writes=frozenset({"fault.out_of_range"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "fill",
@@ -642,6 +642,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"FillEnable"}),
         data_reads=frozenset({"FillSource"}),
         writes=frozenset({"FillDest1", "FillDest2"}),
+        implicit_writes=frozenset({"fault.address_error"}),
     ),
     GraphCase(
         "pack_bits",
@@ -904,9 +905,12 @@ def test_instruction_graph_matrix(case: GraphCase) -> None:
         assert tag_name in graph.def_use_chains
         assert any(version.defined_at == idx for version in graph.def_use_chains[tag_name])
 
+    # No rung reads the fault flags, so their implicit writes are dead and
+    # stay out of writers_of (see test_graph's fault-reader cases).
     for tag_name in case.implicit_writes:
         assert tag_name not in graph.writers_of
         assert tag_name in graph.tags
+        assert tag_name in graph.unread_fault_writes
 
 
 def test_reverse_edges_cover_supported_and_conservative_copy_family_shapes() -> None:
@@ -1170,3 +1174,44 @@ def test_hidden_memory_info_tracks_shift_and_drums() -> None:
 
     assert {"ShiftBits1", "ShiftBits2"} <= set(hidden_writes)
     assert oneshot_writes == ()
+
+
+def _division_fault_reader_case(*, read_fault: bool) -> Program:
+    from pyrung.core import system
+
+    divisor = Int("FaultDivisor")
+    quotient = Int("FaultQuotient")
+    hit = Bool("FaultHit")
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(100 / divisor, quotient)
+        if read_fault:
+            with Rung(system.fault.division_error):
+                out(hit)
+    return logic
+
+
+def test_read_fault_flag_counts_its_implicit_writers() -> None:
+    graph = build_program_graph(_division_fault_reader_case(read_fault=True))
+
+    assert graph.writers_of["fault.division_error"] == frozenset({0})
+    assert "fault.division_error" in graph.fault_writes
+    assert "FaultDivisor" in graph.upstream_slice("FaultHit")
+    assert "FaultHit" in graph.downstream_slice("FaultDivisor")
+    chain = graph.def_use_chains["fault.division_error"]
+    assert any(version.defined_at == 0 and 1 in version.read_by for version in chain)
+    # The flag nobody reads stays out.
+    assert "fault.out_of_range" not in graph.writers_of
+
+
+def test_observed_fault_flag_counts_its_implicit_writers() -> None:
+    logic = _division_fault_reader_case(read_fault=False)
+    base = build_program_graph(logic)
+    assert "fault.division_error" not in base.writers_of
+
+    observed = build_program_graph(logic, observed_faults=("fault.division_error",))
+    assert observed is not base
+    assert observed.writers_of["fault.division_error"] == frozenset({0})
+    assert "FaultDivisor" in observed.upstream_slice("fault.division_error")
+    assert build_program_graph(logic, observed_faults=("fault.division_error",)) is observed
+    assert build_program_graph(logic) is base

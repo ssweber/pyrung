@@ -100,7 +100,7 @@ _FREE_WHEN_WRITTEN: dict[str, frozenset[str]] = {
 }
 
 # Reset by ``SystemPointRuntime.on_scan_start`` before the logic runs.
-_SCAN_START_RESETS: dict[str, Any] = {
+SCAN_START_RESETS: dict[str, Any] = {
     _fault.division_error.name: False,
     _fault.out_of_range.name: False,
     _fault.address_error.name: False,
@@ -113,6 +113,11 @@ _SCAN_START_RESETS: dict[str, Any] = {
     _sd.eject_cmd.name: False,
     _sd.delete_all_cmd.name: False,
 }
+
+# Fault flags instructions set implicitly (``Instruction._fault_writes``).
+FAULT_FLAGS: frozenset[str] = frozenset(
+    {_fault.division_error.name, _fault.out_of_range.name, _fault.address_error.name}
+)
 
 # Fallback domains for free system tags that no comparison partitions.
 _FREE_DOMAINS: dict[str, tuple[Any, ...]] = {
@@ -207,7 +212,7 @@ def build_system_point_model(
         after_scan.append((FIRST_SCAN, False))
     scan_start = tuple(
         (name, value)
-        for name, value in sorted(_SCAN_START_RESETS.items())
+        for name, value in sorted(SCAN_START_RESETS.items())
         if name in referenced and name not in free
     )
     if not (power_on or scan_start or after_scan):
@@ -221,8 +226,10 @@ def build_system_point_model(
 
 
 __all__ = [
+    "FAULT_FLAGS",
     "FIRST_SCAN",
     "FREE_SYSTEM_CAVEAT",
+    "SCAN_START_RESETS",
     "SystemPointModel",
     "build_system_point_model",
     "free_system_domain",

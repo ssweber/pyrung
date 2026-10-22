@@ -129,6 +129,7 @@ class PackTextInstruction(OneShotMixin, Instruction):
 
     _reads = ("source_range",)
     _writes = ("dest",)
+    _fault_writes = ("fault.out_of_range",)
     _conditions = ()
     _structural_fields = ("allow_whitespace",)
 

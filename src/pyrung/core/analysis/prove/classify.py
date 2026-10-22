@@ -96,7 +96,12 @@ from .absorb import (
 from .expr import _build_atom_index, _collect_atoms_for_tag, _referenced_tags
 from .kernel import _restore_kernel, _snapshot_kernel, _step_compiled_kernel
 from .results import PENDING, Intractable
-from .system_points import FIRST_SCAN, free_system_domain, free_system_tags
+from .system_points import (
+    FIRST_SCAN,
+    SCAN_START_RESETS,
+    free_system_domain,
+    free_system_tags,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph, RungNode
@@ -283,9 +288,10 @@ def _collect_all_exprs(
                     exprs.append(_condition_to_expr(cond))
 
     for node in graph.rung_nodes:
-        if not node.guard_reads or not node.writes:
+        node_writes = graph.node_writes(node)
+        if not node.guard_reads or not node_writes:
             continue
-        if upstream is not None and not (node.writes & upstream):
+        if upstream is not None and not (node_writes & upstream):
             continue
         exprs.extend(return_early_guard_exprs(program, node))
 
@@ -2498,6 +2504,10 @@ def _classify_dimensions_from_graph(
                 continue
             if tag_name not in free_system:
                 continue
+        elif model_system_points and tag_name in SCAN_START_RESETS and tag_name not in free_system:
+            # Reset before every scan, so no scan reads a previous scan's value.
+            combinational.add(tag_name)
+            continue
 
         if role == TagRole.INPUT or not is_written or tag_name in receive_dest_names:
             if scope_input_tags is not None and tag_name not in scope_input_tags:

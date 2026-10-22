@@ -88,6 +88,16 @@ def instruction_write_targets(instr: Any) -> tuple[Any, ...]:
     return tuple(targets)
 
 
+def instruction_fault_writes(instr: Any) -> tuple[str, ...]:
+    """System fault flags *instr* can set, from its ``_fault_writes`` declaration.
+
+    Kept apart from :func:`instruction_write_targets`: fault flags are
+    read-only system tags the program cannot address, so write-target
+    consumers (read-only and ownership lints) must not see them.
+    """
+    return tuple(getattr(type(instr), "_fault_writes", ()))
+
+
 def static_write_target_names(target: Any) -> frozenset[str]:
     """Concrete names represented by one safe, statically resolved target.
 
@@ -112,6 +122,7 @@ def instruction_writes_tag(instr: Any, tag_name: str) -> bool:
 
 
 __all__ = [
+    "instruction_fault_writes",
     "instruction_write_targets",
     "instruction_writes_tag",
     "static_write_target_names",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
 from enum import Enum
@@ -12,11 +13,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from pyrung.core.condition import Condition
 from pyrung.core.expression import Expression
 from pyrung.core.instruction.base import Instruction
-from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
-from pyrung.core.instruction.data_transfer import BlockCopyInstruction, CopyInstruction
-from pyrung.core.instruction.packing import PackTextInstruction
 from pyrung.core.memory_block import (
     Block,
     BlockRange,
@@ -27,7 +25,7 @@ from pyrung.core.memory_block import (
 from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
 
-from .write_sites import instruction_write_targets
+from .write_sites import instruction_fault_writes, instruction_write_targets
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -133,6 +131,15 @@ class ProgramGraph:
     block_ranges: dict[str, list[str]]  # range label → member tag names
     pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
     indirect_writes: tuple[IndirectWriteRef, ...] = ()
+    # Fault flags whose implicit writes (``RungNode.implicit_writes``) count as
+    # writes here: the ones a rung reads, plus any the caller observes
+    # (``build_program_graph(observed_faults=...)``).  A fault write nothing
+    # reads is dead, so it stays out of ``writers_of`` and the cones.
+    fault_writes: frozenset[str] = frozenset()
+    unread_fault_writes: frozenset[str] = frozenset()
+    _observed_variants: dict[frozenset[str], ProgramGraph] | None = field(
+        default=None, init=False, repr=False
+    )
     _main_node_index: dict[int, int] | None = field(default=None, init=False, repr=False)
     _call_site_cache: dict[str, frozenset[int]] | None = field(default=None, init=False, repr=False)
     _call_sites_cache: tuple[CallSite, ...] | None = field(default=None, init=False, repr=False)
@@ -160,6 +167,12 @@ class ProgramGraph:
     @classmethod
     def from_program(cls, program: Program) -> ProgramGraph:
         return build_program_graph(program)
+
+    def node_writes(self, node: RungNode) -> frozenset[str]:
+        """Tags *node* writes: its destinations plus the fault flags that count."""
+        if node.implicit_writes and self.fault_writes:
+            return node.writes | (node.implicit_writes & self.fault_writes)
+        return node.writes
 
     def main_node_by_rung(self) -> dict[int, int]:
         """Map main-program rung_index → node index for top-level nodes."""
@@ -486,7 +499,7 @@ class ProgramGraph:
             node = self.rung_nodes[rung_idx]
             read_tags.update(node.condition_reads)
             read_tags.update(node.data_reads)
-            for written_tag in node.writes:
+            for written_tag in self.node_writes(node):
                 write_tags.add(written_tag)
                 if written_tag not in visited_tags and written_tag not in barrier_tags:
                     tag_queue.append(written_tag)
@@ -556,7 +569,7 @@ class ProgramGraph:
                     continue
                 visited_rungs.add(rung_idx)
                 node = self.rung_nodes[rung_idx]
-                for written_tag in node.writes:
+                for written_tag in self.node_writes(node):
                     if written_tag not in visited_tags:
                         queue.append(written_tag)
 
@@ -993,7 +1006,10 @@ def _extract_rung_node(
 
 
 def _extract_instruction_event(
-    instr: Any, node_index: int, tag_refs: dict[str, Tag]
+    instr: Any,
+    node_index: int,
+    tag_refs: dict[str, Tag],
+    fault_writes: frozenset[str] = frozenset(),
 ) -> _AccessEvent:
     """Extract one instruction's ordered reads/writes."""
     condition_reads: set[str] = set()
@@ -1004,10 +1020,9 @@ def _extract_instruction_event(
     for field_name in getattr(cls, "_reads", ()):
         data_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
 
-    instruction_writes, target_reads, _implicit_writes = _extract_instruction_writes(
-        instr, tag_refs
-    )
+    instruction_writes, target_reads, implicit_writes = _extract_instruction_writes(instr, tag_refs)
     writes.update(instruction_writes)
+    writes.update(implicit_writes & fault_writes)
     data_reads.update(target_reads)
 
     for field_name in getattr(cls, "_conditions", ()):
@@ -1031,8 +1046,12 @@ def _extract_instruction_writes(
     Declared writes, declared status fields, and static sequential-copy fan-out
     come from :mod:`write_sites`.  This PDG-specific layer retains indirect
     address reads and conservative regions.  Returns
-    ``(writes, reads, implicit_writes)`` — fault writes are tracked separately
-    so they don't pollute ``writers_of`` or cone computations.
+    ``(writes, reads, implicit_writes)``.  The implicit writes are the fault
+    flags the instruction can set (``_fault_writes``); they stay out of the
+    node's ``writes`` (an instruction's declared destinations) and count in
+    ``writers_of``, the def-use chains and the cones for the flags a rung reads
+    (``ProgramGraph.fault_writes``), so ``Rung(fault.division_error)`` depends
+    on the divisor.
     """
     writes: set[str] = set()
     reads: set[str] = set()
@@ -1052,23 +1071,11 @@ def _extract_instruction_writes(
 
 def _implicit_fault_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:
     """Return implicit system fault tags written by *instr*."""
-    from pyrung.core.system_points import system
+    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
     writes: set[str] = set()
-    if isinstance(instr, CalcInstruction):
-        _register_tag(system.fault.division_error, tag_refs, writes)
-        _register_tag(system.fault.out_of_range, tag_refs, writes)
-        return writes
-
-    if isinstance(instr, CopyInstruction):
-        _register_tag(system.fault.address_error, tag_refs, writes)
-        _register_tag(system.fault.out_of_range, tag_refs, writes)
-        return writes
-
-    if isinstance(instr, BlockCopyInstruction | PackTextInstruction):
-        _register_tag(system.fault.out_of_range, tag_refs, writes)
-        return writes
-
+    for name in instruction_fault_writes(instr):
+        _register_tag(SYSTEM_TAGS_BY_NAME[name], tag_refs, writes)
     return writes
 
 
@@ -1096,13 +1103,14 @@ def _build_access_sequence(
     program: Program,
     node_index_by_rung: dict[int, int],
     tag_refs: dict[str, Tag],
+    fault_writes: frozenset[str] = frozenset(),
 ) -> tuple[_AccessEvent, ...]:
     """Build execution-ordered access events following runner semantics.
 
     Subroutines are inlined at their call sites so that def-use chains
     correctly reflect cross-subroutine ordering (e.g. a main-program rung
     after a ``call()`` reads the version written by the subroutine, not the
-    scan-entry version).
+    scan-entry version).  Implicit fault writes count for *fault_writes* only.
     """
     from pyrung.core.rung import Rung as RungClass
 
@@ -1154,7 +1162,7 @@ def _build_access_sequence(
                 walk_execution(item)
                 continue
 
-            instruction_event = _extract_instruction_event(item, node_index, tag_refs)
+            instruction_event = _extract_instruction_event(item, node_index, tag_refs, fault_writes)
             if (
                 instruction_event.condition_reads
                 or instruction_event.data_reads
@@ -1164,7 +1172,9 @@ def _build_access_sequence(
 
             if isinstance(item, ForLoopInstruction):
                 for child_instr in item.instructions:
-                    child_event = _extract_instruction_event(child_instr, node_index, tag_refs)
+                    child_event = _extract_instruction_event(
+                        child_instr, node_index, tag_refs, fault_writes
+                    )
                     if child_event.condition_reads or child_event.data_reads or child_event.writes:
                         events.append(child_event)
 
@@ -1400,12 +1410,35 @@ def collect_program_tags(program: Program) -> tuple[Tag, ...]:
     return tuple(tag_refs[name] for name in sorted(tag_refs))
 
 
-def build_program_graph(program: Program) -> ProgramGraph:
-    """Build the static PDG summary for a Program."""
-    cached_graph = getattr(program, "_cached_graph", None)
-    if cached_graph is not None:
-        return cached_graph
+def build_program_graph(
+    program: Program,
+    *,
+    observed_faults: Collection[str] = (),
+) -> ProgramGraph:
+    """Build the static PDG summary for a Program.
 
+    An instruction's implicit fault writes (``_fault_writes``) count as writes
+    for the fault flags some rung reads.  *observed_faults* names flags read
+    from outside the program (a verifier property); their writes count too,
+    in a graph variant cached beside the program's own.
+    """
+    cached_graph = getattr(program, "_cached_graph", None)
+    if cached_graph is None:
+        cached_graph = _build_program_graph(program, frozenset())
+        program._cached_graph = cached_graph
+    extra = frozenset(observed_faults) & cached_graph.unread_fault_writes
+    if not extra:
+        return cached_graph
+    variants = cached_graph._observed_variants
+    if variants is None:
+        variants = cached_graph._observed_variants = {}
+    graph = variants.get(extra)
+    if graph is None:
+        graph = variants[extra] = _build_program_graph(program, extra)
+    return graph
+
+
+def _build_program_graph(program: Program, observed_faults: frozenset[str]) -> ProgramGraph:
     tag_refs: dict[str, Tag] = {}
     rung_nodes: list[RungNode] = []
     node_index_by_rung: dict[int, int] = {}
@@ -1467,8 +1500,8 @@ def build_program_graph(program: Program) -> ProgramGraph:
     readers_of_mut: dict[str, set[int]] = defaultdict(set)
     all_readers_of_mut: dict[str, set[int]] = defaultdict(set)
     writers_of_mut: dict[str, set[int]] = defaultdict(set)
-    access_events = _build_access_sequence(program, node_index_by_rung, tag_refs)
 
+    implicit: set[str] = set()
     for node_index, node in enumerate(rung_nodes):
         for tag_name in node.condition_reads | node.data_reads:
             readers_of_mut[tag_name].add(node_index)
@@ -1476,6 +1509,15 @@ def build_program_graph(program: Program) -> ProgramGraph:
             all_readers_of_mut[tag_name].add(node_index)
         for tag_name in node.writes:
             writers_of_mut[tag_name].add(node_index)
+        implicit.update(node.implicit_writes)
+    fault_writes = frozenset(
+        name for name in implicit if name in all_readers_of_mut or name in observed_faults
+    )
+    if fault_writes:
+        for node_index, node in enumerate(rung_nodes):
+            for tag_name in node.implicit_writes & fault_writes:
+                writers_of_mut[tag_name].add(node_index)
+    access_events = _build_access_sequence(program, node_index_by_rung, tag_refs, fault_writes)
 
     _augment_return_early_guards(rung_nodes, program, tag_refs)
     frozen_nodes = tuple(rung_nodes)
@@ -1491,9 +1533,10 @@ def build_program_graph(program: Program) -> ProgramGraph:
         block_ranges=range_acc,
         pointer_tags=_collect_pointer_tags(program),
         indirect_writes=indirect_writes,
+        fault_writes=fault_writes,
+        unread_fault_writes=frozenset(implicit) - fault_writes,
     )
     graph.tag_roles = classify_tags(graph)
-    program._cached_graph = graph
     return graph
 
 

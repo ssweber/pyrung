@@ -132,6 +132,7 @@ class CalcInstruction(OneShotMixin, Instruction):
 
     _reads = ("expression",)
     _writes = ("dest",)
+    _fault_writes = ("fault.division_error", "fault.out_of_range")
     _conditions = ()
     _structural_fields = ("mode",)
 

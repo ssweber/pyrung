@@ -52,6 +52,9 @@ class Instruction(ABC):
     _conditions: tuple[str, ...] = ()
     _structural_fields: tuple[str, ...] = ()
     _exclusive_fields: tuple[str, ...] = ()
+    # System fault flags (``fault.*`` tag names) the instruction can set while
+    # executing, beyond its declared destinations.
+    _fault_writes: tuple[str, ...] = ()
     _executor_kind: int = _EXECUTOR_INSTRUCTION
 
     @abstractmethod

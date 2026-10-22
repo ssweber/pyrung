@@ -58,6 +58,7 @@ class CopyInstruction(OneShotMixin, Instruction):
 
     _reads = ("source",)
     _writes = ("dest",)
+    _fault_writes = ("fault.address_error", "fault.out_of_range")
     _conditions = ()
     _structural_fields = ("convert",)
 
@@ -281,6 +282,7 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
 
     _reads = ("source",)
     _writes = ("dest",)
+    _fault_writes = ("fault.address_error", "fault.out_of_range")
     _conditions = ()
     _structural_fields = ("convert",)
 
@@ -370,6 +372,7 @@ class FillInstruction(OneShotMixin, Instruction):
 
     _reads = ("value",)
     _writes = ("dest",)
+    _fault_writes = ("fault.address_error",)
     _conditions = ()
     _structural_fields = ()
 
