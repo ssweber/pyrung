@@ -1024,15 +1024,16 @@ class TestUnreadAccumulatorFold:
         # The preset is a (far) visible crossing clamped to the run window, so
         # the churn collapses instead of stepping all 500 scans.
         assert counter["n"] <= 12
-        # The timer never completes; its accumulator tracks elapsed time.  The
-        # fold lands the time boundary exactly (advancing the requested 5.0 s),
-        # while scan-by-scan drifts one extra scan from float `t += dt` error —
-        # so they agree to within one dt (folding to a *time* boundary can't be
-        # bit-equal to a drifting accumulation; folding to an acc crossing is —
-        # see test_run_until_accumulator_threshold_does_not_overshoot).
+        # The timer never completes; the fold runs the scans stepping runs and
+        # replays the timer's per-scan carry, so the accumulator and its carry
+        # are bit-equal.
         assert plc_fold.state.tags["Tmr_Done"] is False
         assert plc_fold.state.timestamp >= 0.01 + 5.0 - 1e-9  # advanced the full 5.0 s
-        assert abs(plc_fold.state.tags["Tmr_Acc"] - plc_nofold.state.tags["Tmr_Acc"]) <= 10
+        assert plc_fold.state.scan_id == plc_nofold.state.scan_id
+        assert plc_fold.state.tags["Tmr_Acc"] == plc_nofold.state.tags["Tmr_Acc"]
+        assert plc_fold.state.memory.get("_frac:Tmr_Acc") == plc_nofold.state.memory.get(
+            "_frac:Tmr_Acc"
+        )
 
     def test_run_until_accumulator_threshold_does_not_overshoot(self) -> None:
         prog, tmr = self._unread_timer_program(preset_ms=100_000)
@@ -2550,6 +2551,67 @@ class TestClockEdgeProbe:
     @pytest.mark.parametrize("n", [49, 50, 51, 52, 99, 100, 101, 150])
     def test_edge_pulse_stays_on_its_own_scan(self, n: int) -> None:
         _assert_fold_is_exact(self._edge_pulses, _scans(n))
+
+
+class TestTimerCarryExact:
+    """A timer adds ``dt`` in its unit plus a float carry each scan; a fold
+    lands it where that per-scan recurrence would, not where one aggregate
+    ``skip * dt`` floors.  An earlier rung reading the accumulator sees the
+    value the last folded scan starts from."""
+
+    @staticmethod
+    def _timer_with_reader(unit: str, preset: int) -> Callable[[], Program]:
+        def build() -> Program:
+            from pyrung import copy
+
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    copy(Tmr.Acc, Int("Snap"))
+                with Rung():
+                    on_delay(Tmr, preset, unit)
+                with Rung(Tmr.Done):
+                    out(Bool("Hit"))
+            return prog
+
+        return build
+
+    @pytest.mark.parametrize(
+        ("unit", "preset", "dt"),
+        [("s", 61, 0.1), ("ms", 25_200, 0.7), ("ms", 30_000, 0.3), ("min", 1, 0.013)],
+    )
+    def test_run_until_done_matches_stepping(self, unit: str, preset: int, dt: float) -> None:
+        _assert_fold_is_exact(
+            self._timer_with_reader(unit, preset), _until_hit(int(4 * preset / dt) + 10), dt=dt
+        )
+
+    @pytest.mark.parametrize(("unit", "dt", "n"), [("s", 0.1, 3000), ("ms", 0.3, 87)])
+    def test_budget_run_matches_stepping(self, unit: str, dt: float, n: int) -> None:
+        _assert_fold_is_exact(self._timer_with_reader(unit, 30_000), _scans(n), dt=dt)
+
+    @pytest.mark.parametrize(("dt", "n"), [(0.1, 300), (0.7, 100), (0.013, 3000)])
+    def test_replay_seek_matches_replay_to(self, dt: float, n: int) -> None:
+        plc = PLC(self._timer_with_reader("s", 1_000)(), dt=dt)
+        for _ in range(n):
+            plc.step()
+        target = n - 5
+        sought = plc._replay_seek(target)
+        assert plc._last_replay_seek_stats["kernel_scans"] < n // 2
+        assert _full_state(sought) == _full_state(plc.replay_to(target))
+
+    @pytest.mark.parametrize(
+        ("quantum", "frac"),
+        [(10.0, 0.0), (700.0000000000001, 0.0), (300.0, 0.25), (0.1, 0.0), (1023.5, 0.5)],
+    )
+    def test_closed_form_carry_equals_the_recurrence(self, quantum: float, frac: float) -> None:
+        from pyrung.core.fold import _AccSource, _timer_after, _timer_step, _TimerMove
+
+        src = _AccSource("T_Acc", "T_Done", 32_767, "up", True)
+        move = _TimerMove(src, 0, frac, quantum, quantum)
+        acc, carry = 0, frac
+        for n in range(1, 400):
+            acc, carry = _timer_step(acc, carry, quantum, 32_767)
+            assert _timer_after(move, n) == (acc, carry)
 
 
 class TestFoldLandingCheckpoint:

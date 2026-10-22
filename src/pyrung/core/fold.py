@@ -32,6 +32,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -73,6 +74,7 @@ class _AccSource:
     timed: bool  # True: time-based (dt knob).  False: per-scan (acc patch).
     bidir: bool = False  # CountUp with down_condition — delta sign varies at runtime
     unit: Any = None  # TimeUnit for timed sources; None for counters / synthetic sources.
+    acc_max: int = 32767  # Timed sources: the accumulator's clamp (a time drum's DINT is wider).
 
 
 @dataclass(frozen=True)
@@ -139,6 +141,11 @@ class _FoldContext:
     # may cross ticks (see _TimeMirrors).
     time_mirrors: _TimeMirrors | None = None
 
+    @cached_property
+    def timed_sources(self) -> tuple[_AccSource, ...]:
+        """The time-based sources, whose carry recurrence a fold replays exactly."""
+        return tuple(src for src in self.sources if src.timed)
+
 
 # ── 3. Instruction registry ─────────────────────────────────────────
 
@@ -195,6 +202,7 @@ def _collect_acc_sources(program: Any) -> list[_AccSource]:
             timed=timed,
             bidir=bidir,
             unit=getattr(instr, "unit", None) if timed else None,
+            acc_max=instr._acc_max() if isinstance(instr, TimeDrumInstruction) else 32767,
         )
     return list(out.values())
 
@@ -2387,6 +2395,235 @@ def _modwrap_first_flip(v0: int, c: int, m: int, cmps: list[tuple[str, float]]) 
     return None
 
 
+# Timer carry recurrence.  A timed instruction adds ``quantum + frac`` timer
+# units each scan, keeps the integer part in its accumulator (clamped) and
+# carries the float remainder in ``_frac:<acc>`` memory.  The fold must land
+# every timer exactly where that per-scan recurrence would have put it, float
+# rounding included: one aggregate ``skip * dt`` floors differently.
+
+# Most scans one plan replays a timer carry whose float steps are not exact
+# integer arithmetic.  A crossing beyond it bounds the window here instead.
+_TIMER_REPLAY_CAP = 1_000_000
+
+
+@dataclass(frozen=True)
+class _TimerMove:
+    """A timed source the probe scan advanced by one step of its recurrence."""
+
+    src: _AccSource
+    acc: int
+    frac: float
+    quantum: float
+    delta: float  # the probe's progress, ``acc + frac`` after minus before
+
+
+def _timer_step(acc: int, frac: float, quantum: float, acc_max: int) -> tuple[int, float]:
+    """One scan of the timer recurrence, as the instructions compute it."""
+    units = quantum + frac
+    whole = int(units)
+    return min(acc + whole, acc_max), units - whole
+
+
+def _timer_grid(frac: float, quantum: float) -> tuple[int, int, int, float] | None:
+    """``(Q, F, N, G)`` when the recurrence from *frac* is exact integer arithmetic.
+
+    With ``G`` the unit in the last place of *quantum*, every sum
+    ``quantum + frac`` stays in quantum's binade when ``quantum + 1`` does, so
+    if *frac* lies on the ``G`` grid each float step is exact: in units of
+    ``G`` the carry is ``F + k * Q`` and the timer gains ``(F + k * Q) // N``
+    whole units in ``k`` scans (``N = 1 / G``).  ``None`` otherwise (the
+    recurrence is then replayed scan by scan).
+    """
+    if not (quantum >= 1.0 and math.isfinite(quantum)) or not 0.0 <= frac < 1.0:
+        return None
+    grid = math.ulp(quantum)
+    if grid > 1.0:
+        return None
+    _mant, exp = math.frexp(quantum)
+    if quantum + 1.0 > math.ldexp(1.0, exp):
+        return None
+    f_units = frac / grid
+    if f_units != int(f_units):
+        return None
+    return int(quantum / grid), int(f_units), int(1.0 / grid), grid
+
+
+def _timer_after(move: _TimerMove, n: int) -> tuple[int, float]:
+    """The timer's ``(acc, frac)`` after *n* more scans of its recurrence."""
+    acc, frac, q, acc_max = move.acc, move.frac, move.quantum, move.src.acc_max
+    if n <= 0:
+        return acc, frac
+    grid = _timer_grid(frac, q)
+    if grid is not None:
+        big_q, big_f, big_n, g = grid
+        total = big_f + n * big_q
+        return min(acc + total // big_n, acc_max), (total % big_n) * g
+    for _ in range(n):
+        acc, frac = _timer_step(acc, frac, q, acc_max)
+    return acc, frac
+
+
+def _timer_scans_to_reach(move: _TimerMove, target: int, cap: int | None) -> int | None:
+    """First scan count ``k >= 1`` after which the accumulator is ``>= target``.
+
+    ``None`` when it never gets there.  A replayed (non-integer) carry is
+    searched at most ``cap`` scans (or :data:`_TIMER_REPLAY_CAP`); not found by
+    then returns ``cap + 1``, which bounds a window no farther than the search.
+    """
+    acc, frac, q, acc_max = move.acc, move.frac, move.quantum, move.src.acc_max
+    if acc >= target or target > acc_max or not q > 0.0:
+        return None
+    grid = _timer_grid(frac, q)
+    if grid is not None:
+        big_q, big_f, big_n, _g = grid
+        need = (target - acc) * big_n - big_f
+        return max(1, -(-need // big_q))
+    limit = _TIMER_REPLAY_CAP if cap is None else max(1, min(cap, _TIMER_REPLAY_CAP))
+    for k in range(1, limit + 1):
+        acc, frac = _timer_step(acc, frac, q, acc_max)
+        if acc >= target:
+            return k
+    return limit + 1
+
+
+def _timer_reading(state: Any, acc_name: str) -> tuple[int, float]:
+    """A timer's ``(acc, frac)`` in *state*."""
+    acc = state.tags.get(acc_name, 0)
+    if isinstance(acc, bool) or not isinstance(acc, int):
+        acc = int(acc or 0)
+    return acc, float(state.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
+
+
+def _timer_moves(
+    ctx: _FoldContext, before: tuple[tuple[int, float], ...], state: Any
+) -> tuple[_TimerMove, ...] | None:
+    """The timed sources advancing through the window, or ``None`` if unknown.
+
+    *before* holds each of ``ctx.timed_sources``' readings before the probe
+    scan.  A timer the probe moved by exactly one step of the carry
+    recurrence keeps doing so through the window; one left unchanged, or
+    reset to zero, stays put.  Anything else (two steps in one scan, a patched
+    accumulator, a scan ``dt`` other than the normal one) is not a recurrence
+    the fold can extend, so the window is not certified.
+    """
+    moves: list[_TimerMove] = []
+    dt = ctx.normal_dt
+    for src, (acc_b, frac_b) in zip(ctx.timed_sources, before, strict=True):
+        acc, frac = _timer_reading(state, src.acc_name)
+        if (acc, frac) == (acc_b, frac_b) or (acc == 0 and frac == 0.0):
+            continue
+        if src.unit is None:
+            return None
+        quantum = src.unit.dt_to_units(dt)
+        if (acc, frac) != _timer_step(acc_b, frac_b, quantum, src.acc_max):
+            return None
+        delta = (float(acc) + frac) - (float(acc_b) + frac_b)
+        moves.append(_TimerMove(src, acc, frac, quantum, delta))
+    return tuple(moves)
+
+
+def _timer_integer_target(target: float, strict: bool) -> int | None:
+    """The least integer accumulator value that crosses ``(target, strict)``."""
+    if not math.isfinite(target):
+        return None
+    return math.floor(target) + 1 if strict else math.ceil(target)
+
+
+def _nearest_timer_crossing(
+    ctx: _FoldContext,
+    moves: Sequence[_TimerMove],
+    state: Any,
+    extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None,
+    cap: int | None,
+) -> int | None:
+    """Scans to the nearest crossing of an advancing timer, on its exact recurrence.
+
+    Same thresholds as :func:`_nearest_acc_crossing` (preset, read
+    comparisons, run_until comparisons), resolved to the integer accumulator
+    value the comparisons actually read.  A search never needs to look past
+    *cap* scans: the window is already bounded there.
+    """
+    best: int | None = None
+    for move in moves:
+        src = move.src
+        targets: list[tuple[float, bool]] = []
+        preset = _resolve_num(src.preset, state)
+        if preset is not None:
+            targets.append((preset, False))
+        elif src.done_bit in ctx.read_done:
+            best = 1 if best is None else min(best, 1)
+            continue
+        cmps = ctx.comparisons.get(src.acc_name, ())
+        if extra_comparisons:
+            cmps = cmps + extra_comparisons.get(src.acc_name, ())
+        unresolved = False
+        for form, operand in cmps:
+            kv = _resolve_num(operand, state)
+            if kv is None:
+                unresolved = True
+                break
+            targets.append(_progress_bound(src.kind, form, kv))
+        if unresolved:
+            best = 1 if best is None else min(best, 1)
+            continue
+        nearest: int | None = None
+        for target, strict in targets:
+            t = _timer_integer_target(target, strict)
+            if t is None or t <= move.acc:
+                continue
+            if t > src.acc_max:
+                # The accumulator clamps first, so this threshold never flips.
+                # It still bounds the window, as a moving source's far threshold
+                # always has: only the window's length depends on it.
+                if move.delta > 0:
+                    pace = _scans_to_cross(move.acc + move.frac, move.delta, target, strict)
+                    if pace is not None:
+                        best = pace if best is None else min(best, pace)
+                continue
+            if nearest is None or t < nearest:
+                nearest = t
+        if nearest is None:
+            continue
+        search = cap if best is None else (best if cap is None else min(cap, best))
+        scans = _timer_scans_to_reach(move, nearest, search)
+        if scans is not None:
+            best = scans if best is None else min(best, scans)
+    return best
+
+
+def _timer_landing(
+    moves: Sequence[_TimerMove], skip: int, normal_dt: float
+) -> tuple[tuple[str, int, float, float], ...] | None:
+    """Pre- and post-landing timer edits that make the macro scan exact.
+
+    The landing scan executes each timer once with ``dt = skip * normal_dt``.
+    Give it the accumulator the last folded scan starts from (what an earlier
+    rung reading it sees when stepping) and a carry chosen so that its one
+    aggregate step adds exactly that scan's increment; afterwards the carry is
+    set to the recurrence's own.  Returns ``(acc_name, acc, frac_in,
+    frac_out)`` per timer, or ``None`` if no such carry exists (it would take
+    a window of about 2**51 timer units).
+    """
+    if skip <= 1 or not moves:
+        return ()
+    landing_dt = skip * normal_dt
+    out: list[tuple[str, int, float, float]] = []
+    for move in moves:
+        acc_last, frac_last = _timer_after(move, skip - 1)
+        units = move.quantum + frac_last
+        increment = int(units)
+        frac_out = units - increment
+        landing_units = move.src.unit.dt_to_units(landing_dt)
+        for bias in (0.5, 0.25, 0.75):
+            frac_in = (increment + bias) - landing_units
+            if int(landing_units + frac_in) == increment:
+                break
+        else:
+            return None
+        out.append((move.src.acc_name, acc_last, frac_in, frac_out))
+    return tuple(out)
+
+
 def _nearest_acc_crossing(
     ctx: _FoldContext,
     before_tot: dict[str, float],
@@ -2397,11 +2634,14 @@ def _nearest_acc_crossing(
     """Scans to the nearest actionable accumulator crossing.
 
     *extra_comparisons* carries thresholds read by the ``run_until`` predicate
-    (e.g. ``Tmr_Acc > 500``); merging them in makes the fold land on the
+    (e.g. ``Ctr_Acc > 500``); merging them in makes the fold land on the
     predicate's threshold instead of skipping to the preset and overshooting.
+    Timed sources are left to :func:`_nearest_timer_crossing`.
     """
     best: int | None = None
     for src in ctx.sources:
+        if src.timed:
+            continue  # exact carry recurrence: see _nearest_timer_crossing
         pb = before_tot.get(src.acc_name)
         pa = after_tot.get(src.acc_name)
         if pb is None or pa is None:
@@ -2765,13 +3005,16 @@ def _do_fold(
     on_kernel_scan: Callable[[int], None] | None = None,
     capture_kernel_scan: _CaptureDecision = False,
     capture_sink: Callable[[int, ConditionViewCapture], None] | None = None,
+    timer_landing: Sequence[tuple[str, int, float, float]] = (),
 ) -> tuple[tuple[str, Any], ...]:
     """Fold ``skip`` pure-accumulation scans into one real step.
 
-    Timers ride the dt knob (the interpreter does ``skip`` scans of dt in the
-    one step); per-scan counters can't be moved by time, so their accumulators
-    are patched forward by ``(skip-1)*delta`` and the step's own ``execute``
-    supplies the final increment, keeping every source in phase.
+    Timers ride the dt knob, set up by *timer_landing* (see
+    :func:`_timer_landing`) so that the one aggregate step lands each timer
+    exactly where ``skip`` ordinary scans would; per-scan counters can't be
+    moved by time, so their accumulators are patched forward by
+    ``(skip-1)*delta`` and the step's own ``execute`` supplies the final
+    increment, keeping every source in phase.
 
     The landing scan stands in for the last of the ``skip`` scans, so it
     starts at the timestamp that scan would have read, ``T0 + (skip - 1) *
@@ -2791,7 +3034,19 @@ def _do_fold(
     positioned = pre_landing
     if skip > 1:
         positioned = pre_landing.set(timestamp=start_timestamp + (skip - 1) * ctx.normal_dt)
-        _replace_tip_state(runner, positioned)
+        timer_accs: dict[str, Any] | None = None
+        if timer_landing:
+            # Direct tip edits, not patches: they are not inputs (a replay
+            # re-derives them by stepping), and a timer in the synthesis plant
+            # runs before the patch drain.
+            timer_accs = {name: acc for name, acc, _fi, _fo in timer_landing}
+            positioned = positioned.set(
+                tags=positioned.tags.update(timer_accs),
+                memory=positioned.memory.update(
+                    {f"_frac:{name}": frac_in for name, _acc, frac_in, _fo in timer_landing}
+                ),
+            )
+        _replace_tip_state(runner, positioned, timer_accs)
         runner._landing_commit_dt = ctx.normal_dt
     runner._dt_override_for_next_scan = skip * ctx.normal_dt
     try:
@@ -2811,26 +3066,41 @@ def _do_fold(
     if on_kernel_scan is not None:
         on_kernel_scan(runner._state.scan_id)
 
-    _replace_tip_state(
-        runner,
-        runner._state.set(
-            scan_id=runner._state.scan_id + skip - 1,
-            timestamp=start_timestamp + skip * ctx.normal_dt,
-        ),
+    landed = runner._state.set(
+        scan_id=runner._state.scan_id + skip - 1,
+        timestamp=start_timestamp + skip * ctx.normal_dt,
     )
+    if timer_landing:
+        landed = landed.set(
+            memory=landed.memory.update(
+                {f"_frac:{name}": frac_out for name, _acc, _fi, frac_out in timer_landing}
+            )
+        )
+    _replace_tip_state(runner, landed)
     if skip > 1:
         runner._checkpoint_fold_landing()
     return tuple(patches.items())
 
 
-def _replace_tip_state(runner: PLC, state: SystemState) -> None:
-    """Install *state* (same tags as the tip) as the tip without a scan.
+def _replace_tip_state(
+    runner: PLC, state: SystemState, tag_edits: dict[str, Any] | None = None
+) -> None:
+    """Install *state* as the tip without a scan.
 
-    Keeps the runner's plain-dict read mirror of the tip tags valid, since only
-    the scan id or timestamp changed.
+    Keeps the runner's plain-dict read mirror of the tip tags valid.  *state*
+    has the tip's tags, plus *tag_edits* when given; any other tag change
+    drops the mirror (the next scan rebuilds it).
     """
     if runner._state_tags_read_cache_state is runner._state:
-        runner._state_tags_read_cache_state = state
+        if tag_edits:
+            cache = runner._state_tags_read_cache
+            if cache is not None:
+                cache.update(tag_edits)
+            runner._state_tags_read_cache_state = state
+        elif state.tags is runner._state.tags:
+            runner._state_tags_read_cache_state = state
+        else:
+            runner._state_tags_read_cache_state = None
     runner._state = state
 
 
@@ -2842,6 +3112,8 @@ class _FoldProbe:
     visible: Any
     timestamp: float
     scan_id: int
+    # ``(acc, frac)`` of each of ``ctx.timed_sources`` before the probe scan.
+    timers: tuple[tuple[int, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2867,6 +3139,9 @@ class _FoldPlan:
     after_totals: dict[str, float]
     promoted: frozenset[str]
     pre_fold_timestamp: float
+    # ``(acc_name, acc, frac_in, frac_out)`` timer edits around the landing
+    # scan (see _timer_landing).
+    timer_landing: tuple[tuple[str, int, float, float], ...] = ()
 
 
 class _OrdinaryFoldStrategy:
@@ -2915,6 +3190,7 @@ class _OrdinaryFoldStrategy:
             visible=_visible_items(state, self.exclude),
             timestamp=state.timestamp,
             scan_id=state.scan_id,
+            timers=tuple(_timer_reading(state, src.acc_name) for src in self.ctx.timed_sources),
         )
 
     def plan(
@@ -2959,6 +3235,9 @@ class _OrdinaryFoldStrategy:
             state.timestamp,
             promoted,
         )
+        timer_moves = _timer_moves(self.ctx, probe.timers, state)
+        if timer_moves is None:
+            return None
         after_totals = _acc_totals(state, self.ctx.sources)
         acc_scans = _nearest_acc_crossing(
             self.ctx,
@@ -2989,6 +3268,14 @@ class _OrdinaryFoldStrategy:
         )
         if clock_gap is not None:
             skip = min(skip, clock_gap) if skip is not None else clock_gap
+        if timer_moves:
+            # Searched no farther than the window is already bounded.
+            cap = skip if skip is not None else max_skip
+            timer_scans = _nearest_timer_crossing(
+                self.ctx, timer_moves, state, self.extra_comparisons, cap
+            )
+            if timer_scans is not None:
+                skip = min(skip, timer_scans - 1) if skip is not None else timer_scans - 1
         if max_skip is not None:
             if skip is not None:
                 skip = min(skip, max_skip)
@@ -3004,11 +3291,15 @@ class _OrdinaryFoldStrategy:
                 skip = min(skip, rtc_gap)
         if skip is None or skip < min_skip:
             return None
+        timer_landing = _timer_landing(timer_moves, skip, self.ctx.normal_dt)
+        if timer_landing is None:
+            return None
         return _FoldPlan(
             skip=skip,
             after_totals=after_totals,
             promoted=promoted,
             pre_fold_timestamp=state.timestamp,
+            timer_landing=timer_landing,
         )
 
     def _rtc_gap(
@@ -3093,6 +3384,7 @@ class _OrdinaryFoldStrategy:
             on_kernel_scan=on_kernel_scan,
             capture_kernel_scan=capture_kernel_scan,
             capture_sink=capture_sink,
+            timer_landing=plan.timer_landing,
         )
         return self.finish(runner._state, probe, plan, patches=patches)
 
