@@ -14,7 +14,7 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - `make test-hypothesis` — property-based tests
 - `make test-soundness` — prove agreement checks (`--prove-agreement`)
 - `make test-fuzz` — fuzzer suite
-- `make test-conformance` — conformance cases over Modbus TCP against the local soft PLC (`PLC=host[:port]` for a real CLICK)
+- `make test-conformance` — conformance cases over Modbus TCP against the local soft PLC (`PLC=host[:port]` for a real CLICK, `GROUP=name` for some groups); `make conformance-export OUT=dir` writes the CLICK project
 - `make test-integration` — integration tests (needs hardware/network)
 - Conventional Commits (`feat(core):`, `fix(ladder):`, etc.)
 
@@ -94,7 +94,7 @@ src/pyrung/
 - `src/pyrung/core/analysis/pilot/AGENTS.md` — PILOT steering invariants, actual control flow, module map
 - `editors/vscode/pyrung-debug/AGENTS.md` — VS Code extension event architecture, key files
 - `docs/AGENTS.md` — Documentation tone/style, API design decisions, technical details
-- `tests/conformance/AGENTS.md` — Conformance suite protocol, slot layout, wire pacing, coverage checklist
+- `tests/conformance/AGENTS.md` — Conformance suite protocol, groups and manifest, register layout, wire pacing, coverage checklist
 - `tests/fuzz/reproducers/AGENTS.md` — Fuzz reproducer workflow, diagnose script usage
 
 ## Docs Index

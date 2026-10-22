@@ -4,13 +4,15 @@ Plain-English cases for PLC semantics. Same case, same ladder, same check -- run
 
 A conformance suite in the Modbus sense: the harness observes the implementation **only through registers**. The ladder computes its own answer and writes it into its slot; the harness writes `Cmd`, waits, and reads the slot back.
 
+The whole suite is **one CLICK program**: a main program that calls one subroutine per group (`Conf_Rungs`, later `Conf_Math`, `Conf_Drum`, ...). Load the full project once; after that, editing a group means replacing that one subroutine and rerunning that group.
+
 | Run | Where | How | Pacing |
 |---|---|---|---|
-| In-process | `make test` (unmarked) | `run(cases)` on a fixed-step `PLC` | exact scan counts |
-| Modbus, local sim | `make test-conformance` (marker `conformance`) | `run_modbus(cases)` | wall clock |
-| Modbus, real CLICK | `make test-conformance PLC=host[:port]` (or `--conformance-plc`, or env `PYRUNG_CONFORMANCE_PLC`) | `run_modbus(cases, "host:port")` | wall clock |
+| In-process | `make test` (unmarked) | `run(group)` on a fixed-step `PLC` | exact scan counts |
+| Modbus, local sim | `make test-conformance` (marker `conformance`) | `run_modbus(suite.build())` | wall clock |
+| Modbus, real CLICK | `make test-conformance PLC=host[:port]` (or `--conformance-plc`, or env `PYRUNG_CONFORMANCE_PLC`) | `run_modbus(suite.build(), "host:port")` | wall clock |
 
-The two Modbus runs share every line of client code; only the endpoint differs.
+Add `GROUP=name[,name...]` (or `--conformance-group`, or env `PYRUNG_CONFORMANCE_GROUP`) to run some groups only. The two Modbus runs share every line of client code; only the endpoint differs. `-rP` prints the report: one line per case (`PASS`/`FAIL`/`SKIP`/`STALE`, `[confirmed]`/`[unconfirmed]`) and totals.
 
 ## What a test is
 
@@ -19,6 +21,20 @@ The two Modbus runs share every line of client code; only the endpoint differs.
 3. A check that reads the slot and compares to what we expected.
 
 The ladder writes its own answer because Modbus only reads addresses — we can't peek at variables from Python.
+
+```python
+group = Group("rungs", [
+    case("Memory writes are visible to the next instruction on the same scan",
+         ladder=prove_memory_is_immediate, expect={"Result1": 42}),
+])
+
+def test_rungs():
+    assert_all_passed(run(group))
+```
+
+- **Group**: a named set of cases, one per case module (`group = Group(...)`). The name is snake_case; the subroutine is `Conf_<Name>` (`rung_order` -> `Conf_RungOrder`) and slot nicknames start with `<Name>`. CLICK nicknames are at most 24 characters and `<Name><slot>_ErrorCode` must fit, so keep `<Name>` to 12 characters (build fails otherwise). `suite.py` lists every group in `ALL_GROUPS`; a new case module adds its `group` there.
+- **Case id**: the stable key of the case's slot in the manifest. It defaults to the ladder function's name without a leading `_` or `prove_` (`prove_source_order` -> `source_order`); pass `id=` to pin it. Renaming the ladder function renames the id, and the build then asks for a manifest entry -- pin `id=` if you rename.
+- **confirmed**: `case(..., confirmed=False)` by default. Flip it to `True` once the case has passed against a real CLICK. The report counts unconfirmed cases.
 
 ## One-shot pattern
 
@@ -48,26 +64,57 @@ def prove_ton_resets(slot):
 
 Setup copies fire on the first scan the rung is true, then stop. Observation copies keep overwriting Results every scan — the last read wins by the time the harness checks. Over Modbus the harness reads twice, so a Result that is still moving (`timer.Acc` above) needs a `range` expectation; see Expectations.
 
-## Slot layout
+## Program and register layout
 
-Each case owns a slot -- a `named_array` instance with 8 Int fields, mapped to fixed DS registers so it is reachable over Modbus. Slot N lives at `DS(10*N + 1)`..`DS(10*N + 8)`; the last two registers of each block of 10 are spare.
+```
+main:           copy(<layout hash>, DS1)         every scan
+                call("Conf_Rungs")               every scan, one rung per group
+                ...
+Conf_Rungs:     copy(<group hash>, DS101)        every scan, first rung
+                <case rungs, each gated by its slot's Cmd/Fired>
+                return()
+```
 
-| Field     | Offset | Slot 1 | Purpose                  |
+| Registers | Holds |
+|---|---|
+| `DS1` | Layout hash (1..32767): the group table (subroutine names and bases) and `LAYOUT_VERSION`. Changes only when a group is added, removed, renamed, or moved. |
+| `DS2`..`DS10` | Spare program header. |
+| `DS<base>` | Group hash (1..32767): SHA-256 of the CLICK export of the group's case rungs, folded into a register. Changes whenever that subroutine's exported ladder would. |
+| `DS<base+1>`..`DS<base+9>` | Spare group header. |
+| `DS<base+10N>`..`DS<base+10N+7>` | Slot N of the group; the last two registers of each 10 are spare. |
+
+Each slot is a `named_array` instance with 8 Int fields:
+
+| Field     | Offset | `rungs` slot 1 | Purpose                  |
 |-----------|--------|--------|--------------------------|
-| Cmd       | +0     | DS11   | Trigger (harness writes) |
-| Scratch   | +1     | DS12   | Temporary storage        |
-| Result1-4 | +2..+5 | DS13-16 | Outputs to check        |
-| Fired     | +6     | DS17   | One-shot gate            |
-| ErrorCode | +7     | DS18   | Error reporting          |
+| Cmd       | +0     | DS111  | Trigger (harness writes) |
+| Scratch   | +1     | DS112  | Temporary storage        |
+| Result1-4 | +2..+5 | DS113-116 | Outputs to check      |
+| Fired     | +6     | DS117  | One-shot gate            |
+| ErrorCode | +7     | DS118  | Error reporting          |
 
-DS1..DS10 are the header. The program's first rung writes, on the first scan (`sys.first_scan`, SC2):
+Cases cannot share memory. `build_program(groups, manifest)` returns the program, its TagMap, the layout hash, and one `GroupBuild` per group (subroutine, block, slots, group hash). The build exports each group's subroutine through the validating CLICK exporter, so a case the exporter rejects fails at build time -- mark it in-process-only. Without a manifest, `build_program` packs the groups in order from DS11 (`Manifest.packed`): fine for harness tests and the local sim, never for a real CLICK, because adding a case moves registers.
 
-- `DS1` = build hash (1..32767): a SHA-256 of the CLICK ladder export of the case rungs, folded into a DS register. It changes whenever the exported ladder would.
-- `DS2` = slot count.
+CLICK does not support nested subroutine calls, so a case cannot `call()` a subroutine of its own: its rungs already run inside `Conf_<Group>`. Cases about calls into subroutines need a different home (for example the main program) and are not supported yet.
 
-Cases cannot share memory. Slot order is case order, with in-process-only cases left out. `build_program(cases)` returns the program, its TagMap, and the hash; `ConformanceProgram.export(dir)` writes `main.csv` and `nicknames.csv` for the CLICK software. The build export is validated, so a case the CLICK exporter rejects fails at build time -- mark it in-process-only.
+## Manifest
 
-Case modules expose `cases`; `test_modbus.py` lists every module in `ALL_CASES`. A new case module adds itself there.
+`tests/conformance/manifest.toml` is the checked-in layout. It gives each group a fixed DS block and each case a fixed slot, keyed by case id:
+
+```toml
+[groups.rungs]
+base = 101 # Conf_Rungs: DS101..DS300
+slots = 19
+
+[groups.rungs.cases]
+memory_is_immediate = 1
+source_order = 2
+global_mutation = 3
+```
+
+A block is `10 * (slots + 1)` registers starting at `base` (header, then the slots). Blocks may not overlap, start in the program header, or run past DS4500. Nothing ever moves: a new case takes the next index in its group, a removed case leaves its line (or its gap) behind, a new group takes the next free block. So editing one group never changes another group's hash or any other case's registers.
+
+Entries are added by hand, guided by the build. When a wire case or group has no entry, `build_program` (and so `make test-conformance`) fails with `ManifestError` and prints the exact lines to paste, with the next free index (`b = 4`) or the next free block (`[groups.math]`, `base = 301`, `slots = 19`, and every case). A group that outgrows its slots says so: raise `slots` if the next block allows, or split the group. In-process-only cases need no entry.
 
 ## Expectations
 
@@ -77,9 +124,9 @@ A case that cannot run over Modbus passes `in_process_only="reason"`. The Modbus
 
 ## 8-step protocol
 
-In-process (`run`):
+In-process (`run(group)`; a plain case list also works):
 
-1. Zero every slot (fresh `PLC`).
+1. Zero every slot (fresh `PLC`). A group's cases run inside its `Conf_<Group>` subroutine, called unconditionally, as on the wire.
 2. Stage inputs with `Cmd = 0` so nothing fires (scan 0).
 3. -- (nothing can be dropped in-process).
 4. Patch `Cmd = 1` everywhere.
@@ -88,17 +135,17 @@ In-process (`run`):
 7. Compare to `expect`. Verify `Fired` went up.
 8. Report.
 
-Over Modbus (`run_modbus`), every step is a register read or write:
+Over Modbus (`run_modbus(build, endpoint, groups=None)`), every step is a register read or write, and only the selected groups' registers are touched:
 
-0. Read `DS1..DS2` until `DS1 != 0` (timeout -> `ConformanceError`, "program is not running"). If `(DS1, DS2)` is not this build's `(hash, slot count)`, raise `BuildMismatchError` before writing anything.
-1. Zero every slot register (one block write, chunked at 100 registers). `Cmd` is the first register of each slot, so it is never left at 1 after its `Fired` is cleared.
+0. Read `DS1` until it is nonzero (timeout -> `ConformanceError`, "program is not running"). If it is not this build's layout hash, raise `BuildMismatchError` ("Export the whole project again and load it") before writing anything. Then read each selected group's hash register. A group whose hash does not match is **stale**: its cases come back with `stale=True` and the note `Conf_Math is stale: repush (DS301 reads ..., this build writes ...)`, its registers are not written, and the other groups carry on.
+1. Zero the used slots of every live group (one block write per group, chunked at 100 registers). `Cmd` is the first register of each slot, so it is never left at 1 after its `Fired` is cleared.
 2. Stage inputs with `Cmd = 0`. No case stages inputs yet; this is the zeroing.
 3. Read the slots back until they are all zero (timeout -> `ConformanceError`, "writes were dropped").
 4. Write `Cmd = 1`, one single-register write per slot. A block write would rewrite a slot's other registers after its case might already have fired (the sim applies each register as a patch on the next scan, so one request can span scans).
 5. Poll every 20 ms until every `Fired != 0`, or until the timeout (default 10 s). A case that never fires is judged a failure, not raised. Then sleep the settle time, `max(case.scans) * 10 ms`.
 6. Read every slot, wait `max(100 ms, settle)`, read every slot again.
 7. A case passes only if it fired and **both** reads meet `expect`. If one read passes and the other does not, the result's `note` says "unstable" with both reads.
-8. Report. `assert_all_passed` lists failures; skipped cases do not fail.
+8. Report. `assert_all_passed` lists stale groups (`STALE: ...`, once per group) and failures; in-process-only skips do not fail. `format_report` gives the per-case lines.
 
 ## Pacing over the wire
 
@@ -110,7 +157,20 @@ The default 10 s timeout is far above what the sim needs (a whole run is about 0
 
 ## Running against the real PLC
 
-`make test-conformance PLC=192.168.0.10` (port defaults to 502). The harness does not push ladder: export the program with `build_program(ALL_CASES).export(dir)`, load `main.csv` and `nicknames.csv` with the CLICK software, and put the PLC in RUN. The harness reads `DS1` first and bails if the build does not match. The harness self-checks in `test_modbus.py` always use their own local sim. When a real-PLC answer differs from pyrung's, that is a finding: either pyrung's semantics change, or the difference becomes a documented CLICK deviation.
+The harness does not push ladder. Once:
+
+1. `make conformance-export OUT=dir` writes the whole project: `main.csv`, `subroutines/Conf_<Group>.csv` per group, and `nicknames.csv`, and prints the layout hash and each group's hash and block.
+2. Load it with the CLICK software, write it to the PLC, and put the PLC in RUN.
+3. `make test-conformance PLC=192.168.0.10` (port defaults to 502).
+
+Then, per edit:
+
+1. Edit a group's cases (add a manifest line if `make test-conformance` asks for one).
+2. `make conformance-export OUT=dir`.
+3. In CLICK, replace that group's subroutine with `subroutines/Conf_<Group>.csv` (re-import `nicknames.csv` if slots were added, for readable nicknames), write to the PLC.
+4. `make test-conformance PLC=... GROUP=<group>`.
+
+If you forget step 3, that group reports `Conf_<Group> is stale: repush` and its cases do not run; every other group still runs. Adding, removing, or moving a group changes the main program and the layout hash: load the whole project again. The harness self-checks in `test_modbus.py` always use their own local sim. When a real-PLC answer differs from pyrung's, that is a finding: either pyrung's semantics change, or the difference becomes a documented CLICK deviation. When a case passes on the real CLICK, set `confirmed=True`.
 
 ## Coverage checklist
 
@@ -142,7 +202,7 @@ Each line becomes a sentence, a ladder, and a row in the report.
 - continued chain breaks on a normal rung
 - empty rung (NOP) executes and survives round-trip
 - subroutines: same rules
-- call into subroutine
+- call into subroutine (not inside a group: CLICK has no nested calls)
 - subroutine memory writes visible immediately
 - forloop runs N times in one scan
 - forloop body sees its own prior-iteration writes
