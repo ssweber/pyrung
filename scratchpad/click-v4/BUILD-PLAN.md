@@ -110,6 +110,20 @@ Follow-ups:
   `Ptr`'s range alone.
 - Conformance cases M1/M2/M4 (drafts in the agent report): add to a `math` group.
 
+## Fold status (2026-10-22, later)
+
+- `d00a43b` (first_scan window-constant) landed.
+- `5fb5c55` (RTC-mirror exclusion, branch `p0/fold-perf`, kept for reference) was REJECTED by adversarial review:
+  it mis-judges `continued()` branches, and its landing reads a stale RTC. Probes: session scratchpad `fold-review/`
+  (`p01`..`p20`).
+- RTC in fold is unsound on dev too: no RTC tick bound, and the landing scan reads the RTC from before the skip.
+  Dev also still has the `e6b7e52` perf regression (tumbler goldens fail, internal_route over 2000 s).
+- In progress: `p0/rtc-clock`, RTC fields as clocks (tick bound + correct landing timestamp + soft ticks for
+  plain copies feeding nothing active). Done = all probes folded == stepped, perf back to ccec694, goldens
+  unchanged, then a fresh adversarial review.
+- Queue after it: cyclefold drops a seconds-unit timer across a jump (p15); float drift at dt 0.3/0.7; then the
+  `_LiveInputCache` audit; then features.
+
 ## Known risk, not scheduled
 
 - PILOT's prover context is all-or-nothing (`drive_setup.py:300-385`). Any compile or prover failure silently strips
