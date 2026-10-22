@@ -95,7 +95,9 @@ Each slot is a `named_array` instance with 8 Int fields:
 
 Cases cannot share memory. `build_program(groups, manifest)` returns the program, its TagMap, the layout hash, and one `GroupBuild` per group (subroutine, block, slots, group hash). The build exports each group's subroutine through the validating CLICK exporter, so a case the exporter rejects fails at build time -- mark it in-process-only. Without a manifest, `build_program` packs the groups in order from DS11 (`Manifest.packed`): fine for harness tests and the local sim, never for a real CLICK, because adding a case moves registers.
 
-CLICK does not support nested subroutine calls, so a case cannot `call()` a subroutine of its own: its rungs already run inside `Conf_<Group>`. Cases about calls into subroutines need a different home (for example the main program) and are not supported yet.
+CLICK does not support nested subroutine calls (confirmed in the CLICK editor), so a case cannot `call()` a subroutine of its own: its rungs already run inside `Conf_<Group>`. Subroutine tests must be called from main instead; that home is not built yet.
+
+Unconditional rungs (an output wired straight to the rail, as in main's `copy`/`call` rungs and each group's hash rung) are valid in CLICK (confirmed).
 
 ## Manifest
 
@@ -167,7 +169,7 @@ Then, per edit:
 
 1. Edit a group's cases (add a manifest line if `make test-conformance` asks for one).
 2. `make conformance-export OUT=dir`.
-3. In CLICK, replace that group's subroutine with `subroutines/Conf_<Group>.csv` (re-import `nicknames.csv` if slots were added, for readable nicknames), write to the PLC.
+3. In CLICK, replace that group's subroutine by pasting `subroutines/Conf_<Group>.csv` into it (single-subroutine paste works; re-import `nicknames.csv` if slots were added, for readable nicknames), write to the PLC.
 4. `make test-conformance PLC=... GROUP=<group>`.
 
 If you forget step 3, that group reports `Conf_<Group> is stale: repush` and its cases do not run; every other group still runs. Adding, removing, or moving a group changes the main program and the layout hash: load the whole project again. The harness self-checks in `test_modbus.py` always use their own local sim. When a real-PLC answer differs from pyrung's, that is a finding: either pyrung's semantics change, or the difference becomes a documented CLICK deviation. When a case passes on the real CLICK, set `confirmed=True`.
