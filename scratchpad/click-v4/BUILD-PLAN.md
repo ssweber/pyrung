@@ -1,0 +1,78 @@
+# CLICK v4 — build plan
+
+Work happens on `dev`. Build agents use their own worktrees and merge back into dev one at a time.
+
+## Source documents
+
+| Doc | What it holds |
+|---|---|
+| `RESEARCH.md` | Decided design + syntax, CLICK semantics, probe IDs (O/D/M/F), capture list, conformance plan |
+| `TOUCHPOINTS.md` | First survey: per feature, categories A-L, file:line; addendum on crossings |
+| `TOUCHPOINTS-GAPS.md` | Mechanical gap audit: missed sites + 24 corrections to TOUCHPOINTS.md (corrections win) |
+| `PILOT-GOTCHAS.md` | PILOT audit: 12 cross-cutting items by severity, per-feature notes, suggested PILOT gates |
+| `BINARIES-PC.md` / `BINARIES-FIRMWARE.md` | Compile.dll func-code table; firmware encrypted (no semantics) |
+
+When two docs disagree, the later audit wins, unless this file settles it.
+
+Settled here: **crossings coverage test.** Putting a new class in `EXPECTED_WITH_CROSSINGS` forces an explicit
+`register()`, because `registered_classes()` must match that set exactly. Putting an `OutInstruction` subclass in
+`EXEMPT` passes the test while `crossing_for()` still hands it `OutCrossing` at runtime. The test only sees
+classes from modules that have been imported. Both audits were half right.
+
+## Phase 0 — wrong today, fix before any feature
+
+Each item is its own commit, with a regression test.
+
+1. **Fold freezes rungs that read nothing varying.** Code: `core/fold.py:483-524` `_frozen_rung_writes`, and the same
+   gate in `pilot/coast.py:184-206`. Folded and stepped runs land on different scans (probe: `calc((X*3)%7, X)` ->
+   `out(Hit)` lands at 501 folded vs 503 stepped; `sys.scan_counter` inside a calc is hit the same way). Also
+   `_calc_self_referential.reads_tag` (`fold.py:196-202`) ignores `SumExpr`/`MathFuncExpr`/`ShiftFuncExpr`.
+   Probe script: session scratchpad `fold_probe2.py`.
+2. **Crossings coverage hole.** Add a test that `crossing_for(cls) is None` for every class in `EXEMPT`. Make sure
+   `_concrete_instruction_classes()` sees every instruction module: import them in `instruction/__init__.py`.
+3. **CI safety nets.** CI doesn't exclude the `tumbler` marker, though `make test` does, and CI never runs
+   `--runner-backend=both`, so interpreted/compiled parity is only checked locally. Align CI with `make test`.
+
+## Rules for every feature brief
+
+- New instruction classes subclass neither `OutInstruction` nor `TimeDrumInstruction`. New expression classes
+  are siblings, not subclasses of `SumExpr`/`MathFuncExpr`/`LiteralExpr`; that applies to aggregates and to `RandIntExpr`.
+- Declare every written tag as its own `Tag` field in the field-declaration layer: `write_sites.py:73-88`
+  (`_writes`, `_status_fields`) and `pdg.py:946-969` (`_reads`, `_conditions`, `_exclusive_fields`). For a
+  Timer, store Done and Acc as separate fields, as `on_delay` does. If Done/Acc aren't declared, they show up
+  as unwritten inputs and PILOT may set them directly.
+- Write all internal memory keys every scan (the prover discovers keys from one scan).
+- Crossing per class, registered explicitly. `forward()` returns `UNKNOWN` unless the value is exact
+  (`sp_values.writer_value_facts` and `multitarget._writes_off` trust it).
+- Anything timed registers as a fold source (`core/fold.py:133-150`) and as a cyclefold `_frac` source
+  (`pilot/cyclefold.py:541-547`), and gets a fold-vs-unfold equality test.
+- Hidden-memory instructions go in the elision bail list (`prove/elision/slice.py:260-280`).
+- A new finding code needs its row in `core/validation/registry.py`; without it the report hits a KeyError.
+- `make lint` and `make test` must pass (`make test` runs both runner backends). Draft conformance cases go in with
+  pyrung's current answer marked unconfirmed.
+- Docs page, CHANGELOG Unreleased entry, cheatsheet. The two cheatsheets are one file: the docs copy includes the bundled one.
+
+## Features, in order
+
+| # | Feature | Size | Read | Notes / existing bugs folded in |
+|---|---|---|---|---|
+| 1 | Conformance rename + Modbus runner | S + M | RESEARCH 6, TOUCHPOINTS 6, GAPS 6 | `make test-conformance` + `conformance` marker; in-process run stays in `make test` |
+| 2 | Math aggregates + abs | S-M | RESEARCH 3, TOUCHPOINTS 1, GAPS 1, PILOT 8 | `render_expr` abs/SumExpr; prover `_expr_reads_tag` SumExpr; importer via `_SUM_RE`; `crossings/calc.py` passes `operation=kind` |
+| 3 | `time_event_drum` + drum hint | M | RESEARCH 2, TOUCHPOINTS 3, GAPS 3 | own class; preset rule becomes a v4 hint; fold source |
+| 4 | Out family | L | RESEARCH 1, TOUCHPOINTS 4, GAPS 4, PILOT 2-5 | PILOT: non-OUT writers treated as retentive (`ote_writes`); in-instruction edges invisible (`program_facts.py:173`); advance profile = "hold until output equals v" |
+| 5 | For/Next | L | RESEARCH 4, TOUCHPOINTS 5, GAPS 5, PILOT 6 | today: body instructions get no enable condition (`count_up` in a loop declines in PILOT); `with Rung()` in a loop silently hoists; journals need a body-rung + iteration address; return-shadow treatment for break/continue; `comment()` before a body rung |
+| 6 | `randint` | M-L | RESEARCH 3, TOUCHPOINTS 2, GAPS 2, PILOT 7 | seed lives in `SystemState.memory`, not on the runner (forks); stable site ids for `PLC(logic=[...])`/synthesis/pilot rungs; override via `io_drains_by_scan` with interpreted replay; scan_id resets on restart |
+
+Parallel: 1 and 2 together. After that, one at a time, each merged before the next starts.
+
+## Known risk, not scheduled
+
+- PILOT's prover context is all-or-nothing (`drive_setup.py:300-385`). Any compile or prover failure silently strips
+  value domains, the world key and transition evidence from every `how()`. A new instruction that the prover can't
+  absorb yet degrades all `how()` calls on that program. Each feature checks that `how()` on a program using it
+  still has its prover context.
+
+## Waiting on the user
+
+- CLICK v4 capture session (RESEARCH 5, plus copying the `Compile\` folder), for laddercodec blobs.
+- Real-PLC conformance runs (O/D/M/F).

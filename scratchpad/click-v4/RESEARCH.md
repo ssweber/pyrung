@@ -4,29 +4,155 @@ Source: clicknick#91. CLICK Ver4.00 (installed at `C:\Program Files (x86)\Automa
 help pages diffed against Ver3.92 (`Help/Content/*.htm`), plus `Readme.pdf` and the v4 error-code tables
 (189 Programming, 187 Object). Overlay work is already done in clicknick (0352421).
 
-Order of work: design in pyrung -> capture in CLICK v4 -> laddercodec typed blobs -> pyrung export/import.
+Order of work: design in pyrung -> conformance cases on pyrung's Modbus sim -> capture in CLICK v4 ->
+laddercodec typed blobs -> pyrung export/import -> same conformance cases on a real PLC.
 CPU gating (C0-0x lacks all of this) is **out of scope for now**; pyrung doesn't gate anything yet.
 
-## Decisions so far (2026-10-21)
+## Decisions so far (2026-10-22)
 
-- **SUMBIT** -> no new DSL. `.sum()` on a Bool range; the exporter picks CLICK's spelling from the bank type
-  (capture tells us the spelling), and the importer maps it back to `.sum()`.
-- **Out variants** use CLICK's names:
-  - `toggle(Light)`: its own verb and its own instruction class. Toggle keeps its state when the rung is
-    false, and 25 files dispatch on `OutInstruction` assuming OUT semantics. It takes a single tag only
-    (no range, no oneshot); immediate goes through `Light.immediate` as with `out()`. It exports as an Out
-    coil with CLICK's Toggle box checked.
-  - `debounce(Valve).on_delay(100, acc=A).off_delay(100, acc=B)`: a builder. It is not chained off `out()`,
-    because `out()`'s oneshot/toggle/range don't apply. At least one side is required (enforced the way
-    drum `.reset()` is). There's one unit for both sides, `debounce(Valve, unit="ms")`, because CLICK has a
-    single Unit dropdown.
-  - `flasher(Beacon, on=500, on_acc=A, off=500, off_acc=B, unit="ms")`
-  - `timed(Horn, 1000, acc=T, maintained=False)`
-- **Desugar** debounce/flasher/timed in core; Click export emits the native coil.
-- **RAND** approach accepted: seeded deterministic stream at runtime, nondeterministic input in the prover,
-  test override hook.
-- **`break_loop()` / `continue_loop()`** accepted. Before designing the body model, run the probe matrix in
-  section 4 on a real PLC and pin down *exactly* what CLICK does in a loop.
+- **Builder rule.** `verb(...).method(...)` chaining is reserved for instructions that take *extra rung
+  inputs*: power-rail legs beyond the rung itself (`.reset()`, `.down()`, `.clock()`, `.jog()`, `.jump()`).
+  An instruction with one input (the rung) is a plain call with keywords. The Out variants all have one
+  input, so none of them is a builder. The drums keep theirs.
+- **SUM over bits** -> no new DSL. `.sum()` on a Bool range. CLICK's editor spells it plain `SUM` too
+  (checked 2026-10-22; "SUMBIT" is only the internal/error-table name), so export/import only need to
+  accept Bool banks.
+- **Out variants** are separate verbs, not `out(..., kind=)` and not chained off `out()`. Each one owns its
+  instruction class, because 25 files dispatch on `OutInstruction` assuming OUT semantics.
+- **Timers inside Out variants are `Timer` UDTs** (`Timer[1]`), the same thing `on_delay()` takes. A phase is
+  written `(timer, preset)`, in `on_delay(timer, preset)` order. See "Feels off" #1 and #2.
+- **One unit per instruction**, `unit="ms"` keyword, because CLICK has a single Unit dropdown per coil.
+- **Native classes, no desugar** (decided 2026-10-22). toggle/debounce/flasher/timed are their own
+  instruction classes that do their own timing (like the timers), each with its own `advance_profile` and
+  crossing. There is no lowering layer to build on (the drum-desugar plan was deleted in `79fc61b`, and
+  `core/synthesis.py` only feeds the soft-PLC overlay). They must not subclass `OutInstruction`:
+  `crossing_for()` walks the MRO and would hand them `OutCrossing`.
+- **Drum register durations**: `CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED` stays, downgraded to a hint
+  ("register drum durations need CLICK v4"). That keeps the v3 guard without adding version gating.
+- **Existing bugs found by the survey are fixed inside the feature that touches them** (see
+  TOUCHPOINTS.md "Surprises" #12): `render_expr` abs/SumExpr, prover `_expr_reads_tag` ignoring SumExpr, the
+  drifted click cheatsheets, and CI not excluding the `tumbler` marker.
+- **RAND**: seeded deterministic stream at runtime, nondeterministic input in the prover, test override hook.
+- **For/Next body model**: bare instructions inside `forloop` are implicit always-true body rungs (today's
+  meaning). A body rung with contacts is written as `with Rung(...)` inside the loop. Export and import go
+  both ways on that rule. `break_loop()` / `continue_loop()` live in such a rung.
+- **Twin -> conformance.** The twin harness becomes a Modbus conformance suite, built against pyrung's own
+  Modbus sim first (section 6). The fast in-process run stays in `make test`; the Modbus run goes behind a
+  `conformance` marker with a `make test-conformance` target (decided 2026-10-22).
+
+---
+
+## New syntax, all of it
+
+Out coil variants (section 1):
+
+- `toggle(Light)` — single tag, no range, no oneshot; immediate via `Light.immediate` as with `out()`.
+- `debounce(Valve, on=(Timer[1], 100), off=(Timer[2], 100), unit="ms")` — either side may be left out,
+  not both (error at call time).
+- `flasher(Beacon, on=(Timer[3], 500), off=(Timer[4], 500), unit="ms")` — both sides required.
+- `timed(Horn, Timer[5], 1000, unit="ms", maintained=False)` — CLICK "Timed".
+
+Presets anywhere above are `int | Tag` (CLICK allows DS or a constant).
+
+Drum (section 2):
+
+- `time_event_drum(outputs=, presets=[...], events=[...], unit=, pattern=, current_step=, accumulator=,
+  completion_flag=)` with `.reset()` / `.jump()` / `.jog()` as on `time_drum`. `None` is allowed per step in
+  `presets` or `events`, never both in the same step.
+- `time_drum(presets=[Tag, ...])` — already legal in core; the Click validation that rejects it goes away for v4.
+
+Math (section 3), all inside `calc()` expressions:
+
+- `rng.max()`, `rng.min()`, `rng.median()`, `rng.mean()` — siblings of the existing `rng.sum()`.
+- `rng.sum()` on a Bool range — exists; CLICK spells it `SUM` as well.
+- `randint(lo, hi)` — inclusive, args const or tag.
+- `abs(x)` — exists; export/import fix only.
+
+For/Next (section 4):
+
+- `with Rung(...)` inside `with forloop(...)` — a conditioned body rung.
+- `break_loop()`, `continue_loop()` — only inside a conditioned body rung (CLICK requires a contact).
+- Nested `forloop` up to 3 deep, each with its own `loop.idx`.
+
+---
+
+## Feels off — discussion
+
+### 1. `(timer, preset)` tuples
+
+No other pyrung verb takes a tuple keyword. The alternatives:
+
+```python
+debounce(Valve, on=(Timer[1], 100), off=(Timer[2], 100), unit="ms")                   # A: tuples
+debounce(Valve, on=Timer[1], on_preset=100, off=Timer[2], off_preset=100, unit="ms")  # B: flat kwargs
+debounce(Valve, on=Phase(Timer[1], 100), off=Phase(Timer[2], 100), unit="ms")         # C: value type
+```
+
+**Decided: A** (2026-10-22). It reads as "on for 100, timed by Timer[1]", and its order is `on_delay(Timer[1], 100)`'s
+order, so nothing new has to be learned. B doubles the keyword count and lets `on_preset` be given without
+`on`. C adds a public type that exists only to hold two fields. With A, a half-written phase (`on=Timer[1]`)
+fails at call time with a clear error.
+
+`timed` has one phase, so it takes `(target, timer, preset)` positionally, like `on_delay`. That's a small
+inconsistency with debounce/flasher, but `timed(Horn, on=(Timer[5], 1000))` would be a keyword for nothing.
+
+### 2. Does CLICK set the T done bit?
+
+CLICK's Out dialog only asks for a TD (the accumulator), but C0112 ("refers to a Timer Address which is
+already in use") says the coil claims the whole timer number. So T<n> is reserved either way; the question is
+whether CLICK ever *writes* it. Probe O6 answers it.
+
+Plan either way: the verbs take a `Timer` UDT and pyrung sets `.Done` with a defined meaning per phase.
+
+| Verb | Phase | `.Done` in pyrung |
+|---|---|---|
+| debounce | on | input has been steadily on >= preset (on-side has fired) |
+| debounce | off | input has been steadily off >= preset (off-side has fired) |
+| flasher | on / off | that phase's time is up; drops when the phase restarts |
+| timed | — | the on time has elapsed |
+
+If CLICK doesn't write T<n>, pyrung still sets it. Click validation then reports any *read* of that done bit
+(`CLK_OUT_TIMER_DONE_UNSET`: "CLICK's Out coil does not set T<n>; this contact reads False on the PLC").
+A program that never reads it loses nothing. If CLICK does write T<n>, the table above gets corrected from the
+probe and there's no finding.
+
+### 3. `timed` as a name
+
+`min_on` (the earlier draft) is wrong for the default mode. Not maintained, the output is on for *exactly* T
+and then goes off even though the rung is still true. That's a fixed pulse (IEC TP), not a minimum. Only
+`maintained=True` is "at least T". One verb has to cover both modes, and `timed` is CLICK's own word, so
+it's easy to find in both directions. `pulse` is out (the `Pulse` physical spec). Keeping `timed`.
+
+### 4. `time_event_drum` vs `time_drum(events=...)`
+
+CLICK's dropdown says "Time & Event". pyrung already has one constructor per base (`event_drum`,
+`time_drum`), so a third, `time_event_drum`, follows the pattern. It also keeps `time_drum`'s signature
+honest: in T&E a step may have no preset, which `time_drum` must never allow. Recommendation
+**`time_event_drum`**. The builder is justified here: reset/jump/jog are real rung inputs.
+
+### 5. `.mean()` vs `.avg()`
+
+CLICK spells it AVG and MDN. pyrung spells it the way Python does (`statistics.mean`, `statistics.median`),
+and the exporter maps it, the same way `log10` maps to `LOG`. `.max()` / `.min()` match the built-ins.
+
+This follows the existing rule in `_CLICK_FUNC_TO_PYTHON` (`click/codegen/utils.py:34`): where Python has a
+name, pyrung uses it (`RAD`->`radians`, `DEG`->`degrees`, `LOG`->`log10`, `LN`->`log`); where it doesn't,
+pyrung lowercases CLICK's name (`lsh`, `rsh`, `lro`, `rro`). `.avg()` would be the outlier.
+Recommendation **`.mean()` / `.median()`**.
+
+### 6. `randint`
+
+`rand(lo, hi)` would mirror CLICK. `randint` mirrors Python and signals the inclusive upper bound.
+`from pyrung import randint` shadows `random.randint` in a user's file. That's acceptable: nobody calls
+`random` inside ladder. Recommendation **`randint`**.
+
+### 7. Debounce with both sides is not two timers
+
+Kept from the earlier draft because it constrains the desugar. With both sides set, Debounce is not
+`off_delay(on_delay(in))`. The help says a brief off-bounce while on leaves the output on. With composed
+timers, the on-delay restarts on that bounce, so the output can drop when T_on > T_off. Debounce is really
+"output follows input once they've disagreed for T". The desugar is that state machine, and probe O3 checks
+whether CLICK resets the on-side TD on a bounce.
 
 ---
 
@@ -59,54 +185,39 @@ range / one-shot / immediate. Debounce, Flasher and Timed show only `Bit Memory 
   immediately (when off-debounce isn't used). Off-side: the mirror image. One TD per configured side.
 - **Flasher**: On Flash Time + TD, Off Flash Time + TD (both required), unit ms/sec. Starts in the ON
   phase as soon as the rung goes true; rung false -> output off immediately, at any point in the cycle.
-- **Timed**: Minimum On Time (DS or const) + TD, unit, `Output Maintained` checkbox.
+- **Timed**: Minimum On Time (DS or const) + TD, unit ms/sec/min (editor check 2026-10-22), `Output Maintained` checkbox.
   Not maintained: rung true for any time -> ON for exactly the on time, then OFF *even if the rung is still true*.
   Maintained: ON for at least the on time, then follows the rung.
 
-### Open questions (need PLC/twin runs, not just captures)
-
-1. Toggle on first scan with the rung already true: does it toggle?
-2. Debounce: TD value after it fires (held at preset? reset to 0?). Does the TD reset when the input bounces
-   back mid-count? Preset 0?
-3. Flasher: are both TDs zeroed when the rung goes false? Does a restart begin with a full ON phase?
-4. Timed, not maintained: after timing out with the rung still true, does it need a fresh OFF->ON to fire
-   again? Does a new rising edge during the on time restart the timer?
-5. Units: only ms/sec (dialog shows ms, sec). Confirm there's no min/hour/day.
-
-### pyrung design (proposal)
-
-These are OUT-family writers: they drive the bit when the rung is false, so `INERT_WHEN_DISABLED = False`,
-and they belong in duplicate-out validation. Each TD accumulator must be an explicit tag, because CLICK needs
-the TD numbers. pyrung tags are semantic and TagMap maps them to TD.
+### pyrung design
 
 ```python
-toggle(Light)                     # Out + Toggle; immediate via Light.immediate as today
-debounce(Valve, on=100, on_acc=DbOn, off=100, off_acc=DbOff, unit="ms")   # either side optional
-flasher(Beacon, on=500, on_acc=FlOn, off=500, off_acc=FlOff, unit="ms")
-min_on(Horn, 1000, acc=HornT, unit="ms", maintained=False)                # CLICK "Timed"
+toggle(Light)
+debounce(Valve, on=(Timer[1], 100), off=(Timer[2], 100), unit="ms")
+flasher(Beacon, on=(Timer[3], 500), off=(Timer[4], 500), unit="ms")
+timed(Horn, Timer[5], 1000, unit="ms", maintained=False)
 ```
 
-**Chain idea (`out(Y).off_delay(...)`):** the delay names fit **Debounce**, not Timed.
-- On-debounce = output on only after the input is steadily on for T, then off at once. That's on-delay.
-- Off-debounce = output stays on until the input is steadily off for T. That's off-delay.
-- So `out(Y).on_delay(100, acc=A).off_delay(100, acc=B)` could export as one Debounce coil.
+- These are OUT-family writers: they drive the bit when the rung is false, so `INERT_WHEN_DISABLED = False`,
+  and they belong in duplicate-out validation. Each timer also counts as a writer of its `Timer` UDT, so
+  `on_delay(Timer[1], ...)` elsewhere is a duplicate-timer finding (CLICK's C0112).
+- Units (checked in the v4 editor): debounce and flasher take ms/sec; timed takes ms/sec/min. Anything else
+  (`min` on debounce/flasher, `hour`/`day` anywhere) is a Click validation error, not a core one.
+- Native classes (decided): each does its own timing with `_frac:` per phase, has its own `advance_profile`
+  and crossing, and writes all of its internal state every scan (the prover discovers memory keys from one
+  scan). Not subclasses of `OutInstruction`. Most existing `OutInstruction` dispatch sites must *exclude* them.
 
-Caveat: Debounce with both sides is **not** off_delay(on_delay(in)). The help says a brief off-bounce while
-on leaves the output on. With composed timers, the on-delay restarts on that bounce, so the output can drop
-when T_on > T_off. Debounce is really "output follows input once they've disagreed for T". The desugar
-must be that state machine, and the probe must check whether CLICK resets the on-side TD on a bounce.
+### Probes (conformance cases, section 6)
 
-Timed doesn't match off_delay either. Off-delay holds for the rung's on time **+ T**. Timed holds for
-**max(rung on time, T)** when maintained, and exactly T from the rising edge when not (IEC "TP"). If it's
-chained, `out(Y).min_on(T, acc=, maintained=)` names it honestly.
-
-Decisions for you:
-- **Verbs vs `out(..., kind=)`**: separate verbs (decided). Open: `debounce(...)` or the `out().on_delay().off_delay()` chain.
-- **Name for "Timed"**: `min_on` describes the behaviour. `timed_out` copies CLICK's name, but it reads like
-  "timed out". Avoid `pulse`, which is already the `Pulse` physical spec.
-- **Native vs desugared**: prove/pilot/causal dispatch on instruction class. A drum desugar is already queued
-  for pilot. Debounce/flasher/min_on could share that route (core lowers them to timer primitives plus
-  internal state, while Click export emits the native coil), or get native classes taught to each analyzer.
+| # | Question |
+|---|---|
+| O1 | Toggle on first scan with the rung already true: does it toggle? |
+| O2 | Debounce: TD value after it fires (held at preset? reset to 0?). Preset 0? |
+| O3 | Debounce both sides: does the on-side TD reset when the input bounces back mid-count? |
+| O4 | Flasher: are both TDs zeroed when the rung goes false? Does a restart begin with a full ON phase? |
+| O5 | Timed, not maintained: after timing out with the rung still true, does it need a fresh OFF->ON to fire again? Does a new rising edge during the on time restart the timer? |
+| O6 | **Does any Out variant write T<n>?** Read T<n> every scan through a full cycle of each variant. |
+| O7 | **Settled**: debounce/flasher ms/sec; timed ms/sec/min (editor check). Capture one `timed` in min to confirm func code 8232. |
 
 ---
 
@@ -119,43 +230,70 @@ Decisions for you:
 - Units ms/sec/min/hour/day as in Time base. Current step DS, elapsed TD, completion C, jog,
   load-new-step: all unchanged.
 
-Open: does elapsed TD keep counting past the duration while it waits for the event (and is it clamped)?
-Which banks are eligible for a duration register (presumably DS)?
+```python
+time_event_drum(
+    outputs=[Y1, Y2],
+    presets=[1000, None, 500],          # None: event-only step
+    events=[None, PartPresent, Clamp],  # None: time-only step
+    unit="ms",
+    pattern=[[1, 0], [0, 1], [1, 1]],
+    current_step=Step,
+    accumulator=StepAcc,
+    completion_flag=Done,
+).reset(ResetBtn)
+```
 
-pyrung today: `time_drum(presets=[Tag|int])` already accepts tag presets. Click validation rejects them
-(`CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED`, `click/validation/hardware.py:462`). That check goes away for v4.
-Proposal: `time_drum(..., events=[cond | None, ...])`, with `None` allowed in `presets` too. When
-`events` is present, it exports as Time & Event base. That's one builder, not a third drum constructor.
+Note the event is level, while `event_drum` events are edge-based (twin checklist: "drum events are edge-based").
+That difference goes in the docstring and gets a probe.
+
+- D1: does elapsed TD keep counting past the duration while it waits for the event (and is it clamped)?
+- D2: which banks are eligible for a duration register (presumably DS)?
+- D3: T&E event is level: confirm an event already on at step entry advances as soon as the time is up.
+
+`time_drum(presets=[Tag|int])` already accepts tag presets. Click validation rejects them
+(`CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED`, `click/validation/hardware.py:462`). Decided: keep the code, downgrade
+to a hint ("register drum durations need CLICK v4"). `time_event_drum` is its own class, not a
+`TimeDrumInstruction` subclass (the prover assumes every time-drum step has a preset).
 
 ---
 
 ## 3. Math expansion
 
-| CLICK | Dec | Hex | pyrung proposal | Notes |
+| CLICK | Dec | Hex | pyrung | Notes |
 |---|---|---|---|---|
 | `SUM(a:b)` | yes | yes | `rng.sum()` (exists) | already rendered `SUM ( a : b )` |
-| SUM over bits | ? | ? | `rng.sum()` on a Bool range | `SumExpr` already counts True as 1; need capture for CLICK's rendering |
+| SUM over bits | yes | ? | `rng.sum()` on a Bool range | `SumExpr` already counts True as 1; CLICK renders plain `SUM ( C1 : C10 )` |
 | `MAX(a:b)` | yes | yes | `rng.max()` | sibling of `.sum()` |
 | `MIN(a:b)` | yes | yes | `rng.min()` | |
 | `MDN(a:b)` | yes | yes | `rng.median()` | <= 1024 bytes; even-count rule unknown |
-| `AVG(a:b)` | yes | yes | `rng.avg()` (or `.mean()`) | integer/rounding rule unknown |
+| `AVG(a:b)` | yes | yes | `rng.mean()` | integer/rounding rule unknown |
 | `RAND(lo,hi)` | yes | yes | `randint(lo, hi)` | inclusive like Python `randint`; args const or register |
 | `ABS(x)` | yes | **no** | `abs(x)` (exists, `UnaryExpr`) | **bug today**: translator renders lowercase `abs(...)`; importer has no `ABS` mapping |
 
 Implementation shape: make `SumExpr` one case of a `RangeAggregateExpr(kind)`. It is referenced in only five
 files: `core/expression.py`, `core/memory_block.py`, `click/ladder/translator.py`, `circuitpy/.../_primitives.py`,
-`core/analysis/crossings/calc.py`. Importer: add MAX/MIN/MDN/AVG/RAND/ABS to `_CLICK_FUNC_TO_PYTHON` and
-generalise `_SUM_RE` (`click/codegen/utils.py`). Portability: `abs` goes into the decimal-only set.
+`core/analysis/crossings/calc.py`. Importer (corrected by the survey): MAX/MIN/MDN/AVG take colon ranges, so they
+go through a generalised `_SUM_RE` path, not `_CLICK_FUNC_TO_PYTHON`; RAND goes in the function table; `ABS`
+maps to the Python builtin and stays out of the `pyrung.core.expression` import set (`click/codegen/utils.py`).
+Portability: `abs` into the decimal-only set needs a `UnaryExpr` check, since `abs` is not a `MathFuncExpr`.
 
-**RAND is the real design problem.** pyrung's core promise is deterministic replay, seek and fork,
+**RAND vs deterministic replay.** pyrung's core promise is deterministic replay, seek and fork,
 and the prover is exhaustive.
-- Runtime: draw from a deterministic stream, e.g. seeded per (scan id, instruction id) from a runner seed,
-  so history/fork replays reproduce the same values.
+- Runtime: a **stateless counter-based hash**, `value = lo + H(seed, scan_id, site, iteration) mod (hi-lo+1)`.
+  - `seed`: runner-level, default fixed (so two runs of the same test agree), settable.
+  - `scan_id`: already in state, so seek/replay/fork reproduce values with no RNG state to store or restore.
+  - `site`: a stable id for the `randint` call (rung index + position in the expression), so two RANDs in
+    one scan differ.
+  - `iteration`: the for-loop iteration (0 outside loops), so a RAND in a loop body differs per iteration.
+  - `H`: something cheap and portable, e.g. splitmix64, so CircuitPython can compute the same numbers.
+  A fork gets the same values as its parent for the same scan. That's deliberate (what-if forks differ only
+  by what you changed); a fork may reseed if it wants different draws.
 - Prover: treat each `randint` as a nondeterministic input over `[lo, hi]`.
 - Tests: a runner-level seed/override hook so a test can force a value.
+- Conformance: RAND cases check only the range and that values vary, never specific values.
 
-Open (hardware): AVG/MDN result for integer ranges (truncate vs round; MDN with even count = mean of
-middle two, or the lower one?); RAND with lo > hi; MAX/MIN on DH treated unsigned?
+Probes: M1 AVG/MDN result for integer ranges (truncate vs round); M2 MDN with even count (mean of the middle
+two, or the lower one?); M3 RAND with lo > hi; M4 MAX/MIN on DH, signed or unsigned?
 
 ---
 
@@ -167,7 +305,7 @@ middle two, or the lower one?); RAND with lo > hi; MAX/MIN on DH treated unsigne
 - Nesting up to 3, counting loops inside called subroutines. One-shot only on the outermost For.
   RETURN/END not allowed inside a loop.
 
-### Conflict with pyrung's current model
+### Today's model
 
 `forloop()` today is *one rung*. Its body is a flat list of instructions that all run unconditionally,
 with `branch()` forbidden inside it. Export emits each body instruction as a wire-only rung
@@ -180,21 +318,25 @@ conditioned rungs can live inside a loop), the importer drops them. `_emit_forlo
 existing fixtures (`forloop__basic`, `forloop__oneshot`, `ladder_realistic_output/main.csv`) has a body rung
 with a contact, so nothing has exercised this. **Capture one to settle it.**
 
-### Proposal (back-compatible)
+### Design (decided, back-compatible)
 
-Allow `with Rung(...)` blocks inside `forloop`. Each block becomes a body rung with its own conditions.
-Bare instructions keep their current meaning (unconditional rung).
+A bare instruction in the loop body is an implicit always-true rung. A body rung with contacts is written
+as `with Rung(...)` inside the loop.
 
 ```python
 with Rung(Enable):
     with forloop(10) as loop:
-        copy(Src[loop.idx + 1], Dst[loop.idx + 1])   # bare: unconditional, as today
+        copy(Src[loop.idx + 1], Dst[loop.idx + 1])   # bare: wire-only rung, as today
         with Rung(Dst[loop.idx + 1] == 0):
             continue_loop()
         with Rung(Fault):
             break_loop()
 ```
 
+- Export: bare -> wire-only body rung (unchanged); `with Rung(...)` -> body rung with those contacts.
+- Import: a wire-only body rung -> bare instruction; a body rung with contacts -> `with Rung(...)`. That
+  fixes the dropped-contact importer bug as a side effect.
+- `break_loop()` / `continue_loop()` outside a conditioned body rung is an error (CLICK requires a contact).
 - Names follow `return_early()` (Python reserves `break`/`continue`).
 - Nesting: `_state._forloop_active` becomes a depth counter. `ForLoop.idx` is the fixed `Tag("_forloop_idx")`,
   so nested loops need distinct index tags.
@@ -204,9 +346,9 @@ with Rung(Enable):
 
 ### Probe matrix: what CLICK actually does in a loop
 
-Run these on a real C0-1x/C2 PLC before fixing the body model. Each one is a twin case (`tests/twin`
-one-shot pattern). Using `For(oneshot=1)` gated on `slot.Cmd` makes each loop run exactly once, so the
-counts are readable. F2, F6, F7 and F14 are where pyrung's current model is most likely wrong.
+Run before fixing the body model's runtime semantics. Each one is a conformance case. Using
+`For(oneshot=1)` gated on `slot.Cmd` makes each loop run exactly once, so the counts are readable.
+F2, F6, F7 and F14 are where pyrung's current model is most likely wrong.
 
 | # | Question | Ladder sketch | pyrung today |
 |---|---|---|---|
@@ -245,13 +387,85 @@ format is unchanged and plain `out()` blobs are identical (func codes 8193..8220
 2. Drum: Time & Event with mixed steps (event-only, time-only, both); Time base with a DS duration; T&E with
    a DS duration; one non-ms unit.
 3. Math dec: MAX/MIN/MDN/AVG over DS, DD and DF ranges; `RAND(1,100)`; `RAND(DD1,DD2)`; `ABS(DF1)`;
-   SUM over a C range (see how CLICK spells SUMBIT); composed `MAX(DS1:DS10) + ABS(DS11)`.
+   SUM over a C range (plain `SUM`; capture confirms the blob); composed `MAX(DS1:DS10) + ABS(DS11)`.
    Math hex: `MAX(DH1:DH4)`, `RAND(...)`.
 4. For/Next: **a v3-style loop with a contact on a body rung** (settles the importer question);
    Break with contact; Continue with contact; 3-deep nest; outer one-shot.
 5. Scr side: save a v4 project with all of the above and run `decode_program()` on it.
+6. Right after a Syntax Check, copy `%TEMP%\CLICK (xxxx)\Compile\` (the `Mnemonic.MN` listing and related
+   files). Check every captured func code against the Compile.dll table (section 7).
 
-## 6. Behaviour checks (twin / real PLC, since CLICK has no simulator)
+---
 
-Open questions are in sections 1, 2 and 3 above. The twin harness (`tests/twin/AGENTS.md`) is the vehicle:
-same test against pyrung and a real C0-1x/C2 PLC.
+## 7. Binaries stake (2026-10-22): not a semantics oracle
+
+Both surveys were static only. Details: `BINARIES-PC.md`, `BINARIES-FIRMWARE.md`.
+
+- **Firmware**: `Click_fw0400.clk` is a ZIP with every entry AES-256 encrypted. Unreadable; stopped there.
+- **Compile.dll lowers nothing.** Each v4 instruction is its own opcode pointing at a firmware routine, so
+  its semantics sit behind the encryption. O1-O6, D1-D3, M1-M4 and F1-F16 stay conformance questions.
+- **Useful by-products** (predicted func codes, to confirm during capture):
+
+  | Instruction | func codes | mnemonic |
+  |---|---|---|
+  | Toggle | 8224, 8225 immediate | `OTOG`, `OTOG.Y` |
+  | Debounce | 8226 ms, 8227 sec | `ODEB` |
+  | Flasher | 8228 ms, 8229 sec | `OFLA` |
+  | Timed | 8230-8232 | `OTIME` |
+  | Timed, maintained | 8233-8235 | `OTIMEOM` |
+  | Continue / Break | 9232 / 9233 | `CONTINUE` / `BREAK` |
+  | Drum, register durations | 10249.. | `DRUM.DS*` |
+  | Drum, Time & Event | 10505..10538 | `TEDRUM.DS*` (register form only) |
+
+- O7 settled: debounce/flasher accept ms/sec; timed accepts ms/sec/min. The compiler's third Timed unit
+  (`OTIME.m`, func code 8232 by the table) is minutes, and the editor offers it.
+- Break/Continue are marked as needing exactly one rung input, which agrees with "requires a contact".
+- The aggregates (MAX..ABS) are formula tokens 0x1e-0x23. The rounding rules (M1/M2) are in firmware.
+
+---
+
+## 6. Conformance suite (was: twin harness)
+
+### What it is
+
+A conformance suite in the Modbus sense: a fixed set of cases, each with a stated expectation, run against
+an implementation that is observed **only through Modbus registers**. The ladder computes its own answer and
+writes it into a slot; the harness writes `Cmd`, waits, and reads the slot back. Nothing else is visible,
+on a real PLC or on pyrung.
+
+"Twin" undersells that, and it collides with "digital twin" (plant simulation), which in pyrung is the
+harness/physical layer.
+
+### Name
+
+Recommendation: **`conformance`**. `src/pyrung/twin/` -> `src/pyrung/conformance/`, `tests/twin/` ->
+`tests/conformance/`. The in-process run stays unmarked in `make test`; the Modbus run gets a new registered
+`conformance` marker and `make test-conformance` (decided). No `parity` marker exists (an earlier draft was wrong).
+
+### Build order
+
+1. **pyrung over Modbus first.** Start pyrung's Modbus sim (`ClickDataProvider` behind pyclickplc's
+   server) with the case program loaded, and run the 8-step protocol through a Modbus client. The
+   expectations in each case are what pyrung's sim answers over the wire. That makes the Modbus path the
+   contract and shakes out mapping, transport and pacing before any hardware is involved.
+2. **Real PLC second.** Same cases, same client, pointed at a CLICK with the exported program. A mismatch
+   is a finding: either pyrung's semantics change, or the difference becomes a documented Click deviation
+   (as with `CLK_OUT_TIMER_DONE_UNSET`).
+
+### Gaps in today's harness
+
+- `_runner.run()` reads `plc.current_state.tags` in-process; nothing goes over Modbus. The `on=real_plc`
+  in `tests/twin/AGENTS.md` isn't implemented.
+- Slots are a `named_array` with no TagMap. Over Modbus they need fixed DS addresses (the build hash already
+  claims `DS1`).
+- Step 5 ("run until the slowest test has had its scans") counts scans in-process. Over the wire, against a
+  free-running sim or PLC, it's wall-clock: timer cases need presets well above scan jitter, and expectations
+  need tolerances (or a bracket like "Acc between 90 and 110").
+- Case programs must export to CLICK, so the cases are limited to what the exporter supports. The v4
+  probes (O*, D*, M*, F*) wait for the v4 export.
+
+### Cases from this doc
+
+O1..O7 (Out), D1..D3 (drum), M1..M4 (math), F1..F16 (for/next). Each goes in as a sentence, a ladder and an
+expectation. Write pyrung's current answer as the expectation, mark it unconfirmed, and replace it with the
+PLC's answer when the run comes back.
