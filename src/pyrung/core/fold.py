@@ -75,6 +75,12 @@ class _AccSource:
     bidir: bool = False  # CountUp with down_condition — delta sign varies at runtime
     unit: Any = None  # TimeUnit for timed sources; None for counters / synthetic sources.
     acc_max: int = 32767  # Timed sources: the accumulator's clamp (a time drum's DINT is wider).
+    # Self-calc sources: the per-scan step (an int literal, or the name of a tag
+    # no rung writes, ``-``-prefixed when subtracted) and the destination's wrap
+    # range.  The probe must move the tag by exactly that step, and no skipped
+    # scan may leave the range.
+    step: int | str | None = None
+    value_range: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -247,8 +253,17 @@ def _is_free_running_selfcalc(tag: str, pdg: ProgramGraph, program: Any) -> bool
     return _calc_self_referential(tag, pdg, program)
 
 
-def _match_affine_selfcalc(expr: Any, tag: str) -> tuple[int, int | None] | None:
-    """Match ``(tag ± c) % m`` / ``tag ± c``; return ``(c, m)`` or ``None``."""
+def _match_affine_selfcalc(
+    expr: Any,
+    tag: str,
+    constant_tag: Callable[[str], bool] | None = None,
+) -> tuple[int | str, int | None] | None:
+    """Match ``(tag ± c) % m`` / ``tag ± c``; return ``(c, m)`` or ``None``.
+
+    ``c`` is an int literal.  Without ``% m`` it may also be a tag for which
+    *constant_tag* holds; ``c`` is then that tag's name, prefixed with ``-``
+    for ``tag - K``.
+    """
     from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr
 
     def lit(e: Any) -> int | None:
@@ -261,26 +276,38 @@ def _match_affine_selfcalc(expr: Any, tag: str) -> tuple[int, int | None] | None
     def is_self(e: Any) -> bool:
         return isinstance(e, TagExpr) and getattr(e.tag, "name", None) == tag
 
-    def linear(e: Any) -> int | None:
+    def operand(e: Any, allow_tag: bool) -> int | str | None:
+        k = lit(e)
+        if k is not None:
+            return k
+        if allow_tag and constant_tag is not None and isinstance(e, TagExpr):
+            name = getattr(e.tag, "name", None)
+            if isinstance(name, str) and name != tag and constant_tag(name):
+                return name
+        return None
+
+    def linear(e: Any, allow_tag: bool) -> int | str | None:
         if not isinstance(e, BinaryExpr):
             return None
         if e.symbol == "+":
             if is_self(e.left):
-                return lit(e.right)
+                return operand(e.right, allow_tag)
             if is_self(e.right):
-                return lit(e.left)
+                return operand(e.left, allow_tag)
         elif e.symbol == "-" and is_self(e.left):
-            k = lit(e.right)
-            return None if k is None else -k
+            k = operand(e.right, allow_tag)
+            if k is None:
+                return None
+            return f"-{k}" if isinstance(k, str) else -k
         return None
 
     if isinstance(expr, BinaryExpr) and expr.symbol == "%":
         m = lit(expr.right)
-        c = linear(expr.left)
-        if m is not None and c is not None and c != 0 and 0 < m <= 32767:
+        c = linear(expr.left, allow_tag=False)
+        if m is not None and isinstance(c, int) and c != 0 and 0 < m <= 32767:
             return (c, m)
         return None
-    c = linear(expr)
+    c = linear(expr, allow_tag=True)
     if c is not None and c != 0:
         return (c, None)
     return None
@@ -384,65 +411,6 @@ def _node_reads(node: Any) -> frozenset[str]:
     return node.condition_reads | node.data_reads | node.exclusive_reads
 
 
-def _downstream_closure(pdg: ProgramGraph, root: str) -> frozenset[str]:
-    """All tags whose values can depend on *root*, transitively."""
-    sub_nodes: dict[str, list[Any]] = {}
-    for node in pdg.rung_nodes:
-        if node.subroutine is not None:
-            sub_nodes.setdefault(node.subroutine, []).append(node)
-
-    closure: set[str] = {root}
-    called: set[str] = set()
-    changed = True
-    while changed:
-        changed = False
-        for node in pdg.rung_nodes:
-            if not (_node_reads(node) & closure):
-                continue
-            if not node.writes <= closure:
-                closure |= node.writes
-                changed = True
-            for sub in node.calls:
-                if sub in called:
-                    continue
-                called.add(sub)
-                stack = [sub]
-                while stack:
-                    name = stack.pop()
-                    for sn in sub_nodes.get(name, ()):
-                        if not sn.writes <= closure:
-                            closure |= sn.writes
-                            changed = True
-                        for nested in sn.calls:
-                            if nested not in called:
-                                called.add(nested)
-                                stack.append(nested)
-    return frozenset(closure)
-
-
-def _unread_churn_tags(plc: PLC, pdg: ProgramGraph, program: Any) -> frozenset[str]:
-    """Self-updating tags nothing else reads — unobservable per-scan churn."""
-    out: set[str] = set()
-    harness_names = _harness_referenced_names(plc)
-    for tag, writers in pdg.writers_of.items():
-        if tag in harness_names:
-            continue
-        readers = pdg.all_readers_of.get(tag, frozenset())
-        if not readers <= writers:
-            continue
-        ok = True
-        for ri in writers:
-            extra = pdg.rung_nodes[ri].writes - {tag}
-            if extra:
-                ok = False
-                break
-        if not ok:
-            continue
-        if _calc_self_referential(tag, pdg, program):
-            out.add(tag)
-    return frozenset(out)
-
-
 def _scan_local_terminal_tags(
     plc: PLC,
     pdg: ProgramGraph,
@@ -465,38 +433,6 @@ def _scan_local_terminal_tags(
         and not pdg.all_readers_of.get(tag, frozenset())
         and pdg.unconditional_write_before_read(tag)
     )
-
-
-def _disjoint_churn_closures(
-    plc: PLC,
-    pdg: ProgramGraph,
-    program: Any,
-    target_names: frozenset[str],
-    skip_roots: frozenset[str],
-) -> frozenset[str]:
-    """Read churn whose downstream cone never reaches the targets."""
-    if not target_names:
-        return frozenset()
-    harness_names = _harness_referenced_names(plc)
-    cone: set[str] = set()
-    for t in target_names:
-        cone.add(t)
-        cone |= pdg.upstream_slice(t)
-
-    excluded: set[str] = set()
-    for tag, writers in pdg.writers_of.items():
-        if tag in skip_roots or tag in harness_names:
-            continue
-        readers = pdg.all_readers_of.get(tag, frozenset())
-        if readers <= writers:
-            continue
-        if not _calc_self_referential(tag, pdg, program):
-            continue
-        closure = _downstream_closure(pdg, tag)
-        if closure & cone or closure & harness_names:
-            continue
-        excluded |= closure
-    return frozenset(excluded - target_names)
 
 
 # ── 6a. Real-time clock ─────────────────────────────────────────────
@@ -1672,17 +1608,38 @@ def _selfcalc_sources(
     pdg: ProgramGraph,
     program: Any,
     target_names: frozenset[str],
-) -> list[tuple[str, int, int | None]]:
-    """Affine(-mod) self-calc churners eligible as exact fold sources."""
+) -> list[tuple[str, int | str, int | None, tuple[int, int]]]:
+    """Affine(-mod) self-calc churners eligible as exact fold sources.
+
+    Each is ``(tag, c, m, (lo, hi))``: one unconditional ``calc`` advances
+    ``tag`` by ``c`` per scan (modulo ``m`` when given) into an integer
+    destination that wraps at ``lo..hi``.  ``c`` is a literal or the name of
+    a tag no rung writes (see :func:`_match_affine_selfcalc`).
+    """
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.conversions import calc_store_transform
+    from pyrung.core.system_points import _DERIVED_TAG_NAMES
+    from pyrung.core.tag import TagType
 
     harness_names = _harness_referenced_names(plc)
-    out: list[tuple[str, int, int | None]] = []
+    integer_types = (TagType.INT, TagType.DINT, TagType.WORD)
+
+    def constant_tag(name: str) -> bool:
+        # No rung writes it, so it holds still between patches, and no fold
+        # window contains a patch.
+        tag_obj = pdg.tags.get(name)
+        return (
+            not pdg.writers_of.get(name)
+            and name not in harness_names
+            and name not in _DERIVED_TAG_NAMES
+            and not name.startswith(("sys.", "rtc.", "fault.", "_"))
+            and getattr(tag_obj, "type", None) in integer_types
+        )
+
+    out: list[tuple[str, int | str, int | None, tuple[int, int]]] = []
     for tag, writers in pdg.writers_of.items():
         if tag in harness_names or tag in target_names:
-            continue
-        if pdg.all_readers_of.get(tag, frozenset()) <= writers:
             continue
         if not _is_free_running_selfcalc(tag, pdg, program):
             continue
@@ -1700,9 +1657,20 @@ def _selfcalc_sources(
         ]
         if len(calc_writers) != 1:
             continue
-        matched = _match_affine_selfcalc(calc_writers[0].expression, tag)
+        calc_instr = calc_writers[0]
+        if getattr(calc_instr, "oneshot", False):
+            continue
+        dest_type = getattr(calc_instr.dest, "type", None)
+        if dest_type not in integer_types:
+            continue  # a REAL self-calc rounds per scan: no exact closed form
+        storage = calc_store_transform(dest_type, calc_instr.mode)
+        if storage is None or storage.kind != "wrap":
+            continue
+        if storage.lower is None or storage.upper is None:
+            continue
+        matched = _match_affine_selfcalc(calc_instr.expression, tag, constant_tag)
         if matched is not None:
-            out.append((tag, matched[0], matched[1]))
+            out.append((tag, matched[0], matched[1], (storage.lower, storage.upper)))
     return out
 
 
@@ -1931,15 +1899,15 @@ def _build_fold_context(
         frozenset(c.fb_name for c in h._profile_couplings) if h is not None else frozenset()
     )
 
+    # Self-feeding churn (a calc reading its own destination) is never simply
+    # left out of the plateau guard: the landing must still hold the value
+    # stepping reaches.  An exact affine(-mod) self-calc becomes a fold source
+    # below, patched forward in closed form; any other stays guarded, so a
+    # window it moves in is not folded.  Only scan-local terminals, rebuilt
+    # from the landing scan's own inputs, are excluded.
     churn_excluded: frozenset[str] = frozenset()
 
-    unread = _unread_churn_tags(plc, pdg, program) - target_names
     if advice is None or advice.has("fold_unread_churn"):
-        churn_excluded |= unread
-        if unread and journal is not None:
-            journal.add_note(
-                "fold: unread churn excluded from plateau guard: " + ", ".join(sorted(unread))
-            )
         terminals = _scan_local_terminal_tags(plc, pdg, target_names) - acc_names
         churn_excluded |= terminals
         if terminals and journal is not None:
@@ -1948,19 +1916,10 @@ def _build_fold_context(
                 + ", ".join(sorted(terminals))
             )
 
-    if advice is None or advice.has("fold_disjoint_churn"):
-        disjoint = _disjoint_churn_closures(plc, pdg, program, target_names, skip_roots=unread)
-        churn_excluded |= disjoint
-        if disjoint and journal is not None:
-            journal.add_note(
-                "fold: target-disjoint churn cone excluded from plateau guard: "
-                + ", ".join(sorted(disjoint))
-            )
-
     modwrap: list[_ModWrap] = []
     if advice is None or advice.has("fold_modwrap_source"):
         tracked: list[str] = []
-        for tag, c, m in _selfcalc_sources(plc, pdg, program, target_names):
+        for tag, c, m, value_range in _selfcalc_sources(plc, pdg, program, target_names):
             if tag in acc_names or tag in churn_excluded:
                 continue
             if m is None:
@@ -1969,12 +1928,17 @@ def _build_fold_context(
                         acc_name=tag,
                         done_bit=f"__selfcalc:{tag}",
                         preset=0,
-                        kind="up" if c > 0 else "down",
+                        kind="down" if isinstance(c, int) and c < 0 else "up",
                         timed=False,
+                        # A tag step's sign is only known at runtime.
+                        bidir=not isinstance(c, int),
+                        step=c,
+                        value_range=value_range,
                     )
                 )
                 acc_names |= {tag}
             else:
+                assert isinstance(c, int)
                 modwrap.append(_ModWrap(tag, c, m))
             tracked.append(tag)
         if tracked and journal is not None:
@@ -2646,6 +2610,10 @@ def _nearest_acc_crossing(
         pa = after_tot.get(src.acc_name)
         if pb is None or pa is None:
             continue
+        if src.step is not None:
+            bound = _selfcalc_bound(src, pa - pb, state)
+            if bound is not None:
+                best = bound if best is None else min(best, bound)
         delta = pa - pb
         if abs(delta) <= _EPS:
             continue
@@ -2688,6 +2656,39 @@ def _nearest_acc_crossing(
                 continue
             best = scans if best is None else min(best, scans)
     return best
+
+
+def _selfcalc_bound(src: _AccSource, prog_delta: float, state: Any) -> int | None:
+    """Crossing-style bound for a self-calc source: its step and its wrap.
+
+    The probe must have moved the tag by exactly its step (else ``1``: no
+    fold).  The patched value after ``skip - 1`` steps must stay inside the
+    destination's range: an overflowing step wraps and raises the transient
+    out-of-range fault, so only the genuine landing scan may take it.
+    Returns scans in :func:`_nearest_acc_crossing` units (``skip = scans - 1``),
+    or ``None`` when the source is not moving.
+    """
+    step = src.step
+    if isinstance(step, str):
+        negate = step.startswith("-")
+        raw = state.tags.get(step[1:] if negate else step)
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            return 1
+        step = -raw if negate else raw
+    assert isinstance(step, int)
+    measured = prog_delta if src.kind == "up" else -prog_delta
+    if measured != step:
+        return 1
+    if step == 0:
+        return None
+    value = state.tags.get(src.acc_name)
+    if src.value_range is None or isinstance(value, bool) or not isinstance(value, int):
+        return 1
+    lo, hi = src.value_range
+    if not lo <= value <= hi:
+        return 1
+    first_out = (hi - value) // step + 1 if step > 0 else (value - lo) // -step + 1
+    return first_out + 1
 
 
 def _nearest_mod_flip(

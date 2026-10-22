@@ -669,6 +669,20 @@ def cycle_fold_until(
                 stats["rtc_readers_on"] = stats.get("rtc_readers_on", 0) + 1
             if rtc_room is not None:
                 periods_to_jump = min(periods_to_jump, rtc_room // cyc.period)
+        # A self-calc source wraps at its destination's range (and faults on
+        # the scan that overflows): a jump may not carry it past either end.
+        for tag, delta in cyc.monotone.items():
+            selfcalc = next((s for s in fold_ctx.sources if s.acc_name == tag), None)
+            if selfcalc is None or selfcalc.value_range is None:
+                continue
+            lo, hi = selfcalc.value_range
+            value = plc.state.tags.get(tag)
+            per_period = round(delta)
+            if isinstance(value, bool) or not isinstance(value, int) or per_period == 0:
+                periods_to_jump = 0
+                break
+            room = (hi - value) // per_period if per_period > 0 else (value - lo) // -per_period
+            periods_to_jump = min(periods_to_jump, room)
         if periods_to_jump < 1:
             continue
 

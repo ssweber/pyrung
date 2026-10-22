@@ -200,8 +200,8 @@ def _churn_plus_timer_program(preset_ms: int = 100_000) -> Program:
     rung writes nothing else, affine self-referential calc) PLUS an unrelated
     timer so the fold has a plateau to fold.
 
-    X qualifies for `_unread_churn_tags` (fold.py:368-388): readers ⊆ writers,
-    the writer writes only X, and the calc reads X itself."""
+    Unprotected, X is an exact self-calc fold source (``_selfcalc_sources``):
+    one unconditional ``calc(X + 1, X)`` into an INT."""
     Enable = Bool("Enable", external=True)
     Tmr = Timer.clone("Tmr")
     X = Int("X")
@@ -217,23 +217,25 @@ class TestProtectedChurnExcludedRead:
     """A churn-excluded tag read by the run_until condition must break the
     plateau (not be folded past to the timer preset)."""
 
-    def test_setup_is_real_churn_is_excluded_without_protection(self) -> None:
-        # The unprotected context (target_names=∅) really does classify X as
-        # unobservable churn — the setup being fixed is what the headline needs.
+    def test_unprotected_churn_is_an_exact_fold_source(self) -> None:
+        # The unprotected context (target_names=∅) tracks X as a self-calc fold
+        # source, patched forward exactly: never just left out of the guard.
         plc = PLC(_churn_plus_timer_program(), dt=0.010)
         plc.patch({"Enable": True})
         plc.step()
         ctx = plc._ensure_fold_context()
-        assert "X" in ctx.churn_excluded
+        assert "X" not in ctx.churn_excluded
+        assert "X" in ctx.acc_names
 
-    def test_protection_removes_x_from_churn_excluded(self) -> None:
-        # Threading X in as a protected read (target_names) removes it from the
-        # churn set, so the plateau guard once again watches every increment.
+    def test_protection_keeps_x_in_the_plateau_guard(self) -> None:
+        # Threading X in as a protected read (target_names) keeps it out of the
+        # fold sources, so the plateau guard watches every increment.
         plc = PLC(_churn_plus_timer_program(), dt=0.010)
         plc.patch({"Enable": True})
         plc.step()
         ctx = plc._ensure_fold_context(frozenset({"X"}))
         assert "X" not in ctx.churn_excluded
+        assert "X" not in ctx.acc_names
 
     def test_run_until_lands_on_exact_first_crossing(self) -> None:
         # End-to-end: run_until(X >= K) auto-protects X, so the fold lands on the

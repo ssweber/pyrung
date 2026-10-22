@@ -332,8 +332,11 @@ class TestChurnExclusion:
         plc_nofold.step()
         plc_nofold.run_until(tmr2.Done, max_cycles=5000, fold=False)
 
+        assert plc_fold.state.scan_id == plc_nofold.state.scan_id
         assert plc_fold.state.tags["Done"] == plc_nofold.state.tags["Done"]
         assert plc_fold.state.tags["Tmr_Done"] == plc_nofold.state.tags["Tmr_Done"]
+        # The churn itself lands on the stepped value, not one step past the probe.
+        assert plc_fold.state.tags["Cycle"] == plc_nofold.state.tags["Cycle"]
 
 
 # ---------------------------------------------------------------------------
@@ -2612,6 +2615,128 @@ class TestTimerCarryExact:
         for n in range(1, 400):
             acc, carry = _timer_step(acc, carry, quantum, 32_767)
             assert _timer_after(move, n) == (acc, carry)
+
+
+class TestSelfFeedingChurnExact:
+    """A calc that feeds its own destination is not just left out of the
+    plateau guard: an exact affine self-calc is patched forward in closed form
+    (wrapping and faulting exactly as stepping), any other shape is guarded."""
+
+    @staticmethod
+    def _churn_program(body: Callable[[Any], Any], *, read: bool = False) -> Callable[[], Program]:
+        def build() -> Program:
+            from pyrung import latch
+
+            Tot = Int("Tot")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    body(Tot)
+                if read:
+                    with Rung(Tot > 100):
+                        out(Bool("TotHigh"))
+                with Rung(system.fault.out_of_range):
+                    latch(Bool("FaultSeen"))
+                with Rung():
+                    on_delay(Tmr, 5_000)
+                with Rung(Tmr.Done):
+                    out(Bool("Hit"))
+            return prog
+
+        return build
+
+    _SHAPES: dict[str, Callable[[Any], Any]] = {
+        "tag_step": lambda tot: calc(tot + Int("K"), tot),
+        "literal": lambda tot: calc(tot + 7, tot),
+        "negative": lambda tot: calc(tot - 9, tot),
+        "modular": lambda tot: calc((tot + 7) % 1_000, tot),
+        "not_affine": lambda tot: calc(tot * 3 + 1, tot),
+    }
+
+    @pytest.mark.parametrize("shape", sorted(_SHAPES))
+    @pytest.mark.parametrize("read", [False, True])
+    def test_churn_lands_on_the_stepped_value(self, shape: str, read: bool) -> None:
+        folded = _assert_fold_is_exact(
+            self._churn_program(self._SHAPES[shape], read=read),
+            _until_hit(1_000),
+            patch={"K": 1},
+        )
+        assert folded.state.tags["Hit"] is True
+
+    @pytest.mark.parametrize("shape", ["tag_step", "literal", "negative"])
+    def test_overflow_wraps_and_faults_as_stepping(self, shape: str) -> None:
+        start = -32_700 if shape == "negative" else 32_700
+        _assert_fold_is_exact(
+            self._churn_program(self._SHAPES[shape]),
+            _until_hit(1_000),
+            patch={"K": 7, "Tot": start},
+        )
+
+    def test_cycle_jump_stops_short_of_a_wrap(self) -> None:
+        from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
+
+        def build() -> Program:
+            Tot = Int("Tot")
+            Osc = Bool("Osc")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung(~Osc):
+                    out(Osc)  # a period-2 cycle: the ordinary fold never sees a plateau
+                with Rung():
+                    calc(Tot + 7, Tot)
+                with Rung(Tot > 30_000):
+                    out(Bool("High"))
+                with Rung(system.fault.out_of_range):
+                    out(Bool("FaultNow"))
+                with Rung():
+                    on_delay(Tmr, 60_000)
+            return prog
+
+        def faulted(state: Any) -> bool:
+            return bool(state.tags.get("FaultNow"))
+
+        runs = []
+        for fold in (True, False):
+            plc = PLC(build(), dt=0.010)
+            plc.patch({"Tot": 32_000})
+            plc.step()
+            if fold:
+                stats: dict[str, int] = {}
+                cycle_fold_until(plc, faulted, budget=3_000, kernel_budget=False, stats=stats)
+                assert stats["cycle_folds"] >= 1
+            else:
+                plc.run_until(faulted, max_cycles=3_000, fold=False)
+            runs.append(plc)
+        folded, stepped = runs
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _full_state(folded) == _full_state(stepped)
+
+    def test_unread_affine_churn_still_folds(self) -> None:
+        plc = PLC(self._churn_program(self._SHAPES["tag_step"])(), dt=0.010)
+        plc.patch({"K": 1})
+        plc.step()
+        counter = _count_kernel_scans(plc)
+        plc.run_until(Bool("Hit"), max_cycles=1_000)
+        assert counter["n"] <= 6
+        assert plc.state.tags["Tot"] == plc.state.scan_id
+
+    def test_target_disjoint_churn_cone_matches_stepping(self) -> None:
+        def build() -> Program:
+            Phase = Int("Phase")
+            Seen = Counter.clone("Seen")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    calc((Phase + 1) % 5, Phase)
+                with Rung(Phase == 2):
+                    count_up(Seen, 10_000).reset(Bool("SR"))
+                with Rung():
+                    on_delay(Tmr, 5_000)
+                with Rung(Tmr.Done):
+                    out(Bool("Hit"))
+            return prog
+
+        _assert_fold_is_exact(build, _until_hit(1_000))
 
 
 class TestFoldLandingCheckpoint:
