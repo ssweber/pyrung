@@ -612,10 +612,13 @@ def _scans_to_rtc_tick(
     tags = state.tags
     if any(tags.get(name) for name in _rtc_apply_names()):
         return 0
-    boundary = _rtc_boundary(rtc_at(probe_timestamp), unit)
-    if rtc_at(state.timestamp) >= boundary:
-        return 0
-    return _rtc_reads_before(rtc_at, state.timestamp, dt, boundary)
+    try:
+        boundary = _rtc_boundary(rtc_at(probe_timestamp), unit)
+        if rtc_at(state.timestamp) >= boundary:
+            return 0
+        return _rtc_reads_before(rtc_at, state.timestamp, dt, boundary)
+    except OverflowError:
+        return 0  # the next tick lies past datetime.max: decline, never raise
 
 
 def _rtc_jump_room(
@@ -644,10 +647,13 @@ def _rtc_jump_room(
     tags = state.tags
     if any(tags.get(name) for name in _rtc_apply_names()):
         return 0
-    boundary = _rtc_boundary(rtc_at(state.timestamp - observed_scans * dt), unit)
-    if rtc_at(state.timestamp) >= boundary:
-        return 0
-    return _rtc_reads_before(rtc_at, state.timestamp, dt, boundary)
+    try:
+        boundary = _rtc_boundary(rtc_at(state.timestamp - observed_scans * dt), unit)
+        if rtc_at(state.timestamp) >= boundary:
+            return 0
+        return _rtc_reads_before(rtc_at, state.timestamp, dt, boundary)
+    except OverflowError:
+        return 0  # the next tick lies past datetime.max: decline, never raise
 
 
 # ── 6b. Time mirrors (soft RTC ticks) ───────────────────────────────

@@ -2419,3 +2419,24 @@ class TestSoftRtcCallablePredicate:
         assert stepped.state.tags["Sec"] == 30
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
+
+
+class TestRtcNearDatetimeMax:
+    def test_tick_past_datetime_max_declines_instead_of_raising(self) -> None:
+        from pyrung import copy
+
+        def build() -> Program:
+            with Program(strict=False) as prog:
+                with Rung():
+                    copy(system.rtc.day, Int("D"))
+                with Rung():
+                    on_delay(Timer.clone("Tmr"), 100, "s")
+            return prog
+
+        folded, stepped = _folded_and_stepped(
+            build,
+            lambda plc, fold: _run_scans(plc, 500, fold=fold),
+            start=(9999, 12, 31, 12, 0, 0, 0),
+        )
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
