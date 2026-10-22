@@ -356,6 +356,7 @@ def cycle_fold_until(
         _acc_totals,
         _harness_nearest_scan,
         _OrdinaryFoldStrategy,
+        _rtc_jump_room,
         fold_run_until,
     )
 
@@ -622,6 +623,17 @@ def cycle_fold_until(
         if harness_scan is not None:
             room = harness_scan - plc.state.scan_id - 1
             periods_to_jump = min(periods_to_jump, max(0, room // cyc.period))
+        # RTC fields are clocks with no period: the observed window and every
+        # skipped scan must read them unchanged.
+        rtc_room = _rtc_jump_room(
+            fold_ctx,
+            plc.state,
+            cyc.period * min_repeats + 1,
+            plc._rtc_at_sim_time,
+            fold_ctx.rtc_fields,
+        )
+        if rtc_room is not None:
+            periods_to_jump = min(periods_to_jump, rtc_room // cyc.period)
         if periods_to_jump < 1:
             continue
 

@@ -594,3 +594,51 @@ class TestCycleFoldAcrossClocks:
         # Kernel scans stay observation-bound: a 10x longer soak is nearly free.
         assert long < short * 2
         assert long < 3_000  # 10x more soak, an order of magnitude under its length
+
+
+def _rtc_reader_cycle_program() -> Program:
+    """A period-2 oscillation beside an unconditional reader of the RTC second
+    and a rung that latches on its value: a cycle jump must not skip a tick."""
+    from pyrung import calc, copy, latch
+
+    Sec = Int("RcSec")
+    Half = Int("RcHalf")
+    Seen = Bool("RcSeen")
+    T = Bool("RcT")
+    Tmr = Timer.clone("RcTmr")
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(system.rtc.second, Sec)
+        with Rung(~T):
+            out(T)
+        with Rung():
+            calc(Sec // 30, Half)
+        with Rung(Half == 1):
+            latch(Seen)
+        with Rung():
+            on_delay(Tmr, 300_000)
+    return prog
+
+
+class TestCycleFoldRtcTicks:
+    @staticmethod
+    def _plc() -> PLC:
+        from datetime import datetime
+
+        plc = PLC(_rtc_reader_cycle_program(), dt=0.010)
+        plc.set_rtc(datetime(2026, 3, 1, 12, 59, 5, 250_000))
+        plc.step()
+        return plc
+
+    def test_cycle_jump_stops_at_rtc_ticks(self) -> None:
+        ref = self._plc()
+        for _ in range(6_000):
+            ref.step()
+        folded = self._plc()
+        stats: dict[str, int] = {}
+        cycle_fold_until(folded, lambda _s: False, budget=6_000, kernel_budget=False, stats=stats)
+
+        assert ref.state.tags["RcSeen"] is True
+        assert stats["cycle_folds"] >= 1
+        assert folded.state.scan_id == ref.state.scan_id
+        assert folded.state.tags == ref.state.tags

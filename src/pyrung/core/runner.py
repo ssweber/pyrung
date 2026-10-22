@@ -2865,6 +2865,7 @@ class PLC:
                 probe,
                 max_skip=max_skip,
                 endpoint_is_boundary=True,
+                rtc_at=replay._rtc_at_sim_time,
             )
             if plan is None:
                 continue

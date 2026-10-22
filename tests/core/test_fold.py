@@ -1567,3 +1567,182 @@ class TestFirstScanWindowConstant:
         assert stepped.state.tags["Ctr_Acc"] == 99
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
+
+
+# ---------------------------------------------------------------------------
+# Real-time clock: rtc.* fields are clocks the fold bounds on their ticks
+# ---------------------------------------------------------------------------
+
+_RTC_START = (2026, 3, 1, 12, 59, 57, 250_000)
+
+
+def _rtc_plc(prog: Program, *, dt: float = 0.010, start: tuple[int, ...] = _RTC_START) -> PLC:
+    from datetime import datetime
+
+    plc = PLC(prog, dt=dt)
+    plc.set_rtc(datetime(*start))
+    plc.step()
+    return plc
+
+
+def _rtc_latch_program() -> tuple[Program, Bool]:
+    from pyrung import latch
+
+    X = Bool("X")
+    Tmr = Timer.clone("Tmr")
+    with Program(strict=False) as prog:
+        with Rung(system.rtc.second == 30):
+            latch(X)
+        with Rung():
+            on_delay(Tmr, 60_000)
+    return prog, X
+
+
+def _rtc_gated_counter_program() -> Program:
+    """A counter that counts every scan while the RTC second is below 30.
+
+    Its accumulator is a fold coordinate, so a window whose scans read a
+    different second than the probe did would patch the wrong per-scan delta.
+    """
+    Ctr = Counter.clone("Ctr")
+    Tmr = Timer.clone("Tmr")
+    with Program(strict=False) as prog:
+        with Rung(system.rtc.second < 30):
+            count_up(Ctr, 1_000_000).reset(Bool("CtrReset"))
+        with Rung():
+            on_delay(Tmr, 60_000)
+    return prog
+
+
+def _rtc_mirror_only_program() -> tuple[Program, Bool]:
+    from pyrung import copy
+
+    Sec = Int("Sec")
+    HHMM = Int("HHMM")
+    Tmr = Timer.clone("Tmr")
+    Hit = Bool("Hit")
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(system.rtc.second, Sec)
+        with Rung():
+            calc(system.rtc.hour * 100 + system.rtc.minute, HHMM)
+        with Rung():
+            on_delay(Tmr, 60_000)
+        with Rung(Tmr.Done):
+            out(Hit)
+    return prog, Hit
+
+
+def _run_scans(plc: PLC, n: int, *, fold: bool) -> None:
+    plc.run_until(lambda _s: False, max_cycles=n, fold=fold)
+
+
+class TestRtcTickBound:
+    """A rung or a run_until condition that reads an ``rtc.*`` field bounds every
+    fold window at that field's next tick, so folding never skips one."""
+
+    def test_rtc_fields_are_collected(self) -> None:
+        prog, _x = _rtc_latch_program()
+        plc = _rtc_plc(prog)
+        assert plc._ensure_fold_context().rtc_fields == {system.rtc.second.name}
+        cond = plc._ensure_fold_context(frozenset({system.rtc.minute.name}))
+        assert cond.rtc_condition_fields == {system.rtc.minute.name}
+        assert cond.rtc_fields == {system.rtc.second.name, system.rtc.minute.name}
+
+    def test_rtc_condition_rung_does_not_skip_its_second(self) -> None:
+        prog, _x = _rtc_latch_program()
+        stepped = _rtc_plc(prog)
+        _run_scans(stepped, 4_000, fold=False)
+        prog, _x = _rtc_latch_program()
+        folded = _rtc_plc(prog)
+        counter = _count_kernel_scans(folded)
+        _run_scans(folded, 4_000, fold=True)
+
+        assert stepped.state.tags["X"] is True
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+        assert counter["n"] < 400  # still folds within each second
+
+    def test_run_until_rtc_condition_stops_on_its_scan(self) -> None:
+        def run(fold: bool) -> PLC:
+            prog, _x = _rtc_latch_program()
+            plc = _rtc_plc(prog)
+            plc.run_until(system.rtc.second == 30, max_cycles=6_000, fold=fold)
+            return plc
+
+        folded, stepped = run(True), run(False)
+        assert stepped.state.scan_id < 6_000
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    def test_probe_must_read_the_window_value(self) -> None:
+        """A probe that read the second before a tick, landing after it, says
+        nothing about a window that reads the new second."""
+        from types import SimpleNamespace
+
+        from pyrung.core.fold import _scans_to_rtc_tick
+
+        prog, _x = _rtc_latch_program()
+        plc = _rtc_plc(prog, start=(2026, 3, 1, 12, 59, 57, 0))
+        ctx = plc._ensure_fold_context()
+        fields = ctx.rtc_fields
+        rtc_at = plc._rtc_at_sim_time
+        # The second ticks at sim time 1.0 (scan reads at 0.99 and 1.00).
+        after = SimpleNamespace(tags=plc.state.tags, timestamp=1.005)
+        assert _scans_to_rtc_tick(ctx, after, 0.995, rtc_at, fields) == 0
+        after = SimpleNamespace(tags=plc.state.tags, timestamp=1.015)
+        assert _scans_to_rtc_tick(ctx, after, 1.005, rtc_at, fields) == 99
+        # Reads at 1.015 .. 1.995 see the same second; the landing may follow.
+        before = SimpleNamespace(tags=plc.state.tags, timestamp=0.505)
+        assert _scans_to_rtc_tick(ctx, before, 0.495, rtc_at, fields) == 50
+
+    @pytest.mark.parametrize("dt", [0.010, 0.030, 0.070])
+    def test_rtc_gated_counter_matches_stepped(self, dt: float) -> None:
+        prog = _rtc_gated_counter_program()
+        stepped = _rtc_plc(prog, dt=dt)
+        _run_scans(stepped, int(70 / dt), fold=False)
+        prog = _rtc_gated_counter_program()
+        folded = _rtc_plc(prog, dt=dt)
+        _run_scans(folded, int(70 / dt), fold=True)
+
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    def test_apply_flag_declines_the_window(self) -> None:
+        from types import SimpleNamespace
+
+        from pyrung.core.fold import _scans_to_rtc_tick
+
+        prog, _x = _rtc_latch_program()
+        plc = _rtc_plc(prog)
+        ctx = plc._ensure_fold_context()
+        state = plc.state
+        free = _scans_to_rtc_tick(
+            ctx, state, state.timestamp - ctx.normal_dt, plc._rtc_at_sim_time, ctx.rtc_fields
+        )
+        assert free is not None and free > 0
+        applying = SimpleNamespace(
+            tags={**state.tags, system.rtc.apply_time.name: True}, timestamp=state.timestamp
+        )
+        assert (
+            _scans_to_rtc_tick(
+                ctx,
+                applying,
+                state.timestamp - ctx.normal_dt,
+                plc._rtc_at_sim_time,
+                ctx.rtc_fields,
+            )
+            == 0
+        )
+
+    @pytest.mark.parametrize("dt", [0.010, 0.5])
+    def test_replay_seek_matches_replay(self, dt: float) -> None:
+        prog, _hit = _rtc_mirror_only_program()
+        plc = _rtc_plc(prog, dt=dt)
+        for _ in range(int(30 / dt)):
+            plc.step()
+        target = int(19.5 / dt)
+        seek = plc._replay_seek(target)
+        ref = plc.replay_to(target)
+        assert seek.state.scan_id == ref.state.scan_id
+        assert _plain_tags(seek) == _plain_tags(ref)

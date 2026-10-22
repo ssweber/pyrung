@@ -33,6 +33,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.executor import ConditionViewCapture
     from pyrung.core.runner import PLC
@@ -126,6 +128,11 @@ class _FoldContext:
     # Some rung reads ``sys.first_scan``: a probe scan run at scan 0 sees it True
     # while the window after it sees False, so such a probe cannot certify a fold.
     reads_first_scan: bool = False
+    # ``rtc.*`` fields a rung or the run_until condition reads.  Each is a clock
+    # whose next tick is known from the RTC base (see _scans_to_rtc_tick).
+    rtc_fields: frozenset[str] = frozenset()
+    # The subset the run_until condition reads: always bounded, never soft.
+    rtc_condition_fields: frozenset[str] = frozenset()
 
 
 # ── 3. Instruction registry ─────────────────────────────────────────
@@ -477,6 +484,165 @@ def _disjoint_churn_closures(
             continue
         excluded |= closure
     return frozenset(excluded - target_names)
+
+
+# ── 6a. Real-time clock ─────────────────────────────────────────────
+
+
+def _rtc_field_units() -> dict[str, str]:
+    """``rtc.*`` field name -> the calendar unit whose boundary can change it.
+
+    Day, weekday, month and both year fields change only at midnight, so the
+    day boundary bounds all of them (exactly for day and weekday, early for the
+    rest).
+    """
+    from pyrung.core.system_points import system as _system
+
+    rtc = _system.rtc
+    return {
+        rtc.second.name: "second",
+        rtc.minute.name: "minute",
+        rtc.hour.name: "hour",
+        rtc.day.name: "day",
+        rtc.weekday.name: "day",
+        rtc.month.name: "day",
+        rtc.year4.name: "day",
+        rtc.year2.name: "day",
+    }
+
+
+_RTC_UNIT_ORDER = ("second", "minute", "hour", "day")
+
+
+def _rtc_apply_names() -> tuple[str, str]:
+    from pyrung.core.system_points import system as _system
+
+    return (_system.rtc.apply_date.name, _system.rtc.apply_time.name)
+
+
+def _rtc_finest_unit(fields: frozenset[str]) -> str | None:
+    units = _rtc_field_units()
+    present = {units[f] for f in fields if f in units}
+    for unit in _RTC_UNIT_ORDER:
+        if unit in present:
+            return unit
+    return None
+
+
+def _rtc_boundary(now: datetime, unit: str) -> datetime:
+    """The first RTC instant after *now* at which a *unit*-grained field may change."""
+    from datetime import timedelta
+
+    if unit == "second":
+        return now.replace(microsecond=0) + timedelta(seconds=1)
+    if unit == "minute":
+        return now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    if unit == "hour":
+        return now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    return now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+
+def _rtc_reads_before(
+    rtc_at: Callable[[float], datetime],
+    t0: float,
+    dt: float,
+    boundary: datetime,
+) -> int:
+    """How many consecutive scans reading at ``t0, t0 + dt, ...`` see the RTC before *boundary*.
+
+    Scan ``j`` of a window reads the RTC at ``t0 + j * dt`` (the landing scan
+    resolves it at exactly that expression).  The estimate from the remaining
+    seconds is corrected against the runtime's own ``rtc_at`` so the count
+    agrees with what each scan resolves, including its microsecond rounding.
+    """
+    remaining = (boundary - rtc_at(t0)).total_seconds()
+    n = max(0, math.ceil(remaining / dt - _EPS))
+    while n > 0 and rtc_at(t0 + (n - 1) * dt) >= boundary:
+        n -= 1
+    while rtc_at(t0 + n * dt) < boundary:
+        n += 1
+    return n
+
+
+def _rtc_read_fields(pdg: ProgramGraph) -> frozenset[str]:
+    """``rtc.*`` fields any rung reads (conditions, data, or exclusive reads)."""
+    units = _rtc_field_units()
+    out: set[str] = set()
+    for node in pdg.rung_nodes:
+        out |= _node_reads(node) & units.keys()
+    return frozenset(out)
+
+
+def _scans_to_rtc_tick(
+    ctx: _FoldContext,
+    state: Any,
+    probe_timestamp: float,
+    rtc_at: Callable[[float], datetime] | None,
+    fields: frozenset[str],
+) -> int | None:
+    """Largest fold skip whose scans all read the RTC fields *fields* unchanged.
+
+    Each ``rtc.*`` field is a clock: resolved on read from ``rtc_base +
+    timestamp`` and never stored, so the plateau guard cannot see it move.
+    The window after a probe is certified only by what the probe scan did, so
+
+    * the probe must have read the same field values the window starts with.
+      A probe that straddled a tick saw the previous value; return ``0``;
+    * every window scan, the landing scan included, must read before the next
+      tick of the finest read field.  The landing state itself may sit on or
+      past the tick: the next genuine scan reads the new value.
+
+    A program (or a patch) that leaves ``rtc.apply_date`` / ``apply_time`` set
+    moves the RTC base at the start of the next scan, so nothing is certified
+    then.  ``None`` means no field needs bounding.
+    """
+    if not fields:
+        return None
+    unit = _rtc_finest_unit(fields)
+    if unit is None:
+        return None
+    dt = ctx.normal_dt
+    if rtc_at is None or dt <= 0:
+        return 0
+    tags = state.tags
+    if any(tags.get(name) for name in _rtc_apply_names()):
+        return 0
+    boundary = _rtc_boundary(rtc_at(probe_timestamp), unit)
+    if rtc_at(state.timestamp) >= boundary:
+        return 0
+    return _rtc_reads_before(rtc_at, state.timestamp, dt, boundary)
+
+
+def _rtc_jump_room(
+    ctx: _FoldContext,
+    state: Any,
+    observed_scans: int,
+    rtc_at: Callable[[float], datetime] | None,
+    fields: frozenset[str],
+) -> int | None:
+    """Most scans a cycle jump from *state* may skip without an RTC tick.
+
+    A cycle jump extrapolates the last *observed_scans* genuine scans, so they
+    and every skipped scan must read the same values of *fields*: the first
+    observed scan read at ``state.timestamp - observed_scans * dt``.  Returns
+    ``0`` when the observation already spans a tick, ``None`` when *fields*
+    is empty.
+    """
+    if not fields:
+        return None
+    unit = _rtc_finest_unit(fields)
+    if unit is None:
+        return None
+    dt = ctx.normal_dt
+    if rtc_at is None or dt <= 0:
+        return 0
+    tags = state.tags
+    if any(tags.get(name) for name in _rtc_apply_names()):
+        return 0
+    boundary = _rtc_boundary(rtc_at(state.timestamp - observed_scans * dt), unit)
+    if rtc_at(state.timestamp) >= boundary:
+        return 0
+    return _rtc_reads_before(rtc_at, state.timestamp, dt, boundary)
 
 
 def _window_constant_names() -> frozenset[str]:
@@ -1157,6 +1323,11 @@ def _build_fold_context(
     first_scan_name = _system.sys.first_scan.name
     reads_first_scan = any(first_scan_name in _node_reads(node) for node in pdg.rung_nodes)
 
+    rtc_condition_fields = target_names & frozenset(_rtc_field_units())
+    rtc_fields = _rtc_read_fields(pdg) | rtc_condition_fields
+    if rtc_fields and journal is not None:
+        journal.add_note("fold: bounded by RTC field ticks: " + ", ".join(sorted(rtc_fields)))
+
     return _FoldContext(
         sources=tuple(sources),
         acc_names=acc_names,
@@ -1175,6 +1346,8 @@ def _build_fold_context(
         sat_clocks=sat_clocks,
         frozen_writes=frozen_writes,
         reads_first_scan=reads_first_scan,
+        rtc_fields=rtc_fields,
+        rtc_condition_fields=rtc_condition_fields,
     )
 
 
@@ -1831,6 +2004,7 @@ class _OrdinaryFoldStrategy:
         min_skip: int = 1,
         harness_scan: int | None = None,
         endpoint_is_boundary: bool = False,
+        rtc_at: Callable[[float], datetime] | None = None,
     ) -> _FoldPlan | None:
         """Certify a macro landing after a completed probe scan.
 
@@ -1839,6 +2013,9 @@ class _OrdinaryFoldStrategy:
         input event.  Live run loops leave it false: their budget is not a
         semantic program boundary, and preserving their established cadence
         matters to PILOT's bounded correction lifecycle.
+
+        *rtc_at* resolves the executor's RTC at a simulation time.  A program
+        that reads an ``rtc.*`` field cannot fold without it.
         """
         if not _visible_items_match(state, probe.visible, self.exclude):
             self.inert_soft.clear()
@@ -1887,6 +2064,15 @@ class _OrdinaryFoldStrategy:
         )
         if clock_gap is not None:
             skip = min(skip, clock_gap) if skip is not None else clock_gap
+        rtc_gap = _scans_to_rtc_tick(
+            self.ctx,
+            state,
+            probe.timestamp,
+            rtc_at,
+            self.ctx.rtc_fields,
+        )
+        if rtc_gap is not None:
+            skip = min(skip, rtc_gap) if skip is not None else rtc_gap
         if max_skip is not None:
             if skip is not None:
                 skip = min(skip, max_skip)
@@ -1943,6 +2129,7 @@ class _OrdinaryFoldStrategy:
             max_skip=max_skip,
             min_skip=min_skip,
             harness_scan=harness_scan,
+            rtc_at=runner._rtc_at_sim_time,
         )
         if plan is None:
             return None
