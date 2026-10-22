@@ -356,6 +356,7 @@ def cycle_fold_until(
         _acc_totals,
         _harness_nearest_scan,
         _OrdinaryFoldStrategy,
+        _rtc_hard_fields,
         _rtc_jump_room,
         fold_run_until,
     )
@@ -420,7 +421,11 @@ def cycle_fold_until(
     # treats as don't-care for the plateau (resolved-on-read-driven frozen writes,
     # unread churn, harness feedback) so they don't spuriously break the cycle.
     # Accumulators stay in — they are the monotone coordinates.
+    # Clock mirrors are ignored too: the RTC bound below keeps a jump inside
+    # one tick unless their readers are proven off (fold._TimeMirrors).
     ignore = fold_ctx.frozen_writes | fold_ctx.churn_excluded | fold_ctx.profile_fb_names
+    if fold_ctx.time_mirrors is not None:
+        ignore = ignore | fold_ctx.time_mirrors.names
     significant_keys = frozenset(plc.state.tags) - ignore
     ordinary = _OrdinaryFoldStrategy(fold_ctx, extra_comparisons)
     ring: list[Mapping[str, Any]] = []
@@ -624,16 +629,30 @@ def cycle_fold_until(
             room = harness_scan - plc.state.scan_id - 1
             periods_to_jump = min(periods_to_jump, max(0, room // cyc.period))
         # RTC fields are clocks with no period: the observed window and every
-        # skipped scan must read them unchanged.
-        rtc_room = _rtc_jump_room(
-            fold_ctx,
-            plc.state,
-            cyc.period * min_repeats + 1,
-            plc._rtc_at_sim_time,
-            fold_ctx.rtc_fields,
-        )
-        if rtc_room is not None:
-            periods_to_jump = min(periods_to_jump, rtc_room // cyc.period)
+        # skipped scan must read them unchanged, unless the time-mirror proof
+        # holds over every observed snapshot (fold._TimeMirrors).  Then the jump
+        # may cross ticks, but it leaves the clock mirrors stale, so a real scan
+        # must follow it to rebuild them.
+        observed = cyc.period * min_repeats + 1
+        rtc_at = plc._rtc_at_sim_time
+        rtc_room = _rtc_jump_room(fold_ctx, plc.state, observed, rtc_at, fold_ctx.rtc_fields)
+        if rtc_room is not None and rtc_room < periods_to_jump * cyc.period:
+            hard = fold_ctx.rtc_fields
+            if (
+                fold_ctx.time_mirrors is not None
+                and plc.state.scan_id - observed >= 1
+                and (not kernel_budget or kernel_scans < budget)
+            ):
+                hard = _rtc_hard_fields(fold_ctx, plc.state, ring[-observed:])
+            if hard != fold_ctx.rtc_fields:
+                rtc_room = _rtc_jump_room(fold_ctx, plc.state, observed, rtc_at, hard)
+                if not kernel_budget:
+                    rebuild_room = budget - (plc.state.scan_id - start_scan) - 1
+                    periods_to_jump = min(periods_to_jump, max(0, rebuild_room // cyc.period))
+            elif stats is not None and fold_ctx.time_mirrors is not None:
+                stats["rtc_readers_on"] = stats.get("rtc_readers_on", 0) + 1
+            if rtc_room is not None:
+                periods_to_jump = min(periods_to_jump, rtc_room // cyc.period)
         if periods_to_jump < 1:
             continue
 

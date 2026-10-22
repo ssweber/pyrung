@@ -1844,3 +1844,438 @@ class TestSoftClockInertCount:
         assert stepped.state.tags["Extent"] == 1
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
+
+
+# ---------------------------------------------------------------------------
+# Soft RTC ticks: clock copies rebuilt by the landing scan, readers off
+# ---------------------------------------------------------------------------
+
+
+def _rtc_mirror_program(
+    *, stop_stamp: bool = False, live_stamp: bool = False
+) -> tuple[Program, Bool]:
+    """Clock mirrors, an alarm-history logger that is off unless an alarm edge
+    or a manual request powers it, and a 5 s timer to aim for.
+
+    The logger reads ``Hist1`` and ``Hist2`` before rewriting them, so a live
+    logger keeps scan-to-scan state that a single landing scan cannot replay.
+    """
+    from pyrung import Or, copy
+
+    Sec = Int("Sec")
+    HHMM = Int("HHMM")
+    Alarm = Bool("Alarm")
+    Manual = Int("Manual")
+    Hist1, Hist2, Hist3 = Int("Hist1"), Int("Hist2"), Int("Hist3")
+    Stopped = Bool("Stopped")
+    StopSec = Int("StopSec")
+    Hit = Bool("Hit")
+    Tmr = Timer.clone("Tmr")
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(system.rtc.second, Sec)
+        with Rung():
+            calc(system.rtc.hour * 100 + system.rtc.minute, HHMM)
+        with Rung(Or(rise(Alarm), Manual != 0)):
+            copy(Hist2, Hist3)
+            copy(Hist1, Hist2)
+            copy(Sec, Hist1)
+        if stop_stamp:
+            with Rung(Stopped):
+                copy(Sec, StopSec, oneshot=True)
+        if live_stamp:
+            # Read below, so StopSec is not unread churn: it stays guarded.
+            with Rung(Stopped):
+                calc(StopSec + Sec, StopSec)
+            with Rung(StopSec > 30_000):
+                out(Bool("StopSecHigh"))
+        with Rung():
+            on_delay(Tmr, 5000)
+        with Rung(Tmr.Done):
+            out(Hit)
+    return prog, Hit
+
+
+def _rtc_mirror_plc(prog: Program, **patch: Any) -> PLC:
+    from datetime import datetime
+
+    plc = PLC(prog, dt=0.010)
+    plc.set_rtc(datetime(*_RTC_START))
+    if patch:
+        plc.patch(patch)
+    plc.step()
+    return plc
+
+
+def _without_time_mirrors(plc: PLC) -> None:
+    from dataclasses import replace
+
+    cache = plc._fold_context_cache
+    assert cache is not None
+    for key, value in list(cache.items()):
+        cache[key] = replace(value, time_mirrors=None)
+
+
+def _folded_and_stepped(
+    build: Callable[[], Program],
+    run: Callable[[PLC, bool], None],
+    *,
+    dt: float = 0.010,
+    start: tuple[int, ...] = _RTC_START,
+    patch: dict[str, Any] | None = None,
+) -> tuple[PLC, PLC]:
+    from datetime import datetime
+
+    out = []
+    for fold in (True, False):
+        plc = PLC(build(), dt=dt)
+        plc.set_rtc(datetime(*start))
+        if patch:
+            plc.patch(patch)
+        plc.step()
+        run(plc, fold)
+        out.append(plc)
+    return out[0], out[1]
+
+
+def _until_hit(max_cycles: int) -> Callable[[PLC, bool], None]:
+    def run(plc: PLC, fold: bool) -> None:
+        plc.run_until(Bool("Hit"), max_cycles=max_cycles, fold=fold)
+
+    return run
+
+
+class TestSoftRtcTicks:
+    """While every rung that reads a clock copy is off, the landing scan
+    rebuilds the copies exactly, so folds cross RTC ticks bit-equal."""
+
+    def test_mirrors_and_off_readers_are_found(self) -> None:
+        from pyrung.core.fold import _time_mirrors_off
+
+        prog, hit = _rtc_mirror_program()
+        plc = _rtc_mirror_plc(prog)
+        tm = plc._ensure_fold_context(frozenset({hit.name})).time_mirrors
+        assert tm is not None
+        assert tm.names == {"Sec", "HHMM"}
+        assert len(tm.dead_nodes) == 1
+        assert _time_mirrors_off(tm, (plc.state.tags,))
+
+    @pytest.mark.parametrize("seconds", [5, 12])
+    def test_folded_matches_stepped_across_rollovers(self, seconds: int) -> None:
+        """The window crosses second, minute and hour rollovers."""
+        target = seconds * 100
+
+        def run(plc: PLC, fold: bool) -> None:
+            plc.run_until(lambda s: s.scan_id >= target, max_cycles=target + 10, fold=fold)
+
+        folded, stepped = _folded_and_stepped(lambda: _rtc_mirror_program()[0], run)
+        assert stepped.state.tags["HHMM"] == 1300
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    def test_run_until_target_matches_stepped(self) -> None:
+        folded, stepped = _folded_and_stepped(lambda: _rtc_mirror_program()[0], _until_hit(10_000))
+        assert stepped.state.tags["Hit"] is True
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    def test_soft_ticks_save_kernel_scans(self) -> None:
+        def kernel_scans(mirrors: bool) -> int:
+            prog, hit = _rtc_mirror_program()
+            plc = _rtc_mirror_plc(prog)
+            plc._ensure_fold_context(frozenset({hit.name}))
+            if not mirrors:
+                _without_time_mirrors(plc)
+            counter = _count_kernel_scans(plc)
+            plc.run_until(hit, max_cycles=10_000)
+            return counter["n"]
+
+        assert kernel_scans(True) < 10 < kernel_scans(False)
+
+    def test_live_reader_is_not_judged_off(self) -> None:
+        from pyrung.core.fold import _time_mirrors_off
+
+        prog, hit = _rtc_mirror_program()
+        plc = _rtc_mirror_plc(prog)
+        tm = plc._ensure_fold_context(frozenset({hit.name})).time_mirrors
+        assert tm is not None
+        plc.patch({"Manual": 1})
+        plc.step()
+        assert not _time_mirrors_off(tm, (plc.state.tags,))
+
+    def test_live_reader_folded_matches_stepped(self) -> None:
+        folded, stepped = _folded_and_stepped(
+            lambda: _rtc_mirror_program()[0], _until_hit(10_000), patch={"Manual": 1}
+        )
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    @pytest.mark.parametrize("stopped", [False, True])
+    def test_one_shot_stamp_is_inactive_either_way(self, stopped: bool) -> None:
+        """Powered, the one-shot stamp fired on its first powered scan; off, it
+        does nothing.  Either way it does not act on a tick."""
+        from pyrung.core.fold import _time_mirrors_off
+
+        prog, hit = _rtc_mirror_program(stop_stamp=True)
+        plc = _rtc_mirror_plc(prog, Stopped=stopped)
+        tm = plc._ensure_fold_context(frozenset({hit.name})).time_mirrors
+        assert tm is not None
+        assert _time_mirrors_off(tm, (plc.state.tags,))
+
+        folded, stepped = _folded_and_stepped(
+            lambda: _rtc_mirror_program(stop_stamp=True)[0],
+            _until_hit(10_000),
+            patch={"Stopped": stopped},
+        )
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    def test_powered_accumulating_reader_keeps_ticks_hard(self) -> None:
+        # A budget run: with no target, StopSec is not target-disjoint churn.
+        folded, stepped = _folded_and_stepped(
+            lambda: _rtc_mirror_program(live_stamp=True)[0],
+            lambda plc, fold: _run_scans(plc, 1_000, fold=fold),
+            patch={"Stopped": True},
+        )
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    @pytest.mark.parametrize("dt", [0.5, 0.01])
+    def test_replay_seek_across_soft_ticks(self, dt: float) -> None:
+        from datetime import datetime
+
+        plc = PLC(_rtc_mirror_program()[0], dt=dt)
+        plc.set_rtc(datetime(*_RTC_START))
+        for _ in range(int(30 / dt)):
+            plc.step()
+        target = int(19.5 / dt)
+        seek = plc._replay_seek(target)
+        ref = plc.replay_to(target)
+        assert plc._last_replay_seek_stats["kernel_scans"] < 20
+        assert _plain_tags(seek) == _plain_tags(ref)
+
+
+def _continued_branch_program(cont: bool) -> Program:
+    """A branch whose condition reads ``X == 0``.  Continued, it evaluates on the
+    previous rung's snapshot (where X is still 0), so it is live although X is 1
+    at its own position."""
+    from pyrung import branch, copy, latch
+
+    Sec, X, Snap, Half, Seen = Int("Sec"), Int("X"), Bool("Snap"), Int("Half"), Bool("Seen")
+    Tmr, Hit = Timer.clone("Tmr"), Bool("Hit")
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(system.rtc.second, Sec)
+        with Rung():
+            copy(0, X)
+        with Rung(X == 0):
+            out(Snap)
+        with Rung():
+            copy(1, X)
+        with Rung().continued() if cont else Rung():
+            with branch(X == 0):
+                calc(Sec // 30, Half)
+        with Rung(Half == 1):
+            latch(Seen)
+        with Rung():
+            on_delay(Tmr, 60, "s")
+        with Rung(Tmr.Done):
+            out(Hit)
+    return prog
+
+
+def _rtc_reader_shape(shape: str) -> Program:
+    """One reader of a clock copy (live while ``Req``) in a given program shape."""
+    from pyrung import branch, call, copy, forloop, latch, return_early, subroutine
+
+    Sec, Half, Seen, Req = Int("Sec"), Int("Half"), Bool("Seen"), Bool("Req")
+    Tmr, Hit = Timer.clone("Tmr"), Bool("Hit")
+
+    @subroutine("R")
+    def reader() -> None:
+        with Rung():
+            calc(Sec // 30, Half)
+
+    @subroutine("S")
+    def stamper() -> None:
+        with Rung(system.sys.clock_1s):
+            return_early()
+        with Rung():
+            copy(system.rtc.second, Sec)
+
+    with Program(strict=False) as prog:
+        if shape == "return_early":
+            with Rung():
+                call(stamper)
+            with Rung(Req):
+                calc(Sec // 30, Half)
+        else:
+            with Rung():
+                copy(system.rtc.second, Sec)
+        if shape == "called":
+            with Rung(Req):
+                call(reader)
+        elif shape == "branch_call":
+            with Rung():
+                with branch(Req):
+                    call(reader)
+        elif shape == "forloop":
+            with Rung(Req):
+                with forloop(2):
+                    calc(Sec // 30, Half)
+        elif shape == "plain":
+            with Rung(Req):
+                calc(Sec // 30, Half)
+        with Rung(Half == 1):
+            latch(Seen)
+        with Rung():
+            on_delay(Tmr, 60, "s")
+        with Rung(Tmr.Done):
+            out(Hit)
+    return prog
+
+
+class TestSoftRtcRefusals:
+    """Shapes where a clock-derived value could act inside a window.  The tick
+    stays hard (or the reader is judged on), and folded stays bit-equal."""
+
+    _START = (2026, 3, 1, 12, 59, 5, 250_000)
+
+    @staticmethod
+    def _tm(prog: Program, targets: frozenset[str] = frozenset()) -> Any:
+        plc = _rtc_plc(prog)
+        return plc._ensure_fold_context(targets).time_mirrors
+
+    def test_reader_before_writer(self) -> None:
+        from pyrung import copy
+
+        Sec, Echo = Int("Sec"), Int("Echo")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(Sec, Echo)
+            with Rung():
+                copy(system.rtc.second, Sec)
+        assert self._tm(prog) is None
+
+    def test_mirror_in_an_enable_condition(self) -> None:
+        from pyrung import copy, latch
+
+        Sec, X = Int("Sec"), Bool("X")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(system.rtc.second, Sec)
+            with Rung(Sec == 30):
+                latch(X)
+        assert self._tm(prog) is None
+
+    def test_mirror_as_target(self) -> None:
+        from pyrung import copy
+
+        Sec, Req, Log = Int("Sec"), Bool("Req"), Int("Log")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(system.rtc.second, Sec)
+            with Rung(Req):
+                copy(Sec, Log)
+        assert self._tm(prog) is not None
+        assert self._tm(prog, frozenset({"Sec"})) is None
+
+    def test_calc_that_could_fault_is_not_a_mirror(self) -> None:
+        """``second * 1000`` overflows an Int: the out-of-range flag would follow
+        the clock, so the calc is a live reader, not a rebuilt copy."""
+        from pyrung import copy
+
+        Big, Req, Log = Int("Big"), Bool("Req"), Int("Log")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(system.rtc.second * 1000, Big)
+            with Rung(Req):
+                copy(Big, Log)
+        assert self._tm(prog) is None
+
+    def test_fault_flag_reader_does_not_disable_mirrors(self) -> None:
+        from pyrung import copy, latch
+
+        Sec, Req, Log = Int("Sec"), Bool("Req"), Int("Log")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(system.rtc.second, Sec)
+            with Rung(Req):
+                copy(Sec, Log)
+            with Rung(system.fault.out_of_range):
+                latch(Bool("Err"))
+        tm = self._tm(prog)
+        assert tm is not None and tm.names == {"Sec"}
+
+    def test_clock_gated_copy_is_a_reader_never_off(self) -> None:
+        from pyrung import copy
+        from pyrung.core.fold import _time_mirrors_off
+
+        Sec, Gated = Int("Sec"), Int("Gated")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(system.rtc.second, Sec)
+            with Rung(system.sys.clock_1s):
+                copy(system.rtc.second, Gated)
+        plc = _rtc_plc(prog)
+        tm = plc._ensure_fold_context().time_mirrors
+        assert tm is not None and "Gated" not in tm.names
+        assert not _time_mirrors_off(tm, (plc.state.tags,))
+
+    def test_self_feeding_clock_calc_is_never_off(self) -> None:
+        from pyrung import copy
+        from pyrung.core.fold import _time_mirrors_off
+
+        Sec, Tot = Int("Sec"), Int("Tot")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(system.rtc.second, Sec)
+            with Rung():
+                calc(Tot + system.rtc.second, Tot)
+        plc = _rtc_plc(prog)
+        tm = plc._ensure_fold_context().time_mirrors
+        assert tm is not None and "Tot" not in tm.names
+        assert not _time_mirrors_off(tm, (plc.state.tags,))
+
+    def test_continued_branch_is_not_judged_at_its_own_position(self) -> None:
+        from pyrung.core.fold import _time_mirrors_off
+
+        plc = _rtc_plc(_continued_branch_program(True), dt=1.0, start=self._START)
+        for _ in range(30):
+            plc.step()
+        tm = plc._ensure_fold_context(frozenset({"Hit"})).time_mirrors
+        assert tm is not None
+        assert plc.state.tags["Half"] == 1  # the branch is live
+        assert not _time_mirrors_off(tm, (plc.state.tags,))
+
+    @pytest.mark.parametrize("cont", [True, False], ids=["continued", "plain"])
+    @pytest.mark.parametrize("dt", [1.0, 0.05])
+    def test_continued_branch_folded_matches_stepped(self, cont: bool, dt: float) -> None:
+        folded, stepped = _folded_and_stepped(
+            lambda: _continued_branch_program(cont),
+            _until_hit(int(70 / dt)),
+            dt=dt,
+            start=self._START,
+        )
+        assert stepped.state.tags["Seen"] is cont
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    @pytest.mark.parametrize("shape", ["called", "branch_call", "forloop", "plain", "return_early"])
+    @pytest.mark.parametrize("req", [False, True], ids=["off", "live"])
+    def test_reader_shapes_folded_match_stepped(self, shape: str, req: bool) -> None:
+        dt = 0.05
+        folded, stepped = _folded_and_stepped(
+            lambda: _rtc_reader_shape(shape),
+            _until_hit(int(70 / dt)),
+            dt=dt,
+            start=self._START,
+            patch={"Req": req},
+        )
+        assert stepped.state.tags["Hit"] is True
+        assert stepped.state.tags["Seen"] is req
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _plain_tags(folded) == _plain_tags(stepped)
+
+    def test_return_early_before_the_copy_is_not_a_recompute(self) -> None:
+        assert self._tm(_rtc_reader_shape("return_early")) is None

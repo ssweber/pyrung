@@ -8,7 +8,7 @@ from dataclasses import replace
 import pytest
 
 from pyrung import Bool, Counter, Int, Program, Rung, Timer, count_up, on_delay, out, time_drum
-from pyrung.core import system
+from pyrung.core import rise, system
 from pyrung.core.analysis.pilot.cyclefold import _Cycle, cycle_fold_until, detect_cycle
 from pyrung.core.analysis.pilot.overlay import PilotRung, fork_with_pilot_rungs
 from pyrung.core.runner import PLC
@@ -642,3 +642,142 @@ class TestCycleFoldRtcTicks:
         assert stats["cycle_folds"] >= 1
         assert folded.state.scan_id == ref.state.scan_id
         assert folded.state.tags == ref.state.tags
+
+
+def _clock_mirror_cycle_program(*, live_stamp: bool = False, continued: bool = False) -> Program:
+    """A period-2 oscillation, a ``clock_1s`` contact (so a cycle spans whole
+    seconds and every observed window holds an RTC tick), clock mirrors with an
+    off history logger, and a 20 s timer.
+
+    *live_stamp* adds a reader of the half-minute while ``CmStopped``;
+    *continued* adds a branch on a ``continued()`` rung that reads a mirror and
+    is live on the earlier rung's snapshot although off at its own position.
+    """
+    from pyrung import Or, branch, calc, copy
+
+    T = Bool("CmT")
+    Blink = Bool("CmBlink")
+    Sec = Int("CmSec")
+    HHMM = Int("CmHHMM")
+    Alarm = Bool("CmAlarm")
+    Hist1, Hist2 = Int("CmHist1"), Int("CmHist2")
+    Stopped = Bool("CmStopped")
+    StopSec = Int("CmStopSec")
+    X, Snap, Half = Int("CmX"), Bool("CmSnap"), Int("CmHalf")
+    Hit = Bool("CmHit")
+    Tmr = Timer.clone("CmTmr")
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(system.rtc.second, Sec)
+        with Rung():
+            calc(system.rtc.hour * 100 + system.rtc.minute, HHMM)
+        with Rung(~T):
+            out(T)
+        with Rung(system.sys.clock_1s):
+            out(Blink)
+        with Rung(rise(Alarm)):
+            copy(Hist1, Hist2)
+            copy(Sec, Hist1)
+        if live_stamp:
+            with Rung(Or(Stopped, Alarm)):
+                calc(Sec // 30, StopSec)
+            with Rung(StopSec > 0):
+                out(Bool("CmStopSecHigh"))
+        if continued:
+            with Rung():
+                copy(0, X)
+            with Rung(X == 0):
+                out(Snap)
+            with Rung():
+                copy(1, X)
+            with Rung().continued():
+                with branch(X == 0):
+                    calc(Sec // 30, Half)
+            with Rung(Half == 1):
+                out(Bool("CmHalfOn"))
+        with Rung():
+            on_delay(Tmr, 20, "s")
+        with Rung(Tmr.Done):
+            out(Hit)
+    return prog
+
+
+class TestCycleFoldClockMirrors:
+    """Clock mirrors are ignored by the cycle observer, and a jump may cross RTC
+    ticks while every reader is off.  The jump leaves them stale, so a real scan
+    always follows it."""
+
+    @staticmethod
+    def _plc(prog: Program, **patch: object) -> PLC:
+        from datetime import datetime
+
+        plc = PLC(prog, dt=0.010)
+        plc.set_rtc(datetime(2026, 3, 1, 12, 59, 50, 250_000))
+        if patch:
+            plc.patch(patch)
+        plc.step()
+        return plc
+
+    def _stepped(self, prog: Program, scans: int, **patch: object) -> PLC:
+        ref = self._plc(prog, **patch)
+        for _ in range(scans):
+            ref.step()
+        return ref
+
+    # The first jump comes at scan 209 (208 scans used): 1_008 leaves exactly
+    # eight whole periods, so the jump would otherwise end the coast.
+    @pytest.mark.parametrize("budget", [1_008, 1_500])
+    def test_cycle_jump_across_ticks_matches_stepping(self, budget: int) -> None:
+        ref = self._stepped(_clock_mirror_cycle_program(), budget)
+        folded = self._plc(_clock_mirror_cycle_program())
+        assert folded._ensure_fold_context().time_mirrors is not None
+        stats: dict[str, int] = {}
+        cycle_fold_until(folded, lambda _s: False, budget=budget, kernel_budget=False, stats=stats)
+
+        assert stats["cycle_folds"] >= 1
+        assert folded.state.scan_id == ref.state.scan_id
+        assert folded.state.tags == ref.state.tags
+
+    def test_without_mirrors_the_cycle_never_repeats(self) -> None:
+        plc = self._plc(_clock_mirror_cycle_program())
+        fold_ctx = replace(plc._ensure_fold_context(), time_mirrors=None)
+        stats: dict[str, int] = {}
+        cycle_fold_until(
+            plc, lambda _s: False, budget=1_500, kernel_budget=False, fold_ctx=fold_ctx, stats=stats
+        )
+        assert stats["cycle_folds"] == 0
+
+    @pytest.mark.parametrize(
+        ("program", "patch"),
+        [
+            ({"live_stamp": True}, {"CmStopped": True}),
+            ({"continued": True}, {}),
+        ],
+        ids=["powered_reader", "continued_branch"],
+    )
+    def test_live_reader_blocks_the_jump_across_ticks(
+        self, program: dict[str, bool], patch: dict[str, object]
+    ) -> None:
+        ref = self._stepped(_clock_mirror_cycle_program(**program), 1_500, **patch)
+        plc = self._plc(_clock_mirror_cycle_program(**program), **patch)
+        stats: dict[str, int] = {}
+        cycle_fold_until(plc, lambda _s: False, budget=1_500, kernel_budget=False, stats=stats)
+
+        assert stats.get("cycle_folds", 0) == 0
+        assert stats.get("rtc_readers_on", 0) >= 1
+        assert plc.state.scan_id == ref.state.scan_id
+        assert plc.state.tags == ref.state.tags
+
+    # 208 kernel scans spends the budget on the scan that certifies the first
+    # cycle; a jump taken there would end the coast on stale mirrors.
+    @pytest.mark.parametrize("budget", [208, 400])
+    def test_kernel_budget_never_ends_on_a_jump(self, budget: int) -> None:
+        plc = self._plc(_clock_mirror_cycle_program())
+        stats: dict[str, int] = {}
+        cycle_fold_until(plc, lambda _s: False, budget=budget, kernel_budget=True, stats=stats)
+
+        ref = self._plc(_clock_mirror_cycle_program())
+        for _ in range(plc.state.scan_id - ref.state.scan_id):
+            ref.step()
+        assert stats["cycle_folds"] == (0 if budget == 208 else 1)
+        assert plc.state.tags == ref.state.tags

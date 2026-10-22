@@ -15,6 +15,8 @@ Module structure
 4. Expression matching  — pattern detection on calc expressions
 5. Comparison scanning  — rung reads relevant to crossings
 6. Churn analysis       — identifying unobservable state changes
+6a. Real-time clock     — rtc.* fields as clocks with known ticks
+6b. Time mirrors        — clock copies the landing rebuilds; soft ticks
 7. Self-calc sources    — calc-style counters promoted to fold sources
 8. Mirror detection     — constant-offset views of tracked sources
 9. Context assembly     — build the fold context from program structure
@@ -133,6 +135,9 @@ class _FoldContext:
     rtc_fields: frozenset[str] = frozenset()
     # The subset the run_until condition reads: always bounded, never soft.
     rtc_condition_fields: frozenset[str] = frozenset()
+    # Stored copies of the clock the plateau guard ignores, and when a window
+    # may cross ticks (see _TimeMirrors).
+    time_mirrors: _TimeMirrors | None = None
 
 
 # ── 3. Instruction registry ─────────────────────────────────────────
@@ -643,6 +648,793 @@ def _rtc_jump_room(
     if rtc_at(state.timestamp) >= boundary:
         return 0
     return _rtc_reads_before(rtc_at, state.timestamp, dt, boundary)
+
+
+# ── 6b. Time mirrors (soft RTC ticks) ───────────────────────────────
+
+
+@dataclass(frozen=True)
+class _TimeMirrors:
+    """When an RTC tick is *soft*: no rung but plain recomputes can act on it.
+
+    A program commonly copies the clock into stored tags every scan
+    (``copy(rtc.second, Sec)``) and reads those copies only in rungs that are
+    normally off: an alarm history that stamps the time when an alarm edge
+    fires, a stop-reason stamp, an acknowledgement.  Bounding every fold window
+    at each second would cost such a program its folds, although nothing in it
+    acts on the tick.  A window may cross a tick when all of these hold:
+
+    * *names* (the clock mirrors) are written only by *recompute* rungs: reached
+      on every scan (a main rung, or a rung of a subroutine called on every scan
+      by an unconditional direct ``call()``, with no ``return_early()`` in the
+      chain), with no condition, not continued, and holding only plain
+      ``copy``/``calc`` with direct destinations whose result range provably
+      fits the destination (so no clamp, wrap or fault flag depends on the
+      clock).  A mirror's value after a scan depends only on that scan's clock
+      and on guarded tags, never on the previous scan, so the landing scan
+      (which reads the RTC at the last folded scan's time) rebuilds it exactly;
+    * every reader of a mirror runs strictly after every writer of it;
+    * no enable condition anywhere reads the clock or a mirror;
+    * every other rung that reads one (*dead_nodes*) does nothing with it in
+      the window.  Its instructions that read the clock do nothing while the
+      rung is unpowered, so it is enough that the rung is off, judged at runtime
+      from the window's states (:func:`_time_mirrors_off`).  A main rung whose
+      clock reads are all one-shot copies/calcs is also inactive while its
+      enable holds one judged value: powered, its one-shot already fired;
+    * no mirror is a target, a harness name, a fold coordinate, an excluded
+      tag, or a slot an unbounded pointer may reach.
+
+    Then the window's scans differ from the probe scan only in the clock and the
+    mirrors, so the plateau guard ignores the mirrors and the fold may cross
+    ticks.  Anything not established here keeps every tick a hard bound.
+    """
+
+    names: frozenset[str]
+    dead_nodes: tuple[int, ...]
+    # Dead nodes whose clock reads are all one-shot copies/calcs of a main rung.
+    oneshot_nodes: frozenset[int]
+    # Per PDG node: the enable conditions, or ``None`` when they cannot be
+    # judged at the node's own position (a ``continued()`` rung, or a branch of
+    # one, evaluates them on an earlier rung's snapshot).
+    conditions: tuple[tuple[Any, ...] | None, ...]
+    # Per PDG node: (first, last) main-scan position, or ``None`` if never run.
+    spans: tuple[tuple[int, int] | None, ...]
+    # Per PDG node: conditions are evaluated at rung entry of a main rung, so
+    # every write at the same position happens after them.
+    main_entry: tuple[bool, ...]
+    node_sub: tuple[str | None, ...]
+    callers: dict[str, tuple[int, ...]]
+    # Every placed PDG node that may write a tag (an indirect write counts for
+    # every named slot of its block).
+    writers: dict[str, tuple[int, ...]]
+    # Per PDG node: tags it writes only through instructions that write nothing
+    # while the rung is unpowered (so an off node is not a writer of them).
+    silent_writes: tuple[frozenset[str], ...]
+    # Names an enable condition may never read when judging a rung.
+    unjudgeable: frozenset[str]
+
+
+_ALWAYS_ON_NAME = "sys.always_on"
+_FIRST_SCAN_NAME = "sys.first_scan"
+
+
+class _Unjudgeable(Exception):
+    """A condition read a value that is not fixed across the window."""
+
+
+def _contains_indirect(obj: Any, seen: set[int] | None = None) -> bool:
+    """Whether *obj* (an operand or expression tree) holds an indirect reference."""
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    from pyrung.core.tag import Tag
+
+    if seen is None:
+        seen = set()
+    if obj is None or isinstance(obj, (bool, int, float, str, bytes, Tag)):
+        return False
+    if isinstance(obj, (IndirectRef, IndirectExprRef)):
+        return True
+    if id(obj) in seen:
+        return False
+    seen.add(id(obj))
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        return any(_contains_indirect(item, seen) for item in obj)
+    if isinstance(obj, dict):
+        return any(_contains_indirect(item, seen) for item in obj.values())
+    if hasattr(obj, "__dict__"):
+        return any(_contains_indirect(item, seen) for item in vars(obj).values())
+    return False
+
+
+def _rtc_field_ranges() -> dict[str, tuple[int, int]]:
+    from pyrung.core.system_points import system as _system
+
+    rtc = _system.rtc
+    return {
+        rtc.year4.name: (1, 9999),
+        rtc.year2.name: (0, 99),
+        rtc.month.name: (1, 12),
+        rtc.day.name: (1, 31),
+        rtc.weekday.name: (1, 7),
+        rtc.hour.name: (0, 23),
+        rtc.minute.name: (0, 59),
+        rtc.second.name: (0, 59),
+    }
+
+
+_TYPE_RANGES: dict[str, tuple[int, int]] = {
+    "BOOL": (0, 1),
+    "INT": (-32768, 32767),
+    "DINT": (-2147483648, 2147483647),
+    "WORD": (0, 0xFFFF),
+}
+
+_Span = tuple[float, float]
+
+
+def _tag_range(tag: Any, ranges: dict[str, _Span]) -> _Span | None:
+    known = ranges.get(tag.name)
+    if known is not None:
+        return known
+    type_name = getattr(getattr(tag, "type", None), "name", None)
+    found = _TYPE_RANGES.get(type_name or "")
+    return (float(found[0]), float(found[1])) if found is not None else None
+
+
+def _expr_range(expr: Any, ranges: dict[str, _Span]) -> _Span | None:
+    """Interval of a ``calc`` expression built from ``+``, ``-`` and ``*``, else ``None``."""
+    from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr, UnaryExpr
+    from pyrung.core.tag import Tag
+
+    if isinstance(expr, bool):
+        return None
+    if isinstance(expr, (int, float)):
+        if not math.isfinite(expr):
+            return None
+        return (float(expr), float(expr))
+    if isinstance(expr, Tag):
+        return _tag_range(expr, ranges)
+    if isinstance(expr, TagExpr):
+        return _tag_range(expr.tag, ranges)
+    if isinstance(expr, LiteralExpr):
+        return _expr_range(expr.value, ranges)
+    if isinstance(expr, UnaryExpr) and expr.symbol == "-":
+        inner = _expr_range(expr.operand, ranges)
+        return None if inner is None else (-inner[1], -inner[0])
+    if isinstance(expr, BinaryExpr) and expr.symbol in ("+", "-", "*"):
+        a = _expr_range(expr.left, ranges)
+        b = _expr_range(expr.right, ranges)
+        if a is None or b is None:
+            return None
+        if expr.symbol == "+":
+            return (a[0] + b[0], a[1] + b[1])
+        if expr.symbol == "-":
+            return (a[0] - b[1], a[1] - b[0])
+        products = (a[0] * b[0], a[0] * b[1], a[1] * b[0], a[1] * b[1])
+        return (min(products), max(products))
+    return None
+
+
+def _fits_dest(span: _Span, dest: Any) -> bool:
+    type_name = getattr(getattr(dest, "type", None), "name", None)
+    if type_name == "REAL":
+        return math.isfinite(span[0]) and math.isfinite(span[1])
+    if type_name not in ("INT", "DINT", "WORD"):
+        return False
+    lo, hi = _TYPE_RANGES[type_name]
+    return lo <= span[0] and span[1] <= hi
+
+
+def _recompute_range(
+    instr: Any, ranges: dict[str, _Span], tags: dict[str, Any]
+) -> tuple[str, _Span] | None:
+    """``(dest, value range)`` of a plain ``copy``/``calc`` that cannot fault.
+
+    The stored result must depend only on this scan's reads (no one-shot, no
+    conversion, no self-read, no indirect reference), and its value range must
+    fit the destination, so no clamp, wrap or fault flag depends on the clock.
+    ``None`` otherwise.
+    """
+    from pyrung.core.analysis.pdg import _extract_tag_names
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.tag import Tag
+
+    if type(instr) is CopyInstruction:
+        dest, source = instr.dest, instr.source
+        if instr.convert is not None or instr.oneshot or not isinstance(dest, Tag):
+            return None
+        if isinstance(source, Tag):
+            span = _tag_range(source, ranges)
+        elif isinstance(source, (int, float)) and not isinstance(source, bool):
+            span = _expr_range(source, ranges)
+        else:
+            return None
+    elif type(instr) is CalcInstruction:
+        dest = instr.dest
+        if instr.oneshot or not isinstance(dest, Tag) or instr.mode != "decimal":
+            return None
+        if _contains_indirect(instr.expression):
+            return None
+        if dest.name in _extract_tag_names(instr.expression, tags):
+            return None
+        span = _expr_range(instr.expression, ranges)
+    else:
+        return None
+    if span is None or not _fits_dest(span, dest):
+        return None
+    return dest.name, span
+
+
+def _silent_when_off(instr: Any) -> bool:
+    """Instructions that neither read an operand nor write while the rung is unpowered."""
+    from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
+    from pyrung.core.instruction.control import CallInstruction
+
+    if type(instr) in (LatchInstruction, ResetInstruction):
+        return True
+    return _inert_when_off(instr) and type(instr) is not CallInstruction
+
+
+def _inert_when_off(instr: Any) -> bool:
+    """Instructions whose execution with an unpowered rung reads no operand."""
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.control import CallInstruction
+    from pyrung.core.instruction.data_transfer import (
+        BlockCopyInstruction,
+        CopyInstruction,
+        FillInstruction,
+    )
+    from pyrung.core.instruction.packing import (
+        PackBitsInstruction,
+        PackTextInstruction,
+        PackWordsInstruction,
+        UnpackToBitsInstruction,
+        UnpackToWordsInstruction,
+    )
+
+    return type(instr) in (
+        CopyInstruction,
+        CalcInstruction,
+        BlockCopyInstruction,
+        FillInstruction,
+        PackBitsInstruction,
+        PackWordsInstruction,
+        PackTextInstruction,
+        UnpackToBitsInstruction,
+        UnpackToWordsInstruction,
+        CallInstruction,
+    )
+
+
+def _instruction_reads(instr: Any, tags: dict[str, Any]) -> frozenset[str]:
+    """Every tag an instruction reads through its operand fields and targets."""
+    from pyrung.core.analysis.pdg import _extract_instruction_writes, _extract_tag_names
+
+    reads: set[str] = set()
+    cls = type(instr)
+    for field_name in (
+        *getattr(cls, "_reads", ()),
+        *getattr(cls, "_conditions", ()),
+        *getattr(cls, "_exclusive_fields", ()),
+    ):
+        reads |= _extract_tag_names(getattr(instr, field_name), tags)
+    _writes, target_reads, _implicit = _extract_instruction_writes(instr, tags)
+    return frozenset(reads | target_reads)
+
+
+def _nested_instructions(instructions: Sequence[Any]) -> list[Any]:
+    """*instructions* with every for-loop body flattened in."""
+    out: list[Any] = []
+    stack = list(instructions)
+    while stack:
+        instr = stack.pop()
+        out.append(instr)
+        stack.extend(getattr(instr, "instructions", None) or ())
+    return out
+
+
+def _rung_instructions(rung: Any) -> list[Any]:
+    """A rung's instructions, its branches' and loop bodies' included."""
+    out = _nested_instructions(rung._instructions)
+    for branch in getattr(rung, "_branches", None) or ():
+        out.extend(_rung_instructions(branch))
+    return out
+
+
+def _always_reached_subroutines(pdg: ProgramGraph, program: Any) -> frozenset[str]:
+    """Subroutines whose every rung runs on every scan.
+
+    Every call site must be a direct ``call()`` in an unconditional rung (not a
+    branch or a loop) that itself runs on every scan, and neither the callee
+    nor a calling subroutine may hold a ``return_early()``.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.instruction.control import CallInstruction, ReturnInstruction
+
+    def has_return(sub: str) -> bool:
+        return any(
+            isinstance(instr, ReturnInstruction)
+            for rung in program.subroutines.get(sub, ())
+            for instr in _rung_instructions(rung)
+        )
+
+    sites: dict[str, list[int]] = {}
+    for site in pdg.call_sites():
+        sites.setdefault(site.callee, []).append(site.node_index)
+
+    always: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for sub, nodes in sites.items():
+            if sub in always or has_return(sub):
+                continue
+            ok = bool(nodes)
+            for ni in nodes:
+                node = pdg.rung_nodes[ni]
+                rung = resolve_rung(program, node)
+                if (
+                    rung is None
+                    or node.branch_path
+                    or node.condition_reads
+                    or rung._conditions
+                    or (node.subroutine is not None and node.subroutine not in always)
+                    or not any(
+                        isinstance(instr, CallInstruction) and instr.subroutine_name == sub
+                        for instr in rung._instructions
+                    )
+                ):
+                    ok = False
+                    break
+            if ok:
+                always.add(sub)
+                changed = True
+    return frozenset(always)
+
+
+def _top_rung(program: Any, node: Any) -> Any:
+    """The top-level rung (not the branch) a PDG node belongs to."""
+    from dataclasses import replace as _replace
+
+    from pyrung.core.analysis.pdg import resolve_rung
+
+    if not node.branch_path:
+        return resolve_rung(program, node)
+    return resolve_rung(program, _replace(node, branch_path=()))
+
+
+def _time_mirror_analysis(
+    pdg: ProgramGraph,
+    program: Any,
+    *,
+    coordinates: frozenset[str],
+    excluded: frozenset[str],
+    target_names: frozenset[str],
+    protected: frozenset[str],
+    churn: frozenset[str] = frozenset(),
+) -> _TimeMirrors | None:
+    """Static half of :class:`_TimeMirrors`; ``None`` when the program does not qualify.
+
+    *coordinates* are tags the fold projects on its own (accumulators, modular
+    self-calcs, affine views, harness feedback); a mirror may not be one.
+    *excluded* is every tag outside the plateau guard; a recompute rung may not
+    read one (its pre-landing value can lag the stepped one), and an enable
+    condition judged at runtime may not depend on one.  A mirror may still be
+    in *churn* (the unread outputs the guard already ignores): a recompute
+    rung's unread output is one.
+    """
+    from pyrung.core.analysis.pdg import _extract_instruction_writes, resolve_rung
+    from pyrung.core.instruction.control import ForLoopInstruction
+    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+    from pyrung.core.system_points import system as _system
+
+    rtc_ranges = _rtc_field_ranges()
+    rtc = frozenset(rtc_ranges)
+    nodes = pdg.rung_nodes
+    reads, pos = _node_scan_context(pdg)
+    if not any(r & rtc for r in reads):
+        return None
+    # A rung that sets or applies the clock moves its base inside the window.
+    if any(w.startswith("rtc.") for node in nodes for w in node.all_writes):
+        return None
+
+    tags = dict(pdg.tags)
+    always = _always_reached_subroutines(pdg, program)
+    rungs = [resolve_rung(program, node) for node in nodes]
+    tops = [_top_rung(program, node) for node in nodes]
+
+    def recompute_shape(i: int) -> bool:
+        node, rung, top = nodes[i], rungs[i], tops[i]
+        if rung is None or top is None or node.branch_path or node.calls or not pos[i]:
+            return False
+        if node.subroutine is not None and node.subroutine not in always:
+            return False
+        if top._use_prior_snapshot or node.condition_reads or rung._conditions:
+            return False
+        return bool(rung._instructions) and not rung._branches
+
+    candidates = [i for i in range(len(nodes)) if recompute_shape(i)]
+    # Grow the mirror set from the clock through recompute rungs, tracking each
+    # mirror's value range so no recompute can clamp, wrap or fault.
+    ranges: dict[str, _Span] = {
+        name: (float(lo), float(hi)) for name, (lo, hi) in rtc_ranges.items()
+    }
+    theta: set[str] = set(rtc)
+    recompute: set[int] = set()
+    changed = True
+    while changed:
+        changed = False
+        for i in candidates:
+            rung = rungs[i]
+            if i in recompute or rung is None or not reads[i] & theta:
+                continue
+            spans: dict[str, _Span] = {}
+            for instr in rung._instructions:
+                result = _recompute_range(instr, ranges, tags)
+                if result is None:
+                    spans = {}
+                    break
+                dest, span = result
+                lo, hi = spans.get(dest, span)
+                spans[dest] = (min(lo, span[0]), max(hi, span[1]))
+            if not spans:
+                continue
+            recompute.add(i)
+            for dest, span in spans.items():
+                prior = ranges.get(dest)
+                ranges[dest] = (
+                    span if prior is None else (min(prior[0], span[0]), max(prior[1], span[1]))
+                )
+            theta |= nodes[i].writes
+            changed = True
+    names = frozenset(theta - rtc)
+    if not names:
+        return None
+    opaque = _opaque_indirect_tags(pdg)
+    if names & (target_names | protected | coordinates | (excluded - churn) | opaque):
+        return None
+    # Every writer of a mirror is a recompute rung, and every recompute rung
+    # still fits its destination under the final (widest) mirror ranges.
+    for name in names:
+        if not pdg.writers_of.get(name, frozenset()) <= recompute:
+            return None
+    for i in recompute:
+        rung = rungs[i]
+        assert rung is not None
+        if any(_recompute_range(instr, ranges, tags) is None for instr in rung._instructions):
+            return None
+    # A recompute rung reads only the clock, mirrors, guarded tags and fixed
+    # configuration: those hold their stepped values entering the landing scan.
+    lagging = (
+        excluded | opaque | (frozenset(SYSTEM_TAGS_BY_NAME) - rtc - {_system.sys.always_on.name})
+    ) - theta
+    for i in recompute:
+        if _node_reads(nodes[i]) & lagging:
+            return None
+
+    # Readers strictly after writers (effective reads: a subroutine rung counts
+    # its callers' reads at its callers' positions).
+    for tag in names:
+        writer_last = max(
+            (max(pos[i]) for i, node in enumerate(nodes) if tag in node.all_writes and pos[i]),
+            default=None,
+        )
+        reader_first = min(
+            (min(pos[i]) for i in range(len(nodes)) if tag in reads[i] and pos[i]),
+            default=None,
+        )
+        if writer_last is not None and reader_first is not None and writer_last >= reader_first:
+            return None
+
+    dead: list[int] = []
+    oneshot_nodes: set[int] = set()
+    for i, node in enumerate(nodes):
+        if node.condition_reads & theta:
+            return None  # an enable reads the clock: any tick may matter
+        if i in recompute or not (reads[i] & theta) or not pos[i]:
+            continue
+        rung, top = rungs[i], tops[i]
+        if rung is None or top is None:
+            return None
+        all_oneshot = True
+        stack: list[tuple[Any, bool]] = [(instr, False) for instr in rung._instructions]
+        while stack:
+            instr, in_loop = stack.pop()
+            if isinstance(instr, ForLoopInstruction):
+                if _instruction_reads(instr, tags) & theta:
+                    return None
+                stack.extend((child, True) for child in instr.instructions)
+                continue
+            if not _instruction_reads(instr, tags) & theta:
+                continue
+            if not _inert_when_off(instr):
+                return None
+            if in_loop or not getattr(instr, "oneshot", False):
+                all_oneshot = False
+        dead.append(i)
+        if all_oneshot and node.scope == "main" and not top._use_prior_snapshot:
+            oneshot_nodes.add(i)
+
+    writers: dict[str, set[int]] = {}
+    for i, node in enumerate(nodes):
+        if pos[i]:
+            for w in node.all_writes:
+                writers.setdefault(w, set()).add(i)
+    block_slots: dict[str, list[str]] = {}
+    for name, tag in tags.items():
+        block = getattr(getattr(tag, "_pyrung_block", None), "name", None)
+        if block is not None:
+            block_slots.setdefault(block, []).append(name)
+    for ref in pdg.indirect_writes:
+        if pos[ref.node_index]:
+            for name in block_slots.get(ref.block.name, ()):
+                writers.setdefault(name, set()).add(ref.node_index)
+
+    indirect_slots: dict[int, set[str]] = {}
+    for ref in pdg.indirect_writes:
+        indirect_slots.setdefault(ref.node_index, set()).update(block_slots.get(ref.block.name, ()))
+
+    silent: list[frozenset[str]] = []
+    for i, rung in enumerate(rungs):
+        loud: set[str] = set()
+        quiet: set[str] = set()
+        for instr in _nested_instructions(rung._instructions) if rung is not None else ():
+            dests, _target_reads, implicit = _extract_instruction_writes(instr, tags)
+            if _silent_when_off(instr):
+                quiet |= dests | implicit
+            else:
+                # An instruction that acts while unpowered may own an indirect
+                # write the PDG could not name, so it keeps every slot loud.
+                loud |= dests | implicit | indirect_slots.get(i, set())
+        if i in indirect_slots and not loud:
+            quiet |= indirect_slots[i]
+        silent.append(frozenset(quiet - loud))
+
+    callers: dict[str, list[int]] = {}
+    for site in pdg.call_sites():
+        callers.setdefault(site.callee, []).append(site.node_index)
+
+    judgeable_system = {_system.sys.always_on.name, _system.sys.first_scan.name}
+    unjudgeable = theta | (frozenset(SYSTEM_TAGS_BY_NAME) - judgeable_system) | excluded | protected
+    return _TimeMirrors(
+        names=names,
+        dead_nodes=tuple(dead),
+        oneshot_nodes=frozenset(oneshot_nodes),
+        conditions=tuple(
+            None
+            if rung is None or top is None or top._use_prior_snapshot
+            else tuple(rung._conditions)
+            for rung, top in zip(rungs, tops, strict=True)
+        ),
+        spans=tuple((min(p), max(p)) if p else None for p in pos),
+        main_entry=tuple(node.scope == "main" for node in nodes),
+        node_sub=tuple(node.subroutine for node in nodes),
+        callers={sub: tuple(sites) for sub, sites in callers.items()},
+        writers={tag: tuple(sorted(idx)) for tag, idx in writers.items()},
+        silent_writes=tuple(silent),
+        unjudgeable=frozenset(unjudgeable),
+    )
+
+
+class _OffJudge:
+    """Decides, from scan-boundary tag maps, which rungs are unpowered in a window.
+
+    A condition read is judged only when its value is fixed at the reading
+    rung's position in every scan of the window: the tag is judgeable, holds
+    one value in every supplied map, and its writers (other than writers that
+    are themselves off and write nothing while off) all sit on one side of the
+    rung.  With writers on both sides, the value seen mid-scan could differ
+    from the stored one.
+    """
+
+    def __init__(self, tm: _TimeMirrors, tag_maps: Sequence[Any]) -> None:
+        self.tm = tm
+        self.maps = tag_maps
+        # Nodes proven off, and nodes some judgement asked about.  Proofs only
+        # ever use nodes already proven, so every proof is well founded; the
+        # loop in :meth:`all_inactive` repeats until no new proof appears.
+        self.proven: set[int] = set()
+        self.asked: set[int] = set()
+
+    def _is_off(self, i: int) -> bool:
+        if i in self.proven:
+            return True
+        self.asked.add(i)
+        return False
+
+    def _one_side(self, node: int, writers: Sequence[int]) -> bool:
+        tm = self.tm
+        here = tm.spans[node]
+        if here is None:
+            return False
+        before = after = False
+        for w in writers:
+            span = tm.spans[w]
+            if span is None:
+                continue
+            lo, hi = span
+            if hi < here[0]:
+                before = True
+            elif lo > here[1] or (tm.main_entry[node] and lo >= here[0]):
+                # Main-rung conditions are judged at rung entry: every write at
+                # the same position (the rung, its branches, its callees) is later.
+                after = True
+            else:
+                return False
+            if before and after:
+                return False
+        return True
+
+    def stable(self, name: str, node: int) -> bool:
+        tm = self.tm
+        if name in tm.unjudgeable:
+            return False
+        writers = tm.writers.get(name, ())
+        if self._one_side(node, writers):
+            return True
+        live = [w for w in writers if not (name in tm.silent_writes[w] and self._is_off(w))]
+        return len(live) < len(writers) and self._one_side(node, live)
+
+    def value(self, name: str, default: Any, node: int) -> Any:
+        if name == _ALWAYS_ON_NAME:
+            return True
+        if name == _FIRST_SCAN_NAME:
+            # Window scans follow a genuine probe scan, so scan_id >= 1.
+            return False
+        if not self.stable(name, node):
+            raise _Unjudgeable(name)
+        first = self.maps[0].get(name, default)
+        for tags in self.maps[1:]:
+            if tags.get(name, default) != first:
+                raise _Unjudgeable(name)
+        return first
+
+    def enable(self, i: int) -> bool | None:
+        """The node's own enable: ``True``/``False`` when judged, else ``None``."""
+        conds = self.tm.conditions[i]
+        if conds is None:
+            return None
+        view = _OffView(self, i)
+        results = [_judge_condition(cond, view) for cond in conds]
+        if any(r is False for r in results):
+            return False
+        return True if all(r is True for r in results) else None
+
+    def _judge_off(self, i: int) -> bool:
+        if self.enable(i) is False:
+            return True
+        sub = self.tm.node_sub[i]
+        if sub is None:
+            return False
+        return all([self._is_off(s) for s in self.tm.callers.get(sub, ())])
+
+    def all_inactive(self, nodes: Sequence[int]) -> bool:
+        """Whether no node in *nodes* acts on the clock in any window scan."""
+        oneshot = self.tm.oneshot_nodes
+        pending = [i for i in nodes if i not in oneshot or self.enable(i) is None]
+        self.asked.update(pending)
+        while True:
+            asked_before = len(self.asked)
+            progress = False
+            for i in sorted(self.asked - self.proven):
+                if self._judge_off(i):
+                    self.proven.add(i)
+                    progress = True
+            if all(i in self.proven for i in pending):
+                return True
+            if not progress and len(self.asked) == asked_before:
+                return False
+
+
+class _OffView:
+    """Condition view for one rung position, backed by an :class:`_OffJudge`."""
+
+    def __init__(self, judge: _OffJudge, node: int) -> None:
+        self._judge = judge
+        self._node = node
+
+    def get_tag(self, name: str, default: Any = None) -> Any:
+        return self._judge.value(name, default, self._node)
+
+    def __getattr__(self, name: str) -> Any:
+        raise _Unjudgeable(name)
+
+
+def _judge_condition(cond: Any, view: _OffView) -> bool | None:
+    """Three-valued evaluation of *cond* over *view*: ``None`` when not judgeable."""
+    from pyrung.core.condition import (
+        AllCondition,
+        AnyCondition,
+        BitCondition,
+        CompareEq,
+        CompareGe,
+        CompareGt,
+        CompareLe,
+        CompareLt,
+        CompareNe,
+        FallingEdgeCondition,
+        IntTruthyCondition,
+        NormallyClosedCondition,
+        RisingEdgeCondition,
+    )
+    from pyrung.core.tag import ImmediateRef
+
+    if isinstance(cond, AllCondition):
+        results = [_judge_condition(c, view) for c in cond.conditions]
+        if any(r is False for r in results):
+            return False
+        return True if all(r is True for r in results) else None
+    if isinstance(cond, AnyCondition):
+        results = [_judge_condition(c, view) for c in cond.conditions]
+        if any(r is True for r in results):
+            return True
+        return False if all(r is False for r in results) else None
+    if isinstance(cond, (RisingEdgeCondition, FallingEdgeCondition)):
+        # An edge of a value fixed across the probe and the window never fires
+        # in a window scan.
+        if cond._edge_fn is not None or isinstance(cond.tag, ImmediateRef):
+            return None
+        try:
+            view.get_tag(cond._resolved_tag.name, False)
+        except _Unjudgeable:
+            return None
+        return False
+    if isinstance(cond, (BitCondition, NormallyClosedCondition)):
+        if isinstance(cond.tag, ImmediateRef):
+            return None
+    elif not isinstance(
+        cond,
+        (
+            IntTruthyCondition,
+            CompareEq,
+            CompareNe,
+            CompareLt,
+            CompareLe,
+            CompareGt,
+            CompareGe,
+        ),
+    ):
+        return None
+    try:
+        return bool(cond.evaluate(view))  # type: ignore[arg-type]
+    except _Unjudgeable:
+        return None
+    except Exception:  # noqa: BLE001 - an unexpected read shape is not judgeable
+        return None
+
+
+def _time_mirrors_off(tm: _TimeMirrors, tag_maps: Sequence[Any]) -> bool:
+    """Whether no rung in ``tm.dead_nodes`` acts on the clock in the window.
+
+    *tag_maps* are scan-boundary tag maps of the window (one plateau state, or
+    every snapshot of an observed cycle).  A rung is off when one of its own
+    conditions is definitely False, or when it is a subroutine rung and every
+    call site is off.  A one-shot-only reader is inactive while its enable is
+    judged either way.  Anything not judgeable counts as possibly active.
+    """
+    return _OffJudge(tm, tag_maps).all_inactive(tm.dead_nodes)
+
+
+def _rtc_hard_fields(
+    ctx: _FoldContext,
+    state: Any,
+    tag_maps: Sequence[Any],
+) -> frozenset[str]:
+    """The RTC fields whose ticks bound this window.
+
+    Every read field, unless the time-mirror proof holds over *tag_maps* (see
+    :class:`_TimeMirrors`); then only the fields the run_until condition reads.
+    A pending ``rtc.apply_*`` keeps every field hard.
+    """
+    tm = ctx.time_mirrors
+    if tm is None or not ctx.rtc_fields:
+        return ctx.rtc_fields
+    tags = state.tags
+    if any(tags.get(name) for name in _rtc_apply_names()):
+        return ctx.rtc_fields
+    if not _time_mirrors_off(tm, tag_maps):
+        return ctx.rtc_fields
+    return ctx.rtc_condition_fields
 
 
 def _window_constant_names() -> frozenset[str]:
@@ -1328,6 +2120,30 @@ def _build_fold_context(
     if rtc_fields and journal is not None:
         journal.add_note("fold: bounded by RTC field ticks: " + ", ".join(sorted(rtc_fields)))
 
+    time_mirrors: _TimeMirrors | None = None
+    if rtc_fields and (advice is None or advice.has("fold_frozen_writes")):
+        time_mirrors = _time_mirror_analysis(
+            pdg,
+            program,
+            coordinates=acc_names | modwrap_names | frozenset(mirror_names) | profile_fb_names,
+            excluded=(
+                acc_names
+                | modwrap_names
+                | frozenset(mirror_names)
+                | profile_fb_names
+                | churn_excluded
+                | frozen_writes
+            ),
+            target_names=target_names,
+            protected=_harness_referenced_names(plc),
+            churn=churn_excluded,
+        )
+        if time_mirrors is not None and journal is not None:
+            journal.add_note(
+                "fold: RTC copies rebuilt by the landing scan, ticks soft while their "
+                "readers are off: " + ", ".join(sorted(time_mirrors.names))
+            )
+
     return _FoldContext(
         sources=tuple(sources),
         acc_names=acc_names,
@@ -1348,6 +2164,7 @@ def _build_fold_context(
         reads_first_scan=reads_first_scan,
         rtc_fields=rtc_fields,
         rtc_condition_fields=rtc_condition_fields,
+        time_mirrors=time_mirrors,
     )
 
 
@@ -2013,6 +2830,7 @@ class _OrdinaryFoldStrategy:
             | ctx.modwrap_names
             | ctx.mirror_names
             | ctx.frozen_writes
+            | (ctx.time_mirrors.names if ctx.time_mirrors is not None else frozenset())
         )
         self.inert_soft: set[str] = set()
         self.inert_run: dict[str, int] = {}
@@ -2022,7 +2840,8 @@ class _OrdinaryFoldStrategy:
 
         ``visible`` omits only coordinates whose evolution has a separate,
         statically certified projection (accumulators, modular self-calcs,
-        affine views, and proven unobservable/frozen writes). Everything else
+        affine views, proven unobservable/frozen writes, and clock mirrors the
+        landing scan rebuilds, see :class:`_TimeMirrors`). Everything else
         is the plateau guard: one changed value declines the fold.
         """
         return self.capture_state(runner._state)
@@ -2105,13 +2924,7 @@ class _OrdinaryFoldStrategy:
         )
         if clock_gap is not None:
             skip = min(skip, clock_gap) if skip is not None else clock_gap
-        rtc_gap = _scans_to_rtc_tick(
-            self.ctx,
-            state,
-            probe.timestamp,
-            rtc_at,
-            self.ctx.rtc_fields,
-        )
+        rtc_gap = self._rtc_gap(state, probe, rtc_at, skip, max_skip, endpoint_is_boundary)
         if rtc_gap is not None:
             skip = min(skip, rtc_gap) if skip is not None else rtc_gap
         if max_skip is not None:
@@ -2127,6 +2940,40 @@ class _OrdinaryFoldStrategy:
             promoted=promoted,
             pre_fold_timestamp=state.timestamp,
         )
+
+    def _rtc_gap(
+        self,
+        state: SystemState,
+        probe: _FoldProbe,
+        rtc_at: Callable[[float], datetime] | None,
+        skip: int | None,
+        max_skip: int | None,
+        endpoint_is_boundary: bool,
+    ) -> int | None:
+        """The RTC tick bound for this window (see :func:`_scans_to_rtc_tick`).
+
+        Ticks of every read field bound the window unless the time-mirror proof
+        holds (:func:`_rtc_hard_fields`).  That runtime judgement is only made
+        when the next tick would actually shorten the window.
+        """
+        ctx = self.ctx
+        if not ctx.rtc_fields:
+            return None
+        gap = _scans_to_rtc_tick(ctx, state, probe.timestamp, rtc_at, ctx.rtc_fields)
+        if gap is None or ctx.time_mirrors is None:
+            return gap
+        cap = skip
+        if max_skip is not None:
+            if cap is not None:
+                cap = min(cap, max_skip)
+            elif endpoint_is_boundary:
+                cap = max_skip
+        if cap is not None and gap >= cap:
+            return gap
+        hard = _rtc_hard_fields(ctx, state, (state.tags,))
+        if hard == ctx.rtc_fields:
+            return gap
+        return _scans_to_rtc_tick(ctx, state, probe.timestamp, rtc_at, hard)
 
     def finish(
         self,
