@@ -118,11 +118,21 @@ Follow-ups:
   (`p01`..`p20`).
 - RTC in fold is unsound on dev too: no RTC tick bound, and the landing scan reads the RTC from before the skip.
   Dev also still has the `e6b7e52` perf regression (tumbler goldens fail, internal_route over 2000 s).
-- In progress: `p0/rtc-clock`, RTC fields as clocks (tick bound + correct landing timestamp + soft ticks for
-  plain copies feeding nothing active). Done = all probes folded == stepped, perf back to ccec694, goldens
-  unchanged, then a fresh adversarial review.
-- Queue after it: cyclefold drops a seconds-unit timer across a jump (p15); float drift at dt 0.3/0.7; then the
-  `_LiveInputCache` audit; then features.
+- Landed `ed410aa..7c73450` (branch `p0/rtc-clock`): RTC fields are clocks. Windows end before a tick, the
+  landing scan reads the RTC at its own time, and a tick is soft (crossed, copies rebuilt on landing) only when
+  every reader of the clock copies is judged off. Also fixes p15 (cyclefold seconds timer) and folded `run_for`
+  scan counts. Adversarial review found forced tags, callable `run_until`, datetime.max, and landing-raise
+  holes; all fixed. Perf matches ccec694 (burner how 2255/5, idle 12007, tumbler 18376/24, goldens unchanged)
+  except `run_until(lambda ...)` legs at 7578 vs 7218 kernel scans: a callable's reads are unknown, so its ticks
+  stay hard. Probes: session scratchpad `rtc/`, `adv-rtc/`.
+- Pre-existing on d00a43b, queued next:
+  - (a) A counter gated by a system clock (`Rung(clock_1s): count_up`) loses counts when the probe scan
+    straddles an edge (C_Acc 452 vs 500 at dt 0.01). Repro `rtc/q_clockphase.py`.
+  - (b) Unread self-feeding churn (`calc(Tot + K, Tot)`) ends at a different value than stepping (4 vs 500).
+    Repro `rtc/q_churn.py`.
+  - (d) Float floor in one aggregate `skip*dt`: ms timers one unit low at dt 0.3/0.7, seconds timers at dt 0.1
+    (`run_until` one scan early). Repros `adv-rtc/q_d2_scan.py`, p03.
+- Then the `_LiveInputCache` audit; then features.
 
 ## Known risk, not scheduled
 
