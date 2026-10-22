@@ -17,6 +17,7 @@
 
 ### Features
 
+- `pyrung.conformance.run_modbus()` runs conformance cases over Modbus TCP, observing only DS registers, against pyrung's soft PLC by default or a real CLICK at `host[:port]`; `build_program()` places each case's slot at fixed DS registers with a build hash in `DS1`, and `make test-conformance` runs the suite (`PLC=host[:port]` for hardware).
 - The debugger can act as a simulated CLICK PLC: a `modbus` launch argument serves the session over Modbus TCP (X inputs stay read-only, as on a real CLICK), `speed` paces Continue to real time, and `startMode` plus the `pyrungSetMode`, `pyrungSetSpeed`, and `pyrungModbusInfo` requests (and the `mode` and `speed` console verbs) control RUN/STOP and pacing.
 - Force, unforce, and patch accept CLICK addresses such as `X001` or `DS10` in DAP requests and console commands, and reject targets that are neither a tag nor a mapped address instead of creating an unused tag.
 - A program with no rungs sends scan frames while it runs, so clients see its scan count advance.

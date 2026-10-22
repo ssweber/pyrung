@@ -1,6 +1,16 @@
 # Conformance Suite
 
-Plain-English tests for PLC programs. Same test, same ladder, same check — run against the soft PLC or the real PLC.
+Plain-English cases for PLC semantics. Same case, same ladder, same check -- run in-process, over Modbus against pyrung's soft PLC, or over Modbus against a real CLICK.
+
+A conformance suite in the Modbus sense: the harness observes the implementation **only through registers**. The ladder computes its own answer and writes it into its slot; the harness writes `Cmd`, waits, and reads the slot back.
+
+| Run | Where | How | Pacing |
+|---|---|---|---|
+| In-process | `make test` (unmarked) | `run(cases)` on a fixed-step `PLC` | exact scan counts |
+| Modbus, local sim | `make test-conformance` (marker `conformance`) | `run_modbus(cases)` | wall clock |
+| Modbus, real CLICK | `make test-conformance PLC=host[:port]` (or `--conformance-plc`, or env `PYRUNG_CONFORMANCE_PLC`) | `run_modbus(cases, "host:port")` | wall clock |
+
+The two Modbus runs share every line of client code; only the endpoint differs.
 
 ## What a test is
 
@@ -36,36 +46,71 @@ def prove_ton_resets(slot):
         copy(1, slot.Fired, oneshot=True)
 ```
 
-Setup copies fire on the first scan the rung is true, then stop. Observation copies keep overwriting Results every scan — the last read wins by the time the harness checks.
+Setup copies fire on the first scan the rung is true, then stop. Observation copies keep overwriting Results every scan — the last read wins by the time the harness checks. Over Modbus the harness reads twice, so a Result that is still moving (`timer.Acc` above) needs a `range` expectation; see Expectations.
 
 ## Slot layout
 
-Each test owns a slot — a `named_array` instance with 8 Int fields:
+Each case owns a slot -- a `named_array` instance with 8 Int fields, mapped to fixed DS registers so it is reachable over Modbus. Slot N lives at `DS(10*N + 1)`..`DS(10*N + 8)`; the last two registers of each block of 10 are spare.
 
-| Field     | Purpose                  |
-|-----------|--------------------------|
-| Cmd       | Trigger (harness writes) |
-| Scratch   | Temporary storage        |
-| Result1-4 | Outputs to check         |
-| Fired     | One-shot gate            |
-| ErrorCode | Error reporting          |
+| Field     | Offset | Slot 1 | Purpose                  |
+|-----------|--------|--------|--------------------------|
+| Cmd       | +0     | DS11   | Trigger (harness writes) |
+| Scratch   | +1     | DS12   | Temporary storage        |
+| Result1-4 | +2..+5 | DS13-16 | Outputs to check        |
+| Fired     | +6     | DS17   | One-shot gate            |
+| ErrorCode | +7     | DS18   | Error reporting          |
 
-Tests cannot share memory. Test #1 owns one contiguous block, test #2 the next.
+DS1..DS10 are the header. The program's first rung writes, on the first scan (`sys.first_scan`, SC2):
+
+- `DS1` = build hash (1..32767): a SHA-256 of the CLICK ladder export of the case rungs, folded into a DS register. It changes whenever the exported ladder would.
+- `DS2` = slot count.
+
+Cases cannot share memory. Slot order is case order, with in-process-only cases left out. `build_program(cases)` returns the program, its TagMap, and the hash; `ConformanceProgram.export(dir)` writes `main.csv` and `nicknames.csv` for the CLICK software. The build export is validated, so a case the CLICK exporter rejects fails at build time -- mark it in-process-only.
+
+Case modules expose `cases`; `test_modbus.py` lists every module in `ALL_CASES`. A new case module adds itself there.
+
+## Expectations
+
+`expect` maps a slot field to an int or a `range` (`range(90, 111)` reads as `90..110` in failures). Exact ints are for values that do not depend on how long the harness waited. Over the wire, anything wall-clock dependent (timer `Acc`, scan counts) either stops moving before the harness reads -- observe `Done`, or capture the value once with `oneshot=True` when a condition is met -- or uses a bracket wide enough for scan jitter that both reads fall in. Keep timer presets well above the scan period (hundreds of ms, not tens) and set `scans` so the settle time covers the preset.
+
+A case that cannot run over Modbus passes `in_process_only="reason"`. The Modbus run leaves it out of the program and reports it as skipped with that reason.
 
 ## 8-step protocol
 
-1. Zero every slot.
-2. Stage inputs with `Cmd = 0` so nothing fires.
-3. Read back to catch dropped writes.
-4. Write `Cmd = 1` everywhere.
-5. Run until the slowest test has had its scans.
-6. Read every slot.
+In-process (`run`):
+
+1. Zero every slot (fresh `PLC`).
+2. Stage inputs with `Cmd = 0` so nothing fires (scan 0).
+3. -- (nothing can be dropped in-process).
+4. Patch `Cmd = 1` everywhere.
+5. Run `max(case.scans)` scans.
+6. Read every slot from `current_state`.
 7. Compare to `expect`. Verify `Fired` went up.
 8. Report.
 
+Over Modbus (`run_modbus`), every step is a register read or write:
+
+0. Read `DS1..DS2` until `DS1 != 0` (timeout -> `ConformanceError`, "program is not running"). If `(DS1, DS2)` is not this build's `(hash, slot count)`, raise `BuildMismatchError` before writing anything.
+1. Zero every slot register (one block write, chunked at 100 registers). `Cmd` is the first register of each slot, so it is never left at 1 after its `Fired` is cleared.
+2. Stage inputs with `Cmd = 0`. No case stages inputs yet; this is the zeroing.
+3. Read the slots back until they are all zero (timeout -> `ConformanceError`, "writes were dropped").
+4. Write `Cmd = 1`, one single-register write per slot. A block write would rewrite a slot's other registers after its case might already have fired (the sim applies each register as a patch on the next scan, so one request can span scans).
+5. Poll every 20 ms until every `Fired != 0`, or until the timeout (default 10 s). A case that never fires is judged a failure, not raised. Then sleep the settle time, `max(case.scans) * 10 ms`.
+6. Read every slot, wait `max(100 ms, settle)`, read every slot again.
+7. A case passes only if it fired and **both** reads meet `expect`. If one read passes and the other does not, the result's `note` says "unstable" with both reads.
+8. Report. `assert_all_passed` lists failures; skipped cases do not fail.
+
+## Pacing over the wire
+
+Over Modbus nothing counts scans, so waits are wall clock: "Fired, then settle, then two reads". `case.scans` becomes settle time at the nominal 10 ms scan. The double read is the stability check: a value still moving when the harness reads fails loudly instead of passing by luck.
+
+The local sim (`SimServer`) is `ClickDataProvider` behind `pyclickplc.server.ClickServer` on a free localhost port, serving a `PLC(realtime=True)` that free-runs on its own thread at one scan per 10 ms of wall clock (late scans are not burst to catch up). Timers therefore see wall-clock time, as on a CLICK. Modbus reads and writes take the same lock as the scan, and each write becomes a `patch()` applied at the start of the next scan. A scan exception stops the sim and fails the run.
+
+The default 10 s timeout is far above what the sim needs (a whole run is about 0.3 s); it is sized for a real CLICK on a busy network.
+
 ## Running against the real PLC
 
-`run(cases, on=real_plc)` — same 8 steps. The harness does not push ladder; you load it with the Click software. The canonical program writes a build hash to `DS1` on first scan. The harness reads `DS1` first and bails if it doesn't match.
+`make test-conformance PLC=192.168.0.10` (port defaults to 502). The harness does not push ladder: export the program with `build_program(ALL_CASES).export(dir)`, load `main.csv` and `nicknames.csv` with the CLICK software, and put the PLC in RUN. The harness reads `DS1` first and bails if the build does not match. The harness self-checks in `test_modbus.py` always use their own local sim. When a real-PLC answer differs from pyrung's, that is a finding: either pyrung's semantics change, or the difference becomes a documented CLICK deviation.
 
 ## Coverage checklist
 

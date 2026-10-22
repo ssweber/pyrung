@@ -27,6 +27,10 @@ make lint
 # Run tests:
 make test
 
+# Run the conformance cases over Modbus TCP against pyrung's local soft PLC
+# (add PLC=host[:port] to run them against a CLICK loaded with the exported program):
+make test-conformance
+
 # Build wheel:
 make build
 
