@@ -149,7 +149,10 @@ def _abstracted_hidden_tags(context: _ExploreContext) -> frozenset[str]:
                 hidden.add(atom.threshold)
     # An elided tag is recomputed every scan from this scan's inputs; the value
     # left in a restored snapshot is stale, so it must not resolve an atom.
+    # Demoted edge sources are elided the same way (only their prev is
+    # forwarded), so their current value is just as stale.
     hidden.update(name for name in context.elided_tags if name not in exact_stateful)
+    hidden.update(name for name in context.demoted_edge_names if name not in exact_stateful)
     return frozenset(hidden)
 
 

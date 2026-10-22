@@ -370,6 +370,32 @@ class TestDemotionSoundness:
         assert "S2" in context.demoted_edge_names
         _assert_soundness(logic, ~target)
 
+    @pytest.mark.parametrize("edge", [rise, fall])
+    def test_demoted_edge_keeps_copied_input_live(self, edge):
+        """A demoted tag's snapshot value must not resolve its own edge atom.
+
+        ``Sensor`` is rewritten every scan by an unconditional copy, so it is
+        demoted and its value in the restored snapshot is stale.  Live-input
+        pruning used to evaluate ``rise(Sensor)`` against that stale value, find
+        it constant False, and never enumerate ``Button``: ``always(~Target)``
+        came back Proven although ``Target`` is two scans away.  ``Target`` is an
+        ``out()``, so nothing stateful keeps ``Button`` live on its own.
+        """
+        button = Bool("Button", external=True)
+        sensor = Bool("Sensor")
+        target = Bool("Target")
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(button, sensor)
+            with Rung(edge(sensor)):
+                out(target)
+
+        context = prove_module._build_explore_context(logic)
+        assert "Sensor" in context.demoted_edge_names
+        result = always(logic, ~target, max_states=10_000, depth_budget=20)
+        assert isinstance(result, Counterexample), result
+        _assert_trace_replays(logic, result, "Target")
+
 
 # ===================================================================
 # Group: Replay with demoted edge prev values
