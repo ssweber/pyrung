@@ -1,4 +1,4 @@
-"""Case and result types for the twin harness."""
+"""Case and result types for the conformance suite."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from pyrung.twin._slot import SLOT_FIELDS
+from pyrung.conformance._slot import SLOT_FIELDS
 
 
 @dataclass(frozen=True)

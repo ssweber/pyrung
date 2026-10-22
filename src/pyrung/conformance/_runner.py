@@ -1,10 +1,10 @@
-"""Twin harness runner — the 8-step protocol."""
+"""Conformance suite runner (in-process) -- the 8-step protocol."""
 
 from __future__ import annotations
 
+from pyrung.conformance._case import Case, CaseResult
+from pyrung.conformance._slot import make_slot
 from pyrung.core import PLC, Program
-from pyrung.twin._case import Case, CaseResult
-from pyrung.twin._slot import make_slot
 
 
 def run(cases: list[Case]) -> list[CaseResult]:

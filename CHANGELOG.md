@@ -12,6 +12,7 @@
 
 ### Breaking Changes
 
+- The twin test harness is now the conformance suite: import it from `pyrung.conformance` instead of `pyrung.twin`.
 - Generated CLICK projects put pyrung's guidance in `AGENTS.pyrung.md` and `README.pyrung.md`, rewritten on every generation, while `AGENTS.md` and `README.md` become the user's files with a `<!-- pyrung:guidance -->` line pointing at them; `refresh_workspace_lifecycle_guidance()` and the lifecycle markers are removed.
 
 ### Features

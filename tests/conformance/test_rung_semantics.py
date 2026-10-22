@@ -1,9 +1,9 @@
-"""First three twin-harness tests: rung semantics."""
+"""First three conformance cases: rung semantics."""
 
 from __future__ import annotations
 
+from pyrung.conformance import assert_all_passed, case, run
 from pyrung.core import Rung, copy
-from pyrung.twin import assert_all_passed, case, run
 
 
 def prove_memory_is_immediate(slot):

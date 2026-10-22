@@ -1,4 +1,4 @@
-"""Slot template for twin harness tests."""
+"""Slot template for conformance cases."""
 
 from __future__ import annotations
 

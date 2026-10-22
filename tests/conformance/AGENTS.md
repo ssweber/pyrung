@@ -1,4 +1,4 @@
-# Twin Harness
+# Conformance Suite
 
 Plain-English tests for PLC programs. Same test, same ladder, same check — run against the soft PLC or the real PLC.
 

@@ -84,7 +84,7 @@ src/pyrung/
 │   ├── condenser.py     # Transcript condensing to causal-minimum
 │   ├── miner.py         # Invariant miner
 │   └── live.py          # pyrung live (TCP attach)
-└── twin/                # Twin harness: same test against soft PLC or real PLC
+└── conformance/         # Conformance suite: same cases in-process, over Modbus, or on a real PLC
 ```
 
 ## Sub-AGENTS.md Files
@@ -93,7 +93,7 @@ src/pyrung/
 - `src/pyrung/core/analysis/pilot/AGENTS.md` — PILOT steering invariants, actual control flow, module map
 - `editors/vscode/pyrung-debug/AGENTS.md` — VS Code extension event architecture, key files
 - `docs/AGENTS.md` — Documentation tone/style, API design decisions, technical details
-- `tests/twin/AGENTS.md` — Twin harness protocol, slot layout, coverage checklist
+- `tests/conformance/AGENTS.md` — Conformance suite protocol, slot layout, wire pacing, coverage checklist
 - `tests/fuzz/reproducers/AGENTS.md` — Fuzz reproducer workflow, diagnose script usage
 
 ## Docs Index
