@@ -17,6 +17,8 @@ The ClickNick workspace for the conformance CLICK project. `.clicknick.toml` lin
 1. Edit a group's cases (add the manifest line if `make test-conformance` asks for one).
 2. `make conformance-workspace` regenerates `src/plc/` from the suite, exactly as ClickNick would from the same ladder. It leaves `csv/` alone: that is what CLICK last accepted, and the baseline ClickNick diffs against.
 3. In ClickNick, **Preview Changes**. Only the changed rungs show: the group's case rungs and its hash rung (rung 1 of `Conf_<Group>`). **Copy to Click**, paste in CLICK, save, write to the PLC.
+
+   The first Preview Changes after the initial load may also show cosmetic diffs, because ladder rebuilt from a CLICK file looks a little different from pyrung's export. pyrung is the source of truth and changes only flow pyrung -> CLICK, so ignore them (or take them once).
 4. `make test-conformance PLC=host GROUP=<group>`
 
 New slots bring new nicknames. They are in the regenerated `src/plc/tags.py`; `clicknick-cli tag apply` stages them in the Address Editor (review **Changed**, then **Sync**). Nicknames only make the ladder readable; the harness reads registers, so this step can wait.
