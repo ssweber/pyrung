@@ -2550,3 +2550,29 @@ class TestClockEdgeProbe:
     @pytest.mark.parametrize("n", [49, 50, 51, 52, 99, 100, 101, 150])
     def test_edge_pulse_stays_on_its_own_scan(self, n: int) -> None:
         _assert_fold_is_exact(self._edge_pulses, _scans(n))
+
+
+class TestFoldLandingCheckpoint:
+    """A landing that puts the tip on a checkpoint scan is checkpointed
+    there, never at the scan id it first commits under."""
+
+    @staticmethod
+    def _program() -> Program:
+        C = Counter.clone("C")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.clock_100ms):
+                count_up(C, 100_000).reset(Bool("CR"))
+        return prog
+
+    def test_landing_checkpoints_hold_the_stepped_state(self) -> None:
+        folded, stepped = _folded_and_stepped(self._program, _scans(2_000))
+        interval = folded._checkpoint_interval
+        assert sorted(folded._checkpoints) == list(
+            range(interval, folded.state.scan_id + 1, interval)
+        )
+        for scan_id, state in folded._checkpoints.items():
+            assert state.scan_id == scan_id
+            replayed = stepped.replay_to(scan_id).state
+            assert {k: v for k, v in state.tags.items() if not k.startswith("sys.scan_time")} == {
+                k: v for k, v in replayed.tags.items() if not k.startswith("sys.scan_time")
+            }

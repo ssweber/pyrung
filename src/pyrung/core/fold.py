@@ -2818,6 +2818,8 @@ def _do_fold(
             timestamp=start_timestamp + skip * ctx.normal_dt,
         ),
     )
+    if skip > 1:
+        runner._checkpoint_fold_landing()
     return tuple(patches.items())
 
 

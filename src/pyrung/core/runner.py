@@ -4007,6 +4007,21 @@ class PLC:
             return
         registration.enabled = False
 
+    def _checkpoint_fold_landing(self) -> None:
+        """Checkpoint the tip when a fold landing put it on a checkpoint scan.
+
+        The landing state is the exact state of the scan it lands on, so a
+        replay may anchor there as on any stepped checkpoint.
+        """
+        state = self._state
+        scan_id = state.scan_id
+        if scan_id <= 0 or scan_id % self._checkpoint_interval != 0:
+            return
+        current_forces = dict(self._input_overrides.forces)
+        self._scan_log.record_force_changes(scan_id, current_forces)
+        self._forces_last_recorded = current_forces
+        self._checkpoints[scan_id] = state
+
     def _consume_pause_request(self) -> bool:
         pause_requested = self._pause_requested_this_scan
         self._pause_requested_this_scan = False
@@ -4210,6 +4225,10 @@ class PLC:
 
         self._capture_previous_states(ctx, dt)
         commit_dt = dt
+        # A fold landing commits here at its first scan id and is then moved to
+        # the scan it stands for; it is checkpointed there (see
+        # _checkpoint_fold_landing), never at this id.
+        is_fold_landing = self._landing_commit_dt is not None
         if self._landing_commit_dt is not None:
             commit_dt = self._landing_commit_dt
             self._landing_commit_dt = None
@@ -4232,7 +4251,9 @@ class PLC:
         # Checkpoint bypass: the force-map write at checkpoint boundaries
         # is unconditional — replay reads force state from the checkpoint
         # scan's log entry, so diff-eliding it would strand reconstruction.
-        is_checkpoint = new_scan_id > 0 and new_scan_id % self._checkpoint_interval == 0
+        is_checkpoint = (
+            not is_fold_landing and new_scan_id > 0 and new_scan_id % self._checkpoint_interval == 0
+        )
         if self._this_scan_drained_patches:
             self._scan_log.record_patches(new_scan_id, self._this_scan_drained_patches)
             self._this_scan_drained_patches = {}
