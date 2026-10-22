@@ -2968,14 +2968,19 @@ class _OrdinaryFoldStrategy:
         )
         if clock_gap is not None:
             skip = min(skip, clock_gap) if skip is not None else clock_gap
-        rtc_gap = self._rtc_gap(state, probe, rtc_at, skip, max_skip, endpoint_is_boundary, forced)
-        if rtc_gap is not None:
-            skip = min(skip, rtc_gap) if skip is not None else rtc_gap
         if max_skip is not None:
             if skip is not None:
                 skip = min(skip, max_skip)
             elif endpoint_is_boundary:
                 skip = max_skip
+        # An RTC tick only shortens a window something else bounds; it never
+        # creates one.  A window with no other bound is not folded at all, as
+        # without an RTC reader, so a stop predicate the fold cannot see (a
+        # callable) is still judged after every scan there.
+        if skip is not None:
+            rtc_gap = self._rtc_gap(state, probe, rtc_at, skip, forced)
+            if rtc_gap is not None:
+                skip = min(skip, rtc_gap)
         if skip is None or skip < min_skip:
             return None
         return _FoldPlan(
@@ -2990,30 +2995,21 @@ class _OrdinaryFoldStrategy:
         state: SystemState,
         probe: _FoldProbe,
         rtc_at: Callable[[float], datetime] | None,
-        skip: int | None,
-        max_skip: int | None,
-        endpoint_is_boundary: bool,
+        cap: int,
         forced: Collection[str] | None,
     ) -> int | None:
-        """The RTC tick bound for this window (see :func:`_scans_to_rtc_tick`).
+        """The RTC tick bound on a window already bounded at *cap* scans.
 
-        Ticks of every read field bound the window unless the time-mirror proof
-        holds (:func:`_rtc_hard_fields`).  That runtime judgement is only made
-        when the next tick would actually shorten the window.
+        Ticks of every read field bound the window (see
+        :func:`_scans_to_rtc_tick`) unless the time-mirror proof holds
+        (:func:`_rtc_hard_fields`).  That runtime judgement is only made when
+        the next tick would actually shorten the window.
         """
         ctx = self.ctx
         if not ctx.rtc_fields:
             return None
         gap = _scans_to_rtc_tick(ctx, state, probe.timestamp, rtc_at, ctx.rtc_fields)
-        if gap is None or ctx.time_mirrors is None:
-            return gap
-        cap = skip
-        if max_skip is not None:
-            if cap is not None:
-                cap = min(cap, max_skip)
-            elif endpoint_is_boundary:
-                cap = max_skip
-        if cap is not None and gap >= cap:
+        if gap is None or ctx.time_mirrors is None or gap >= cap:
             return gap
         hard = _rtc_hard_fields(ctx, state, (state.tags,), forced)
         if hard == ctx.rtc_fields:

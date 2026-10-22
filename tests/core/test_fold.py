@@ -1594,7 +1594,7 @@ def _rtc_latch_program() -> tuple[Program, Bool]:
         with Rung(system.rtc.second == 30):
             latch(X)
         with Rung():
-            on_delay(Tmr, 60_000)
+            on_delay(Tmr, 60, "s")  # a crossing that bounds every window
     return prog, X
 
 
@@ -1960,18 +1960,29 @@ class TestSoftRtcTicks:
         assert len(tm.dead_nodes) == 1
         assert _time_mirrors_off(tm, (plc.state.tags,))
 
+    @pytest.mark.parametrize("mode", ["run_for", "callable"])
     @pytest.mark.parametrize("seconds", [5, 12])
-    def test_folded_matches_stepped_across_rollovers(self, seconds: int) -> None:
-        """The window crosses second, minute and hour rollovers.  run_for has no
-        stop predicate, so nothing but the program could read a tick."""
+    def test_folded_matches_stepped_across_rollovers(self, seconds: int, mode: str) -> None:
+        """The window crosses second, minute and hour rollovers.  A callable stop
+        predicate (``scan_id >= target``) is invisible to the fold, so after the
+        timer saturates nothing bounds a window and none is folded; the RTC tick
+        only ever shortens a window, never creates one."""
+        target = seconds * 100
 
         def run(plc: PLC, fold: bool) -> None:
-            plc.run_for(float(seconds), fold=fold)
+            if mode == "run_for":
+                plc.run_for(float(seconds), fold=fold)
+            else:
+                plc.run_until(lambda s: s.scan_id >= target, max_cycles=target + 10, fold=fold)
 
-        folded, stepped = _folded_and_stepped(lambda: _rtc_mirror_program()[0], run)
-        assert stepped.state.tags["HHMM"] == 1300
-        assert folded.state.scan_id == stepped.state.scan_id
-        assert _plain_tags(folded) == _plain_tags(stepped)
+        for us in (250_000, 500_000, 750_000, 990_000):
+            start = (2026, 3, 1, 12, 59, 57, us)
+            folded, stepped = _folded_and_stepped(
+                lambda: _rtc_mirror_program()[0], run, start=start
+            )
+            assert stepped.state.tags["HHMM"] == 1300
+            assert folded.state.scan_id == stepped.state.scan_id
+            assert _plain_tags(folded) == _plain_tags(stepped)
 
     def test_run_until_target_matches_stepped(self) -> None:
         folded, stepped = _folded_and_stepped(lambda: _rtc_mirror_program()[0], _until_hit(10_000))
