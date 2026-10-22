@@ -153,6 +153,16 @@ def _abstracted_hidden_tags(context: _ExploreContext) -> frozenset[str]:
     # forwarded), so their current value is just as stale.
     hidden.update(name for name in context.elided_tags if name not in exact_stateful)
     hidden.update(name for name in context.demoted_edge_names if name not in exact_stateful)
+    # A tag read after an in-scan write is stale at that reader even when it is
+    # tracked exactly: `Rung(J): latch(K)`, `Rung(And(K, I))`, `Rung(): reset(K)`
+    # leaves K False in every snapshot although the middle rung sees it True.
+    # The snapshot value only stands for reads of the scan-entry version.
+    nd_names = context.nondeterministic_dims
+    for name, versions in context.graph.def_use_chains.items():
+        if name in nd_names or name in hidden:
+            continue
+        if any(version.defined_at is not None and version.read_by for version in versions):
+            hidden.add(name)
     return frozenset(hidden)
 
 
