@@ -141,6 +141,23 @@ class TestConsole:
         assert _tag(adapter, "Lamp") is True
         assert "bench    Motor -> Spare  on_delay=0ms" in _say(adapter, out, "links")
 
+    def test_normally_closed_link_drives_while_the_enable_is_off(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path)
+        assert _say(adapter, out, "link X003 ~Y001 on_delay=0ms") == (
+            "Linked ~Motor -> Spare on the bench"
+        )
+        assert "bench    ~Motor -> Spare  on_delay=0ms" in _say(adapter, out, "links")
+        _say(adapter, out, "run 50ms")
+        assert _tag(adapter, "Spare") is True
+        _run_motor(adapter, out)
+        assert _tag(adapter, "Spare") is False
+
+    def test_normally_closed_link_needs_a_bit_enable(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path)
+        response = _repl(adapter, out, "link X003 ~State on_delay=0ms")
+        assert not response["success"]
+        assert "write State:0" in response["message"]
+
     def test_unlink_cuts_and_restore_brings_back_the_program_link(self, tmp_path: Path):
         adapter, out = _launch(tmp_path)
         assert "free input" in _say(adapter, out, "unlink Aux")

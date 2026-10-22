@@ -54,7 +54,9 @@ _CHOICE_VALUE_RE = re.compile(r"^[^:,\|\[\]]+$")
 _PROFILE_VALUE_RE = re.compile(r"^[^,\[\]]+$")
 # A ``link=`` value names the enable — a tag name or a Click address — with an
 # optional ``:trigger`` (a choices label or an integer): ``link=State:SORTING``.
-_LINK_VALUE_RE = re.compile(r"^[^:,\|\[\]]+(?::[^:,\|\[\]]+)?$")
+# ``~`` marks a bit enable that drives while OFF (``link=~Enable``); Click
+# forbids ``~`` in nicknames, so the prefix is never part of a name.
+_LINK_VALUE_RE = re.compile(r"^(?:~[^~:,\|\[\]]+|[^~:,\|\[\]]+(?::[^:,\|\[\]]+)?)$")
 _BOOL_CHOICE_PRESET: ChoiceMap = {0: "False", 1: "True"}
 _CHOICE_PRESETS: dict[str, ChoiceMap] = {
     "Bool": _BOOL_CHOICE_PRESET,

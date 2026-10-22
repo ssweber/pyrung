@@ -218,6 +218,7 @@ Conditions on a rung, its branches, and its `.continued()` rungs share the pre-i
 |---|---|---|
 | `PHYS_MISSING_PROFILE` | Info | A tag has a `Physical` relationship through `link`, but the linked tag has no physical profile. |
 | `PHYS_ANTITOGGLE` | Warning | A feedback-linked command can pulse or change state faster than its declared feedback timing. |
+| `PHYS_LINK_UNKNOWN` | Warning | A tag's `link` names an enable the program never reads or writes, so the harness has nothing to drive its feedback from. |
 
 The physical checks, including `TAG_RANGE_VIOLATION`, use the scan interval passed as `dt`:
 

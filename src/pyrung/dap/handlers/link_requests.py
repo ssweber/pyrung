@@ -79,7 +79,7 @@ def on_pyrung_link(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     with adapter._state_lock:
         coupling = links.build_coupling_locked(adapter, feedback, enable, keys)
         text = links.set_link_locked(adapter, coupling)
-        command = links.link_command(coupling)
+        command = links.link_command(adapter, coupling)
         capture_hook(adapter, "link", command)
     return {"text": text, "command": command}, []
 

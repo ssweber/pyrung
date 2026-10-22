@@ -18,6 +18,7 @@ from pyrung.core import (
     out,
     udt,
 )
+from pyrung.core.harness import _parse_link_spec, format_link_spec
 from pyrung.core.physical import Physical, Pulse, Ramp
 
 # --- Fixtures: Physical declarations ---
@@ -687,6 +688,84 @@ class TestTriggerValidation:
         harness = Harness(plc)
         with pytest.raises(ValueError, match="has no choices map"):
             harness.install()
+
+
+# --- Normally-Closed (~) Links ---
+
+
+@udt()
+class NormallyClosedPair:
+    En: Bool
+    Fb: Bool = Field(physical=LIMIT_SWITCH, link="~En")
+
+
+class TestNormallyClosedLink:
+    def test_fb_follows_the_bit_while_it_is_off(self):
+        plc, dev = _make_trigger_plc(NormallyClosedPair, en_field="En")
+        harness = Harness(plc)
+        harness.install()
+
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is True
+
+        plc.patch({dev[1].En: True})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is False
+
+    def test_coupling_triggers_on_zero(self):
+        plc, dev = _make_trigger_plc(NormallyClosedPair, en_field="En")
+        harness = Harness(plc)
+        harness.install()
+
+        (coupling,) = harness.couplings()
+        assert coupling.trigger_value == 0
+
+    def test_flat_tag(self):
+        Sol = Bool("VentSol")
+        Open = Bool("VentOpen", physical=LIMIT_SWITCH, link="~VentSol")
+
+        with Program() as logic:
+            pass
+        plc = PLC(logic, dt=0.010)
+        plc._register_known_tag(Sol)
+        plc._register_known_tag(Open)
+        Harness(plc).install()
+
+        plc.run_for(0.050)
+        assert _fb(plc, Open) is True
+        plc.patch({Sol: True})
+        plc.run_for(0.050)
+        assert _fb(plc, Open) is False
+
+    def test_on_a_non_bool_field_raises(self):
+        with pytest.raises(ValueError, match="normally-closed BOOL enable"):
+
+            @udt()
+            class Bad:
+                State: Int
+                Fb: Bool = Field(physical=LIMIT_SWITCH, link="~State")
+
+    def test_on_a_non_bool_flat_tag_raises(self):
+        State = Int("NcState")
+        Fb = Bool("NcFb", physical=LIMIT_SWITCH, link="~NcState")
+
+        with Program() as logic:
+            pass
+        plc = PLC(logic, dt=0.010)
+        plc._register_known_tag(State)
+        plc._register_known_tag(Fb)
+        with pytest.raises(ValueError, match="write NcState:0"):
+            Harness(plc).install()
+
+    def test_cannot_combine_with_a_trigger(self):
+        with pytest.raises(ValueError, match="cannot combine ~"):
+            _parse_link_spec("~En:1")
+
+    def test_format_is_canonical(self):
+        assert format_link_spec("En", None, bit=True) == "En"
+        assert format_link_spec("En", 0, bit=True) == "~En"
+        assert format_link_spec("Mode", 0, bit=False) == "Mode:0"
+        assert format_link_spec("Mode", "BAKE", bit=False) == "Mode:BAKE"
 
 
 # --- Coupling Summary Display ---

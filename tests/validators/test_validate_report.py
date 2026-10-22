@@ -279,6 +279,7 @@ class TestValidationReport:
     def test_all_rules_constant_complete(self):
         expected = {
             "PHYS_ANTITOGGLE",
+            "PHYS_LINK_UNKNOWN",
             "CALL_NEVER_CALLED",
             "CALL_RECURSION",
             "CMP_ALWAYS_FALSE",

@@ -20,8 +20,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from pyrung.core.harness import Coupling, _resolve_trigger_value, link_problem
+from pyrung.core.harness import (
+    Coupling,
+    _parse_link_spec,
+    _resolve_trigger_value,
+    format_link_spec,
+    link_problem,
+)
 from pyrung.core.physical import Physical, parse_profile_spec, profile_to_token
+from pyrung.core.tag import TagType
 from pyrung.dap import execution_flow
 from pyrung.dap.console import ConsoleResult, register
 from pyrung.dap.grammar import Slot
@@ -46,7 +53,8 @@ class BenchLink:
 def build_coupling_locked(
     adapter: Any, feedback: str, enable: str, keys: Mapping[str, str]
 ) -> Coupling:
-    """Resolve and validate one link: *enable* (``Tag`` or ``Tag:trigger``) drives *feedback*.
+    """Resolve and validate one link: *enable* (``Tag``, ``Tag:trigger`` or ``~Tag``) drives
+    *feedback*.
 
     Both tags may be tag names or Click addresses.  *keys* are ``LINK_KEYS``
     values as written in a comment (``on_delay="2s"``).  The physical name
@@ -59,7 +67,10 @@ def build_coupling_locked(
         )
     runner = adapter._require_runner_locked()
     fb_name = adapter._resolve_target_locked(feedback)
-    en_text, _, trigger_raw = enable.partition(":")
+    try:
+        en_text, trigger_raw = _parse_link_spec(enable)
+    except ValueError as exc:
+        raise adapter.DAPAdapterError(f"cannot link {fb_name}: {exc}") from exc
     en_name = adapter._resolve_target_locked(en_text)
     try:
         profile = parse_profile_spec(keys["profile"]) if "profile" in keys else None
@@ -99,10 +110,16 @@ def same_wiring(a: Coupling, b: Coupling) -> bool:
     )
 
 
-def enable_text(coupling: Coupling) -> str:
-    if coupling.trigger_value is None:
-        return coupling.en_name
-    return f"{coupling.en_name}:{coupling.trigger_value}"
+def _is_bit(adapter: Any, tag_name: str) -> bool:
+    tag = adapter._require_runner_locked()._known_tags_by_name.get(tag_name)
+    return tag is not None and tag.type == TagType.BOOL
+
+
+def enable_text(adapter: Any, coupling: Coupling) -> str:
+    """The enable as a ``link=`` value: ``Tag``, ``Tag:trigger`` or ``~Tag``."""
+    return format_link_spec(
+        coupling.en_name, coupling.trigger_value, bit=_is_bit(adapter, coupling.en_name)
+    )
 
 
 def physical_tokens(coupling: Coupling) -> list[str]:
@@ -122,9 +139,11 @@ def physical_tokens(coupling: Coupling) -> list[str]:
     return tokens
 
 
-def link_command(coupling: Coupling) -> str:
+def link_command(adapter: Any, coupling: Coupling) -> str:
     """The console command that creates *coupling* as a bench link."""
-    return " ".join(["link", coupling.fb_name, enable_text(coupling), *physical_tokens(coupling)])
+    return " ".join(
+        ["link", coupling.fb_name, enable_text(adapter, coupling), *physical_tokens(coupling)]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +226,7 @@ def set_link_locked(adapter: Any, coupling: Coupling) -> str:
         text = f"{fb} already has this link in the program; bench change removed"
     else:
         adapter._bench_links[fb] = BenchLink(coupling)
-        text = f"Linked {enable_text(coupling)} -> {fb} on the bench"
+        text = f"Linked {enable_text(adapter, coupling)} -> {fb} on the bench"
     sync_harness_locked(adapter)
     return text
 
@@ -336,8 +355,8 @@ def format_links_locked(adapter: Any) -> str:
         if row.get("cut"):
             text = f"  bench    {fb} cut"
         else:
-            enable = (
-                row["enable"] if row["trigger"] is None else f"{row['enable']}:{row['trigger']}"
+            enable = format_link_spec(
+                row["enable"], row["trigger"], bit=_is_bit(adapter, row["enable"])
             )
             keys = " ".join(
                 f"{key}={row[field]}"
@@ -368,7 +387,7 @@ def format_links_locked(adapter: Any) -> str:
 # Console verbs
 # ---------------------------------------------------------------------------
 
-_LINK_USAGE = "link <feedback> <enable[:trigger]> on_delay=.. off_delay=.. | profile=.."
+_LINK_USAGE = "link <feedback> <[~]enable[:trigger]> on_delay=.. off_delay=.. | profile=.."
 
 
 def parse_link_keys(adapter: Any, tokens: list[str]) -> dict[str, str]:

@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 TAG_RANGE_VIOLATION = "TAG_RANGE_VIOLATION"
 PHYS_MISSING_PROFILE = "PHYS_MISSING_PROFILE"
 PHYS_ANTITOGGLE = "PHYS_ANTITOGGLE"
+PHYS_LINK_UNKNOWN = "PHYS_LINK_UNKNOWN"
 
 
 @dataclass(frozen=True)
@@ -154,7 +155,7 @@ def _linked_command_name(feedback: Tag, tag_map: dict[str, Tag]) -> str | None:
     link = feedback.link
     if link is None:
         return None
-    link_field = link.partition(":")[0]
+    link_field = link.removeprefix("~").partition(":")[0]
 
     runtime = getattr(feedback, "_pyrung_structure_runtime", None)
     index = getattr(feedback, "_pyrung_structure_index", None)
@@ -182,6 +183,35 @@ def _linked_feedback_by_command(tag_map: dict[str, Tag]) -> dict[str, list[Tag]]
         if command_name is not None:
             result[command_name].append(tag)
     return result
+
+
+def _validate_link_enables(tag_map: dict[str, Tag]) -> list[PhysicalRealismFinding]:
+    """A ``link=`` whose enable the program never touches: the harness skips it."""
+    findings: list[PhysicalRealismFinding] = []
+    for tag_name in sorted(tag_map):
+        tag = tag_map[tag_name]
+        if tag.link is None or tag.physical is None:
+            continue
+        command_name = _linked_command_name(tag, tag_map)
+        if command_name is not None and command_name in tag_map:
+            continue
+        findings.append(
+            PhysicalRealismFinding(
+                code=PHYS_LINK_UNKNOWN,
+                target_name=tag.name,
+                display=FindingDisplay(
+                    code=PHYS_LINK_UNKNOWN,
+                    severity="warning",
+                    frames=(Frame(location=tag.name),),
+                    problem=(
+                        f"{tag.name} links to {tag.link}, which the program never uses; "
+                        "its feedback will not move."
+                    ),
+                    hint="link to a tag the program reads or writes",
+                ),
+            )
+        )
+    return findings
 
 
 def _contains_edge_condition(conditions: tuple[Any, ...]) -> bool:
@@ -397,5 +427,6 @@ def validate_physical_realism(program: Program, *, dt: float = 0.010) -> Physica
     findings: list[PhysicalRealismFinding] = []
     findings.extend(_validate_ranges(program, tag_map))
     findings.extend(_validate_missing_profiles(tag_map))
+    findings.extend(_validate_link_enables(tag_map))
     findings.extend(_validate_antitoggle(program, tag_map, dt=dt))
     return PhysicalRealismReport(findings=tuple(findings))

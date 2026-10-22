@@ -411,6 +411,19 @@ def test_tag_meta_link_takes_a_trigger():
     assert format_tag_meta(meta) == "[link=State:SORTING, on_delay=1s]"
 
 
+def test_tag_meta_link_takes_a_normally_closed_enable():
+    meta, remaining = parse_tag_meta("[link=~Vent_Sol, on_delay=1s] Vent")
+
+    assert remaining == "Vent"
+    assert meta == TagMeta(link="~Vent_Sol", on_delay="1s")
+    assert format_tag_meta(meta) == "[link=~Vent_Sol, on_delay=1s]"
+
+
+def test_tag_meta_link_rejects_normally_closed_with_a_trigger():
+    with pytest.raises(ValueError, match="Invalid TagMeta link value"):
+        parse_tag_meta("[link=~State:A, on_delay=1s] Sorted")
+
+
 def test_tag_meta_link_rejects_a_second_trigger():
     with pytest.raises(ValueError, match="Invalid TagMeta link value"):
         parse_tag_meta("[link=State:A:B, on_delay=1s] Sorted")
@@ -2561,6 +2574,7 @@ def test_from_nickname_file_names_an_address_link_by_its_nickname(tmp_path):
         get_addr_key("X", 2): bit("X", 2, "Motor_Aux", "[on_delay=2s, link=Y001]"),
         get_addr_key("X", 3): bit("X", 3, "Valve_Open", "[on_delay=1s, link=y5]"),
         get_addr_key("X", 4): bit("X", 4, "Pump_Aux", "[on_delay=1s, link=Motor_Run]"),
+        get_addr_key("X", 5): bit("X", 5, "Motor_Off", "[on_delay=1s, link=~Y001]"),
     }
     pyclickplc.write_csv(path, records)
 
@@ -2571,3 +2585,4 @@ def test_from_nickname_file_names_an_address_link_by_its_nickname(tmp_path):
     assert links["Motor_Aux"] == "Motor_Run"
     assert links["Valve_Open"] == "Y005"  # no nickname: the name codegen gives the slot
     assert links["Pump_Aux"] == "Motor_Run"
+    assert links["Motor_Off"] == "~Motor_Run"

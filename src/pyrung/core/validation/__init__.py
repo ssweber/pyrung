@@ -78,6 +78,7 @@ from pyrung.core.validation.math_conditions import (
 )
 from pyrung.core.validation.physical_realism import (
     PHYS_ANTITOGGLE,
+    PHYS_LINK_UNKNOWN,
     PHYS_MISSING_PROFILE,
     TAG_RANGE_VIOLATION,
     PhysicalRealismFinding,
@@ -155,6 +156,7 @@ __all__ = [
     "FindingDisplay",
     "Frame",
     "PHYS_ANTITOGGLE",
+    "PHYS_LINK_UNKNOWN",
     "CALL_NEVER_CALLED",
     "CALL_RECURSION",
     "CMP_ALWAYS_FALSE",

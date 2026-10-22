@@ -971,19 +971,29 @@ def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
             )
         if spec.link is None:
             continue
-        link_field, _, trigger_part = spec.link.partition(":")
+        from pyrung.core.harness import NC_TRIGGER, _parse_link_spec
+
+        link_field, trigger_part = _parse_link_spec(spec.link)
         if link_field not in field_by_name:
             raise ValueError(
                 f"Field {spec.name!r} links to unknown field {link_field!r}; "
                 "links must refer to a field in the same structure."
             )
-        if trigger_part:
-            en_spec = field_by_name[link_field]
+        en_spec = field_by_name[link_field]
+        if trigger_part == NC_TRIGGER:
+            if en_spec.type != TagType.BOOL:
+                raise ValueError(
+                    f"Field {spec.name!r}: ~ marks a normally-closed BOOL enable, but "
+                    f"{link_field!r} is {en_spec.type.value}. "
+                    f"Use link='{link_field}:0' to drive while it is 0."
+                )
+        elif trigger_part:
             if en_spec.type == TagType.BOOL:
                 raise ValueError(
                     f"Field {spec.name!r}: trigger value {trigger_part!r} is not valid "
                     f"for BOOL enable field {link_field!r}. "
-                    "Use plain link='fieldname' for BOOL enables."
+                    f"Use link='{link_field}' to drive while it is on, or "
+                    f"link='~{link_field}' while it is off."
                 )
             try:
                 int(trigger_part)

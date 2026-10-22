@@ -78,12 +78,42 @@ class _ProfileCoupling:
     trigger_value: int | str | None = None
 
 
+#: Raw trigger for ``~Name``: drive while the bit enable is OFF (normally closed).
+NC_TRIGGER = "~"
+
+
 def _parse_link_spec(link: str) -> tuple[str, str | None]:
+    """Split a ``link=`` value into the enable name and its raw trigger.
+
+    ``Name`` drives while the enable is on, ``Name:trigger`` while it equals the
+    trigger, and ``~Name`` while a bit enable is off.
+    """
+    if link.startswith(NC_TRIGGER):
+        name = link[len(NC_TRIGGER) :]
+        if ":" in name:
+            raise ValueError(f"Link {link!r} cannot combine ~ with a :trigger.")
+        return (name, NC_TRIGGER)
     name, _, trigger = link.partition(":")
     return (name, trigger or None)
 
 
+def format_link_spec(en_name: str, trigger_value: int | str | None, *, bit: bool) -> str:
+    """The canonical ``link=`` value: ``~Name`` for a bit enable that drives while off."""
+    if trigger_value is None:
+        return en_name
+    if bit and trigger_value == 0:
+        return f"{NC_TRIGGER}{en_name}"
+    return f"{en_name}:{trigger_value}"
+
+
 def _resolve_trigger_value(trigger_raw: str, en_tag: Any) -> int | str:
+    if trigger_raw == NC_TRIGGER:
+        if getattr(en_tag, "type", None) != TagType.BOOL:
+            raise ValueError(
+                f"~ marks a normally-closed bit enable, but {en_tag.name!r} is "
+                f"{en_tag.type.value}; write {en_tag.name}:0 to drive while it is 0."
+            )
+        return 0
     try:
         return int(trigger_raw)
     except ValueError:

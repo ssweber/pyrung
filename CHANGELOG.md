@@ -28,6 +28,8 @@
 - Bench links: the `link`, `unlink`, `restore`, and `links` console verbs and the `pyrungLink`, `pyrungUnlink`, `pyrungRestoreLink`, `pyrungSetLinks`, and `pyrungListLinks` requests add, replace, or cut feedback links for the debug session without editing the program. They survive `reload`, can be set aside together (`links bench off`) or one at a time, are recorded by captures, and are refused when the program writes the feedback. Frames carry `linksRevision`, and `linksPending` gives the simulated milliseconds left on each bool feedback's running delay (`Harness.pending_ms()`).
 - `Harness.set_overrides()` replaces or cuts declared couplings, or adds new ones, by feedback tag; `Harness.declared()` lists the program's own couplings, `Harness.pending()` reports a bool feedback still counting toward a flip, and `link_problem()` explains why a coupling cannot run. `Harness.unlink()` is now a cut override.
 - In a CLICK nickname comment, `link=` accepts a CLICK address (`link=Y001`, read as the nickname at that address) and a value trigger (`link=State:SORTING`).
+- `link="~Tag"` drives feedback while a Bool enable is off (normally closed), in Python, UDT fields, nickname comments, and the `link` console verb; bench-link text shows it as `~Tag`. `~` on a non-Bool enable is refused.
+- `PHYS_LINK_UNKNOWN` warns when a `link=` names an enable the program never uses, which the harness skipped silently.
 
 ### Fixes
 

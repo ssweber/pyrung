@@ -86,6 +86,20 @@ When `DiverterCmd` goes True, the harness schedules `BinSensor=True` 2 seconds l
 
 The distinction: UDT links model device-level feedback (motor command → motor contactor feedback). Standalone links model process-level physics (diverter fires → box arrives at bin). Both use the same `Physical` timing and the same harness machinery.
 
+### Normally closed — `~`
+
+Prefix the enable with `~` when the feedback responds while a bit is **off**, like a `~Tag` contact on a rung. A spring-return valve opens when its solenoid drops out:
+
+```python
+VentSol = Bool()
+VentOpen = Bool(
+    physical=Physical("VentOpen", on_delay="300ms", off_delay="200ms"),
+    link="~VentSol",
+)
+```
+
+`~` only applies to Bool enables. To drive while an Int equals zero, write `link="Mode:0"`.
+
 ### Value triggers — linking to specific states
 
 Plain `link=` watches for bool edges (truthy ↔ falsy). When the enable tag is an Int with a choices map — a state machine, a mode selector — you often want feedback to fire when the tag enters a *specific* value, not just any nonzero value.
@@ -246,7 +260,7 @@ A counter instruction in the logic counts the rising edges — the harness produ
 
 In a CLICK nickname comment the spec is a comma-free token: `profile=ramp:up=0.8|down=-0.05`, `profile=approach:toward=180|rate=0.3`, or `profile=pulse:on_dwell=8ms|off_dwell=8ms`.
 
-In a comment, `link=` names the enable by nickname or by CLICK address, with the same optional trigger: `[on_delay=2s, off_delay=500ms, link=Motor_Run]`, `[on_delay=2s, link=Y001]`, or `[on_delay=1s, link=State:SORTING]`. An address reads as the nickname at that address; an address without a nickname keeps its address name (`Y005`), which is what generated code calls that slot. A nickname wins over an address that looks the same.
+In a comment, `link=` names the enable by nickname or by CLICK address, with the same optional `~` or trigger: `[on_delay=2s, off_delay=500ms, link=Motor_Run]`, `[on_delay=2s, link=Y001]`, `[on_delay=300ms, link=~Vent_Sol]`, or `[on_delay=1s, link=State:SORTING]`. An address reads as the nickname at that address; an address without a nickname keeps its address name (`Y005`), which is what generated code calls that slot. A nickname wins over an address that looks the same.
 
 ## Validation
 
@@ -254,11 +268,12 @@ pyrung validates UDT and named-array field annotations at construction time:
 
 - **Bool Fb field + `link=` but no physical** — rejected. A linked bool feedback field must declare either `physical=Physical(..., on_delay=..., off_delay=...)` or `physical=Physical(..., profile=...)`.
 - **Physical profile without `link=`** — rejected on tags and fields. A profile defines a response to a linked command; without a link there's nothing to respond to.
-- **Trigger value on Bool enable** — rejected. `link="En:1"` where `En` is a Bool field is invalid; use plain `link="En"` for Bool enables.
+- **Trigger value on Bool enable** — rejected. `link="En:1"` where `En` is a Bool field is invalid; use `link="En"` to drive while it is on, or `link="~En"` while it is off.
+- **`~` on a non-Bool enable** — rejected. `link="~Mode"` where `Mode` is an Int raises `ValueError`; write `link="Mode:0"`.
 - **Unknown choices label** — `link="State:MISSING"` raises `ValueError` when `MISSING` is not in the enable field's choices map.
 - **Non-numeric trigger without choices** — `link="State:SORTING"` on an Int field with no choices map raises `ValueError`. Use `link="State:2"` for literal values.
 
-`Program.check()` also checks the full program. In addition to range violations and feedback timing hazards, it reports linked analog feedback that does not declare `physical=Physical(..., profile=...)`.
+`Program.check()` also checks the full program. In addition to range violations and feedback timing hazards, it reports linked analog feedback that does not declare `physical=Physical(..., profile=...)`, and a `link=` whose enable the program never uses (`PHYS_LINK_UNKNOWN`) — the harness has nothing to drive that feedback from.
 
 ## Forces override the harness
 

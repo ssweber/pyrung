@@ -265,14 +265,15 @@ def tag_map_from_nickname_file(
         """
         if tag_meta is None or tag_meta.link is None:
             return None
-        enable, sep, trigger = tag_meta.link.partition(":")
+        nc = "~" if tag_meta.link.startswith("~") else ""
+        enable, sep, trigger = tag_meta.link.removeprefix(nc).partition(":")
         if enable in nicknames:
             return tag_meta.link
         try:
             display = format_address_display(*parse_address(enable))
         except ValueError:
             return tag_meta.link
-        return f"{nickname_at.get(display, display)}{sep}{trigger}"
+        return f"{nc}{nickname_at.get(display, display)}{sep}{trigger}"
 
     def physical_owner_name(logical_block: Block, slot_name: str) -> str:
         struct_name = getattr(logical_block, "_pyrung_structure_name", None)

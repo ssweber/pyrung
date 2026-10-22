@@ -120,7 +120,7 @@ data:
   clear_forces
   force <tag> <value>
   get <tag> [tag2 ...]
-  link <feedback> <enable[:trigger]> on_delay=.. off_delay=.. | profile=..  (bench wiring)
+  link <feedback> <[~]enable[:trigger]> on_delay=.. off_delay=.. | profile=..  (bench wiring)
   links [bench on|off | enable <tag> | disable <tag>]
   monitor <tag>
   note <text>

@@ -92,6 +92,7 @@ _SPECS: tuple[RuleSpec, ...] = (
         "physical",
         "Command Changes Too Fast for Feedback",
     ),
+    RuleSpec("PHYS_LINK_UNKNOWN", "PHYS", "warning", "physical", "Link Enable Never Used"),
     RuleSpec(
         "RUNG_CONTRADICTION", "RUNG", "error", "rung", "Rung Never Fires (Contradiction)", True
     ),
