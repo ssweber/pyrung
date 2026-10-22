@@ -121,6 +121,7 @@ _EXPENSIVE_MARKERS = frozenset(
         "fuzz",
         "known_answer",
         "tumbler",
+        "conformance",
     }
 )
 
@@ -136,6 +137,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "Backend used by tests that opt into runner_factory: "
             "'interpreted' uses PLC, 'compiled' uses CompiledPLC, "
             "'both' runs both and asserts state parity."
+        ),
+    )
+    group = parser.getgroup("pyrung-conformance", "pyrung conformance suite")
+    group.addoption(
+        "--conformance-plc",
+        action="store",
+        default=None,
+        metavar="HOST[:PORT]",
+        help=(
+            "Run the conformance marker against a CLICK at HOST[:PORT] instead of "
+            "pyrung's local soft PLC (env: PYRUNG_CONFORMANCE_PLC)."
         ),
     )
     group = parser.getgroup("pyrung-prove", "pyrung prove debug tools")

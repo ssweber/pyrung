@@ -6,7 +6,7 @@
 .DEFAULT_GOAL := default
 DOCS_ADDR ?= localhost:8000
 
-.PHONY: default install lint test test-prove test-pilot test-tumbler watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
+.PHONY: default install lint test test-prove test-pilot test-tumbler test-conformance watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
 
 default: install verify
 
@@ -17,7 +17,7 @@ lint:
 	uv run devtools/lint.py
 
 test:
-	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler" --ignore=tests/fuzz --runner-backend=both
+	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --runner-backend=both
 
 test-prove:
 	uv run pytest tests/core/analysis/ -k "prove or elision_agreement or packml_diagnosis" -q
@@ -27,6 +27,11 @@ test-pilot:
 
 test-tumbler:
 	uv run pytest tests/tumbler/ -q
+
+# Conformance cases over Modbus TCP against pyrung's local soft PLC.
+# Point at a real CLICK running the exported program with PLC=host[:port].
+test-conformance:
+	uv run pytest -m conformance tests/conformance/ -q $(if $(PLC),--conformance-plc=$(PLC))
 
 watch-pilot-burner:
 	uv run python devtools/watch_pilot_decisions.py --target y_BurnerLoop --no-avoid --max-scans 20000 --wall-budget 240 --stall-budget 30 --output-budget 30 --memory-budget-mb 4096
@@ -46,7 +51,7 @@ test-soundness:
 test-fuzz:
 	$(PROVE_SNAPSHOT_ENV) uv run pytest tests/fuzz/
 
-verify: lint test test-hypothesis docs-check
+verify: lint test test-conformance test-hypothesis docs-check
 
 upgrade:
 	uv lock --upgrade

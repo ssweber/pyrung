@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from pyrung.conformance._case import Case, CaseResult
+from pyrung.conformance._case import Case, CaseResult, expectation_met, format_expect
 from pyrung.conformance._slot import make_slot
 from pyrung.core import PLC, Program
 
 
 def run(cases: list[Case]) -> list[CaseResult]:
+    """Run *cases* in-process on a fixed-step ``PLC``, counting scans exactly."""
     if not cases:
         return []
 
@@ -34,7 +35,7 @@ def run(cases: list[Case]) -> list[CaseResult]:
                 actual[field_name] = plc.current_state.tags.get(tag.name, 0)
 
             fired = plc.current_state.tags.get(slot[i].Fired.name, 0) != 0
-            passed = actual == c.expect and fired
+            passed = expectation_met(c.expect, actual) and fired
             results.append(
                 CaseResult(case=c, passed=passed, actual=actual, slot_index=i, fired=fired)
             )
@@ -43,14 +44,17 @@ def run(cases: list[Case]) -> list[CaseResult]:
 
 
 def assert_all_passed(results: list[CaseResult]) -> None:
-    failures = [r for r in results if not r.passed]
+    """Raise ``AssertionError`` listing every case that ran and failed; skipped cases pass."""
+    failures = [r for r in results if not r.passed and r.skipped is None]
     if not failures:
         return
     lines: list[str] = []
     for f in failures:
-        lines.append(f"FAIL: {f.case.sentence}")
-        lines.append(f"  expected: {f.case.expect}")
+        lines.append(f"FAIL: {f.case.sentence} (slot {f.slot_index})")
+        lines.append(f"  expected: {format_expect(f.case.expect)}")
         lines.append(f"  actual:   {f.actual}")
         if not f.fired:
             lines.append("  Fired:    did not fire")
+        if f.note:
+            lines.append(f"  note:     {f.note}")
     raise AssertionError("\n".join(lines))

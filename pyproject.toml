@@ -195,6 +195,7 @@ markers = [
     "fuzz: grammar-based fuzzer tests",
     "known_answer: hand-enumerated reachable-state oracle tests",
     "tumbler: slow full-program tumbler fixture tests (run separately)",
+    "conformance: conformance cases over Modbus TCP (local soft PLC or a real CLICK)",
 ]
 testpaths = [
     "src",
