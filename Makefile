@@ -6,7 +6,7 @@
 .DEFAULT_GOAL := default
 DOCS_ADDR ?= localhost:8000
 
-.PHONY: default install lint test test-prove test-pilot test-tumbler test-conformance conformance-export watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
+.PHONY: default install lint test test-prove test-pilot test-tumbler test-conformance conformance-export conformance-workspace watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
 
 default: install verify
 
@@ -37,6 +37,10 @@ test-conformance:
 # Write the whole conformance CLICK project (main, one subroutine per group, nicknames).
 conformance-export:
 	uv run python -m tests.conformance.suite $(or $(OUT),build/conformance)
+
+# Regenerate src/plc/ in the conformance ClickNick workspace, for Preview Changes.
+conformance-workspace:
+	uv run python -m tests.conformance.suite --workspace $(or $(WORKSPACE),tests/conformance/workspace)
 
 watch-pilot-burner:
 	uv run python devtools/watch_pilot_decisions.py --target y_BurnerLoop --no-avoid --max-scans 20000 --wall-budget 240 --stall-budget 30 --output-budget 30 --memory-budget-mb 4096

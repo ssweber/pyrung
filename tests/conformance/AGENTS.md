@@ -4,7 +4,7 @@ Plain-English cases for PLC semantics. Same case, same ladder, same check -- run
 
 A conformance suite in the Modbus sense: the harness observes the implementation **only through registers**. The ladder computes its own answer and writes it into its slot; the harness writes `Cmd`, waits, and reads the slot back.
 
-The whole suite is **one CLICK program**: a main program that calls one subroutine per group (`Conf_Rungs`, later `Conf_Math`, `Conf_Drum`, ...). Load the full project once; after that, editing a group means replacing that one subroutine and rerunning that group.
+The whole suite is **one CLICK program**: a main program that calls one subroutine per group (`Conf_Rungs`, later `Conf_Math`, `Conf_Drum`, ...). Load the full project once; after that, editing a group means pasting its changed rungs (through the ClickNick workspace, see "Running against the real PLC") and rerunning that group.
 
 | Run | Where | How | Pacing |
 |---|---|---|---|
@@ -159,20 +159,26 @@ The default 10 s timeout is far above what the sim needs (a whole run is about 0
 
 ## Running against the real PLC
 
-The harness does not push ladder. Once:
+The harness does not push ladder. CLICK takes it two ways: a whole program through ClickNick's Guided Paste (first load), and changed rungs through ClickNick's Preview Changes (every update after). `tests/conformance/workspace/` is the ClickNick workspace for the conformance project: its committed `.clicknick.toml` links it to the CLICK PLC named `PYRUNG_CONFORMANCE`, and everything ClickNick generates or seeds in it is gitignored (see its `README.md`). pytest, ruff and ty skip the folder (`pyproject.toml`), since ClickNick seeds a smoke test and a `pyproject.toml` there.
+
+First load:
 
 1. `make conformance-export OUT=dir` writes the whole project: `main.csv`, `subroutines/Conf_<Group>.csv` per group, and `nicknames.csv`, and prints the layout hash and each group's hash and block.
-2. Load it with the CLICK software, write it to the PLC, and put the PLC in RUN.
-3. `make test-conformance PLC=192.168.0.10` (port defaults to 502).
+2. In a new CLICK project, ClickNick **Ladder > Open in Guided Paste...** on `dir`: it imports `nicknames.csv`, then walks through main and each subroutine.
+3. In ClickNick's Workspace controls, find an existing workspace and pick `tests/conformance/workspace/`. ClickNick asks a project without a PLC name for one: enter `PYRUNG_CONFORMANCE`. It refuses the folder if the project already has another name; rename the PLC in CLICK.
+4. Save in CLICK (ClickNick fills `src/plc/` and `csv/`), write to the PLC, put it in RUN.
+5. `make test-conformance PLC=192.168.0.10` (port defaults to 502).
 
 Then, per edit:
 
 1. Edit a group's cases (add a manifest line if `make test-conformance` asks for one).
-2. `make conformance-export OUT=dir`.
-3. In CLICK, replace that group's subroutine by pasting `subroutines/Conf_<Group>.csv` into it (single-subroutine paste works; re-import `nicknames.csv` if slots were added, for readable nicknames), write to the PLC.
+2. `make conformance-workspace` (or `WORKSPACE=dir` for another folder) rewrites the workspace's `src/plc/` from the suite: `pyrung_to_ladder` to temporary CSVs, then `ladder_to_pyrung_project` with ClickNick's arguments (`index=True`, the suite's nicknames), swapped in whole. It never touches `csv/`, which is CLICK's accepted snapshot and ClickNick's diff baseline.
+3. ClickNick **Preview Changes** shows only the changed rungs: the group's case rungs and its hash rung (R1 of `Conf_<Group>`). **Copy to Click**, paste in CLICK, save, write to the PLC.
 4. `make test-conformance PLC=... GROUP=<group>`.
 
-If you forget step 3, that group reports `Conf_<Group> is stale: repush` and its cases do not run; every other group still runs. Adding, removing, or moving a group changes the main program and the layout hash: load the whole project again. The harness self-checks in `test_modbus.py` always use their own local sim. When a real-PLC answer differs from pyrung's, that is a finding: either pyrung's semantics change, or the difference becomes a documented CLICK deviation. When a case passes on the real CLICK, set `confirmed=True`.
+`test_workspace.py` pins what step 3 depends on: the suite exported, regenerated as workspace source, and exported again gives byte-identical CSVs, so an unchanged rung never shows as a diff. New slot nicknames land in the regenerated `src/plc/tags.py`; `clicknick-cli tag apply` stages them in ClickNick's Address Editor (**Changed**, then **Sync**). They only make the ladder readable, so they can wait.
+
+If you forget step 3, that group reports `Conf_<Group> is stale: repush` and its cases do not run; every other group still runs. Adding, removing, or moving a group changes the main program and the layout hash in `DS1`, so Preview Changes shows main's rungs too. A new group's subroutine does not show there at all (ClickNick only diffs subroutines CLICK already has): paste its `subroutines/Conf_<Group>.csv` from `make conformance-export` with Guided Paste, then take main from Preview Changes. The harness self-checks in `test_modbus.py` always use their own local sim. When a real-PLC answer differs from pyrung's, that is a finding: either pyrung's semantics change, or the difference becomes a documented CLICK deviation. When a case passes on the real CLICK, set `confirmed=True`.
 
 ## Coverage checklist
 

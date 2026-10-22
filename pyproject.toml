@@ -101,7 +101,11 @@ exclude-newer-package = { pyclickplc = "0 days", ty = "0 days" }
 [tool.ruff]
 # Set as desired, typically 88 (black standard) or 100 (wide).
 line-length = 100
-extend-exclude = ["*.md", "tests/fuzz/reproducers"]
+extend-exclude = [
+    "*.md",
+    "tests/fuzz/reproducers",
+    "tests/conformance/workspace",  # ClickNick-generated workspace
+]
 
 [tool.ruff.lint]
 select = [
@@ -163,6 +167,7 @@ exclude = [
     "devtools/serial_monitor.py",  # Windows-only APIs (ctypes.windll, msvcrt)
     "tests/fixtures/tumbler/*",  # Click-generated fixture (huge tags.py)
     "tests/fuzz/reproducers/*",
+    "tests/conformance/workspace/*",  # ClickNick-generated workspace
     "tests/**/test_walk*",  # walk engine deprecated (switched to pilot); mirrors pytest --ignore-glob
 ]
 
@@ -201,7 +206,8 @@ testpaths = [
     "src",
     "tests",
 ]
-norecursedirs = ["tests/fuzz/reproducers"]
+# The conformance workspace holds ClickNick-generated source and a seeded smoke test.
+norecursedirs = ["tests/fuzz/reproducers", "tests/conformance/workspace"]
 filterwarnings = [
     "error:copy\\(.*writes a bool literal to a BOOL tag:UserWarning",
 ]

@@ -9,6 +9,8 @@ each gated by its slot's ``Cmd``/``Fired``.
 from __future__ import annotations
 
 import hashlib
+import shutil
+import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -114,6 +116,52 @@ class ConformanceProgram:
         pyrung_to_ladder(self.program, self.tag_map).write(out)
         self.tag_map.to_nickname_file(out / "nicknames.csv")
         return out
+
+    def export_workspace(self, workspace: str | Path) -> Path:
+        """Replace ``src/plc/`` in a ClickNick workspace with this program as pyrung source.
+
+        The source is generated the way ClickNick generates it after a CLICK
+        save: the exported ladder CSVs go through
+        :func:`~pyrung.click.ladder_to_pyrung_project` (``index=True``, with
+        this program's nicknames), so rungs that did not change export to the
+        same CSV and ClickNick's Preview Changes shows only the ones that did.
+        Nothing else in the workspace is touched: ``csv/`` stays CLICK's
+        accepted snapshot, the baseline Preview Changes diffs against.
+
+        ``src/plc/`` is swapped in whole, so a reader never sees half of it.
+        Returns the new ``src/plc`` directory.
+        """
+        from pyrung.click import ladder_to_pyrung_project
+
+        root = Path(workspace)
+        if not root.is_dir():
+            raise FileNotFoundError(f"Workspace not found: {root}")
+        destination = root / "src" / "plc"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        previous = destination.with_name(".plc.conformance-previous")
+        with tempfile.TemporaryDirectory(prefix=".conformance-export-", dir=root) as stage:
+            csv_dir = self.export(Path(stage) / "csv")
+            project = Path(stage) / "project"
+            ladder_to_pyrung_project(
+                csv_dir,
+                nickname_csv=csv_dir / "nicknames.csv",
+                output_dir=project,
+                index=True,
+                workspace_kind="persistent",
+            )
+            if previous.exists():
+                shutil.rmtree(previous)
+            if destination.exists():
+                destination.replace(previous)
+            try:
+                (project / "src" / "plc").replace(destination)
+            except Exception:
+                if previous.exists() and not destination.exists():
+                    previous.replace(destination)
+                raise
+        if previous.exists():
+            shutil.rmtree(previous)
+        return destination
 
 
 def build_program(
