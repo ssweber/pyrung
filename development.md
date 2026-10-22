@@ -11,7 +11,8 @@ Then [fork the repo](https://github.com/ssweber/pyrung/fork) and
 ## Basic Developer Workflows
 
 The `Makefile` offers shortcuts to `uv` commands.
-(GitHub Actions call `uv` directly, not the Makefile.)
+(GitHub Actions call `uv` directly for setup and lint, but run tests with
+`make test` so CI and local test selection stay identical.)
 
 ```shell
 # Install all dependencies (locked):

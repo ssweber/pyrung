@@ -1,6 +1,7 @@
 # Makefile for easy development workflows.
 # See development.md for docs.
-# Note GitHub Actions call uv directly, not this Makefile.
+# Note GitHub Actions call uv directly for setup and lint, but run `make test`
+# so CI and local test selection stay identical.
 
 .DEFAULT_GOAL := default
 DOCS_ADDR ?= localhost:8000

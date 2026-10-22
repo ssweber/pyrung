@@ -32,7 +32,9 @@ jobs:
         run: uv sync --locked --all-extras --dev
 
       - name: Run tests
-        run: uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz" --ignore=tests/fuzz
+        # Same selection and options as local `make test` (markers, --ignore,
+        # --runner-backend=both); edit the Makefile target, not this step.
+        run: make test
 
       - name: Build package
         run: uv build
