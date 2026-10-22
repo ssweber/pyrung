@@ -65,6 +65,21 @@ Each item is its own commit, with a regression test.
 
 Parallel: 1 and 2 together. After that, one at a time, each merged before the next starts.
 
+## Phase 0 status (2026-10-22)
+
+All three landed on dev: `619adad` (CI runs `make test`), `ccec694` (crossings gate), `e6b7e52` (fold freeze).
+The fold fix also caught a third shape: a rung reading a tag written further down the scan. A tag is now
+frozen only when every reader comes strictly after every writer.
+
+Fold follow-ups found by the fix, not yet scheduled:
+- Self-feeding calcs that are excluded from the plateau check by design still end with a different value than stepping.
+  The existing test compares only `Done`.
+- A calc reading `sys.dt` / `sys.scan_time_current_ms` is inflated on the landing scan (`dt = skip * dt`).
+  Relevant to anything new that reads dt directly.
+- RTC comparisons (`rtc.second == 30`) don't bound a fold; only the `sys.clock_*` edges do.
+- Gates on `rise()`/`fall()` edges of non-clock tags and one-shot copies aren't covered by tests.
+- `tests/fuzz/test_fold_soundness.py` docstring still describes the old frozen rule.
+
 ## Known risk, not scheduled
 
 - PILOT's prover context is all-or-nothing (`drive_setup.py:300-385`). Any compile or prover failure silently strips
