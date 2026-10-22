@@ -602,6 +602,10 @@ class CompiledPLC:
 
             self._kernel.scan_id += logical_scans
             self._kernel.timestamp = start_timestamp + effective_dt
+        except BaseException:
+            # A scan that raised commits nothing: undo the landing's clock move.
+            self._kernel.timestamp = start_timestamp
+            raise
         finally:
             self._dt = normal_dt
             if logical_scans > 1:

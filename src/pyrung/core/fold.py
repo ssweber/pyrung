@@ -2768,12 +2768,12 @@ def _do_fold(
     if patches:
         runner.patch(patches)
 
-    start_timestamp = runner._state.timestamp
+    pre_landing = runner._state
+    start_timestamp = pre_landing.timestamp
+    positioned = pre_landing
     if skip > 1:
-        _replace_tip_state(
-            runner,
-            runner._state.set(timestamp=start_timestamp + (skip - 1) * ctx.normal_dt),
-        )
+        positioned = pre_landing.set(timestamp=start_timestamp + (skip - 1) * ctx.normal_dt)
+        _replace_tip_state(runner, positioned)
         runner._landing_commit_dt = ctx.normal_dt
     runner._dt_override_for_next_scan = skip * ctx.normal_dt
     try:
@@ -2782,6 +2782,12 @@ def _do_fold(
             capture_execution=_capture_requested(capture_kernel_scan),
             capture_sink=capture_sink,
         )
+    except BaseException:
+        # The landing scan committed nothing: leave the tip as it was.
+        runner._dt_override_for_next_scan = None
+        if runner._state is positioned:
+            _replace_tip_state(runner, pre_landing)
+        raise
     finally:
         runner._landing_commit_dt = None
     if on_kernel_scan is not None:

@@ -2440,3 +2440,34 @@ class TestRtcNearDatetimeMax:
         )
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
+
+
+class TestLandingScanRaises:
+    """A landing scan that raises commits nothing and leaves the tip as the
+    pre-fold state, as an unfolded scan that raises does."""
+
+    def test_tip_is_unchanged_when_the_landing_raises(self) -> None:
+        from pyrung import run_function
+
+        def boom() -> None:
+            raise RuntimeError("boom")
+
+        def build() -> Program:
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Tmr, 5, "s")
+                with Rung(Tmr.Done):
+                    run_function(boom)
+            return prog
+
+        tips = []
+        for fold in (False, True):
+            plc = PLC(build(), dt=0.01)
+            plc.step()
+            with pytest.raises(RuntimeError):
+                plc.run_until(Bool("Never"), max_cycles=2_000, fold=fold)
+            tips.append(plc.state)
+        stepped, folded = tips
+        assert folded.timestamp == pytest.approx(folded.scan_id * 0.01)
+        assert stepped.timestamp == pytest.approx(stepped.scan_id * 0.01)
