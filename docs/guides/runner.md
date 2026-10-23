@@ -106,6 +106,23 @@ state = runner.run_until_fn(
 
 The predicate receives the committed `SystemState` each scan.
 
+### Folding
+
+`run_for()` and `run_until()` fold by default: while only timers, counters and
+self-feeding calcs are moving, they compute the steady scans in one step and
+land on the same state and scan count as stepping.  Pass `fold=False` to step
+every scan.
+
+A callable predicate is judged on the state it is given (or `runner.state`);
+the fold records which tags it reads.  Anything else it consults, such as
+another runner or `history`, is invisible to the fold.
+
+One known gap: a value copied from a timer or counter into a block element
+nothing reads by name (`calc(Tmr.Acc // 1000, DS[5])`) can be left stale inside
+a folded stretch when a rung reads it back through an index with no declared
+range (`DS[Idx]`, `Idx` without `min`/`max` or `choices`).  Give the index tag
+its range, or run with `fold=False`.
+
 ## Injecting inputs
 
 ### `patch()` — one-shot
