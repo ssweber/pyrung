@@ -144,6 +144,21 @@ def _strip_quoted_strings(text: str) -> str:
     return re.sub(r'"[^"]*"', "", text)
 
 
+def _out_variant_timer_pairs(kwargs: list[tuple[str, str]]) -> list[tuple[str, str, str]]:
+    """``(side, done, acc)`` for each phase Timer of a debounce/flasher/timed token.
+
+    The token names only the phase's TD, as CLICK's coil does; its Done is the T
+    of the same number.
+    """
+    values = dict(kwargs)
+    pairs: list[tuple[str, str, str]] = []
+    for side in ("on", "off"):
+        acc = values.get(f"{side}_acc")
+        if acc is not None and acc.startswith("TD") and acc[2:].isdigit():
+            pairs.append((side, f"T{acc[2:]}", acc))
+    return pairs
+
+
 def _parse_af_args(args_str: str) -> tuple[list[str], list[tuple[str, str]]]:
     """Parse AF token arguments into positional args and keyword args.
 
@@ -532,6 +547,10 @@ _RESERVED_IMPORT_NAMES: frozenset[str] = frozenset(
         "event_drum",
         "time_drum",
         "time_event_drum",
+        "toggle",
+        "debounce",
+        "flasher",
+        "timed",
         "return_early",
         "send",
         "receive",

@@ -2586,3 +2586,34 @@ def test_from_nickname_file_names_an_address_link_by_its_nickname(tmp_path):
     assert links["Valve_Open"] == "Y005"  # no nickname: the name codegen gives the slot
     assert links["Pump_Aux"] == "Motor_Run"
     assert links["Motor_Off"] == "~Motor_Run"
+
+
+def test_tag_named_after_its_address_exports_without_a_nickname(tmp_path):
+    """Nothing to say about T7/TD7 beyond the address, so no nickname is written;
+    a tag named after its address that carries metadata keeps the name so the
+    row reads back as that tag."""
+    from pyrung import Int, Timer
+
+    timer = Timer.clone("T7", nicknames={"Done": "T7", "Acc": "TD7"})
+    speed = Int("DS1", min=0, max=100, comment="speed", readonly=True, default=5)
+    start = Bool("X001", external=True, comment="start pb")
+    mapping = TagMap(
+        [
+            timer.Done.map_to(t[7]),
+            timer.Acc.map_to(td[7]),
+            speed.map_to(ds[1]),
+            start.map_to(x[1]),
+        ],
+        include_system=False,
+    )
+    path = tmp_path / "nicknames.csv"
+    mapping.to_nickname_file(path)
+
+    rows = pyclickplc.read_csv(path)
+    assert get_addr_key("T", 7) not in rows
+    assert get_addr_key("TD", 7) not in rows
+
+    back = {e.logical.name: e.logical for e in TagMap.from_nickname_file(path).tags()}
+    assert (back["DS1"].readonly, back["DS1"].min, back["DS1"].max) == (True, 0, 100)
+    assert back["DS1"].comment == "speed"
+    assert back["X001"].external is True

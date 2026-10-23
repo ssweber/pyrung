@@ -200,18 +200,20 @@ mapping = TagMap([
 When importing ladder CSV with nicknames, a nickname on a T or CT address produces a named clone:
 
 ```python
-# Without nickname → clone named after the operand
-T1 = Timer.clone("T1")
+# Without nickname → clone named after the operand, fields named after their addresses
+T1 = Timer.clone("T1", nicknames={'Done': 'T1', 'Acc': 'TD1'})
 on_delay(T1, preset=100)
 
 # With nickname {"T1": "OvenTimer"} → clone named after the nickname
-OvenTimer = Timer.clone("OvenTimer")
+OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer', 'Acc': 'TD1'})
 on_delay(OvenTimer, preset=100)
 ```
 
-The T (done-bit) nickname drives the name — any nickname on the matching TD/CTD address is silently overridden. This keeps `.Done` and `.Acc` fields under a single consistent prefix.
+The T (done-bit) nickname names the clone, or the TD/CTD nickname when the T has none. Each field keeps its own address's nickname; a field whose address has none is named after the address. A tag named after its own address exports with no nickname, so codegen never invents one.
 
 If the nickname already ends with `_Done` or `_Acc`, the suffix is stripped automatically — `"OvenTimer_Done"` becomes `Timer.clone("OvenTimer")`.
+
+The clone follows the retentive setting of its addresses. The built-in `Timer` and `Counter` match CLICK's bank defaults (T, TD non-retentive; CT, CTD retentive), so a field whose address differs gets an override, such as `Timer.clone("T1", ..., retentive={'Acc': True})` for a TD set retentive.
 
 Condition references resolve through the clone. A rung conditioned on T1 renders as `OvenTimer.Done`:
 
@@ -414,6 +416,10 @@ on_delay(MyTimer, preset=60000)
 # Right — use seconds
 on_delay(MyTimer, preset=60, unit="sec")
 ```
+
+### Out coil variants
+
+`toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Each phase timer must map to `T<n>` with `TD<n>` of the same number (the coil names only the TD; CLICK claims the whole timer), and a register preset to `DS`. A timer or counter whose Done and Acc map to different numbers is `CLK_TIMER_PAIR_MISMATCH`, for `on_delay` and the counters too. The CSV token names each phase's TD: `debounce(Y001,on_acc=TD1,on_preset=100,off_acc=TD2,off_preset=DS5,unit=Tms)`. CLICK's Out dialog offers fewer units than its timers: `debounce` and `flasher` take `ms` or `sec`, `timed` takes `ms`, `sec` or `min`; any other unit is `CLK_OUT_UNIT_UNSUPPORTED`. Only `toggle` takes `immediate(...)`. Whether CLICK sets the phase timer's `T` bit is not yet confirmed; pyrung sets it.
 
 Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hints as errors.
 

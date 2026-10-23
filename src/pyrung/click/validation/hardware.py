@@ -8,6 +8,7 @@ from pyrung.click.capabilities import CONVERTER_COMPATIBILITY
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.time_mode import TimeUnit
 from pyrung.core.validation.walker import ProgramLocation, _condition_children
 
 from .findings import (
@@ -17,7 +18,9 @@ from .findings import (
     CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
     CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
+    CLK_OUT_UNIT_UNSUPPORTED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
+    CLK_TIMER_PAIR_MISMATCH,
     CLK_TIMER_PRESET_OVERFLOW,
     ClickFinding,
     ValidationMode,
@@ -65,6 +68,10 @@ _WRITE_TARGET_FIELDS: frozenset[tuple[str, str]] = frozenset(
         ("TimeEventDrumInstruction", "current_step"),
         ("TimeEventDrumInstruction", "accumulator"),
         ("TimeEventDrumInstruction", "completion_flag"),
+        ("ToggleInstruction", "target"),
+        ("DebounceInstruction", "target"),
+        ("FlasherInstruction", "target"),
+        ("TimedInstruction", "target"),
     }
 )
 
@@ -92,6 +99,22 @@ _ROLE_ASSIGNMENT_FIELDS: dict[tuple[str, str], str] = {
     ("TimeEventDrumInstruction", "accumulator"): "drum_accumulator",
     ("TimeEventDrumInstruction", "completion_flag"): "drum_completion_flag",
     ("TimeEventDrumInstruction", "jump_step"): "drum_jump_step",
+    # The Out coil variants claim each phase's whole Timer, as on_delay does.
+    ("DebounceInstruction", "on_done"): "timer_done_bit",
+    ("DebounceInstruction", "on_acc"): "timer_accumulator",
+    ("DebounceInstruction", "on_preset"): "timer_preset",
+    ("DebounceInstruction", "off_done"): "timer_done_bit",
+    ("DebounceInstruction", "off_acc"): "timer_accumulator",
+    ("DebounceInstruction", "off_preset"): "timer_preset",
+    ("FlasherInstruction", "on_done"): "timer_done_bit",
+    ("FlasherInstruction", "on_acc"): "timer_accumulator",
+    ("FlasherInstruction", "on_preset"): "timer_preset",
+    ("FlasherInstruction", "off_done"): "timer_done_bit",
+    ("FlasherInstruction", "off_acc"): "timer_accumulator",
+    ("FlasherInstruction", "off_preset"): "timer_preset",
+    ("TimedInstruction", "timer_done"): "timer_done_bit",
+    ("TimedInstruction", "timer_acc"): "timer_accumulator",
+    ("TimedInstruction", "on_preset"): "timer_preset",
 }
 
 _COPY_COMPATIBILITY_FIELDS: dict[str, tuple[str, str, str]] = {
@@ -173,7 +196,11 @@ def _evaluate_role_assignments(
             continue
 
         value = getattr(instruction, field_name)
-        if field_name in {"preset", "jump_step"} and not isinstance(value, Tag):
+        if value is None:
+            continue
+        if (field_name == "jump_step" or field_name.endswith("preset")) and not isinstance(
+            value, Tag
+        ):
             continue
 
         location = _instruction_location(base_location, f"instruction.{field_name}")
@@ -511,7 +538,13 @@ def _evaluate_drums(
 
 _INT16_MAX = 32_767
 
-_TIMER_INSTRUCTION_TYPES = frozenset({"OnDelayInstruction", "OffDelayInstruction"})
+_TIMER_PRESET_FIELDS: dict[str, tuple[str, ...]] = {
+    "OnDelayInstruction": ("preset",),
+    "OffDelayInstruction": ("preset",),
+    "DebounceInstruction": ("on_preset", "off_preset"),
+    "FlasherInstruction": ("on_preset", "off_preset"),
+    "TimedInstruction": ("on_preset",),
+}
 
 
 def _evaluate_timer_preset_overflow(
@@ -520,29 +553,117 @@ def _evaluate_timer_preset_overflow(
     tag_map: TagMap,
     mode: ValidationMode,
 ) -> list[ClickFinding]:
-    instruction_type = type(instruction).__name__
-    if instruction_type not in _TIMER_INSTRUCTION_TYPES:
-        return []
+    findings: list[ClickFinding] = []
+    for field_name in _TIMER_PRESET_FIELDS.get(type(instruction).__name__, ()):
+        preset = getattr(instruction, field_name, None)
+        if isinstance(preset, Tag) or preset is None or preset <= _INT16_MAX:
+            continue
+        location = _instruction_location(base_location, f"instruction.{field_name}")
+        location_text = _format_location(location)
+        findings.append(
+            ClickFinding(
+                code=CLK_TIMER_PRESET_OVERFLOW,
+                severity=_route_severity(CLK_TIMER_PRESET_OVERFLOW, mode),
+                message=(
+                    f"Timer preset {preset} exceeds Click INT range (max {_INT16_MAX}) "
+                    f"at {location_text}."
+                ),
+                location=location_text,
+                suggestion=_build_suggestion(CLK_TIMER_PRESET_OVERFLOW, None, tag_map),
+            )
+        )
+    return findings
 
-    preset = getattr(instruction, "preset", None)
-    if isinstance(preset, Tag) or preset is None:
-        return []
 
-    if preset <= _INT16_MAX:
-        return []
+# A CLICK timer or counter is one number: its instruction names T<n> (or CT<n>)
+# and the accumulator TD<n> (CTD<n>) comes with it.  The Out coils name only TD<n>.
+_TIMER_PAIR_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
+    "OnDelayInstruction": (("done_bit", "accumulator"),),
+    "OffDelayInstruction": (("done_bit", "accumulator"),),
+    "CountUpInstruction": (("done_bit", "accumulator"),),
+    "CountDownInstruction": (("done_bit", "accumulator"),),
+    "DebounceInstruction": (("on_done", "on_acc"), ("off_done", "off_acc")),
+    "FlasherInstruction": (("on_done", "on_acc"), ("off_done", "off_acc")),
+    "TimedInstruction": (("timer_done", "timer_acc"),),
+}
+_PAIRED_BANKS = {"T": "TD", "CT": "CTD"}
 
-    location = _instruction_location(base_location, "instruction.preset")
-    location_text = _format_location(location)
-    suggestion = _build_suggestion(CLK_TIMER_PRESET_OVERFLOW, None, tag_map)
+
+def _evaluate_timer_pairs(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    findings: list[ClickFinding] = []
+    for done_field, acc_field in _TIMER_PAIR_FIELDS.get(type(instruction).__name__, ()):
+        done, acc = getattr(instruction, done_field), getattr(instruction, acc_field)
+        done_slots = resolver.resolve_operand_slots(done).slots
+        acc_slots = resolver.resolve_operand_slots(acc).slots
+        if len(done_slots) != 1 or len(acc_slots) != 1:
+            continue
+        done_slot, acc_slot = done_slots[0], acc_slots[0]
+        if _PAIRED_BANKS.get(done_slot.memory_type) != acc_slot.memory_type:
+            continue  # a wrong bank is a role finding
+        if done_slot.address == acc_slot.address:
+            continue
+        location_text = _format_location(
+            _instruction_location(base_location, f"instruction.{acc_field}")
+        )
+        findings.append(
+            ClickFinding(
+                code=CLK_TIMER_PAIR_MISMATCH,
+                severity=_route_severity(CLK_TIMER_PAIR_MISMATCH, mode),
+                message=(
+                    f"{_bank_label(done_slot)} and {_bank_label(acc_slot)} are different "
+                    f"CLICK timers or counters at {location_text}; Done and Acc must share "
+                    "one number."
+                ),
+                location=location_text,
+                suggestion="Map Done and Acc to the same number, e.g. T5 with TD5.",
+            )
+        )
+    return findings
+
+
+# CLICK v4's Out dialog offers fewer units than its timers do.
+_OUT_VARIANT_UNITS: dict[str, tuple[str, frozenset[TimeUnit]]] = {
+    "DebounceInstruction": ("debounce", frozenset({TimeUnit.Tms, TimeUnit.Ts})),
+    "FlasherInstruction": ("flasher", frozenset({TimeUnit.Tms, TimeUnit.Ts})),
+    "TimedInstruction": ("timed", frozenset({TimeUnit.Tms, TimeUnit.Ts, TimeUnit.Tm})),
+}
+_UNIT_NAMES = {
+    TimeUnit.Tms: "ms",
+    TimeUnit.Ts: "sec",
+    TimeUnit.Tm: "min",
+    TimeUnit.Th: "hour",
+    TimeUnit.Td: "day",
+}
+
+
+def _evaluate_out_variant_unit(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    spec = _OUT_VARIANT_UNITS.get(type(instruction).__name__)
+    if spec is None:
+        return []
+    verb, allowed = spec
+    unit = instruction.unit
+    if unit in allowed:
+        return []
+    location_text = _format_location(_instruction_location(base_location, "instruction.unit"))
+    choices = "/".join(_UNIT_NAMES[u] for u in TimeUnit if u in allowed)
     return [
         ClickFinding(
-            code=CLK_TIMER_PRESET_OVERFLOW,
-            severity=_route_severity(CLK_TIMER_PRESET_OVERFLOW, mode),
+            code=CLK_OUT_UNIT_UNSUPPORTED,
+            severity=_route_severity(CLK_OUT_UNIT_UNSUPPORTED, mode),
             message=(
-                f"Timer preset {preset} exceeds Click INT range (max {_INT16_MAX}) "
+                f"CLICK's {verb} coil times in {choices}, not {_UNIT_NAMES[unit]}, "
                 f"at {location_text}."
             ),
             location=location_text,
-            suggestion=suggestion,
+            suggestion=f"Use unit= one of {choices} and scale the preset.",
         )
     ]

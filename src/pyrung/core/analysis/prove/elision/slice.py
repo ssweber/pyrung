@@ -74,6 +74,12 @@ from pyrung.core.instruction.drums import (
     TimeDrumInstruction,
     TimeEventDrumInstruction,
 )
+from pyrung.core.instruction.out_variants import (
+    DebounceInstruction,
+    FlasherInstruction,
+    TimedInstruction,
+    ToggleInstruction,
+)
 from pyrung.core.rung import Rung
 from pyrung.core.state import SystemState
 from pyrung.core.tag import ImmediateRef
@@ -267,7 +273,7 @@ def _collect_hidden_memory_info(
     """Survey instructions for unmodelled cross-scan memory and oneshot keys.
 
     Returns ``(drum_shift_writes, oneshot_key_writes)`` where *drum_shift_writes*
-    is the set of tags written by drum/shift instructions (whose hidden memory
+    is the set of tags written by drum, shift and Out coil variant instructions (whose hidden memory
     slice elision does not model) and *oneshot_key_writes* pairs each
     oneshot instruction's ``_oneshot`` memory key with the tags it writes.
     """
@@ -278,7 +284,16 @@ def _collect_hidden_memory_info(
         targets = _instruction_write_targets(instr, tag_refs)
         if isinstance(
             instr,
-            (EventDrumInstruction, TimeDrumInstruction, TimeEventDrumInstruction, ShiftInstruction),
+            (
+                EventDrumInstruction,
+                TimeDrumInstruction,
+                TimeEventDrumInstruction,
+                ShiftInstruction,
+                ToggleInstruction,
+                DebounceInstruction,
+                FlasherInstruction,
+                TimedInstruction,
+            ),
         ):
             drum_shift_writes.update(targets)
         if getattr(instr, "_oneshot", False):

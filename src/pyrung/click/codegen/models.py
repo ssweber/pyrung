@@ -137,6 +137,8 @@ class _TimerCounterCloneDecl:
     done_operand: str  # original done-bit operand (e.g. "T1")
     acc_operand: str  # original accumulator operand (e.g. "TD1")
     nicknames: dict[str, str] = field(default_factory=dict)
+    # Fields whose address is set to a retentive policy other than the built-in's.
+    retentive: dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass

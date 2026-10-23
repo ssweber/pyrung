@@ -35,6 +35,7 @@ from .findings import (
     CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
+    CLK_OUT_UNIT_UNSUPPORTED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
     CLK_PTR_CONTEXT_ONLY_COPY,
@@ -43,6 +44,7 @@ from .findings import (
     CLK_PTR_POINTER_MUST_BE_DS,
     CLK_STATUS_BIT_NOT_PORTABLE,
     CLK_TILDE_BOOL_CONTACT_ONLY,
+    CLK_TIMER_PAIR_MISMATCH,
     CLK_TIMER_PRESET_OVERFLOW,
     ClickFinding,
     ClickValidationReport,
@@ -53,8 +55,10 @@ from .findings import (
 from .hardware import (
     _evaluate_copy_compatibility,
     _evaluate_drums,
+    _evaluate_out_variant_unit,
     _evaluate_pack_text,
     _evaluate_role_assignments,
+    _evaluate_timer_pairs,
     _evaluate_timer_preset_overflow,
     _evaluate_write_targets,
 )
@@ -165,6 +169,7 @@ def validate_click_program(
         findings.extend(_evaluate_instruction_portability(instruction, base_location, mode))
         findings.extend(_evaluate_range_aggregates(instruction, base_location, mode, resolver))
         findings.extend(_evaluate_timer_preset_overflow(instruction, base_location, tag_map, mode))
+        findings.extend(_evaluate_out_variant_unit(instruction, base_location, mode))
 
     active_profile = profile if profile is not None else _load_default_profile()
 
@@ -200,6 +205,7 @@ def validate_click_program(
             findings.extend(
                 _evaluate_drums(instruction, base_location, tag_map, active_profile, mode, resolver)
             )
+            findings.extend(_evaluate_timer_pairs(instruction, base_location, mode, resolver))
 
     errors: list[ClickFinding] = []
     warnings: list[ClickFinding] = []
@@ -255,6 +261,8 @@ __all__ = [
     "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
     "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
     "CLK_TIMER_PRESET_OVERFLOW",
+    "CLK_OUT_UNIT_UNSUPPORTED",
+    "CLK_TIMER_PAIR_MISMATCH",
     "CLK_STATUS_BIT_NOT_PORTABLE",
     "ClickFinding",
     "ClickValidationReport",

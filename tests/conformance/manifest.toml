@@ -34,3 +34,15 @@ slots = 19
 [groups.drum.cases]
 te_acc_counts_while_waiting = 1
 te_level_event_already_on = 2
+
+[groups.out]
+base = 701 # Conf_Out: DS701..DS900
+slots = 19
+
+[groups.out.cases]
+toggle_flips_once_per_edge = 1
+debounce_td_keeps_counting = 2
+debounce_bounce_restarts_on_side = 3
+flasher_restarts_with_on_phase = 4
+timed_needs_fresh_edge = 5
+out_coil_sets_timer_done = 6

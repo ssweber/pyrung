@@ -14,7 +14,7 @@ Read it like a ladder diagram: conditions go on `rung(...)`, instructions go in 
 
 - [Rungs](rungs.md) — comments, branching, source order, and how power flows through a rung
 - [Conditions](conditions.md) — contacts, comparisons, AND/OR logic, and edge detection
-- [Coils](coils.md) — `out`, `latch`, `reset`, and immediate I/O
+- [Coils](coils.md) — `out`, `toggle`, `debounce`, `flasher`, `timed`, `latch`, `reset`, and immediate I/O
 
 ## Data movement
 

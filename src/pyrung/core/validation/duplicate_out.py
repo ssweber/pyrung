@@ -8,7 +8,11 @@ Covered instruction types:
   OutInstruction, OnDelayInstruction, OffDelayInstruction,
   CountUpInstruction, CountDownInstruction, ShiftInstruction,
   EventDrumInstruction, TimeDrumInstruction, TimeEventDrumInstruction,
+  ToggleInstruction, DebounceInstruction, FlasherInstruction, TimedInstruction,
   ModbusSendInstruction, ModbusReceiveInstruction.
+
+The Out coil variants claim their Timers too, so ``on_delay(Timer[1], ...)``
+beside ``debounce(..., on=(Timer[1], ...))`` is a conflict (CLICK's C0112).
 """
 
 from __future__ import annotations

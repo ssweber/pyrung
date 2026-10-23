@@ -52,8 +52,10 @@ from pyrung.core.program import (
     copy,
     count_down,
     count_up,
+    debounce,
     event_drum,
     fill,
+    flasher,
     forloop,
     latch,
     off_delay,
@@ -69,6 +71,8 @@ from pyrung.core.program import (
     subroutine,
     time_drum,
     time_event_drum,
+    timed,
+    toggle,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -124,6 +128,10 @@ _CLICK_BLOCKS: dict[str, _AddressableBlock] = {
 }
 
 # Everything a test snippet might reference — pre-loaded into the exec namespace
+# A pool for tests that need more than one timer (the Out coil variants own
+# one or two each); mapped to T1..T10 / TD1..TD10 only when a source uses it.
+Timers = Timer.clone("Timers", count=10)
+
 _EXEC_NAMESPACE: dict[str, object] = {
     # Core types
     "Program": Program,
@@ -138,6 +146,7 @@ _EXEC_NAMESPACE: dict[str, object] = {
     "Block": Block,
     "TagType": TagType,
     "Timer": Timer,
+    "Timers": Timers,
     "Counter": Counter,
     # Condition combinators
     "Or": Or,
@@ -169,6 +178,10 @@ _EXEC_NAMESPACE: dict[str, object] = {
     "event_drum": event_drum,
     "time_drum": time_drum,
     "time_event_drum": time_event_drum,
+    "toggle": toggle,
+    "debounce": debounce,
+    "flasher": flasher,
+    "timed": timed,
     "call": call,
     "subroutine": subroutine,
     "return_early": return_early,
@@ -368,8 +381,12 @@ def build_program(source: str) -> tuple[Program, TagMap]:
         mapping_entries.append(ns[spec.name].map_to(block_obj.select(spec.start, spec.end)))
 
     # Map built-in Timer/Counter blocks to Click hardware banks.
-    mapping_entries.append(Timer._blocks["Done"].map_to(t.select(1, 1)))
-    mapping_entries.append(Timer._blocks["Acc"].map_to(td.select(1, 1)))
+    if "Timers[" in source:
+        mapping_entries.append(Timers._blocks["Done"].map_to(t.select(1, 10)))
+        mapping_entries.append(Timers._blocks["Acc"].map_to(td.select(1, 10)))
+    else:
+        mapping_entries.append(Timer._blocks["Done"].map_to(t.select(1, 1)))
+        mapping_entries.append(Timer._blocks["Acc"].map_to(td.select(1, 1)))
     mapping_entries.append(Counter._blocks["Done"].map_to(ct.select(1, 1)))
     mapping_entries.append(Counter._blocks["Acc"].map_to(ctd.select(1, 1)))
 

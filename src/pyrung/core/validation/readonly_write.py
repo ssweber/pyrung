@@ -71,6 +71,25 @@ class ReadonlyWriteReport:
 def _any_write_targets(instr: Any) -> list[tuple[str, str]]:
     """Return (tag_name, instruction_type) for any instruction with a write target."""
     itype = type(instr).__name__
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+    )
+
+    if isinstance(instr, (DebounceInstruction, FlasherInstruction, TimedInstruction)):
+        # The coil bit plus the Done/Acc of each Timer it owns.
+        from pyrung.core.analysis.write_sites import (
+            instruction_write_targets,
+            static_write_target_names,
+        )
+
+        return [
+            (name, itype)
+            for target in instruction_write_targets(instr)
+            for name in sorted(static_write_target_names(target))
+        ]
+
     target = getattr(instr, "target", None)
     if target is not None:
         names = _resolve_tag_names(target)

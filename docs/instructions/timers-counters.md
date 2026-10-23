@@ -32,6 +32,12 @@ HeatTimer = Timer.clone(
 
 Unspecified fields retain the normal `{name}_Done` or `{name}_Acc` name. Nickname overrides are supported on single-instance Timer and Counter clones.
 
+A timer's `Done` and `Acc` reset on STOP->RUN; a counter's survive, as on a CLICK (its T and TD banks are non-retentive, CT and CTD retentive). Override either field with `retentive=`, for example a retentive timer whose elapsed time must survive a restart:
+
+```python
+CureTimer = Timer.clone("CureTimer", retentive={"Acc": True})
+```
+
 ### Status bits
 
 Timers and counters also have status bits that reflect instruction state each scan. These are available in the runner API (`.when()`, `.monitor()`, `.value`) but cannot be used in `with rung()` — CLICK PLCs manage these bits internally.

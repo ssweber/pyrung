@@ -194,6 +194,11 @@ def _ensure_registry() -> dict[type, tuple[str, bool]]:
 
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.drums import TimeDrumInstruction, TimeEventDrumInstruction
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+    )
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 
     _SOURCE_REGISTRY = {
@@ -203,8 +208,36 @@ def _ensure_registry() -> dict[type, tuple[str, bool]]:
         CountDownInstruction: ("down", False),
         TimeDrumInstruction: ("up", True),
         TimeEventDrumInstruction: ("up", True),
+        DebounceInstruction: ("up", True),
+        FlasherInstruction: ("up", True),
+        TimedInstruction: ("up", True),
     }
     return _SOURCE_REGISTRY
+
+
+def _instruction_phases(instr: Any) -> list[tuple[Any, Any, Any]]:
+    """``(accumulator, done, preset)`` for each phase a source times.
+
+    An Out coil variant times one or two phases, each like an on-delay timer.
+    """
+    from pyrung.core.instruction.drums import TimeDrumInstruction, TimeEventDrumInstruction
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+    )
+
+    if isinstance(instr, (TimeDrumInstruction, TimeEventDrumInstruction)):
+        preset = _StepPreset(instr.current_step.name, instr.presets)
+        return [(instr.accumulator, instr.completion_flag, preset)]
+    if isinstance(instr, (DebounceInstruction, FlasherInstruction)):
+        return [
+            (instr.on_acc, instr.on_done, instr.on_preset),
+            (instr.off_acc, instr.off_done, instr.off_preset),
+        ]
+    if isinstance(instr, TimedInstruction):
+        return [(instr.timer_acc, instr.timer_done, instr.on_preset)]
+    return [(instr.accumulator, instr.done_bit, instr.preset)]
 
 
 def _collect_acc_sources(program: Any) -> list[_AccSource]:
@@ -224,22 +257,17 @@ def _collect_acc_sources(program: Any) -> list[_AccSource]:
         kind, timed = params
         bidir = isinstance(instr, CountUpInstruction) and instr.down_condition is not None
         drum = isinstance(instr, (TimeDrumInstruction, TimeEventDrumInstruction))
-        if drum:
-            preset = _StepPreset(instr.current_step.name, instr.presets)
-            done_bit = instr.completion_flag.name
-        else:
-            preset = instr.preset
-            done_bit = instr.done_bit.name
-        out[instr.accumulator.name] = _AccSource(
-            acc_name=instr.accumulator.name,
-            done_bit=done_bit,
-            preset=preset.name if isinstance(preset, Tag) else preset,
-            kind=kind,
-            timed=timed,
-            bidir=bidir,
-            unit=getattr(instr, "unit", None) if timed else None,
-            acc_max=instr._acc_max() if drum else 32767,
-        )
+        for accumulator, done, preset in _instruction_phases(instr):
+            out[accumulator.name] = _AccSource(
+                acc_name=accumulator.name,
+                done_bit=done.name,
+                preset=preset.name if isinstance(preset, Tag) else preset,
+                kind=kind,
+                timed=timed,
+                bidir=bidir,
+                unit=getattr(instr, "unit", None) if timed else None,
+                acc_max=instr._acc_max() if drum else 32767,
+            )
     return list(out.values())
 
 
@@ -579,7 +607,11 @@ def _audit_coordinate_reads(
                 seen |= _audit_condition(
                     getattr(instr, field_name, None), coords, tags, instr_cmps, unmodeled
                 )
-            own = instr.accumulator.name if type(instr) in registry else None
+            own = (
+                {acc.name for acc, _done, _preset in _instruction_phases(instr)}
+                if type(instr) in registry
+                else set()
+            )
             dest = getattr(getattr(instr, "dest", None), "name", None)
             allowed = modeled_writes.get(dest, frozenset()) if dest is not None else frozenset()
             writes, target_reads, implicit = _extract_instruction_writes(instr, tags)
@@ -592,7 +624,7 @@ def _audit_coordinate_reads(
                 field_reads &= coords
                 seen |= field_reads
                 if field_name in exclusive:
-                    field_reads = field_reads - {own}
+                    field_reads = field_reads - own
                 field_reads -= allowed
                 if not field_reads:
                     continue

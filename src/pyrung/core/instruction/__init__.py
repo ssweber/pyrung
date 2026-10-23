@@ -19,6 +19,12 @@ from .control import (
 from .counters import CountDownInstruction, CountUpInstruction
 from .data_transfer import BlockCopyInstruction, CopyInstruction, FillInstruction
 from .drums import EventDrumInstruction, TimeDrumInstruction, TimeEventDrumInstruction
+from .out_variants import (
+    DebounceInstruction,
+    FlasherInstruction,
+    TimedInstruction,
+    ToggleInstruction,
+)
 from .packing import (
     PackBitsInstruction,
     PackTextInstruction,
@@ -59,9 +65,11 @@ __all__ = [
     "CopyInstruction",
     "CountDownInstruction",
     "CountUpInstruction",
+    "DebounceInstruction",
     "EventDrumInstruction",
     "EnabledFunctionCallInstruction",
     "FillInstruction",
+    "FlasherInstruction",
     "ForLoopInstruction",
     "FunctionCallInstruction",
     "LatchInstruction",
@@ -76,8 +84,10 @@ __all__ = [
     "ReturnInstruction",
     "SearchInstruction",
     "ShiftInstruction",
+    "TimedInstruction",
     "TimeDrumInstruction",
     "TimeEventDrumInstruction",
+    "ToggleInstruction",
     "UnpackToBitsInstruction",
     "UnpackToWordsInstruction",
 ]

@@ -168,6 +168,43 @@ class _InstructionMixin:
 
         return specs
 
+    def _out_variant_token(self, instruction: Any, instruction_type: str, *, path: str) -> str:
+        """Debounce/flasher/timed: each phase as its Timer's TD and preset.
+
+        CLICK's coil names only the phase's TD; the T of the same number comes
+        with it (validation reports a Timer whose Done is not that T).
+        """
+        if instruction_type == "TimedInstruction":
+            phases = [("on", instruction.timer_acc, instruction.on_preset)]
+        else:
+            phases = [
+                ("on", instruction.on_acc, instruction.on_preset),
+                ("off", instruction.off_acc, instruction.off_preset),
+            ]
+        kwargs: dict[str, str] = {}
+        for side, acc, preset in phases:
+            kwargs[f"{side}_acc"] = self._render_operand(
+                acc, path=f"{path}.{side}_acc", source=instruction
+            )
+            kwargs[f"{side}_preset"] = self._render_operand(
+                preset, path=f"{path}.{side}_preset", source=instruction
+            )
+        kwargs["unit"] = self._render_operand(
+            instruction.unit, path=f"{path}.unit", source=instruction
+        )
+        if instruction_type == "TimedInstruction" and instruction.maintained:
+            kwargs["maintained"] = "1"
+        verb = {
+            "DebounceInstruction": "debounce",
+            "FlasherInstruction": "flasher",
+            "TimedInstruction": "timed",
+        }[instruction_type]
+        return self._fn(
+            verb,
+            self._render_operand(instruction.target, path=f"{path}.target", source=instruction),
+            **kwargs,
+        )
+
     def _instruction_token(self, instruction: Any, *, path: str) -> str:
         # Dispatch by runtime type name to avoid importing all instruction classes.
         instruction_type = type(instruction).__name__
@@ -186,6 +223,19 @@ class _InstructionMixin:
                 ),
                 **oneshot_kw,
             )
+        if instruction_type == "ToggleInstruction":
+            return self._fn(
+                "toggle",
+                self._render_operand(
+                    instruction.target,
+                    path=f"{path}.target",
+                    source=instruction,
+                    allow_immediate=True,
+                    immediate_context="coil",
+                ),
+            )
+        if instruction_type in {"DebounceInstruction", "FlasherInstruction", "TimedInstruction"}:
+            return self._out_variant_token(instruction, instruction_type, path=path)
         if instruction_type == "LatchInstruction":
             return self._fn(
                 "latch",

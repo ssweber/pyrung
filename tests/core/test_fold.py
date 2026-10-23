@@ -3671,3 +3671,67 @@ class TestTimeEventDrum:
             plc.run_until(lambda _s: False, max_cycles=2_000)
             work.append(counter["n"])
         assert work[0] == work[1]
+
+
+class TestOutVariants:
+    """Debounce, flasher and timed coils time their phases like on_delay: each
+    phase accumulator is a timed source, so a window ends at the next phase
+    change and the landing matches stepping."""
+
+    @staticmethod
+    def _shape(verb: str, reader: str, unit: str = "ms") -> Callable[[], Program]:
+        from pyrung import debounce, flasher, timed
+
+        on, off = (2_500, 1_200) if unit == "ms" else (7, 3)
+        T = Timer.clone("OV", count=2)
+        coil = Bool("Coil")
+        verbs = {
+            "debounce": lambda: debounce(coil, on=(T[1], on), off=(T[2], off), unit=unit),
+            "flasher": lambda: flasher(coil, on=(T[1], off), off=(T[2], on), unit=unit),
+            "timed": lambda: timed(coil, T[1], on, unit),
+            "maintained": lambda: timed(coil, T[1], on, unit, maintained=True),
+        }
+        readers = {
+            "coil": lambda: coil,
+            "done": lambda: T[1].Done,
+            "off_done": lambda: T[2].Done,
+            "acc": lambda: T[1].Acc >= 500,
+        }
+
+        def source() -> None:
+            with Rung(Bool("In")):
+                verbs[verb]()
+
+        return lambda: _scan_stamp_program(source, readers[reader], above=False)
+
+    @pytest.mark.parametrize("reader", ["coil", "done", "acc"])
+    @pytest.mark.parametrize("verb", ["debounce", "flasher", "timed", "maintained"])
+    def test_held_rung_matches_stepping(self, verb: str, reader: str) -> None:
+        _assert_fold_is_exact(self._shape(verb, reader), _scans(900), dt=0.01, patch={"In": True})
+
+    @pytest.mark.parametrize("verb", ["debounce", "flasher", "timed"])
+    def test_seconds_unit_matches_stepping(self, verb: str) -> None:
+        shape = self._shape(verb, "coil", unit="sec")
+        _assert_fold_is_exact(shape, _scans(3_000), dt=0.03, patch={"In": True})
+
+    @pytest.mark.parametrize("verb", ["debounce", "flasher", "timed", "maintained"])
+    def test_rung_dropping_mid_phase_matches_stepping(self, verb: str) -> None:
+        reader = "off_done" if verb in ("debounce", "flasher") else "coil"
+
+        def run(plc: PLC, fold: bool) -> None:
+            plc.patch({"In": True})
+            _run_scans(plc, 150, fold=fold)
+            plc.patch({"In": False})
+            _run_scans(plc, 400, fold=fold)
+            plc.patch({"In": True})
+            _run_scans(plc, 333, fold=fold)
+
+        _assert_fold_is_exact(self._shape(verb, reader), run, dt=0.01)
+
+    def test_flasher_folds(self) -> None:
+        """A held flasher is not stepped scan by scan."""
+        plc = PLC(self._shape("flasher", "coil")(), dt=0.01)
+        plc.patch({"In": True})
+        counter = _count_kernel_scans(plc)
+        plc.run_until(lambda _s: False, max_cycles=2_000)
+        assert counter["n"] < 500

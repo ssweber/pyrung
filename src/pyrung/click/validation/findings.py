@@ -49,6 +49,8 @@ CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED = "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED
 CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y = "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y"
 CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS = "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS"
 CLK_TIMER_PRESET_OVERFLOW = "CLK_TIMER_PRESET_OVERFLOW"
+CLK_OUT_UNIT_UNSUPPORTED = "CLK_OUT_UNIT_UNSUPPORTED"
+CLK_TIMER_PAIR_MISMATCH = "CLK_TIMER_PAIR_MISMATCH"
 CLK_STATUS_BIT_NOT_PORTABLE = "CLK_STATUS_BIT_NOT_PORTABLE"
 
 
@@ -224,7 +226,10 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
         )
 
     if code == CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED:
-        return "Use immediate(...) only in rung contacts and out()/latch()/reset() coil targets."
+        return (
+            "Use immediate(...) only in rung contacts and out()/latch()/reset()/toggle() "
+            "coil targets."
+        )
 
     if code == CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED:
         return "Use rise(tag)/fall(tag) without immediate(...), or use a plain immediate contact."
@@ -282,6 +287,8 @@ __all__ = [
     "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
     "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
     "CLK_TIMER_PRESET_OVERFLOW",
+    "CLK_OUT_UNIT_UNSUPPORTED",
+    "CLK_TIMER_PAIR_MISMATCH",
     "CLK_STATUS_BIT_NOT_PORTABLE",
     "ClickFinding",
     "ClickValidationReport",

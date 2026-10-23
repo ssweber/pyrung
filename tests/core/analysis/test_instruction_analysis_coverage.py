@@ -27,8 +27,10 @@ from pyrung.core import (
     copy,
     count_down,
     count_up,
+    debounce,
     event_drum,
     fill,
+    flasher,
     forloop,
     latch,
     off_delay,
@@ -46,6 +48,8 @@ from pyrung.core import (
     subroutine,
     time_drum,
     time_event_drum,
+    timed,
+    toggle,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -396,6 +400,34 @@ def _time_event_drum_case() -> Program:
             .jump(Bool("TEDrumJump"), step=Int("TEDrumJumpStep"))
         ),
         Bool("TEDrumAuto"),
+    )
+
+
+def _toggle_case() -> Program:
+    return _program_with_one_rung(lambda: toggle(Bool("ToggleLamp")), Bool("ToggleButton"))
+
+
+def _debounce_case() -> Program:
+    on, off = Timer.clone("AnalysisDebOn"), Timer.clone("AnalysisDebOff")
+    return _program_with_one_rung(
+        lambda: debounce(Bool("DebValve"), on=(on, Int("DebOnPreset")), off=(off, 200), unit="ms"),
+        Bool("DebInput"),
+    )
+
+
+def _flasher_case() -> Program:
+    on, off = Timer.clone("AnalysisFlashOn"), Timer.clone("AnalysisFlashOff")
+    return _program_with_one_rung(
+        lambda: flasher(Bool("FlashBeacon"), on=(on, 500), off=(off, Int("FlashOffPreset"))),
+        Bool("FlashEnable"),
+    )
+
+
+def _timed_case() -> Program:
+    timer = Timer.clone("AnalysisTimed")
+    return _program_with_one_rung(
+        lambda: timed(Bool("TimedHorn"), timer, Int("TimedPreset"), maintained=True),
+        Bool("TimedEnable"),
     )
 
 
@@ -764,6 +796,53 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         writes=frozenset({"TimeDrumOutput", "TimeDrumStep", "TimeDrumAcc", "TimeDrumDone"}),
     ),
     GraphCase(
+        "toggle",
+        "toggle",
+        _toggle_case,
+        frozenset({"ToggleButton"}),
+        writes=frozenset({"ToggleLamp"}),
+    ),
+    GraphCase(
+        "debounce",
+        "debounce",
+        _debounce_case,
+        frozenset({"DebInput"}),
+        data_reads=frozenset({"DebOnPreset"}),
+        writes=frozenset(
+            {
+                "DebValve",
+                "AnalysisDebOn_Done",
+                "AnalysisDebOn_Acc",
+                "AnalysisDebOff_Done",
+                "AnalysisDebOff_Acc",
+            }
+        ),
+    ),
+    GraphCase(
+        "flasher",
+        "flasher",
+        _flasher_case,
+        frozenset({"FlashEnable"}),
+        data_reads=frozenset({"FlashOffPreset"}),
+        writes=frozenset(
+            {
+                "FlashBeacon",
+                "AnalysisFlashOn_Done",
+                "AnalysisFlashOn_Acc",
+                "AnalysisFlashOff_Done",
+                "AnalysisFlashOff_Acc",
+            }
+        ),
+    ),
+    GraphCase(
+        "timed",
+        "timed",
+        _timed_case,
+        frozenset({"TimedEnable"}),
+        data_reads=frozenset({"TimedPreset"}),
+        writes=frozenset({"TimedHorn", "AnalysisTimed_Done", "AnalysisTimed_Acc"}),
+    ),
+    GraphCase(
         "time_event_drum",
         "time_event_drum",
         _time_event_drum_case,
@@ -879,6 +958,10 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
 PUBLIC_RUNG_INSTRUCTIONS = frozenset(
     {
         "out",
+        "toggle",
+        "debounce",
+        "flasher",
+        "timed",
         "latch",
         "reset",
         "copy",

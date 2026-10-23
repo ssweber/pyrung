@@ -39,8 +39,10 @@ from pyrung.core import (
     copy,
     count_down,
     count_up,
+    debounce,
     event_drum,
     fill,
+    flasher,
     forloop,
     lro,
     named_array,
@@ -60,10 +62,12 @@ from pyrung.core import (
     subroutine,
     time_drum,
     time_event_drum,
+    timed,
     to_ascii,
     to_binary,
     to_text,
     to_value,
+    toggle,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -667,6 +671,23 @@ class TestInstructionCoverage:
         compile(result.code, "code.py", "exec")
         assert "_ready" in result.code
         assert "_frac:" in result.code
+
+    def test_out_coil_variants_codegen_compiles(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        timers = Timer.clone("OutT", count=5)
+        with Program(strict=False) as prog:
+            with Rung(Bool("Enable", default=True)):
+                toggle(Bool("Lamp"))
+                debounce(Bool("Valve"), on=(timers[1], 100), off=(timers[2], 50))
+                flasher(Bool("Beacon"), on=(timers[3], 500), off=(timers[4], 500), unit="sec")
+                timed(Bool("Horn"), timers[5], 1000, maintained=True)
+
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
+
+        compile(result.code, "code.py", "exec")
+        assert "_toggle:" in result.code
+        assert "_frac:OutT4_Acc" in result.code
 
     def test_event_and_time_drum_codegen_keys_and_precedence_smoke(self, monkeypatch):
         hw = P1AM()

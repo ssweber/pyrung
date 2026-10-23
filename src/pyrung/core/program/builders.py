@@ -14,17 +14,21 @@ from pyrung.core.condition import (
 from pyrung.core.instruction import (
     CountDownInstruction,
     CountUpInstruction,
+    DebounceInstruction,
     DebugInstructionSubStep,
     EventDrumInstruction,
+    FlasherInstruction,
     OffDelayInstruction,
     OnDelayInstruction,
     ShiftInstruction,
+    TimedInstruction,
     TimeDrumInstruction,
     TimeEventDrumInstruction,
+    ToggleInstruction,
 )
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.structure import DoneAccUDT
-from pyrung.core.tag import Tag, TagType
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.time_mode import normalize_unit
 
 from .context import _require_rung_context
@@ -1165,3 +1169,201 @@ def off_delay(
         en_bit=en_bit,
         tt_bit=tt_bit,
     )
+
+
+def _out_target(target: Tag | ImmediateRef, func_name: str, *, immediate: bool) -> Tag:
+    """Return the single Bool tag an Out coil variant writes.
+
+    Only toggle takes an ``immediate(...)`` target: CLICK's Debounce, Flasher
+    and Timed coils have no Immediate option.
+    """
+    if isinstance(target, ImmediateRef) and not immediate:
+        raise TypeError(
+            f"{func_name}() takes no immediate(...) target; only out() and toggle() "
+            "coils write immediately."
+        )
+    tag = target.value if isinstance(target, ImmediateRef) else target
+    if not isinstance(tag, Tag) or tag.type is not TagType.BOOL:
+        raise TypeError(f"{func_name}() writes one Bool tag, got {target!r}.")
+    return tag
+
+
+def _out_phase(phase: Any, func_name: str, side: str) -> tuple[Tag, Tag, Tag | int] | None:
+    """Unpack an ``(timer, preset)`` phase into its Done, Acc and preset."""
+    if phase is None:
+        return None
+    if not isinstance(phase, tuple) or len(phase) != 2:
+        raise TypeError(f"{func_name}() {side}= takes (timer, preset), got {phase!r}.")
+    timer, preset = phase
+    done_bit, accumulator = _extract_done_acc(timer, func_name)
+    if isinstance(preset, bool) or not isinstance(preset, (int, Tag)):
+        raise TypeError(f"{func_name}() {side} preset must be an int or a tag, got {preset!r}.")
+    return done_bit, accumulator, preset
+
+
+def _distinct_phases(
+    on: tuple[Tag, Tag, Tag | int] | None,
+    off: tuple[Tag, Tag, Tag | int] | None,
+    func_name: str,
+) -> None:
+    if on is not None and off is not None and on[1].name == off[1].name:
+        raise ValueError(f"{func_name}() on= and off= need two different timers.")
+
+
+def toggle(target: Tag | ImmediateRef) -> Tag | ImmediateRef:
+    """Toggle coil (CLICK Out with Toggle).
+
+    Inverts the target on each OFF->ON transition of the rung and keeps its
+    value while the rung is false.
+
+    Example:
+        with Rung(PushButton):
+            toggle(Light)
+            toggle(Y[1].immediate)
+    """
+    _out_target(target, "toggle", immediate=True)
+    enable_condition, source_file, source_line = _capture_rung_condition_and_source("toggle")
+    instruction = ToggleInstruction(target, enable_condition)
+    instruction.source_file, instruction.source_line = source_file, source_line
+    _require_rung_context("toggle")._rung.add_instruction(instruction)
+    return target
+
+
+def debounce(
+    target: Tag,
+    *,
+    on: tuple[DoneAccUDT, Tag | int],
+    off: tuple[DoneAccUDT, Tag | int],
+    unit: TimeUnitStr = "ms",
+) -> Tag:
+    """Debounce coil (CLICK Out, Debounce).
+
+    The target follows the rung once the rung has held steady: it turns on
+    after the rung has been true for the ``on`` time and off after it has been
+    false for the ``off`` time.  CLICK requires both sides.
+
+    Example:
+        with Rung(LevelSwitch):
+            debounce(TankFull, on=(Timer[1], 500), off=(Timer[2], 200))
+
+    Args:
+        target: Bool tag driven by the coil.
+        on: ``(timer, preset)`` for the on side.
+        off: ``(timer, preset)`` for the off side.
+        unit: Time unit for both presets (default ``"ms"``).
+    """
+    _out_target(target, "debounce", immediate=False)
+    on_phase = _out_phase(on, "debounce", "on")
+    off_phase = _out_phase(off, "debounce", "off")
+    if on_phase is None or off_phase is None:
+        raise ValueError("debounce() needs both on=(timer, preset) and off=(timer, preset).")
+    _distinct_phases(on_phase, off_phase, "debounce")
+    canonical_unit = normalize_unit(unit)
+    enable_condition, source_file, source_line = _capture_rung_condition_and_source("debounce")
+    instruction = DebounceInstruction(
+        target,
+        on_done=on_phase[0],
+        on_acc=on_phase[1],
+        on_preset=on_phase[2],
+        off_done=off_phase[0],
+        off_acc=off_phase[1],
+        off_preset=off_phase[2],
+        unit=canonical_unit,
+        enable_condition=enable_condition,
+    )
+    instruction.source_file, instruction.source_line = source_file, source_line
+    _require_rung_context("debounce")._rung.add_instruction(instruction)
+    return target
+
+
+def flasher(
+    target: Tag,
+    *,
+    on: tuple[DoneAccUDT, Tag | int],
+    off: tuple[DoneAccUDT, Tag | int],
+    unit: TimeUnitStr = "ms",
+) -> Tag:
+    """Flasher coil (CLICK Out, Flasher).
+
+    While the rung is true the target alternates: on for the ``on`` time, then
+    off for the ``off`` time, starting with the on phase.  The rung going false
+    turns it off at once.
+
+    Example:
+        with Rung(Alarm):
+            flasher(Beacon, on=(Timer[3], 500), off=(Timer[4], 500))
+
+    Args:
+        target: Bool tag driven by the coil.
+        on: ``(timer, preset)`` for the on phase.
+        off: ``(timer, preset)`` for the off phase.
+        unit: Time unit for both presets (default ``"ms"``).
+    """
+    _out_target(target, "flasher", immediate=False)
+    on_phase = _out_phase(on, "flasher", "on")
+    off_phase = _out_phase(off, "flasher", "off")
+    if on_phase is None or off_phase is None:
+        raise ValueError("flasher() needs both on=(timer, preset) and off=(timer, preset).")
+    _distinct_phases(on_phase, off_phase, "flasher")
+    canonical_unit = normalize_unit(unit)
+    enable_condition, source_file, source_line = _capture_rung_condition_and_source("flasher")
+    instruction = FlasherInstruction(
+        target,
+        on_done=on_phase[0],
+        on_acc=on_phase[1],
+        on_preset=on_phase[2],
+        off_done=off_phase[0],
+        off_acc=off_phase[1],
+        off_preset=off_phase[2],
+        unit=canonical_unit,
+        enable_condition=enable_condition,
+    )
+    instruction.source_file, instruction.source_line = source_file, source_line
+    _require_rung_context("flasher")._rung.add_instruction(instruction)
+    return target
+
+
+def timed(
+    target: Tag,
+    timer: DoneAccUDT,
+    preset: Tag | int,
+    unit: TimeUnitStr = "ms",
+    *,
+    maintained: bool = False,
+) -> Tag:
+    """Timed coil (CLICK Out, Timed).
+
+    A rung edge turns the target on for ``preset``.  Not maintained, it then
+    goes off even if the rung is still true, and the next pulse needs the rung
+    to go false and true again.  Maintained, it stays on for at least
+    ``preset`` and then follows the rung.
+
+    Example:
+        with Rung(CallButton):
+            timed(Horn, Timer[5], 1000)
+            timed(Lamp, Timer[6], 3, "sec", maintained=True)
+
+    Args:
+        target: Bool tag driven by the coil.
+        timer: Timer instance that times the on time.
+        preset: On time in ``unit`` (Tag or int).
+        unit: Time unit (default ``"ms"``).
+        maintained: Keep the target on while the rung stays true after the on time.
+    """
+    _out_target(target, "timed", immediate=False)
+    phase = _out_phase((timer, preset), "timed", "on")
+    assert phase is not None
+    canonical_unit = normalize_unit(unit)
+    enable_condition, source_file, source_line = _capture_rung_condition_and_source("timed")
+    instruction = TimedInstruction(
+        target,
+        timer_done=phase[0],
+        timer_acc=phase[1],
+        on_preset=phase[2],
+        unit=canonical_unit,
+        maintained=bool(maintained),
+        enable_condition=enable_condition,
+    )
+    instruction.source_file, instruction.source_line = source_file, source_line
+    _require_rung_context("timed")._rung.add_instruction(instruction)
+    return target

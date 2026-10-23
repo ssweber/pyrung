@@ -85,6 +85,9 @@ _COPY_RESET = "CopyInstruction(reset)"
 
 _OUT_LATCH = "OutInstruction(latch)"
 _OUT_RESET = "OutInstruction(reset)"
+# Toggle, debounce, flasher and timed coils drive their bit both ways themselves.
+_VARIANT_LATCH = "OutVariant(latch)"
+_VARIANT_RESET = "OutVariant(reset)"
 
 # ---------------------------------------------------------------------------
 # Latch/Reset target extractor
@@ -115,6 +118,12 @@ def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
     """
     from pyrung.core.instruction.coils import LatchInstruction, OutInstruction, ResetInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+        ToggleInstruction,
+    )
     from pyrung.core.tag import TagType
 
     if isinstance(instr, (LatchInstruction, ResetInstruction)):
@@ -127,6 +136,15 @@ def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
             for tag in _resolve_tag_objects(instr.target)
             if tag.type == TagType.BOOL
             for itype in (_OUT_LATCH, _OUT_RESET)
+        ]
+
+    if isinstance(
+        instr, (ToggleInstruction, DebounceInstruction, FlasherInstruction, TimedInstruction)
+    ):
+        return [
+            (name, itype)
+            for name in _resolve_tag_names(instr.target)
+            for itype in (_VARIANT_LATCH, _VARIANT_RESET)
         ]
 
     if isinstance(instr, CopyInstruction):
@@ -486,8 +504,8 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
     return_rungs = _return_rungs(program)
 
     # Partition sites by target and instruction type
-    latch_types = {LatchInstruction.__name__, _COPY_LATCH, _OUT_LATCH}
-    reset_types = {ResetInstruction.__name__, _COPY_RESET, _OUT_RESET}
+    latch_types = {LatchInstruction.__name__, _COPY_LATCH, _OUT_LATCH, _VARIANT_LATCH}
+    reset_types = {ResetInstruction.__name__, _COPY_RESET, _OUT_RESET, _VARIANT_RESET}
 
     out_sites: dict[str, list[WriteSite]] = defaultdict(list)
     for site in sites:

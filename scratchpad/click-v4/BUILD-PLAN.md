@@ -60,8 +60,8 @@ classes from modules that have been imported.
 | 1 | Conformance rename + Modbus runner | S + M | RESEARCH 6, TOUCHPOINTS 6, GAPS 6 | **Done.** One program, a `Conf_<Group>` subroutine per group, manifest, `confirmed=`; `math` group added. CLICK confirmed: pasting one subroutine works, nested calls unsupported, rail-wired outputs valid |
 | 2 | Math aggregates + abs | S-M | RESEARCH 3, TOUCHPOINTS 1, GAPS 1, PILOT 8 | **Done** |
 | 3 | `time_event_drum` + drum hint | M | RESEARCH 2, TOUCHPOINTS 3, GAPS 3 | **Done** (reviewed). Own class; level events; Acc keeps counting while a timed step waits (D1 = pyrung's answer, unconfirmed); fold source (event-only steps place no crossing); preset rule is a v4 hint in every mode; `drum` conformance group (D1, D3). Prover: named Intractable, see Open queue |
-| 4 | Out family | L | RESEARCH 1, TOUCHPOINTS 4, GAPS 4, PILOT 2-5 | **Next.** PILOT: non-OUT writers treated as retentive (`ote_writes`); in-instruction edges invisible (`program_facts.py:173`); advance profile = "hold until output equals v". Needs the CLICK v4 capture |
-| 5 | For/Next | L | RESEARCH 4, TOUCHPOINTS 5, GAPS 5, PILOT 6 | Today: body instructions get no enable condition (`count_up` in a loop declines in PILOT); `with Rung()` in a loop silently hoists; journals need a body-rung + iteration address; return-shadow treatment for break/continue; `comment()` before a body rung. Index-heavy: do the PDG affine fix first (Open queue) |
+| 4 | Out family | L | RESEARCH 1, TOUCHPOINTS 4, GAPS 4, PILOT 2-5 | **Done** (reviewed). Debounce needs both sides; every phase shows for at least one scan; TD-only CSV token; `CLK_TIMER_PAIR_MISMATCH`; Timer/Counter retentive now CLICK's bank defaults and the importer conforms clones to their addresses (no invented nicknames). `out_variants.py`, own classes; state in tags (coil bit + each phase Timer's Done/Acc) except toggle's prev-rung key. Answers to O1-O6 are pyrung's, unconfirmed: debounce sides are TONs on the rung / its negation (TD counts past preset, a bounce restarts it), flasher Dones mark the running phase, timed is IEC TP (needs a fresh edge). Fold sources per phase; prover exact for toggle, Intractable naming the verb otherwise; PILOT profiles for toggle/debounce/timed (flasher has none: its writer trace reaches both values); CSV token is pyrung's; `out` conformance group (O1-O6) |
+| 5 | For/Next | L | RESEARCH 4, TOUCHPOINTS 5, GAPS 5, PILOT 6 | **Next.** Today: body instructions get no enable condition (`count_up` in a loop declines in PILOT); `with Rung()` in a loop silently hoists; journals need a body-rung + iteration address; return-shadow treatment for break/continue; `comment()` before a body rung. Index-heavy: do the PDG affine fix first (Open queue) |
 | 6 | `randint` | M-L | RESEARCH 3, TOUCHPOINTS 2, GAPS 2, PILOT 7 | Seed lives in `SystemState.memory`, not on the runner (forks); stable site ids for `PLC(logic=[...])`/synthesis/pilot rungs; override via `io_drains_by_scan` with interpreted replay; scan_id resets on restart |
 
 One at a time, each merged before the next starts.
@@ -137,10 +137,49 @@ time_event_drum (from feature 3):
 - Fuzz grammar has no T&E kind (`_TERMINAL_KINDS` etc. would need it).
 - PILOT declines (never unsound) on an Acc target past the preset: on a time-only last step
   (`time_drum` plans `_auto` there) and on a timed+event step (holding the event off would work).
+- **The ladder export precheck still blocks register drum durations.** RESEARCH says
+  `CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED` was downgraded to a hint, but `pyrung_to_ladder()` raises
+  `LadderExportError` on `time_drum(presets=[DS1302, ...])` (`click/ladder/validator.py` `_run_precheck`).
+  The capture generator (`captures/v4_capture.py`) works around it with `validate=False`.
 - `CMP_PRESET_STAYS_ZERO` (`cmp_conditions._preset_sites`) does not cover drum duration registers, and
   Click validation does not role-check register presets on either time drum.
 
+Out family (from feature 4):
+- **laddercodec**: no Out-type encoding (func codes 8224-8235). Until then the `out` conformance group cannot
+  reach a real CLICK. First capture (debounce, 2026-10-23): class `Out`, type 0x2715 like a plain coil, 15
+  fields, a 3-row cell. `0x6066` target, `0x60B3`/`0x60B4` on preset/TD, `0x60B5`/`0x60B6` off preset/TD,
+  `0x3218` func code (8226 as predicted). Unknown: `0x1246`=0, `0x1247`=0, `0x21F9`=0, `0x2248`=1,
+  `0x20CA`=2 (output type?). No T field. laddercodec decoded it as a plain `out(C1)` until its coil parser
+  learned to reject unknown func codes (unreleased).
+- Out CSV token is TD-only (done): `debounce(Y001,on_acc=TD1,on_preset=100,off_acc=TD2,off_preset=DS5,unit=Tms)`;
+  the importer derives T<n> from TD<n>; `CLK_TIMER_PAIR_MISMATCH` covers a Done not on the T of its TD's
+  number (all timers and counters). `debounce()` requires both sides (done).
+- Semantics not probed yet: a phase no longer than a scan shows for one scan (pyrung's choice); the flasher's
+  first on phase counts the rung's first scan, so it is one scan shorter than later ones.
+- O6: if CLICK does not write T<n>, add `CLK_OUT_TIMER_DONE_UNSET` (a read of an Out-owned `Timer.Done`).
+- PILOT declines `how()` on a counter fed by a debounced bit's edges (strict xfail
+  `test_pilot_counts_debounced_edges`): the edge driver flips the input every scan, so the debounce never fires. The
+  oscillation would have to hold each level until the coil follows.
+- Prover: no exact model for debounce/flasher/timed (their Acc is unmodeled, as the time & event drum's).
+- Crossings fall through for all four; `forward()` must stay `UNKNOWN` (sp_values, multitarget proof).
+- Lint gaps (declines, not wrong): `stranded_bits` doesn't count a toggle target as persistent, `physical_realism`
+  ignores the variants, `CMP_PRESET_STAYS_ZERO` doesn't cover their presets. Fuzz grammar has no Out kinds.
+
+Found by the feature-4 review, pre-existing on HEAD:
+- **Prover, HIGH:** `always(prog, Or(~M2, M0))` is Proven when `Rung(): out(M2)` and M0 is a tag the program
+  never writes (plain `out`, no new instructions). Repro: reviewer session scratchpad (gone); restate from this.
+- Fold: two `on_delay`s on one Timer (one rung false and resetting it, one ticking) plus any other moving timer
+  folds Acc ahead (350 vs 70). A duplicate-out program, but it breaks "equal stepping or decline".
+- A Real preset tag: interpreted compares `acc >= 2.5`, compiled `acc >= int(2.5)` (on_delay, timed, debounce).
+- The importer drops the comment on an un-nicknamed TD row.
+
 Other:
+- **Function spelling in math export.** CLICK spells a call `NAME ( a , b )`, with spaces around each paren and
+  separator (v4 capture: `ABS ( DS1411 )`, `RAND ( DD111 , DD112 )`, `SUM ( DS301 : DS350 )`). laddercodec
+  now normalizes to that form on encode (unreleased; `ABS( x )` was a Math instruction error in CLICK v4,
+  because CLICK splits the internal form on spaces). pyrung's translator still renders `ABS(DS1)`
+  (`tests/click/test_ladder_export.py` `test_calc_abs_renders_uppercase`), so its CSV doesn't match what a
+  copy-back decodes to. Render the spaced form, and check that the importer takes it.
 - `cause("T")` on a stepped `calc(T + 3, T)` raises RecursionError (not fold).
 - Click exporter doesn't enforce CLICK's 24-character nickname limit (`pyclickplc.validation.NICKNAME_MAX_LENGTH`);
   add a validation finding.
@@ -155,6 +194,6 @@ Other:
 
 ## Waiting on the user
 
-- CLICK v4 capture session (RESEARCH 5, plus copying the `Compile\` folder), for laddercodec blobs. Needed from
-  feature 4.
+- CLICK v4 capture session (RESEARCH 5, plus copying the `Compile\` folder), for laddercodec blobs (the T&E drum and
+  the Out types wait on it).
 - Real-PLC conformance runs (O/D/M/F).

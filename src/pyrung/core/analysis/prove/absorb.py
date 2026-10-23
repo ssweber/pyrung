@@ -210,6 +210,12 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
         TimeDrumInstruction,
         TimeEventDrumInstruction,
     )
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+        ToggleInstruction,
+    )
     from pyrung.core.instruction.packing import (
         PackBitsInstruction,
         PackTextInstruction,
@@ -302,6 +308,16 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
         targets = [instr.result.name, instr.found.name]
     elif isinstance(instr, ForLoopInstruction):
         targets = [instr.idx_tag.name]
+    elif isinstance(
+        instr, (ToggleInstruction, DebounceInstruction, FlasherInstruction, TimedInstruction)
+    ):
+        from pyrung.core.analysis.write_sites import (
+            instruction_write_targets,
+            static_write_target_names,
+        )
+
+        for target in instruction_write_targets(instr):
+            targets.extend(sorted(static_write_target_names(target)))
 
     return [(name, itype) for name in targets]
 

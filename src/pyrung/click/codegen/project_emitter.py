@@ -581,7 +581,7 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
         core.append("auto")
 
     # Built-in Timer/Counter UDTs
-    if collection.used_instructions & {"on_delay", "off_delay"}:
+    if collection.used_instructions & {"on_delay", "off_delay", "debounce", "flasher", "timed"}:
         core.append("Timer")
     if collection.used_instructions & {"count_up", "count_down"}:
         core.append("Counter")
@@ -754,7 +754,7 @@ def _emit_logic_imports(
         parts.append("subroutine")
 
     # Built-in Timer/Counter UDTs
-    if refs.used_instructions & {"on_delay", "off_delay"}:
+    if refs.used_instructions & {"on_delay", "off_delay", "debounce", "flasher", "timed"}:
         parts.append("Timer")
     if refs.used_instructions & {"count_up", "count_down"}:
         parts.append("Counter")
@@ -790,6 +790,10 @@ def _emit_logic_imports(
         "event_drum": "event_drum",
         "time_drum": "time_drum",
         "time_event_drum": "time_event_drum",
+        "toggle": "toggle",
+        "debounce": "debounce",
+        "flasher": "flasher",
+        "timed": "timed",
         "return": "return_early",
     }
     for instr_name in sorted(refs.used_instructions):

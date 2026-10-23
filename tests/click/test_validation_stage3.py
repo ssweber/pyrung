@@ -739,3 +739,145 @@ class TestConverterBankCompatibility:
             f.code == CLK_COPY_CONVERTER_INCOMPATIBLE and f.severity == "error"
             for f in report.errors
         )
+
+
+class TestOutVariants:
+    """Each phase of a debounce/flasher/timed coil claims a whole Timer (T + TD),
+    a register preset must be DS, and the units follow CLICK v4's Out dialog."""
+
+    Timers = Timer.clone("OutTimers", count=4)
+
+    def _map(self, *, bad_acc: bool = False, extra=()) -> TagMap:
+        timers = self.Timers
+        return TagMap(
+            [
+                Bool("Coil").map_to(y[1]),
+                Bool("Lamp").map_to(c[1]),
+                timers._blocks["Done"].map_to(t.select(1, 4)),
+                timers._blocks["Acc"].map_to((ds if bad_acc else td).select(1, 4)),
+                *extra,
+            ],
+            include_system=False,
+        )
+
+    def _report(self, body, tag_map: TagMap, mode="strict"):
+        return validate_click_program(_build_program(body), tag_map, mode=mode)
+
+    def test_valid_mapping_passes(self) -> None:
+        timers = self.Timers
+        preset = Int("OnTime")
+
+        def body():
+            with Rung(Bool("In")):
+                from pyrung import debounce, flasher, timed, toggle
+
+                toggle(Bool("Lamp"))
+                debounce(Bool("Coil"), on=(timers[1], preset), off=(timers[2], 10))
+                flasher(Bool("Coil"), on=(timers[3], 10), off=(timers[4], 10), unit="sec")
+                timed(Bool("Coil"), timers[1], 3, "min")
+
+        tag_map = self._map(extra=[preset.map_to(ds[1]), Bool("In").map_to(x[1])])
+        assert _codes(self._report(body, tag_map)) == []
+
+    def test_timer_accumulator_must_be_td(self) -> None:
+        timers = self.Timers
+
+        def body():
+            with Rung(Bool("In")):
+                from pyrung import debounce
+
+                debounce(Bool("Coil"), on=(timers[1], 10), off=(timers[2], 10))
+
+        tag_map = self._map(bad_acc=True, extra=[Bool("In").map_to(x[1])])
+        assert CLK_BANK_WRONG_ROLE in _codes(self._report(body, tag_map))
+
+    def test_preset_register_must_be_ds(self) -> None:
+        timers = self.Timers
+        preset = Dint("OnTime")
+
+        def body():
+            with Rung(Bool("In")):
+                from pyrung import timed
+
+                timed(Bool("Coil"), timers[1], preset)
+
+        tag_map = self._map(extra=[preset.map_to(dd[1]), Bool("In").map_to(x[1])])
+        assert CLK_BANK_WRONG_ROLE in _codes(self._report(body, tag_map))
+
+    def test_units_follow_the_out_dialog(self) -> None:
+        from pyrung.click.validation import CLK_OUT_UNIT_UNSUPPORTED
+
+        timers = self.Timers
+
+        def body():
+            with Rung(Bool("In")):
+                from pyrung import debounce, flasher, timed
+
+                debounce(Bool("Coil"), on=(timers[1], 1), off=(timers[2], 1), unit="min")
+                flasher(Bool("Coil"), on=(timers[3], 1), off=(timers[4], 1), unit="hour")
+                timed(Bool("Coil"), timers[1], 1, "day")
+
+        tag_map = self._map(extra=[Bool("In").map_to(x[1])])
+        report = self._report(body, tag_map)
+        assert _codes(report).count(CLK_OUT_UNIT_UNSUPPORTED) == 3
+        messages = [f.message for f in report.errors if f.code == CLK_OUT_UNIT_UNSUPPORTED]
+        assert "debounce coil times in ms/sec, not min" in messages[0]
+        assert "timed coil times in ms/sec/min, not day" in messages[2]
+
+    def test_preset_overflow(self) -> None:
+        from pyrung.click.validation import CLK_TIMER_PRESET_OVERFLOW
+
+        timers = self.Timers
+
+        def body():
+            with Rung(Bool("In")):
+                from pyrung import debounce
+
+                debounce(Bool("Coil"), on=(timers[1], 40_000), off=(timers[2], 50_000))
+
+        tag_map = self._map(extra=[Bool("In").map_to(x[1])])
+        assert _codes(self._report(body, tag_map)).count(CLK_TIMER_PRESET_OVERFLOW) == 2
+
+    def test_immediate_toggle_needs_y(self) -> None:
+        from pyrung import immediate, toggle
+        from pyrung.click.validation import CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y
+
+        def body():
+            with Rung(Bool("In")):
+                toggle(immediate(Bool("Lamp")))
+
+        tag_map = self._map(extra=[Bool("In").map_to(x[1])])
+        assert CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y in _codes(self._report(body, tag_map))
+
+
+def test_timer_done_and_acc_must_share_one_number():
+    """CLICK names one timer (or counter) number; T5 with TD7 cannot be stored."""
+    from pyrung import debounce
+    from pyrung.click.validation import CLK_TIMER_PAIR_MISMATCH
+
+    split, other = Timer.clone("SplitTimer"), Timer.clone("OtherTimer")
+    paired = Timer.clone("PairedTimer")
+
+    def logic():
+        with Rung(Bool("In")):
+            debounce(Bool("Coil"), on=(split, 10), off=(paired, 10))
+            on_delay(other, preset=10)
+
+    tag_map = TagMap(
+        [
+            Bool("In").map_to(x[1]),
+            Bool("Coil").map_to(y[1]),
+            split.Done.map_to(t[5]),
+            split.Acc.map_to(td[7]),
+            paired.Done.map_to(t[6]),
+            paired.Acc.map_to(td[6]),
+            other.Done.map_to(t[7]),
+            other.Acc.map_to(td[5]),
+        ],
+        include_system=False,
+    )
+    report = validate_click_program(_build_program(logic), tag_map, mode="strict")
+    mismatches = [f for f in report.errors if f.code == CLK_TIMER_PAIR_MISMATCH]
+    assert len(mismatches) == 2
+    assert "T5 and TD7" in mismatches[0].message
+    assert "T7 and TD5" in mismatches[1].message

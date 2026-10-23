@@ -378,7 +378,8 @@ def _evaluate_immediate_usage(
             continue
 
         if (
-            loc.instruction_type in {"OutInstruction", "LatchInstruction", "ResetInstruction"}
+            loc.instruction_type
+            in {"OutInstruction", "LatchInstruction", "ResetInstruction", "ToggleInstruction"}
             and loc.arg_path == "instruction.target"
         ):
             instruction = instructions_by_site.get(site_key)

@@ -48,9 +48,11 @@ from pyrung.core.instruction import (
     CopyInstruction,
     CountDownInstruction,
     CountUpInstruction,
+    DebounceInstruction,
     EnabledFunctionCallInstruction,
     EventDrumInstruction,
     FillInstruction,
+    FlasherInstruction,
     ForLoopInstruction,
     FunctionCallInstruction,
     LatchInstruction,
@@ -64,8 +66,10 @@ from pyrung.core.instruction import (
     ReturnInstruction,
     SearchInstruction,
     ShiftInstruction,
+    TimedInstruction,
     TimeDrumInstruction,
     TimeEventDrumInstruction,
+    ToggleInstruction,
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
 )
@@ -535,6 +539,12 @@ from ._instructions_block import (
     _compile_shift_instruction,
     _compile_time_drum_instruction,
 )
+from ._instructions_out import (
+    _compile_debounce_instruction,
+    _compile_flasher_instruction,
+    _compile_timed_instruction,
+    _compile_toggle_instruction,
+)
 from ._instructions_pack import (
     _compile_pack_bits_instruction,
     _compile_pack_text_instruction,
@@ -556,6 +566,14 @@ def compile_instruction(
 ) -> list[str]:
     if isinstance(instr, OutInstruction):
         return _compile_out_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, ToggleInstruction):
+        return _compile_toggle_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, DebounceInstruction):
+        return _compile_debounce_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, FlasherInstruction):
+        return _compile_flasher_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, TimedInstruction):
+        return _compile_timed_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, LatchInstruction):
         return _compile_latch_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, ResetInstruction):

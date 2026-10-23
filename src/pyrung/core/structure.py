@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import builtins
 from collections.abc import Callable, Iterable, Mapping, Sized
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import IntEnum
 from typing import Any, ClassVar, Literal, Protocol, get_origin
 
@@ -426,16 +426,35 @@ class _DoneAccRuntime(_StructRuntime):
         *,
         count: int | None = None,
         nicknames: Mapping[str, str] | None = None,
+        retentive: Mapping[str, bool] | None = None,
         readonly: bool | None = None,
         external: bool | None = None,
         final: bool | None = None,
         public: bool | None = None,
         lock: bool | None = None,
     ) -> _DoneAccRuntime:
+        """Copy this Timer/Counter under *name*.
+
+        ``nicknames`` renames the ``Done``/``Acc`` tags (``count=1`` only);
+        ``retentive`` overrides either field's retentive policy, for example
+        ``retentive={"Acc": True}`` for a timer whose time survives STOP -> RUN.
+        """
+        field_specs = self._original_field_specs
+        if retentive:
+            unknown = set(retentive) - {"Done", "Acc"}
+            if unknown:
+                fields = ", ".join(sorted(unknown))
+                raise ValueError(f"Unknown Timer/Counter retentive fields: {fields}.")
+            field_specs = tuple(
+                replace(spec, retentive=bool(retentive[spec.name]))
+                if spec.name in retentive
+                else spec
+                for spec in field_specs
+            )
         clone = _DoneAccRuntime(
             name=name,
             count=self.count if count is None else count,
-            field_specs=self._original_field_specs,
+            field_specs=field_specs,
             always_number=self.always_number,
             readonly=self.readonly if readonly is None else readonly,
             external=self.external if external is None else external,
@@ -1032,7 +1051,8 @@ def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
 # ---------------------------------------------------------------------------
 # Built-in Timer / Counter UDTs (count=1).  Use ``Timer.clone("Name")``
 # for named instances.  For a full Click-sized pool, clone with an
-# explicit count: ``Timer.clone("T", count=500)``.
+# explicit count: ``Timer.clone("T", count=500)``.  Retentive policy follows
+# CLICK's bank defaults: T, TD non-retentive; CT, CTD retentive.
 
 
 Timer = _DoneAccRuntime(
@@ -1040,7 +1060,7 @@ Timer = _DoneAccRuntime(
     count=1,
     field_specs=(
         _FieldSpec("Done", TagType.BOOL, UNSET, retentive=False),
-        _FieldSpec("Acc", TagType.INT, UNSET, retentive=True),
+        _FieldSpec("Acc", TagType.INT, UNSET, retentive=False),
         _FieldSpec("EN", TagType.BOOL, UNSET, retentive=False, final=True),
         _FieldSpec("TT", TagType.BOOL, UNSET, retentive=False, final=True),
     ),
@@ -1050,7 +1070,7 @@ Counter = _DoneAccRuntime(
     name="Counter",
     count=1,
     field_specs=(
-        _FieldSpec("Done", TagType.BOOL, UNSET, retentive=False),
+        _FieldSpec("Done", TagType.BOOL, UNSET, retentive=True),
         _FieldSpec("Acc", TagType.DINT, UNSET, retentive=True),
         _FieldSpec("CU", TagType.BOOL, UNSET, retentive=False, final=True),
         _FieldSpec("CD", TagType.BOOL, UNSET, retentive=False, final=True),

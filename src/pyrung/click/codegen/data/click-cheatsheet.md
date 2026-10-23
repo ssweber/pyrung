@@ -13,6 +13,7 @@ from pyrung import (
     comment, branch,                         # rung structure
     And, Or, rise, fall, system,             # conditions
     out, latch, reset,                       # coils
+    toggle, debounce, flasher, timed,        # Out coil types (CLICK v4)
     calc,                                    # math
     copy, blockcopy, fill,                   # data movement
     to_value, to_ascii, to_text, to_binary,  # copy converters
@@ -190,6 +191,16 @@ on_delay(MyTimer, 500).reset(ResetBtn)
 
 # TOF — off-delay
 off_delay(CoolDown, 500)
+```
+
+Out coil types own their timers, given as `(timer, preset)`; `debounce` and `flasher` take `"ms"`/`"sec"`, `timed` also `"min"`:
+
+```python
+toggle(Light)                                          # flip on each rung edge
+debounce(TankFull, on=(T1, 500), off=(T2, 200))        # follow the rung once steady
+flasher(Beacon, on=(T3, 500), off=(T4, 500))           # blink while the rung is true
+timed(Horn, T5, 1000)                                  # on for 1 s per rung edge
+timed(Lamp, T6, 3, "sec", maintained=True)             # at least 3 s, then follow
 ```
 
 ## Counters

@@ -953,11 +953,19 @@ def write_tag_map_to_nickname_file(
             uom=getattr(entry.logical, "uom", None),
             owner_name=entry.logical.name,
         )
+        comment = _compose_address_comment(entry.logical.comment, tag_meta=tag_meta)
+        # A tag named after its own address (``T101`` at T101) and carrying nothing
+        # in its comment has no nickname; its default and retentive flag still
+        # round-trip as the row's.  One with metadata keeps the name, since a row
+        # without a nickname is read back as no tag.
+        nickname = entry.logical.name
+        if not comment and nickname == self._hardware_address_name(entry.hardware):
+            nickname = ""
         records[get_addr_key(memory_type, address)] = AddressRecord(
             memory_type=memory_type,
             address=address,
-            nickname=entry.logical.name,
-            comment=_compose_address_comment(entry.logical.comment, tag_meta=tag_meta),
+            nickname=nickname,
+            comment=comment,
             initial_value=_format_default(entry.logical.default, entry.logical.type),
             retentive=entry.logical.retentive,
             data_type=BANKS[memory_type].data_type,

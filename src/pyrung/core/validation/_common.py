@@ -147,6 +147,12 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
         TimeDrumInstruction,
         TimeEventDrumInstruction,
     )
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+        ToggleInstruction,
+    )
     from pyrung.core.instruction.send_receive import (
         ModbusReceiveInstruction,
         ModbusSendInstruction,
@@ -158,6 +164,13 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
 
     if isinstance(instr, OutInstruction):
         targets = _resolve_tag_names(instr.target)
+    elif isinstance(instr, ToggleInstruction):
+        targets = _resolve_tag_names(instr.target)
+    elif isinstance(instr, (DebounceInstruction, FlasherInstruction)):
+        targets = _resolve_tag_names(instr.target)
+        targets += [instr.on_done.name, instr.on_acc.name, instr.off_done.name, instr.off_acc.name]
+    elif isinstance(instr, TimedInstruction):
+        targets = [instr.target.name, instr.timer_done.name, instr.timer_acc.name]
     elif isinstance(instr, (OnDelayInstruction, OffDelayInstruction)):
         targets = [instr.done_bit.name, instr.accumulator.name]
     elif isinstance(instr, (CountUpInstruction, CountDownInstruction)):

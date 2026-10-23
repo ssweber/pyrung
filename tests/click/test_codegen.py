@@ -2277,6 +2277,74 @@ class TestRoundTrip:
             """,
         )
 
+    def test_toggle(self):
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    toggle(Y1)
+                with rung(X2):
+                    toggle(immediate(Y2))
+            """,
+            """
+            with rung(X001):
+                toggle(Y001)
+
+            with rung(X002):
+                toggle(immediate(Y002))
+            """,
+        )
+
+    def test_debounce(self):
+        """Each phase's Timer is rebuilt from its Done and Acc operands."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    debounce(Y1, on=(Timers[1], 100), off=(Timers[2], DS5))
+                with rung(X2):
+                    debounce(Y2, on=(Timers[3], 1), off=(Timers[4], 2), unit="sec")
+            """,
+            """
+            with rung(X001):
+                debounce(Y001, on=(T1, 100), off=(T2, DS5))
+
+            with rung(X002):
+                debounce(Y002, on=(T3, 1), off=(T4, 2), unit="sec")
+            """,
+        )
+
+    def test_flasher(self):
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    flasher(Y1, on=(Timers[3], 500), off=(Timers[4], DS1))
+            """,
+            """
+            with rung(X001):
+                flasher(Y001, on=(T3, 500), off=(T4, DS1))
+            """,
+        )
+
+    def test_timed(self):
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    timed(Y1, Timers[5], 1000)
+                with rung(X2):
+                    timed(Y2, Timers[6], 3, "min", maintained=True)
+            """,
+            """
+            with rung(X001):
+                timed(Y001, T5, 1000)
+
+            with rung(X002):
+                timed(Y002, T6, 3, "min", maintained=True)
+            """,
+        )
+
     def test_send(self):
         """Send instruction with ModbusTcpTarget."""
         _assert_codegen_body(
@@ -2884,7 +2952,7 @@ class TestNicknameMerge:
             X001 = x[1]
 
             # --- Clones ---
-            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer'})
+            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer', 'Acc': 'TD1'})
 
             # --- Program ---
             with Program() as logic:
@@ -2918,7 +2986,7 @@ class TestNicknameMerge:
             X001 = x[1]
 
             # --- Clones ---
-            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer_Done'})
+            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer_Done', 'Acc': 'TD1'})
 
             # --- Program ---
             with Program() as logic:
@@ -2945,7 +3013,7 @@ class TestNicknameMerge:
             (
                 {"TD1": "HeatingElapsed_Acc"},
                 "HeatingElapsed",
-                {"Acc": "HeatingElapsed_Acc"},
+                {"Done": "T1", "Acc": "HeatingElapsed_Acc"},
             ),
         ],
     )
@@ -2977,10 +3045,60 @@ class TestNicknameMerge:
         namespace["mapping"].to_nickname_file(nickname_path)
         rows = pyclickplc.read_csv(nickname_path)
 
-        expected_done = source_nicknames.get("T1", f"{clone_name}_Done")
-        expected_acc = source_nicknames.get("TD1", f"{clone_name}_Acc")
-        assert rows[get_addr_key("T", 1)].nickname == expected_done
-        assert rows[get_addr_key("TD", 1)].nickname == expected_acc
+        # Each address keeps the nickname it came with, and gains none.
+        for address, (bank, index) in {"T1": ("T", 1), "TD1": ("TD", 1)}.items():
+            row = rows.get(get_addr_key(bank, index))
+            assert (row.nickname if row is not None else None) == source_nicknames.get(address)
+
+    @pytest.mark.parametrize(
+        ("records", "expected_retentive"),
+        [
+            ({}, ""),
+            ({("TD", 1): ("", True)}, ", retentive={'Acc': True}"),
+            ({("T", 1): ("OvenTimer", False), ("TD", 1): ("", True)}, ", retentive={'Acc': True}"),
+        ],
+        ids=["bank-default", "unnamed-retentive-td", "named-t-retentive-td"],
+    )
+    def test_timer_clone_conforms_to_its_addresses_retentive(
+        self, tmp_path: Path, records, expected_retentive: str
+    ):
+        """The clone takes the retentive policy its T/TD rows set (bank default when
+        absent), and exports the same rows back."""
+        import pyclickplc
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import BANKS
+
+        logic, mapping = build_program(
+            """
+            with rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            """
+        )
+        csv_dir = tmp_path / "csv"
+        pyrung_to_ladder(logic, mapping).write(csv_dir)
+        nick_path = tmp_path / "nicknames.csv"
+        source = {
+            get_addr_key(bank, index): AddressRecord(
+                memory_type=bank,
+                address=index,
+                nickname=nickname,
+                comment="",
+                initial_value="0",
+                retentive=retentive,
+                data_type=BANKS[bank].data_type,
+            )
+            for (bank, index), (nickname, retentive) in records.items()
+        }
+        pyclickplc.write_csv(nick_path, source)
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+        clone_line = next(line for line in code.splitlines() if "Timer.clone(" in line)
+        assert clone_line.endswith(f"{expected_retentive})")
+
+        namespace = exec_with_source(code)
+        out_path = tmp_path / "out.csv"
+        namespace["mapping"].to_nickname_file(out_path)
+        assert pyclickplc.read_csv(out_path) == pyclickplc.read_csv(nick_path)
 
     def test_named_counter(self):
         """Counter with nickname emits Counter.clone() declaration."""
@@ -3001,7 +3119,7 @@ class TestNicknameMerge:
             X002 = x[2]
 
             # --- Clones ---
-            PartCounter = Counter.clone("PartCounter", nicknames={'Done': 'PartCounter'})
+            PartCounter = Counter.clone("PartCounter", nicknames={'Done': 'PartCounter', 'Acc': 'CTD1'})
 
             # --- Program ---
             with Program() as logic:
@@ -3046,8 +3164,9 @@ class TestNicknameMerge:
         assert rows[get_addr_key("CT", 1)].nickname == "PartsComplete"
         assert rows[get_addr_key("CTD", 1)].nickname == "LifetimeParts"
 
-    def test_timer_without_nickname_uses_address_based_field_names(self, tmp_path: Path):
-        """An unnamed Timer exposes both underlying CLICK addresses."""
+    def test_timer_without_nickname_invents_none(self, tmp_path: Path):
+        """An unnamed Timer's fields are named after their addresses, so export
+        writes no nickname for them."""
         _assert_codegen_full(
             """
             with rung(X1):
@@ -3064,7 +3183,7 @@ class TestNicknameMerge:
             X001 = x[1]
 
             # --- Clones ---
-            T1 = Timer.clone("T1", nicknames={'Done': 'T1_Done', 'Acc': 'TD1_Acc'})
+            T1 = Timer.clone("T1", nicknames={'Done': 'T1', 'Acc': 'TD1'})
 
             # --- Program ---
             with Program() as logic:
@@ -3094,8 +3213,8 @@ class TestNicknameMerge:
         namespace["mapping"].to_nickname_file(nickname_path)
         rows = pyclickplc.read_csv(nickname_path)
 
-        assert rows[get_addr_key("T", 1)].nickname == "T1_Done"
-        assert rows[get_addr_key("TD", 1)].nickname == "TD1_Acc"
+        assert get_addr_key("T", 1) not in rows
+        assert get_addr_key("TD", 1) not in rows
 
     def test_named_timer_condition_reference(self):
         """Timer done-bit used as condition renders as Slug.Done."""
@@ -3118,7 +3237,7 @@ class TestNicknameMerge:
             Y001 = y[1]
 
             # --- Clones ---
-            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer'})
+            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer', 'Acc': 'TD1'})
 
             # --- Program ---
             with Program() as logic:

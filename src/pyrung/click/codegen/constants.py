@@ -78,6 +78,10 @@ _INSTRUCTION_NAMES = {
     "event_drum",
     "time_drum",
     "time_event_drum",
+    "toggle",
+    "debounce",
+    "flasher",
+    "timed",
     "call",
     "return",
     "for",
@@ -86,6 +90,10 @@ _INSTRUCTION_NAMES = {
     "send",
     "receive",
 }
+
+# Out coil variants whose phases own a Timer, named as ``<side>_done``/``<side>_acc``
+_OUT_VARIANT_TIMER_INSTRUCTIONS = {"debounce", "flasher", "timed"}
+_OUT_VARIANT_SIDES = ("on", "off")
 
 # Instructions that support pin rows
 _PIN_INSTRUCTIONS = {

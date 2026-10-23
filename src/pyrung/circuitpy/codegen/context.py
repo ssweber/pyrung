@@ -301,6 +301,10 @@ class CodegenContext:
                 return
             seen_values.add(value_id)
 
+            if isinstance(value, ImmediateRef):
+                walk_value(value.value)
+                return
+
             if isinstance(value, Tag):
                 self.referenced_tags.setdefault(value.name, value)
                 self._associate_tag_with_known_block(value)

@@ -252,6 +252,11 @@ Each line becomes a sentence, a ladder, and a row in the report.
 - rise / fall fire one scan
 - rise/fall see the value carried from end of previous scan
 - latch / reset stickiness
+- toggle flips once per OFF->ON and holds (O1)
+- debounce TD keeps counting past its preset while steady (O2); a bounce restarts the timing side (O3)
+- flasher rung-false clears both TDs; the restart is a full on phase (O4)
+- timed (not maintained) needs a fresh edge after timing out (O5)
+- Out coil variants set the phase timer's T bit (O6)
 - TON auto-reset, drops Acc and Done together when rung goes false
 - TON enable: no immediate tick on the scan that enables — Done stays whatever it was before until the next tick
 - RTON holds Acc and Done across rung-false

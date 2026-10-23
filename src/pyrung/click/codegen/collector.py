@@ -14,6 +14,7 @@ from pyrung.click.codegen.constants import (
     _FUNC_RE,
     _INSTRUCTION_NAMES,
     _OPERAND_RE,
+    _OUT_VARIANT_TIMER_INSTRUCTIONS,
     _RANGE_RE,
 )
 from pyrung.click.codegen.models import (
@@ -690,6 +691,9 @@ def _enrich_with_ownership(
     tag_by_hardware = {
         _hw_address_name(entry.hardware): entry.logical for entry in structured_map.tags()
     }
+
+    # A Timer/Counter clone conforms to the retentive policy its addresses carry.
+    _conform_clone_retentive(collection, structured_map, tag_by_hardware)
     for operand, decl in collection.tags.items():
         if operand in collection.semantic_operands or operand in collection.timer_counter_operands:
             continue
@@ -822,6 +826,32 @@ def _scan_token_for_operands(
 _TC_NICK_SUFFIXES = ("_Done", "_Acc")
 
 
+def _conform_clone_retentive(
+    collection: _OperandCollection,
+    structured_map: TagMap,
+    tag_by_hardware: dict[str, Any],
+) -> None:
+    """Record each clone field whose address retentive differs from the built-in's."""
+    from pyclickplc.addresses import parse_address
+    from pyclickplc.banks import DEFAULT_RETENTIVE
+
+    from pyrung.core.structure import Counter, Timer
+
+    for decl in collection.timer_counter_clones:
+        builtin = Timer if decl.kind == "Timer" else Counter
+        for field_name, operand in (("Done", decl.done_operand), ("Acc", decl.acc_operand)):
+            memory_type, index = parse_address(operand)
+            logical = tag_by_hardware.get(operand)
+            if logical is not None:
+                retentive = bool(logical.retentive)
+            else:
+                retentive = structured_map._source_unmapped_retentive.get(
+                    (memory_type, index), DEFAULT_RETENTIVE[memory_type]
+                )
+            if retentive != getattr(builtin, field_name).retentive:
+                decl.retentive[field_name] = retentive
+
+
 def _register_timer_counter_clone(
     done_operand: str,
     acc_operand: str,
@@ -860,18 +890,9 @@ def _register_timer_counter_clone(
     )
     var_name = _make_safe_identifier(raw_name, used_names=used_var_names)
 
-    field_nicknames: dict[str, str] = {}
-    if done_nick:
-        field_nicknames["Done"] = done_nick
-    if acc_nick:
-        field_nicknames["Acc"] = acc_nick
-    if not field_nicknames:
-        # With no user naming intent, make both physical CLICK addresses
-        # visible instead of deriving T1_Acc / CT1_Acc from the clone base.
-        field_nicknames = {
-            "Done": f"{done_operand}_Done",
-            "Acc": f"{acc_operand}_Acc",
-        }
+    # A field the project left un-nicknamed is named after its own address, which
+    # exports back as no nickname: codegen never invents one (T1_Done, OvenTimer_Acc).
+    field_nicknames = {"Done": done_nick or done_operand, "Acc": acc_nick or acc_operand}
 
     collection.timer_counter_clones.append(
         _TimerCounterCloneDecl(
@@ -944,6 +965,22 @@ def _scan_af_token(
                 tc_args[1],
                 done_nick,
                 acc_nick,
+                func_name,
+                collection,
+            )
+
+    if func_name in _OUT_VARIANT_TIMER_INSTRUCTIONS:
+        from pyrung.click.codegen.utils import _out_variant_timer_pairs, _parse_af_args
+
+        _, phase_kwargs = _parse_af_args(args_str)
+        for _side, done_operand, acc_operand in _out_variant_timer_pairs(phase_kwargs):
+            collection.timer_counter_operands.add(done_operand)
+            collection.timer_counter_operands.add(acc_operand)
+            _register_timer_counter_clone(
+                done_operand,
+                acc_operand,
+                nicknames.get(done_operand) if nicknames else None,
+                nicknames.get(acc_operand) if nicknames else None,
                 func_name,
                 collection,
             )
@@ -1237,6 +1274,18 @@ def _ref_af_token(
             # Rebuild args_str without the first two positional args
             remaining = [f"{k}={v}" for k, v in tc_kwargs]
             args_str = ",".join(remaining)
+
+    # Out coil variants: each phase's Done/Acc renders as its Timer clone.
+    if func_name in _OUT_VARIANT_TIMER_INSTRUCTIONS:
+        from pyrung.click.codegen.utils import _out_variant_timer_pairs, _parse_af_args
+
+        ov_args, ov_kwargs = _parse_af_args(args_str)
+        for _side, done_operand, _acc in _out_variant_timer_pairs(ov_kwargs):
+            render = collection.semantic_operands.get(done_operand)
+            if render is not None and render.import_kind == "tc_clone":
+                refs.tc_clone_var_names.add(render.import_name)
+        timer_keys = {f"{side}_acc" for side in ("on", "off")}
+        args_str = ",".join([*ov_args, *(f"{k}={v}" for k, v in ov_kwargs if k not in timer_keys)])
 
     clean_args = _strip_quoted_strings(args_str)
 

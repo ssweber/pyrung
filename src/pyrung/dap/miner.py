@@ -158,6 +158,11 @@ def _instruction_owned_tags(runner: Any) -> frozenset[str]:
         TimeDrumInstruction,
         TimeEventDrumInstruction,
     )
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+    )
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.tag import Tag
     from pyrung.core.validation._common import walk_instructions
@@ -168,6 +173,12 @@ def _instruction_owned_tags(runner: Any) -> frozenset[str]:
             "accumulator",
             "current_step",
             "completion_flag",
+            "on_done",
+            "on_acc",
+            "off_done",
+            "off_acc",
+            "timer_done",
+            "timer_acc",
         }
     )
     _OWNED_TYPES = (
@@ -178,6 +189,9 @@ def _instruction_owned_tags(runner: Any) -> frozenset[str]:
         EventDrumInstruction,
         TimeDrumInstruction,
         TimeEventDrumInstruction,
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
     )
 
     owned: set[str] = set()

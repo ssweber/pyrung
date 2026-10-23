@@ -2272,13 +2272,24 @@ _KIND_LABELS: dict[str, str] = {
 def _unmodeled_accumulators(program: Program) -> dict[str, str]:
     """Accumulators of instructions the prover has no exact model for, by verb."""
     from pyrung.core.instruction.drums import TimeEventDrumInstruction
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+    )
     from pyrung.core.validation._common import walk_instructions
 
-    return {
-        instr.accumulator.name: "time_event_drum"
-        for instr in walk_instructions(program)
-        if isinstance(instr, TimeEventDrumInstruction)
-    }
+    out: dict[str, str] = {}
+    for instr in walk_instructions(program):
+        if isinstance(instr, TimeEventDrumInstruction):
+            out[instr.accumulator.name] = "time_event_drum"
+        elif isinstance(instr, (DebounceInstruction, FlasherInstruction)):
+            verb = "debounce" if isinstance(instr, DebounceInstruction) else "flasher"
+            out[instr.on_acc.name] = verb
+            out[instr.off_acc.name] = verb
+        elif isinstance(instr, TimedInstruction):
+            out[instr.timer_acc.name] = "timed"
+    return out
 
 
 def _build_infeasible_hints(

@@ -60,6 +60,12 @@ from pyrung.core.instruction.drums import (
     TimeDrumInstruction,
     TimeEventDrumInstruction,
 )
+from pyrung.core.instruction.out_variants import (
+    DebounceInstruction,
+    FlasherInstruction,
+    TimedInstruction,
+    ToggleInstruction,
+)
 from pyrung.core.instruction.packing import (
     PackBitsInstruction,
     PackTextInstruction,
@@ -99,6 +105,10 @@ EXPECTED_WITH_CROSSINGS = frozenset(
         TimeEventDrumInstruction,
         SearchInstruction,
         ModbusReceiveInstruction,
+        ToggleInstruction,
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
     }
 )
 
@@ -125,6 +135,10 @@ EXEMPT = frozenset(
 _ALWAYS_FALLTHROUGH = (
     PackTextInstruction,
     OffDelayInstruction,
+    ToggleInstruction,
+    DebounceInstruction,
+    FlasherInstruction,
+    TimedInstruction,
 )
 
 

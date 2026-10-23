@@ -311,7 +311,7 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         core_imports.append("auto")
 
     # Built-in Timer/Counter UDTs
-    if collection.used_instructions & {"on_delay", "off_delay"}:
+    if collection.used_instructions & {"on_delay", "off_delay", "debounce", "flasher", "timed"}:
         core_imports.append("Timer")
     if collection.used_instructions & {"count_up", "count_down"}:
         core_imports.append("Counter")
@@ -353,6 +353,10 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         "event_drum": "event_drum",
         "time_drum": "time_drum",
         "time_event_drum": "time_event_drum",
+        "toggle": "toggle",
+        "debounce": "debounce",
+        "flasher": "flasher",
+        "timed": "timed",
         "call": "call",
         "return": "return_early",
     }
@@ -491,7 +495,13 @@ def _emit_tc_clone_declarations(lines: list[str], collection: _OperandCollection
             f"{field_name!r}: {nickname!r}" for field_name, nickname in decl.nicknames.items()
         )
         nicknames_arg = f", nicknames={{{nickname_items}}}" if nickname_items else ""
-        lines.append(f'{decl.var_name} = {decl.kind}.clone("{decl.var_name}"{nicknames_arg})')
+        retentive_items = ", ".join(
+            f"{field_name!r}: {value!r}" for field_name, value in decl.retentive.items()
+        )
+        retentive_arg = f", retentive={{{retentive_items}}}" if retentive_items else ""
+        lines.append(
+            f'{decl.var_name} = {decl.kind}.clone("{decl.var_name}"{nicknames_arg}{retentive_arg})'
+        )
 
 
 def _emit_plain_block_declarations(lines: list[str], collection: _OperandCollection) -> None:
@@ -1250,6 +1260,54 @@ def _render_timer_counter_call(
     return f"{py_func}({', '.join(rendered_parts)})"
 
 
+def _render_out_variant_call(
+    py_func: str,
+    args: list[str],
+    kwargs: list[tuple[str, str]],
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    structured_map: TagMap | None,
+) -> str | None:
+    """Render debounce/flasher/timed with each phase as ``(Timer, preset)``."""
+    from pyrung.click.codegen.utils import _out_variant_timer_pairs
+
+    if len(args) != 1:
+        return None
+    values = dict(kwargs)
+    phases: dict[str, tuple[str, str]] = {}
+    for side, done_operand, _acc in _out_variant_timer_pairs(kwargs):
+        udt_ref = _merge_timer_counter_args(done_operand, collection)
+        preset = values.get(f"{side}_preset")
+        if udt_ref is None or preset is None:
+            return None
+        phases[side] = (
+            udt_ref,
+            _sub_operand_kwarg(f"{side}_preset", preset, collection, nicknames, structured_map),
+        )
+    target = _sub_operand(args[0], collection, nicknames, structured_map)
+    unit = values.get("unit", "Tms")
+    unit_arg = None if unit == "Tms" else f'"{_FRIENDLY_TIMER_UNITS.get(unit, unit)}"'
+
+    if py_func == "timed":
+        if set(phases) != {"on"}:
+            return None
+        timer, preset = phases["on"]
+        parts = [target, timer, preset]
+        if unit_arg is not None:
+            parts.append(unit_arg)
+        if values.get("maintained") in {"1", "True"}:
+            parts.append("maintained=True")
+        return f"timed({', '.join(parts)})"
+
+    if not phases:
+        return None
+    parts = [target]
+    parts.extend(f"{side}=({timer}, {preset})" for side, (timer, preset) in phases.items())
+    if unit_arg is not None:
+        parts.append(f"unit={unit_arg}")
+    return f"{py_func}({', '.join(parts)})"
+
+
 def _render_af_token(
     token: str,
     collection: _OperandCollection,
@@ -1321,6 +1379,13 @@ def _render_af_token(
         )
         if rendered_timer_counter is not None:
             return rendered_timer_counter
+
+    if func_name in {"debounce", "flasher", "timed"}:
+        rendered_out_variant = _render_out_variant_call(
+            py_func, args, kwargs, collection, nicknames, structured_map
+        )
+        if rendered_out_variant is not None:
+            return rendered_out_variant
 
     rendered_parts = []
     choice_source = None

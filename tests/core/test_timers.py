@@ -326,10 +326,11 @@ class TestOnDelayRTON:
         """RTON accumulator preserves value across STOP->RUN when retentive."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
+        kept = Timer.clone("Timer", retentive={"Acc": True})
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer[1], preset=100).reset(ResetBtn)
+                on_delay(kept, preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
@@ -1320,3 +1321,46 @@ class TestTimerStatusBits:
         assert runner.current_state.tags["MyTimer_Acc"] == 10
         assert "MyTimer_EN" not in runner.current_state.tags
         assert "MyTimer_TT" not in runner.current_state.tags
+
+
+class TestRetentiveDefaults:
+    """Built-in Timer/Counter fields follow CLICK's bank defaults: T and TD are
+    non-retentive, CT and CTD retentive.  ``clone(retentive=...)`` overrides."""
+
+    def test_defaults_match_click_banks(self):
+        from pyrung.core import Counter
+
+        assert Timer.Done.retentive is False
+        assert Timer.Acc.retentive is False
+        assert Counter.Done.retentive is True
+        assert Counter.Acc.retentive is True
+
+    def test_clone_overrides_field_retentive(self):
+        kept = Timer.clone("KeptTimer", retentive={"Acc": True})
+        assert kept.Acc.retentive is True
+        assert kept.Done.retentive is False
+        pool = Timer.clone("KeptPool", count=3, retentive={"Acc": True})
+        assert pool[2].Acc.retentive is True
+
+    def test_clone_rejects_unknown_retentive_field(self):
+        with pytest.raises(ValueError, match="Unknown Timer/Counter retentive fields: EN"):
+            Timer.clone("BadTimer", retentive={"EN": True})
+
+    def test_rton_time_resets_on_stop_run_unless_retentive(self, runner_factory):
+        enable = Bool("RtonEnable")
+        plain, kept = Timer.clone("PlainRton"), Timer.clone("KeptRton", retentive={"Acc": True})
+        with Program() as logic:
+            with Rung(enable):
+                on_delay(plain, 1000).reset(Bool("RtonReset"))
+            with Rung(enable):
+                on_delay(kept, 1000).reset(Bool("RtonReset2"))
+
+        runner = runner_factory(logic, dt=0.010)
+        runner.patch({enable: True})
+        for _ in range(5):
+            runner.step()
+        runner.stop()
+        runner.start()
+        tags = runner.current_state.tags
+        assert tags["PlainRton_Acc"] == 0
+        assert tags["KeptRton_Acc"] == 50
