@@ -182,7 +182,12 @@ Follow-ups:
     is Proven though reachable. Applies to any large external-input product. Should be Intractable, not a sample.
   - The three above are on branch `p0/prove-prune` (gap 2 = new `prove/cycles.py`: pump hidden progress around
     multi-scan cycles). Review: merge with fixes (a time-like timer is not pumped, so an uncaveated trace fails
-    replay; 14+ Bool inputs now Intractable). Fixes in progress.
+    replay; 14+ Bool inputs now Intractable). All fixed; landed `6216553..cc80777` (PackML lock byte-identical,
+    59 s vs 57 s; burner context identical; make test 6896 on the combined tree).
+    Where the remaining holes belong, per the builder: F1/F1b in `cycles.py` (keep revisits that are ahead; ~+18%
+    PackML if kept naively); F4 needs periodic, not monotone, pump checks; F3 is hidden-event jump arithmetic in
+    `events.py`; CTUD in classification (don't absorb, or model as bidirectional); callables/projections reading
+    absorbed accumulators in classify/absorb (treat opaque reads as consuming).
   - Wrong Proven on dev, still on that branch (session scratchpad `adv-prove-prune/`):
     - HIGH: a timer in any unit but ms never reaches Done (`on_delay(T, 1, "sec")` held: `always(~T.Done)`
       Proven; true at scan 100). Same at 4281d01. Only the fraction advances, so Done is never PENDING. `f3c.py`.
