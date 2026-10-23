@@ -125,10 +125,12 @@ time_event_drum (from feature 3):
 - **Prover has no exact model.** Its Acc is unmodeled whatever its declared domain (`classify.py`,
   `unmodeled_accs`; the `_frac:` carry is in no state key, so a declared domain gave a wrong Proven before
   the review fix), so any program using the drum is Intractable "unbounded domain on Acc" with a hint
-  naming `time_event_drum`, even for unrelated properties (as with any unbounded counter). how() keeps its context. Exact route: a saturating key for Acc (only `Acc >= preset[step]`
+  naming `time_event_drum`, even for unrelated properties (as with any unbounded counter). how() keeps
+  its context. Exact route: a saturating key for Acc (only `Acc >= preset[step]`
   matters when nothing else reads it), or a done/acc kind whose crossing is gated by the event.
 - laddercodec: no T&E encoding yet (`drum_kind` T&E, func codes 10505..10538, register-duration codes).
   pyrung exports and imports the `time_event_drum(...)` CSV token, `None` for a blank preset or event.
+  Until then the `drum` conformance group (D1, D3) cannot reach a real CLICK.
 - D2 (which banks may hold a duration register) has no Click check.
 - Fold perf, also for `time_drum`: a coarse-unit (`sec`) drum steps most scans inside a step
   (~1600 kernel scans of 2000 in `TestTimeEventDrum._event_only_tail`); not measured further.
