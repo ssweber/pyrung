@@ -3369,22 +3369,31 @@ def _do_fold(
     return tuple(patches.items())
 
 
-def _scan_callbacks(runner: Any) -> tuple[bool, bool]:
-    """``(any, any_but_do)``: active ``when()`` registrations and monitors on *runner*.
+def _scan_callbacks(runner: Any, moving: frozenset[str] | None = None) -> tuple[bool, bool]:
+    """``(blocks_ordinary, blocks_jumps)`` for the active ``when()`` registrations and monitors.
 
     They are judged after every committed scan, on the state that scan left,
     so a fold that skips scans cannot honor them: the ordinary fold declines
-    while any is active.  A ``when().do()`` callback acts every scan its
+    while any ``when()`` registration is active.  A monitor only acts when its
+    tag changes, and on a plateau only the *moving* tags (the fold's excluded
+    coordinates) change on a skipped scan, so with *moving* given only a
+    monitor on one of those blocks the ordinary fold: any other monitored tag
+    holds through the window and sees the changes it sees stepping (a Harness
+    installs one on each bool feedback).  A ``when().do()`` callback acts every scan its
     condition holds, so a cycle jump that observed whole periods of it may
     still repeat it; a pause, snapshot or monitor blocks those jumps too.
     """
     active = [
         r for r in getattr(runner, "_breakpoints_by_id", {}).values() if r.enabled and not r.removed
     ]
-    monitors = any(
-        r.enabled and not r.removed for r in getattr(runner, "_monitors_by_id", {}).values()
+    live_monitors = [
+        r for r in getattr(runner, "_monitors_by_id", {}).values() if r.enabled and not r.removed
+    ]
+    monitors = bool(live_monitors)
+    blocks_ordinary = bool(active) or (
+        monitors if moving is None else any(r.tag_name in moving for r in live_monitors)
     )
-    return bool(active) or monitors, monitors or any(r.action != "do" for r in active)
+    return blocks_ordinary, monitors or any(r.action != "do" for r in active)
 
 
 def _replace_tip_state(
@@ -3659,7 +3668,7 @@ class _OrdinaryFoldStrategy:
         capture_sink: Callable[[int, ConditionViewCapture], None] | None = None,
     ) -> _FoldAdvance | None:
         """Fold after a completed probe, or return ``None`` if proof declines."""
-        if _scan_callbacks(runner)[0]:
+        if _scan_callbacks(runner, self.exclude)[0]:
             return None
         harness_scan = _harness_nearest_scan(runner)
         plan = self.plan(

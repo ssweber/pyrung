@@ -2949,6 +2949,42 @@ class TestUnseenStopsStayExact:
         _assert_fold_is_exact(self._counter(timer=True), go)
         assert seen[True] == seen[False] != []
 
+    @pytest.mark.parametrize("tag", ["Hit", "Tmr_Done", "Tmr_Acc"])
+    def test_monitor_on_a_steady_tag_still_folds(self, tag: str) -> None:
+        """A monitor fires only when its tag changes, so one on a tag that holds
+        through the plateau leaves the fold free, and the landing judges it at
+        the scan it stands for."""
+
+        def build() -> Program:
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Tmr, 3_000)
+                with Rung(Tmr.Done):
+                    out(Bool("Hit"))
+            return prog
+
+        seen: dict[bool, list[Any]] = {True: [], False: []}
+        kernel = {True: 0, False: 0}
+
+        def go(plc: PLC, fold: bool) -> None:
+            orig = plc._run_single_scan
+
+            def counted(**kw: Any) -> Any:
+                kernel[fold] += 1
+                return orig(**kw)
+
+            plc._run_single_scan = counted  # ty: ignore[invalid-assignment]
+            plc.monitor(tag, lambda new, old: seen[fold].append((plc.state.scan_id, new, old)))
+            plc.run_until(Bool("Hit"), max_cycles=5_000, fold=fold)
+
+        _assert_fold_is_exact(build, go)
+        assert seen[True] == seen[False] != []
+        if tag == "Tmr_Acc":
+            assert kernel[True] == kernel[False]
+        else:
+            assert kernel[True] < 20
+
     def test_pause_breakpoint_blocks_cycle_jumps(self) -> None:
         from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
 
