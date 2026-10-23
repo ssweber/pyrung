@@ -24,6 +24,7 @@ from pyrung.core.instruction import (
     SearchInstruction,
     ShiftInstruction,
     TimeDrumInstruction,
+    TimeEventDrumInstruction,
 )
 from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.tag import TagType
@@ -542,7 +543,7 @@ def _compile_event_drum_instruction(
 
 
 def _compile_time_drum_instruction(
-    instr: TimeDrumInstruction,
+    instr: TimeDrumInstruction | TimeEventDrumInstruction,
     enabled_expr: str,
     ctx: CodegenContext,
     indent: int,
@@ -564,7 +565,11 @@ def _compile_time_drum_instruction(
     jog_prev_key = f"_drum_jog_prev:{key_base}"
     max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX
 
-    preset_exprs = [f"int({_compile_value(preset, ctx)})" for preset in instr.presets]
+    timed_event = isinstance(instr, TimeEventDrumInstruction)
+    preset_exprs = [
+        None if preset is None else f"int({_compile_value(preset, ctx)})"
+        for preset in instr.presets
+    ]
     reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
         instr.reset_condition, ctx
     )
@@ -622,18 +627,30 @@ def _compile_time_drum_instruction(
         "_int_units = int(_dt_units)",
         "_frac = _dt_units - _int_units",
         f"_acc = min(_acc + _int_units, {max_acc})",
-        *_compile_step_selector_lines(
-            step_var="_step",
-            target_var="_preset",
-            value_exprs=preset_exprs,
-        ),
     ]
-    if ctx.proof_metadata:
-        preset_key = prove_effective_preset_key(instr.completion_flag.name)
-        enabled_body.append(f"_mem[{preset_key!r}] = _preset")
+    if timed_event:
+        assert isinstance(instr, TimeEventDrumInstruction)
+        enabled_body.extend(
+            _compile_step_selector_lines(
+                step_var="_step",
+                target_var="_ready",
+                value_exprs=_time_event_ready_exprs(instr, preset_exprs, ctx),
+            )
+        )
+    else:
+        enabled_body.extend(
+            _compile_step_selector_lines(
+                step_var="_step",
+                target_var="_preset",
+                value_exprs=[expr for expr in preset_exprs if expr is not None],
+            )
+        )
+        if ctx.proof_metadata:
+            preset_key = prove_effective_preset_key(instr.completion_flag.name)
+            enabled_body.append(f"_mem[{preset_key!r}] = _preset")
     enabled_body.extend(
         [
-            "if _acc >= _preset:",
+            "if _ready:" if timed_event else "if _acc >= _preset:",
             f"    if _step < {step_count}:",
             "        _step += 1",
             "        _step_changed = True",
@@ -701,6 +718,9 @@ def _compile_time_drum_instruction(
             f"    _mem[{frac_key!r}] = _frac",
         ]
     )
+    if timed_event:
+        # Every scan, as the interpreter writes it.
+        lines.append(f"_mem[{frac_key!r}] = _frac")
 
     if instr.jump_condition is not None:
         lines.append(f"_mem[{jump_prev_key!r}] = _jump_curr")
@@ -708,3 +728,26 @@ def _compile_time_drum_instruction(
         lines.append(f"_mem[{jog_prev_key!r}] = _jog_curr")
 
     return [" " * indent + line for line in lines]
+
+
+def _time_event_ready_exprs(
+    instr: TimeEventDrumInstruction,
+    preset_exprs: list[str | None],
+    ctx: CodegenContext,
+) -> list[str]:
+    """Per step: its time is up (if it has a preset) and its event is on (if it has one)."""
+    snap_events = ctx._helper_condition_snapshots.get(id(instr), {}).get("events")
+    # Snapshots exist for the steps that have an event, in step order.
+    snapshots = iter(snap_events) if isinstance(snap_events, list) else None
+    exprs: list[str] = []
+    for preset_expr, event in zip(preset_exprs, instr.events, strict=True):
+        parts: list[str] = []
+        if preset_expr is not None:
+            parts.append(f"(_acc >= {preset_expr})")
+        if event is not None:
+            if snapshots is not None:
+                parts.append(f"bool({next(snapshots)})")
+            else:
+                parts.append(f"bool({compile_condition(event, ctx)})")
+        exprs.append(" and ".join(parts))
+    return exprs

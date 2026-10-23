@@ -1078,3 +1078,47 @@ def test_co_pending_timers_do_not_inflate_visited_set():
         f"visited set inflated to {states.estimated_space}; abstract state space is ~11"
     )
     assert len(states) == 11
+
+
+class TestTimeEventDrum:
+    """The prover has no model of a time & event drum's timing yet: a program
+    using one is Intractable, named, never a wrong Proven, and how() keeps its
+    prover context."""
+
+    @staticmethod
+    def _program(hit_reads_y3: bool) -> Program:
+        from pyrung.core import time_event_drum
+
+        with Program(strict=False) as logic:
+            with Rung():
+                time_event_drum(
+                    outputs=[Bool("Y1"), Bool("Y2"), Bool("Y3")],
+                    presets=[30, None, 20],
+                    events=[None, Bool("A"), Bool("B")],
+                    unit="ms",
+                    pattern=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                    current_step=Int("Step"),
+                    accumulator=Int("Acc"),
+                    completion_flag=Bool("Done"),
+                ).reset(Bool("R"))
+            with Rung(Bool("Done"), ~Bool("Y3")) if hit_reads_y3 else Rung(Bool("Done")):
+                out(Bool("H"))
+        return logic
+
+    @pytest.mark.parametrize("hit_reads_y3", [False, True])
+    def test_is_intractable_naming_the_drum(self, hit_reads_y3: bool) -> None:
+        result = always(self._program(hit_reads_y3), ~Bool("H"))
+        assert isinstance(result, Intractable)
+        assert "Acc" in result.tags
+        assert any("time_event_drum" in hint for hint in result.hints)
+
+    def test_how_keeps_its_prover_context(self) -> None:
+        from pyrung.core.analysis.pilot.drive_setup import build_prover_context
+
+        logic = self._program(False)
+        plc = PLC(logic, dt=0.01)
+        prover = build_prover_context(logic, dict(plc.state.tags))
+        assert prover.nd_domains
+        assert prover.key_config is not None
+        assert "Step" in prover.key_config.stateful_names
+        assert plc.how(Bool("Done"), max_scans=200).reachable

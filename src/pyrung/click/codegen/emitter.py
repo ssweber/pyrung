@@ -352,6 +352,7 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         "unpack_to_words": "unpack_to_words",
         "event_drum": "event_drum",
         "time_drum": "time_drum",
+        "time_event_drum": "time_event_drum",
         "call": "call",
         "return": "return_early",
     }

@@ -55,7 +55,11 @@ from pyrung.core.instruction.data_transfer import (
     CopyInstruction,
     FillInstruction,
 )
-from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+from pyrung.core.instruction.drums import (
+    EventDrumInstruction,
+    TimeDrumInstruction,
+    TimeEventDrumInstruction,
+)
 from pyrung.core.instruction.packing import (
     PackBitsInstruction,
     PackTextInstruction,
@@ -92,6 +96,7 @@ EXPECTED_WITH_CROSSINGS = frozenset(
         ShiftInstruction,
         EventDrumInstruction,
         TimeDrumInstruction,
+        TimeEventDrumInstruction,
         SearchInstruction,
         ModbusReceiveInstruction,
     }

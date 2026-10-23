@@ -230,6 +230,7 @@ _INSTRUCTION_LABELS: dict[str, str] = {
     "CountDownInstruction": "count_down",
     "EventDrumInstruction": "event_drum",
     "TimeDrumInstruction": "time_drum",
+    "TimeEventDrumInstruction": "time_event_drum",
     "FillInstruction": "fill",
     "BlockCopyInstruction": "blockcopy",
     "PackBitsInstruction": "pack_bits",

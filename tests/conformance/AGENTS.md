@@ -295,6 +295,8 @@ Each line becomes a sentence, a ladder, and a row in the report.
 - shift register: reset takes precedence over clock if both true same scan
 - shift register: rung power is the shift-in value
 - drum events are edge-based
+- time & event drum events are levels: one already on ends the step when its time is up (D3)
+- time & event step keeps timing past its duration while it waits for the event (D1)
 - drum pause/reset/jump precedence order
 - drum reset sets step=1, completion=False, then applies outputs for step 1 — no stale output scan
 - drum jump/jog do NOT clear completion flag — only reset does

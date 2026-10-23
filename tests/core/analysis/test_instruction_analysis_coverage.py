@@ -45,6 +45,7 @@ from pyrung.core import (
     shift,
     subroutine,
     time_drum,
+    time_event_drum,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -375,6 +376,26 @@ def _time_drum_case() -> Program:
             .jog(Bool("TimeDrumJog"))
         ),
         Bool("TimeDrumAuto"),
+    )
+
+
+def _time_event_drum_case() -> Program:
+    step = Int("TEDrumStep")
+    return _program_with_one_rung(
+        lambda: (
+            time_event_drum(
+                outputs=[Bool("TEDrumOutput")],
+                presets=[Int("TEDrumPreset1"), None],
+                events=[None, Bool("TEDrumEvent2")],
+                pattern=[[0], [1]],
+                current_step=step,
+                accumulator=Int("TEDrumAcc"),
+                completion_flag=Bool("TEDrumDone"),
+            )
+            .reset(Bool("TEDrumReset"))
+            .jump(Bool("TEDrumJump"), step=Int("TEDrumJumpStep"))
+        ),
+        Bool("TEDrumAuto"),
     )
 
 
@@ -743,6 +764,14 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         writes=frozenset({"TimeDrumOutput", "TimeDrumStep", "TimeDrumAcc", "TimeDrumDone"}),
     ),
     GraphCase(
+        "time_event_drum",
+        "time_event_drum",
+        _time_event_drum_case,
+        frozenset({"TEDrumAuto", "TEDrumEvent2", "TEDrumReset", "TEDrumJump"}),
+        data_reads=frozenset({"TEDrumPreset1", "TEDrumJumpStep", "TEDrumStep"}),
+        writes=frozenset({"TEDrumOutput", "TEDrumStep", "TEDrumAcc", "TEDrumDone"}),
+    ),
+    GraphCase(
         "on_delay",
         "on_delay",
         _on_delay_case,
@@ -873,6 +902,7 @@ PUBLIC_RUNG_INSTRUCTIONS = frozenset(
         "on_delay",
         "off_delay",
         "time_drum",
+        "time_event_drum",
         "forloop",
         "send",
         "receive",
@@ -1174,6 +1204,10 @@ def test_hidden_memory_info_tracks_shift_and_drums() -> None:
 
     assert {"ShiftBits1", "ShiftBits2"} <= set(hidden_writes)
     assert oneshot_writes == ()
+
+    logic = _time_event_drum_case()
+    hidden_writes, _ = _collect_hidden_memory_info(logic, build_program_graph(logic).tags)
+    assert {"TEDrumOutput", "TEDrumStep", "TEDrumAcc", "TEDrumDone"} <= set(hidden_writes)
 
 
 def _division_fault_reader_case(*, read_fault: bool) -> Program:

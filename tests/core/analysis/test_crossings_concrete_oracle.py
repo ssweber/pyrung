@@ -53,7 +53,11 @@ from pyrung.core.instruction.data_transfer import (
     CopyInstruction,
     FillInstruction,
 )
-from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+from pyrung.core.instruction.drums import (
+    EventDrumInstruction,
+    TimeDrumInstruction,
+    TimeEventDrumInstruction,
+)
 from pyrung.core.instruction.packing import (
     PackBitsInstruction,
     PackTextInstruction,
@@ -97,6 +101,7 @@ _DIRECT_ORACLE_CLASSES = frozenset(
 )
 _CONCRETE_ORACLE_FRONTIERS = {
     TimeDrumInstruction: "needs elapsed-time and hidden-step state rows",
+    TimeEventDrumInstruction: "needs elapsed-time and hidden-step state rows",
 }
 
 

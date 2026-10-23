@@ -2216,6 +2216,29 @@ class TestRoundTrip:
             """,
         )
 
+    def test_time_event_drum(self):
+        """Time & event drum: blank presets and events round-trip as None."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    time_event_drum(
+                        outputs=[Y1, Y2, Y3],
+                        presets=[100, None, DS5],
+                        events=[None, X3, X4],
+                        unit="Tms",
+                        pattern=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                        current_step=DS1,
+                        accumulator=TD1,
+                        completion_flag=C1,
+                    ).reset(X2).jog(X5)
+            """,
+            """
+            with rung(X001):
+                time_event_drum(outputs=[Y001, Y002, Y003], presets=[100, None, DS5], events=[None, X003, X004], unit="Tms", pattern=[[1, 0, 0], [0, 1, 0], [0, 0, 1]], current_step=DS1, accumulator=TD1, completion_flag=C1).reset(X002).jog(X005)
+            """,
+        )
+
     def test_send(self):
         """Send instruction with ModbusTcpTarget."""
         _assert_codegen_body(

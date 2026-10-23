@@ -17,6 +17,7 @@ from .builders import (
     OnDelayBuilder,
     ShiftBuilder,
     TimeDrumBuilder,
+    TimeEventDrumBuilder,
     count_down,
     count_up,
     event_drum,
@@ -24,6 +25,7 @@ from .builders import (
     on_delay,
     shift,
     time_drum,
+    time_event_drum,
 )
 from .conditions import (
     And,
@@ -118,6 +120,7 @@ __all__ = [
     "OnDelayBuilder",
     "ShiftBuilder",
     "TimeDrumBuilder",
+    "TimeEventDrumBuilder",
     "count_down",
     "count_up",
     "event_drum",
@@ -125,6 +128,7 @@ __all__ = [
     "on_delay",
     "shift",
     "time_drum",
+    "time_event_drum",
     # Validation & Types
     "DialectValidator",
     "ForbiddenControlFlowError",

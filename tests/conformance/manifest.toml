@@ -26,3 +26,11 @@ avg_odd_count = 3
 avg_dint_no_overflow = 4
 mdn_even_count = 5
 max_min_word_unsigned = 6
+
+[groups.drum]
+base = 501 # Conf_Drum: DS501..DS700
+slots = 19
+
+[groups.drum.cases]
+te_acc_counts_while_waiting = 1
+te_level_event_already_on = 2

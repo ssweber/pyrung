@@ -3592,3 +3592,82 @@ class TestLandingDtReadouts:
         assert folded.state.scan_id == stepped.state.scan_id
         assert dict(folded.state.tags) == dict(stepped.state.tags)
         assert dict(folded.state.memory) == dict(stepped.state.memory)
+
+
+class TestTimeEventDrum:
+    """A time & event drum is a timed source whose step may end on its preset,
+    on its event, or on both.  Event-only steps place no timer crossing; the
+    event's own change bounds the window."""
+
+    @staticmethod
+    def _shape(gate: bool, read_done: bool) -> Callable[[], Program]:
+        from pyrung import time_event_drum
+
+        W, T2 = Timer.clone("W"), Timer.clone("T2")
+
+        def source() -> None:
+            with Rung():
+                on_delay(T2, 30_000)
+            with Rung(Bool("O2")):
+                on_delay(W, 2_500)
+            with Rung(system.sys.clock_1s) if gate else Rung():
+                time_event_drum(
+                    outputs=[Bool("O1"), Bool("O2"), Bool("O3")],
+                    presets=[3_000, None, 1_500],
+                    events=[None, W.Done, T2.Acc >= 15_000],
+                    unit="ms",
+                    pattern=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                    current_step=Int("Step"),
+                    accumulator=Int("DAcc"),
+                    completion_flag=Bool("DDone"),
+                ).reset(Bool("R"))
+
+        reader = (lambda: Bool("DDone")) if read_done else (lambda: Bool("O3"))
+        return lambda: _scan_stamp_program(source, reader, above=False)
+
+    @pytest.mark.parametrize("read_done", [True, False])
+    @pytest.mark.parametrize("gate", [True, False])
+    def test_completion_scan_matches_stepping(self, gate: bool, read_done: bool) -> None:
+        folded = _assert_fold_is_exact(self._shape(gate, read_done), _scans(400), dt=0.1)
+        assert folded.state.tags["DDone"]
+
+    @staticmethod
+    def _event_only_tail(read_done: bool = True) -> Program:
+        from pyrung import time_event_drum
+
+        W = Timer.clone("W")
+        with Program(strict=False) as prog:
+            with Rung(Bool("O2")):
+                on_delay(W, 4_000)
+            with Rung():
+                time_event_drum(
+                    outputs=[Bool("O1"), Bool("O2")],
+                    presets=[600, None],
+                    events=[None, W.Done],
+                    unit="sec",
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=Int("Step"),
+                    accumulator=Int("DAcc"),
+                    completion_flag=Bool("DDone"),
+                ).reset(Bool("R"))
+            with Rung(Bool("DDone") if read_done else Bool("O1")):
+                out(Bool("L"))
+        return prog
+
+    @pytest.mark.parametrize("scans", [2_000, 60_100, 61_000])
+    def test_event_only_final_step_folds_to_its_event(self, scans: int) -> None:
+        folded = _assert_fold_is_exact(self._event_only_tail, _scans(scans), dt=0.01)
+        assert folded.state.tags["L"] is (scans > 60_400)
+
+    def test_reading_done_does_not_step_an_event_only_step(self) -> None:
+        """No preset to place: the Done read costs nothing over an unread drum."""
+        work = []
+        for read_done in (True, False):
+            plc = PLC(self._event_only_tail(read_done), dt=0.01)
+            plc.step()
+            plc.run_until(lambda _s: False, max_cycles=60_100)
+            assert plc.state.tags["Step"] == 2
+            counter = _count_kernel_scans(plc)
+            plc.run_until(lambda _s: False, max_cycles=2_000)
+            work.append(counter["n"])
+        assert work[0] == work[1]

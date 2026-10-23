@@ -130,6 +130,7 @@ _STATEFUL_INSTRUCTIONS = frozenset(
         "ShiftInstruction",
         "EventDrumInstruction",
         "TimeDrumInstruction",
+        "TimeEventDrumInstruction",
         "FunctionCallInstruction",
         "EnabledFunctionCallInstruction",
         "BlockCopyInstruction",
@@ -358,11 +359,16 @@ def _collect_implicit_edge_condition_exprs(
     Drum events, shift clocks, and drum jog/jump conditions use internal
     rising-edge detection rather than rise()/fall() atoms.  Their condition
     expressions must be in all_exprs so _live_inputs can see the ND inputs
-    they reference.
+    they reference.  A time & event drum's events are levels, but they sit in
+    no rung expression either.
     """
     from pyrung.core.instruction.advanced import ShiftInstruction
     from pyrung.core.instruction.control import ForLoopInstruction
-    from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+    from pyrung.core.instruction.drums import (
+        EventDrumInstruction,
+        TimeDrumInstruction,
+        TimeEventDrumInstruction,
+    )
 
     def _add(cond: Any) -> None:
         if cond is not None:
@@ -387,13 +393,13 @@ def _collect_implicit_edge_condition_exprs(
         for instr in instructions:
             if isinstance(instr, ShiftInstruction) and _in_scope(instr):
                 _add(instr.clock_condition)
-            elif isinstance(instr, (EventDrumInstruction, TimeDrumInstruction)) and _in_scope(
-                instr
-            ):
+            elif isinstance(
+                instr, (EventDrumInstruction, TimeDrumInstruction, TimeEventDrumInstruction)
+            ) and _in_scope(instr):
                 _add(instr.jog_condition)
                 _add(instr.jump_condition)
                 _add(instr.reset_condition)
-                if isinstance(instr, EventDrumInstruction):
+                if isinstance(instr, (EventDrumInstruction, TimeEventDrumInstruction)):
                     for event_cond in instr.events:
                         _add(event_cond)
             if isinstance(instr, ForLoopInstruction) and hasattr(instr, "instructions"):
@@ -1141,9 +1147,13 @@ def _domain_from_write_instruction(
             atom_index,
         )
 
-    from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+    from pyrung.core.instruction.drums import (
+        EventDrumInstruction,
+        TimeDrumInstruction,
+        TimeEventDrumInstruction,
+    )
 
-    if isinstance(instr, (TimeDrumInstruction, EventDrumInstruction)):
+    if isinstance(instr, (TimeDrumInstruction, EventDrumInstruction, TimeEventDrumInstruction)):
         return _domain_from_drum_instruction(instr, target_name)
 
     from pyrung.core.instruction.advanced import SearchInstruction
@@ -2259,16 +2269,36 @@ _KIND_LABELS: dict[str, str] = {
 }
 
 
+def _unmodeled_accumulators(program: Program) -> dict[str, str]:
+    """Accumulators of instructions the prover has no exact model for, by verb."""
+    from pyrung.core.instruction.drums import TimeEventDrumInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    return {
+        instr.accumulator.name: "time_event_drum"
+        for instr in walk_instructions(program)
+        if isinstance(instr, TimeEventDrumInstruction)
+    }
+
+
 def _build_infeasible_hints(
     infeasible_tags: list[str],
     graph: ProgramGraph,
     threshold_blockers: dict[str, _ThresholdBlocker] | None = None,
+    unmodeled_accs: dict[str, str] | None = None,
 ) -> list[str]:
     """Generate actionable hints for each infeasible tag."""
     blockers = threshold_blockers or {}
+    unmodeled = unmodeled_accs or {}
     hints: list[str] = []
     for name in infeasible_tags:
         blocker = blockers.get(name)
+        if name in unmodeled:
+            hints.append(
+                f"  {name}: {unmodeled[name]} accumulator; the prover does not model"
+                f" its timing yet; cover it with tests"
+            )
+            continue
         if blocker is not None:
             label = _KIND_LABELS.get(blocker.kind, "accumulator")
             hints.append(f"  {name}: {label}; threshold abstraction blocked:")
@@ -2783,9 +2813,19 @@ def _classify_dimensions_from_graph(
                     infeasible_tags.append(tag_name)
             continue
 
-        if tag_name not in graph.readers_of and not (
-            _tag_is_observable(tag_name, scope=scope, project=project)
-            and (_has_inert_writer(program, tag_name) or _has_out_oneshot_writer(program, tag_name))
+        # An accumulator its own instruction reads back (a time & event drum's)
+        # carries across scans; only the paired ones above are absorbed.
+        self_read = tag_name in graph.all_readers_of and tag_name not in done_by_acc
+        if (
+            tag_name not in graph.readers_of
+            and not self_read
+            and not (
+                _tag_is_observable(tag_name, scope=scope, project=project)
+                and (
+                    _has_inert_writer(program, tag_name)
+                    or _has_out_oneshot_writer(program, tag_name)
+                )
+            )
         ):
             combinational.add(tag_name)
             continue
@@ -2880,7 +2920,9 @@ def _classify_dimensions_from_graph(
     if infeasible_tags:
         total_dims = len(stateful) + len(nondeterministic) + len(infeasible_tags)
         blocker_map = {b.acc_name: b for b in threshold_absorptions.blockers}
-        hints = _build_infeasible_hints(sorted(infeasible_tags), graph, blocker_map)
+        hints = _build_infeasible_hints(
+            sorted(infeasible_tags), graph, blocker_map, _unmodeled_accumulators(program)
+        )
         done_presets_partial = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
         done_presets_partial.update(
             {d: p for d, p in absorptions.synthetic_presets.items() if d in done_acc}

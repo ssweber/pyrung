@@ -789,6 +789,7 @@ def _emit_logic_imports(
         "unpack_to_words": "unpack_to_words",
         "event_drum": "event_drum",
         "time_drum": "time_drum",
+        "time_event_drum": "time_event_drum",
         "return": "return_early",
     }
     for instr_name in sorted(refs.used_instructions):

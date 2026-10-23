@@ -63,7 +63,33 @@ with rung(Running):
         .jog(Start)
 ```
 
-`event_drum(...)` and `time_drum(...)` are terminal builders. `.reset(...)` is required and finalizes the instruction. `.jump(...)` and `.jog(...)` are optional.
+A tag preset (`DS[1]`) needs CLICK v4 firmware; earlier firmware takes literal durations only, and Click validation leaves a hint.
+
+## Time & event drum
+
+```python
+with rung(Running):
+    time_event_drum(
+        outputs=[Clamp, Drill, Eject],
+        presets=[500, None, 2000],
+        events=[None, PartPresent, DrillHome],
+        unit="ms",
+        pattern=[
+            [1, 0, 0],
+            [1, 1, 0],
+            [0, 0, 1],
+        ],
+        current_step=DrumStep,
+        accumulator=DrumAcc,
+        completion_flag=DrumDone,
+    ).reset(ShiftReset)
+```
+
+A step ends when its time is up **and** its event is on. `None` leaves out either half: step 1 is time-only, step 2 waits for `PartPresent` alone, step 3 needs 2 s and `DrillHome`. Each step needs at least one.
+
+Events are levels, unlike `event_drum`'s rising edges: an event already on when the time comes up ends the step on that scan, and one level held across several event-only steps ends one step per scan. The accumulator times from step entry and keeps counting while a timed step waits for its event.
+
+`event_drum(...)`, `time_drum(...)` and `time_event_drum(...)` are terminal builders. `.reset(...)` is required and finalizes the instruction. `.jump(...)` and `.jog(...)` are optional.
 
 ### Variadic condition chaining
 

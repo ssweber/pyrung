@@ -144,7 +144,11 @@ class _InstructionMixin:
                 specs.append(("reset", reset_condition, ".reset()"))
             return specs
 
-        if instruction_type in {"EventDrumInstruction", "TimeDrumInstruction"}:
+        if instruction_type in {
+            "EventDrumInstruction",
+            "TimeDrumInstruction",
+            "TimeEventDrumInstruction",
+        }:
             reset_condition = getattr(instruction, "reset_condition", None)
             if reset_condition is not None:
                 specs.append(("reset", reset_condition, ".reset()"))
@@ -449,6 +453,45 @@ class _InstructionMixin:
                 presets=self._render_sequence(
                     instruction.presets,
                     path=f"{path}.presets",
+                    source=instruction,
+                ),
+                unit=self._render_operand(
+                    instruction.unit, path=f"{path}.unit", source=instruction
+                ),
+                pattern=self._render_pattern(instruction.pattern),
+                current_step=self._render_operand(
+                    instruction.current_step,
+                    path=f"{path}.current_step",
+                    source=instruction,
+                ),
+                accumulator=self._render_operand(
+                    instruction.accumulator,
+                    path=f"{path}.accumulator",
+                    source=instruction,
+                ),
+                completion_flag=self._render_operand(
+                    instruction.completion_flag,
+                    path=f"{path}.completion_flag",
+                    source=instruction,
+                ),
+            )
+        if instruction_type == "TimeEventDrumInstruction":
+            # A step's blank preset or event renders as None.
+            return self._fn(
+                "time_event_drum",
+                outputs=self._render_sequence(
+                    instruction.outputs,
+                    path=f"{path}.outputs",
+                    source=instruction,
+                ),
+                presets=self._render_sequence(
+                    instruction.presets,
+                    path=f"{path}.presets",
+                    source=instruction,
+                ),
+                events=self._render_condition_sequence(
+                    instruction.events,
+                    path=f"{path}.events",
                     source=instruction,
                 ),
                 unit=self._render_operand(

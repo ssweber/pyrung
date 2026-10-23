@@ -99,6 +99,7 @@ from pyrung.core.program import (
     shift,
     subroutine,
     time_drum,
+    time_event_drum,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -240,6 +241,7 @@ __all__ = [
     "on_delay",
     "off_delay",
     "time_drum",
+    "time_event_drum",
     "send",
     "receive",
     "ModbusAddress",

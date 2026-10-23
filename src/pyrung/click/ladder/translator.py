@@ -478,6 +478,9 @@ class _TranslatorMixin:
     def _render_condition_sequence(self, values: tuple[Any, ...], *, path: str, source: Any) -> str:
         rendered: list[str] = []
         for index, value in enumerate(values):
+            if value is None:
+                rendered.append("None")
+                continue
             rendered.append(
                 self._render_condition_inline(value, path=f"{path}[{index}]", source=source)
             )
@@ -517,6 +520,9 @@ class _TranslatorMixin:
     def _render_sequence(self, values: Any, *, path: str, source: Any) -> str:
         rendered: list[str] = []
         for index, value in enumerate(values):
+            if value is None:
+                rendered.append("None")
+                continue
             rendered.append(self._render_operand(value, path=f"{path}[{index}]", source=source))
         return f"[{','.join(rendered)}]"
 

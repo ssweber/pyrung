@@ -62,6 +62,9 @@ _WRITE_TARGET_FIELDS: frozenset[tuple[str, str]] = frozenset(
         ("TimeDrumInstruction", "current_step"),
         ("TimeDrumInstruction", "accumulator"),
         ("TimeDrumInstruction", "completion_flag"),
+        ("TimeEventDrumInstruction", "current_step"),
+        ("TimeEventDrumInstruction", "accumulator"),
+        ("TimeEventDrumInstruction", "completion_flag"),
     }
 )
 
@@ -85,6 +88,10 @@ _ROLE_ASSIGNMENT_FIELDS: dict[tuple[str, str], str] = {
     ("TimeDrumInstruction", "accumulator"): "drum_accumulator",
     ("TimeDrumInstruction", "completion_flag"): "drum_completion_flag",
     ("TimeDrumInstruction", "jump_step"): "drum_jump_step",
+    ("TimeEventDrumInstruction", "current_step"): "drum_current_step",
+    ("TimeEventDrumInstruction", "accumulator"): "drum_accumulator",
+    ("TimeEventDrumInstruction", "completion_flag"): "drum_completion_flag",
+    ("TimeEventDrumInstruction", "jump_step"): "drum_jump_step",
 }
 
 _COPY_COMPATIBILITY_FIELDS: dict[str, tuple[str, str, str]] = {
@@ -381,7 +388,11 @@ def _evaluate_drums(
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     instruction_type = type(instruction).__name__
-    if instruction_type not in {"EventDrumInstruction", "TimeDrumInstruction"}:
+    if instruction_type not in {
+        "EventDrumInstruction",
+        "TimeDrumInstruction",
+        "TimeEventDrumInstruction",
+    }:
         return []
 
     findings: list[ClickFinding] = []
@@ -446,9 +457,11 @@ def _evaluate_drums(
                     )
                 )
 
-    if instruction_type == "EventDrumInstruction":
+    if instruction_type in {"EventDrumInstruction", "TimeEventDrumInstruction"}:
         events = getattr(instruction, "events", ())
         for idx, event_condition in enumerate(events):
+            if event_condition is None:
+                continue
             event_location = _instruction_location(base_location, f"instruction.events[{idx}]")
             event_tags = _iter_condition_tags(event_condition)
             for event_tag in event_tags:
@@ -470,8 +483,8 @@ def _evaluate_drums(
                         code=CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
                         severity=_route_severity(CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED, mode),
                         message=(
-                            "time_drum preset must be a literal integer for Click portability "
-                            f"at {location_text}."
+                            "time_drum preset from a register needs CLICK v4 firmware; "
+                            f"earlier firmware takes literal durations only, at {location_text}."
                         ),
                         location=location_text,
                     )

@@ -205,7 +205,11 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
         CopyInstruction,
         FillInstruction,
     )
-    from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+    from pyrung.core.instruction.drums import (
+        EventDrumInstruction,
+        TimeDrumInstruction,
+        TimeEventDrumInstruction,
+    )
     from pyrung.core.instruction.packing import (
         PackBitsInstruction,
         PackTextInstruction,
@@ -252,7 +256,7 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
                 targets = _expand_indirect_tag_names(dest)
     elif isinstance(instr, ShiftInstruction):
         targets = _resolve_tag_names(instr.bit_range)
-    elif isinstance(instr, TimeDrumInstruction):
+    elif isinstance(instr, (TimeDrumInstruction, TimeEventDrumInstruction)):
         targets = [t.name for t in instr.outputs]
         targets.append(instr.current_step.name)
         targets.append(instr.completion_flag.name)

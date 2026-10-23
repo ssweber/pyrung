@@ -153,7 +153,11 @@ def _instruction_owned_tags(runner: Any) -> frozenset[str]:
         return frozenset()
 
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
-    from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+    from pyrung.core.instruction.drums import (
+        EventDrumInstruction,
+        TimeDrumInstruction,
+        TimeEventDrumInstruction,
+    )
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.tag import Tag
     from pyrung.core.validation._common import walk_instructions
@@ -173,6 +177,7 @@ def _instruction_owned_tags(runner: Any) -> frozenset[str]:
         CountDownInstruction,
         EventDrumInstruction,
         TimeDrumInstruction,
+        TimeEventDrumInstruction,
     )
 
     owned: set[str] = set()

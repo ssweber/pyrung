@@ -531,6 +531,7 @@ _RESERVED_IMPORT_NAMES: frozenset[str] = frozenset(
         "unpack_to_words",
         "event_drum",
         "time_drum",
+        "time_event_drum",
         "return_early",
         "send",
         "receive",

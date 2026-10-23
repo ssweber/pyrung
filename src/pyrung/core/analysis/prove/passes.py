@@ -1369,9 +1369,15 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     )
 
     if infeasible_unclassified:
+        from .classify import _unmodeled_accumulators
+
         tags = sorted(infeasible_unclassified)
+        unmodeled = _unmodeled_accumulators(ctx.program)
         hints = [
-            f"  {name}: unclassified tag with no inferrable domain; "
+            f"  {name}: {unmodeled[name]} accumulator; the prover does not model"
+            f" its timing yet; cover it with tests"
+            if name in unmodeled
+            else f"  {name}: unclassified tag with no inferrable domain; "
             f"add choices=, min=/max=, or readonly=True"
             for name in tags
         ]

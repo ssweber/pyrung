@@ -25,6 +25,7 @@ from pyrung import (
     out,
     shift,
     time_drum,
+    time_event_drum,
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.advance import build_advance_index
@@ -143,6 +144,54 @@ class TestSequencerAdvance:
 
         assert path.reachable, path.reason
         assert path.replay().state.tags[step.name] == 3
+
+    @staticmethod
+    def _time_event_drum_program() -> tuple[Program, Int, Bool]:
+        enable = Bool("TEAuto", external=True)
+        reset = Bool("TEReset", external=True)
+        part = Bool("TEPart", external=True)
+        clamp = Bool("TEClamp", external=True)
+        step = Int("TEStep")
+        done = Bool("TEDone")
+        with Program() as prog:
+            with Rung(enable):
+                time_event_drum(
+                    outputs=[Bool("TEOut1"), Bool("TEOut2")],
+                    presets=[20, None, 30, None],
+                    events=[None, part, clamp, part],
+                    unit="ms",
+                    pattern=[[1, 0], [0, 1], [1, 1], [0, 0]],
+                    current_step=step,
+                    accumulator=Int("TEAcc"),
+                    completion_flag=done,
+                ).reset(reset)
+        return prog, step, done
+
+    def test_time_event_drum_holds_a_level_event_instead_of_pulsing_it(self):
+        prog, step, _done = self._time_event_drum_program()
+        owner = build_advance_index(prog).resolve(step.name)
+        assert owner is not None
+        plan = owner.profile.plan
+        from pyrung.core.crossing import Eq
+
+        both = plan(Eq(step.name, frozenset({4})), {step.name: 3, "TEAcc": 0})
+        assert both is not None
+        assert both.pulse is None
+        assert {str(h.condition) for h in both.holds} >= {"TEClamp"}
+        assert both.progress is not None
+
+        event_only = plan(Eq(step.name, frozenset({3})), {step.name: 2, "TEAcc": 0})
+        assert event_only is not None
+        assert event_only.pulse is None
+        assert event_only.progress is None
+
+    def test_time_event_drum_path_replays_across_time_and_event_boundaries(self):
+        prog, _step, done = self._time_event_drum_program()
+
+        path = PLC(prog, dt=0.010).how(done, max_scans=400)
+
+        assert path.reachable, path.reason
+        assert path.replay().state.tags[done.name] is True
 
     def test_shift_path_replays_across_clock_boundaries(self):
         data = Bool("ShiftData", external=True)

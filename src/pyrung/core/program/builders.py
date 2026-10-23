@@ -20,6 +20,7 @@ from pyrung.core.instruction import (
     OnDelayInstruction,
     ShiftInstruction,
     TimeDrumInstruction,
+    TimeEventDrumInstruction,
 )
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.structure import DoneAccUDT
@@ -281,7 +282,9 @@ class _DrumBuilderBase(_BuilderBase):
     ) -> None:
         super().__init__(func_name=func_name, source_file=source_file, source_line=source_line)
         self._register_required_builder(descriptor)
-        self._instruction: EventDrumInstruction | TimeDrumInstruction | None = None
+        self._instruction: (
+            EventDrumInstruction | TimeDrumInstruction | TimeEventDrumInstruction | None
+        ) = None
         self._reset_source_file: str | None = None
         self._reset_source_line: int | None = None
         self._jump_source_file: str | None = None
@@ -495,6 +498,89 @@ class TimeDrumBuilder(_DrumBuilderBase):
         return self
 
 
+class TimeEventDrumBuilder(_DrumBuilderBase):
+    def __init__(
+        self,
+        outputs: Sequence[Tag],
+        presets: Sequence[Tag | int | None],
+        events: Sequence[Condition | Tag | None],
+        unit: str,
+        pattern: Sequence[Sequence[bool | int]],
+        current_step: Tag,
+        accumulator: Tag,
+        completion_flag: Tag,
+        auto_condition: Any,
+        source_file: str | None = None,
+        source_line: int | None = None,
+    ) -> None:
+        super().__init__(
+            func_name="time_event_drum",
+            descriptor="time_event_drum(...).reset(...)",
+            source_file=source_file,
+            source_line=source_line,
+        )
+        self._outputs = outputs
+        self._presets = presets
+        self._events = events
+        self._unit = unit
+        self._pattern = pattern
+        self._current_step = current_step
+        self._accumulator = accumulator
+        self._completion_flag = completion_flag
+        self._auto_condition = auto_condition
+
+    def reset(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> TimeEventDrumBuilder:
+        self._assert_required_builder_owner("reset")
+        self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
+        try:
+            instr = TimeEventDrumInstruction(
+                outputs=self._outputs,
+                presets=self._presets,
+                events=self._events,
+                unit=self._unit,
+                pattern=self._pattern,
+                current_step=self._current_step,
+                accumulator=self._accumulator,
+                completion_flag=self._completion_flag,
+                auto_condition=self._auto_condition,
+                reset_condition=_coalesce_condition_args("reset", conditions),
+            )
+            self._instruction = instr
+            self._refresh_debug_substeps()
+            self._append_instruction(instr)
+        except Exception:
+            self._resolve_required_builder()
+            raise
+        self._resolve_required_builder()
+        return self
+
+    def jump(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+        step: Tag | int,
+    ) -> TimeEventDrumBuilder:
+        self._jump_source_file, self._jump_source_line = _capture_chained_method_source()
+        self._assert_finalized("jump")
+        assert self._instruction is not None
+        self._instruction.set_jump(_coalesce_condition_args("jump", conditions), step)
+        self._refresh_debug_substeps()
+        return self
+
+    def jog(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> TimeEventDrumBuilder:
+        self._jog_source_file, self._jog_source_line = _capture_chained_method_source()
+        self._assert_finalized("jog")
+        assert self._instruction is not None
+        self._instruction.set_jog(_coalesce_condition_args("jog", conditions))
+        self._refresh_debug_substeps()
+        return self
+
+
 def event_drum(
     *,
     outputs: Sequence[Tag],
@@ -531,6 +617,41 @@ def time_drum(
     return TimeDrumBuilder(
         outputs,
         presets,
+        canonical_unit,
+        pattern,
+        current_step,
+        accumulator,
+        completion_flag,
+        auto_condition,
+        source_file=source_file,
+        source_line=source_line,
+    )
+
+
+def time_event_drum(
+    *,
+    outputs: Sequence[Tag],
+    presets: Sequence[Tag | int | None],
+    events: Sequence[Condition | Tag | None],
+    unit: TimeUnitStr = "ms",
+    pattern: Sequence[Sequence[bool | int]],
+    current_step: Tag,
+    accumulator: Tag,
+    completion_flag: Tag,
+) -> TimeEventDrumBuilder:
+    """CLICK's Time & Event drum: each step ends when its time is up and its event is on.
+
+    A step's preset or event may be ``None`` (event-only or time-only step), not both.
+    Events are **levels**, unlike ``event_drum``'s rising edges: an event already on
+    when the time comes up ends the step on that scan.  The accumulator keeps
+    counting while a timed step waits for its event.
+    """
+    canonical_unit = normalize_unit(unit)
+    auto_condition, source_file, source_line = _capture_rung_condition_and_source("time_event_drum")
+    return TimeEventDrumBuilder(
+        outputs,
+        presets,
+        events,
         canonical_unit,
         pattern,
         current_step,

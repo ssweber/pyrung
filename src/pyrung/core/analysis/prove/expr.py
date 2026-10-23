@@ -308,7 +308,11 @@ def _walk_implicit_edge_inputs(
     from pyrung.core.analysis.simplified import _condition_to_expr
     from pyrung.core.instruction.advanced import ShiftInstruction
     from pyrung.core.instruction.control import ForLoopInstruction
-    from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+    from pyrung.core.instruction.drums import (
+        EventDrumInstruction,
+        TimeDrumInstruction,
+        TimeEventDrumInstruction,
+    )
 
     result: set[str] = set()
     nd_keys = frozenset(nd_dims)
@@ -329,9 +333,12 @@ def _walk_implicit_edge_inputs(
                     _collect_edge_atoms(_condition_to_expr(own), nd_dims, result)
             if isinstance(instr, ShiftInstruction):
                 _check(instr.clock_condition)
-            elif isinstance(instr, (EventDrumInstruction, TimeDrumInstruction)):
+            elif isinstance(
+                instr, (EventDrumInstruction, TimeDrumInstruction, TimeEventDrumInstruction)
+            ):
                 _check(instr.jog_condition)
                 _check(instr.jump_condition)
+                # A time & event drum's events are levels, not edges.
                 if isinstance(instr, EventDrumInstruction):
                     for event_cond in instr.events:
                         _check(event_cond)

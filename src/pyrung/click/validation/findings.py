@@ -80,7 +80,13 @@ class ClickValidationReport:
         return ", ".join(parts) + "."
 
 
+# Advice about firmware versions, not portability: a hint even in strict mode.
+_VERSION_HINTS = frozenset({CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED})
+
+
 def _route_severity(code: str, mode: ValidationMode) -> FindingSeverity:
+    if code in _VERSION_HINTS:
+        return "hint"
     if mode == "strict":
         return "error"
     if code == CLK_PROFILE_UNAVAILABLE:

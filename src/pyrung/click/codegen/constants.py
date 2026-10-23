@@ -77,6 +77,7 @@ _INSTRUCTION_NAMES = {
     "unpack_to_words",
     "event_drum",
     "time_drum",
+    "time_event_drum",
     "call",
     "return",
     "for",
@@ -95,6 +96,7 @@ _PIN_INSTRUCTIONS = {
     "shift",
     "event_drum",
     "time_drum",
+    "time_event_drum",
 }
 
 # Copy converter functions

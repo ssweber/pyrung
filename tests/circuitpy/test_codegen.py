@@ -59,6 +59,7 @@ from pyrung.core import (
     sqrt,
     subroutine,
     time_drum,
+    time_event_drum,
     to_ascii,
     to_binary,
     to_text,
@@ -645,6 +646,27 @@ class TestInstructionCoverage:
         for line in key_lines:
             assert ":i" in line
             assert ".py:" not in line
+
+    def test_time_event_drum_codegen_compiles(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        with Program(strict=False) as prog:
+            with Rung(Bool("Enable", default=True)):
+                time_event_drum(
+                    outputs=[Bool("Out1"), Bool("Out2")],
+                    presets=[100, None],
+                    events=[None, Bool("Event2")],
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=Int("Step"),
+                    accumulator=Int("Acc"),
+                    completion_flag=Bool("Done"),
+                ).reset(Bool("ResetCmd"))
+
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
+
+        compile(result.code, "code.py", "exec")
+        assert "_ready" in result.code
+        assert "_frac:" in result.code
 
     def test_event_and_time_drum_codegen_keys_and_precedence_smoke(self, monkeypatch):
         hw = P1AM()

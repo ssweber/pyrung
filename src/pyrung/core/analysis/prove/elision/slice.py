@@ -69,7 +69,11 @@ from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.executor import execute_program
 from pyrung.core.instruction.advanced import ShiftInstruction
 from pyrung.core.instruction.control import ForLoopInstruction
-from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+from pyrung.core.instruction.drums import (
+    EventDrumInstruction,
+    TimeDrumInstruction,
+    TimeEventDrumInstruction,
+)
 from pyrung.core.rung import Rung
 from pyrung.core.state import SystemState
 from pyrung.core.tag import ImmediateRef
@@ -272,7 +276,10 @@ def _collect_hidden_memory_info(
 
     for instr in _iter_program_instructions(program):
         targets = _instruction_write_targets(instr, tag_refs)
-        if isinstance(instr, (EventDrumInstruction, TimeDrumInstruction, ShiftInstruction)):
+        if isinstance(
+            instr,
+            (EventDrumInstruction, TimeDrumInstruction, TimeEventDrumInstruction, ShiftInstruction),
+        ):
             drum_shift_writes.update(targets)
         if getattr(instr, "_oneshot", False):
             oneshot_key_writes.append((instr.memory_key("_oneshot"), frozenset(targets)))

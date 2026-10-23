@@ -159,6 +159,7 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.on_delay",
             "pyrung.off_delay",
             "pyrung.time_drum",
+            "pyrung.time_event_drum",
             "pyrung.send",
             "pyrung.receive",
             "pyrung.ModbusAddress",

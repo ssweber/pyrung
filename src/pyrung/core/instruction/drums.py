@@ -657,3 +657,266 @@ class TimeDrumInstruction(_DrumBaseInstruction):
             accumulator=self.accumulator,
             done=self.completion_flag,
         )
+
+
+class TimeEventDrumInstruction(_DrumBaseInstruction):
+    """CLICK's Time & Event drum: a step ends when its time is up and its event is on.
+
+    Each step has an optional preset and an optional **level** event; at least one
+    is required.  The accumulator times every enabled scan from step entry and
+    keeps counting (clamped) while a timed step waits for its event.  It is its
+    own class, not a ``TimeDrumInstruction``: the prover and fold model a time
+    drum as one whose every step ends on its preset.
+    """
+
+    _reads = ("presets", "jump_step", "current_step")
+    _writes = ("outputs", "current_step", "accumulator", "completion_flag")
+    _conditions = ("events", "auto_condition", "reset_condition", "jump_condition", "jog_condition")
+    _structural_fields = ("pattern", "unit")
+    # The drum reads its accumulator every scan it times, like a timer does.
+    _exclusive_fields = ("current_step", "accumulator")
+
+    def __init__(
+        self,
+        outputs: Sequence[Tag],
+        presets: Sequence[Tag | int | None],
+        events: Sequence[Any],
+        unit: str,
+        pattern: Sequence[Sequence[bool | int]],
+        current_step: Tag,
+        accumulator: Tag,
+        completion_flag: Tag,
+        auto_condition: Any,
+        reset_condition: Any,
+        jump_condition: Any = None,
+        jump_step: Tag | int | None = None,
+        jog_condition: Any = None,
+    ) -> None:
+        super().__init__(
+            outputs=outputs,
+            pattern=pattern,
+            current_step=current_step,
+            completion_flag=completion_flag,
+            auto_condition=auto_condition,
+            reset_condition=reset_condition,
+            jump_condition=jump_condition,
+            jump_step=jump_step,
+            jog_condition=jog_condition,
+        )
+        if len(presets) != self.step_count:
+            raise ValueError("time_event_drum presets count must match step count")
+        if len(events) != self.step_count:
+            raise ValueError("time_event_drum events count must match step count")
+        cooked_presets: list[Tag | int | None] = []
+        for preset in presets:
+            if preset is None or (isinstance(preset, int) and not isinstance(preset, bool)):
+                cooked_presets.append(preset)
+                continue
+            if isinstance(preset, Tag):
+                if preset.type not in {TagType.INT, TagType.DINT}:
+                    raise TypeError(
+                        f"time_event_drum preset tags must be INT or DINT; got {preset.type.name}"
+                    )
+                cooked_presets.append(preset)
+                continue
+            raise TypeError(
+                f"time_event_drum presets must be int, Tag or None, got {type(preset).__name__}"
+            )
+        self.presets = tuple(cooked_presets)
+        self.events = tuple(None if event is None else to_condition(event) for event in events)
+        for index, (preset, event) in enumerate(zip(self.presets, self.events, strict=True)):
+            if preset is None and event is None:
+                raise ValueError(
+                    f"time_event_drum step {index + 1} needs a preset, an event, or both"
+                )
+
+        if accumulator.type not in {TagType.INT, TagType.DINT}:
+            raise TypeError(
+                f"time_event_drum accumulator must be INT or DINT, got {accumulator.type.name}"
+            )
+        self.accumulator = accumulator
+        self.unit = _parse_time_unit(unit)
+
+    def _acc_max(self) -> int:
+        return _INT_MAX if self.accumulator.type == TagType.INT else _DINT_MAX
+
+    def _step_ready(self, step: int, acc_value: int, ctx: ScanContext, condition_view: Any) -> bool:
+        preset = self.presets[step - 1]
+        if preset is not None and acc_value < _resolve_preset_value(preset, ctx):
+            return False
+        event = self.events[step - 1]
+        return event is None or bool(event.evaluate(condition_view))
+
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        condition_view = instruction_condition_view(ctx)
+        step_raw = _read_step_tag_value(ctx, self.current_step)
+        step = step_raw
+        step_changed = False
+        reset_step_data = False
+
+        if enabled and not self._step_is_valid(step):
+            step = 1
+            step_changed = True
+            reset_step_data = True
+            ctx.set_tag(self.current_step.name, 1)
+        elif not self._step_is_valid(step):
+            step = 1
+
+        acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
+        frac_key = f"_frac:{self.accumulator.name}"
+        frac = float(ctx.get_memory(frac_key, 0.0))
+
+        jump_curr, jump_edge = self._resolve_jump_edge(ctx, condition_view)
+        jog_curr, jog_edge = self._resolve_jog_edge(ctx, condition_view)
+        reset_active = bool(self.reset_condition.evaluate(condition_view))
+
+        if enabled:
+            dt = float(ctx.get_memory("_dt", 0.0))
+            dt_units = self.unit.dt_to_units(dt) + frac
+            int_units = int(dt_units)
+            frac = dt_units - int_units
+            acc_value = min(acc_value + int_units, self._acc_max())
+            if self._step_ready(step, acc_value, ctx, condition_view):
+                if step < self.step_count:
+                    step += 1
+                    step_changed = True
+                    reset_step_data = True
+                    ctx.set_tag(self.current_step.name, step)
+                else:
+                    ctx.set_tag(self.completion_flag.name, True)
+
+        if reset_active:
+            step = 1
+            step_changed = True
+            reset_step_data = True
+            ctx.set_tags(
+                {
+                    self.current_step.name: 1,
+                    self.completion_flag.name: False,
+                }
+            )
+
+        if enabled and jump_edge:
+            target = _resolve_step_value(self.jump_step, ctx)
+            if target is not None and self._step_is_valid(target):
+                step_changed = step_changed or (step != target)
+                step = target
+                reset_step_data = True
+                ctx.set_tag(self.current_step.name, step)
+
+        if enabled and jog_edge and step < self.step_count:
+            step += 1
+            step_changed = True
+            reset_step_data = True
+            ctx.set_tag(self.current_step.name, step)
+
+        if reset_step_data:
+            acc_value = 0
+            frac = 0.0
+
+        if enabled or reset_active:
+            self._apply_outputs(ctx, step)
+
+        if enabled or reset_active or step_changed or reset_step_data:
+            ctx.set_tags({self.accumulator.name: acc_value, self.current_step.name: step})
+        # Every scan, so the prover finds the key from any one scan.
+        ctx.set_memory(frac_key, frac)
+
+        self._write_control_prev_state(ctx, jump_curr=jump_curr, jog_curr=jog_curr)
+
+    def _advance(self, until: Eq | Cmp, step: int) -> AdvanceStep:
+        """Hold the drum enabled, and *step*'s event on, until *until*.
+
+        The event is a level, so it is a hold, not a pulse: an oscillating event
+        would miss the scan the time comes up.
+        """
+        auto = ConditionDemand(self.auto_condition)
+        holds: tuple[ConditionDemand, ...] = (auto,)
+        pulse: ConditionDemand | None = None
+        event = self.events[step - 1]
+        if isinstance(event, (RisingEdgeCondition, FallingEdgeCondition)):
+            pulse = ConditionDemand(event)
+        elif event is not None:
+            holds = (auto, ConditionDemand(event))
+        return AdvanceStep(
+            until=until,
+            holds=holds,
+            pulse=pulse,
+            progress=auto if self.presets[step - 1] is not None else None,
+        )
+
+    def advance_profile(self) -> AdvanceProfile:
+        def _reset(until: Eq | Cmp) -> AdvanceStep:
+            return _condition_step(until, self.reset_condition)
+
+        def _next(current: int) -> AdvanceStep:
+            return self._advance(Cmp(self.current_step.name, ">=", current + 1), current)
+
+        def plan(constraint: Constraint, snapshot: Snapshot) -> AdvanceStep | None:
+            if not isinstance(constraint, (Eq, Cmp)):
+                return None
+            if constraint_holds(constraint, snapshot) is True:
+                return None
+
+            current = _snapshot_int(snapshot, self.current_step, 1)
+            if not 1 <= current <= self.step_count:
+                return _reset(Cmp(self.current_step.name, ">=", 1))
+
+            if constraint.tag == self.current_step.name:
+                boundary = _next_step_boundary(
+                    constraint,
+                    snapshot,
+                    current_step=self.current_step,
+                    step_count=self.step_count,
+                )
+                if boundary is None:
+                    return None
+                return (
+                    _reset(boundary)
+                    if _is_step_one_restart(boundary, self.current_step)
+                    else self._advance(boundary, current)
+                )
+
+            if constraint.tag == self.completion_flag.name:
+                desired = _desired_bool(constraint)
+                if desired is None:
+                    return None
+                if not desired:
+                    return _reset(eq(self.completion_flag, False))
+                if current < self.step_count:
+                    return _next(current)
+                return self._advance(eq(self.completion_flag, True), current)
+
+            if constraint.tag != self.accumulator.name:
+                return None
+            target = scalar_boundary(constraint, snapshot)
+            if target is None:
+                return None
+            acc = _snapshot_int(snapshot, self.accumulator, 0)
+            if target < acc:
+                if current == self.step_count:
+                    return _reset(eq(self.current_step, 1))
+                return _next(current)
+            preset_spec = self.presets[current - 1]
+            if preset_spec is None:
+                # An event-only step: its event may end it before Acc gets there.
+                return None
+            try:
+                preset = int(resolve_snapshot_value(preset_spec, snapshot))
+            except (TypeError, ValueError):
+                return None
+            if target < preset:
+                # Acc counts whatever the event does.
+                return _condition_step(constraint, self.auto_condition, reports_progress=True)
+            if current < self.step_count and self.events[current - 1] is None:
+                # A time-only step clears Acc as it crosses its preset.
+                return _next(current)
+            # Past the preset the event ends the step: no plan holds it off.
+            return None
+
+        return AdvanceProfile(
+            channels=(self.current_step, self.accumulator, self.completion_flag),
+            plan=plan,
+            accumulator=self.accumulator,
+            done=self.completion_flag,
+        )

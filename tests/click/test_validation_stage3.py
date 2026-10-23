@@ -407,7 +407,7 @@ def test_drum_stage3_wrong_role_failures_are_reported():
     assert len(wrong_role_locations) == len(set(wrong_role_locations))
 
 
-def test_time_drum_non_literal_preset_reports_literal_required():
+def test_time_drum_register_preset_hints_it_needs_click_v4():
     enable = Bool("Enable")
     reset = Bool("Reset")
     step = Int("Step")
@@ -441,8 +441,12 @@ def test_time_drum_non_literal_preset_reports_literal_required():
         include_system=False,
     )
 
-    report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED in _codes(report)
+    for mode in ("warn", "strict"):
+        report = validate_click_program(prog, tag_map, mode=mode)
+        hints = [f for f in report.hints if f.code == CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED]
+        assert hints, mode
+        assert "CLICK v4" in hints[0].message
+        assert CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED not in {f.code for f in report.errors}
 
 
 def test_event_drum_literal_jump_step_reports_tag_required():

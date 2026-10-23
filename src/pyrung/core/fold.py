@@ -193,7 +193,7 @@ def _ensure_registry() -> dict[type, tuple[str, bool]]:
         return _SOURCE_REGISTRY
 
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
-    from pyrung.core.instruction.drums import TimeDrumInstruction
+    from pyrung.core.instruction.drums import TimeDrumInstruction, TimeEventDrumInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 
     _SOURCE_REGISTRY = {
@@ -202,6 +202,7 @@ def _ensure_registry() -> dict[type, tuple[str, bool]]:
         CountUpInstruction: ("up", False),
         CountDownInstruction: ("down", False),
         TimeDrumInstruction: ("up", True),
+        TimeEventDrumInstruction: ("up", True),
     }
     return _SOURCE_REGISTRY
 
@@ -209,7 +210,7 @@ def _ensure_registry() -> dict[type, tuple[str, bool]]:
 def _collect_acc_sources(program: Any) -> list[_AccSource]:
     """Introspect every registered accumulating instruction, including calls."""
     from pyrung.core.instruction.counters import CountUpInstruction
-    from pyrung.core.instruction.drums import TimeDrumInstruction
+    from pyrung.core.instruction.drums import TimeDrumInstruction, TimeEventDrumInstruction
     from pyrung.core.tag import Tag
     from pyrung.core.validation._common import walk_instructions
 
@@ -222,7 +223,8 @@ def _collect_acc_sources(program: Any) -> list[_AccSource]:
             continue
         kind, timed = params
         bidir = isinstance(instr, CountUpInstruction) and instr.down_condition is not None
-        if isinstance(instr, TimeDrumInstruction):
+        drum = isinstance(instr, (TimeDrumInstruction, TimeEventDrumInstruction))
+        if drum:
             preset = _StepPreset(instr.current_step.name, instr.presets)
             done_bit = instr.completion_flag.name
         else:
@@ -236,7 +238,7 @@ def _collect_acc_sources(program: Any) -> list[_AccSource]:
             timed=timed,
             bidir=bidir,
             unit=getattr(instr, "unit", None) if timed else None,
-            acc_max=instr._acc_max() if isinstance(instr, TimeDrumInstruction) else 32767,
+            acc_max=instr._acc_max() if drum else 32767,
         )
     return list(out.values())
 
@@ -2642,6 +2644,23 @@ def _condition_read_audit(
     return ctx.unmodeled_coordinates(unmodeled), _merge_comparisons({}, found)
 
 
+def _step_without_preset(value: Any, state: Any) -> bool:
+    """True on a time & event drum step that has no preset.
+
+    Only its event ends such a step, and the event is a condition read whose
+    change bounds the window like any other: the timer has no crossing to place.
+    """
+    if not isinstance(value, _StepPreset):
+        return False
+    step = state.tags.get(value.step_name)
+    return (
+        isinstance(step, int)
+        and not isinstance(step, bool)
+        and 1 <= step <= len(value.values)
+        and value.values[step - 1] is None
+    )
+
+
 def _resolve_num(value: Any, state: Any) -> float | None:
     """Resolve a threshold operand (literal, tag name, or Tag) to a number."""
     from pyrung.core.tag import Tag
@@ -3210,7 +3229,7 @@ def _nearest_timer_crossing(
         preset = _resolve_num(src.preset, state)
         if preset is not None:
             targets.append((preset, False))
-        elif src.done_bit in ctx.read_done:
+        elif src.done_bit in ctx.read_done and not _step_without_preset(src.preset, state):
             best = 1 if best is None else min(best, 1)
             continue
         cmps = ctx.comparisons.get(src.acc_name, ())

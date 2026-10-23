@@ -45,7 +45,11 @@ from pyrung.core.instruction.data_transfer import (
     CopyInstruction,
     FillInstruction,
 )
-from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+from pyrung.core.instruction.drums import (
+    EventDrumInstruction,
+    TimeDrumInstruction,
+    TimeEventDrumInstruction,
+)
 from pyrung.core.instruction.packing import (
     PackBitsInstruction,
     PackTextInstruction,
@@ -99,6 +103,21 @@ def _time_drum():
     return TimeDrumInstruction(
         [Bool("Y1"), Bool("Y2")],
         [10, 20],
+        "ms",
+        [[1, 0], [0, 1]],
+        Int("Step"),
+        Int("Acc"),
+        Bool("Cmpl"),
+        Bool("Auto"),
+        Bool("Rst"),
+    )
+
+
+def _time_event_drum():
+    return TimeEventDrumInstruction(
+        [Bool("Y1"), Bool("Y2")],
+        [10, None],
+        [None, Bool("E2")],
         "ms",
         [[1, 0], [0, 1]],
         Int("Step"),
@@ -193,6 +212,7 @@ _CASES = [
     ),
     (_event_drum(), "Y2", True, "fallthrough", ()),
     (_time_drum(), "Y2", True, "fallthrough", ()),
+    (_time_event_drum(), "Y2", True, "fallthrough", ()),
     (_search(), "F", True, "partial", ()),
 ]
 

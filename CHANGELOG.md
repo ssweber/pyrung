@@ -33,6 +33,8 @@
 - `link="~Tag"` drives feedback while a Bool enable is off (normally closed), in Python, UDT fields, nickname comments, and the `link` console verb; bench-link text shows it as `~Tag`. `~` on a non-Bool enable is refused.
 - `PHYS_LINK_UNKNOWN` warns when a `link=` names an enable the program never uses, which the harness skipped silently.
 - `rng.max()`, `rng.min()`, `rng.median()`, and `rng.mean()` on block ranges join `rng.sum()` inside `calc()`, export to CLICK as `MAX`, `MIN`, `MDN`, and `AVG`, import back, and run on both backends and in CircuitPython; CLICK validation checks range order, bank, bit-range, and `MDN` size rules (`CLK_CALC_RANGE_NOT_CONTIGUOUS`, `CLK_CALC_RANGE_MIXED_BANKS`, `CLK_CALC_BIT_RANGE_AGGREGATE`, `CLK_CALC_MEDIAN_RANGE_TOO_LARGE`).
+- `time_event_drum()` is CLICK v4's Time & Event drum: a step ends when its time is up and its level event is on, either half may be `None`, and it runs on both backends and in CircuitPython, folds in `run_for()`/`run_until()`, steers in `how()`, and exports to CLICK and imports back; the prover reports a program using it as Intractable for now.
+- A `time_drum` preset taken from a register is a hint that it needs CLICK v4 firmware (`CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED`), no longer an error in strict mode.
 
 ### Fixes
 

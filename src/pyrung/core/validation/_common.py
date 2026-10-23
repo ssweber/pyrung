@@ -142,7 +142,11 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
     from pyrung.core.instruction.advanced import ShiftInstruction
     from pyrung.core.instruction.coils import OutInstruction
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
-    from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+    from pyrung.core.instruction.drums import (
+        EventDrumInstruction,
+        TimeDrumInstruction,
+        TimeEventDrumInstruction,
+    )
     from pyrung.core.instruction.send_receive import (
         ModbusReceiveInstruction,
         ModbusSendInstruction,
@@ -160,8 +164,7 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
         targets = [instr.done_bit.name, instr.accumulator.name]
     elif isinstance(instr, ShiftInstruction):
         targets = _resolve_tag_names(instr.bit_range)
-    elif isinstance(instr, TimeDrumInstruction):
-        # TimeDrum before EventDrum (TimeDrum is subclass)
+    elif isinstance(instr, (TimeDrumInstruction, TimeEventDrumInstruction)):
         targets = [t.name for t in instr.outputs]
         targets.append(instr.current_step.name)
         targets.append(instr.completion_flag.name)

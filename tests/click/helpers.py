@@ -68,6 +68,7 @@ from pyrung.core.program import (
     shift,
     subroutine,
     time_drum,
+    time_event_drum,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -167,6 +168,7 @@ _EXEC_NAMESPACE: dict[str, object] = {
     "unpack_to_words": unpack_to_words,
     "event_drum": event_drum,
     "time_drum": time_drum,
+    "time_event_drum": time_event_drum,
     "call": call,
     "subroutine": subroutine,
     "return_early": return_early,

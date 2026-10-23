@@ -65,6 +65,7 @@ from pyrung.core.instruction import (
     SearchInstruction,
     ShiftInstruction,
     TimeDrumInstruction,
+    TimeEventDrumInstruction,
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
 )
@@ -133,12 +134,17 @@ def _collect_helper_conditions(
                     result.append((item, "jog_condition", item.jog_condition))
                 for i, cond in enumerate(item.events):
                     result.append((item, f"events[{i}]", cond))
-            elif isinstance(item, TimeDrumInstruction):
+            elif isinstance(item, (TimeDrumInstruction, TimeEventDrumInstruction)):
                 result.append((item, "reset_condition", item.reset_condition))
                 if item.jump_condition is not None:
                     result.append((item, "jump_condition", item.jump_condition))
                 if item.jog_condition is not None:
                     result.append((item, "jog_condition", item.jog_condition))
+                if isinstance(item, TimeEventDrumInstruction):
+                    # Only the steps that have an event; the compiler reads them in order.
+                    for i, cond in enumerate(item.events):
+                        if cond is not None:
+                            result.append((item, f"events[{i}]", cond))
 
     _walk(rung)
     return result
@@ -576,7 +582,7 @@ def compile_instruction(
         return _compile_shift_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, EventDrumInstruction):
         return _compile_event_drum_instruction(instr, enabled_expr, ctx, indent)
-    if isinstance(instr, TimeDrumInstruction):
+    if isinstance(instr, (TimeDrumInstruction, TimeEventDrumInstruction)):
         return _compile_time_drum_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, PackBitsInstruction):
         return _compile_pack_bits_instruction(instr, enabled_expr, ctx, indent)

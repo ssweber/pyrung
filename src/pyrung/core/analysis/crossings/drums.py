@@ -21,7 +21,11 @@ from pyrung.core.crossing import (
     CrossingContext,
     ReverseResult,
 )
-from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+from pyrung.core.instruction.drums import (
+    EventDrumInstruction,
+    TimeDrumInstruction,
+    TimeEventDrumInstruction,
+)
 
 
 class DrumCrossing(BaseCrossing):
@@ -36,3 +40,4 @@ class DrumCrossing(BaseCrossing):
 _DRUM = DrumCrossing()
 register(EventDrumInstruction, _DRUM)
 register(TimeDrumInstruction, _DRUM)
+register(TimeEventDrumInstruction, _DRUM)

@@ -20,7 +20,8 @@ from pyrung import (
     unpack_to_bits, unpack_to_words,         # unpack
     on_delay, off_delay,                     # timers
     count_up, count_down,                    # counters
-    shift, event_drum, time_drum, search,    # drum/shift/search
+    shift, event_drum, time_drum,            # drum/shift/search
+    time_event_drum, search,
     call, subroutine, forloop, return_early, # program control
     send, receive, ModbusTcpTarget,          # communication
 )

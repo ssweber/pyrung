@@ -59,6 +59,7 @@ _VERB: dict[str, str] = {
     "CountDownInstruction": "countdown",
     "EventDrumInstruction": "eventdrum",
     "TimeDrumInstruction": "timedrum",
+    "TimeEventDrumInstruction": "timeeventdrum",
     "ShiftInstruction": "shift",
     "SearchInstruction": "search",
     "ModbusSendInstruction": "send",
