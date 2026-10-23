@@ -273,11 +273,19 @@ def _monotone_read_surface(
         if isinstance(cur, bool) or not isinstance(cur, (int, float)):
             return None
         prog = float(cur)
+        # What a comparison reads now and one period ago: a timer's integer
+        # accumulator (floored low on a float tie, which only waits longer).
+        if src.timed:
+            read_now = float(state.tags.get(tag, 0) or 0)
+            read_before = float(math.floor(prog - d - 1e-9))
+        else:
+            read_now, read_before = prog, prog - d
 
         bounds: list[tuple[float, bool]] = []
         preset = _resolve_num(src.preset, state)
         if preset is not None:
             bounds.append((preset, False))  # Done flips at acc ≥ preset
+        n_preset = len(bounds)
         cmps = fold_ctx.comparisons.get(tag, ())
         if extra_comparisons:
             cmps = cmps + extra_comparisons.get(tag, ())
@@ -290,11 +298,12 @@ def _monotone_read_surface(
             return None  # no resolvable surface at all — fail closed
 
         tag_best: int | None = None
-        for target, strict in bounds:
-            # Crossed within the last period (one unit of slack for a timer's
-            # integer reading): a rung above the accumulating one may not have
-            # read it yet, so the jump waits for a fresh observation.
-            if _crossed_between(prog - d - 1.0, prog, target, strict):
+        for i, (target, strict) in enumerate(bounds):
+            # A comparison crossed within the last period may not have been
+            # read yet by a rung above the accumulating one (Done, which the
+            # source writes itself, shows in the ring): wait for a fresh
+            # observation instead of jumping past that flip.
+            if i >= n_preset and _crossed_between(read_before, read_now, target, strict):
                 tag_best = 1
                 break
             periods = _scans_to_cross(prog, d, target, strict)
