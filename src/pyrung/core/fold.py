@@ -3790,6 +3790,7 @@ def _do_fold(
             positioned = positioned.set(tags=positioned.tags.update(edits))
         _replace_tip_state(runner, positioned, edits or None)
         runner._landing_commit_dt = ctx.normal_dt
+        runner._landing_scan_id = pre_landing.scan_id + skip
     runner._dt_override_for_next_scan = skip * ctx.normal_dt
     try:
         runner._run_single_scan(
@@ -3805,6 +3806,7 @@ def _do_fold(
         raise
     finally:
         runner._landing_commit_dt = None
+        runner._landing_scan_id = None
     if on_kernel_scan is not None:
         on_kernel_scan(runner._state.scan_id)
 
@@ -3820,7 +3822,7 @@ def _do_fold(
         )
     _replace_tip_state(runner, landed)
     if skip > 1:
-        runner._record_fold_landing()
+        runner._record_fold_landing(pre_landing.scan_id + 1)
     return tuple(patches.items())
 
 

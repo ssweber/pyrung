@@ -3418,3 +3418,53 @@ class TestReadsOutsideTheCrossings:
 
         _assert_fold_is_exact(lambda: self._folding_kept(shape), run)
         assert kernel["n"] < 50
+
+
+class TestFoldedHistoryQueries:
+    """History materializes the scans a fold skipped; recorded cause() refuses
+    them clearly instead of answering from the one-step landing."""
+
+    @staticmethod
+    def _program() -> Program:
+        T = Int("T")
+        C = Counter.clone("C")
+        Tmr = Timer.clone("Tmr")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(T + 3, T)
+            with Rung(Bool("En")):
+                count_up(C, 1_000).reset(Bool("CR"))
+            with Rung():
+                on_delay(Tmr, 7_000)
+            with Rung(Tmr.Done):
+                out(Bool("Hit"))
+        return prog
+
+    def _runs(self) -> tuple[PLC, PLC]:
+        folded, stepped = _folded_and_stepped(self._program, _until_hit(3_000), patch={"En": True})
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert folded._fold_windows
+        return folded, stepped
+
+    def test_range_and_latest_cover_every_scan(self) -> None:
+        folded, stepped = self._runs()
+        tip = folded.state.scan_id
+        got = folded.history.range(1, tip + 1)
+        want = stepped.history.range(1, tip + 1)
+        assert [s.scan_id for s in got] == list(range(1, tip + 1))
+        assert [_plain_tags_of(s) for s in got] == [_plain_tags_of(s) for s in want]
+        assert [_plain_tags_of(s) for s in folded.history.latest(25)] == [
+            _plain_tags_of(s) for s in stepped.history.latest(25)
+        ]
+
+    def test_cause_refuses_a_folded_scan(self) -> None:
+        folded, stepped = self._runs()
+        first, last = folded._fold_windows[0]
+        for scan in (first, (first + last) // 2, last):
+            with pytest.raises(ValueError, match="folded"):
+                folded.cause("C_Acc", scan)
+            with pytest.raises(ValueError, match="folded"):
+                folded.effect("C_Acc", scan)
+        tip = folded.state.scan_id
+        assert str(folded.cause("C_Acc", tip)) == str(stepped.cause("C_Acc", tip))
+        assert str(folded.cause("Hit")) == str(stepped.cause("Hit"))

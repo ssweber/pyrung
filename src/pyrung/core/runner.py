@@ -1287,6 +1287,11 @@ class PLC:
         # starts at the timestamp the last folded scan would have read and
         # commits one normal step later (see ``fold._do_fold``).
         self._landing_commit_dt: float | None = None
+        # The scan a landing stands for, while it commits (its causal records
+        # belong to that scan), and every ``(first, last)`` scan range a live
+        # fold computed as one macro step.
+        self._landing_scan_id: int | None = None
+        self._fold_windows: list[tuple[int, int]] = []
         self._replay_mode: bool = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
         # Constant-size instrumentation for the most recent sparse point seek.
@@ -1855,6 +1860,7 @@ class PLC:
                 program=self._program,
             )
 
+        self._refuse_folded_scan(scan, "cause")
         from pyrung.core.analysis.causal import recorded_cause
 
         cause_history = (
@@ -1951,6 +1957,7 @@ class PLC:
                 **kwargs,
             )
 
+        self._refuse_folded_scan(scan, "effect")
         from pyrung.core.analysis.causal import recorded_effect
 
         return recorded_effect(
@@ -1966,6 +1973,28 @@ class PLC:
             program=self._program,
             node_runs_fn=self._replay_rung_runs_at,
         )
+
+    def _refuse_folded_scan(self, scan: int | None, verb: str) -> None:
+        """Raise if *scan* is one a live fold computed in a single macro step.
+
+        ``history`` materializes such scans by replay, but the recorded
+        causal index holds one entry for the whole window (at its last
+        scan), so a transition inside it cannot be explained exactly.
+        """
+        if scan is None or not self._fold_windows:
+            return
+        from bisect import bisect_right
+
+        i = bisect_right(self._fold_windows, (scan, math.inf)) - 1
+        if i < 0:
+            return
+        first, last = self._fold_windows[i]
+        if first <= scan <= last:
+            raise ValueError(
+                f"{verb}(): scan {scan} was folded (scans {first}..{last} ran as one "
+                f"step), so its transitions were not recorded one by one; rerun with "
+                f"fold=False to explain it"
+            )
 
     def why(self, *tags: Tag | str) -> CausalChain:
         """Explain how tags reached their current values from a snapshot.
@@ -2294,13 +2323,21 @@ class PLC:
         cache = self._recent_state_cache
         cache_lo = self._cache_oldest_scan_id()
         window_lo = cache_lo if cache_lo is not None else tip + 1
-        if lo >= window_lo:
-            return [state for sid, (state, _) in cache.items() if lo <= sid <= hi]
         if hi < window_lo:
             return self._replay_range(lo, hi)
-        replayed = self._replay_range(lo, window_lo - 1)
-        cached = [state for sid, (state, _) in cache.items() if window_lo <= sid <= hi]
-        return replayed + cached
+        replayed = self._replay_range(lo, window_lo - 1) if lo < window_lo else []
+        first = max(lo, window_lo)
+        cached = {sid: state for sid, (state, _) in cache.items() if first <= sid <= hi}
+        if len(cached) == hi - first + 1:
+            return replayed + [cached[sid] for sid in range(first, hi + 1)]
+        # A fold landing skips the scans it stands for: the cache holds the
+        # landing, not the scans before it.  Replay the gaps.
+        missing = [sid for sid in range(first, hi + 1) if sid not in cached]
+        gap_lo = missing[0]
+        filled = self._replay_range(gap_lo, missing[-1])
+        for offset, state in enumerate(filled):
+            cached.setdefault(gap_lo + offset, state)
+        return replayed + [cached[sid] for sid in range(first, hi + 1)]
 
     def _seed_defaults_for_fork(self, state: SystemState) -> SystemState:
         """Return *state* with defaults for any known tag it lacks.
@@ -2495,6 +2532,7 @@ class PLC:
         self._rung_firing_timelines.trim_before(scan_id)
         self._committed_tag_timelines.trim_before(scan_id)
         self._node_firing_timelines.trim_before(scan_id)
+        self._fold_windows = [w for w in self._fold_windows if w[1] >= scan_id]
         for cp in [k for k in self._checkpoints if k < scan_id]:
             del self._checkpoints[cp]
         if scan_id > self._initial_scan_id:
@@ -3698,6 +3736,7 @@ class PLC:
         self._rung_firing_timelines.reset()
         self._committed_tag_timelines.reset()
         self._node_firing_timelines.reset()
+        self._fold_windows = []
         self._causal_initial_tags = dict(self._state.tags)
 
         if self._time_mode == TimeMode.REALTIME:
@@ -4013,15 +4052,18 @@ class PLC:
             return
         registration.enabled = False
 
-    def _record_fold_landing(self) -> None:
+    def _record_fold_landing(self, first_scan_id: int | None = None) -> None:
         """Cache the tip a fold landing moved to its scan, and checkpoint it there.
 
         The landing state is the exact state of the scan it lands on, so
         history may serve it, and a replay may anchor on it, as on any
-        stepped scan.
+        stepped scan.  *first_scan_id* is the first scan the landing stands
+        for; recorded ``cause()`` / ``effect()`` refuse the window.
         """
         state = self._state
         scan_id = state.scan_id
+        if first_scan_id is not None and first_scan_id <= scan_id:
+            self._fold_windows.append((first_scan_id, scan_id))
         self._cache_state(state)
         if scan_id <= 0 or scan_id % self._checkpoint_interval != 0:
             return
@@ -4240,6 +4282,8 @@ class PLC:
         if self._landing_commit_dt is not None:
             commit_dt = self._landing_commit_dt
             self._landing_commit_dt = None
+        landing_scan_id = self._landing_scan_id if is_fold_landing else None
+        self._landing_scan_id = None
         self._system_runtime.on_scan_end(ctx)
         if self._constrained_tags:
             self._bounds_violations = check_bounds(ctx._tags_pending, self._constrained_tags)
@@ -4282,18 +4326,21 @@ class PLC:
         # Record the actual committed boundary, not attempted rung writes. This
         # is the cheap exactness index consumed by cause(): later same-scan
         # writers, synthesis, and forces have already won before this point.
+        # A fold landing executes exactly the last scan it stands for: its
+        # causal records belong there, not under the id it commits with.
+        causal_scan_id = landing_scan_id if landing_scan_id is not None else new_scan_id
         for name in ctx._tags_pending:
             before = previous_state.tags.get(name)
             after = self._state.tags.get(name)
             if before != after:
-                self._committed_tag_timelines.append(name, new_scan_id, {name: after})
+                self._committed_tag_timelines.append(name, causal_scan_id, {name: after})
         # Only firing rungs append. Their value columns independently extend
         # stable, alternating, or arithmetic ranges; varied=true is sparse.
         new_firings = ctx._rung_firings
         for rung_index, writes in new_firings.items():
             self._rung_firing_timelines.append(
                 rung_index,
-                new_scan_id,
+                causal_scan_id,
                 writes,
                 ctx._rung_firing_varied.get(rung_index, frozenset()),
             )
@@ -4301,7 +4348,7 @@ class PLC:
         for rung_id, writes in node_firings.items():
             self._node_firing_timelines.append(
                 rung_id,
-                new_scan_id,
+                causal_scan_id,
                 writes,
                 ctx._node_firing_varied.get(rung_id, frozenset()),
             )
