@@ -2879,17 +2879,14 @@ def _nearest_acc_crossing(
         pa = after_tot.get(src.acc_name)
         if pb is None or pa is None:
             continue
-        if src.step is not None:
-            bound = _selfcalc_bound(src, pa - pb, state)
-            if bound is not None:
-                best = bound if best is None else min(best, bound)
         delta = pa - pb
         if abs(delta) <= _EPS:
             continue
         if delta < 0 and not src.bidir:
             continue
         bounds: list[tuple[float, bool]] = []
-        preset = _resolve_num(src.preset, state)
+        # A self-calc source has no Done bit: its sentinel preset is no crossing.
+        preset = None if src.step is not None else _resolve_num(src.preset, state)
         if preset is not None:
             # Crossing the preset flips the Done bit, which is a written, visible
             # tag (never excluded from the plateau guard) — so the preset is a
@@ -2924,6 +2921,24 @@ def _nearest_acc_crossing(
             if scans is None:
                 continue
             best = scans if best is None else min(best, scans)
+    return best
+
+
+def _selfcalc_wrap_bound(
+    ctx: _FoldContext, before_tot: dict[str, float], after_tot: dict[str, float], state: Any
+) -> int | None:
+    """The nearest :func:`_selfcalc_bound` over the self-calc sources."""
+    best: int | None = None
+    for src in ctx.sources:
+        if src.step is None:
+            continue
+        pb = before_tot.get(src.acc_name)
+        pa = after_tot.get(src.acc_name)
+        if pb is None or pa is None:
+            continue
+        bound = _selfcalc_bound(src, pa - pb, state)
+        if bound is not None:
+            best = bound if best is None else min(best, bound)
     return best
 
 
@@ -3346,6 +3361,24 @@ def _do_fold(
     return tuple(patches.items())
 
 
+def _scan_callbacks(runner: Any) -> tuple[bool, bool]:
+    """``(any, any_but_do)``: active ``when()`` registrations and monitors on *runner*.
+
+    They are judged after every committed scan, on the state that scan left,
+    so a fold that skips scans cannot honor them: the ordinary fold declines
+    while any is active.  A ``when().do()`` callback acts every scan its
+    condition holds, so a cycle jump that observed whole periods of it may
+    still repeat it; a pause, snapshot or monitor blocks those jumps too.
+    """
+    active = [
+        r for r in getattr(runner, "_breakpoints_by_id", {}).values() if r.enabled and not r.removed
+    ]
+    monitors = any(
+        r.enabled and not r.removed for r in getattr(runner, "_monitors_by_id", {}).values()
+    )
+    return bool(active) or monitors, monitors or any(r.action != "do" for r in active)
+
+
 def _replace_tip_state(
     runner: PLC, state: SystemState, tag_edits: dict[str, Any] | None = None
 ) -> None:
@@ -3538,11 +3571,14 @@ class _OrdinaryFoldStrategy:
                 skip = min(skip, max_skip)
             elif endpoint_is_boundary:
                 skip = max_skip
-        # An RTC tick only shortens a window something else bounds; it never
-        # creates one.  A window with no other bound is not folded at all, as
-        # without an RTC reader, so a stop predicate the fold cannot see (a
-        # callable) is still judged after every scan there.
+        # An RTC tick or a self-calc's wrap only shortens a window something
+        # else bounds; it never creates one.  A window with no other bound is
+        # not folded at all, so a stop the fold cannot see (a callable
+        # predicate) is still judged after every scan there.
         if skip is not None:
+            wrap = _selfcalc_wrap_bound(self.ctx, probe.totals, after_totals, state)
+            if wrap is not None:
+                skip = min(skip, wrap - 1)
             rtc_gap = self._rtc_gap(state, probe, rtc_at, skip, forced)
             if rtc_gap is not None:
                 skip = min(skip, rtc_gap)
@@ -3615,6 +3651,8 @@ class _OrdinaryFoldStrategy:
         capture_sink: Callable[[int, ConditionViewCapture], None] | None = None,
     ) -> _FoldAdvance | None:
         """Fold after a completed probe, or return ``None`` if proof declines."""
+        if _scan_callbacks(runner)[0]:
+            return None
         harness_scan = _harness_nearest_scan(runner)
         plan = self.plan(
             runner._state,

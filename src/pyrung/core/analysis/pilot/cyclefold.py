@@ -358,6 +358,7 @@ def cycle_fold_until(
         _OrdinaryFoldStrategy,
         _rtc_hard_fields,
         _rtc_jump_room,
+        _scan_callbacks,
         _without_soft_rtc_ticks,
         fold_run_until,
     )
@@ -461,13 +462,7 @@ def cycle_fold_until(
     # settle before the plateau test, and ordinary arbitration runs immediately
     # before the first cycle-certification attempt on that same scan.
     since_ordinary_probe = 0
-    active_scan_callbacks = any(
-        not registration.removed and registration.enabled
-        for registration in getattr(plc, "_breakpoints_by_id", {}).values()
-    ) or any(
-        not registration.removed and registration.enabled
-        for registration in getattr(plc, "_monitors_by_id", {}).values()
-    )
+    active_scan_callbacks, blocking_callbacks = _scan_callbacks(plc)
     ordinary_eligible = not active_scan_callbacks
     if kernel_budget is None:
         kernel_budget = bool(plc._synthesis is not None and getattr(plc._synthesis, "holds", ()))
@@ -683,6 +678,9 @@ def cycle_fold_until(
                 break
             room = (hi - value) // per_period if per_period > 0 else (value - lo) // -per_period
             periods_to_jump = min(periods_to_jump, room)
+        if blocking_callbacks:
+            # A pause, snapshot or monitor must be judged on every scan.
+            continue
         if periods_to_jump < 1:
             continue
 

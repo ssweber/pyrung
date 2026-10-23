@@ -2894,3 +2894,82 @@ class TestSoftClockEdgesAsRead:
             plc.step()
         for target in (10, 51, 157, 299):
             assert plc._replay_seek(target).state.tags["S"] == plc.replay_to(target).state.tags["S"]
+
+
+class TestUnseenStopsStayExact:
+    """A bound that only exists to keep a fold exact (a self-calc's wrap)
+    shortens windows but never opens one, and a ``when()`` callback is
+    judged on every scan: the fold cannot see either stop."""
+
+    @staticmethod
+    def _counter(step_tag: bool = False, timer: bool = False) -> Callable[[], Program]:
+        def build() -> Program:
+            T = Int("T")
+            with Program(strict=False) as prog:
+                with Rung():
+                    calc(T + (Int("K") if step_tag else 1), T)
+                if timer:
+                    with Rung():
+                        on_delay(Timer.clone("Tmr"), 30_000)
+            return prog
+
+        return build
+
+    @pytest.mark.parametrize("step_tag", [False, True])
+    def test_callable_stop_on_an_unread_self_calc(self, step_tag: bool) -> None:
+        folded = _assert_fold_is_exact(
+            self._counter(step_tag),
+            lambda plc, fold: plc.run_until(
+                lambda s: s.tags.get("T", 0) >= 500, max_cycles=5_000, fold=fold
+            ),
+            patch={"K": 1},
+        )
+        assert folded.state.tags["T"] == 500
+
+    @pytest.mark.parametrize("timer", [False, True])
+    @pytest.mark.parametrize("run", ["until", "for"])
+    def test_pause_breakpoint_is_judged_every_scan(self, timer: bool, run: str) -> None:
+        def go(plc: PLC, fold: bool) -> None:
+            plc.when(Int("T") == 500).pause()
+            if run == "until":
+                plc.run_until(Bool("Never"), max_cycles=5_000, fold=fold)
+            else:
+                plc.run_for(50.0, fold=fold)
+
+        folded = _assert_fold_is_exact(self._counter(timer=timer), go)
+        assert folded.state.tags["T"] == 500
+
+    def test_monitor_sees_every_change(self) -> None:
+        seen: dict[bool, list[Any]] = {True: [], False: []}
+
+        def go(plc: PLC, fold: bool) -> None:
+            plc.monitor("T", lambda new, old: seen[fold].append((plc.state.scan_id, new)))
+            plc.run_for(5.0, fold=fold)
+
+        _assert_fold_is_exact(self._counter(timer=True), go)
+        assert seen[True] == seen[False] != []
+
+    def test_pause_breakpoint_blocks_cycle_jumps(self) -> None:
+        from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
+
+        def build() -> Program:
+            Osc = Bool("Osc")
+            with Program(strict=False) as prog:
+                with Rung(~Osc):
+                    out(Osc)  # a period-2 cycle
+                with Rung():
+                    on_delay(Timer.clone("Tmr"), 60_000)
+            return prog
+
+        runs = []
+        for fold in (True, False):
+            plc = PLC(build(), dt=0.010)
+            plc.step()
+            plc.when(Int("Tmr_Acc") >= 5_000).pause()
+            if fold:
+                cycle_fold_until(plc, lambda _s: False, budget=3_000, kernel_budget=False)
+            else:
+                plc.run_until(Bool("Never"), max_cycles=3_000, fold=False)
+            runs.append(plc)
+        assert runs[0].state.scan_id == runs[1].state.scan_id
+        assert _full_state(runs[0]) == _full_state(runs[1])
