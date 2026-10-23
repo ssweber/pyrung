@@ -20,6 +20,7 @@ make lint          # codespell + ruff + ty
 - **Elision** — Removes scan-local tags from tracked state. Risk: misclassifying a cross-scan tag as scan-local.
 - **Threshold absorption** — Replaces concrete accumulator values with crossed/uncrossed boolean vectors. Risk: missing boundaries, or assuming monotonicity when conditional resets exist.
 - **Fast-forward / tesseracting (hidden events)** — Skips timer/counter scans, branching at crossing events. Like the Wrinkle in Time tesseract: folds over intermediate ticks to land directly at the crossing. Risk: missing input combinations that change mid-accumulation.
+- **Cycle pumping** — A revisit of a key with hidden accumulator progress the first state there lacks closes a cycle when it descends from a node with that key over single-scan links with monotone progress; it is pumped to the last uncrossed value (trace repeats the cycle) and its successors inherit the progress. A revisit that does not close a cycle is kept when a counter advanced on the step into it (one per key for timers); otherwise dropped unless the accumulator is time-like there (a held-input scan advances it on a self-loop, so the jump covers it). Covers per-pulse counts, change counters and timers beside toggling bits. Risk: treating a cycle with a reset as linear (pumping overshoots, a spurious counterexample); a head start made on another branch outside any cycle is still represented by the first state (see `cycles.py`).
 - **Backward propagation** — Traces comparisons backward through arithmetic/copies to seed input domains. Risk: can't invert all operations; may not follow chains far enough.
 - **Edge compression** — Removes dead rise/fall prev values from state keys. Risk: merging states that should be distinct.
 - **Edge inputs** — Enumerates rising/falling edge combinations via single-flip expansion. Risk: missing simultaneous edge combinations.
@@ -40,6 +41,7 @@ Each module has a docstring with implementation details. This map is for navigat
 - **`passes.py`** — Pre-BFS pass pipeline. 15 ordered passes building the `_ExploreContext`. `_JournalBuilder` accumulates per-tag Decision records; `freeze()` produces the immutable context for BFS.
 - **`classify.py`** — Dimension classification (stateful / nondeterministic / combinational) and domain inference. See docstring for the 7-level domain inference stack.
 - **`absorb.py`** — Accumulator absorption and threshold abstraction. Three paths: redundant Acc, threshold vector, comparison-only. All gated by the exclusivity check. See northstar docstring.
+- **`cycles.py`** — Hidden progress across multi-scan cycles: refined revisits, the time-like probe, cycle pumping with repeated traces.
 - **`events.py`** — Hidden-event scheduling. Settles pending timers/counters without stepping through every tick. See docstring for the settle cascade.
 - **`kernel.py`** — Kernel integration. Snapshot/restore, state key extraction, edge compression, live input caching. See docstring for state key composition.
 - **`expr.py`** — Expression tree helpers. Partial evaluation, tag reference collection, atom indexing, edge-bearing input partition.

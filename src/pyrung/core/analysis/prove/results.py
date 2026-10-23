@@ -133,6 +133,9 @@ class _ParentLink:
     scans: int
     caveats: tuple[str, ...] = ()
     prev: dict[str, Any] = field(default_factory=dict)
+    # Steps replayed after this one: the repeated traversals of a pumped cycle
+    # (see cycles.py).
+    repeat: tuple[TraceStep, ...] = ()
 
 
 @dataclass(frozen=True)

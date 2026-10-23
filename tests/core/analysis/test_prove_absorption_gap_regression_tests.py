@@ -22,11 +22,14 @@ from pyrung.core import (
     latch,
     on_delay,
     out,
+    rise,
+    system,
 )
 from pyrung.core.analysis.prove import (
     PENDING,
     Counterexample,
     Intractable,
+    Proven,
     TraceStep,
     _classify_dimensions,
     always,
@@ -480,3 +483,198 @@ class TestBoundaryDomainCompression:
         )
         assert not isinstance(states, Intractable)
         assert frozenset({("B0", True), ("T0_Done", False)}) in states
+
+
+def _assert_replays_to(logic: Program, result, tag_name: str) -> None:
+    assert isinstance(result, Counterexample)
+    assert _replay_trace(logic, result.trace).current_state.tags[tag_name] is True
+
+
+class TestProgressAcrossCycles:
+    """Hidden accumulators that advance once per multi-scan cycle.
+
+    The state key hides an absorbed accumulator below its thresholds, and the
+    hidden-event jump only advances it on a self-loop.  A count per pulse or
+    per change, or a timer running beside a toggling bit, returns to a known
+    key with more progress; that progress must not be dropped.
+    """
+
+    def test_change_counter(self):
+        source = Int("ChgSource", external=True, choices={0: "a", 1: "b"}, default=0)
+        last = Int("ChgLast")
+        count = Int("ChgCount")
+        hit = Bool("ChgHit")
+        with Program(strict=False) as logic:
+            with Rung(source != last):
+                calc(count + 1, count)
+                copy(source, last)
+            with Rung(count >= 3):
+                out(hit)
+        _assert_replays_to(logic, always(logic, ~hit), "ChgHit")
+
+    def test_change_counter_on_a_copied_input(self):
+        source = Int("ChgInSource", external=True, choices={0: "a", 1: "b"}, default=0)
+        current = Int("ChgInCurrent")
+        last = Int("ChgInLast")
+        count = Int("ChgInCount")
+        hit = Bool("ChgInHit")
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(source, current)
+            with Rung(current != last):
+                calc(count + 1, count)
+                copy(current, last)
+            with Rung(count >= 3):
+                out(hit)
+        _assert_replays_to(logic, always(logic, ~hit), "ChgInHit")
+
+    def test_minute_change_counter(self):
+        current = Int("MinCurrent")
+        last = Int("MinLast")
+        count = Int("MinCount")
+        hit = Bool("MinHit")
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(system.rtc.minute, current)
+            with Rung(current != last):
+                calc(count + 1, count)
+                copy(current, last)
+            with Rung(count >= 3):
+                out(hit)
+        assert isinstance(always(logic, ~hit), Counterexample)
+
+    def test_rise_counter(self):
+        pulse = Bool("RiseIn", external=True)
+        count = Int("RiseCount")
+        hit = Bool("RiseHit")
+        with Program(strict=False) as logic:
+            with Rung(rise(pulse)):
+                calc(count + 1, count)
+            with Rung(count >= 3):
+                out(hit)
+        _assert_replays_to(logic, always(logic, ~hit), "RiseHit")
+
+    def test_count_up_on_a_rising_edge(self):
+        pulse = Bool("CtuIn", external=True)
+        clear = Bool("CtuClear", external=True)
+        counter = Counter.clone("CtuRise")
+        hit = Bool("CtuHit")
+        with Program(strict=False) as logic:
+            with Rung(rise(pulse)):
+                count_up(counter, preset=3).reset(clear)
+            with Rung(counter.Done):
+                out(hit)
+        _assert_replays_to(logic, always(logic, ~hit), "CtuHit")
+
+    def test_timer_beside_a_toggling_bit(self):
+        enable = Bool("OscEnable", external=True)
+        toggle = Bool("OscToggle")
+        timer = Timer.clone("OscTimer")
+        hit = Bool("OscHit")
+        with Program(strict=False) as logic:
+            with Rung(~toggle):
+                out(toggle)
+            with Rung(enable):
+                on_delay(timer, preset=50)
+            with Rung(timer.Done):
+                out(hit)
+        _assert_replays_to(logic, always(logic, ~hit), "OscHit")
+
+    def test_large_preset_is_pumped_with_a_faithful_trace(self):
+        pulse = Bool("PumpIn", external=True)
+        count = Int("PumpCount")
+        hit = Bool("PumpHit")
+        with Program(strict=False) as logic:
+            with Rung(rise(pulse)):
+                calc(count + 1, count)
+            with Rung(count >= 1000):
+                out(hit)
+        result = always(logic, ~hit)
+        _assert_replays_to(logic, result, "PumpHit")
+        assert isinstance(result, Counterexample)
+        assert len(result.trace) == 2000
+        assert result.caveats == ()
+
+    def test_reachable_states_sees_the_pulsed_crossing(self):
+        pulse = Bool("ReachIn", external=True)
+        count = Int("ReachCount")
+        hit = Bool("ReachHit")
+        with Program(strict=False) as logic:
+            with Rung(rise(pulse)):
+                calc(count + 1, count)
+            with Rung(count >= 5):
+                out(hit)
+        states = reachable_states(logic, project=["ReachHit"])
+        assert states == frozenset(
+            {frozenset({("ReachHit", False)}), frozenset({("ReachHit", True)})}
+        )
+
+    def test_reset_between_pulses_stays_proven(self):
+        pulse = Bool("ResetIn", external=True)
+        count = Int("ResetCount")
+        hit = Bool("ResetHit")
+        with Program(strict=False) as logic:
+            with Rung(rise(pulse)):
+                calc(count + 1, count)
+            with Rung(~pulse):
+                copy(0, count)
+            with Rung(count >= 2):
+                out(hit)
+        assert isinstance(always(logic, ~hit), Proven)
+
+    def test_timer_reset_by_the_toggle_stays_proven(self):
+        toggle = Bool("TogToggle")
+        timer = Timer.clone("TogTimer")
+        hit = Bool("TogHit")
+        with Program(strict=False) as logic:
+            with Rung(~toggle):
+                out(toggle)
+            with Rung(toggle):
+                on_delay(timer, preset=30)
+            with Rung(timer.Done):
+                out(hit)
+        assert isinstance(always(logic, ~hit), Proven)
+
+    def test_reset_inside_the_cycle_is_not_pumped(self):
+        pulse = Bool("MaskIn", external=True)
+        count = Int("MaskCount")
+        hit = Bool("MaskHit")
+        with Program(strict=False) as logic:
+            with Rung(rise(pulse)):
+                copy(0, count)
+                calc(count + 1, count)
+            with Rung(count >= 2):
+                out(hit)
+        assert isinstance(always(logic, ~hit), Proven)
+
+    def test_counter_beside_a_toggling_bit(self):
+        enable = Bool("TogCntEnable", external=True)
+        toggle = Bool("TogCntToggle")
+        count = Int("TogCntCount")
+        hit = Bool("TogCntHit")
+        with Program(strict=False) as logic:
+            with Rung(~toggle):
+                out(toggle)
+            with Rung(enable, toggle):
+                calc(count + 1, count)
+            with Rung(count >= 3):
+                out(hit)
+        _assert_replays_to(logic, always(logic, ~hit), "TogCntHit")
+
+    def test_change_counter_on_a_wide_copied_input(self):
+        """The last-seen value is compared with a tag rewritten every scan,
+        so its hidden value decides the next comparison: it stays exact."""
+        source = Int("WideSource", external=True, choices={v: f"v{v}" for v in range(20)})
+        current = Int("WideCurrent")
+        last = Int("WideLast")
+        count = Int("WideCount")
+        hit = Bool("WideHit")
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(source, current)
+            with Rung(current != last):
+                calc(count + 1, count)
+                copy(current, last)
+            with Rung(count >= 3):
+                out(hit)
+        _assert_replays_to(logic, always(logic, ~hit), "WideHit")

@@ -2442,6 +2442,7 @@ def _classify_dimensions_from_graph(
             project=project,
             receive_dest_names=receive_dest_names,
             atom_index=atom_idx,
+            stable_partners_only=model_system_points,
         )
         if profile:
             profile_last = _classify_profile_mark(timings, "comparison_absorptions", profile_last)

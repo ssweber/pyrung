@@ -14,6 +14,7 @@ from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
 from . import _ExploreContext
 from .classify import _build_dimension_hints
+from .cycles import _CycleTracker
 from .events import (
     _has_pending_done,
     _has_pending_hidden_event,
@@ -110,10 +111,16 @@ def _build_trace(
             break
         current = link.parent_key
     links.reverse()
-    trace = [TraceStep(inputs=link.inputs, scans=link.scans, prev=link.prev) for link in links]
+    trace: list[TraceStep] = []
+    for link in links:
+        trace.append(TraceStep(inputs=link.inputs, scans=link.scans, prev=link.prev))
+        trace.extend(link.repeat)
     caveats = _merge_caveats(*(link.caveats for link in links))
     return trace, caveats
 
+
+# Marks a refined trace id (see _refine_revisit in _bfs_explore_gen).
+_REFINED = object()
 
 _BFSResult = (
     list[Proven | Counterexample | Intractable]
@@ -337,6 +344,7 @@ def _bfs_explore_gen(
         edge_caveats: tuple[str, ...] = (),
         initial: bool = False,
         bprev_dict: dict[str, Any] | None = None,
+        extra_steps: tuple[TraceStep, ...] = (),
     ) -> None:
         assert predicates is not None and results is not None and parent_map is not None
         for i, predicate in enumerate(predicates):
@@ -352,6 +360,7 @@ def _bfs_explore_gen(
                 continue
             trace, trace_caveats = _build_trace(parent_map, p_key)
             trace.append(TraceStep(inputs=input_dict, scans=edge_scans, prev=bprev_dict or {}))
+            trace.extend(extra_steps)
             results[i] = Counterexample(
                 trace=trace,
                 caveats=_merge_caveats(
@@ -393,6 +402,232 @@ def _bfs_explore_gen(
 
     def _extract_bprev(k: ReplayKernel) -> tuple[Any, ...]:
         return tuple(k.tags.get(n) for n in _demoted)
+
+    # Revisits that bring new hidden accumulator progress (cycles.py).  A
+    # refined node shares its key with the first node there and gets the
+    # trace id ``(_REFINED, base_tid, projection)``.
+    cycles = _CycleTracker(context)
+    cycles_active = cycles.active
+    cycles_hidden = cycles.hidden_by_node
+    if cycles_active:
+        cycles.record_node(initial_tid, None, 0, cycles.hidden_vector(kernel, initial_key))
+
+    def _base_tid(tid: Any) -> Any:
+        if type(tid) is tuple and len(tid) == 3 and tid[0] is _REFINED:
+            return tid[1]
+        return tid
+
+    def _visible_key(tid: Any) -> tuple[Any, ...]:
+        base = _base_tid(tid)
+        return base[0] if _has_demoted else base
+
+    def _probe_stutter(key: tuple[Any, ...], hidden: tuple[Any, ...]) -> set[int]:
+        """Hidden accumulators a held-input scan advances while keeping *key*."""
+        probe_snap = _snapshot_kernel(kernel, _mutable, _base_keys)
+        if _has_demoted:
+            for name, value in zip(_demoted, _extract_bprev(kernel), strict=True):
+                kernel.prev[name] = value
+        _step_kernel(context, kernel)
+        tv = _threshold_vector_key(kernel, context.threshold_vector_specs)
+        live_after = (
+            live_cache.live_inputs(kernel, threshold_vector=tv)
+            if bfs_config.live_input_pruning
+            else None
+        )
+        probe_key = _state_key(kernel, live=live_after, threshold_vector=tv)
+        visible = key[:-1] if paced else key
+        advanced = (
+            cycles.advanced(hidden, cycles.hidden_vector(kernel, key))
+            if probe_key == visible
+            else set()
+        )
+        _restore_kernel(kernel, probe_snap)
+        return advanced
+
+    def _traverses_again(
+        key: tuple[Any, ...],
+        hidden: tuple[Any, ...],
+        chain: list[Any],
+        input_dict: dict[str, Any],
+        bprev_dict: dict[str, Any],
+        deltas: dict[int, float],
+    ) -> bool:
+        """Replay the cycle once from the revisit: same key, same progress again."""
+        visible = key[:-1] if paced else key
+        for inputs, _prev in (*cycles.cycle_steps(chain), (input_dict, bprev_dict)):
+            if _has_demoted:
+                for name, value in zip(_demoted, _extract_bprev(kernel), strict=True):
+                    kernel.prev[name] = value
+            for name, value in inputs.items():
+                kernel.tags[name] = value
+            _step_kernel(context, kernel)
+        tv = _threshold_vector_key(kernel, context.threshold_vector_specs)
+        live_after = (
+            live_cache.live_inputs(kernel, threshold_vector=tv)
+            if bfs_config.live_input_pruning
+            else None
+        )
+        again = _state_key(kernel, live=live_after, threshold_vector=tv) == visible and (
+            cycles.repeats_linearly(hidden, cycles.hidden_vector(kernel, key), deltas)
+        )
+        return again
+
+    def _refine_revisit(
+        *,
+        key: tuple[Any, ...],
+        tid: Any,
+        input_dict: dict[str, Any],
+        edge_scans: int,
+        edge_caveats: tuple[str, ...],
+        child_flipped: bool,
+        parent_key: Any,
+        bprev_dict: dict[str, Any],
+        bprev: tuple[Any, ...],
+        depth: int,
+    ) -> Intractable | None:
+        """Enqueue a revisit of *key* whose hidden progress is new there (cycles.py)."""
+        # Pending accumulators follow from the key, so the first node's
+        # vector says which ones to read.
+        base_hidden = cycles.node_hidden(tid)
+        if base_hidden is None:
+            return None
+        hidden = cycles.changed_from(kernel, base_hidden)
+        if hidden is None:
+            return None
+        differing = cycles.differing(base_hidden, hidden)
+        if not differing or cycles.is_dominated(tid, differing):
+            return None
+        if cycles.seen(tid, base_hidden, cycles.pulse_projection(tid, hidden)):
+            return None
+        chain = cycles.cycle_start(parent_key, tid, _base_tid, edge_scans)
+        inherited = cycles.is_pumped(parent_key)
+        pulsed = cycles.counters(cycles.advanced(cycles.node_hidden(parent_key), hidden, differing))
+        if (
+            chain is None
+            and not inherited
+            and not pulsed
+            and (cycles.timer_seeded(tid) or cycles.counters(differing))
+        ):
+            return None
+        probe_key = (tid, tuple(sorted(input_dict.items(), key=lambda kv: kv[0])))
+        if not cycles.probed(probe_key):
+            cycles.note_timelike(tid, probe_key, _probe_stutter(key, hidden))
+            if cycles.is_dominated(tid, differing):
+                return None
+        pulse = differing - cycles.timelike(tid)
+        pulsed &= pulse
+        x_projection = cycles.pulse_projection(tid, hidden)
+        x_snap: _KernelSnapshot | None = None
+        repeat: tuple[TraceStep, ...] = ()
+        pumped = cycles.pump(kernel, key, hidden, chain, pulse) if chain is not None else None
+        if pumped is not None and pumped.count:
+            assert chain is not None
+            x_snap = _snapshot_kernel(kernel, _mutable, _base_keys)
+            if not _traverses_again(key, hidden, chain, input_dict, bprev_dict, pumped.deltas):
+                pumped = None
+            _restore_kernel(kernel, x_snap)
+        if pumped is not None and pumped.count:
+            assert x_snap is not None
+            cycles.apply(kernel, pumped.values)
+            tv = _threshold_vector_key(kernel, context.threshold_vector_specs)
+            live_after = (
+                live_cache.live_inputs(kernel, threshold_vector=tv)
+                if bfs_config.live_input_pruning
+                else None
+            )
+            pumped_key = _state_key(kernel, live=live_after, threshold_vector=tv)
+            if paced:
+                pumped_key = (*pumped_key, child_flipped)
+            if pumped_key != key:
+                _restore_kernel(kernel, x_snap)
+                pumped = None
+            else:
+                assert chain is not None
+                hidden = pumped.values
+                if parent_map is not None:
+                    steps = [
+                        TraceStep(
+                            inputs=parent_map[node].inputs,
+                            scans=parent_map[node].scans,
+                            prev=parent_map[node].prev,
+                        )
+                        for node in reversed(chain[:-1])
+                    ]
+                    steps.append(TraceStep(inputs=input_dict, scans=edge_scans, prev=bprev_dict))
+                    repeat = tuple(steps) * pumped.count
+        if pumped is None or not pumped.count:
+            x_snap = None
+        claimed_x = cycles.claim(tid, base_hidden, x_projection)
+        if (
+            pumped is None
+            and not inherited
+            and not pulsed
+            and not (claimed_x and cycles.seed_timer(tid, kernel, key, pulse))
+        ):
+            return None
+        projection = cycles.pulse_projection(tid, hidden)
+        fresh = claimed_x if x_snap is None else cycles.claim(tid, base_hidden, projection)
+        if not fresh:
+            if x_snap is not None:
+                _restore_kernel(kernel, x_snap)
+            return None
+        refined_tid = (_REFINED, tid, projection)
+        cycles.refined_nodes += 1
+        if len(visited) + cycles.refined_nodes > max_states:
+            return Intractable(
+                reason="max_states exceeded",
+                dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+                estimated_space=len(visited) + cycles.refined_nodes,
+                hints=_build_intractable_hints(context),
+                journal=context.journal,
+            )
+        if x_snap is not None:
+            # A pumped state still has uncrossed thresholds pending: under
+            # ``settled`` only its settled descendants are judged.
+            if predicates is not None and not settled:
+                _record_failures(
+                    state=kernel.tags,
+                    p_key=parent_key,
+                    input_dict=input_dict,
+                    edge_scans=edge_scans,
+                    edge_caveats=edge_caveats,
+                    bprev_dict=bprev_dict,
+                    extra_steps=repeat,
+                )
+            if project is not None:
+                projected_rows.add(_projected_tuple(kernel, project))
+        if parent_map is not None:
+            parent_map[refined_tid] = _ParentLink(
+                parent_key,
+                input_dict,
+                edge_scans,
+                edge_caveats,
+                prev=bprev_dict,
+                repeat=repeat,
+            )
+        # A pumped node's link spans many scans: no later cycle runs through
+        # it, and its successors inherit its progress instead.
+        cycles.record_node(
+            refined_tid,
+            parent_key,
+            -1 if x_snap is not None else edge_scans,
+            hidden,
+            (input_dict, bprev_dict),
+        )
+        if x_snap is not None or inherited:
+            cycles.mark_pumped(refined_tid)
+        queue.append(
+            (
+                _snapshot_kernel(kernel, _mutable, _base_keys),
+                depth + 1,
+                refined_tid,
+                child_flipped,
+                bprev,
+            )
+        )
+        if x_snap is not None:
+            _restore_kernel(kernel, x_snap)
+        return None
 
     queue: deque[tuple[_KernelSnapshot, int, tuple[Any, ...], bool, tuple[Any, ...]]] = deque()
     queue.append(
@@ -440,6 +675,7 @@ def _bfs_explore_gen(
                 _progress_next_time = now + 5.0
 
         snap, depth, parent_key, just_flipped, cur_bprev = queue.popleft()
+        _parent_visible = _visible_key(parent_key)
         _bprev_dict: dict[str, Any] = (
             dict(zip(_demoted, cur_bprev, strict=True)) if _has_demoted else {}
         )
@@ -642,11 +878,35 @@ def _bfs_explore_gen(
                     dict(kernel.tags),
                 )
             if not _should_enqueue(key, bprev):
+                if cycles_active:
+                    base_hidden = cycles_hidden.get(tid)
+                    if base_hidden is None or cycles.changed_from(kernel, base_hidden) is None:
+                        return None
+                    return _refine_revisit(
+                        key=key,
+                        tid=tid,
+                        input_dict=input_dict,
+                        edge_scans=edge_scans,
+                        edge_caveats=edge_caveats,
+                        child_flipped=child_flipped,
+                        parent_key=parent_key,
+                        bprev_dict=bprev_dict,
+                        bprev=bprev,
+                        depth=depth,
+                    )
                 return None
 
             any_enqueued_ref[0] = True
-            if len(visited) > max_states:
+            if len(visited) + cycles.refined_nodes > max_states:
                 return _max_states_intractable()
+            if cycles_active:
+                cycles.record_node(
+                    tid,
+                    parent_key,
+                    edge_scans,
+                    cycles.hidden_vector(kernel, key),
+                    (input_dict, bprev_dict),
+                )
             if parent_map is not None:
                 parent_map[tid] = _ParentLink(
                     parent_key,
@@ -707,7 +967,15 @@ def _bfs_explore_gen(
 
             is_new_projection = _record_projection_for_current(key, seen_outcomes)
             if skip_project_duplicate and not is_new_projection:
-                return None
+                # An outcome this expansion already produced, unless it carries
+                # new hidden progress (cycles.py).
+                if not cycles_active:
+                    return None
+                base_hidden = cycles_hidden.get(
+                    _trace_id(key, _extract_bprev(kernel)) if _has_demoted else key
+                )
+                if base_hidden is None or cycles.changed_from(kernel, base_hidden) is None:
+                    return None
 
             return _enqueue_current_successor(
                 key=key,
@@ -832,7 +1100,6 @@ def _bfs_explore_gen(
             # right, so its successors are still reached when it is expanded;
             # suppressing the cross-transition jump only removes a spurious,
             # over-approximating edge.
-            _parent_visible = parent_key[0] if _has_demoted else parent_key
             _jump_self_loop = (
                 new_key[:-1] == _parent_visible[:-1] if paced else new_key == _parent_visible
             )
@@ -1032,7 +1299,7 @@ def _bfs_explore_gen(
                             _f_key = _state_key(kernel, live=_f_post_live, threshold_vector=_f_tv)
                             _f_key = (*_f_key, _f_child_flipped) if paced else _f_key
 
-                            _f_parent_visible = parent_key[0] if _has_demoted else parent_key
+                            _f_parent_visible = _parent_visible
                             _f_jump_self_loop = (
                                 _f_key[:-1] == _f_parent_visible[:-1]
                                 if paced

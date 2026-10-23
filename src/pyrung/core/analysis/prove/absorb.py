@@ -880,8 +880,14 @@ def _find_comparison_absorptions(
     project: tuple[str, ...] | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
     atom_index: dict[str, list[Atom]] | None = None,
+    stable_partners_only: bool = False,
 ) -> _ThresholdAbsorptions:
-    """Find written tags whose value is only ever observed through comparisons."""
+    """Find written tags whose value is only ever observed through comparisons.
+
+    *stable_partners_only* (the BFS) also requires every comparison partner to
+    be a literal or a stable tag; the ``how()`` domain prior keeps the wider
+    rule.
+    """
     if atom_index is None:
         atom_index = _build_atom_index(all_exprs)
     projected = frozenset(project or ())
@@ -929,6 +935,12 @@ def _find_comparison_absorptions(
                 break
             normalized.extend(specs)
         if not normalized:
+            continue
+        # The vector holds each comparison as of the end of the scan.  Against
+        # a tag the program or the outside rewrites, the next scan compares
+        # with a new value (``copy(rtc.minute, C)``, then ``Rung(C != P)``),
+        # which the hidden value of *tag_name* decides: keep it concrete.
+        if stable_partners_only and any(spec.mode != _THRESHOLD_MODE_EXACT for spec in normalized):
             continue
 
         absorbed_tags.add(tag_name)
