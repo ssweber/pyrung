@@ -3182,3 +3182,32 @@ class TestEqualityFall:
     @pytest.mark.parametrize(("unit", "dt"), [("s", 0.1), ("ms", 0.0003)])
     def test_fall_scan_matches_stepping(self, form: str, unit: str, dt: float) -> None:
         _assert_fold_is_exact(self._shape(form, unit), _scans(400), dt=dt)
+
+
+class TestResetPulseInProbe:
+    """A reset the probe scan saw may be a one-scan pulse: the accumulator
+    counts (or times) again on the next scan, so a reset never certifies a
+    window that holds it still."""
+
+    @staticmethod
+    def _shape(kind: str) -> Callable[[], Program]:
+        from pyrung import count_down
+
+        def build() -> Program:
+            pulse = rise(system.sys.clock_1s)
+            with Program(strict=False) as prog:
+                with Rung():
+                    if kind == "up":
+                        count_up(Counter.clone("C"), 5_000).reset(pulse)
+                    elif kind == "down":
+                        count_down(Counter.clone("C"), 5_000).reset(pulse)
+                    else:
+                        on_delay(Timer.clone("C"), 50_000).reset(pulse)
+            return prog
+
+        return build
+
+    @pytest.mark.parametrize("kind", ["up", "down", "rto"])
+    def test_counts_again_after_the_pulse(self, kind: str) -> None:
+        folded = _assert_fold_is_exact(self._shape(kind), _scans(700))
+        assert folded.state.tags["C_Acc"] != 0

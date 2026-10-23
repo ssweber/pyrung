@@ -2763,15 +2763,16 @@ def _timer_moves(
     *before* and *after* hold each of ``ctx.timed_sources``' ``(acc, frac)``
     before and after the probe scan (see :func:`_acc_readings`).  A timer the probe moved by exactly one step of the carry
     recurrence keeps doing so through the window, even when that step left
-    it where it was; one otherwise left unchanged, or reset to zero, stays
-    put.  Anything else (two steps in one scan, a patched
-    accumulator, a scan ``dt`` other than the normal one) is not a recurrence
-    the fold can extend, so the window is not certified.
+    it where it was; one otherwise left unchanged stays put.  Anything else
+    (two steps in one scan, a patched accumulator, a scan ``dt`` other than
+    the normal one, a reset) is not a recurrence the fold can extend, so the
+    window is not certified.  A reset in particular may be a one-scan pulse
+    the timer retimes from on the very next scan.
     """
     moves: list[_TimerMove] = []
     dt = ctx.normal_dt
     for src, (acc_b, frac_b), (acc, frac) in zip(ctx.timed_sources, before, after, strict=True):
-        still = (acc, frac) == (acc_b, frac_b) or (acc == 0 and frac == 0.0)
+        still = (acc, frac) == (acc_b, frac_b)
         if src.unit is None:
             if still:
                 continue
@@ -2895,6 +2896,16 @@ def _timer_landing(
     return tuple(out)
 
 
+def _counter_clamp_bounds(kind: str) -> tuple[tuple[float, bool], ...]:
+    """A counter's DINT clamps as boundaries in its progress coordinate."""
+    from pyrung.core.instruction.conversions import _DINT_MAX, _DINT_MIN
+
+    hi, lo = (float(_DINT_MAX), float(_DINT_MIN))
+    if kind == "down":
+        hi, lo = -lo, -hi
+    return ((hi, False), (lo, True))
+
+
 def _nearest_acc_crossing(
     ctx: _FoldContext,
     before_tot: dict[str, float],
@@ -2920,9 +2931,17 @@ def _nearest_acc_crossing(
         delta = pa - pb
         if abs(delta) <= _EPS:
             continue
+        if src.step is None and abs(abs(delta) - 1.0) > _EPS:
+            # A counter moves one count per scan.  Anything else is a reset, a
+            # patch or a write the probe saw once (a one-scan reset pulse
+            # leaves it counting again on the next scan): not a recurrence.
+            return 1
         if delta < 0 and not src.bidir:
-            continue
+            return 1
         bounds: list[tuple[float, bool]] = []
+        if src.step is None:
+            # The accumulator clamps at the DINT range: a projection stops there.
+            bounds.extend(_counter_clamp_bounds(src.kind))
         # A self-calc source has no Done bit: its sentinel preset is no crossing.
         preset = None if src.step is not None else _resolve_num(src.preset, state)
         if preset is not None:
