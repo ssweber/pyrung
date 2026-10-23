@@ -994,3 +994,54 @@ class TestEdgeInAnInstructionCondition:
             with Rung(counter.Acc >= 5, y):
                 out(hit)
         _assert_replays_to(logic, always(logic, ~hit), "UdHit")
+
+
+class TestAccumulatorReadOutsideTheProgram:
+    """A callable property or a projection reads concrete tag values: an
+    accumulator it reads is tracked exactly, not behind a threshold vector or
+    a Done state, whose representative value is all a callable would see."""
+
+    def _level_counter(self, tag: str):
+        enable = Bool(tag + "En", external=True)
+        count = Int(tag + "N")
+        hit = Bool(tag + "Hit")
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                calc(count + 1, count)
+            with Rung(count >= 100):
+                out(hit)
+        return logic, count
+
+    def test_callable_reads_an_integer_counter(self):
+        logic, count = self._level_counter("CallN")
+        result = always(logic, lambda s: s["CallNN"] != 50)
+        assert isinstance(result, Counterexample)
+        assert _replay_trace(logic, result.trace).current_state.tags["CallNN"] == 50
+
+    def test_callable_reads_counter_and_timer_accumulators(self):
+        pulse = Bool("CallCtuIn", external=True)
+        clear = Bool("CallCtuClr", external=True)
+        counter = Counter.clone("CallCtu")
+        with Program(strict=False) as logic:
+            with Rung(rise(pulse)):
+                count_up(counter, preset=6).reset(clear)
+        for scope in (None, ["CallCtu_Acc"]):
+            result = always(logic, lambda s: s["CallCtu_Acc"] != 3, scope=scope)
+            assert isinstance(result, Counterexample)
+            assert _replay_trace(logic, result.trace).current_state.tags["CallCtu_Acc"] == 3
+
+        enable = Bool("CallTonEn", external=True)
+        timer = Timer.clone("CallTon")
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(timer, preset=100)
+        result = always(logic, lambda s: s["CallTon_Acc"] != 50)
+        assert isinstance(result, Counterexample)
+        assert _replay_trace(logic, result.trace).current_state.tags["CallTon_Acc"] == 50
+
+    def test_unbounded_counter_read_without_a_comparison_is_not_proven(self):
+        """In the cone of the projection or of the callable's scope the
+        counter is compared nowhere: it has no domain, so not Proven."""
+        logic, _count = self._level_counter("ProjN")
+        assert isinstance(reachable_states(logic, project=["ProjNN"]), Intractable)
+        assert isinstance(always(logic, lambda s: s["ProjNN"] != 50, scope=["ProjNN"]), Intractable)

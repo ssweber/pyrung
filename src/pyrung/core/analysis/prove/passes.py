@@ -878,6 +878,21 @@ def _pass_build_graph(ctx: _PassContext) -> None:
     ctx.receive_dest_names = frozenset(_collect_receive_dest_names(ctx.program))
 
 
+def _observed_project(ctx: _PassContext) -> tuple[str, ...] | None:
+    """Tags read from outside the program: the projection and what callables read.
+
+    A callable property reads concrete tag values, so an accumulator it may
+    read (its ``scope=``, or any tag without one) must be tracked exactly,
+    like a projected one, not hidden behind a threshold vector or a Done
+    state: the search keeps one representative value per abstract state.
+    """
+    if ctx.opaque_reads_all and ctx.graph is not None:
+        return tuple(sorted(ctx.graph.tags))
+    if not ctx.opaque_reads:
+        return ctx.project
+    return tuple(dict.fromkeys((*(ctx.project or ()), *ctx.opaque_reads)))
+
+
 def _scope_upstream(ctx: _PassContext) -> frozenset[str] | None:
     """Compute the upstream tag cone for the current scope."""
     if ctx.scope is None or ctx.graph is None:
@@ -939,7 +954,7 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         ctx.graph,
         ctx.all_exprs,
         scope=ctx.scope,
-        project=ctx.project,
+        project=_observed_project(ctx),
         structural_domain_info=structural_domain_info,
         receive_dest_names=ctx.receive_dest_names,
         exclusions=exclusions,
@@ -947,6 +962,7 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         stepping_tags_out=stepping,
         threshold_absorptions_out=threshold_absorptions,
         model_system_points=not ctx.domains_only,
+        observe_everything=ctx.opaque_reads_all,
     )
     if profile:
         profile_last = _classify_profile_mark(timings, "classify_from_graph", profile_last)
@@ -1795,7 +1811,7 @@ def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
         ctx.program,
         ctx.graph,
         ctx.all_exprs,
-        project=ctx.project,
+        project=_observed_project(ctx),
         atom_index=atom_index,
     )
     comparison_absorptions = _find_comparison_absorptions(
@@ -1803,7 +1819,7 @@ def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
         ctx.graph,
         ctx.all_exprs,
         structural_domains,
-        project=ctx.project,
+        project=_observed_project(ctx),
         receive_dest_names=ctx.receive_dest_names,
         atom_index=atom_index,
     )
@@ -1928,7 +1944,7 @@ def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
         ctx.graph,
         ctx.all_exprs,
         scope=ctx.scope,
-        project=ctx.project,
+        project=_observed_project(ctx),
         structural_domain_info=_get_structural_domain_info(ctx),
         receive_dest_names=ctx.receive_dest_names,
         _skip_absorptions=True,
@@ -1936,6 +1952,7 @@ def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
         unclassified=unclassified,
         stepping_tags_out=stepping,
         model_system_points=not ctx.domains_only,
+        observe_everything=ctx.opaque_reads_all,
     )
     ctx._stepping_tags = frozenset(stepping)
     if isinstance(result, Intractable):

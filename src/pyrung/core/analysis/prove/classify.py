@@ -2343,6 +2343,7 @@ def _classify_dimensions_from_graph(
     stepping_tags_out: set[str] | None = None,
     threshold_absorptions_out: list[_ThresholdAbsorptions] | None = None,
     model_system_points: bool = False,
+    observe_everything: bool = False,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context.
 
@@ -2356,6 +2357,14 @@ def _classify_dimensions_from_graph(
     :func:`_collect_structural_domain_info`; pass it to reuse a fixpoint already
     computed by another pass (only valid when *discovered_domains* is None, since
     that input feeds the fixpoint).
+
+    *project* holds every tag read from outside the program: the projection
+    and what callable properties read (``passes._observed_project``).  Their
+    accumulators are tracked exactly, and one that accumulates from its own
+    value but has no domain is infeasible.  *observe_everything* marks a
+    callable without ``scope=`` (every tag is in *project*): it keeps
+    accumulators exact but leaves domainless tags unclassified rather than
+    refusing every such program.
     """
     profile = _classify_profile_enabled()
     timings: list[tuple[str, float]] = []
@@ -2432,10 +2441,16 @@ def _classify_dimensions_from_graph(
         profile_last = _classify_profile_mark(timings, "comparison_influence_index", profile_last)
 
     consumed_accs: set[str] = set()
+    observed = frozenset(project or ())
     for acc_name in done_acc_info.pairs.values():
-        if atom_idx.get(acc_name) or _has_forbidden_data_read(
-            program,
-            acc_name,
+        # Projected, or read by a callable property: tracked exactly.
+        if (
+            acc_name in observed
+            or atom_idx.get(acc_name)
+            or _has_forbidden_data_read(
+                program,
+                acc_name,
+            )
         ):
             consumed_accs.add(acc_name)
     if profile:
@@ -2816,6 +2831,17 @@ def _classify_dimensions_from_graph(
                 declared = _declared_domain(tag)
                 if declared is not None:
                     stateful[tag_name] = declared
+                elif (
+                    tag_name in observed
+                    and not observe_everything
+                    and graph.writers_of.get(tag_name, frozenset())
+                    & graph.all_readers_of.get(tag_name, frozenset())
+                ):
+                    # Read from outside the program (projected, or by a
+                    # callable) and accumulated from its own value
+                    # (``calc(N + 1, N)``): its values are the answer, and
+                    # with no domain the search cannot track them.
+                    infeasible_tags.append(tag_name)
                 elif unclassified is not None:
                     unclassified.add(tag_name)
             continue
