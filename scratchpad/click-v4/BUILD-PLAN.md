@@ -145,7 +145,9 @@ Follow-ups:
 - System tags and fault writes: branch `p0/prove-sys` (system tags modeled: first_scan a state bit, constants at
   runtime values, clocks/scan_counter/RTC free with caveats, scan-start resets; instructions declare fault writes,
   counted only where a flag is read). Adversarial review: merge with fixes (property-only system tags unmodeled;
-  PILOT prior drift; RTC-through-calc Intractable). Fixes in progress.
+  PILOT prior drift; RTC-through-calc Intractable). Landed `db6bd9d..8f6175f`: PackML lock byte-identical, burner
+  PILOT context identical to dev, how(y_BurnerLoop) 2255/5. A callable reading a free tag the search didn't
+  explore returns Intractable naming it.
 - Queued P0, already wrong on dev (adversarial review of `p0/prove-sys`, repros in session scratchpad `adv-prove-sys/`):
   - Live-input pruning works from expressions only: `never()`, callable properties, DAP `scope=` and
     `reachable_states(project=)` lose inputs that reach the observed tag through an unconditioned rung.
@@ -153,6 +155,9 @@ Follow-ups:
     lock files can miss states. Repros `lam2.py`, `lam3.py`, `proj.py`.
   - Accumulator absorption: `Rung(M != P): calc(N + 1, N); copy(M, P)` then `Rung(N >= 3)` Proven (P gets domain
     `(0,)`, "default_only"); reachable in 3 scans. Repro `probes_c.py`.
+  - `prove/inputs.py` `_FREE_COMBO_CAP = 10_000` silently thins free-input domains (`_thin_domain`) and reports
+    Proven over the sample: copy `rtc.minute`/`second`/`hour` into X, Y, Z, then `Rung(X == 37, Y == 13, Z == 5)`
+    is Proven though reachable. Applies to any large external-input product. Should be Intractable, not a sample.
   - Low: `_pilot_sweep_domains` and the lints step without the system model (`bounds.py`, `lintsys.py`: false
     CMP_ALWAYS_FALSE on `calc(rtc...)` destinations).
 - PDG indirect reads: `DS[agg]` with no base tag registers no reads; `DS[Ptr + k]` is narrowed by Ptr's range
