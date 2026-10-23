@@ -19,6 +19,7 @@ from pyrung.core import (
     copy,
     count_down,
     count_up,
+    fall,
     latch,
     on_delay,
     out,
@@ -967,3 +968,29 @@ class TestProgressMadeOnAnotherBranch:
                 latch(armed)
                 reset(parked)
         _assert_replays_to(logic, always(logic, ~hit), "LateH")
+
+
+class TestEdgeInAnInstructionCondition:
+    """An input whose rise is read only by an instruction's own condition
+    (``count_up(...).down(rise(Y))``) is edge-bearing: its previous value
+    stays in the key, and its edge is never dead."""
+
+    def test_up_down_counter_with_a_rising_down_edge(self):
+        x = Bool("UdX", external=True)
+        y = Bool("UdY", external=True)
+        l1 = Bool("UdL1")
+        l2 = Bool("UdL2")
+        counter = Counter.clone("UdCtr")
+        hit = Bool("UdHit")
+        with Program(strict=False) as logic:
+            with Rung(y):
+                count_up(counter, preset=5).down(rise(y)).reset(l2)
+            with Rung(~y, ~l1):
+                reset(l2)
+            with Rung(fall(x), y):
+                reset(l1)
+            with Rung(~counter.Done):
+                out(l1)
+            with Rung(counter.Acc >= 5, y):
+                out(hit)
+        _assert_replays_to(logic, always(logic, ~hit), "UdHit")

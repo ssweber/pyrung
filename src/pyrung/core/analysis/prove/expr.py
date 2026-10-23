@@ -321,6 +321,12 @@ def _walk_implicit_edge_inputs(
 
     def _walk(instructions: list[Any]) -> None:
         for instr in instructions:
+            # An instruction's own condition (``count_up(...).down(rise(Y))``,
+            # ``.reset(rise(R))``) is in no rung expression.
+            for field_name in getattr(instr, "_conditions", ()):
+                own = getattr(instr, field_name, None)
+                if own is not None:
+                    _collect_edge_atoms(_condition_to_expr(own), nd_dims, result)
             if isinstance(instr, ShiftInstruction):
                 _check(instr.clock_condition)
             elif isinstance(instr, (EventDrumInstruction, TimeDrumInstruction)):

@@ -118,7 +118,46 @@ def _collect_edge_tag_exprs(
             if _has_edge_atom(expr, name) and rung_idx not in seen[name]:
                 seen[name].add(rung_idx)
                 result[name].append(expr)
+    # An edge read anywhere else (a branch, a subroutine rung, an
+    # instruction's own condition such as ``count_up(...).down(rise(Y))`` or
+    # ``.reset(rise(R))``) is read under conditions this pass does not
+    # resolve: it stays live in every state.  With no expression found it
+    # would read as dead everywhere, and the key would merge the scans
+    # before and after its rise.
+    for expr in _off_rail_edge_exprs(program):
+        for name in edge_set:
+            if _has_edge_atom(expr, name):
+                result[name].append(Atom(name, "rise"))
     return result
+
+
+def _off_rail_edge_exprs(program: Program) -> list[Expr]:
+    """Conditions other than main rung conditions that can hold an edge atom."""
+    exprs: list[Expr] = []
+
+    def instructions(instrs: Any) -> None:
+        for instr in instrs:
+            for field_name in getattr(instr, "_conditions", ()):
+                cond = getattr(instr, field_name, None)
+                if cond is not None:
+                    exprs.append(_condition_to_expr(cond))
+            body = getattr(instr, "instructions", None)
+            if isinstance(body, list):
+                instructions(body)
+
+    def rung_tree(rung: Any, *, main: bool) -> None:
+        if not main:
+            exprs.extend(_condition_to_expr(c) for c in rung._conditions)
+        instructions(rung._instructions)
+        for branch in rung._branches:
+            rung_tree(branch, main=False)
+
+    for rung in program.rungs:
+        rung_tree(rung, main=True)
+    for sub_rungs in program.subroutines.values():
+        for rung in sub_rungs:
+            rung_tree(rung, main=False)
+    return exprs
 
 
 def _live_edge_prevs(
