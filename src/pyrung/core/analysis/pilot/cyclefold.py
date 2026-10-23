@@ -263,6 +263,7 @@ def _monotone_read_surface(
         _progress_bounds,
         _resolve_num,
         _scans_to_cross,
+        _timer_integer_target,
     )
 
     sources = {s.acc_name: s for s in fold_ctx.sources}
@@ -316,7 +317,15 @@ def _monotone_read_surface(
             if i >= n_preset and _crossed_between(read_before, read_now, target, strict):
                 tag_best = 1
                 break
-            periods = _scans_to_cross(prog, d, target, strict)
+            if src.timed:
+                # A rung reads a timer's integer accumulator, not its progress:
+                # a seconds timer at 2.07 s still reads 2, so `Acc > 2` is ahead
+                # of it.  Reach the least integer that crosses, shaded down so
+                # float drift can only shorten the jump.
+                t = _timer_integer_target(target, strict)
+                periods = None if t is None else _scans_to_cross(prog, d, t - 1e-9, False)
+            else:
+                periods = _scans_to_cross(prog, d, target, strict)
             if periods is not None:
                 tag_best = periods if tag_best is None else min(tag_best, periods)
         if tag_best is None:

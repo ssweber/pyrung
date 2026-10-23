@@ -8,7 +8,19 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Counter, Int, Program, Rung, Timer, count_up, on_delay, out, time_drum
+from pyrung import (
+    Bool,
+    Counter,
+    Int,
+    Program,
+    Rung,
+    Timer,
+    calc,
+    count_up,
+    on_delay,
+    out,
+    time_drum,
+)
 from pyrung.core import rise, system
 from pyrung.core.analysis.pilot.cyclefold import _Cycle, cycle_fold_until, detect_cycle
 from pyrung.core.analysis.pilot.overlay import PilotRung, fork_with_pilot_rungs
@@ -857,6 +869,48 @@ class TestCycleJumpPatchesLand:
         plc.step()
         stats: dict[str, int] = {}
         cycle_fold_until(plc, lambda _s: False, budget=6_000, kernel_budget=False, stats=stats)
+
+        assert stats["cycle_folds"] >= 1
+        assert plc.state.scan_id == ref.state.scan_id
+        assert plc.state.tags == ref.state.tags
+
+
+class TestCycleJumpReadsTheIntegerAccumulator:
+    """A rung reads a timer's integer accumulator, not its fractional progress:
+    a seconds timer at 2.07 s reads 2, so ``Acc > 2`` is still ahead of it and
+    must bound the jump (the tumbler's rotate step transition went 11 scans
+    late when it did not)."""
+
+    @pytest.mark.parametrize(("form", "k"), [("gt", 2), ("ge", 3), ("eq", 3)])
+    def test_comparison_on_a_seconds_timer_flips_where_stepping_does(
+        self, form: str, k: int
+    ) -> None:
+        def build() -> Program:
+            T, Hit, N = Bool("IaT"), Bool("IaHit"), Int("IaN")
+            Tmr = Timer.clone("IaTmr")
+            cond = {"gt": Tmr.Acc > k, "ge": Tmr.Acc >= k, "eq": Tmr.Acc == k}[form]
+            with Program(strict=False) as prog:
+                with Rung(~T):
+                    out(T)
+                with Rung():
+                    on_delay(Tmr, 60, "s")
+                with Rung(cond):
+                    calc(N + 1, N)
+                with Rung(cond):
+                    out(Hit)
+            return prog
+
+        ref = PLC(build(), dt=0.010)
+        ref.step()
+        for _ in range(500):
+            ref.step()
+        plc = PLC(build(), dt=0.010)
+        plc.step()
+        # Start the coast part-way into a second, as the tumbler's did.
+        for _ in range(7):
+            plc.step()
+        stats: dict[str, int] = {}
+        cycle_fold_until(plc, lambda _s: False, budget=493, kernel_budget=False, stats=stats)
 
         assert stats["cycle_folds"] >= 1
         assert plc.state.scan_id == ref.state.scan_id
