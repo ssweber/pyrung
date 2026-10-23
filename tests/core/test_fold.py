@@ -2973,3 +2973,60 @@ class TestUnseenStopsStayExact:
             runs.append(plc)
         assert runs[0].state.scan_id == runs[1].state.scan_id
         assert _full_state(runs[0]) == _full_state(runs[1])
+
+
+class TestTagStepSelfCalcGuardedWhenRead:
+    """``calc(T + K, T)`` with ``K`` a tag is a fold source only when nothing
+    else reads ``T``; a moving preset, a comparison against a moving tag or
+    an expression read keeps it in the plateau guard."""
+
+    @staticmethod
+    def _expression_reader() -> Program:
+        from pyrung import latch
+
+        T = Int("T")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(T + Int("K"), T)
+            with Rung((T // 100) == 3):
+                latch(Bool("L"))
+            with Rung(T > 2_000):
+                out(Bool("Hit"))
+        return prog
+
+    @staticmethod
+    def _moving_preset() -> Program:
+        P = Int("P")
+        Tmr = Timer.clone("Tmr")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(P - Int("K"), P)
+            with Rung():
+                on_delay(Tmr, P)
+            with Rung(Tmr.Done):
+                out(Bool("Hit"))
+        return prog
+
+    @staticmethod
+    def _moving_threshold() -> Program:
+        T = Int("T")
+        Tmr = Timer.clone("Tmr")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(T - Int("K"), T)
+            with Rung():
+                on_delay(Tmr, 30_000)
+            with Rung(Tmr.Acc > T):
+                out(Bool("Hit"))
+        return prog
+
+    @pytest.mark.parametrize(
+        ("build", "patch"),
+        [
+            ("_expression_reader", {"K": 1}),
+            ("_moving_preset", {"P": 30_000, "K": 1}),
+            ("_moving_threshold", {"T": 10_000, "K": 3}),
+        ],
+    )
+    def test_read_tag_step_matches_stepping(self, build: str, patch: dict[str, int]) -> None:
+        _assert_fold_is_exact(getattr(self, build), _until_hit(5_000), patch=patch)

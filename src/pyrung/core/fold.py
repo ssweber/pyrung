@@ -1613,8 +1613,9 @@ def _selfcalc_sources(
 
     Each is ``(tag, c, m, (lo, hi))``: one unconditional ``calc`` advances
     ``tag`` by ``c`` per scan (modulo ``m`` when given) into an integer
-    destination that wraps at ``lo..hi``.  ``c`` is a literal or the name of
-    a tag no rung writes (see :func:`_match_affine_selfcalc`).
+    destination that wraps at ``lo..hi``.  ``c`` is a literal, or, for a
+    ``tag`` nothing else reads, the name of a tag no rung writes (see
+    :func:`_match_affine_selfcalc`).
     """
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.instruction.calc import CalcInstruction
@@ -1668,7 +1669,14 @@ def _selfcalc_sources(
             continue
         if storage.lower is None or storage.upper is None:
             continue
-        matched = _match_affine_selfcalc(calc_instr.expression, tag, constant_tag)
+        # A tag step only for a tag nothing else reads: the crossing set models
+        # literal comparisons on a source, not a moving preset, a comparison
+        # against another moving tag, an expression or an index, and a tag
+        # step that dev left guarded must not start relying on it.
+        unread = pdg.all_readers_of.get(tag, frozenset()) <= writers
+        matched = _match_affine_selfcalc(
+            calc_instr.expression, tag, constant_tag if unread else None
+        )
         if matched is not None:
             out.append((tag, matched[0], matched[1], (storage.lower, storage.upper)))
     return out
