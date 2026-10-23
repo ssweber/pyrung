@@ -440,10 +440,13 @@ def _cmd_cause(adapter: Any, expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError("Usage: cause <tag>[@scan|:value]")
     tag, scan, has_value, value = _parse_tag_spec(parts[1])
     runner = adapter._require_runner_locked()
-    if has_value:
-        chain = runner.cause(tag, to=value)
-    else:
-        chain = runner.cause(tag, scan=scan)
+    try:
+        if has_value:
+            chain = runner.cause(tag, to=value)
+        else:
+            chain = runner.cause(tag, scan=scan)
+    except ValueError as exc:  # e.g. a scan a fold computed in one step
+        raise adapter.DAPAdapterError(str(exc)) from exc
     if chain is None:
         return ConsoleResult(f"No causal chain found for {tag}")
     return ConsoleResult(str(chain))
@@ -456,10 +459,13 @@ def _cmd_effect(adapter: Any, expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError("Usage: effect <tag>[@scan|:value]")
     tag, scan, has_value, value = _parse_tag_spec(parts[1])
     runner = adapter._require_runner_locked()
-    if has_value:
-        chain = runner.effect(tag, from_=value)
-    else:
-        chain = runner.effect(tag, scan=scan)
+    try:
+        if has_value:
+            chain = runner.effect(tag, from_=value)
+        else:
+            chain = runner.effect(tag, scan=scan)
+    except ValueError as exc:  # e.g. a scan a fold computed in one step
+        raise adapter.DAPAdapterError(str(exc)) from exc
     if chain is None:
         return ConsoleResult(f"No effect chain found for {tag}")
     return ConsoleResult(str(chain))
