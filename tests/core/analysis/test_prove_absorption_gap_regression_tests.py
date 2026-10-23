@@ -22,6 +22,7 @@ from pyrung.core import (
     latch,
     on_delay,
     out,
+    reset,
     rise,
     system,
 )
@@ -869,3 +870,100 @@ class TestUnreadTimer:
         names = result._debug_context.stateful_names
         assert "SinkTmr_Done" not in names
         assert "SinkUsed_Done" in names
+
+
+class TestProgressMadeOnAnotherBranch:
+    """A key reached again with hidden progress made earlier on another branch.
+
+    A counter's value there can be ahead of the first node's (a pulse that came
+    with the step that started the timer) or behind it (the first node took a
+    shortcut that also counted); a timer can be behind (it started later).
+    Neither is reachable from the first node, so the revisit is its own node.
+    """
+
+    def test_counter_ahead_wins_the_race(self):
+        arm = Bool("AheadArm", external=True)
+        pulse = Bool("AheadPulse", external=True)
+        armed = Bool("AheadArmed")
+        count = Int("AheadCount")
+        timer = Timer.clone("AheadTmr")
+        hit = Bool("AheadHit")
+        with Program(strict=False) as logic:
+            with Rung(arm):
+                latch(armed)
+            with Rung(armed):
+                on_delay(timer, preset=1000)
+            with Rung(rise(pulse), armed):
+                calc(count + 1, count)
+            with Rung(count >= 3, ~timer.Done):
+                out(hit)
+        result = always(logic, ~hit)
+        _assert_replays_to(logic, result, "AheadHit")
+        assert sum(step.scans for step in result.trace) == 5
+
+    def _shortcut(self, tag: str, *, lock_first: bool) -> tuple[Program, Bool]:
+        """Path B arms in one step and counts N once; path A takes two steps."""
+        a = Bool(tag + "A", external=True)
+        b = Bool(tag + "B", external=True)
+        x = Bool(tag + "X", external=True)
+        armed = Bool(tag + "S")
+        pre = Bool(tag + "P")
+        n = Int(tag + "N")
+        m = Int(tag + "M")
+        lock = Bool(tag + "K")
+        hit = Bool(tag + "H")
+        with Program(strict=False) as logic:
+            with Rung(pre):
+                latch(armed)
+                reset(pre)
+            with Rung(b, ~armed, ~pre):
+                latch(armed)
+                calc(n + 1, n)
+            with Rung(a, ~armed, ~pre):
+                latch(pre)
+            with Rung(armed, rise(x)):
+                calc(n + 1, n)
+                calc(m + 1, m)
+            if not lock_first:
+                with Rung(m >= 3, ~lock):
+                    out(hit)
+            with Rung(n >= 3):
+                latch(lock)
+            if lock_first:
+                with Rung(m >= 3, ~lock):
+                    out(hit)
+        return logic, hit
+
+    def test_counter_behind_has_room_left(self):
+        """Only the longer path, with N behind, counts M to 3 before N locks out."""
+        logic, hit = self._shortcut("Behind", lock_first=False)
+        _assert_replays_to(logic, always(logic, ~hit), "BehindH")
+        logic, hit = self._shortcut("BehindLock", lock_first=True)
+        assert isinstance(always(logic, ~hit), Proven)
+
+    def test_timer_behind_has_time_left(self):
+        """A detour arms the timer later: the pulses then beat it."""
+        a = Bool("LateA", external=True)
+        b = Bool("LateB", external=True)
+        c = Bool("LateC", external=True)
+        pulse = Bool("LateY", external=True)
+        armed = Bool("LateL")
+        parked = Bool("LateP")
+        count = Int("LateN")
+        timer = Timer.clone("LateTmr")
+        hit = Bool("LateH")
+        with Program(strict=False) as logic:
+            with Rung(rise(pulse), armed):
+                calc(count + 1, count)
+            with Rung(a, ~armed, ~parked):
+                latch(armed)
+            with Rung(armed):
+                on_delay(timer, preset=60)
+            with Rung(count >= 3, ~timer.Done):
+                out(hit)
+            with Rung(b, ~armed, ~parked):
+                latch(parked)
+            with Rung(parked, c):
+                latch(armed)
+                reset(parked)
+        _assert_replays_to(logic, always(logic, ~hit), "LateH")

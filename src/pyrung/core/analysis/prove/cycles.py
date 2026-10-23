@@ -17,36 +17,40 @@ reachable crossing (``N >= 3``, the timer's Done) is never seen.
 
 - The *hidden vector* of a state is the normalized progress of every hidden
   accumulator that still has an uncrossed threshold at its key.
-- A revisit whose hidden vector differs from the first state at the key is
-  dominated when every differing accumulator is *time-like* there: stepping
-  the revisiting state with its inputs held returns to the same key and
-  advances it.  The first state can then reach the larger values by
-  stuttering, and its self-loop jump schedules the crossing (the existing
-  timer treatment).
+- A revisit is *covered*, and dropped, when a node kept at its key has every
+  counter equal and every *time-like* accumulator at or below the revisit's:
+  stepping that node with its inputs held returns to the same key and
+  advances those, so it reaches the revisit by stuttering, and its self-loop
+  jump schedules the crossing (the existing timer treatment).  A revisit
+  *behind* on a time-like accumulator is not covered: it has more time left
+  before a threshold (a timer started later on another branch).
 - When the revisit descends from a node with the same key, the path between
-  them is a cycle.  If every link on it is one scan and each such accumulator
-  only advances along it, repeating the cycle adds the same progress again,
+  them is a cycle.  If every link on it replays by holding its inputs for its
+  scans (one scan, or a hidden-event jump with no caveat, as a self-resetting
+  timer's lap jumps to its Done) and each accumulator it advances only
+  advances along it, repeating the cycle adds the same progress again,
   because an absorbed accumulator is read only by the threshold comparisons
-  (the absorption gate), which stay false below the thresholds.  The node is
-  then *pumped*: advanced by as many further cycles as keep every threshold
-  uncrossed, and its trace repeats the cycle that many times.  From there the
-  next traversal crosses.
+  (the absorption gate), which stay false below the thresholds.  An
+  accumulator that falls back inside the cycle but returns to the same
+  progress (that timer) is periodic and stays put.  The node is then
+  *pumped*: advanced by as many further cycles as keep every threshold
+  uncrossed, and its trace repeats the cycle that many times; traversing it
+  once more from the revisit first confirms each accumulator repeats exactly
+  (a timer on its carry recurrence).  From there the next traversal crosses.
 - A pumped node's successors inherit its progress: a revisit below one is
-  kept while its hidden vector stays new.
-- A revisit that does not close a cycle is kept when a counter
-  (``count_up``/``count_down`` and absorbed integer or real counters)
-  advanced on the very step into it, a pulse arriving through another branch
-  of the BFS tree; its own descendants then close the cycle.  For a timer,
-  which advances on every scan it runs, one such revisit per key is kept,
-  when its thresholds resolve.  Any other revisit keeps the old treatment and
-  is dropped: its progress was made earlier on another branch.
+  kept while it is not covered.
+- Any other revisit whose counters (``count_up``/``count_down`` and absorbed
+  integer or real counters) differ from the first node's is kept: its value
+  was made on another branch, ahead (a pulse that came with the step that
+  armed a timer) or behind (the first node took a shortcut that also
+  counted), and neither is reachable from the first node.  Its descendants
+  close any cycle.  A timer that advanced around a cycle the BFS tree does
+  not show, not time-like at the key, is kept once per key, when its
+  thresholds resolve.
 
-What is left: a state whose hidden progress was made on another branch some
-steps earlier, at a key whose first state can only make that progress again
-outside any cycle (a bounded run of pulses), is represented by the first
-state alone.  Keeping every such state as its own node finds it, at the cost
-of duplicating every key a counter's value differs at (about 20% on the
-PackML lock bench, which has no such state).
+What is left: a timer whose value at a key differs by the branch it came
+from, and that does not advance while the key holds still, is represented by
+the first node plus one seed per key.
 
 Accumulators read outside threshold comparisons are never absorbed, so the
 concrete value is in the key and no tracking is needed.  Comparison-only
@@ -263,6 +267,12 @@ def _max_repeats(value: float, delta: float, limits: list[tuple[float, bool]]) -
     return best or 0
 
 
+def _at_or_below(kept: Any, value: Any) -> bool:
+    if kept is None or value is None:
+        return kept is value
+    return kept <= value
+
+
 def _max_timer_repeats(
     kernel: ReplayKernel,
     source: _ProgressSource,
@@ -339,7 +349,11 @@ class _CycleTracker:
         self._parent: dict[Any, Any] = {}
         self._scans: dict[Any, int] = {}
         self._step: dict[Any, tuple[dict[str, Any], dict[str, Any]]] = {}
-        self._seen: dict[Any, set[tuple[Any, ...]]] = {}
+        # Nodes kept at each key: the time-like set they are grouped under,
+        # and the hidden vectors by projection (see ``covered``).
+        self._seen: dict[
+            Any, tuple[frozenset[int], dict[tuple[Any, ...], list[tuple[Any, ...]]]]
+        ] = {}
         self._timelike: dict[Any, set[int]] = {}
         self._probed: set[tuple[Any, ...]] = set()
         self._timer_seeded: set[Any] = set()
@@ -386,13 +400,35 @@ class _CycleTracker:
         self._timer_seeded.add(base_tid)
         return True
 
-    def seen(
-        self, base_tid: Any, base_hidden: tuple[Any, ...], projection: tuple[Any, ...]
+    def covered(self, base_tid: Any, base_hidden: tuple[Any, ...], hidden: tuple[Any, ...]) -> bool:
+        """Whether a node kept at the key reaches *hidden* by stuttering there.
+
+        Every counter equal, and every time-like accumulator at or below
+        *hidden*'s: held inputs keep the key and advance those, so the kept
+        node gets there.  One *behind* on a time-like accumulator is not
+        covered: it has more time left before a threshold.
+        """
+        timelike = self._timelike.get(base_tid, ())
+        projection = self._projection(timelike, hidden)
+        if base_tid in self._seen:
+            candidates = self._kept(base_tid, base_hidden).get(projection, ())
+        elif projection == self._projection(timelike, base_hidden):
+            candidates = (base_hidden,)
+        else:
+            return False
+        for node in candidates:
+            if all(_at_or_below(node[i], hidden[i]) for i in timelike):
+                return True
+        return False
+
+    def ahead(
+        self, base_hidden: tuple[Any, ...], hidden: tuple[Any, ...], indices: set[int]
     ) -> bool:
-        seen = self._seen.get(base_tid)
-        if seen is None:
-            return projection == self.pulse_projection(base_tid, base_hidden)
-        return projection in seen
+        return all(base_hidden[i] is None or hidden[i] >= base_hidden[i] for i in indices)
+
+    @staticmethod
+    def _projection(timelike: Any, hidden: tuple[Any, ...]) -> tuple[Any, ...]:
+        return tuple(None if i in timelike else value for i, value in enumerate(hidden))
 
     def hidden_vector(self, kernel: ReplayKernel, key: tuple[Any, ...]) -> tuple[Any, ...] | None:
         values: list[Any] = []
@@ -462,27 +498,37 @@ class _CycleTracker:
             i for i, (a, b) in enumerate(zip(base, hidden, strict=True)) if a != b and b is not None
         }
 
-    def pulse_projection(self, base_tid: Any, hidden: tuple[Any, ...]) -> tuple[Any, ...]:
-        timelike = self._timelike.get(base_tid, ())
-        return tuple(None if i in timelike else value for i, value in enumerate(hidden))
-
     def timelike(self, base_tid: Any) -> set[int]:
         return self._timelike.get(base_tid, set())
 
-    def is_dominated(self, base_tid: Any, differing: set[int]) -> bool:
-        return differing <= self._timelike.get(base_tid, set())
+    def _kept(
+        self, base_tid: Any, base_hidden: tuple[Any, ...]
+    ) -> dict[tuple[Any, ...], list[tuple[Any, ...]]]:
+        """Nodes kept at the key, by projection under its current time-like set."""
+        timelike = frozenset(self._timelike.get(base_tid, ()))
+        entry = self._seen.get(base_tid)
+        if entry is None:
+            kept = {self._projection(timelike, base_hidden): [base_hidden]}
+            self._seen[base_tid] = (timelike, kept)
+            return kept
+        known, kept = entry
+        if known != timelike:
+            regrouped: dict[tuple[Any, ...], list[tuple[Any, ...]]] = {}
+            for nodes in kept.values():
+                for node in nodes:
+                    regrouped.setdefault(self._projection(timelike, node), []).append(node)
+            self._seen[base_tid] = (timelike, regrouped)
+            kept = regrouped
+        return kept
 
-    def claim(
-        self, base_tid: Any, base_hidden: tuple[Any, ...], projection: tuple[Any, ...]
-    ) -> bool:
-        """Record a refined node for *projection* at *base_tid*; False if known."""
-        seen = self._seen.get(base_tid)
-        if seen is None:
-            seen = {self.pulse_projection(base_tid, base_hidden)}
-            self._seen[base_tid] = seen
-        if projection in seen:
+    def claim(self, base_tid: Any, base_hidden: tuple[Any, ...], hidden: tuple[Any, ...]) -> bool:
+        """Record a refined node with *hidden* at *base_tid*; False if covered."""
+        if self.covered(base_tid, base_hidden, hidden):
             return False
-        seen.add(projection)
+        timelike = self._timelike.get(base_tid, ())
+        self._kept(base_tid, base_hidden).setdefault(self._projection(timelike, hidden), []).append(
+            hidden
+        )
         return True
 
     def cycle_start(

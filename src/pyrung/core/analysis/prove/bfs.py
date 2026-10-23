@@ -504,9 +504,7 @@ def _bfs_explore_gen(
         if hidden is None:
             return None
         differing = cycles.differing(base_hidden, hidden)
-        if not differing or cycles.is_dominated(tid, differing):
-            return None
-        if cycles.seen(tid, base_hidden, cycles.pulse_projection(tid, hidden)):
+        if not differing or cycles.covered(tid, base_hidden, hidden):
             return None
         chain = cycles.cycle_start(parent_key, tid, _base_tid, edge_scans)
         inherited = cycles.is_pumped(parent_key)
@@ -515,17 +513,19 @@ def _bfs_explore_gen(
             chain is None
             and not inherited
             and not pulsed
-            and (cycles.timer_seeded(tid) or cycles.counters(differing))
+            and not cycles.counters(differing)
+            and cycles.timer_seeded(tid)
+            and cycles.ahead(base_hidden, hidden, differing)
         ):
             return None
         probe_key = (tid, tuple(sorted(input_dict.items(), key=lambda kv: kv[0])))
         if not cycles.probed(probe_key):
             cycles.note_timelike(tid, probe_key, _probe_stutter(key, hidden))
-            if cycles.is_dominated(tid, differing):
+            if cycles.covered(tid, base_hidden, hidden):
                 return None
         pulse = differing - cycles.timelike(tid)
         pulsed &= pulse
-        x_projection = cycles.pulse_projection(tid, hidden)
+        x_hidden = hidden
         x_snap: _KernelSnapshot | None = None
         repeat: tuple[TraceStep, ...] = ()
         pumped = cycles.pump(kernel, key, hidden, chain, pulse) if chain is not None else None
@@ -578,21 +578,27 @@ def _bfs_explore_gen(
                         )
         if pumped is None or not pumped.count:
             x_snap = None
-        claimed_x = cycles.claim(tid, base_hidden, x_projection)
+        claimed_x = cycles.claim(tid, base_hidden, x_hidden)
+        # Kept: a counter that differs from the first node's (its value was
+        # made on another branch, ahead or behind), a time-like accumulator
+        # behind it (not covered: it has more time left), a pumped or
+        # inherited revisit, or a fresh pulse; a timer that only advanced
+        # around a cycle the tree does not show seeds the key once.
         if (
             pumped is None
             and not inherited
             and not pulsed
+            and pulse
+            and not cycles.counters(pulse)
             and not (claimed_x and cycles.seed_timer(tid, kernel, key, pulse))
         ):
             return None
-        projection = cycles.pulse_projection(tid, hidden)
-        fresh = claimed_x if x_snap is None else cycles.claim(tid, base_hidden, projection)
+        fresh = claimed_x if x_snap is None else cycles.claim(tid, base_hidden, hidden)
         if not fresh:
             if x_snap is not None:
                 _restore_kernel(kernel, x_snap)
             return None
-        refined_tid = (_REFINED, tid, projection)
+        refined_tid = (_REFINED, tid, hidden)
         cycles.refined_nodes += 1
         if len(visited) + cycles.refined_nodes > max_states:
             return Intractable(
