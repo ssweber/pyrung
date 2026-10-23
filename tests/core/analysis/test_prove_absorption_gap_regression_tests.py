@@ -730,3 +730,30 @@ class TestProgressAcrossCycles:
         assert isinstance(result, Counterexample)
         assert len(result.trace) < 100
         assert any("more times to replay it" in caveat for caveat in result.caveats)
+
+
+class TestUnreadTimer:
+    """A timer nothing reads (Done, accumulator, status bits) changes no other
+    tag: it is left out of the key.  One read only by another instruction's
+    condition is not unread."""
+
+    def test_unread_timer_leaves_the_key(self):
+        enable = Bool("SinkEn", external=True)
+        sink = Timer.clone("SinkTmr")
+        used = Timer.clone("SinkUsed")
+        counter = Counter.clone("SinkCtu")
+        hit = Bool("SinkHit")
+        with Program(strict=False) as logic:
+            with Rung():
+                on_delay(sink, preset=1, unit="sec")
+            with Rung():
+                on_delay(used, preset=50)
+            with Rung(enable):
+                count_up(counter, preset=10).reset(used.Done)
+            with Rung(counter.Acc >= 7):
+                out(hit)
+        result = always(logic, ~hit, _debug=True)
+        assert isinstance(result, Proven)
+        names = result._debug_context.stateful_names
+        assert "SinkTmr_Done" not in names
+        assert "SinkUsed_Done" in names

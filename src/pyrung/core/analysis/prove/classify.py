@@ -203,6 +203,51 @@ def _classify_profile_emit(
         )
 
 
+def _unread_timer_done_tags(
+    program: Program,
+    graph: ProgramGraph,
+    done_acc: dict[str, str],
+    *,
+    scope: list[str] | None,
+    project: tuple[str, ...] | None,
+) -> frozenset[str]:
+    """Done tags of timers and counters whose every output is read by nothing.
+
+    The Done bit, the accumulator and any status bits are read by no rung,
+    branch, instruction condition or data read (an owner's exclusive read of
+    its own accumulator aside), and none is in *scope* or *project*.  Such a
+    timer runs, but no other tag depends on it, so its state never decides
+    what else is reachable.
+    """
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    observed = set(scope or ()) | set(project or ())
+    outputs: dict[str, set[str]] = {}
+    for instr in walk_instructions(program):
+        if not isinstance(
+            instr,
+            (OnDelayInstruction, OffDelayInstruction, CountUpInstruction, CountDownInstruction),
+        ):
+            continue
+        done_name = instr.done_bit.name
+        names = outputs.setdefault(done_name, {done_name, instr.accumulator.name})
+        for status in ("en_bit", "tt_bit"):
+            tag = getattr(instr, status, None)
+            if tag is not None:
+                names.add(tag.name)
+    unread: set[str] = set()
+    for done_name, acc_name in done_acc.items():
+        names = outputs.get(done_name)
+        if names is None or acc_name not in names:
+            continue
+        if any(name in observed or graph.readers_of.get(name) for name in names):
+            continue
+        unread.add(done_name)
+    return frozenset(unread)
+
+
 def _tag_is_observable(
     tag_name: str,
     *,
@@ -2490,6 +2535,11 @@ def _classify_dimensions_from_graph(
     nondeterministic: dict[str, tuple[Any, ...]] = {}
     combinational: set[str] = set()
     infeasible_tags: list[str] = []
+    unread_timers = (
+        _unread_timer_done_tags(program, graph, done_acc, scope=scope, project=project)
+        if model_system_points and (scope is not None or project is not None)
+        else frozenset()
+    )
 
     free_system = (
         free_system_tags(graph.tags, graph.writers_of) if model_system_points else frozenset()
@@ -2617,6 +2667,14 @@ def _classify_dimensions_from_graph(
             continue
 
         if tag_name in done_acc:
+            if tag_name in unread_timers:
+                # Nothing reads its Done, accumulator or status bits, and
+                # nothing outside the program observes them: like any unread
+                # tag it changes no other state, so it is left out of the key.
+                combinational.add(tag_name)
+                if exclusions is not None:
+                    exclusions[tag_name] = "unread_timer"
+                continue
             stateful[tag_name] = (False, PENDING, True)
             continue
 
