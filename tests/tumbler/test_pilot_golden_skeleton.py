@@ -31,6 +31,7 @@ from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.runner import _compile_avoid
 from tests.fixtures.tumbler import enter_production
+from tests.fold_check import wall_budget
 from tests.tumbler.bench import Bench
 from tests.tumbler.skeleton import divergence_message, dump_skeleton, extract_skeleton
 
@@ -85,7 +86,7 @@ def _drive_bool_target(logic, tag_name: str, max_scans: int, wall_budget_s: floa
     plc = PLC(logic, dt=0.010)
     plc.step()
     target = plc._known_tags_by_name[tag_name]
-    deadline = time.monotonic() + wall_budget_s
+    deadline = time.monotonic() + wall_budget(wall_budget_s)
     events = []
     for event in pilot_events(plc, target, max_scans=max_scans):
         events.append(event)
@@ -384,7 +385,7 @@ def test_completed_first_door_incident_opens_working_theory(tumbler_logic) -> No
     plc.step()
     tags = plc._known_tags_by_name
     avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
-    deadline = time.monotonic() + 45.0
+    deadline = time.monotonic() + wall_budget(45.0)
     for event in pilot_events(
         plc,
         tags["Sts_State_Completed"],
@@ -435,7 +436,7 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     events = []
     theory_corrections = []
     finished = None
-    deadline = time.monotonic() + INTERNAL_ROUTE_WALL_BUDGET_S
+    deadline = time.monotonic() + wall_budget(INTERNAL_ROUTE_WALL_BUDGET_S)
     for event in pilot_events(
         plc,
         tags["Sts_State_Completed"],

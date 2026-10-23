@@ -6,7 +6,7 @@
 .DEFAULT_GOAL := default
 DOCS_ADDR ?= localhost:8000
 
-.PHONY: default install lint test test-prove test-pilot test-tumbler test-conformance conformance-export conformance-workspace watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
+.PHONY: default install lint test test-prove test-pilot test-tumbler test-fold test-conformance conformance-export conformance-workspace watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
 
 default: install verify
 
@@ -18,6 +18,9 @@ lint:
 
 test:
 	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --runner-backend=both
+
+test-fold:
+	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --fold-check -q
 
 test-prove:
 	uv run pytest tests/core/analysis/ -k "prove or elision_agreement or packml_diagnosis" -q

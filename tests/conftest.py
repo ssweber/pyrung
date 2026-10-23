@@ -25,6 +25,10 @@ _current_test: str | None = None
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    if config.getoption("fold_check", default=False):
+        from tests import fold_check
+
+        fold_check.install()
     try:
         import psutil
     except ImportError:
@@ -137,6 +141,15 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "Backend used by tests that opt into runner_factory: "
             "'interpreted' uses PLC, 'compiled' uses CompiledPLC, "
             "'both' runs both and asserts state parity."
+        ),
+    )
+    group.addoption(
+        "--fold-check",
+        action="store_true",
+        default=False,
+        help=(
+            "Check every folded run_until()/run_for()/cycle coast against a "
+            "stepped twin, scan by scan (tests/fold_check.py)."
         ),
     )
     group = parser.getgroup("pyrung-conformance", "pyrung conformance suite")
@@ -566,3 +579,12 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):  # noqa
     rep = outcome.get_result()
     if rep.when == "call":
         item.rep_call = rep  # type: ignore[attr-defined]
+
+
+def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: pytest.Config) -> None:
+    if config.getoption("fold_check", default=False):
+        from tests import fold_check
+
+        terminalreporter.write_line("fold-check:")
+        for line in fold_check.summary():
+            terminalreporter.write_line(line)

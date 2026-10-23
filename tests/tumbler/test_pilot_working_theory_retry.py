@@ -12,6 +12,7 @@ from pyrung.core.analysis.pilot import attempt_transition as attempt_transition_
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot import theory_recording as theory_recording_module
 from pyrung.core.runner import _compile_avoid
+from tests.fold_check import wall_budget
 
 pytestmark = pytest.mark.tumbler
 
@@ -48,7 +49,7 @@ def test_mode_request_reads_exact_atomic_operation_before_separate_clear(
     crossing_accepts: list[dict[str, Any]] = []
     clear_snapshot: dict[str, Any] | None = None
     latest_snapshot: dict[str, Any] = {}
-    deadline = time.monotonic() + 30.0
+    deadline = time.monotonic() + wall_budget(30.0)
 
     for event in pilot_events(
         plc,

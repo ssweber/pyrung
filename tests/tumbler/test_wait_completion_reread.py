@@ -13,6 +13,7 @@ import pytest
 
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot_events
+from tests.fold_check import wall_budget
 
 pytestmark = pytest.mark.tumbler
 
@@ -51,7 +52,7 @@ def test_cold_boot_how_y_burnerloop_completes(tumbler_logic) -> None:
     plc.step()
     target = plc._known_tags_by_name["y_BurnerLoop"]
 
-    deadline = time.monotonic() + GATE_WALL_BUDGET_S
+    deadline = time.monotonic() + wall_budget(GATE_WALL_BUDGET_S)
     finished = None
     for event in pilot_events(plc, target, max_scans=GATE_MAX_SCANS):
         if event.kind == "finished":
