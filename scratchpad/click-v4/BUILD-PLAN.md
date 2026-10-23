@@ -174,6 +174,18 @@ Follow-ups:
   - `prove/inputs.py` `_FREE_COMBO_CAP = 10_000` silently thins free-input domains (`_thin_domain`) and reports
     Proven over the sample: copy `rtc.minute`/`second`/`hour` into X, Y, Z, then `Rung(X == 37, Y == 13, Z == 5)`
     is Proven though reachable. Applies to any large external-input product. Should be Intractable, not a sample.
+  - The three above are on branch `p0/prove-prune` (gap 2 = new `prove/cycles.py`: pump hidden progress around
+    multi-scan cycles). Review: merge with fixes (a time-like timer is not pumped, so an uncaveated trace fails
+    replay; 14+ Bool inputs now Intractable). Fixes in progress.
+  - Wrong Proven on dev, still on that branch (session scratchpad `adv-prove-prune/`):
+    - HIGH: a timer in any unit but ms never reaches Done (`on_delay(T, 1, "sec")` held: `always(~T.Done)`
+      Proven; true at scan 100). Same at 4281d01. Only the fraction advances, so Done is never PENDING. `f3c.py`.
+    - HIGH: a self-resetting TON as a pulse generator (`Rung(~T.Done): on_delay(T, 50)`, `Rung(T.Done): calc(N+1)`)
+      never counts: the lap holds a multi-scan hidden-event jump, so no cycle forms. `p4.py`, `p5.py`.
+    - HIGH: head-start race (`Rung(rise(Y), L): calc(N+1, N)` racing a TON) drops the revisit as dominated.
+      `f1.py`; domination also ignores direction (`p6.py` ctr=0 B=1).
+    - MEDIUM: CTUD (`count_up(c, 4).down(rise(Y))`), `p1.py ctud`.
+    - Callables/projections reading an absorbed accumulator see representative values only (`g1.py`).
   - Low: `_pilot_sweep_domains` and the lints step without the system model (`bounds.py`, `lintsys.py`: false
     CMP_ALWAYS_FALSE on `calc(rtc...)` destinations).
 - PDG indirect reads: `DS[agg]` with no base tag registers no reads; `DS[Ptr + k]` is narrowed by Ptr's range
