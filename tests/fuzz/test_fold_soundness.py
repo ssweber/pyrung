@@ -291,3 +291,159 @@ def test_frozen_write_exclusion_is_bit_equal() -> None:
             )
 
     inner()
+
+
+# ---------------------------------------------------------------------------
+# Composite readers: the shapes the fold reviews kept finding
+# ---------------------------------------------------------------------------
+
+_SOURCES = ["timer_ms", "timer_s", "counter", "counter_pulse_reset", "selfcalc"]
+_READERS = [
+    "cmp_below",  # a comparison rung after the source
+    "cmp_above",  # read before the source moves this scan (flips one scan late)
+    "eq",  # flips twice: reaching k and passing it
+    "expr",  # (acc // d) == k
+    "display",  # calc(acc // d, Disp), nothing reads Disp
+    "stored",  # calc(acc // d, Q) then Rung(Q == k)
+    "snapshot",  # Rung(rise(X)): copy(acc, Snap) then Rung(Snap > k)
+    "operand",  # acc compared against the other source's acc
+]
+
+
+@st.composite
+def _composite_spec(draw: st.DrawFn) -> dict:
+    n_src = draw(st.integers(min_value=1, max_value=2))
+    sources = [draw(st.sampled_from(_SOURCES)) for _ in range(n_src)]
+    readers = [
+        {
+            "src": draw(st.integers(min_value=0, max_value=n_src - 1)),
+            "shape": draw(st.sampled_from(_READERS)),
+            "k": draw(st.integers(min_value=1, max_value=60)),
+            "d": draw(st.sampled_from([1, 7, 100])),
+            "form": draw(st.sampled_from(_FORMS)),
+            "count": draw(st.booleans()),
+        }
+        for _ in range(draw(st.integers(min_value=1, max_value=3)))
+    ]
+    return {
+        "sources": sources,
+        "readers": readers,
+        "gate": draw(st.sampled_from(["none", "clock_500ms", "clock_1s"])),
+        "dt": draw(st.sampled_from([0.01, 0.03, 0.1])),
+        "seconds": draw(st.sampled_from([3.0, 12.0, 40.0])),
+    }
+
+
+def _build_composite(spec: dict):
+    from pyrung import copy
+
+    # Each source's accumulator, made before any rung so a reader can sit above it.
+    blocks: list = []
+    accs: list = []
+    for i, kind in enumerate(spec["sources"]):
+        if kind.startswith("timer"):
+            blocks.append(Timer.clone(f"T{i}"))
+            accs.append(blocks[-1].Acc)
+        elif kind.startswith("counter"):
+            blocks.append(Counter.clone(f"C{i}"))
+            accs.append(blocks[-1].Acc)
+        else:
+            blocks.append(None)
+            accs.append(Int(f"S{i}"))
+
+    with Program(strict=False) as prog:
+        for j, r in enumerate(spec["readers"]):
+            if r["shape"] == "cmp_above":
+                _reader_body(j, r, _cmp(accs[r["src"]], r["form"], r["k"] * r["d"]))
+        for i, kind in enumerate(spec["sources"]):
+            gate = () if spec["gate"] == "none" or i > 0 else (getattr(system.sys, spec["gate"]),)
+            with Rung(*gate):
+                if kind.startswith("timer"):
+                    unit = "s" if kind == "timer_s" else "ms"
+                    on_delay(blocks[i], 30 if unit == "s" else 30_000, unit)
+                elif kind.startswith("counter"):
+                    pulse = kind == "counter_pulse_reset"
+                    count_up(blocks[i], 30_000).reset(
+                        rise(system.sys.clock_1s) if pulse else Bool(f"CR{i}")
+                    )
+                else:
+                    calc((accs[i] + 3) % 997, accs[i])
+        for j, r in enumerate(spec["readers"]):
+            acc = accs[r["src"]]
+            other = accs[(r["src"] + 1) % len(accs)]
+            shape, k, d = r["shape"], r["k"], r["d"]
+            if shape == "cmp_below":
+                _reader_body(j, r, _cmp(acc, r["form"], k * d))
+            elif shape == "eq":
+                _reader_body(j, r, acc == k * d)
+            elif shape == "expr":
+                _reader_body(j, r, (acc // d) == k)
+            elif shape == "display":
+                with Rung():
+                    calc(acc // d, Int(f"Disp{j}"))
+            elif shape == "stored":
+                with Rung():
+                    calc(acc // d, Int(f"Q{j}"))
+                _reader_body(j, r, Int(f"Q{j}") == k)
+            elif shape == "snapshot":
+                with Rung(rise(Bool(f"X{j}"))):
+                    copy(acc, Int(f"Snap{j}"))
+                _reader_body(j, r, Int(f"Snap{j}") > k)
+            elif shape == "operand":
+                _reader_body(j, r, acc > other)
+    return prog
+
+
+def _reader_body(j: int, r: dict, cond) -> None:
+    from pyrung import latch
+
+    with Rung(cond):
+        if r["count"]:
+            calc(Int(f"N{j}") + 1, Int(f"N{j}"))
+        else:
+            latch(Bool(f"Hit{j}"))
+
+
+def _run_composite(spec: dict, *, fold: bool) -> tuple[int, dict]:
+    plc = PLC(_build_composite(spec), dt=spec["dt"])
+    plc.step()
+    plc.run_for(spec["seconds"], fold=fold)
+    image = dict(plc.state.tags)
+    image.update({f"mem:{k}": v for k, v in plc.state.memory.items()})
+    return plc.state.scan_id, image
+
+
+def test_composite_readers_fold_is_bit_equal() -> None:
+    """Every reader shape the reviews found must leave stepping's exact state."""
+
+    def spec_of(sources, readers, gate="none", dt=0.01, seconds=12.0):
+        return {"sources": sources, "readers": readers, "gate": gate, "dt": dt, "seconds": seconds}
+
+    def reader(shape, *, src=0, k=5, d=100, form="ge", count=True):
+        return {"src": src, "shape": shape, "k": k, "d": d, "form": form, "count": count}
+
+    @given(spec=_composite_spec())
+    @settings(max_examples=MAX_EXAMPLES, deadline=None)
+    # Review probes, always exercised: read-above (a6), slow-timer == (a7),
+    # pulse reset (a3), expression / stored copy (gap_dataread), affine self-calc (a1).
+    @example(spec=spec_of(["timer_ms"], [reader("cmp_above")]))
+    @example(spec=spec_of(["timer_s"], [reader("eq", k=7, d=1)], dt=0.1))
+    @example(spec=spec_of(["counter_pulse_reset"], [reader("cmp_below", k=1, d=7)]))
+    @example(spec=spec_of(["timer_ms"], [reader("expr", k=1, d=100), reader("stored", k=1, d=100)]))
+    @example(spec=spec_of(["selfcalc", "timer_ms"], [reader("operand"), reader("display")]))
+    def inner(spec: dict) -> None:
+        f_scan, folded = _run_composite(spec, fold=True)
+        s_scan, stepped = _run_composite(spec, fold=False)
+        if (f_scan, folded) != (s_scan, stepped):
+            diffs = {
+                k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
+                for k in sorted(set(folded) | set(stepped))
+                if folded.get(k) != stepped.get(k)
+            }
+            note(f"spec={spec}")
+            raise AssertionError(
+                f"fold disagreed with scan-by-scan (scans {f_scan} vs {s_scan})\n"
+                f"  spec={spec}\n  diffs={diffs}"
+            )
+
+    inner()
