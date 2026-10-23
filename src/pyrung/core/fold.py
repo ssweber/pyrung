@@ -3312,28 +3312,28 @@ def _do_fold(
     Uses ``_run_single_scan(consume_pause_request=False)`` so the caller
     retains control over pause consumption.
     """
-    patches = _fold_patches(runner.state, skip, ctx, before_tot, after_tot)
-    if patches:
-        runner.patch(patches)
+    patches = _fold_patches(runner.state, skip, ctx, before_tot, after_tot) if skip > 1 else {}
 
     pre_landing = runner._state
     start_timestamp = pre_landing.timestamp
     positioned = pre_landing
     if skip > 1:
         positioned = pre_landing.set(timestamp=start_timestamp + (skip - 1) * ctx.normal_dt)
-        timer_accs: dict[str, Any] | None = None
+        # Direct tip edits, not patches: they are not inputs (a replay steps
+        # the folded scans and re-derives them, so logging them would apply
+        # them twice), and a timer in the synthesis plant runs before the
+        # patch drain.
+        edits: dict[str, Any] = dict(patches)
         if timer_landing:
-            # Direct tip edits, not patches: they are not inputs (a replay
-            # re-derives them by stepping), and a timer in the synthesis plant
-            # runs before the patch drain.
-            timer_accs = {name: acc for name, acc, _fi, _fo in timer_landing}
+            edits.update({name: acc for name, acc, _fi, _fo in timer_landing})
             positioned = positioned.set(
-                tags=positioned.tags.update(timer_accs),
                 memory=positioned.memory.update(
                     {f"_frac:{name}": frac_in for name, _acc, frac_in, _fo in timer_landing}
                 ),
             )
-        _replace_tip_state(runner, positioned, timer_accs)
+        if edits:
+            positioned = positioned.set(tags=positioned.tags.update(edits))
+        _replace_tip_state(runner, positioned, edits or None)
         runner._landing_commit_dt = ctx.normal_dt
     runner._dt_override_for_next_scan = skip * ctx.normal_dt
     try:
@@ -3365,7 +3365,7 @@ def _do_fold(
         )
     _replace_tip_state(runner, landed)
     if skip > 1:
-        runner._checkpoint_fold_landing()
+        runner._record_fold_landing()
     return tuple(patches.items())
 
 

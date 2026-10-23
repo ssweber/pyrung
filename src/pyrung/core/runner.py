@@ -4013,14 +4013,16 @@ class PLC:
             return
         registration.enabled = False
 
-    def _checkpoint_fold_landing(self) -> None:
-        """Checkpoint the tip when a fold landing put it on a checkpoint scan.
+    def _record_fold_landing(self) -> None:
+        """Cache the tip a fold landing moved to its scan, and checkpoint it there.
 
-        The landing state is the exact state of the scan it lands on, so a
-        replay may anchor there as on any stepped checkpoint.
+        The landing state is the exact state of the scan it lands on, so
+        history may serve it, and a replay may anchor on it, as on any
+        stepped scan.
         """
         state = self._state
         scan_id = state.scan_id
+        self._cache_state(state)
         if scan_id <= 0 or scan_id % self._checkpoint_interval != 0:
             return
         current_forces = dict(self._input_overrides.forces)
@@ -4232,8 +4234,8 @@ class PLC:
         self._capture_previous_states(ctx, dt)
         commit_dt = dt
         # A fold landing commits here at its first scan id and is then moved to
-        # the scan it stands for; it is checkpointed there (see
-        # _checkpoint_fold_landing), never at this id.
+        # the scan it stands for; it is cached and checkpointed there (see
+        # _record_fold_landing), never under this id.
         is_fold_landing = self._landing_commit_dt is not None
         if self._landing_commit_dt is not None:
             commit_dt = self._landing_commit_dt
@@ -4310,7 +4312,8 @@ class PLC:
             self._current_rung_traces = {}
             self._current_rung_traces_scan_id = None
             self._latest_committed_trace_event = None
-        self._cache_state(self._state)
+        if not is_fold_landing:
+            self._cache_state(self._state)
 
         # Retention-policy auto-trim, piggybacked on checkpoint cadence.
         if (

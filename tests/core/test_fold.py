@@ -3030,3 +3030,46 @@ class TestTagStepSelfCalcGuardedWhenRead:
     )
     def test_read_tag_step_matches_stepping(self, build: str, patch: dict[str, int]) -> None:
         _assert_fold_is_exact(getattr(self, build), _until_hit(5_000), patch=patch)
+
+
+class TestFoldedHistoryReplays:
+    """Fold projections are not inputs: replaying a folded live run steps the
+    folded scans and re-derives them, and history serves each landing at the
+    scan it stands for."""
+
+    @staticmethod
+    def _program() -> Program:
+        T = Int("T")
+        C = Counter.clone("C")
+        Tmr = Timer.clone("Tmr")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(T + 3, T)
+            with Rung(Bool("En")):
+                count_up(C, 1_000).reset(Bool("CR"))
+            with Rung():
+                on_delay(Tmr, 7_000)
+            with Rung(Tmr.Done):
+                out(Bool("Hit"))
+        return prog
+
+    def test_history_replay_seek_and_forks_match_stepping(self) -> None:
+        folded, stepped = _folded_and_stepped(self._program, _until_hit(3_000), patch={"En": True})
+        tip = folded.state.scan_id
+        assert tip == stepped.state.scan_id
+        for target in (2, 3, 4, tip // 2, tip - 1, tip):
+            want = _full_state(stepped.replay_to(target))
+            assert _full_state(folded.replay_to(target)) == want
+            assert _full_state(folded._replay_seek(target)) == want
+            assert _plain_tags_of(folded.history.at(target)) == _plain_tags_of(
+                stepped.history.at(target)
+            )
+            fork, ref = folded.replay_to(target), stepped.replay_to(target)
+            for _ in range(5):
+                fork.step()
+                ref.step()
+            assert _full_state(fork) == _full_state(ref)
+
+
+def _plain_tags_of(state: Any) -> dict[str, Any]:
+    return {k: v for k, v in state.tags.items() if not k.startswith("sys.scan_time")}
