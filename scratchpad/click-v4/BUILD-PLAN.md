@@ -132,6 +132,22 @@ Follow-ups:
     Repro `rtc/q_churn.py`.
   - (d) Float floor in one aggregate `skip*dt`: ms timers one unit low at dt 0.3/0.7, seconds timers at dt 0.1
     (`run_until` one scan early). Repros `adv-rtc/q_d2_scan.py`, p03.
+  Fixes on branch `p0/fold-small` (clock phase, timer carry recurrence, affine churn, strict fuzz). Adversarial
+  review: timer/clock/checkpoint commits sound; affine churn commit opens windows past unreadable stops
+  (`when()`, callable `run_until`), drops `rise(clock)` at dt >= half-period, logs fold patches as inputs; sub-unit
+  carry replay costs 12 s on a 36M-scan min-unit `run_for`. Fixes in progress.
+- Wrong on dev too, queued after fold-small (adversarial review, session scratchpad `adv-fold-small/`):
+  - HIGH: a comparison on an accumulator read by a rung above the accumulating rung flips late (`T.Acc >= 500`
+    above the TON rises at scan 199 vs 51); timers, counters and self-calcs. `a6_readbefore.py`.
+  - HIGH: clock-gated `time_drum`: clock goes soft because drum acc changes are hidden from the plateau check
+    (DAcc 900 vs 32767, Done missed). `a4_drum.py`. Matters for `time_event_drum`.
+  - HIGH: history of a folded live run: landings commit under their first scan id; `history.at(P+1)` returns the
+    landed state and `replay_to` re-applies counter patches early. `fold-small/history_folded.py`, `replay_folded.py`.
+  - HIGH: accumulators read through an expression or stored copy (`(Tmr.Acc // 5000) == 1`) are skipped past.
+    `fold-small/gap_dataread.py`.
+  - MEDIUM: `==` fall on sub-unit-step timers (`a7_eq.py`); one-scan reset during the probe counts as standing
+    still (`a3_reset.py`); a self-calc used as an index (`a1_affine.py`); a calc reading `sys.dt` sees the
+    inflated landing dt.
 - `_LiveInputCache` audit done: `df8bfd0`. The cache key was fine; pruning read end-of-scan values of keyed tags
   that a later rung reads after an in-scan write (`Rung(Arm): latch(P)`, `Rung(And(P, Fire))`, `Rung(): reset(P)`
   proved `always(~Hit)`). Such tags are now hidden from pruning; PackML lock byte-identical, 58-59 s both.
