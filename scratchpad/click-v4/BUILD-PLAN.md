@@ -135,7 +135,13 @@ Follow-ups:
   Fixes on branch `p0/fold-small` (clock phase, timer carry recurrence, affine churn, strict fuzz). Adversarial
   review: timer/clock/checkpoint commits sound; affine churn commit opens windows past unreadable stops
   (`when()`, callable `run_until`), drops `rise(clock)` at dt >= half-period, logs fold patches as inputs; sub-unit
-  carry replay costs 12 s on a 36M-scan min-unit `run_for`. Fixes in progress.
+  carry replay costs 12 s on a 36M-scan min-unit `run_for`. All fixed; landed `11dfa5a..324d732`. Fold patches are
+  tip edits now (history/replay exact after a fold), `when()` blocks folds, a monitor only on a moving tag does.
+  Perf vs dev: how 2255/5, idle 12008, seek 78, tumbler 18376/24, run_until legs -2.3%. Every remaining probe BAD is
+  also BAD on dev with the same numbers.
+  Also found, on dev: `history.range()`/`latest()` over a fold window return cached states only (4 of 700);
+  `cause(tag, scan)` inside a fold window returns None; `cause("T")` on stepped `calc(T + 3, T)` raises
+  RecursionError (not fold).
 - Wrong on dev too, queued after fold-small (adversarial review, session scratchpad `adv-fold-small/`):
   - HIGH: a comparison on an accumulator read by a rung above the accumulating rung flips late (`T.Acc >= 500`
     above the TON rises at scan 199 vs 51); timers, counters and self-calcs. `a6_readbefore.py`.
