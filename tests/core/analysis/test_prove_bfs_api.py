@@ -16,6 +16,8 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
+    calc,
+    call,
     copy,
     count_up,
     latch,
@@ -24,6 +26,8 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    subroutine,
+    system,
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -617,6 +621,89 @@ class TestReachableStates:
             }
         )
         assert expected <= states
+
+
+def _divide_by_input() -> tuple[Program, Int]:
+    """``calc(100 / Divisor, Quotient)`` on an unconditioned rung: no rung
+    condition names Divisor, it reaches Quotient and the division fault only
+    through data flow."""
+    divisor = Int("Divisor", external=True, choices={1: "one", 0: "zero", 2: "two"}, default=1)
+    quotient = Int("Quotient", default=100)
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(100 / divisor, quotient)
+    return logic, quotient
+
+
+class TestDataFlowInputsReachObservers:
+    """Inputs that reach an observed tag through data flow alone stay live.
+
+    Live-input pruning keeps an input only while some expression names it.
+    ``never()``, a callable property, ``scope=`` and a projection must still
+    see the inputs upstream of what they read.
+    """
+
+    def test_never_keeps_the_condition_expression(self):
+        logic, quotient = _divide_by_input()
+        fault = never(logic, system.fault.division_error)
+        assert isinstance(fault, Counterexample)
+        assert _replay_trace(logic, fault.trace).current_state.tags["fault.division_error"]
+        half = never(logic, quotient == 50)
+        assert isinstance(half, Counterexample)
+        assert _replay_trace(logic, half.trace).current_state.tags["Quotient"] == 50
+
+    def test_never_batch_keeps_the_condition_expressions(self):
+        logic, quotient = _divide_by_input()
+        results = never(logic, [system.fault.division_error, quotient == 7])
+        assert isinstance(results, list)
+        assert isinstance(results[0], Counterexample)
+        assert isinstance(results[1], Proven)
+
+    def test_callable_without_scope_keeps_every_input(self):
+        logic, _quotient = _divide_by_input()
+        result = always(logic, lambda s: s["Quotient"] != 50)
+        assert isinstance(result, Counterexample)
+        assert _replay_trace(logic, result.trace).current_state.tags["Quotient"] == 50
+        assert isinstance(always(logic, lambda s: s["Quotient"] != 7), Proven)
+
+    def test_callable_scope_is_its_read_set(self):
+        logic, _quotient = _divide_by_input()
+        result = always(
+            logic,
+            lambda s: not s["fault.division_error"],
+            scope=["fault.division_error"],
+        )
+        assert isinstance(result, Counterexample)
+        assert _replay_trace(logic, result.trace).current_state.tags["fault.division_error"]
+        negated = never(logic, lambda s: s["Quotient"] == 50, scope=["Quotient"])
+        assert isinstance(negated, Counterexample)
+
+    def test_projection_keeps_its_upstream_inputs(self):
+        logic, _quotient = _divide_by_input()
+        states = reachable_states(logic, project=["Quotient", "fault.division_error"])
+        assert states == frozenset(
+            {
+                frozenset({("Quotient", 100), ("fault.division_error", False)}),
+                frozenset({("Quotient", 50), ("fault.division_error", False)}),
+                frozenset({("Quotient", 0), ("fault.division_error", True)}),
+            }
+        )
+
+    def test_projection_through_a_gated_subroutine(self):
+        gate = Bool("SubGate", external=True)
+        source = Int("SubSource", external=True, choices={0: "a", 5: "b"}, default=0)
+        copied = Int("SubCopy")
+        with Program(strict=False) as logic:
+            with Rung(gate):
+                call("copy_sub")
+            with subroutine("copy_sub"):
+                with Rung():
+                    copy(source, copied)
+        states = reachable_states(logic, project=["SubCopy"])
+        assert states == frozenset({frozenset({("SubCopy", 0)}), frozenset({("SubCopy", 5)})})
+        result = always(logic, lambda s: s["SubCopy"] != 5)
+        assert isinstance(result, Counterexample)
+        assert _replay_trace(logic, result.trace).current_state.tags["SubCopy"] == 5
 
 
 class TestDiffStates:

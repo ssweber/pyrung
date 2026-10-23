@@ -266,8 +266,9 @@ def callable_refusals(
     """System tags a callable property may not read in this search.
 
     Free tags the search did not explore: not an input, or an input no rung
-    reads (input pruning only keeps inputs some expression names, and a
-    callable names none).  Also ``first_scan`` (and the scan-time min/max
+    reads.  Such an input is explored only when the callable's ``scope=``
+    names it; the refusal does not consult the scope, so it stays
+    conservative.  Also ``first_scan`` (and the scan-time min/max
     riding on it) when it is not a dimension, and fault flags whose
     instruction writers the graph does not count.
     """

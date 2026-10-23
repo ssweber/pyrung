@@ -229,6 +229,8 @@ def _build_explore_context(
     pipeline_cache: _PipelineCache | None = None,
     restrict_inputs_to_scope: bool = False,
     allow_partial: bool = False,
+    opaque_reads: tuple[str, ...] = (),
+    opaque_reads_all: bool = False,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for always()/reachable_states()."""
     split_at_tags = _validate_split_at(program, split_at) if split_at else None
@@ -250,6 +252,8 @@ def _build_explore_context(
         pipeline_cache=pipeline_cache,
         restrict_inputs_to_scope=restrict_inputs_to_scope,
         domains_only=_opt_config.domains_only,
+        opaque_reads=opaque_reads,
+        opaque_reads_all=opaque_reads_all,
     )
     return _run_pre_bfs_pipeline(
         ctx, _passes_for_opt_config(_opt_config), allow_partial=allow_partial
@@ -471,7 +475,9 @@ def always(
         Tag/Condition expressions are preferred; a callable
         ``(state_dict) -> bool`` is accepted as a fallback.
     scope : list of tag names, optional
-        Override automatic scope derivation.
+        Override automatic scope derivation.  For a callable property this
+        is its read set: every input upstream of these tags is explored.
+        A callable without ``scope=`` keeps every input in play.
     depth_budget : int
         Abstract BFS depth budget. Hidden-event acceleration may cover more
         concrete PLC scans than this budget.
@@ -495,20 +501,77 @@ def always(
         counterexample, the result is ``Proven`` with a populated
         ``aggressive_counterexample`` field.
     """
-    from pyrung.circuitpy.codegen import compile_kernel
-
     is_batch, property_specs = _normalize_property_specs(*conditions)
-    compiled_properties = [_compile_property_spec(spec) for spec in property_specs]
-    opt = _resolve_opt_config(_opt_config, _skip_optimizations)
+    return _always_compiled(
+        program,
+        [_compile_property_spec(spec) for spec in property_specs],
+        is_batch=is_batch,
+        scope=scope,
+        depth_budget=depth_budget,
+        max_states=max_states,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
+        split_at=split_at,
+        settled=settled,
+        paced=paced,
+        opt=_resolve_opt_config(_opt_config, _skip_optimizations),
+        journal=journal,
+        _debug=_debug,
+    )
+
+
+_CompiledProperty = tuple[Callable[[dict[str, Any]], bool], list[str] | None, Expr | None]
+
+
+def _opaque_read_set(
+    compiled_properties: list[_CompiledProperty],
+    scope: list[str] | None,
+) -> tuple[tuple[str, ...], bool]:
+    """What the callable properties in one search read: ``(tags, everything)``.
+
+    A callable names no expression, so the verifier cannot see which tags it
+    depends on.  ``scope=`` is taken as its read set; without one it may read
+    any tag.  Condition properties contribute nothing here, their expressions
+    already reach input liveness.
+    """
+    if all(expr is not None for _pred, _scope, expr in compiled_properties):
+        return (), False
+    if scope is None:
+        return (), True
+    return tuple(scope), False
+
+
+def _always_compiled(
+    program: Program,
+    compiled_properties: list[_CompiledProperty],
+    *,
+    is_batch: bool,
+    scope: list[str] | None,
+    depth_budget: int,
+    max_states: int,
+    joint_inputs: tuple[tuple[str, ...], ...],
+    exclusive_inputs: tuple[tuple[str, ...], ...],
+    split_at: list[str] | None,
+    settled: bool,
+    paced: bool,
+    opt: _OptConfig,
+    journal: bool,
+    _debug: bool,
+) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
+    """Shared body of :func:`always` and :func:`never` over compiled properties."""
+    from pyrung.circuitpy.codegen import compile_kernel
 
     if not is_batch:
         predicate, auto_scope, expr = compiled_properties[0]
         effective_scope = scope if scope is not None else auto_scope
         extra = [expr] if expr is not None else []
+        opaque_reads, opaque_all = _opaque_read_set(compiled_properties, effective_scope)
         context = _build_explore_context(
             program,
             scope=effective_scope,
             extra_exprs=extra,
+            opaque_reads=opaque_reads,
+            opaque_reads_all=opaque_all,
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
             split_at=split_at,
@@ -562,10 +625,15 @@ def always(
         group_exprs: list[Expr] = [
             e for i in indices if (e := compiled_properties[i][2]) is not None
         ]
+        opaque_reads, opaque_all = _opaque_read_set(
+            [compiled_properties[i] for i in indices], group_scope
+        )
         context = _build_explore_context(
             program,
             scope=group_scope,
             extra_exprs=group_exprs,
+            opaque_reads=opaque_reads,
+            opaque_reads_all=opaque_all,
             compiled=compiled_kernel,
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
@@ -643,42 +711,17 @@ def never(
         never(logic, [(Cmd, ~Fb, ~Alarm), (~Running,)])  # batch prove
     """
     is_batch, specs = _normalize_property_specs(*conditions)
-
     if not is_batch:
-        spec = specs[0] if len(specs) == 1 else tuple(specs)
-        pred, auto_scope, _expr = _compile_property_spec(spec)
-        neg = (lambda p: lambda s: not p(s))(pred)
-        return always(
-            program,
-            neg,
-            scope=scope if scope is not None else auto_scope,
-            depth_budget=depth_budget,
-            max_states=max_states,
-            joint_inputs=joint_inputs,
-            exclusive_inputs=exclusive_inputs,
-            split_at=split_at,
-            settled=settled,
-            paced=paced,
-            _skip_optimizations=_skip_optimizations,
-            _opt_config=_opt_config,
-            journal=journal,
-            _debug=_debug,
-        )
-
-    compiled = [_compile_property_spec(spec) for spec in specs]
-    negated = [(lambda p: lambda s: not p(s))(pred) for pred, _, _ in compiled]
-    if scope is None:
-        all_tags: set[str] = set()
-        for _, auto_scope_i, _ in compiled:
-            if auto_scope_i is not None:
-                all_tags.update(auto_scope_i)
-        effective_scope: list[str] | None = sorted(all_tags) if all_tags else None
-    else:
-        effective_scope = scope
-    return always(
+        specs = [specs[0] if len(specs) == 1 else tuple(specs)]
+    # The negated predicate keeps the condition's expression: it names the
+    # same tags, so scope, input liveness and domain seeding see what the
+    # property reads (a bare predicate would hide them).
+    compiled = [_negated_property(_compile_property_spec(spec)) for spec in specs]
+    return _always_compiled(
         program,
-        negated,
-        scope=effective_scope,
+        compiled,
+        is_batch=is_batch,
+        scope=scope,
         depth_budget=depth_budget,
         max_states=max_states,
         joint_inputs=joint_inputs,
@@ -686,11 +729,22 @@ def never(
         split_at=split_at,
         settled=settled,
         paced=paced,
-        _skip_optimizations=_skip_optimizations,
-        _opt_config=_opt_config,
+        opt=_resolve_opt_config(_opt_config, _skip_optimizations),
         journal=journal,
         _debug=_debug,
     )
+
+
+def _negated_property(compiled: _CompiledProperty) -> _CompiledProperty:
+    predicate, auto_scope, expr = compiled
+
+    def _negated(state: dict[str, Any]) -> bool:
+        return not predicate(state)
+
+    bind = getattr(predicate, "_pyrung_bind_system", None)
+    if bind is not None:
+        setattr(_negated, "_pyrung_bind_system", bind)  # noqa: B010
+    return _negated, auto_scope, expr
 
 
 def _prove_paced_single(

@@ -34,7 +34,7 @@ always(logic, ~Running, EstopOK)          # implicit AND (same property, always 
 always(logic, lambda s: s["X"] + s["Y"] < 100)  # callable fallback
 ```
 
-Condition expressions are preferred — the verifier extracts referenced tags and automatically restricts input enumeration to the upstream cone. Callable predicates work but don't get auto-scoping.
+Condition expressions are preferred — the verifier extracts referenced tags and automatically restricts input enumeration to the upstream cone. A callable names no tags, so the verifier can't tell what it reads: without `scope=` it explores every input on every scan, which is slower. Pass `scope=` with the tags the callable reads and the verifier treats that list as its read set, exploring every input upstream of those tags. A callable that reads a tag outside its `scope=` can miss a violation.
 
 ### Result types
 

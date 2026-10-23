@@ -309,6 +309,12 @@ class _PassContext:
     # functional-dep projections for slice-elided or ordering-violating
     # scratch, which PILOT's index chase validates by interpretation.
     domains_only: bool = False
+    # Tags a callable property reads (its ``scope=``).  It names no
+    # expression, so input liveness cannot see what it depends on; see
+    # ``_opaque_observer_nd_names``.  ``opaque_reads_all`` marks a callable
+    # with no scope, which may read any tag.
+    opaque_reads: tuple[str, ...] = ()
+    opaque_reads_all: bool = False
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -525,9 +531,18 @@ class _PassContext:
         # input values, silently missing the coupled (A, B) corner.  Excluding
         # observed ND inputs from the partition routes them through the normal
         # cross-product enumeration, which sets kernel.tags before stepping.
-        observed_nd_inputs = _observed_tags(
-            project=self.project, extra_exprs=self.extra_exprs
+        observed_nd_inputs = (
+            _observed_tags(project=self.project, extra_exprs=self.extra_exprs)
+            | set(self.opaque_reads)
         ) & set(self.nondeterministic_dims)
+        if self.opaque_reads_all:
+            observed_nd_inputs = set(self.nondeterministic_dims)
+        opaque_live = _opaque_observer_nd_names(
+            self.graph,
+            self.nondeterministic_dims,
+            (*(self.project or ()), *self.opaque_reads),
+            everything=self.opaque_reads_all,
+        )
 
         _split_names = frozenset(self.split_at_tags) if self.split_at_tags else frozenset()
         independence_relation = _build_independence_relation(
@@ -617,6 +632,7 @@ class _PassContext:
             always_live_input_names=tuple(
                 sorted(
                     observed_nd_inputs
+                    | opaque_live
                     | _collect_stateful_upstream_nd_names(
                         self.graph, self.stateful_dims, self.nondeterministic_dims
                     )
@@ -1105,6 +1121,35 @@ def _pass_validate_declared_bounds(ctx: _PassContext) -> None:
             f"  - {v}" for v in all_violations
         )
         raise ValueError(msg)
+
+
+def _opaque_observer_nd_names(
+    graph: ProgramGraph | None,
+    nd_dims: dict[str, tuple[Any, ...]] | None,
+    observed: tuple[str, ...],
+    *,
+    everything: bool,
+) -> set[str]:
+    """ND inputs a projection or a callable property can observe.
+
+    Live-input pruning keeps an input only while a residual expression names
+    it (or a hidden tag one names depends on it).  A projection or a callable
+    names no expression, so an input that reaches an observed tag through
+    data flow alone (``calc(100 / D, Q)`` with ``Q`` projected) would be held
+    at its current value and its other values never explored.  Every input in
+    the upstream cone of an observed tag stays live instead.  A callable with
+    no ``scope=`` may read any tag, so every input stays live.
+    """
+    if graph is None or not nd_dims:
+        return set()
+    if everything:
+        return set(nd_dims)
+    live: set[str] = set()
+    for name in observed:
+        if name in nd_dims:
+            live.add(name)
+        live.update(graph.upstream_slice(name) & nd_dims.keys())
+    return live
 
 
 def _collect_stateful_upstream_nd_names(
