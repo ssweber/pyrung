@@ -4,8 +4,10 @@ Between accumulator crossings every rung emits identical output.  The fold
 detects these plateaus, computes the nearest crossing in closed form, and
 folds the runner forward — dt knob for timers, acc-patch for per-scan
 counters, modular arithmetic for wrapping self-calcs.  Soundness rests on
-the plateau guard (only-accumulators-changed), not on the crossing set
-being exhaustive.
+the plateau guard for every value it checks, and on the crossing set for
+every value it lets move: each read of a moving value is a comparison the
+crossing arithmetic places, a read the landing scan reproduces, or it bounds
+the window at that value's next change (see _audit_coordinate_reads).
 
 Module structure
 ────────────────
