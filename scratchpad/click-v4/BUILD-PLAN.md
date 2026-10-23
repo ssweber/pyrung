@@ -222,6 +222,17 @@ Decided after the overnight fold/prover rounds:
       `f1.py`; domination also ignores direction (`p6.py` ctr=0 B=1).
     - MEDIUM: CTUD (`count_up(c, 4).down(rise(Y))`), `p1.py ctud`.
     - Callables/projections reading an absorbed accumulator see representative values only (`g1.py`).
+  - Found by the prove-timers race-narrowing agent (2026-10-23), revisit later; repros in session
+    scratchpad `race/` (session ff9bdd9b):
+    - HIGH, wrong Proven, also on dev: three timers where B must be pressed partway through T1.
+      `Rung(A): latch(L1)`, `Rung(B): latch(L2)`, `Rung(L1): on_delay(T1,100)`, `Rung(L1): on_delay(T3,120)`,
+      `Rung(L2): on_delay(T2,50)`, `Rung(T1.Done,~T2.Done): latch(X)`, `Rung(T2.Done,~T3.Done): latch(Y)`,
+      `Rung(X,Y): out(H)` is Proven; brute force reaches H in 11 scans (presets 60/30/80, 80/40/100 too).
+      Suspect `cycles.covered()`: a revisit ahead on one time-like timer and equal on another is treated as
+      reachable by stuttering, but stuttering advances both. `race/r4.py`.
+    - Absorption gate blind spot: `_has_forbidden_data_read` misses reads through an unbounded index
+      (`_indirect_ref_tags` returns None), so an accumulator mapped into a bank (`LoopIndex = ds[7]`) could
+      be read by `copy(ds[ptr], ...)` unseen. PackML's pointer never reaches it; the gate doesn't check.
   - Low: `_pilot_sweep_domains` and the lints step without the system model (`bounds.py`, `lintsys.py`: false
     CMP_ALWAYS_FALSE on `calc(rtc...)` destinations).
 - PDG indirect reads: `DS[agg]` with no base tag registers no reads; `DS[Ptr + k]` is narrowed by Ptr's range
