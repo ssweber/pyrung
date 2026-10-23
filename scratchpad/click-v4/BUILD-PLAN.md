@@ -132,8 +132,6 @@ time_event_drum (from feature 3):
 - D2 (which banks may hold a duration register) has no Click check.
 - Fold perf, also for `time_drum`: a coarse-unit (`sec`) drum steps most scans inside a step
   (~1600 kernel scans of 2000 in `TestTimeEventDrum._event_only_tail`); not measured further.
-- Exporter, pre-existing (also `event_drum`): a coil and a pinned instruction in one rung fail the CSV
-  round-trip (`pin count mismatch`). Open: does CLICK allow it? If not, make it a clear finding.
 - Fuzz grammar has no T&E kind (`_TERMINAL_KINDS` etc. would need it).
 
 Other:

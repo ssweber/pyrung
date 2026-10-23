@@ -488,8 +488,14 @@ class _LayoutMixin:
                 path=f"{path}.instruction",
             )
 
-        first_instruction_path = f"{path}.instruction[0]({type(instructions[0]).__name__})"
-        pin_rows = self._pin_rows(instructions[0], path=first_instruction_path)
+        # A pinned instruction is terminal, so it is the last output; any coil
+        # before it on the rung has no pins of its own.
+        pin_rows: list[tuple[str, ...]] = []
+        for instruction_index, instruction in enumerate(instructions):
+            instruction_path = (
+                f"{path}.instruction[{instruction_index}]({type(instruction).__name__})"
+            )
+            pin_rows.extend(self._pin_rows(instruction, path=instruction_path))
         return output_rows, pin_rows
 
     def _single_output_rows(
