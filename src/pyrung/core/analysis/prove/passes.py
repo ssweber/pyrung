@@ -69,6 +69,8 @@ from .kernel import _collect_edge_tag_exprs, _step_compiled_kernel
 from .results import Decision, Intractable, Journal, TagEntry
 from .system_points import (
     FAULT_FLAGS,
+    FIRST_SCAN,
+    FIRST_SCAN_DEPENDENTS,
     SystemPointModel,
     build_system_point_model,
     free_system_tags,
@@ -631,7 +633,10 @@ class _PassContext:
             independence_relation=independence_relation,
             free_input_factoring=free_input_factoring,
             mutable_tag_names=mutable_tag_names,
-            base_tag_keys=frozenset(self.compiled._tag_template)
+            base_tag_keys=(
+                frozenset(self.compiled._tag_template)
+                | _system_tag_keys(self.system_points, self.nondeterministic_dims)
+            )
             if mutable_tag_names is not None
             else None,
             simulation_status_tag_names=_collect_builtin_status_tag_names(self.program),
@@ -803,24 +808,52 @@ _OPT_TOGGLE_FIELDS = tuple(f for f in _OptConfig.__dataclass_fields__ if f != "d
 _DEFAULT_OPT_CONFIG = _OptConfig()
 
 
-def _observed_fault_flags(ctx: _PassContext) -> frozenset[str]:
-    """Fault flags the property or projection reads.
+def _system_tag_keys(
+    system_points: SystemPointModel | None,
+    nondeterministic_dims: dict[str, tuple[Any, ...]] | None,
+) -> frozenset[str]:
+    """System tag keys the kernel holds beyond its compiled template.
 
-    A callable property (no scope, no projection) may read any of them.  The
-    ``how()`` domain prior keeps the program's own graph.
+    A system tag only the property reads is seeded at power-on or assigned
+    as an input; restoring a snapshot must not drop it as a dynamic key.
+    """
+    keys = {name for name in nondeterministic_dims or () if name in SYSTEM_TAGS_BY_NAME}
+    if system_points is not None:
+        keys.update(name for name, _ in system_points.power_on)
+        keys.update(name for name, _ in system_points.after_scan)
+    return frozenset(keys)
+
+
+def _observed_system_tags(ctx: _PassContext) -> frozenset[str]:
+    """System tags the property, scope or projection reads.
+
+    The system-point model must cover them even when no rung reads them.  A
+    callable property (no scope, no projection) may read any fault flag, so
+    every fault writer counts; its other reads go through the guarded state
+    view (``system_points.guarded_state``).  The ``how()`` domain prior keeps
+    the program's own graph.
     """
     if ctx.domains_only:
         return frozenset()
-    if ctx.scope is None and ctx.project is None:
-        return FAULT_FLAGS
     observed = set(ctx.scope or ()) | set(ctx.project or ())
     for expr in ctx.extra_exprs or ():
         observed.update(_referenced_tags(expr))
-    return FAULT_FLAGS & observed
+    if ctx.scope is None and ctx.project is None:
+        observed.update(FAULT_FLAGS)
+    return frozenset(name for name in observed if name in SYSTEM_TAGS_BY_NAME)
 
 
 def _pass_build_graph(ctx: _PassContext) -> None:
-    ctx.graph = build_program_graph(ctx.program, observed_faults=_observed_fault_flags(ctx))
+    observed = _observed_system_tags(ctx)
+    ctx.graph = build_program_graph(ctx.program, observed_system=observed)
+    if (
+        not ctx.domains_only
+        and FIRST_SCAN not in ctx.graph.tags
+        and FIRST_SCAN_DEPENDENTS & ctx.graph.tags.keys()
+    ):
+        # The scan-time min/max ride on the first_scan bit, which then needs
+        # a tag of its own.
+        ctx.graph = build_program_graph(ctx.program, observed_system=observed | {FIRST_SCAN})
     ctx.all_exprs = _collect_all_exprs(ctx.program, ctx.graph, scope=ctx.scope)
     if ctx.extra_exprs:
         ctx.all_exprs = ctx.all_exprs + ctx.extra_exprs
@@ -1558,11 +1591,15 @@ def _pass_compile_kernel(ctx: _PassContext) -> None:
     assert ctx.stateful_dims is not None
     ctx.stateful_names = tuple(sorted(ctx.stateful_dims))
     if not ctx.domains_only:
-        referenced = frozenset(ctx.compiled.referenced_tags) & SYSTEM_TAGS_BY_NAME.keys()
+        referenced = (
+            frozenset(ctx.compiled.referenced_tags)
+            | frozenset(ctx.graph.tags if ctx.graph is not None else ())
+        ) & SYSTEM_TAGS_BY_NAME.keys()
+        nd = ctx.nondeterministic_dims or {}
         ctx.system_points = build_system_point_model(
             referenced,
             ctx.graph.writers_of if ctx.graph is not None else {},
-            frozenset(ctx.nondeterministic_dims or ()) & referenced,
+            {name: nd[name] for name in referenced if name in nd},
             ctx.dt,
         )
     combinational_edge = set(ctx.compiled.edge_tags) & (ctx._combinational_tags or set())
@@ -1652,6 +1689,7 @@ def _get_structural_domain_info(
             ctx.graph,
             ctx.all_exprs,
             literal_write_domains,
+            model_system_points=not ctx.domains_only,
         )
     return ctx._structural_domain_info
 

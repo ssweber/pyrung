@@ -97,8 +97,12 @@ from .expr import _build_atom_index, _collect_atoms_for_tag, _referenced_tags
 from .kernel import _restore_kernel, _snapshot_kernel, _step_compiled_kernel
 from .results import PENDING, Intractable
 from .system_points import (
+    FAULT_FLAGS,
     FIRST_SCAN,
+    FIRST_SCAN_DEPENDENTS,
     SCAN_START_RESETS,
+    bounded_system_tag,
+    clip_to_range,
     free_system_domain,
     free_system_tags,
 )
@@ -1143,12 +1147,18 @@ def _collect_structural_domain_info(
     all_exprs: list[Expr],
     literal_write_domains: dict[str, tuple[Any, ...]] | None = None,
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
+    *,
+    model_system_points: bool = False,
 ) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
     """Discover finite domains and reverse soundness blockers.
 
     Returns ``(domains, blockers)`` where *domains* maps tag names to their
     inferred finite value tuples and *blockers* lists source tags with
     unsupported reverse dependencies that could not be safely bounded.
+
+    *model_system_points* (BFS only) treats scan-, clock- and time-derived
+    system tags as free inputs: never constant storage, and seeded with their
+    calendar range when it is small (``rtc.hour``, ``rtc.minute``, ...).
     """
     from pyrung.core.validation._common import walk_instructions
 
@@ -1193,8 +1203,16 @@ def _collect_structural_domain_info(
     influences_comparison = _comparison_influencing_tags(graph, atom_idx, program)
     if profile:
         profile_last = _classify_profile_mark(timings, "comparison_influence_index", profile_last)
-    # Scan-, clock- and time-derived system tags are not constant storage.
-    free_system = free_system_tags(graph.tags, graph.writers_of)
+    # Under the BFS system-point model, scan-, clock- and time-derived system
+    # tags are free inputs, not constant storage.
+    free_system = (
+        free_system_tags(graph.tags, graph.writers_of) if model_system_points else frozenset()
+    )
+    for tag_name in sorted(free_system):
+        if tag_name not in known_domains:
+            full_range = free_system_domain(tag_name)
+            if full_range is not None:
+                known_domains[tag_name] = full_range
     for tag_name, tag in graph.tags.items():
         if tag_name in known_domains:
             continue
@@ -2214,7 +2232,13 @@ def _build_infeasible_hints(
             continue
         tag = graph.tags.get(name)
         ptr_info = graph.pointer_tags.get(name)
-        if ptr_info is not None:
+        if name in SYSTEM_TAGS_BY_NAME:
+            hints.append(
+                f"  {name}: system tag explored as a free input with no finite range"
+                f"; compare it with literals where it is read (e.g. {name} >= 2030)"
+                f" instead of copying it into arithmetic, or narrow scope="
+            )
+        elif ptr_info is not None:
             block_name, start, end = ptr_info
             hints.append(
                 f"  {name}: pointer into {block_name}[{start}..{end}]"
@@ -2328,6 +2352,7 @@ def _classify_dimensions_from_graph(
             all_exprs,
             literal_write_domains,
             discovered_domains,
+            model_system_points=model_system_points,
         )
         if profile:
             profile_last = _classify_profile_mark(
@@ -2440,8 +2465,12 @@ def _classify_dimensions_from_graph(
 
     scope_input_tags: frozenset[str] | None = None
     if scope is not None:
+        # Under the model an unwritten system tag is an input even when only
+        # the property reads it (no rung, so no graph role).
         _is_nd_input = lambda tn: (
-            graph.tag_roles.get(tn) is TagRole.INPUT or tn in receive_dest_names
+            graph.tag_roles.get(tn) is TagRole.INPUT
+            or tn in receive_dest_names
+            or (model_system_points and tn in SYSTEM_TAGS_BY_NAME and tn not in graph.writers_of)
         )
         upstream_tags: set[str] = set()
         for tag_name in scope:
@@ -2464,7 +2493,13 @@ def _classify_dimensions_from_graph(
     free_system = (
         free_system_tags(graph.tags, graph.writers_of) if model_system_points else frozenset()
     )
+    first_scan_tags = frozenset({FIRST_SCAN}) | FIRST_SCAN_DEPENDENTS
     for tag_name, tag in graph.tags.items():
+        if tag_name in free_system:
+            tag = bounded_system_tag(tag)
+        if not model_system_points and tag_name in FAULT_FLAGS:
+            # The how() prior keeps fault flags out, as before they had writers.
+            continue
         if tag.readonly:
             if exclusions is not None:
                 exclusions[tag_name] = "readonly"
@@ -2495,12 +2530,11 @@ def _classify_dimensions_from_graph(
         is_written = tag_name in graph.writers_of
 
         if tag_name in SYSTEM_TAGS_BY_NAME and not is_written:
-            if (
-                model_system_points
-                and tag_name == FIRST_SCAN
-                and (scope_input_tags is None or tag_name in scope_input_tags)
-            ):
-                stateful[tag_name] = (False, True)
+            if model_system_points and tag_name in first_scan_tags:
+                # first_scan, and the scan-time min/max that differ on scan 0
+                # only, ride on one stateful bit (see system_points).
+                if scope_input_tags is None or scope_input_tags & first_scan_tags:
+                    stateful[FIRST_SCAN] = (False, True)
                 continue
             if tag_name not in free_system:
                 continue
@@ -2555,10 +2589,13 @@ def _classify_dimensions_from_graph(
                 else:
                     infeasible_tags.append(tag_name)
                     continue
-            if tag.default not in domain:
+            if tag_name in free_system:
+                domain = clip_to_range(tag_name, tuple(domain))
+            if tag.default not in domain and tag_name not in free_system:
                 # The power-on default is always a reachable initial value that
                 # BFS must cover, but only when it respects declared constraints
-                # and isn't already subsumed by the _EQ_NE_OTHER sentinel.
+                # and isn't already subsumed by the _EQ_NE_OTHER sentinel.  A
+                # free system tag has no power-on value of its own.
                 default_valid = True
                 if tag.min is not None and tag.default < tag.min:
                     default_valid = False

@@ -1209,9 +1209,9 @@ def test_observed_fault_flag_counts_its_implicit_writers() -> None:
     base = build_program_graph(logic)
     assert "fault.division_error" not in base.writers_of
 
-    observed = build_program_graph(logic, observed_faults=("fault.division_error",))
+    observed = build_program_graph(logic, observed_system=("fault.division_error",))
     assert observed is not base
     assert observed.writers_of["fault.division_error"] == frozenset({0})
     assert "FaultDivisor" in observed.upstream_slice("fault.division_error")
-    assert build_program_graph(logic, observed_faults=("fault.division_error",)) is observed
+    assert build_program_graph(logic, observed_system=("fault.division_error",)) is observed
     assert build_program_graph(logic) is base

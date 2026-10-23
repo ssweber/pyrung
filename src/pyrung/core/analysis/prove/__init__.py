@@ -34,7 +34,12 @@ from .results import StateDiff as StateDiff
 from .results import TagEntry as TagEntry
 from .results import TraceStep as TraceStep
 from .results import _ParentLink as _ParentLink
-from .system_points import SystemPointModel
+from .system_points import (
+    SystemPointModel,
+    callable_refusals,
+    guarded_state,
+    system_constants,
+)
 
 
 @dataclass(frozen=True)
@@ -294,10 +299,29 @@ def _compile_property(
     """
     if len(conditions) == 1 and callable(conditions[0]) and not _is_condition_like(conditions[0]):
         user_predicate = conditions[0]
+        # Set per search by _bfs_explore: the system constants this callable
+        # may read and the system tags it may not (see system_points).
+        system_view: list[tuple[dict[str, Any], frozenset[str]] | None] = [None]
 
         def _predicate(state: dict[str, Any]) -> bool:
-            return bool(user_predicate(dict(state)))
+            view = system_view[0]
+            if view is None:
+                return bool(user_predicate(dict(state)))
+            return bool(user_predicate(guarded_state(state, view[0], view[1])))
 
+        def _bind_system(context: _ExploreContext) -> None:
+            system_view[0] = (
+                system_constants(context.dt),
+                callable_refusals(
+                    context.nondeterministic_dims,
+                    context.stateful_dims,
+                    context.graph.writers_of,
+                    context.graph.all_readers_of,
+                    context.graph.unread_fault_writes,
+                ),
+            )
+
+        setattr(_predicate, "_pyrung_bind_system", _bind_system)  # noqa: B010
         return _predicate, None, None
 
     from pyrung.core.condition import _as_condition, _normalize_and_condition

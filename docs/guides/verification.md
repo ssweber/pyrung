@@ -116,7 +116,9 @@ assert isinstance(result, Proven)
 
 ### System tags
 
-System tags read as they do in a fixed-step run at the verifier's `dt`. `sys.first_scan` is True on the first scan only, `sys.always_on` and the scan-time readings are constants, and fault and command bits reset at the start of each scan. The clocks, `sys.scan_counter`, `sys.scan_clock_toggle`, the RTC fields, and `sys.battery_present` depend on how long the PLC has run, so the verifier explores them as free inputs that can take any value on any scan. A `Proven` result holds for every timing; a `Counterexample` that drives one of them carries a caveat, since the PLC may never produce that sequence.
+System tags read as they do in a fixed-step run at the verifier's `dt`, whether a rung or only the property reads them. `sys.first_scan` is True on the first scan only, and `sys.scan_time_min_ms` and `sys.scan_time_max_ms` read 0 on that scan and the fixed scan time after. `sys.always_on`, `sys.scan_time_current_ms` and `sys.mode_run` are constants, and fault and command bits reset at the start of each scan. When the program writes `sys.cmd_mode_stop`, `sys.mode_run` becomes a free input instead; a stop written from outside the program, over Modbus or from an HMI, is not modeled.
+
+The clocks, `sys.scan_counter`, `sys.scan_clock_toggle` and the RTC fields depend on how long the PLC has run, and `sys.battery_present` is set by the environment, so the verifier explores them as free inputs that can take any value on any scan, within the calendar range for the RTC fields. A `Proven` result holds for every timing; a `Counterexample` that drives one of them carries a caveat, since the PLC may never produce that sequence. A callable property can read the constants; reading a free system tag that no rung reads returns `Intractable`, so write that property as a condition.
 
 ### Debugging with journals
 

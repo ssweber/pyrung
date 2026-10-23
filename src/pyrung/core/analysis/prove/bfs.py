@@ -36,7 +36,7 @@ from .kernel import (
 )
 from .passes import _DEFAULT_BFS_CONFIG, _BFSConfig
 from .results import Counterexample, Intractable, Proven, TraceStep, _ParentLink
-from .system_points import FIRST_SCAN, FREE_SYSTEM_CAVEAT
+from .system_points import FIRST_SCAN, FREE_SYSTEM_CAVEAT, UnmodeledSystemRead
 
 
 def _projected_tuple(kernel: ReplayKernel, project_names: tuple[str, ...]) -> tuple[Any, ...]:
@@ -152,8 +152,12 @@ def _bfs_explore(
     frontier_collector: list[dict[str, Any]] | None = None,
 ) -> _BFSResult:
     """BFS over the reachable state space (consumes first result from generator)."""
-    return next(
-        _bfs_explore_gen(
+    for predicate in predicates or ():
+        bind = getattr(predicate, "_pyrung_bind_system", None)
+        if bind is not None:
+            bind(context)
+    try:
+        return _first_bfs_result(
             context,
             predicates=predicates,
             project=project,
@@ -169,7 +173,24 @@ def _bfs_explore(
             state_filter=state_filter,
             frontier_collector=frontier_collector,
         )
-    )
+    except UnmodeledSystemRead as exc:
+        assert predicates is not None
+        refusal = Intractable(
+            reason=(f"callable property reads {exc.name}, which this search did not explore"),
+            dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+            estimated_space=0,
+            tags=[exc.name],
+            hints=[
+                f"  {exc.name}: system tag the verifier explores only where a rung or a"
+                f" condition property names it; write the property as a condition"
+            ],
+            journal=context.journal,
+        )
+        return [refusal for _ in predicates]
+
+
+def _first_bfs_result(context: _ExploreContext, **kwargs: Any) -> _BFSResult:
+    return next(_bfs_explore_gen(context, **kwargs))
 
 
 def _bfs_explore_gen(

@@ -133,7 +133,7 @@ class ProgramGraph:
     indirect_writes: tuple[IndirectWriteRef, ...] = ()
     # Fault flags whose implicit writes (``RungNode.implicit_writes``) count as
     # writes here: the ones a rung reads, plus any the caller observes
-    # (``build_program_graph(observed_faults=...)``).  A fault write nothing
+    # (``build_program_graph(observed_system=...)``).  A fault write nothing
     # reads is dead, so it stays out of ``writers_of`` and the cones.
     fault_writes: frozenset[str] = frozenset()
     unread_fault_writes: frozenset[str] = frozenset()
@@ -1413,20 +1413,28 @@ def collect_program_tags(program: Program) -> tuple[Tag, ...]:
 def build_program_graph(
     program: Program,
     *,
-    observed_faults: Collection[str] = (),
+    observed_system: Collection[str] = (),
 ) -> ProgramGraph:
     """Build the static PDG summary for a Program.
 
     An instruction's implicit fault writes (``_fault_writes``) count as writes
-    for the fault flags some rung reads.  *observed_faults* names flags read
-    from outside the program (a verifier property); their writes count too,
-    in a graph variant cached beside the program's own.
+    for the fault flags some rung reads.  *observed_system* names system tags
+    read from outside the program (a verifier property or projection): they
+    join ``tags`` and, for fault flags, their implicit writes count too, in a
+    graph variant cached beside the program's own.
     """
+    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+
     cached_graph = getattr(program, "_cached_graph", None)
     if cached_graph is None:
         cached_graph = _build_program_graph(program, frozenset())
         program._cached_graph = cached_graph
-    extra = frozenset(observed_faults) & cached_graph.unread_fault_writes
+    extra = frozenset(
+        name
+        for name in observed_system
+        if name in cached_graph.unread_fault_writes
+        or (name in SYSTEM_TAGS_BY_NAME and name not in cached_graph.tags)
+    )
     if not extra:
         return cached_graph
     variants = cached_graph._observed_variants
@@ -1438,7 +1446,9 @@ def build_program_graph(
     return graph
 
 
-def _build_program_graph(program: Program, observed_faults: frozenset[str]) -> ProgramGraph:
+def _build_program_graph(program: Program, observed_system: frozenset[str]) -> ProgramGraph:
+    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+
     tag_refs: dict[str, Tag] = {}
     rung_nodes: list[RungNode] = []
     node_index_by_rung: dict[int, int] = {}
@@ -1511,8 +1521,11 @@ def _build_program_graph(program: Program, observed_faults: frozenset[str]) -> P
             writers_of_mut[tag_name].add(node_index)
         implicit.update(node.implicit_writes)
     fault_writes = frozenset(
-        name for name in implicit if name in all_readers_of_mut or name in observed_faults
+        name for name in implicit if name in all_readers_of_mut or name in observed_system
     )
+    for name in observed_system:
+        if name in SYSTEM_TAGS_BY_NAME:
+            tag_refs.setdefault(name, SYSTEM_TAGS_BY_NAME[name])
     if fault_writes:
         for node_index, node in enumerate(rung_nodes):
             for tag_name in node.implicit_writes & fault_writes:

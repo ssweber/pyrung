@@ -7,10 +7,14 @@ against the concrete PLC.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from pyrung.core import (
     PLC,
     Bool,
+    Dint,
     Int,
+    Or,
     Program,
     Rung,
     calc,
@@ -23,18 +27,28 @@ from pyrung.core import (
     subroutine,
     system,
 )
+from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.drive_setup import build_prover_context
 from pyrung.core.analysis.prove import (
     Counterexample,
+    Intractable,
     Proven,
     TraceStep,
     _build_explore_context,
     always,
+    never,
+    reachable_states,
+)
+from pyrung.core.analysis.prove.classify import (
+    _collect_all_exprs,
+    _collect_structural_domain_info,
 )
 from pyrung.core.analysis.prove.passes import _OptConfig
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
 S = system.sys
 F = system.fault
+R = system.rtc
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
@@ -215,8 +229,6 @@ class TestFreeSystemPoints:
         with Program(strict=False) as logic:
             with Rung(S.clock_1s, S.scan_counter == 3, enable):
                 out(hit)
-        from dataclasses import replace
-
         ctx = _build_explore_context(logic, _opt_config=replace(_OptConfig(), domains_only=True))
         assert not set(ctx.nondeterministic_dims) & set(SYSTEM_TAGS_BY_NAME)
 
@@ -358,3 +370,169 @@ class TestFaultFlags:
         result = always(logic, ~hit)
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "Hit")
+
+
+def _enable_hit() -> tuple[Program, Bool]:
+    enable = Bool("Enable", external=True)
+    hit = Bool("Hit")
+    with Program(strict=False) as logic:
+        with Rung(enable):
+            out(hit)
+    return logic, hit
+
+
+def _has_free_caveat(result: Counterexample, name: str) -> bool:
+    return any(name in caveat for caveat in result.caveats)
+
+
+class TestPropertyOnlySystemTags:
+    """System tags only the property reads are modeled like rung-read ones."""
+
+    def test_clock_in_the_property(self):
+        logic, hit = _enable_hit()
+        result = always(logic, Or(~S.clock_1s, ~hit))
+        assert isinstance(result, Counterexample)
+        assert _has_free_caveat(result, "sys.clock_1s")
+
+    def test_scan_counter_in_the_property(self):
+        logic, _hit = _enable_hit()
+        assert isinstance(always(logic, S.scan_counter < 100), Counterexample)
+
+    def test_rtc_field_in_the_property(self):
+        logic, _hit = _enable_hit()
+        assert isinstance(always(logic, R.hour != 12), Counterexample)
+
+    def test_constant_in_the_property(self):
+        logic, _hit = _enable_hit()
+        assert isinstance(never(logic, ~S.always_on), Proven)
+        assert isinstance(always(logic, S.mode_run), Proven)
+
+    def test_first_scan_in_the_projection(self):
+        logic, _hit = _enable_hit()
+        rows = reachable_states(logic, project=["sys.first_scan", "Hit"])
+        assert isinstance(rows, frozenset)
+        assert frozenset({("sys.first_scan", True), ("Hit", False)}) in rows
+        assert frozenset({("sys.first_scan", True), ("Hit", True)}) not in rows
+
+    def test_callable_reads_constants(self):
+        logic, _hit = _enable_hit()
+        assert isinstance(always(logic, lambda s: s["sys.always_on"]), Proven)
+
+    def test_callable_reading_an_unexplored_clock_is_refused(self):
+        logic, _hit = _enable_hit()
+        result = always(logic, lambda s: not (s["sys.clock_1s"] and s["Hit"]))
+        assert isinstance(result, Intractable)
+        assert result.tags == ["sys.clock_1s"]
+
+
+class TestCalendarRanges:
+    def test_impossible_rtc_values_are_proven_unreachable(self):
+        logic, _hit = _enable_hit()
+        assert isinstance(always(logic, R.month != 0), Proven)
+        assert isinstance(always(logic, R.year4 != 0), Proven)
+        assert isinstance(always(logic, R.hour < 30), Proven)
+        assert isinstance(always(logic, R.month != 12), Counterexample)
+
+    def test_minute_copied_through_calc(self):
+        minute = Int("Minute")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(R.minute, minute)
+            with Rung(minute == 30):
+                out(hit)
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        assert _has_free_caveat(result, "rtc.minute")
+
+    def test_packed_time_of_day(self):
+        hhmm = Int("Hhmm")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(R.hour * 100 + R.minute, hhmm)
+            with Rung(hhmm == 1230):
+                out(hit)
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        assert {"rtc.hour": 12, "rtc.minute": 30}.items() <= result.trace[-1].inputs.items()
+
+    def test_year_arithmetic_hint_names_the_system_tag(self):
+        stamp = Dint("Stamp")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(R.year4 * 10000 + R.month * 100 + R.day, stamp)
+            with Rung(stamp == 20261225):
+                out(hit)
+        result = always(logic, ~hit)
+        assert isinstance(result, Intractable)
+        hint = next(h for h in result.hints if "rtc.year4" in h)
+        assert "system tag" in hint
+        assert "choices=" not in hint
+
+
+class TestScanTimeAndEnvironment:
+    def test_scan_time_max_is_the_fixed_scan_time(self):
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung(S.scan_time_max_ms > 50):
+                latch(hit)
+        assert isinstance(always(logic, ~hit), Proven)
+
+    def test_scan_time_max_reads_zero_on_the_first_scan(self):
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung(S.scan_time_max_ms == 0):
+                latch(hit)
+        plc = PLC(logic, dt=0.010)
+        plc.step()
+        assert plc.current_state.tags["Hit"] is True
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_battery_present_is_an_environment_input(self):
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung(~S.battery_present):
+                latch(hit)
+        plc = PLC(logic, dt=0.010)
+        plc.battery_present = False
+        plc.step()
+        assert plc.current_state.tags["Hit"] is True
+        assert isinstance(always(logic, ~hit), Counterexample)
+
+
+class TestHowPriorUnchanged:
+    """The how() domain prior (domains_only) keeps the pre-model system-tag handling."""
+
+    def test_structural_domains_keep_rtc_constant_without_the_model(self):
+        stamp = Int("Stamp")
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(R.month, stamp)
+        graph = build_program_graph(logic)
+        exprs = _collect_all_exprs(logic, graph)
+        off, _ = _collect_structural_domain_info(logic, graph, exprs)
+        on, _ = _collect_structural_domain_info(logic, graph, exprs, model_system_points=True)
+        assert off["rtc.month"] == (0,)
+        assert on["rtc.month"] == tuple(range(1, 13))
+
+    def test_fault_flag_stays_out_of_the_prior(self):
+        divisor = _divisor("Divisor")
+        quotient = Int("Quotient")
+        alarm = Bool("Alarm")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(100 / divisor, quotient)
+            with Rung(F.division_error):
+                latch(alarm)
+        ctx = _build_explore_context(logic, _opt_config=replace(_OptConfig(), domains_only=True))
+        assert "fault.division_error" not in ctx.stateful_dims
+        assert "fault.division_error" not in ctx.nondeterministic_dims
+        plc = PLC(logic, dt=0.010)
+        plc.step()
+        prior = build_prover_context(logic, dict(plc.current_state.tags))
+        key = prior.key_config.stateful_names if prior.key_config is not None else ()
+        assert "fault.division_error" not in key
