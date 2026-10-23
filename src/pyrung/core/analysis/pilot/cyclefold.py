@@ -255,7 +255,7 @@ def _monotone_read_surface(
     from pyrung.core.fold import (
         _acc_totals,
         _crossed_between,
-        _progress_bound,
+        _progress_bounds,
         _resolve_num,
         _scans_to_cross,
     )
@@ -285,7 +285,7 @@ def _monotone_read_surface(
             kv = _resolve_num(operand, state)
             if kv is None:
                 return None  # unresolved threshold — fail closed
-            bounds.append(_progress_bound("up", form, kv))
+            bounds.extend(_progress_bounds("up", form, kv))
         if not bounds:
             return None  # no resolvable surface at all — fail closed
 

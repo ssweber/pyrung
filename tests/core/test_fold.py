@@ -3158,3 +3158,27 @@ class TestReadAboveTheSource:
     def test_flip_scan_matches_stepping(self, kind: str, above: bool) -> None:
         folded = _assert_fold_is_exact(self._shape(kind, above), _scans(300))
         assert folded.state.tags["Stamp"] > 0
+
+
+class TestEqualityFall:
+    """``Acc == k`` flips twice: on reaching ``k`` and on passing it.  A timer
+    stepping less than one unit per scan sits at ``k`` for many scans, so the
+    fall bounds a window of its own."""
+
+    @staticmethod
+    def _shape(form: str, unit: str) -> Callable[[], Program]:
+        T = Timer.clone("T")
+
+        def source() -> None:
+            with Rung():
+                on_delay(T, 30, unit)
+
+        def reader() -> Any:
+            return T.Acc == 5 if form == "eq" else T.Acc != 5
+
+        return lambda: _scan_stamp_program(source, reader, above=False)
+
+    @pytest.mark.parametrize("form", ["eq", "ne"])
+    @pytest.mark.parametrize(("unit", "dt"), [("s", 0.1), ("ms", 0.0003)])
+    def test_fall_scan_matches_stepping(self, form: str, unit: str, dt: float) -> None:
+        _assert_fold_is_exact(self._shape(form, unit), _scans(400), dt=dt)

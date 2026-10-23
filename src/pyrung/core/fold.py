@@ -2292,6 +2292,20 @@ def _progress_bound(kind: str, form: str, k: float) -> tuple[float, bool]:
     return k, form in ("gt", "le")
 
 
+def _progress_bounds(kind: str, form: str, k: float) -> tuple[tuple[float, bool], ...]:
+    """Every ``(target, strict)`` boundary where ``acc <form> k`` can flip.
+
+    A monotone accumulator flips an ordering comparison once; ``eq``/``ne``
+    flip twice, on reaching ``k`` and on passing it.  A step below one unit
+    (a slow timer) sits at ``k`` for many scans, so the fall is a crossing of
+    its own.
+    """
+    target, strict = _progress_bound(kind, form, k)
+    if form in ("eq", "ne"):
+        return ((target, False), (target, True))
+    return ((target, strict),)
+
+
 def _scans_to_cross(pa: float, delta: float, target: float, strict: bool) -> int | None:
     """Scans for progress (at ``pa``, +``delta``/scan) to cross ``target``."""
     if strict:
@@ -2325,10 +2339,9 @@ def _comparisons_saturated(progress: float, kind: str, cmps: Sequence[tuple[str,
     the source, the source's raw value keeps changing but its logical effect on
     that rung is constant — so a clock gating the rung need not stay bound to it.
 
-    ``eq``/``ne`` are treated conservatively as *never* saturated: ``_progress_bound``
-    models only their rising crossing, not the fall one scan later, so a value
-    sitting at or past the threshold could still re-flip under this arithmetic.
-    Excluding them keeps the predicate sound at the cost of a missed fold.
+    ``eq``/``ne`` are treated conservatively as *never* saturated (a value
+    sitting at the threshold still has its fall ahead); excluding them keeps
+    the predicate sound at the cost of a missed fold.
 
     Empty *cmps* is vacuously saturated (the caller only passes comparison reads;
     a raw data read of the source is disqualifying upstream, never reaches here).
@@ -2816,7 +2829,7 @@ def _nearest_timer_crossing(
             if kv is None:
                 unresolved = True
                 break
-            targets.append(_progress_bound(src.kind, form, kv))
+            targets.extend(_progress_bounds(src.kind, form, kv))
         if unresolved:
             best = 1 if best is None else min(best, 1)
             continue
@@ -2934,7 +2947,7 @@ def _nearest_acc_crossing(
             if kv is None:
                 unresolved = True
                 break
-            bounds.append(_progress_bound(src.kind, form, kv))
+            bounds.extend(_progress_bounds(src.kind, form, kv))
         if unresolved:
             best = 1 if best is None else min(best, 1)
             continue
