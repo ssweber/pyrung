@@ -678,3 +678,55 @@ class TestProgressAcrossCycles:
             with Rung(count >= 3):
                 out(hit)
         _assert_replays_to(logic, always(logic, ~hit), "WideHit")
+
+    def _counter_racing_a_timer(self, preset: int, *, ctu: bool, tag: str) -> tuple[Program, Bool]:
+        arm = Bool(tag + "Arm", external=True)
+        pulse = Bool(tag + "Pulse", external=True)
+        armed = Bool(tag + "Armed")
+        count = Int(tag + "Count")
+        counter = Counter.clone(tag + "Ctu")
+        timer = Timer.clone(tag + "Tmr")
+        hit = Bool(tag + "Hit")
+        with Program(strict=False) as logic:
+            with Rung(rise(pulse), armed):
+                if ctu:
+                    count_up(counter, preset=5).reset(hit)
+                else:
+                    calc(count + 1, count)
+            with Rung(arm):
+                latch(armed)
+            with Rung(armed):
+                on_delay(timer, preset=preset)
+            with Rung(counter.Done if ctu else count >= 3, ~timer.Done):
+                out(hit)
+        return logic, hit
+
+    def test_pumping_carries_a_timer_running_beside_the_pulses(self):
+        """The timer advances on every lap the trace repeats: it is pumped too,
+        and its preset bounds the repeats (no unreplayable counterexample)."""
+        logic, hit = self._counter_racing_a_timer(60, ctu=False, tag="RaceInt")
+        assert isinstance(always(logic, ~hit), Proven)
+        assert reachable_states(logic, project=["RaceIntHit"]) == frozenset(
+            {frozenset({("RaceIntHit", False)})}
+        )
+        logic, hit = self._counter_racing_a_timer(100, ctu=True, tag="RaceCtu")
+        assert isinstance(always(logic, ~hit), Proven)
+
+    def test_pulses_that_beat_the_timer_still_count(self):
+        logic, hit = self._counter_racing_a_timer(70, ctu=False, tag="RaceWin")
+        _assert_replays_to(logic, always(logic, ~hit), "RaceWinHit")
+
+    def test_huge_preset_trace_lists_the_cycle_once(self):
+        pulse = Bool("HugeIn", external=True)
+        clear = Bool("HugeClear", external=True)
+        counter = Counter.clone("HugeCtu")
+        hit = Bool("HugeHit")
+        with Program(strict=False) as logic:
+            with Rung(rise(pulse)):
+                count_up(counter, preset=10**7).reset(clear)
+            with Rung(counter.Done):
+                out(hit)
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        assert len(result.trace) < 100
+        assert any("more times to replay it" in caveat for caveat in result.caveats)

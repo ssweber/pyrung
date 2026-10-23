@@ -269,11 +269,28 @@ class _CycleTracker:
         "_pumped",
         "_probed",
         "_readers",
+        "_untracked",
         "refined_nodes",
     )
 
     def __init__(self, context: _ExploreContext) -> None:
         self._sources = _hidden_progress_sources(context)
+        tracked = {source.acc_name for source in self._sources}
+        exact = set(context.stateful_names)
+        self._untracked = tuple(
+            sorted(
+                (
+                    {spec.acc_name for spec in context.done_event_specs}
+                    | {
+                        vector.acc_name
+                        for vector in context.threshold_vector_specs
+                        if vector.kind != _THRESHOLD_KIND_COMPARISON_ONLY
+                    }
+                )
+                - tracked
+                - exact
+            )
+        )
         self._readers = tuple(
             (i, source.acc_name, source.kind in _PLAIN_KINDS)
             for i, source in enumerate(self._sources)
@@ -463,15 +480,21 @@ class _CycleTracker:
         chain: list[Any],
         pulse: set[int],
     ) -> _Pump | None:
-        """Extra cycle traversals that keep *key* uncrossed, if the cycle is linear."""
+        """Extra cycle traversals that keep *key* uncrossed, if the cycle is linear.
+
+        Every accumulator the cycle advances is pumped, time-like or not: the
+        trace repeats the whole cycle, so a timer running beside the pulses
+        advances with them and its thresholds bound the repeats too.
+        """
         start = self._hidden.get(chain[-1])
         if start is None:
             return None
         deltas: dict[int, float] = {}
-        for i in pulse:
+        for i, last in enumerate(hidden):
+            if last is None:
+                continue
             first = start[i]
-            last = hidden[i]
-            if first is None or last is None:
+            if first is None:
                 return None
             delta = last - first
             if delta < 0:
@@ -489,7 +512,7 @@ class _CycleTracker:
             if first > previous:
                 return None
             deltas[i] = delta
-        if not deltas:
+        if not (deltas.keys() & pulse):
             return None
         repeats: int | None = None
         for i, delta in deltas.items():
@@ -524,10 +547,19 @@ class _CycleTracker:
         """
         if after is None:
             return False
-        for i, delta in deltas.items():
-            if after[i] is None or abs(after[i] - (before[i] + delta)) > 1e-9:
+        for i, value in enumerate(before):
+            if value is None:
+                continue
+            if after[i] is None or abs(after[i] - (value + deltas.get(i, 0))) > 1e-9:
                 return False
         return True
+
+    def untracked_values(self, kernel: ReplayKernel) -> tuple[Any, ...]:
+        """Hidden accumulators the tracker does not follow (timers toward a hidden
+        preset): a pumped cycle must leave them where they are."""
+        return tuple(
+            (kernel.tags.get(name), kernel.memory.get(f"_frac:{name}")) for name in self._untracked
+        )
 
     def cycle_steps(self, chain: list[Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
         """Inputs and demoted prevs of the links from the cycle's start onward."""

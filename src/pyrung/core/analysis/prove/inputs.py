@@ -17,13 +17,28 @@ if TYPE_CHECKING:
 _FREE_COMBO_CAP = 10_000
 
 
+def _thin_domain(domain: tuple[Any, ...], max_values: int) -> tuple[Any, ...]:
+    """Subsample a domain to at most *max_values* evenly-spaced representatives."""
+    if len(domain) <= max_values:
+        return domain
+    step = (len(domain) - 1) / (max_values - 1)
+    indices = {round(i * step) for i in range(max_values)}
+    indices.add(0)
+    indices.add(len(domain) - 1)
+    return tuple(domain[i] for i in sorted(indices))
+
+
 class _FreeComboOverflow(Exception):
     """The free inputs live at one state have more joint values than the cap.
 
     Free inputs are enumerated jointly from every state, so their domain
-    product is the per-state branching factor.  Past ``_FREE_COMBO_CAP`` the
-    search stops with ``Intractable``: a sample of the product could miss
-    the one combination that breaks the property.
+    product is the per-state branching factor.  Past ``_FREE_COMBO_CAP`` each
+    domain is thinned to evenly spaced representatives, a sample that could
+    miss the one combination that breaks the property: the BFS raises this
+    and either stops (``reachable_states``) or keeps searching the sample for
+    counterexamples and reports ``Intractable`` instead of ``Proven``.
+    Domains already at the per-input target (two-valued Bools) are not
+    thinned, and the full product is enumerated as before.
     """
 
     def __init__(self, domain_sizes: dict[str, int]) -> None:
@@ -425,6 +440,7 @@ def _iter_input_assignments(
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     free_inputs: frozenset[str] = frozenset(),
     factored_free: frozenset[str] = frozenset(),
+    sample: bool = False,
 ) -> Any:
     """Yield single-dimension interleaved input assignments for one BFS state.
 
@@ -485,9 +501,18 @@ def _iter_input_assignments(
         combo_estimate = 1
         for n in live_free:
             combo_estimate *= len(nondeterministic_dims[n])
-        if combo_estimate > _FREE_COMBO_CAP:
-            raise _FreeComboOverflow({n: len(nondeterministic_dims[n]) for n in live_free})
-        free_domains = [[(n, v) for v in nondeterministic_dims[n]] for n in live_free]
+        target_per = max(2, int(_FREE_COMBO_CAP ** (1.0 / len(live_free))))
+        if combo_estimate > _FREE_COMBO_CAP and any(
+            len(nondeterministic_dims[n]) > target_per for n in live_free
+        ):
+            if not sample:
+                raise _FreeComboOverflow({n: len(nondeterministic_dims[n]) for n in live_free})
+            free_domains = [
+                [(n, v) for v in _thin_domain(nondeterministic_dims[n], target_per)]
+                for n in live_free
+            ]
+        else:
+            free_domains = [[(n, v) for v in nondeterministic_dims[n]] for n in live_free]
         for combo in itertools.product(*free_domains):
             d = dict(combo)
             if any(d[n] != stutter_dict.get(n) for n in d):

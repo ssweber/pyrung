@@ -23,6 +23,7 @@ from pyrung.core import (
     run_function,
 )
 from pyrung.core.analysis.prove import (
+    Counterexample,
     Intractable,
     TraceStep,
     _classify_dimensions,
@@ -454,3 +455,33 @@ class TestFreeInputComboCap:
         logic, _hit = self._joint_compare()
         result = reachable_states(logic, project=["CapHit"])
         assert isinstance(result, Intractable)
+
+    def test_bool_inputs_past_the_cap_are_enumerated_exactly(self):
+        """Two-valued inputs cannot be thinned, so their product is explored in full."""
+        inputs = [Bool(f"CapBool{i}", external=True) for i in range(14)]
+        hit = Bool("CapBoolHit")
+        with Program(strict=False) as logic:
+            with Rung(*inputs):
+                out(hit)
+        assert isinstance(always(logic, ~hit), Counterexample)
+        assert reachable_states(logic, project=["CapBoolHit"]) == frozenset(
+            {frozenset({("CapBoolHit", False)}), frozenset({("CapBoolHit", True)})}
+        )
+
+    def test_a_sampled_search_still_reports_its_counterexamples(self):
+        values = {v: f"v{v}" for v in range(25)}
+        a = Int("SmpA", external=True, choices=values)
+        b = Int("SmpB", external=True, choices=values)
+        c = Int("SmpC", external=True, choices=values)
+        arm = Bool("SmpArm", external=True)
+        armed = Bool("SmpArmed")
+        hit = Bool("SmpHit")
+        with Program(strict=False) as logic:
+            with Rung(arm):
+                latch(armed)
+            with Rung(armed, a == 9, b == 9, c == 9):
+                out(hit)
+        results = always(logic, [~hit, ~armed])
+        assert isinstance(results, list)
+        assert isinstance(results[0], Intractable)
+        assert isinstance(results[1], Counterexample)

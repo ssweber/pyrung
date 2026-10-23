@@ -122,6 +122,9 @@ def _build_trace(
 # Marks a refined trace id (see _refine_revisit in _bfs_explore_gen).
 _REFINED = object()
 
+# Longest pumped cycle repetition written out step by step in a trace.
+_MAX_PUMPED_TRACE_STEPS = 100_000
+
 _BFSResult = (
     list[Proven | Counterexample | Intractable]
     | frozenset[frozenset[tuple[str, Any]]]
@@ -454,6 +457,7 @@ def _bfs_explore_gen(
     ) -> bool:
         """Replay the cycle once from the revisit: same key, same progress again."""
         visible = key[:-1] if paced else key
+        untracked = cycles.untracked_values(kernel)
         for inputs, _prev in (*cycles.cycle_steps(chain), (input_dict, bprev_dict)):
             if _has_demoted:
                 for name, value in zip(_demoted, _extract_bprev(kernel), strict=True):
@@ -467,10 +471,11 @@ def _bfs_explore_gen(
             if bfs_config.live_input_pruning
             else None
         )
-        again = _state_key(kernel, live=live_after, threshold_vector=tv) == visible and (
-            cycles.repeats_linearly(hidden, cycles.hidden_vector(kernel, key), deltas)
+        return (
+            _state_key(kernel, live=live_after, threshold_vector=tv) == visible
+            and cycles.repeats_linearly(hidden, cycles.hidden_vector(kernel, key), deltas)
+            and cycles.untracked_values(kernel) == untracked
         )
-        return again
 
     def _refine_revisit(
         *,
@@ -554,7 +559,17 @@ def _bfs_explore_gen(
                         for node in reversed(chain[:-1])
                     ]
                     steps.append(TraceStep(inputs=input_dict, scans=edge_scans, prev=bprev_dict))
-                    repeat = tuple(steps) * pumped.count
+                    if len(steps) * pumped.count <= _MAX_PUMPED_TRACE_STEPS:
+                        repeat = tuple(steps) * pumped.count
+                    else:
+                        # Spelled out, the trace would not fit in memory.
+                        repeat = tuple(steps)
+                        edge_caveats = (
+                            *edge_caveats,
+                            f"Counterexample trace lists a {len(steps)}-step input cycle once"
+                            f" where the PLC runs it {pumped.count} times; repeat those steps"
+                            f" {pumped.count - 1} more times to replay it.",
+                        )
         if pumped is None or not pumped.count:
             x_snap = None
         claimed_x = cycles.claim(tid, base_hidden, x_projection)
@@ -643,6 +658,9 @@ def _bfs_explore_gen(
         getattr(progress, "set_depth", None) if progress is not None else None
     )
     depth_truncated = False
+    # Set when free inputs past the joint-value cap were sampled (see
+    # inputs._FreeComboOverflow): no property may then be Proven.
+    sampled_overflow: _FreeComboOverflow | None = None
     # Deterministic work budget: count kernel evaluations (machine-independent,
     # unlike wall-clock) so a bounded how() search yields the same Intractable
     # verdict on every machine.  None => unbounded, so always/never/reachable_states
@@ -734,14 +752,28 @@ def _bfs_explore_gen(
                     joint_inputs=context.joint_inputs,
                     free_inputs=context.free_input_names,
                     factored_free=_factored_names,
+                    sample=sampled_overflow is not None,
                 )
             except _FreeComboOverflow as overflow:
-                intractable = _free_combo_intractable(context, overflow, len(visited))
-                if results is not None:
-                    yield [r if r is not None else intractable for r in results]
-                else:
-                    yield intractable
-                return
+                if results is None:
+                    yield _free_combo_intractable(context, overflow, len(visited))
+                    return
+                # Keep searching a thinned sample: a counterexample it finds
+                # is real, but what it does not find is not Proven.
+                sampled_overflow = overflow
+                assignments = _iter_input_assignments(
+                    live,
+                    context.nondeterministic_dims,
+                    context.exclusive_input_groups if bfs_config.exclusive_input_grouping else (),
+                    context.exclusive_input_group_by_member
+                    if bfs_config.exclusive_input_grouping
+                    else {},
+                    current_values=current_values,
+                    joint_inputs=context.joint_inputs,
+                    free_inputs=context.free_input_names,
+                    factored_free=_factored_names,
+                    sample=True,
+                )
 
         if _factoring_active:
             assert _factoring is not None
@@ -1400,6 +1432,11 @@ def _bfs_explore_gen(
                 f"BFS exhausted depth_budget={depth_budget}; deeper abstract states were not explored.",
             ),
         )
+
+    if sampled_overflow is not None:
+        sampled = _free_combo_intractable(context, sampled_overflow, len(visited))
+        yield [r if r is not None else sampled for r in results or [None]]
+        return
 
     if results is not None:
         yield [
