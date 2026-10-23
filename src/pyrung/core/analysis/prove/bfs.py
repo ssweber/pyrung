@@ -458,7 +458,6 @@ def _bfs_explore_gen(
     ) -> bool:
         """Replay the cycle once from the revisit: same key, same progress again."""
         visible = key[:-1] if paced else key
-        untracked = cycles.untracked_values(kernel)
         timers_before = cycles.timer_readings(kernel)
         for inputs, scans in (*cycles.cycle_steps(chain), (input_dict, edge_scans)):
             for name, value in inputs.items():
@@ -478,7 +477,6 @@ def _bfs_explore_gen(
             _state_key(kernel, live=live_after, threshold_vector=tv) == visible
             and cycles.repeats_linearly(hidden, cycles.hidden_vector(kernel, key), deltas)
             and cycles.timer_lap_matches(timers_before, kernel, timer_steps)
-            and cycles.untracked_values(kernel) == untracked
         )
 
     def _refine_revisit(

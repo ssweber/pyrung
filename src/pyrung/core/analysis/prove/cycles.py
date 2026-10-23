@@ -52,6 +52,10 @@ What is left: a timer whose value at a key differs by the branch it came
 from, and that does not advance while the key holds still, is represented by
 the first node plus one seed per key.
 
+A timer toward a tag preset (an abstract threshold) is tracked like any
+other; it is pumped or seeded only at a key where every threshold still
+ahead of it is exact (the preset itself crossed, ``T.Acc >= 40`` not yet).
+
 Accumulators read outside threshold comparisons are never absorbed, so the
 concrete value is in the key and no tracking is needed.  Comparison-only
 vectors are not tracked either: they compare against literals or stable tags
@@ -145,7 +149,6 @@ def _hidden_progress_sources(context: _ExploreContext) -> tuple[_ProgressSource,
         kinds.setdefault(spec.acc_name, spec.kind)
     vectors: dict[str, list[tuple[int, tuple[_VectorAtom, ...]]]] = {}
     offset = len(context.stateful_names)
-    abstract_timers: set[str] = set()
     for index, vector in enumerate(context.threshold_vector_specs):
         if vector.acc_name in exact or vector.kind == _THRESHOLD_KIND_COMPARISON_ONLY:
             continue
@@ -153,10 +156,6 @@ def _hidden_progress_sources(context: _ExploreContext) -> tuple[_ProgressSource,
             _VectorAtom(atom.threshold, atom.form, atom.mode == _THRESHOLD_MODE_EXACT)
             for atom in vector.atoms
         )
-        if vector.kind in _TIMER_KINDS and not all(atom.exact for atom in atoms):
-            # A timer toward a hidden preset can be neither pumped nor
-            # seeded (both need the thresholds), so it is never tracked.
-            abstract_timers.add(vector.acc_name)
         vectors.setdefault(vector.acc_name, []).append((offset + index, atoms))
         kinds.setdefault(vector.acc_name, vector.kind)
     return tuple(
@@ -168,7 +167,6 @@ def _hidden_progress_sources(context: _ExploreContext) -> tuple[_ProgressSource,
             vector_slots=tuple(vectors.get(name, ())),
         )
         for name in sorted(kinds)
-        if name not in abstract_timers
     )
 
 
@@ -319,28 +317,11 @@ class _CycleTracker:
         "_pumped",
         "_probed",
         "_readers",
-        "_untracked",
         "refined_nodes",
     )
 
     def __init__(self, context: _ExploreContext) -> None:
         self._sources = _hidden_progress_sources(context)
-        tracked = {source.acc_name for source in self._sources}
-        exact = set(context.stateful_names)
-        self._untracked = tuple(
-            sorted(
-                (
-                    {spec.acc_name for spec in context.done_event_specs}
-                    | {
-                        vector.acc_name
-                        for vector in context.threshold_vector_specs
-                        if vector.kind != _THRESHOLD_KIND_COMPARISON_ONLY
-                    }
-                )
-                - tracked
-                - exact
-            )
-        )
         self._readers = tuple(
             (i, source.acc_name, source.kind in _PLAIN_KINDS)
             for i, source in enumerate(self._sources)
@@ -715,13 +696,6 @@ class _CycleTracker:
             if expected is None or _timer_reading(kernel, source.acc_name) != expected:
                 return False
         return True
-
-    def untracked_values(self, kernel: ReplayKernel) -> tuple[Any, ...]:
-        """Hidden accumulators the tracker does not follow (timers toward a hidden
-        preset): a pumped cycle must leave them where they are."""
-        return tuple(
-            (kernel.tags.get(name), kernel.memory.get(f"_frac:{name}")) for name in self._untracked
-        )
 
     def cycle_steps(self, chain: list[Any]) -> list[tuple[dict[str, Any], int]]:
         """Inputs and scans of the links from the cycle's start onward."""

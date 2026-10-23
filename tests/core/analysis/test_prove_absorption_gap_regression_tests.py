@@ -1045,3 +1045,33 @@ class TestAccumulatorReadOutsideTheProgram:
         logic, _count = self._level_counter("ProjN")
         assert isinstance(reachable_states(logic, project=["ProjNN"]), Intractable)
         assert isinstance(always(logic, lambda s: s["ProjNN"] != 50, scope=["ProjNN"]), Intractable)
+
+
+class TestTimerTowardADynamicPreset:
+    """A timer toward a tag preset, beside a toggling bit, still has exact
+    thresholds once the preset is crossed: its progress around the two-scan
+    cycle is followed, not left with the first node's."""
+
+    def test_accumulator_threshold_past_a_crossed_tag_preset(self):
+        x = Bool("DynX", external=True)
+        clear = Bool("DynClr", external=True)
+        toggle = Bool("DynTog")
+        cleared = Bool("DynL1")
+        stop = Bool("DynL2")
+        preset = Int("DynPre", retentive=True)
+        timer = Timer.clone("DynTmr")
+        hit = Bool("DynHit")
+        with Program(strict=False) as logic:
+            with Rung(toggle):
+                reset(cleared)
+            with Rung(toggle):
+                copy(3, preset)
+            with Rung(~toggle):
+                out(toggle)
+            with Rung(~stop):
+                on_delay(timer, preset=preset).reset(clear)
+            with Rung(x):
+                copy(5, preset)
+            with Rung(rise(x), timer.Acc >= 40):
+                out(hit)
+        _assert_replays_to(logic, always(logic, ~hit), "DynHit")
