@@ -159,6 +159,31 @@ Follow-ups:
   proved `always(~Hit)`). Such tags are now hidden from pruning; PackML lock byte-identical, 58-59 s both.
   Probes + brute-force harness: session scratchpad `prove-cache/`.
 
+## Regroup (2026-10-23)
+
+Decided after the overnight fold/prover rounds:
+- **Fold has no caveats.** It is on by default, so it equals stepping (whole state, scan count) or declines.
+  New bugs come from a differential check (`make test-fold`, below), not further review rounds.
+- **The prover may carry caveats.** A construct outside the exact fragment returns Intractable naming it.
+  Common idioms stay exact: coarse-unit timers, self-resetting TON pulses, and the head-start race
+  (counter vs timer, timer vs timer), which guards fault/safety claims.
+- **Fold-reads landed** `7090449..5a09b1b` (rebased onto 03524a9). Reads of a moving value the crossings
+  don't model now bound the window instead of being skipped past; history serves folded scans;
+  cause()/effect() refuse them, on forks too. The review added: a callable reading `runner.state` is
+  traced, a `run_until()` condition that indexes a block is traced. make test 6942; burner how 2275/5,
+  idle 12008, run_until legs 7399, seek 78, tumbler 18492 (same as the branch before review).
+- **Documented gap** (runner guide, "Folding"; strict xfails `TestIndexedDisplays`): a display copied from
+  an accumulator into a block element nothing reads by name goes stale inside a window when a rung reads
+  it back through an unbounded index (`DS[Idx]`, no min/max/choices). Marking every element of such a
+  block read cost the tumbler most of its folds (AlmHistorian indexes DS unbounded; how 2275 -> 3355).
+  Proper fix: pointer bounds from their writers, or the probe scan recording what each index resolved to
+  (the compiled kernel inlines indexed reads, `circuitpy/codegen/compile/_primitives.py`).
+- Found, queued: cycle-fold jumps (`pilot/cyclefold.py`) never register fold windows, so cause() inside a
+  PILOT coast jump is not refused. PILOT calls cause() heavily: check its callers before making it raise.
+- Next: land `p0/prove-timers` (race narrowing in progress: 770bd5c's strict revisit rule only where two
+  accumulators can race; PackML lock 113 s vs dev 58 s before it), then `make test-fold` (suite programs
+  folded vs stepped, scan by scan; fold fuzz seeded from the review probes), then feature 3.
+
 ## Prover gaps found by the audit (wrong verdicts with every optimization off, so not pruning)
 
 - `sys.first_scan`, `sys.scan_counter` (and likely the clock bits) are constant in the prover's compiled kernel:
