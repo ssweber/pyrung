@@ -3186,45 +3186,39 @@ def _mark_inert_soft(
     ctx: _FoldContext,
     inert_soft: set[str],
     inert_run: dict[str, int],
-    before_ts: float,
-    after_ts: float,
+    read_ts: float,
     promoted: frozenset[str] = frozenset(),
 ) -> None:
-    """Count inert toggles per soft clock; confirm one inert after a full period.
+    """Record the clock edges one genuine probe scan saw; confirm a clock inert once both did.
 
-    The caller invokes this only after the visible state was observed unchanged
-    across the span, so every clock *toggle* the span crossed produced no visible
-    change.  But a clock toggles every half-period — alternating rise, fall, rise
-    … — and an edge-sensitive rung (``rise(clock)`` / ``fall(clock)``) responds to
-    only *one* polarity: a ``rise()``-gated pulse leaves the state unchanged at
-    every *fall*, so a single inert toggle would wrongly mark the whole clock
-    skippable and drop the next rise.
+    The caller invokes this only after the visible state was observed
+    unchanged across the probe scan, which read the clocks at *read_ts*; the
+    scan before it read them one normal ``dt`` earlier.  An edge-sensitive
+    rung (``rise(clock)`` / ``fall(clock)``) sees exactly that pair of reads,
+    so the probe shows one polarity inert when the two reads differ.  A clock
+    joins *inert_soft* only after both a rise and a fall were seen inert
+    (``inert_run`` holds the polarities seen: 1 rise, 2 fall); the loop clears
+    it whenever the plateau breaks.
 
-    So require a **full period** — two consecutive inert toggles, covering both a
-    rise and a fall — before adding the clock to *inert_soft*.  ``inert_run``
-    accumulates consecutive inert toggles; the loop clears it (with *inert_soft*)
-    whenever the plateau breaks, so a polarity that *does* change the state resets
-    the run and the clock keeps bounding every edge.  Promoted saturation-
-    rescuable clocks are inert-eligible on the same terms.
-
-    *before_ts* and *after_ts* are the timestamps of the states on either side
-    of the span.  A scan reads the clock at its *start*, one normal ``dt``
-    before the state it commits (a fold landing likewise reads at the last
-    folded scan's start), so the toggles a span's scans actually executed lie
-    between ``before_ts - dt`` and ``after_ts - dt``.  A toggle between the
-    last read and the committed timestamp has not run yet and is not counted.
+    Edges the clock crossed between two reads are never counted: at a ``dt``
+    of a half-period or more one scan can cross several, and stepping sees
+    only the reads.  A clock whose reads never differ is never confirmed, and
+    keeps bounding the fold.  Promoted saturation-rescuable clocks are
+    inert-eligible on the same terms.
     """
-    from pyrung.core.system_points import clock_phase
+    from pyrung.core.system_points import clock_high
 
     dt = ctx.normal_dt
     for name, hp in _window_soft_clocks(ctx, promoted):
         if name in inert_soft:
             continue
-        toggles = clock_phase(after_ts - dt, hp) - clock_phase(before_ts - dt, hp)
-        if toggles <= 0:
+        before = clock_high(read_ts - dt, hp)
+        now = clock_high(read_ts, hp)
+        if before == now:
             continue
-        inert_run[name] = inert_run.get(name, 0) + toggles
-        if inert_run[name] >= 2:
+        seen = inert_run.get(name, 0) | (1 if now else 2)
+        inert_run[name] = seen
+        if seen == 3:
             inert_soft.add(name)
 
 
@@ -3497,14 +3491,7 @@ class _OrdinaryFoldStrategy:
             return None
 
         promoted = _runtime_soft_clocks(self.ctx, state)
-        _mark_inert_soft(
-            self.ctx,
-            self.inert_soft,
-            self.inert_run,
-            probe.timestamp,
-            state.timestamp,
-            promoted,
-        )
+        _mark_inert_soft(self.ctx, self.inert_soft, self.inert_run, probe.timestamp, promoted)
         timer_moves = _timer_moves(self.ctx, probe.timers, state)
         if timer_moves is None:
             return None
@@ -3606,17 +3593,12 @@ class _OrdinaryFoldStrategy:
         *,
         patches: tuple[tuple[str, Any], ...] = (),
     ) -> _FoldAdvance:
-        """Update window-local clock evidence after an executor lands *plan*."""
-        if _visible_items_match(state, probe.visible, self.exclude):
-            _mark_inert_soft(
-                self.ctx,
-                self.inert_soft,
-                self.inert_run,
-                plan.pre_fold_timestamp,
-                state.timestamp,
-                plan.promoted,
-            )
-        else:
+        """Update window-local clock evidence after an executor lands *plan*.
+
+        A landing reads no clock edge that is not yet confirmed inert (the
+        window stops before it), so it only ever clears the evidence.
+        """
+        if not _visible_items_match(state, probe.visible, self.exclude):
             self.inert_soft.clear()
             self.inert_run.clear()
         return _FoldAdvance(logical_scans=plan.skip, patches=patches)

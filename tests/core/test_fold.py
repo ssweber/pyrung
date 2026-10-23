@@ -2844,3 +2844,53 @@ class TestFoldLandingCheckpoint:
             assert {k: v for k, v in state.tags.items() if not k.startswith("sys.scan_time")} == {
                 k: v for k, v in replayed.tags.items() if not k.startswith("sys.scan_time")
             }
+
+
+class TestSoftClockEdgesAsRead:
+    """A soft clock is confirmed inert only from edges a genuine scan read.
+
+    At a ``dt`` of a half-period or more, one scan crosses several edges but
+    an edge rung sees only the two reads; counting crossed edges confirmed a
+    ``rise()`` clock inert after a single falling scan and dropped every rise.
+    """
+
+    @staticmethod
+    def _rise_program(clock: str, pulse: bool) -> Callable[[], Program]:
+        def build() -> Program:
+            S = Int("S")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Timer.clone("A"), 30_000)
+                with Rung(rise(getattr(system.sys, clock))):
+                    if pulse:
+                        out(Bool("P"))
+                    else:
+                        calc(S + 3, S)
+                if pulse:
+                    with Rung(Bool("P")):
+                        calc(S + 1, S)
+            return prog
+
+        return build
+
+    @pytest.mark.parametrize(
+        ("clock", "dt"),
+        [("clock_100ms", 0.25), ("clock_100ms", 0.07), ("clock_1s", 1.1), ("clock_500ms", 0.3)],
+    )
+    @pytest.mark.parametrize("pulse", [False, True])
+    def test_rise_rungs_match_stepping(self, clock: str, dt: float, pulse: bool) -> None:
+        _assert_fold_is_exact(self._rise_program(clock, pulse), _scans(2_000), dt=dt)
+
+    def test_replay_seek_keeps_every_rise(self) -> None:
+        def build() -> Program:
+            S = Int("S")
+            with Program(strict=False) as prog:
+                with Rung(rise(system.sys.clock_100ms)):
+                    calc(S + 3, S)
+            return prog
+
+        plc = PLC(build(), dt=0.25)
+        for _ in range(300):
+            plc.step()
+        for target in (10, 51, 157, 299):
+            assert plc._replay_seek(target).state.tags["S"] == plc.replay_to(target).state.tags["S"]
