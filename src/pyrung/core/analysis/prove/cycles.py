@@ -47,6 +47,11 @@ reachable crossing (``N >= 3``, the timer's Done) is never seen.
   close any cycle.  A timer that advanced around a cycle the BFS tree does
   not show, not time-like at the key, is kept once per key, when its
   thresholds resolve.
+- A counter with a dead guard (``deadness.py``) is left out of the hidden
+  vector at a key where the guard is false, as if its thresholds were all
+  crossed: nothing reads its value there before it is overwritten, so states
+  that differ in it run alike.  A runaway count left over from the last
+  request no longer duplicates every key until the next one.
 
 What is left: a timer whose value at a key differs by the branch it came
 from, and that does not advance while the key holds still, is represented by
@@ -89,6 +94,7 @@ if TYPE_CHECKING:
     from pyrung.core.kernel import ReplayKernel
 
     from . import _ExploreContext
+    from .deadness import DeadGuard
 
 _DOWN_KINDS = frozenset((_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN, _PROGRESS_KIND_REAL_DOWN))
 _TIMER_KINDS = frozenset((_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM))
@@ -317,6 +323,7 @@ class _CycleTracker:
         "_pumped",
         "_probed",
         "_readers",
+        "_dead",
         "refined_nodes",
     )
 
@@ -326,6 +333,18 @@ class _CycleTracker:
             (i, source.acc_name, source.kind in _PLAIN_KINDS)
             for i, source in enumerate(self._sources)
         )
+        # (state-key index of the guard tag, guard) per source, for a counter
+        # whose progress is dead where the guard is false (deadness.py).
+        slot = {name: i for i, name in enumerate(context.stateful_names)}
+        dead: list[tuple[int, DeadGuard] | None] = []
+        for source in self._sources:
+            guard = context.dead_guards.get(source.acc_name)
+            dead.append(
+                (slot[guard.tag], guard)
+                if guard is not None and source.kind not in _TIMER_KINDS and guard.tag in slot
+                else None
+            )
+        self._dead = tuple(dead) if any(dead) else None
         self._hidden: dict[Any, tuple[Any, ...] | None] = {}
         self._parent: dict[Any, Any] = {}
         self._scans: dict[Any, int] = {}
@@ -414,7 +433,12 @@ class _CycleTracker:
     def hidden_vector(self, kernel: ReplayKernel, key: tuple[Any, ...]) -> tuple[Any, ...] | None:
         values: list[Any] = []
         any_pending = False
-        for source in self._sources:
+        dead = self._dead
+        for i, source in enumerate(self._sources):
+            if dead is not None and (entry := dead[i]) is not None and entry[1].dead(key[entry[0]]):
+                # Never read before it is overwritten from here: settled.
+                values.append(None)
+                continue
             if _is_pending(source, key):
                 any_pending = True
                 values.append(_progress_value(kernel, source))

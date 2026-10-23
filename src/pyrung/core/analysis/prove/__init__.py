@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
 
+    from .deadness import DeadGuard
     from .inputs import _ExclusiveInputGroup
 
 from .expr import _eval_atom as _eval_atom
@@ -92,6 +93,9 @@ class _ExploreContext:
     # Timer units added per scan at ``dt``, by accumulator (see
     # ``events._exact_timer_move``).
     timer_quanta: dict[str, float] = field(default_factory=dict)
+    # Hidden counters whose progress is dead at a key where a guard tag
+    # holds a given value (see deadness.py).
+    dead_guards: dict[str, DeadGuard] = field(default_factory=dict)
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec

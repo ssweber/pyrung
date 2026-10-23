@@ -8,14 +8,18 @@ import pytest
 
 from pyrung.core import (
     PLC,
+    Block,
     Bool,
     Counter,
     Dint,
     Int,
     Program,
     Rung,
+    TagType,
     Timer,
+    branch,
     calc,
+    call,
     copy,
     count_down,
     count_up,
@@ -25,6 +29,7 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    subroutine,
     system,
 )
 from pyrung.core.analysis.prove import (
@@ -968,6 +973,185 @@ class TestProgressMadeOnAnotherBranch:
                 latch(armed)
                 reset(parked)
         _assert_replays_to(logic, always(logic, ~hit), "LateH")
+
+    def test_race_carried_across_rungs_by_latches(self):
+        """The head-start race with each crossing latched on its own rung."""
+        arm = Bool("XrA", external=True)
+        pulse = Bool("XrY", external=True)
+        armed = Bool("XrL")
+        count = Int("XrN")
+        timer = Timer.clone("XrTmr")
+        counted = Bool("XrX")
+        late = Bool("XrLate")
+        hit = Bool("XrH")
+        with Program(strict=False) as logic:
+            with Rung(arm):
+                latch(armed)
+            with Rung(armed):
+                on_delay(timer, preset=60)
+            with Rung(rise(pulse), armed):
+                calc(count + 1, count)
+            with Rung(count >= 3):
+                latch(counted)
+            with Rung(timer.Done):
+                latch(late)
+            with Rung(counted, ~late):
+                out(hit)
+        result = always(logic, ~hit)
+        _assert_replays_to(logic, result, "XrH")
+        assert sum(step.scans for step in result.trace) == 5
+
+    @pytest.mark.parametrize(("steps", "lock_at"), [(3, 3), (4, 4)])
+    def test_one_counter_races_a_visible_chain(self, steps: int, lock_at: int):
+        """No second accumulator: the pulses that count N also walk a latch chain.
+
+        Path B arms in one step and counts N once, path A takes two steps and
+        does not.  Only path A, with N behind, reaches the end of the chain
+        before N locks it out.
+        """
+        tag = f"Chain{steps}"
+        a = Bool(tag + "A", external=True)
+        b = Bool(tag + "B", external=True)
+        x = Bool(tag + "X", external=True)
+        armed = Bool(tag + "S")
+        pre = Bool(tag + "P")
+        n = Int(tag + "N")
+        lock = Bool(tag + "K")
+        hit = Bool(tag + "H")
+        stages = [Bool(f"{tag}C{i}") for i in range(steps)]
+        with Program(strict=False) as logic:
+            with Rung(pre):
+                latch(armed)
+                reset(pre)
+            with Rung(b, ~armed, ~pre):
+                latch(armed)
+                calc(n + 1, n)
+            with Rung(a, ~armed, ~pre):
+                latch(pre)
+            with Rung(armed, rise(x)):
+                calc(n + 1, n)
+            for i in range(steps - 1, -1, -1):
+                with Rung(rise(x), stages[i - 1] if i else armed, ~stages[i]):
+                    latch(stages[i])
+            with Rung(stages[-1], ~lock):
+                out(hit)
+            with Rung(n >= lock_at):
+                latch(lock)
+        _assert_replays_to(logic, always(logic, ~hit), tag + "H")
+
+
+class TestDeadCounterBehindAGuard:
+    """A counter read only behind ``Rung(Req != 0): call(run)`` and reset by
+    every rung that raises the request is dead while ``Req == 0`` (deadness.py):
+    its stale value there is never read, so revisits differing in it are not
+    kept.  Each refused shape below lets a stale count reach the next request,
+    and pretending the guard held there would prove a reachable hit away.
+    """
+
+    def _program(self, tag: str, variant: str, preset: int = 20) -> tuple[Program, Bool]:
+        go = Bool(tag + "Go", external=True)
+        y = Bool(tag + "Y", external=True)
+        cancel = Bool(tag + "Cx", external=True)
+        table = Block(tag + "B", TagType.INT, 1, 4)
+        req = table[1] if variant.startswith("indirect") else Int(tag + "Req")
+        n = Int(tag + "N")
+        hit = Bool(tag + "H")
+        timer = Timer.clone(tag + "T")
+        ptr = Int(tag + "P")
+        with Program(strict=False) as logic:
+            if variant == "no_reset":
+                with Rung(go, req == 0):
+                    copy(1, req)
+            elif variant == "reset_elsewhere":
+                with Rung(go, req == 0):
+                    copy(1, req)
+                with Rung(go, y):
+                    copy(0, n)
+            else:
+                with Rung(go, req == 0):
+                    copy(1, req)
+                    copy(0, n)
+            with Rung(cancel):
+                copy(0, req)
+            if variant.startswith("indirect"):
+                with Rung():
+                    copy(1 if variant == "indirect_hits" else 3, ptr)
+                with Rung(cancel, y):
+                    copy(1, table[ptr])
+            with Rung(req != 0):
+                on_delay(timer, preset=preset)
+            if variant == "in_branch":
+                with Rung(go):
+                    with branch(req != 0):
+                        call(tag + "Run")
+                with Rung(~go, req != 0):
+                    call(tag + "Run")
+            elif variant == "unguarded":
+                with Rung():
+                    call(tag + "Run")
+            else:
+                with Rung(req != 0):
+                    call(tag + "Run")
+            if variant == "read_outside":
+                with Rung(n >= 1, req == 0, y):
+                    copy(0, n)
+            with subroutine(tag + "Run"):
+                with Rung(rise(y)):
+                    calc(n + 1, n)
+                with Rung(n >= 2, ~timer.Done):
+                    latch(hit)
+                with Rung(n >= 2):
+                    copy(0, req)
+                    copy(0, n)
+        return logic, hit
+
+    @pytest.mark.parametrize("variant", ["plain", "indirect_safe"])
+    def test_guard_found(self, variant: str):
+        tag = "DgOk" if variant == "plain" else "DgSafe"
+        logic, hit = self._program(tag, variant)
+        result = always(logic, ~hit, _debug=True)
+        assert isinstance(result, Proven)
+        guard = result._debug_context.dead_guards[tag + "N"]
+        assert (guard.op, guard.value) == ("ne", 0)
+        logic, hit = self._program(tag + "Slow", variant, preset=40)
+        _assert_replays_to(logic, always(logic, ~hit), tag + "SlowH")
+
+    @pytest.mark.parametrize(
+        ("variant", "preset"),
+        [("no_reset", 20), ("reset_elsewhere", 30), ("indirect_hits", 20), ("unguarded", 20)],
+    )
+    def test_stale_count_reaches_the_next_request(self, variant: str, preset: int):
+        tag = "Dg" + "".join(part.title() for part in variant.split("_"))
+        logic, hit = self._program(tag, variant, preset)
+        result = always(logic, ~hit, _debug=True)
+        _assert_replays_to(logic, result, tag + "H")
+        assert tag + "N" not in result._debug_context.dead_guards
+
+    @pytest.mark.parametrize("variant", ["in_branch", "read_outside"])
+    def test_guard_refused_conservatively(self, variant: str):
+        tag = "Dg" + "".join(part.title() for part in variant.split("_"))
+        logic, hit = self._program(tag, variant)
+        result = always(logic, ~hit, _debug=True)
+        assert isinstance(result, Proven)
+        assert tag + "N" not in result._debug_context.dead_guards
+
+    def test_packml_runaway_guard(self):
+        from pyrung.cli import _apply_lock_config, _default_projection_names
+
+        packml = importlib.import_module("examples.packml_bench")
+        projection, joint, excl, split = _apply_lock_config(
+            _default_projection_names(packml.logic), getattr(packml, "__lock__", None)
+        )
+        context = prove_module._build_reachable_context(
+            packml.logic,
+            scope=sorted(set(projection)),
+            project=tuple(projection),
+            joint_inputs=joint,
+            exclusive_inputs=excl,
+            split_at=split,
+        )
+        guard = context.dead_guards["LoopIndex"]
+        assert (guard.tag, guard.op, guard.value) == ("StateRequested", "ne", 0)
 
 
 class TestEdgeInAnInstructionCondition:

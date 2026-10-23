@@ -50,6 +50,7 @@ from .classify import (
     _collect_structural_domain_info,
     _pilot_sweep_domains,
 )
+from .deadness import DeadGuard, hidden_dead_guards
 from .elision import _elide_scan_local_stateful_dims
 from .events import _TIMER_DELAY_KINDS, _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
 from .expr import (
@@ -376,6 +377,53 @@ class _PassContext:
             stepping_tags=self._stepping_tags or frozenset(),
         )
 
+    def _hidden_dead_guards(self) -> dict[str, DeadGuard]:
+        """Guards past which a hidden counter's progress is dead (deadness.py)."""
+        from .cycles import _TIMER_KINDS
+
+        assert self.graph is not None
+        assert self.stateful_names is not None
+        assert self.nondeterministic_dims is not None
+        kinds: dict[str, str] = {}
+        for spec in self.done_event_specs or ():
+            kinds.setdefault(spec.acc_name, spec.kind)
+        vectors = self.threshold_absorptions.vector_specs if self.threshold_absorptions else ()
+        for vector in vectors:
+            if vector.kind != _THRESHOLD_KIND_COMPARISON_ONLY:
+                kinds.setdefault(vector.acc_name, vector.kind)
+        stateful = set(self.stateful_names)
+        # A hidden accumulator another tag is derived from, or that anything
+        # outside the program reads, is not a candidate (it would not be hidden).
+        derived = {source for source, *_ in (self._functional_dep_projections or {}).values()}
+        derived |= {source for source, *_ in (self._init_constant_projections or {}).values()}
+        observed = {*(self.project or ()), *self.opaque_reads}
+        accumulators = sorted(
+            name
+            for name, kind in kinds.items()
+            if kind not in _TIMER_KINDS
+            and name not in stateful
+            and name not in derived
+            and name not in observed
+            and not self.opaque_reads_all
+        )
+        if not accumulators:
+            return {}
+        done_slots = {self.stateful_names[spec.index] for spec in self.state_key_done_specs or ()}
+        tags = self.graph.tags
+        eligible = {
+            name
+            for name in stateful - done_slots
+            if name not in self.nondeterministic_dims and name in tags and not tags[name].external
+        }
+        return hidden_dead_guards(
+            self.program,
+            tags,
+            accumulators,
+            eligible=eligible,
+            unbounded=set(self.nondeterministic_dims) | set(self.receive_dest_names),
+            initial_state=self.initial_state,
+        )
+
     def freeze(self) -> _ExploreContext:
         assert self.compiled is not None
         assert self.graph is not None
@@ -607,6 +655,8 @@ class _PassContext:
             # capture/restore these dynamic keys — see _snapshot_kernel.
             mutable_tag_names = frozenset(mutable)
 
+        dead_guards = {} if domains_only else self._hidden_dead_guards()
+
         return _ExploreContext(
             compiled=self.compiled,
             graph=self.graph,
@@ -648,6 +698,7 @@ class _PassContext:
             journal=journal,
             drum_event_meta=self.drum_event_meta or {},
             timer_quanta=self.timer_quanta or {},
+            dead_guards=dead_guards,
             independence_relation=independence_relation,
             free_input_factoring=free_input_factoring,
             mutable_tag_names=mutable_tag_names,
