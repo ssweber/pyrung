@@ -89,6 +89,9 @@ class _ExploreContext:
     # and the system tags explored as free inputs.  See system_points.py.
     system_points: SystemPointModel | None = None
     free_system_inputs: frozenset[str] = field(default_factory=frozenset)
+    # Timer units added per scan at ``dt``, by accumulator (see
+    # ``events._exact_timer_move``).
+    timer_quanta: dict[str, float] = field(default_factory=dict)
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec

@@ -51,7 +51,7 @@ from .classify import (
     _pilot_sweep_domains,
 )
 from .elision import _elide_scan_local_stateful_dims
-from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
+from .events import _TIMER_DELAY_KINDS, _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
 from .expr import (
     _build_atom_index,
     _collect_atoms_for_tag,
@@ -340,6 +340,7 @@ class _PassContext:
     synthetic_preset_tags: tuple[str, ...] | None = None
     receive_dest_names: frozenset[str] = frozenset()
     drum_event_meta: dict[str, Any] | None = None
+    timer_quanta: dict[str, float] | None = None
     demotable_edge_tag_names: tuple[str, ...] | None = None
     _combinational_tags: frozenset[str] | None = None
     _stepping_tags: frozenset[str] | None = None
@@ -646,6 +647,7 @@ class _PassContext:
             caveats=caveats,
             journal=journal,
             drum_event_meta=self.drum_event_meta or {},
+            timer_quanta=self.timer_quanta or {},
             independence_relation=independence_relation,
             free_input_factoring=free_input_factoring,
             mutable_tag_names=mutable_tag_names,
@@ -1812,6 +1814,26 @@ def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
     _record_threshold_absorption_journal(ctx)
 
 
+def _timer_quanta(program: Program, dt: float) -> dict[str, float]:
+    """Timer units each timed instruction adds per scan at *dt*, by accumulator."""
+    from pyrung.core.instruction.drums import TimeDrumInstruction
+    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    quanta: dict[str, float] = {}
+    conflicting: set[str] = set()
+    for instr in walk_instructions(program):
+        if not isinstance(instr, (OnDelayInstruction, OffDelayInstruction, TimeDrumInstruction)):
+            continue
+        name = instr.accumulator.name
+        quantum = instr.unit.dt_to_units(dt)
+        if quanta.setdefault(name, quantum) != quantum:
+            conflicting.add(name)
+    for name in conflicting:
+        del quanta[name]
+    return quanta
+
+
 def _pass_build_event_specs(ctx: _PassContext) -> None:
     assert ctx.stateful_names is not None and ctx.done_acc is not None
     assert ctx.done_kinds is not None and ctx.done_presets is not None
@@ -1823,7 +1845,14 @@ def _pass_build_event_specs(ctx: _PassContext) -> None:
         if acc_name is None:
             continue
         kind = ctx.done_kinds[done_name]
-        sk_done.append(_StateKeyDoneSpec(index=index, acc_name=acc_name, kind=kind))
+        sk_done.append(
+            _StateKeyDoneSpec(
+                index=index,
+                acc_name=acc_name,
+                kind=kind,
+                frac_key=f"_frac:{acc_name}" if kind in _TIMER_DELAY_KINDS else None,
+            )
+        )
         preset: int | str | None = ctx.done_presets.get(done_name)
         if preset is None and ctx.done_acc_info is not None:
             preset = ctx.done_acc_info.preset_tags.get(done_name)
@@ -1842,6 +1871,7 @@ def _pass_build_event_specs(ctx: _PassContext) -> None:
             )
     ctx.state_key_done_specs = tuple(sk_done)
     ctx.done_event_specs = tuple(d_events)
+    ctx.timer_quanta = _timer_quanta(ctx.program, ctx.dt)
 
     if ctx.done_acc_info is not None:
         ctx.drum_event_meta = dict(ctx.done_acc_info.drum_meta)

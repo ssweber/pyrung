@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from itertools import product as _product
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.fold import _carry_run, _timer_grid, _timer_step
 from pyrung.core.kernel import ReplayKernel
 
 from .absorb import (
@@ -71,6 +72,10 @@ class _StateKeyDoneSpec:
     index: int
     acc_name: str
     kind: str
+    # ``_frac:<acc>`` memory key for timers: a timer in a unit coarser than
+    # the scan (``"sec"`` at 10 ms) runs for many scans on its fractional
+    # carry alone, with ``Acc`` still 0.
+    frac_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -305,6 +310,85 @@ def _timer_total(kernel: ReplayKernel, acc_name: str) -> float:
     return acc + frac
 
 
+# A timer accumulator is an INT that clamps here.
+_TIMER_ACC_MAX = 32767
+
+
+def _timer_reading(snap: _KernelSnapshot | ReplayKernel, acc_name: str) -> tuple[int, float]:
+    return (
+        int(snap.tags.get(acc_name, 0) or 0),
+        float(snap.memory.get(f"_frac:{acc_name}", 0.0) or 0.0),
+    )
+
+
+def _exact_timer_move(
+    acc_name: str,
+    quantum: float | None,
+    before: _KernelSnapshot,
+    kernel: ReplayKernel,
+) -> tuple[int, float, float] | None:
+    """``(acc, frac, quantum)`` when the last scan ran this timer once.
+
+    A timer adds ``quantum + frac`` units a scan, keeps the integer part and
+    carries the float remainder (``timers.py``).  When the scan from *before*
+    to *kernel* was exactly one such step, later scans repeat it, and the
+    carry recurrence (``fold._carry_run``) says where the timer is after any
+    number of them, float rounding included: ``acc + frac + k * delta`` in
+    one aggregate floors differently, so a jump planned on it lands a scan
+    early or late (or, for a quantum far below one unit, nowhere near).
+    """
+    if quantum is None or not quantum > 0.0:
+        return None
+    acc_b, frac_b = _timer_reading(before, acc_name)
+    acc, frac = _timer_reading(kernel, acc_name)
+    if acc >= _TIMER_ACC_MAX:
+        return None
+    if (acc, frac) != _timer_step(acc_b, frac_b, quantum, _TIMER_ACC_MAX):
+        return None
+    return acc, frac, quantum
+
+
+def _timer_after(acc: int, frac: float, quantum: float, scans: int) -> tuple[int, float] | None:
+    """The timer's ``(acc, frac)`` after *scans* more steps, or None past the work cap."""
+    if scans <= 0:
+        return acc, frac
+    grid = _timer_grid(frac, quantum)
+    if grid is not None:
+        big_q, big_f, big_n, g = grid
+        total = big_f + scans * big_q
+        return min(acc + total // big_n, _TIMER_ACC_MAX), (total % big_n) * g
+    steps, acc, frac, _status = _carry_run(acc, frac, quantum, _TIMER_ACC_MAX, scans)
+    if steps != scans:
+        return None
+    return acc, frac
+
+
+def _timer_scans_to_reach(acc: int, frac: float, quantum: float, target: int) -> int | None:
+    """Scans ``k >= 1`` until the accumulator is ``>= target``.
+
+    None when it never gets there (*target* past the clamp) or the search
+    ran past the work cap.
+    """
+    if acc >= target:
+        return 1
+    if target > _TIMER_ACC_MAX:
+        return None
+    grid = _timer_grid(frac, quantum)
+    if grid is not None:
+        big_q, big_f, big_n, _g = grid
+        need = (target - acc) * big_n - big_f
+        return max(1, -(-need // big_q))
+    steps, _acc, _frac, status = _carry_run(acc, frac, quantum, _TIMER_ACC_MAX, None, target)
+    return steps if status == "target" else None
+
+
+def _timer_integer_target(threshold: float, form: str) -> int | None:
+    """The least integer accumulator value that crosses ``(threshold, form)``."""
+    if not math.isfinite(threshold):
+        return None
+    return math.ceil(threshold) if form == _THRESHOLD_FORM_GE else math.floor(threshold) + 1
+
+
 def _resolve_done_preset(
     preset: int | str,
     preset_memory_key: str | None,
@@ -336,11 +420,19 @@ def _scans_until_done_event(
     acc_name: str,
     before: _KernelSnapshot,
     kernel: ReplayKernel,
+    quantum: float | None = None,
 ) -> int | None:
     """Estimate scans until this pending timer/counter reaches its next Done event."""
     resolved_preset = _resolve_done_preset(preset, preset_memory_key, kernel)
     if resolved_preset is None:
         return None
+    if kind in _TIMER_DELAY_KINDS:
+        move = _exact_timer_move(acc_name, quantum, before, kernel)
+        if move is not None:
+            acc, frac, q = move
+            exact = _timer_scans_to_reach(acc, frac, q, resolved_preset)
+            if exact is not None or resolved_preset > _TIMER_ACC_MAX:
+                return exact
     acc_before = int(before.tags.get(acc_name, 0) or 0)
     acc_after = int(kernel.tags.get(acc_name, 0) or 0)
 
@@ -411,11 +503,20 @@ def _scans_until_threshold_event(
     spec: _ThresholdEventSpec,
     before: _KernelSnapshot,
     kernel: ReplayKernel,
+    quantum: float | None = None,
 ) -> int | None:
     """Estimate scans until an uncrossed threshold atom crosses."""
     threshold_value = _threshold_value(kernel, spec.threshold)
     if not _is_numeric_literal(threshold_value):
         return None
+    if spec.kind in _TIMER_DELAY_KINDS:
+        move = _exact_timer_move(spec.acc_name, quantum, before, kernel)
+        target = _timer_integer_target(float(threshold_value), spec.form)
+        if move is not None and target is not None:
+            acc, frac, q = move
+            exact = _timer_scans_to_reach(acc, frac, q, target)
+            if exact is not None or target > _TIMER_ACC_MAX:
+                return exact
 
     delta_current = _progress_delta_and_current(spec.kind, spec.acc_name, before, kernel)
     if delta_current is None:
@@ -444,12 +545,21 @@ def _advance_hidden_progress(
     skipped_scans: int,
     before: _KernelSnapshot,
     kernel: ReplayKernel,
+    quantum: float | None = None,
 ) -> None:
     """Advance a hidden timer/counter through skipped scans before the event scan."""
     if skipped_scans <= 0:
         return
 
-    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM}:
+    if kind in _TIMER_DELAY_KINDS:
+        move = _exact_timer_move(acc_name, quantum, before, kernel)
+        if move is not None:
+            acc, frac, q = move
+            landed = _timer_after(acc, frac, q, skipped_scans)
+            if landed is not None:
+                kernel.tags[acc_name] = landed[0]
+                kernel.memory[f"_frac:{acc_name}"] = landed[1]
+                return
         acc_before = int(before.tags.get(acc_name, 0) or 0)
         before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_total = _timer_total(kernel, acc_name)
@@ -534,6 +644,7 @@ def _collect_all_pending_sources(
             spec.acc_name,
             before_snap,
             kernel,
+            context.timer_quanta.get(spec.acc_name),
         )
         if scans is None:
             continue
@@ -554,7 +665,9 @@ def _collect_all_pending_sources(
         vector = key[vector_offset + spec.vector_index]
         if vector[spec.atom_index]:
             continue
-        scans = _scans_until_threshold_event(spec, before_snap, kernel)
+        scans = _scans_until_threshold_event(
+            spec, before_snap, kernel, context.timer_quanta.get(spec.acc_name)
+        )
         if scans is None:
             continue
         source_key = (spec.kind, spec.acc_name, spec.vector_index, spec.atom_index)
@@ -647,7 +760,14 @@ def _advance_group_to_threshold(
         advanced.add(acc_key)
         if src.kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN, _DONE_KIND_TIME_DRUM}:
             pre_advance_counter_acc[src.acc_name] = int(kernel.tags.get(src.acc_name, 0) or 0)
-        _advance_hidden_progress(src.kind, src.acc_name, skipped_scans, before_snap, kernel)
+        _advance_hidden_progress(
+            src.kind,
+            src.acc_name,
+            skipped_scans,
+            before_snap,
+            kernel,
+            context.timer_quanta.get(src.acc_name),
+        )
 
     return _EventAdvanceState(
         pre_event_snapshot=_snapshot_kernel(
@@ -691,7 +811,14 @@ def _advance_all_to_cofire(
     for (kind, acc_name), src in by_acc.items():
         if kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN, _DONE_KIND_TIME_DRUM}:
             pre_advance_counter_acc[acc_name] = int(kernel.tags.get(acc_name, 0) or 0)
-        _advance_hidden_progress(kind, acc_name, max(src.scans - 1, 0), before_snap, kernel)
+        _advance_hidden_progress(
+            kind,
+            acc_name,
+            max(src.scans - 1, 0),
+            before_snap,
+            kernel,
+            context.timer_quanta.get(acc_name),
+        )
 
     cofire_group = _SimultaneityGroup(scans=1, exact_sources=frozenset(all_sources))
     return _EventAdvanceState(
@@ -939,14 +1066,15 @@ def _materialize_abstract_threshold_outcome(
     assert isinstance(acc_value, (int, float))
 
     kernel.tags[threshold_name] = acc_value
-    scans = _scans_until_threshold_event(spec, before_snap, kernel)
+    quantum = context.timer_quanta.get(spec.acc_name)
+    scans = _scans_until_threshold_event(spec, before_snap, kernel, quantum)
     if scans is None:
         return None
     pre_advance_counter_acc: dict[str, int] = {}
     if spec.kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN}:
         pre_advance_counter_acc[spec.acc_name] = int(kernel.tags.get(spec.acc_name, 0) or 0)
     skipped_scans = max(scans - 1, 0)
-    _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel)
+    _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel, quantum)
     pre_event_snapshot = _snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys)
     _step_kernel(context, kernel)
     _fixup_unfired_counters(

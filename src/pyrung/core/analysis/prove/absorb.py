@@ -168,6 +168,10 @@ def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:
     off_delay                False  *          False
     off_delay                True   True       PENDING
     off_delay                True   False      True
+
+    For a timer the state key passes its fractional carry as *acc_val* when
+    ``Acc`` is 0: a timer in seconds at a 10 ms scan is timing long before
+    ``Acc`` leaves 0.
     """
     acc_nonzero = bool(acc_val and acc_val != 0)
     if kind == _DONE_KIND_OFF_DELAY:

@@ -454,10 +454,12 @@ def _bfs_explore_gen(
         input_dict: dict[str, Any],
         bprev_dict: dict[str, Any],
         deltas: dict[int, float],
+        timer_steps: dict[int, int],
     ) -> bool:
         """Replay the cycle once from the revisit: same key, same progress again."""
         visible = key[:-1] if paced else key
         untracked = cycles.untracked_values(kernel)
+        timers_before = cycles.timer_readings(kernel)
         for inputs, _prev in (*cycles.cycle_steps(chain), (input_dict, bprev_dict)):
             if _has_demoted:
                 for name, value in zip(_demoted, _extract_bprev(kernel), strict=True):
@@ -474,6 +476,7 @@ def _bfs_explore_gen(
         return (
             _state_key(kernel, live=live_after, threshold_vector=tv) == visible
             and cycles.repeats_linearly(hidden, cycles.hidden_vector(kernel, key), deltas)
+            and cycles.timer_lap_matches(timers_before, kernel, timer_steps)
             and cycles.untracked_values(kernel) == untracked
         )
 
@@ -528,12 +531,14 @@ def _bfs_explore_gen(
         if pumped is not None and pumped.count:
             assert chain is not None
             x_snap = _snapshot_kernel(kernel, _mutable, _base_keys)
-            if not _traverses_again(key, hidden, chain, input_dict, bprev_dict, pumped.deltas):
+            if not _traverses_again(
+                key, hidden, chain, input_dict, bprev_dict, pumped.deltas, pumped.timer_steps
+            ):
                 pumped = None
             _restore_kernel(kernel, x_snap)
         if pumped is not None and pumped.count:
             assert x_snap is not None
-            cycles.apply(kernel, pumped.values)
+            cycles.apply(kernel, pumped)
             tv = _threshold_vector_key(kernel, context.threshold_vector_specs)
             live_after = (
                 live_cache.live_inputs(kernel, threshold_vector=tv)

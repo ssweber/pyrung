@@ -104,6 +104,8 @@ class _ProgressSource:
 
     acc_name: str
     kind: str
+    # Timer units added per scan (timers only; see events._exact_timer_move).
+    quantum: float | None
     # (state-key index of the Done slot, preset, preset memory key)
     done_slots: tuple[tuple[int, int | str, str | None], ...]
     # (state-key index of the threshold vector, its atoms)
@@ -118,6 +120,10 @@ class _Pump:
     values: tuple[Any, ...]
     # Progress one traversal adds, per accumulator index.
     deltas: dict[int, float]
+    # Timers: carry-recurrence steps one traversal runs, and the exact
+    # ``(acc, frac)`` the pumped node lands on.
+    timer_steps: dict[int, int]
+    timer_landing: dict[int, tuple[int, float]]
 
 
 def _hidden_progress_sources(context: _ExploreContext) -> tuple[_ProgressSource, ...]:
@@ -151,6 +157,7 @@ def _hidden_progress_sources(context: _ExploreContext) -> tuple[_ProgressSource,
         _ProgressSource(
             acc_name=name,
             kind=kinds[name],
+            quantum=context.timer_quanta.get(name) if kinds[name] in _TIMER_KINDS else None,
             done_slots=tuple(done.get(name, ())),
             vector_slots=tuple(vectors.get(name, ())),
         )
@@ -252,6 +259,37 @@ def _max_repeats(value: float, delta: float, limits: list[tuple[float, bool]]) -
         repeats = max(repeats, 0)
         best = repeats if best is None else min(best, repeats)
     return best or 0
+
+
+def _max_timer_repeats(
+    kernel: ReplayKernel,
+    source: _ProgressSource,
+    steps: int,
+    limits: list[tuple[float, bool]],
+) -> int | None:
+    """Most extra traversals of *steps* timer steps each that keep every limit uncrossed.
+
+    On the timer's exact carry recurrence: a timer threshold reads the
+    integer accumulator, so ``(threshold, inclusive)`` is crossed from the
+    least integer past it.  None when the recurrence cannot be searched.
+    """
+    from .events import _TIMER_ACC_MAX, _timer_reading, _timer_scans_to_reach
+
+    if steps <= 0:
+        return None
+    assert source.quantum is not None
+    acc, frac = _timer_reading(kernel, source.acc_name)
+    best: int | None = None
+    for threshold, inclusive in limits:
+        target = math.floor(threshold) + 1 if inclusive else math.ceil(threshold)
+        if target > _TIMER_ACC_MAX:
+            continue
+        scans = _timer_scans_to_reach(acc, frac, source.quantum, target)
+        if scans is None:
+            return None
+        repeats = (scans - 1) // steps
+        best = repeats if best is None else min(best, repeats)
+    return 0 if best is None else best
 
 
 class _CycleTracker:
@@ -486,10 +524,13 @@ class _CycleTracker:
         trace repeats the whole cycle, so a timer running beside the pulses
         advances with them and its thresholds bound the repeats too.
         """
+        from .events import _timer_after, _timer_reading
+
         start = self._hidden.get(chain[-1])
         if start is None:
             return None
         deltas: dict[int, float] = {}
+        timer_steps: dict[int, int] = {}
         for i, last in enumerate(hidden):
             if last is None:
                 continue
@@ -504,14 +545,22 @@ class _CycleTracker:
             # Linear only when the accumulator never falls back along the
             # cycle (no reset on the way).
             previous = last
+            steps = 0
             for tid in chain[:-1]:
                 values = self._hidden.get(tid)
                 if values is None or values[i] is None or values[i] > previous:
                     return None
+                steps += values[i] < previous
                 previous = values[i]
             if first > previous:
                 return None
+            steps += first < previous
             deltas[i] = delta
+            if self._sources[i].quantum is not None:
+                # One scan runs a timer at most once: each link it grew on
+                # is one step of its carry recurrence (checked exactly when
+                # the cycle is traversed again).
+                timer_steps[i] = steps
         if not (deltas.keys() & pulse):
             return None
         repeats: int | None = None
@@ -521,17 +570,41 @@ class _CycleTracker:
                 return None
             if not limits:
                 continue
-            count = _max_repeats(hidden[i], delta, limits)
+            if i in timer_steps:
+                count = _max_timer_repeats(kernel, self._sources[i], timer_steps[i], limits)
+                if count is None:
+                    return None
+            else:
+                count = _max_repeats(hidden[i], delta, limits)
             repeats = count if repeats is None else min(repeats, count)
         if repeats is None:
             return None
         if repeats == 0:
             # Already the last uncrossed point of the progression.
-            return _Pump(count=0, values=hidden, deltas=deltas)
+            return _Pump(
+                count=0, values=hidden, deltas=deltas, timer_steps=timer_steps, timer_landing={}
+            )
         values = list(hidden)
+        landing: dict[int, tuple[int, float]] = {}
         for i, delta in deltas.items():
-            values[i] = hidden[i] + repeats * delta
-        return _Pump(count=repeats, values=tuple(values), deltas=deltas)
+            if i in timer_steps:
+                source = self._sources[i]
+                assert source.quantum is not None
+                acc, frac = _timer_reading(kernel, source.acc_name)
+                landed = _timer_after(acc, frac, source.quantum, repeats * timer_steps[i])
+                if landed is None:
+                    return None
+                landing[i] = landed
+                values[i] = round(landed[0] + landed[1], 9)
+            else:
+                values[i] = hidden[i] + repeats * delta
+        return _Pump(
+            count=repeats,
+            values=tuple(values),
+            deltas=deltas,
+            timer_steps=timer_steps,
+            timer_landing=landing,
+        )
 
     def repeats_linearly(
         self,
@@ -550,7 +623,43 @@ class _CycleTracker:
         for i, value in enumerate(before):
             if value is None:
                 continue
-            if after[i] is None or abs(after[i] - (value + deltas.get(i, 0))) > 1e-9:
+            if after[i] is None:
+                return False
+            if self._sources[i].quantum is not None:
+                # Timers are compared exactly (timer_lap_matches).
+                continue
+            if abs(after[i] - (value + deltas.get(i, 0))) > 1e-9:
+                return False
+        return True
+
+    def timer_readings(self, kernel: ReplayKernel) -> tuple[tuple[int, float] | None, ...]:
+        from .events import _timer_reading
+
+        return tuple(
+            _timer_reading(kernel, source.acc_name) if source.quantum is not None else None
+            for source in self._sources
+        )
+
+    def timer_lap_matches(
+        self,
+        before: tuple[tuple[int, float] | None, ...],
+        kernel: ReplayKernel,
+        timer_steps: dict[int, int],
+    ) -> bool:
+        """Whether one more traversal ran each timer exactly its steps again.
+
+        A timer the cycle does not advance must be left where it was.
+        """
+        from .events import _timer_after, _timer_reading
+
+        for i, source in enumerate(self._sources):
+            start = before[i]
+            if start is None:
+                continue
+            quantum = source.quantum
+            assert quantum is not None
+            expected = _timer_after(start[0], start[1], quantum, timer_steps.get(i, 0))
+            if expected is None or _timer_reading(kernel, source.acc_name) != expected:
                 return False
         return True
 
@@ -565,9 +674,13 @@ class _CycleTracker:
         """Inputs and demoted prevs of the links from the cycle's start onward."""
         return [self._step[tid] for tid in reversed(chain[:-1])]
 
-    def apply(self, kernel: ReplayKernel, values: tuple[Any, ...]) -> None:
-        for source, value in zip(self._sources, values, strict=True):
-            if value is not None:
+    def apply(self, kernel: ReplayKernel, pumped: _Pump) -> None:
+        for i, (source, value) in enumerate(zip(self._sources, pumped.values, strict=True)):
+            landed = pumped.timer_landing.get(i)
+            if landed is not None:
+                kernel.tags[source.acc_name] = landed[0]
+                kernel.memory[f"_frac:{source.acc_name}"] = landed[1]
+            elif value is not None:
                 _set_progress(kernel, source, value)
 
     def advanced(

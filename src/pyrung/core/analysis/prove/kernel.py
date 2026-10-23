@@ -539,11 +539,11 @@ def _extract_state_key(
     """
     parts = list(map(kernel.tags.get, stateful_names))
     for spec in done_specs:
-        parts[spec.index] = _done_acc_state(
-            spec.kind,
-            parts[spec.index],
-            kernel.tags.get(spec.acc_name),
-        )
+        acc = kernel.tags.get(spec.acc_name)
+        if not acc and spec.frac_key is not None:
+            # Progress carried in the fraction alone still counts.
+            acc = kernel.memory.get(spec.frac_key) or acc
+        parts[spec.index] = _done_acc_state(spec.kind, parts[spec.index], acc)
     if threshold_vector is None:
         threshold_vector = _threshold_vector_key(kernel, threshold_vector_specs)
     parts.extend(threshold_vector)

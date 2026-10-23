@@ -17,6 +17,7 @@ from pyrung.core import (
     calc,
     copy,
     count_up,
+    latch,
     off_delay,
     on_delay,
     out,
@@ -167,6 +168,121 @@ class TestTimerFastForward:
         done_values = {dict(s).get("T1_Done") for s in states}
         assert False in done_values
         assert True in done_values
+
+
+def _first_hit_scan(logic: Program, tag_name: str, inputs: dict, limit: int) -> int | None:
+    plc = PLC(logic, dt=0.010)
+    plc.patch(inputs)
+    for scan in range(1, limit + 1):
+        plc.step()
+        if plc.current_state.tags[tag_name]:
+            return scan
+    return None
+
+
+def _assert_hit_replays(logic: Program, result, tag_name: str, scans: int | None = None) -> None:
+    assert isinstance(result, Counterexample)
+    assert not result.caveats
+    assert _replay_trace(logic, result.trace).current_state.tags[tag_name] is True
+    if scans is not None:
+        assert sum(step.scans for step in result.trace) == scans
+
+
+_COARSE_UNITS = [("sec", 1), ("Ts", 2), ("min", 1), ("ms", 1500)]
+
+
+class TestTimerUnitsCoarserThanTheScan:
+    """A timer in seconds or minutes runs for many scans on its fractional
+    carry alone (``Acc`` stays 0 at 10 ms): that is still progress, and the
+    hidden-event jump lands where the per-scan carry recurrence does."""
+
+    @pytest.mark.parametrize(("unit", "preset"), _COARSE_UNITS)
+    def test_on_delay_reaches_done(self, unit, preset):
+        tag = f"CoarseTon{unit}"
+        enable = Bool(tag + "En", external=True)
+        timer = Timer.clone(tag)
+        hit = Bool(tag + "Hit")
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(timer, preset=preset, unit=unit)
+            with Rung(timer.Done):
+                out(hit)
+        truth = _first_hit_scan(logic, hit.name, {enable.name: True}, 20_000)
+        _assert_hit_replays(logic, always(logic, ~hit), hit.name, truth)
+
+    @pytest.mark.parametrize(("unit", "preset"), _COARSE_UNITS)
+    def test_retentive_and_off_delay_reach_done(self, unit, preset):
+        tag = f"CoarseRet{unit}"
+        enable = Bool(tag + "En", external=True)
+        clear = Bool(tag + "Clr", external=True)
+        retentive = Timer.clone(tag + "R")
+        hit = Bool(tag + "Hit")
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(retentive, preset=preset, unit=unit).reset(clear)
+            with Rung(retentive.Done):
+                out(hit)
+        _assert_hit_replays(logic, always(logic, ~hit), hit.name)
+
+        tag = f"CoarseTof{unit}"
+        enable = Bool(tag + "En", external=True)
+        seen = Bool(tag + "Seen")
+        off = Timer.clone(tag)
+        hit = Bool(tag + "Hit")
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                latch(seen)
+            with Rung(enable):
+                off_delay(off, preset=preset, unit=unit)
+            with Rung(seen, ~enable, ~off.Done):
+                out(hit)
+        _assert_hit_replays(logic, always(logic, ~hit), hit.name)
+
+    @pytest.mark.parametrize(("unit", "preset"), _COARSE_UNITS)
+    def test_accumulator_threshold_is_crossed(self, unit, preset):
+        tag = f"CoarseAcc{unit}"
+        enable = Bool(tag + "En", external=True)
+        timer = Timer.clone(tag)
+        hit = Bool(tag + "Hit")
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(timer, preset=preset * 4, unit=unit)
+            with Rung(timer.Acc > preset):
+                out(hit)
+        truth = _first_hit_scan(logic, hit.name, {enable.name: True}, 40_000)
+        _assert_hit_replays(logic, always(logic, ~hit), hit.name, truth)
+
+    @pytest.mark.parametrize(("unit", "preset"), [("min", 1), ("Ts", 2)])
+    def test_retentive_timer_on_a_toggling_bit_is_pumped_exactly(self, unit, preset):
+        """Pumped around the two-scan cycle on the carry recurrence: an
+        aggregate float jump lands a couple of scans short of the preset."""
+        tag = f"CoarseOsc{unit}"
+        toggle = Bool(tag + "Tog")
+        clear = Bool(tag + "Clr", external=True)
+        timer = Timer.clone(tag)
+        hit = Bool(tag + "Hit")
+        with Program(strict=False) as logic:
+            with Rung(~toggle):
+                out(toggle)
+            with Rung(toggle):
+                on_delay(timer, preset=preset, unit=unit).reset(clear)
+            with Rung(timer.Done):
+                out(hit)
+        truth = _first_hit_scan(logic, hit.name, {clear.name: False}, 40_000)
+        _assert_hit_replays(logic, always(logic, ~hit), hit.name, truth)
+
+    def test_timer_on_a_toggling_bit_never_finishes(self):
+        toggle = Bool("CoarseNeverTog")
+        timer = Timer.clone("CoarseNever")
+        hit = Bool("CoarseNeverHit")
+        with Program(strict=False) as logic:
+            with Rung(~toggle):
+                out(toggle)
+            with Rung(toggle):
+                on_delay(timer, preset=1, unit="sec")
+            with Rung(timer.Done):
+                out(hit)
+        assert isinstance(always(logic, ~hit), Proven)
 
 
 class TestDynamicPresetDoneEvent:
