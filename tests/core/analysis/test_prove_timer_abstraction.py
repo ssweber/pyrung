@@ -1112,6 +1112,32 @@ class TestTimeEventDrum:
         assert "Acc" in result.tags
         assert any("time_event_drum" in hint for hint in result.hints)
 
+    @pytest.mark.parametrize(
+        "acc", [Int("Acc", min=0, max=5), Int("Acc", choices={0: "a", 1: "b", 2: "c"})]
+    )
+    def test_declared_acc_domain_is_still_intractable(self, acc: Int) -> None:
+        """A declared domain must not make Acc plain state: its seconds carry
+        is in no state key, so the step-1 timeout would never be seen."""
+        from pyrung.core import time_event_drum
+
+        with Program(strict=False) as logic:
+            with Rung():
+                time_event_drum(
+                    outputs=[Bool("Y1"), Bool("Y2")],
+                    presets=[1, None],
+                    events=[None, Bool("A", default=True)],
+                    unit="sec",
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=Int("Step"),
+                    accumulator=acc,
+                    completion_flag=Bool("Done"),
+                ).reset(Bool("R", readonly=True))
+            with Rung(Bool("Y2")):
+                out(Bool("H"))
+        result = always(logic, ~Bool("H"))
+        assert isinstance(result, Intractable)
+        assert any("time_event_drum" in hint for hint in result.hints)
+
     def test_how_keeps_its_prover_context(self) -> None:
         from pyrung.core.analysis.pilot.drive_setup import build_prover_context
 

@@ -819,7 +819,7 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
 
         if enabled or reset_active or step_changed or reset_step_data:
             ctx.set_tags({self.accumulator.name: acc_value, self.current_step.name: step})
-        # Every scan, so the prover finds the key from any one scan.
+        # Every scan, as the compiled kernel writes it.
         ctx.set_memory(frac_key, frac)
 
         self._write_control_prev_state(ctx, jump_curr=jump_curr, jog_curr=jog_curr)

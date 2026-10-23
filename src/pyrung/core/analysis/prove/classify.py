@@ -2580,6 +2580,7 @@ def _classify_dimensions_from_graph(
     nondeterministic: dict[str, tuple[Any, ...]] = {}
     combinational: set[str] = set()
     infeasible_tags: list[str] = []
+    unmodeled_accs = frozenset(_unmodeled_accumulators(program))
     unread_timers = (
         _unread_timer_done_tags(program, graph, done_acc, scope=scope, project=project)
         if model_system_points and (scope is not None or project is not None)
@@ -2811,6 +2812,16 @@ def _classify_dimensions_from_graph(
                     stateful[tag_name] = domain
                 else:
                     infeasible_tags.append(tag_name)
+            continue
+
+        if tag_name in unmodeled_accs:
+            # Its timing is not modeled: the carry (``_frac:``) is in no state
+            # key, so even a declared domain must not let the search track it
+            # as plain state.  It times whether or not anything reads it.
+            if unclassified is not None:
+                unclassified.add(tag_name)
+            else:
+                infeasible_tags.append(tag_name)
             continue
 
         # An accumulator its own instruction reads back (a time & event drum's)
