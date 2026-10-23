@@ -4644,6 +4644,7 @@ class PLC:
         protected_reads: frozenset[str] = frozenset()
         clock_reads: frozenset[str] = frozenset()
         scan_derived: frozenset[str] = frozenset()
+        normalized: Any = None
         if self._is_fn_predicate(conditions):
             predicate = conditions[0]
         else:
@@ -4670,18 +4671,32 @@ class PLC:
             protected_reads = reads - clock_reads - scan_derived
         self._ensure_running()
         if fold and self._logic:
-            from pyrung.core.fold import _without_soft_rtc_ticks, fold_run_until
+            from pyrung.core.fold import (
+                _condition_read_audit,
+                _merge_comparisons,
+                _without_soft_rtc_ticks,
+                fold_run_until,
+            )
 
             fold_ctx = self._ensure_fold_context(protected_reads, clock_reads, scan_derived)
-            if self._is_fn_predicate(conditions):
+            opaque = self._is_fn_predicate(conditions)
+            extra_unmodeled: frozenset[str] = frozenset()
+            if opaque:
                 # A callable may read a clock copy the fold cannot see.
                 fold_ctx = _without_soft_rtc_ticks(fold_ctx)
+            else:
+                # Coordinates the condition reads other than by a comparison
+                # (an expression, a contact) bound every window they move in.
+                extra_unmodeled, found = _condition_read_audit((normalized,), fold_ctx)
+                extra_comparisons = _merge_comparisons(extra_comparisons or {}, found)
             return fold_run_until(
                 self,
                 predicate,
                 max_cycles=max_cycles,
                 fold_ctx=fold_ctx,
                 extra_comparisons=extra_comparisons,
+                extra_unmodeled=extra_unmodeled,
+                trace_reads=opaque,
             )
         for _ in range(max_cycles):
             self._consume_pause_request()

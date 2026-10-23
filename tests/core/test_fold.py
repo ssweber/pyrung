@@ -3240,3 +3240,181 @@ class TestClockGatedTimeDrum:
     def test_completion_scan_matches_stepping(self, gate: bool) -> None:
         folded = _assert_fold_is_exact(self._shape(gate), _scans(400), dt=0.1)
         assert folded.state.tags["DDone"]
+
+
+class TestReadsOutsideTheCrossings:
+    """A coordinate the plateau guard ignores must be read only where the
+    crossing set places its flips.  Any other read (an expression, an index,
+    a moving operand or preset, a stored copy, an instruction's own
+    condition, an opaque stop predicate) bounds the window at the
+    coordinate's next value change."""
+
+    @staticmethod
+    def _program(shape: str) -> Program:
+        from pyrung import Block, TagType, copy, latch
+
+        T, U, P, Q, Y = Int("T"), Int("U"), Int("P"), Int("Q"), Int("Y")
+        Tmr, C = Timer.clone("Tmr"), Counter.clone("C")
+        DS = Block("DS", TagType.INT, 1, 3_000)
+        with Program(strict=False) as prog:
+            if shape in ("expr", "index", "index_copy", "operand", "both_moving"):
+                with Rung():
+                    calc(T + 1 if shape != "operand" else T - 3, T)
+            if shape == "both_moving":
+                with Rung():
+                    calc(U - 2, U)
+            if shape in ("preset", "counter_preset"):
+                with Rung():
+                    calc(P - 1, P)
+            if shape in ("operand", "stateful", "copied", "expr_timer", "preset"):
+                with Rung():
+                    on_delay(Tmr, P if shape == "preset" else 20_000)
+            if shape == "counter_preset":
+                with Rung():
+                    count_up(C, P).reset(Bool("CR"))
+            if shape == "reset_cond":
+                with Rung():
+                    count_up(C, 1_000).reset(Bool("CR"))
+                with Rung():
+                    on_delay(Tmr, 2_000).reset(C.Acc == 100)
+            reader = {
+                "expr": lambda: (T // 100) == 3,
+                "index": lambda: DS[T] == 5,
+                "operand": lambda: Tmr.Acc > T,
+                "both_moving": lambda: T > U,
+                "expr_timer": lambda: (Tmr.Acc // 5_000) == 1,
+                "copied": lambda: Q == 1,
+                "stateful": lambda: Y > 0,
+            }.get(shape)
+            if shape == "index_copy":
+                with Rung():
+                    copy(DS[T], Q)
+                reader = lambda: Q == 5  # noqa: E731
+            if shape == "copied":
+                with Rung():
+                    calc(Tmr.Acc // 5_000, Q)
+            if shape == "stateful":
+                with Rung():
+                    calc(Y + Tmr.Acc // 5_000, Y)
+            if reader is not None:
+                with Rung(reader()):
+                    latch(Bool("L"))
+            with Rung(rise(Bool("L"))):
+                copy(T, Int("TAtL"))
+            with Rung(T > 2_000):  # a far crossing that opens windows
+                out(Bool("Far"))
+            with Rung(Tmr.Done if shape != "counter_preset" else C.Done):
+                out(Bool("Done"))
+        return prog
+
+    @pytest.mark.parametrize(
+        ("shape", "patch"),
+        [
+            ("expr", {}),
+            ("index", {"DS500": 5, "T": 1}),
+            ("index_copy", {"DS500": 5, "T": 1}),
+            ("operand", {"T": 10_000}),
+            ("both_moving", {"U": 5_000}),
+            ("preset", {"P": 30_000}),
+            ("counter_preset", {"P": 3_000}),
+            ("expr_timer", {}),
+            ("copied", {}),
+            ("stateful", {}),
+            ("reset_cond", {}),
+        ],
+    )
+    def test_matches_stepping(self, shape: str, patch: dict[str, int]) -> None:
+        def run(plc: PLC, fold: bool) -> None:
+            if "preset" in shape:
+                plc.run_until(Bool("Done"), max_cycles=5_000, fold=fold)
+            else:
+                _run_scans(plc, 2_500, fold=fold)
+
+        _assert_fold_is_exact(lambda: self._program(shape), run, patch=patch)
+
+    @staticmethod
+    def _timer_only() -> Program:
+        with Program(strict=False) as prog:
+            with Rung():
+                on_delay(Timer.clone("Tmr"), 30_000)
+        return prog
+
+    @pytest.mark.parametrize(
+        "stop",
+        [
+            "condition_expr",
+            "callable_acc",
+            "callable_scan_id",
+            "callable_iterates",
+        ],
+    )
+    def test_stop_predicate_reads(self, stop: str) -> None:
+        Tmr = Timer.clone("Tmr")
+        until: Any = {
+            "condition_expr": (Tmr.Acc // 5_000) == 1,
+            "callable_acc": lambda s: s.tags.get("Tmr_Acc", 0) >= 5_000,
+            "callable_scan_id": lambda s: s.scan_id >= 777,
+            "callable_iterates": lambda s: any(
+                k == "Tmr_Acc" and v >= 5_000 for k, v in s.tags.items()
+            ),
+        }[stop]
+
+        def run(plc: PLC, fold: bool) -> None:
+            plc.run_until(until, max_cycles=5_000, fold=fold)
+
+        folded = _assert_fold_is_exact(self._timer_only, run)
+        assert folded.state.scan_id < 5_000
+
+    def test_cycle_coast_traces_an_undeclared_predicate(self) -> None:
+        from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
+
+        def run(plc: PLC, fold: bool) -> None:
+            def pred(s: Any) -> bool:
+                return s.tags.get("Tmr_Acc", 0) >= 5_000
+
+            if fold:
+                cycle_fold_until(plc, pred, budget=5_000)
+            else:
+                plc.run_until(pred, max_cycles=5_000, fold=False)
+
+        _assert_fold_is_exact(self._timer_only, run)
+
+    @staticmethod
+    def _folding_kept(shape: str) -> Program:
+        from pyrung import copy
+
+        Tmr, C = Timer.clone("Tmr"), Counter.clone("C")
+        with Program(strict=False) as prog:
+            with Rung():
+                count_up(C, 100_000).reset(Bool("CR"))
+            with Rung():
+                on_delay(Tmr, 20_000)
+            if shape == "display":
+                # Nothing reads the display: the landing scan rebuilds it.
+                with Rung():
+                    calc(30_000 - Tmr.Acc, Int("Left"))
+            else:
+                # A snapshot gated by an edge never fires inside a window.
+                with Rung(rise(Bool("X"))):
+                    copy(C.Acc, Int("Snap"))
+                with Rung(Int("Snap") > 5):
+                    out(Bool("Big"))
+        return prog
+
+    @pytest.mark.parametrize("shape", ["display", "snapshot"])
+    def test_reads_the_landing_reproduces_still_fold(self, shape: str) -> None:
+        kernel = {"n": 0}
+
+        def run(plc: PLC, fold: bool) -> None:
+            if fold:
+                scan = plc._run_single_scan
+
+                def counted(**kw: Any) -> Any:
+                    kernel["n"] += 1
+                    return scan(**kw)
+
+                plc._run_single_scan = counted  # type: ignore[method-assign]
+            _run_scans(plc, 1_500, fold=fold)
+
+        _assert_fold_is_exact(lambda: self._folding_kept(shape), run)
+        assert kernel["n"] < 50

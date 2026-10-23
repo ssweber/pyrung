@@ -30,10 +30,15 @@ Module structure
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
+
+from pyrsistent import PMap
+
+_PMAP: Any = PMap  # its bucket accessors are private API
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -146,6 +151,27 @@ class _FoldContext:
     # Stored copies of the clock the plateau guard ignores, and when a window
     # may cross ticks (see _TimeMirrors).
     time_mirrors: _TimeMirrors | None = None
+    # Coordinates some read reaches other than through a comparison the
+    # crossing set models (an expression, an index, a moving operand or
+    # preset, a stored copy, an edge): their next value change bounds every
+    # window they move in (see :func:`_audit_coordinate_reads`).
+    unmodeled: frozenset[str] = frozenset()
+    # ``(view, source)`` per affine acc view in ``mirror_names``.
+    mirror_sources: tuple[tuple[str, str], ...] = ()
+    # Unread tags a copy/calc writes from a coordinate: stale inside a window,
+    # rebuilt by its landing scan (see _audit_coordinate_reads).
+    landing_rebuilt: frozenset[str] = frozenset()
+
+    @cached_property
+    def coordinates(self) -> frozenset[str]:
+        """Every moving value the crossing set tracks for the plateau guard."""
+        return self.acc_names | self.modwrap_names | self.mirror_names
+
+    def unmodeled_coordinates(self, names: Collection[str]) -> frozenset[str]:
+        """The tracked sources behind *names* (a view stands for its source)."""
+        views = dict(self.mirror_sources)
+        out = {views.get(name, name) for name in names}
+        return frozenset(out) & (self.acc_names | self.modwrap_names)
 
     @cached_property
     def timed_sources(self) -> tuple[_AccSource, ...]:
@@ -389,6 +415,229 @@ def _scan_rung_reads(
 
     frozen = {k: tuple(v) for k, v in comparisons.items()}
     return frozen, frozenset(read_tags)
+
+
+_COMPARE_FORMS = {
+    "CompareEq": "eq",
+    "CompareNe": "ne",
+    "CompareLt": "lt",
+    "CompareLe": "le",
+    "CompareGt": "gt",
+    "CompareGe": "ge",
+}
+
+
+def _condition_leaves(condition: Any) -> list[Any]:
+    """The leaf conditions of *condition* (``None``, a list, or a tree)."""
+    from pyrung.core.condition import AllCondition, AnyCondition
+
+    out: list[Any] = []
+    stack = [condition]
+    while stack:
+        cond = stack.pop()
+        if cond is None:
+            continue
+        if isinstance(cond, (list, tuple)):
+            stack.extend(cond)
+        elif isinstance(cond, (AllCondition, AnyCondition)):
+            stack.extend(cond.conditions)
+        else:
+            out.append(cond)
+    return out
+
+
+def _audit_condition(
+    condition: Any,
+    coords: frozenset[str],
+    tags: dict[str, Any],
+    cmps: dict[str, list[tuple[str, Any]]],
+    unmodeled: set[str],
+) -> set[str]:
+    """Classify every read of a coordinate in *condition*; return the ones seen.
+
+    A leaf ``coord <cmp> operand`` (or an Int contact, ``coord != 0``) is a
+    crossing the fold places; it is recorded in *cmps*.  Any other leaf that
+    reads a coordinate, and a coordinate read as a comparison's operand, is
+    added to *unmodeled*.
+    """
+    from pyrung.core.analysis.pdg import _extract_tag_names
+    from pyrung.core.analysis.simplified import _operand_label
+    from pyrung.core.condition import IntTruthyCondition
+    from pyrung.core.tag import Tag
+
+    seen: set[str] = set()
+    for leaf in _condition_leaves(condition):
+        reads = _extract_tag_names(leaf, tags) & coords
+        if not reads:
+            continue
+        seen |= reads
+        tag = getattr(leaf, "tag", None)
+        name = tag.name if isinstance(tag, Tag) else None
+        form = _COMPARE_FORMS.get(type(leaf).__name__)
+        operand: Any = None
+        if form is not None:
+            operand = _operand_label(leaf.value)
+        elif isinstance(leaf, IntTruthyCondition):
+            form, operand = "ne", 0
+        if form is None or name not in reads:
+            unmodeled |= reads
+            continue
+        cmps.setdefault(name, []).append((form, operand))
+        unmodeled |= reads - {name}
+    return seen
+
+
+def _audit_coordinate_reads(
+    pdg: ProgramGraph,
+    program: Any,
+    coords: frozenset[str],
+    modeled_writes: dict[str, frozenset[str]],
+    unread: Callable[[str], bool] = lambda _name: False,
+    dormant: dict[str, list[frozenset[str] | None]] | None = None,
+) -> tuple[
+    frozenset[str],
+    dict[str, list[tuple[str, Any]]],
+    dict[str, list[tuple[str, Any]]],
+    frozenset[str],
+]:
+    """Every read of a moving coordinate, sorted into modeled and unmodeled.
+
+    Between crossings the plateau guard ignores a coordinate's motion, so the
+    crossing set must cover each of its readers.  Covered are a comparison
+    ``coord <cmp> operand`` in a rung's or an instruction's condition, the
+    accumulating instruction's own read of its accumulator, the writer of
+    *modeled_writes* (a self-calc reading itself, an affine view reading its
+    source), and a plain ``copy``/``calc`` whose every write is *unread* (no
+    rung reads it, nor a stop predicate): its rung's condition holds still
+    through a window, so the landing scan rebuilds what stepping leaves there
+    (a display such as ``calc(Preset - Tmr.Acc, HMI_Left)``).  Every other
+    read, and any read the program graph records that this walk does not
+    find, makes the coordinate *unmodeled*.
+
+    A ``copy``/``calc`` read in a main rung gated by ``rise(X)`` / ``fall(X)``
+    of a plain tag ``X`` the rung does not write, or by a one-shot, is
+    *dormant* when *dormant* is given: the read is recorded there under the
+    coordinate (with the gate tags, ``None`` for a one-shot) instead of
+    counting as unmodeled.  Every scan of a window sees ``X`` as the probe
+    did, so the edge, and the one-shot, never fire inside it; the caller
+    confirms ``X`` is guarded by the plateau.
+
+    Returns ``(unmodeled, rung_cmps, instruction_cmps, rebuilt)``: the
+    comparisons found in rung conditions and in instruction conditions
+    (resets, count-down legs, drum events), which the rung condition scan does
+    not reach, and the unread tags whose value a window leaves stale until the
+    landing scan.
+    """
+    from pyrung.core.analysis.pdg import _extract_instruction_writes, _extract_tag_names
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.tag import Tag
+
+    tags = dict(pdg.tags)
+    registry = _ensure_registry()
+    unmodeled: set[str] = set()
+    rebuilt: set[str] = set()
+    rung_cmps: dict[str, list[tuple[str, Any]]] = {}
+    instr_cmps: dict[str, list[tuple[str, Any]]] = {}
+    if not coords:
+        return frozenset(), rung_cmps, instr_cmps, frozenset()
+    for node in pdg.rung_nodes:
+        reads = (
+            (node.condition_reads - node.guard_reads) | node.data_reads | node.exclusive_reads
+        ) & coords
+        if not reads:
+            continue
+        rung = _resolve_rung(program, node)
+        if rung is None:
+            unmodeled |= reads
+            continue
+        seen: set[str] = set()
+        for cond in rung._conditions:
+            seen |= _audit_condition(cond, coords, tags, rung_cmps, unmodeled)
+        gates: frozenset[str] = frozenset()
+        top_level = dormant is not None and node.scope == "main" and not node.branch_path
+        if top_level:
+            gates = (
+                frozenset(
+                    cond._resolved_tag.name
+                    for cond in rung._conditions
+                    if isinstance(cond, (RisingEdgeCondition, FallingEdgeCondition))
+                    and cond._edge_fn is None
+                    and isinstance(cond.tag, Tag)
+                )
+                - node.all_writes
+            )
+        for instr in _nested_instructions(rung._instructions):
+            cls = type(instr)
+            for field_name in getattr(cls, "_conditions", ()):
+                seen |= _audit_condition(
+                    getattr(instr, field_name, None), coords, tags, instr_cmps, unmodeled
+                )
+            own = instr.accumulator.name if type(instr) in registry else None
+            dest = getattr(getattr(instr, "dest", None), "name", None)
+            allowed = modeled_writes.get(dest, frozenset()) if dest is not None else frozenset()
+            writes, target_reads, implicit = _extract_instruction_writes(instr, tags)
+            outputs = set(writes) | set(implicit)
+            exclusive = getattr(cls, "_exclusive_fields", ())
+            instr_reads: set[str] = set()
+            for field_name in (*getattr(cls, "_reads", ()), *exclusive):
+                field_reads = _extract_tag_names(getattr(instr, field_name, None), tags)
+                instr_reads |= field_reads
+                field_reads &= coords
+                seen |= field_reads
+                if field_name in exclusive:
+                    field_reads = field_reads - {own}
+                field_reads -= allowed
+                if not field_reads:
+                    continue
+                plain = type(instr) in (CopyInstruction, CalcInstruction)
+                oneshot = bool(getattr(instr, "oneshot", False))
+                if (
+                    plain
+                    and not oneshot
+                    and outputs
+                    and all(unread(name) for name in outputs)
+                    and not outputs & instr_reads
+                ):
+                    rebuilt |= outputs
+                    continue
+                if dormant is not None and plain and top_level and (oneshot or gates):
+                    for name in field_reads:
+                        dormant.setdefault(name, []).append(None if oneshot else gates)
+                    continue
+                unmodeled |= field_reads
+            target_reads = set(target_reads) & coords
+            seen |= target_reads
+            unmodeled |= target_reads
+        unmodeled |= reads - seen
+    return frozenset(unmodeled), rung_cmps, instr_cmps, frozenset(rebuilt)
+
+
+def _merge_comparisons(
+    base: dict[str, tuple[tuple[str, Any], ...]],
+    extra: Mapping[str, Sequence[tuple[str, Any]]],
+) -> dict[str, tuple[tuple[str, Any], ...]]:
+    """*base* with *extra*'s comparisons appended where not already present."""
+
+    def key(item: tuple[str, Any]) -> tuple[str, Any]:
+        form, operand = item
+        if isinstance(operand, (bool, int, float, str)):
+            return (form, (type(operand), operand))
+        return (form, id(operand))
+
+    out = dict(base)
+    for name, items in extra.items():
+        have = list(out.get(name, ()))
+        keys = {key(item) for item in have}
+        for item in items:
+            k = key(item)
+            if k not in keys:
+                keys.add(k)
+                have.append(item)
+        out[name] = tuple(have)
+    return out
 
 
 # ── 6. Churn analysis ───────────────────────────────────────────────
@@ -1991,6 +2240,7 @@ def _build_fold_context(
         )
 
     mirror_names: set[str] = set()
+    mirror_cmp_keys: dict[str, set[tuple[str, Any]]] = {}
     if mirror_cands:
         merged = dict(comparisons)
         reverse_form = {
@@ -2017,12 +2267,56 @@ def _build_fold_context(
             merged[a] = merged.get(a, ()) + projected
             merged.pop(m, None)
             mirror_names.add(m)
+            mirror_cmp_keys[m] = set(cmps)
         comparisons = merged
         if mirror_names and journal is not None:
             journal.add_note(
                 "fold: affine acc-view thresholds translated onto their sources: "
                 + ", ".join(sorted(mirror_names))
             )
+    mirror_sources = tuple(
+        sorted((m, a) for m, a, _scale, _offset in mirror_cands if m in mirror_names)
+    )
+
+    # Every read of a moving coordinate must be one the crossing set places.
+    view_of = dict(mirror_sources)
+    modeled_writes: dict[str, frozenset[str]] = {
+        s.acc_name: frozenset({s.acc_name}) for s in sources if s.step is not None
+    }
+    modeled_writes.update({name: frozenset({name}) for name in modwrap_names})
+    modeled_writes.update({m: frozenset({a}) for m, a in mirror_sources})
+    protected_names = target_names | _harness_referenced_names(plc)
+
+    def unread(name: str) -> bool:
+        return name not in protected_names and not pdg.all_readers_of.get(name)
+
+    dormant: dict[str, list[frozenset[str] | None]] = {}
+    unmodeled_raw, rung_cmps, instr_cmps, landing_rebuilt = _audit_coordinate_reads(
+        pdg,
+        program,
+        acc_names | modwrap_names | frozenset(mirror_names),
+        modeled_writes,
+        unread,
+        dormant,
+    )
+    unmodeled_set = set(unmodeled_raw)
+    found: dict[str, list[tuple[str, Any]]] = {}
+    for table in (rung_cmps, instr_cmps):
+        for name, items in table.items():
+            if name in view_of:
+                # A view's thresholds were projected from the rung scan; any
+                # other comparison on it was not.
+                if any(item not in mirror_cmp_keys.get(name, ()) for item in items):
+                    unmodeled_set.add(name)
+                continue
+            found.setdefault(name, []).extend(items)
+    comparisons = _merge_comparisons(comparisons, found)
+    unmodeled = frozenset(view_of.get(name, name) for name in unmodeled_set)
+    if unmodeled and journal is not None:
+        journal.add_note(
+            "fold: windows bounded at each value change of coordinates read "
+            "outside a modeled comparison: " + ", ".join(sorted(unmodeled))
+        )
 
     # System clocks (sys.clock_1s, …) are pure functions of the timestamp,
     # resolved on read and never stored in state.tags — so the plateau guard
@@ -2047,7 +2341,7 @@ def _build_fold_context(
         | (frozenset(_DERIVED_TAG_NAMES) - {_system.sys.always_on.name})
     )
     clock_half_periods, soft_clocks, sat_clocks = _partition_read_clocks(
-        pdg, clock_disqualifying, acc_names
+        pdg, clock_disqualifying, acc_names - unmodeled
     )
     if condition_clock_reads:
         # A clock read by the run_until condition has no rung body to prove it
@@ -2122,11 +2416,21 @@ def _build_fold_context(
         syn_program = Program.__new__(Program)
         syn_program.rungs = list(syn.all_rungs())
         syn_program.subroutines = {}
+        syn_names: set[str] = set()
         for src in _collect_acc_sources(syn_program):
             if src.acc_name in acc_names:
                 continue
             sources.append(src)
             acc_names = acc_names | {src.acc_name}
+            syn_names.add(src.acc_name)
+        if syn_names:
+            syn_unmodeled, syn_rung, syn_instr, syn_rebuilt = _audit_coordinate_reads(
+                pdg, program, frozenset(syn_names), {}, unread
+            )
+            unmodeled = unmodeled | syn_unmodeled
+            landing_rebuilt = landing_rebuilt | syn_rebuilt
+            comparisons = _merge_comparisons(comparisons, syn_rung)
+            comparisons = _merge_comparisons(comparisons, syn_instr)
 
     first_scan_name = _system.sys.first_scan.name
     reads_first_scan = any(first_scan_name in _node_reads(node) for node in pdg.rung_nodes)
@@ -2160,11 +2464,37 @@ def _build_fold_context(
                 "readers are off: " + ", ".join(sorted(time_mirrors.names))
             )
 
+    # A dormant read stays dormant only while each of its gates is a tag the
+    # plateau guard checks (see _audit_coordinate_reads).
+    unguarded = (
+        acc_names
+        | profile_fb_names
+        | churn_excluded
+        | modwrap_names
+        | frozenset(mirror_names)
+        | frozen_writes
+        | landing_rebuilt
+        | (time_mirrors.names if time_mirrors is not None else frozenset())
+        | frozenset(_DERIVED_TAG_NAMES)
+    )
+    woken = {
+        view_of.get(name, name)
+        for name, sites in dormant.items()
+        if any(gates is not None and gates <= unguarded for gates in sites)
+    }
+    unmodeled = unmodeled | frozenset(woken)
+
     return _FoldContext(
         sources=tuple(sources),
         acc_names=acc_names,
         comparisons=comparisons,
-        read_done=frozenset(s.done_bit for s in sources) & read_tags,
+        read_done=frozenset(
+            s.done_bit
+            for s in sources
+            if s.done_bit in read_tags
+            or s.done_bit in target_names
+            or pdg.all_readers_of.get(s.done_bit)
+        ),
         normal_dt=float(getattr(plc, "_dt", 0.010) or 0.010),
         profile_fb_names=profile_fb_names,
         churn_excluded=churn_excluded,
@@ -2181,6 +2511,9 @@ def _build_fold_context(
         rtc_fields=rtc_fields,
         rtc_condition_fields=rtc_condition_fields,
         time_mirrors=time_mirrors,
+        unmodeled=unmodeled,
+        mirror_sources=mirror_sources,
+        landing_rebuilt=landing_rebuilt,
     )
 
 
@@ -2255,6 +2588,29 @@ def _extract_condition_reads(condition: Any) -> frozenset[str]:
 
     visit(_condition_to_expr(condition))
     return frozenset(out)
+
+
+def _condition_read_audit(
+    conditions: Collection[Any], ctx: _FoldContext
+) -> tuple[frozenset[str], dict[str, tuple[tuple[str, Any], ...]]]:
+    """How stop conditions read the fold's coordinates.
+
+    Returns the sources some condition reads outside a comparison (see
+    :func:`_audit_condition`), and the comparisons found, to merge into the
+    caller's crossings.
+    """
+    if not ctx.coordinates:
+        return frozenset(), {}
+    tags: dict[str, Any] = {}
+    cmps: dict[str, list[tuple[str, Any]]] = {}
+    unmodeled: set[str] = set()
+    for condition in conditions:
+        _audit_condition(condition, ctx.coordinates, tags, cmps, unmodeled)
+    # A comparison on a view was not projected onto its source: unmodeled.
+    views = dict(ctx.mirror_sources)
+    unmodeled |= {name for name in cmps if name in views}
+    found = {name: items for name, items in cmps.items() if name not in views}
+    return ctx.unmodeled_coordinates(unmodeled), _merge_comparisons({}, found)
 
 
 def _resolve_num(value: Any, state: Any) -> float | None:
@@ -2803,18 +3159,25 @@ def _nearest_timer_crossing(
     state: Any,
     extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None,
     cap: int | None,
+    unmodeled: frozenset[str] = frozenset(),
 ) -> int | None:
     """Scans to the nearest crossing of an advancing timer, on its exact recurrence.
 
     Same thresholds as :func:`_nearest_acc_crossing` (preset, read
     comparisons, run_until comparisons), resolved to the integer accumulator
-    value the comparisons actually read.  A search never needs to look past
-    *cap* scans: the window is already bounded there.
+    value the comparisons actually read.  A timer in *unmodeled* is bounded at
+    its next integer step, and at one scan when the probe stepped it.  A
+    search never needs to look past *cap* scans: the window is already
+    bounded there.
     """
     best: int | None = None
     for move in moves:
         src = move.src
         targets: list[tuple[float, bool]] = []
+        if src.acc_name in unmodeled:
+            if move.acc_before is not None and move.acc_before != move.acc:
+                return 1
+            targets.append((float(move.acc + 1), False))
         preset = _resolve_num(src.preset, state)
         if preset is not None:
             targets.append((preset, False))
@@ -2912,13 +3275,16 @@ def _nearest_acc_crossing(
     after_tot: dict[str, float],
     state: Any,
     extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
+    unmodeled: frozenset[str] = frozenset(),
 ) -> int | None:
     """Scans to the nearest actionable accumulator crossing.
 
     *extra_comparisons* carries thresholds read by the ``run_until`` predicate
     (e.g. ``Ctr_Acc > 500``); merging them in makes the fold land on the
     predicate's threshold instead of skipping to the preset and overshooting.
-    Timed sources are left to :func:`_nearest_timer_crossing`.
+    A moving source in *unmodeled* changes every scan a reader may see, so it
+    bounds the window at one scan.  Timed sources are left to
+    :func:`_nearest_timer_crossing`.
     """
     best: int | None = None
     for src in ctx.sources:
@@ -2937,6 +3303,8 @@ def _nearest_acc_crossing(
             # leaves it counting again on the next scan): not a recurrence.
             return 1
         if delta < 0 and not src.bidir:
+            return 1
+        if src.acc_name in unmodeled:
             return 1
         bounds: list[tuple[float, bool]] = []
         if src.step is None:
@@ -3039,6 +3407,7 @@ def _nearest_mod_flip(
     state: Any,
     extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
     before: Sequence[Any] = (),
+    unmodeled: frozenset[str] = frozenset(),
 ) -> int | None:
     """Scans to the nearest comparison truth-flip among mod-wrap sources.
 
@@ -3048,6 +3417,8 @@ def _nearest_mod_flip(
     """
     best: int | None = None
     for i, mw in enumerate(ctx.modwrap):
+        if mw.name in unmodeled:
+            return 1  # it moves every scan, and some read of it is not a comparison
         cmps_raw = ctx.comparisons.get(mw.name, ())
         if extra_comparisons:
             cmps_raw = cmps_raw + extra_comparisons.get(mw.name, ())
@@ -3502,6 +3873,97 @@ def _replace_tip_state(
     runner._state = state
 
 
+# Reads of an opaque stop predicate.  A callable ``run_until`` predicate is
+# judged on a state whose field and tag reads are recorded: a window may fold
+# only if, at the probe, the predicate read no value the window moves (it then
+# takes the same path and returns the same answer on every skipped scan).
+_READ_TRACES: list[set[str]] = []
+_READ_ALL = "*"  # iterated or compared the whole tag map
+_FIELD_READ = ":"  # prefix of a state field read (scan_id, timestamp, memory)
+
+
+class _TracedTags(PMap):
+    """A tag map that records which keys are read while a trace is active."""
+
+    __slots__ = ()
+
+    def __getitem__(self, key: Any) -> Any:
+        if _READ_TRACES:
+            _READ_TRACES[-1].add(key)
+        return _PMAP._getitem(self._buckets, key)
+
+    def __contains__(self, key: Any) -> bool:
+        if _READ_TRACES:
+            _READ_TRACES[-1].add(key)
+        return _PMAP._contains(self._buckets, key)
+
+    def iteritems(self) -> Any:
+        if _READ_TRACES:
+            _READ_TRACES[-1].add(_READ_ALL)
+        return PMap.iteritems(self)
+
+    def __eq__(self, other: object) -> bool:
+        if _READ_TRACES:
+            _READ_TRACES[-1].add(_READ_ALL)
+        return PMap.__eq__(self, other)
+
+    __hash__ = PMap.__hash__
+
+
+def _traced_state_class() -> type:
+    global _TRACED_STATE
+    if _TRACED_STATE is None:
+        from pyrung.core.state import SystemState
+
+        class _TracedState(SystemState):
+            """A SystemState whose field reads (and tag reads) are recorded."""
+
+            __slots__ = ()
+
+            def __getitem__(self, key: Any) -> Any:
+                value = _PMAP._getitem(self._buckets, key)
+                if key == "tags":
+                    return _PMAP.__new__(_TracedTags, value._size, value._buckets)
+                if _READ_TRACES:
+                    _READ_TRACES[-1].add(_FIELD_READ + str(key))
+                return value
+
+        _TRACED_STATE = _TracedState
+    return _TRACED_STATE
+
+
+_TRACED_STATE: type | None = None
+
+
+@contextmanager
+def _reads_untraced() -> Iterator[None]:
+    """Keep the reads inside the block out of the active trace.
+
+    For a predicate whose contract is to be judged only on the scans a coast
+    really executes (PILOT's opaque ``avoid=`` callables): its reads must not
+    bound the windows that skip the others.
+    """
+    _READ_TRACES.append(set())
+    try:
+        yield
+    finally:
+        _READ_TRACES.pop()
+
+
+def _traced_call(
+    predicate: Callable[[SystemState], bool], state: SystemState
+) -> tuple[bool, frozenset[str]]:
+    """``predicate(state)`` and every tag (or state field) it read."""
+    traced = _PMAP.__new__(_traced_state_class(), state._size, state._buckets)
+    reads: set[str] = set()
+    _READ_TRACES.append(reads)
+    try:
+        hit = bool(predicate(traced))
+    finally:
+        _READ_TRACES.pop()
+    return hit, frozenset(reads)
+
+
 @dataclass(frozen=True)
 class _FoldProbe:
     """State captured immediately before one ordinary probe scan."""
@@ -3557,9 +4019,16 @@ class _OrdinaryFoldStrategy:
         self,
         ctx: _FoldContext,
         extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
+        extra_unmodeled: Collection[str] = (),
     ) -> None:
         self.ctx = ctx
         self.extra_comparisons = extra_comparisons
+        # Coordinates read outside a modeled comparison by the program or by
+        # the stop predicate (see _audit_coordinate_reads).
+        self.unmodeled = ctx.unmodeled | ctx.unmodeled_coordinates(extra_unmodeled)
+        # What an opaque stop predicate read at the latest probe (``None``: no
+        # such predicate); the loop sets it (see _traced_call).
+        self.predicate_reads: frozenset[str] | None = None
         self.exclude = (
             ctx.acc_names
             | ctx.profile_fb_names
@@ -3571,6 +4040,27 @@ class _OrdinaryFoldStrategy:
         )
         self.inert_soft: set[str] = set()
         self.inert_run: dict[str, int] = {}
+
+    def predicate_unmodeled(self) -> frozenset[str] | None:
+        """Sources the opaque predicate read, or ``None`` if it read the unknowable.
+
+        A tag the plateau guard checks holds still through a window.  A source
+        (or a view of one) moves: it is bounded at its next value change.  Any
+        other moving read (another excluded tag, a value the landing rebuilds,
+        ``scan_id``, ``timestamp``, memory, the whole map) declines the window.
+        """
+        reads = self.predicate_reads
+        if reads is None:
+            return frozenset()
+        ctx = self.ctx
+        moving = reads & (self.exclude | ctx.landing_rebuilt)
+        if _READ_ALL in reads or any(
+            isinstance(name, str) and name.startswith(_FIELD_READ) for name in reads
+        ):
+            return None
+        if moving - ctx.coordinates:
+            return None
+        return ctx.unmodeled_coordinates(moving)
 
     def capture(self, runner: PLC) -> _FoldProbe:
         """Capture the entry side of one normal probe scan.
@@ -3634,18 +4124,28 @@ class _OrdinaryFoldStrategy:
         timer_moves = _timer_moves(self.ctx, probe.timers, after_timers)
         if timer_moves is None:
             return None
+        unmodeled = self.unmodeled
+        if self.predicate_reads is not None:
+            read_sources = self.predicate_unmodeled()
+            if read_sources is None:
+                return None
+            unmodeled = unmodeled | read_sources
         acc_scans = _nearest_acc_crossing(
             self.ctx,
             probe.totals,
             after_totals,
             state,
             self.extra_comparisons,
+            unmodeled,
         )
+        if acc_scans == 1:
+            return None
         mod_scans = _nearest_mod_flip(
             self.ctx,
             state,
             self.extra_comparisons,
             probe.mods,
+            unmodeled,
         )
         candidates = [n for n in (acc_scans, mod_scans) if n is not None]
         skip = min(candidates) - 1 if candidates else None
@@ -3668,7 +4168,7 @@ class _OrdinaryFoldStrategy:
             # Searched no farther than the window is already bounded.
             cap = skip if skip is not None else max_skip
             timer_scans = _nearest_timer_crossing(
-                self.ctx, timer_moves, state, self.extra_comparisons, cap
+                self.ctx, timer_moves, state, self.extra_comparisons, cap, unmodeled
             )
             if timer_scans is not None:
                 skip = min(skip, timer_scans - 1) if skip is not None else timer_scans - 1
@@ -3800,6 +4300,8 @@ def fold_run_until(
     on_kernel_scan: Callable[[int], None] | None = None,
     capture_kernel_scans: _CaptureDecision = False,
     capture_sink: Callable[[int, ConditionViewCapture], None] | None = None,
+    extra_unmodeled: Collection[str] = (),
+    trace_reads: bool = False,
 ) -> SystemState:
     """Fold-aware ``run_until`` loop.
 
@@ -3809,9 +4311,19 @@ def fold_run_until(
 
     *extra_comparisons* carries thresholds the predicate reads on excluded
     (accumulator / mod-wrap) tags so the fold lands on them exactly instead of
-    overshooting to the preset.
+    overshooting to the preset.  *extra_unmodeled* names the coordinates it
+    reads any other way.  With *trace_reads* (an opaque callable) every
+    judgement records the predicate's reads, and only the values it read
+    bound or decline the next window (see :func:`_traced_call`).
     """
-    strategy = _OrdinaryFoldStrategy(fold_ctx, extra_comparisons)
+    strategy = _OrdinaryFoldStrategy(fold_ctx, extra_comparisons, extra_unmodeled)
+
+    def judge(state: SystemState) -> bool:
+        if not trace_reads:
+            return bool(predicate(state))
+        hit, strategy.predicate_reads = _traced_call(predicate, state)
+        return hit
+
     used = 0
     kernel_scans = 0
     macro_folds = 0
@@ -3830,7 +4342,7 @@ def fold_run_until(
         kernel_scans += 1
 
         pause_requested = runner._consume_pause_request()
-        if predicate(runner._state) or pause_requested:
+        if judge(runner._state) or pause_requested:
             break
 
         if used >= max_cycles:
@@ -3851,7 +4363,7 @@ def fold_run_until(
             if advances is not None:
                 advances.extend(advance.patches)
             pause_requested = runner._consume_pause_request()
-            if predicate(runner._state) or pause_requested:
+            if judge(runner._state) or pause_requested:
                 break
 
     if stats is not None:

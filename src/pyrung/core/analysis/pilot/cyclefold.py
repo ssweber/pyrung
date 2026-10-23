@@ -235,8 +235,13 @@ def _monotone_read_surface(
     state: SystemState,
     fold_ctx: _FoldContext,
     extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
+    read_sources: frozenset[str] | None = frozenset(),
 ) -> tuple[int | None, int] | None:
     """Partition the monotone coordinates by their readable future.
+
+    A coordinate some read reaches outside the comparisons (the program's,
+    ``fold_ctx.unmodeled``, or the predicate's, *read_sources*; ``None`` when
+    the predicate read something unknowable) fails closed.
 
     For each coordinate, its read surface is the preset (Done flip) plus every
     comparison the program or the armed predicate reads on it.  A coordinate
@@ -264,7 +269,12 @@ def _monotone_read_surface(
     totals = _acc_totals(state, fold_ctx.sources)
     best: int | None = None
     live = 0
+    if read_sources is None:
+        return None
+    unmodeled = fold_ctx.unmodeled | read_sources
     for tag, d in cyc.monotone.items():
+        if tag in unmodeled:
+            return None
         src = sources.get(tag)
         # v1: only certified up-accumulators (timers / count-up) are foldable.
         if src is None or src.kind != "up" or d <= 0:
@@ -333,6 +343,7 @@ def cycle_fold_until(
     stats: dict[str, int] | None = None,
     advances: list[tuple[str, Any]] | None = None,
     on_kernel_scan: Callable[[int], None] | None = None,
+    extra_unmodeled: frozenset[str] = frozenset(),
 ) -> bool:
     """Coast *plc* until *predicate*, folding active-hold limit cycles.
 
@@ -368,7 +379,10 @@ def cycle_fold_until(
     Soundness mirrors the runner fold: observe ≥ ``min_repeats`` periods before
     trusting the cycle, bound every jump at the nearest comparison/preset crossing,
     and re-detect after each landing (the ring is cleared, so a regime change forces
-    fresh observation). Fails closed everywhere it cannot certify a jump. The
+    fresh observation). *extra_unmodeled* names coordinates the predicate reads
+    other than by a comparison; with undeclared *predicate_reads* its reads are
+    traced at every judgement (``fold._traced_call``), and either keeps a jump
+    from carrying a coordinate it read. Fails closed everywhere it cannot certify a jump. The
     public work metrics are ``kernel_scans`` and ``macro_folds``, with
     ``logical_scans`` and ``skipped_scans`` derived alongside the diagnostic
     breakdown.
@@ -380,6 +394,7 @@ def cycle_fold_until(
         _rtc_hard_fields,
         _rtc_jump_room,
         _scan_callbacks,
+        _traced_call,
         _without_soft_rtc_ticks,
         fold_run_until,
     )
@@ -405,6 +420,8 @@ def cycle_fold_until(
             stats=stats,
             advances=advances,
             on_kernel_scan=on_kernel_scan,
+            extra_unmodeled=extra_unmodeled,
+            trace_reads=predicate_reads is None,
         )
         return bool(predicate(plc.state))
 
@@ -456,7 +473,15 @@ def cycle_fold_until(
     if fold_ctx.time_mirrors is not None:
         ignore = ignore | fold_ctx.time_mirrors.names
     significant_keys = frozenset(plc.state.tags) - ignore
-    ordinary = _OrdinaryFoldStrategy(fold_ctx, extra_comparisons)
+    ordinary = _OrdinaryFoldStrategy(fold_ctx, extra_comparisons, extra_unmodeled)
+    trace_reads = predicate_reads is None
+
+    def judge(state: SystemState) -> bool:
+        if not trace_reads:
+            return bool(predicate(state))
+        hit, ordinary.predicate_reads = _traced_call(predicate, state)
+        return hit
+
     ring: list[Mapping[str, Any]] = []
     ring_cap = max_period * (min_repeats + 2) + 4
     kernel_scans = 0
@@ -534,7 +559,7 @@ def cycle_fold_until(
         kernel_scans += 1
         since_ordinary_probe = 0 if probe_ordinary else since_ordinary_probe + 1
         paused = plc._consume_pause_request()
-        if predicate(plc.state) or paused:
+        if judge(plc.state) or paused:
             return _finish(bool(predicate(plc.state)))
 
         # Layer 1: the ordinary plateau/crossing proof.  Probe periodically so
@@ -559,7 +584,7 @@ def cycle_fold_until(
                 ring.clear()
                 since_detect = 0
                 paused = plc._consume_pause_request()
-                if predicate(plc.state) or paused:
+                if judge(plc.state) or paused:
                     return _finish(bool(predicate(plc.state)))
                 continue
 
@@ -601,7 +626,9 @@ def cycle_fold_until(
         if cyc is None:
             continue
         surface = (
-            _monotone_read_surface(cyc, plc.state, fold_ctx, extra_comparisons)
+            _monotone_read_surface(
+                cyc, plc.state, fold_ctx, extra_comparisons, ordinary.predicate_unmodeled()
+            )
             if cyc.monotone
             else (None, 0)
         )

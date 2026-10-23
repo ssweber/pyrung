@@ -214,6 +214,27 @@ def _fold_metadata(
     )
 
 
+def _trigger_read_audit(
+    triggers: Iterable[CoastTrigger], fold_ctx: Any
+) -> tuple[frozenset[str], dict[str, tuple[tuple[str, Any], ...]]]:
+    """Fold coordinates the triggers read outside a comparison, and the comparisons.
+
+    A condition is audited leaf by leaf (``fold._condition_read_audit``); a
+    predicate with declared reads reads each of them opaquely.  Undeclared
+    predicates are traced by the coast loop instead.
+    """
+    from pyrung.core.fold import _condition_read_audit
+
+    triggers = list(triggers)
+    conditions = [t.condition for t in triggers if t.condition is not None]
+    unmodeled, found = _condition_read_audit(conditions, fold_ctx)
+    declared: set[str] = set()
+    for trigger in triggers:
+        if trigger.condition is None and trigger.predicate_reads is not None:
+            declared.update(trigger.predicate_reads)
+    return unmodeled | fold_ctx.unmodeled_coordinates(declared), found
+
+
 @dataclass
 class CoastSession:
     """A sequence of seeks over one PLC, accumulating an event timeline.
@@ -445,25 +466,46 @@ class CoastSession:
                     declared_predicate_reads,
                 ) = _fold_metadata(live)
 
+                from pyrung.core.fold import _reads_untraced
+
                 def _any_pred(s: Any, _live: list[CoastTrigger] = live) -> bool:
-                    return any(trigger.predicate(s) for trigger in _live)
+                    for trigger in _live:
+                        if (
+                            trigger.kind == AVOID
+                            and trigger.condition is None
+                            and trigger.predicate_reads is None
+                        ):
+                            # An opaque avoid is judged only on executed scans:
+                            # its reads do not narrow the fold.
+                            with _reads_untraced():
+                                if trigger.predicate(s):
+                                    return True
+                        elif trigger.predicate(s):
+                            return True
+                    return False
 
                 # A seek always advances at least one scan before judging: a
                 # trigger already true at arm time lands after one scan, not zero.
                 from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
+                from pyrung.core.fold import _merge_comparisons
 
                 stats: dict[str, int] = {}
+                fold_ctx = plc._ensure_fold_context(protected, clock_reads, scan_derived)
+                read_unmodeled, read_cmps = _trigger_read_audit(live, fold_ctx)
+                if read_cmps:
+                    crossings = _merge_comparisons(crossings or {}, read_cmps)
                 cycle_fold_until(
                     plc,
                     _any_pred,
                     budget=remaining,
                     kernel_budget=self.kernel_budget,
-                    fold_ctx=plc._ensure_fold_context(protected, clock_reads, scan_derived),
+                    fold_ctx=fold_ctx,
                     extra_comparisons=crossings,
                     predicate_reads=declared_predicate_reads,
                     stats=stats,
                     advances=advances,
                     on_kernel_scan=self.note_kernel_scan,
+                    extra_unmodeled=read_unmodeled,
                 )
                 kernel_scans += stats.get("kernel_scans", 0)
                 macro_folds += stats.get("macro_folds", 0)
