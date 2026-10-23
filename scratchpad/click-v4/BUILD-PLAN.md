@@ -59,8 +59,8 @@ classes from modules that have been imported.
 |---|---|---|---|---|
 | 1 | Conformance rename + Modbus runner | S + M | RESEARCH 6, TOUCHPOINTS 6, GAPS 6 | **Done.** One program, a `Conf_<Group>` subroutine per group, manifest, `confirmed=`; `math` group added. CLICK confirmed: pasting one subroutine works, nested calls unsupported, rail-wired outputs valid |
 | 2 | Math aggregates + abs | S-M | RESEARCH 3, TOUCHPOINTS 1, GAPS 1, PILOT 8 | **Done** |
-| 3 | `time_event_drum` + drum hint | M | RESEARCH 2, TOUCHPOINTS 3, GAPS 3 | **Built, uncommitted.** Own class; level events; Acc keeps counting while a timed step waits (D1 = pyrung's answer, unconfirmed); fold source (event-only steps place no crossing); preset rule is a v4 hint in every mode; `drum` conformance group (D1, D3). Prover: named Intractable, see Open queue |
-| 4 | Out family | L | RESEARCH 1, TOUCHPOINTS 4, GAPS 4, PILOT 2-5 | PILOT: non-OUT writers treated as retentive (`ote_writes`); in-instruction edges invisible (`program_facts.py:173`); advance profile = "hold until output equals v". Needs the CLICK v4 capture |
+| 3 | `time_event_drum` + drum hint | M | RESEARCH 2, TOUCHPOINTS 3, GAPS 3 | **Done** (reviewed). Own class; level events; Acc keeps counting while a timed step waits (D1 = pyrung's answer, unconfirmed); fold source (event-only steps place no crossing); preset rule is a v4 hint in every mode; `drum` conformance group (D1, D3). Prover: named Intractable, see Open queue |
+| 4 | Out family | L | RESEARCH 1, TOUCHPOINTS 4, GAPS 4, PILOT 2-5 | **Next.** PILOT: non-OUT writers treated as retentive (`ote_writes`); in-instruction edges invisible (`program_facts.py:173`); advance profile = "hold until output equals v". Needs the CLICK v4 capture |
 | 5 | For/Next | L | RESEARCH 4, TOUCHPOINTS 5, GAPS 5, PILOT 6 | Today: body instructions get no enable condition (`count_up` in a loop declines in PILOT); `with Rung()` in a loop silently hoists; journals need a body-rung + iteration address; return-shadow treatment for break/continue; `comment()` before a body rung. Index-heavy: do the PDG affine fix first (Open queue) |
 | 6 | `randint` | M-L | RESEARCH 3, TOUCHPOINTS 2, GAPS 2, PILOT 7 | Seed lives in `SystemState.memory`, not on the runner (forks); stable site ids for `PLC(logic=[...])`/synthesis/pilot rungs; override via `io_drains_by_scan` with interpreted replay; scan_id resets on restart |
 
@@ -122,10 +122,10 @@ PDG (shared with prover, PILOT, causal, lints):
   elements with a writer" for unbounded reads.
 
 time_event_drum (from feature 3):
-- **Prover has no exact model.** Its Acc is classed stateful (a self-read accumulator no longer counts as
-  combinational: `classify.py`, `self_read`), so any program using the drum is Intractable "unbounded domain
-  on Acc" with a hint naming `time_event_drum`, even for unrelated properties (as with any unbounded
-  counter). how() keeps its context. Exact route: a saturating key for Acc (only `Acc >= preset[step]`
+- **Prover has no exact model.** Its Acc is unmodeled whatever its declared domain (`classify.py`,
+  `unmodeled_accs`; the `_frac:` carry is in no state key, so a declared domain gave a wrong Proven before
+  the review fix), so any program using the drum is Intractable "unbounded domain on Acc" with a hint
+  naming `time_event_drum`, even for unrelated properties (as with any unbounded counter). how() keeps its context. Exact route: a saturating key for Acc (only `Acc >= preset[step]`
   matters when nothing else reads it), or a done/acc kind whose crossing is gated by the event.
 - laddercodec: no T&E encoding yet (`drum_kind` T&E, func codes 10505..10538, register-duration codes).
   pyrung exports and imports the `time_event_drum(...)` CSV token, `None` for a blank preset or event.
@@ -133,6 +133,10 @@ time_event_drum (from feature 3):
 - Fold perf, also for `time_drum`: a coarse-unit (`sec`) drum steps most scans inside a step
   (~1600 kernel scans of 2000 in `TestTimeEventDrum._event_only_tail`); not measured further.
 - Fuzz grammar has no T&E kind (`_TERMINAL_KINDS` etc. would need it).
+- PILOT declines (never unsound) on an Acc target past the preset: on a time-only last step
+  (`time_drum` plans `_auto` there) and on a timed+event step (holding the event off would work).
+- `CMP_PRESET_STAYS_ZERO` (`cmp_conditions._preset_sites`) does not cover drum duration registers, and
+  Click validation does not role-check register presets on either time drum.
 
 Other:
 - `cause("T")` on a stepped `calc(T + 3, T)` raises RecursionError (not fold).
