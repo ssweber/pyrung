@@ -452,6 +452,8 @@ class TimeDrumInstruction(_DrumBaseInstruction):
     _writes = ("outputs", "current_step", "accumulator", "completion_flag")
     _conditions = ("auto_condition", "reset_condition", "jump_condition", "jog_condition")
     _structural_fields = ("pattern", "unit")
+    # The drum reads its accumulator every scan it times, like a timer does.
+    _exclusive_fields = ("current_step", "accumulator")
 
     def __init__(
         self,

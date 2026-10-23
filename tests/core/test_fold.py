@@ -3211,3 +3211,32 @@ class TestResetPulseInProbe:
     def test_counts_again_after_the_pulse(self, kind: str) -> None:
         folded = _assert_fold_is_exact(self._shape(kind), _scans(700))
         assert folded.state.tags["C_Acc"] != 0
+
+
+class TestClockGatedTimeDrum:
+    """A time drum reads its accumulator every scan it times, so a clock
+    gating it is bounded at every edge like a gated timer's, not confirmed
+    inert from edges where the hidden accumulator merely paused."""
+
+    @staticmethod
+    def _shape(gate: bool) -> Callable[[], Program]:
+        from pyrung import time_drum
+
+        def source() -> None:
+            with Rung(system.sys.clock_1s) if gate else Rung():
+                time_drum(
+                    outputs=[Bool("O1"), Bool("O2")],
+                    presets=[3_000, 1_500],
+                    unit="ms",
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=Int("Step"),
+                    accumulator=Int("DAcc"),
+                    completion_flag=Bool("DDone"),
+                ).reset(Bool("R"))
+
+        return lambda: _scan_stamp_program(source, lambda: Bool("DDone"), above=False)
+
+    @pytest.mark.parametrize("gate", [True, False])
+    def test_completion_scan_matches_stepping(self, gate: bool) -> None:
+        folded = _assert_fold_is_exact(self._shape(gate), _scans(400), dt=0.1)
+        assert folded.state.tags["DDone"]
