@@ -2602,6 +2602,28 @@ class TestTimerCarryExact:
         assert plc._last_replay_seek_stats["kernel_scans"] < n // 2
         assert _full_state(sought) == _full_state(plc.replay_to(target))
 
+    def test_timer_held_at_its_clamp_keeps_its_carry(self) -> None:
+        # At 32767 with a whole-unit quantum and no carry, the probe sees the
+        # timer unchanged, but each landing still runs it once with the
+        # aggregate dt, whose float product leaves a stray carry.
+        def build() -> Program:
+            Long = Timer.clone("Long")
+            Tmr = Timer.clone("Tmr")
+            C = Counter.clone("C")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Long, 32_000)
+                with Rung(system.sys.clock_1s):
+                    on_delay(Tmr, 30, "s")
+                with Rung(Tmr.Done):
+                    out(Bool("Hit"))
+                with Rung(rise(system.sys.clock_1s)):
+                    count_up(C, 100_000).reset(Bool("CR"))
+            return prog
+
+        folded = _assert_fold_is_exact(build, _until_hit(6_000), dt=0.007)
+        assert folded.state.tags["Long_Acc"] == 32_767
+
     @pytest.mark.parametrize(
         ("quantum", "frac"),
         [(10.0, 0.0), (700.0000000000001, 0.0), (300.0, 0.25), (0.1, 0.0), (1023.5, 0.5)],

@@ -2465,8 +2465,9 @@ def _timer_moves(
 
     *before* holds each of ``ctx.timed_sources``' readings before the probe
     scan.  A timer the probe moved by exactly one step of the carry
-    recurrence keeps doing so through the window; one left unchanged, or
-    reset to zero, stays put.  Anything else (two steps in one scan, a patched
+    recurrence keeps doing so through the window, even when that step left
+    it where it was; one otherwise left unchanged, or reset to zero, stays
+    put.  Anything else (two steps in one scan, a patched
     accumulator, a scan ``dt`` other than the normal one) is not a recurrence
     the fold can extend, so the window is not certified.
     """
@@ -2474,13 +2475,19 @@ def _timer_moves(
     dt = ctx.normal_dt
     for src, (acc_b, frac_b) in zip(ctx.timed_sources, before, strict=True):
         acc, frac = _timer_reading(state, src.acc_name)
-        if (acc, frac) == (acc_b, frac_b) or (acc == 0 and frac == 0.0):
-            continue
+        still = (acc, frac) == (acc_b, frac_b) or (acc == 0 and frac == 0.0)
         if src.unit is None:
+            if still:
+                continue
             return None
         quantum = src.unit.dt_to_units(dt)
         if (acc, frac) != _timer_step(acc_b, frac_b, quantum, src.acc_max):
+            if still:
+                continue
             return None
+        # One step of the recurrence, possibly a fixed point (an accumulator
+        # held at its clamp with a whole-unit quantum): the landing still runs
+        # the timer once with the aggregate dt, so it needs the edits too.
         delta = (float(acc) + frac) - (float(acc_b) + frac_b)
         moves.append(_TimerMove(src, acc, frac, quantum, delta))
     return tuple(moves)
