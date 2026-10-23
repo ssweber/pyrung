@@ -2365,10 +2365,6 @@ def _modwrap_first_flip(v0: int, c: int, m: int, cmps: list[tuple[str, float]]) 
 # every timer exactly where that per-scan recurrence would have put it, float
 # rounding included: one aggregate ``skip * dt`` floors differently.
 
-# Most scans one plan replays a timer carry whose float steps are not exact
-# integer arithmetic.  A crossing beyond it bounds the window here instead.
-_TIMER_REPLAY_CAP = 1_000_000
-
 
 @dataclass(frozen=True)
 class _TimerMove:
@@ -2412,6 +2408,270 @@ def _timer_grid(frac: float, quantum: float) -> tuple[int, int, int, float] | No
     return int(quantum / grid), int(f_units), int(1.0 / grid), grid
 
 
+# Off-grid carries (a quantum below one unit, or a sum that straddles a power
+# of two).  The recurrence is replayed, but exactly accelerated: IEEE rounding
+# is translation invariant on a grid, so
+#
+# * while x stays strictly inside one binade (grid G) with the same integer
+#   part, each step adds the same increment once f is on the grid (and even,
+#   when that binade rounds ties): a regime is jumped in O(1);
+# * when two consecutive groups of carry cycles did the same thing step for
+#   step and their starts differ by D, an even multiple of every grid they
+#   used, later groups are those cycles shifted by D for as long as every
+#   step stays inside its binade.  That set of shifts is an interval, so a
+#   doubling and bisection search on one shifted group finds its end.
+
+# Most real float steps one carry replay may spend; a crossing search that
+# runs out bounds the window where it stopped.
+_CARRY_WORK_CAP = 200_000
+_BIG = 1 << 62
+
+
+def _carry_cycle(q, base, acc_max, target, acc, f, limit, budget):
+    """Run until just after a carry step, *limit* steps, the target, or *budget* real steps.
+
+    Returns ``(steps, acc, f, sig, gtop, status, work)``; *sig* is ``None`` when
+    a step sat too close to a binade edge to promise translation.
+    """
+    steps = 0
+    work = 0
+    sig: list | None = []
+    gtop = 0.0
+    regime = None  # (i, e) of the current run of interior real steps
+    run_len = 0
+    while steps < limit:
+        if work >= budget:
+            return steps, acc, f, sig, gtop, "work", work
+        x = q + f
+        i = int(x)
+        nf = x - i
+        acc = acc + i if acc + i < acc_max else acc_max
+        steps += 1
+        work += 1
+        _m, e = math.frexp(x)
+        g = math.ldexp(1.0, e - 53)
+        interior = math.ldexp(1.0, e - 1) + g <= x <= math.ldexp(1.0, e) - 2 * g and g <= 0.25
+        if sig is not None:
+            if interior:
+                sig.append((i, e))
+            else:
+                # At a binade edge the rounding grid is ambiguous unless the
+                # sum was exact (TwoSum error zero); an exact sum stays exact
+                # under any shift by a multiple of this grid.
+                back = x - f
+                if (f - (x - back)) + (q - back) == 0.0:
+                    sig.append((i, e, "x"))
+                else:
+                    sig = None
+            if g > gtop:
+                gtop = g
+        prev = f
+        f = nf
+        if target is not None and acc >= target:
+            return steps, acc, f, sig, gtop, "target", work
+        if i > base:
+            return steps, acc, f, sig, gtop, "carry", work
+        if not interior:
+            regime = None
+            continue
+        if regime != (i, e):
+            regime = (i, e)
+            run_len = 1
+            continue
+        run_len += 1
+        if run_len < 3:
+            continue
+        # Three interior steps in one regime: the first left f on the grid, the
+        # second (a tie, if this binade rounds ties) left it even, so the
+        # third's increment f - prev repeats while x stays in the binade.
+        d_units = int((f - prev) / g)
+        f_units = int(f / g)
+        i_units = int(i / g)
+        if d_units * g != f - prev or f_units * g != f:
+            regime = None
+            continue
+        hi = (1 << 53) - 2  # x <= 2**e - 2g, in units of g
+        one = int(1.0 / g)  # f < 1
+        room = limit - steps
+        if d_units > 0:
+            room = min(room, (hi - i_units - f_units) // d_units, (one - 1 - f_units) // d_units)
+        if room <= 0:
+            continue
+        if target is not None and i > 0:
+            need = -(-(target - acc) // i)
+            if need <= room:
+                room = need
+        acc = acc + i * room if acc + i * room < acc_max else acc_max
+        f = (f_units + d_units * room) * g
+        steps += room
+        if sig is not None:
+            sig.append(("j", i, e, room))
+        regime = None
+        if target is not None and acc >= target:
+            return steps, acc, f, sig, gtop, "target", work
+    return steps, acc, f, sig, gtop, "limit", work
+
+
+def _carry_translate(q, base, acc_max, target, acc, f, remaining, cycles, budget):
+    """Jump whole groups of carry cycles that repeat as a translation, or ``None``.
+
+    Every group size the history allows is a candidate when its two latest
+    groups did the same thing step for step and their shift is an even
+    multiple of the coarsest grid they used.  The smallest drift per scan
+    survives longest, so those are searched first (three at most); the
+    largest verified jump wins.
+    """
+    candidates = []
+    for p in range(1, len(cycles) // 2 + 1):
+        a = cycles[-2 * p : -p]
+        b = cycles[-p:]
+        steps_b = sum(c[2] for c in b)
+        gain_b = sum(c[3] for c in b)
+        if sum(c[2] for c in a) != steps_b or sum(c[3] for c in a) != gain_b:
+            continue
+        if any(ca[4] != cb[4] for ca, cb in zip(a, b, strict=True)):
+            continue
+        shift = b[0][1] - a[0][1]
+        if f != b[0][1] + shift:
+            continue
+        gtop = max(c[5] for c in cycles[-2 * p :])
+        units = shift / gtop
+        if units != int(units) or int(units) % 2:
+            continue
+        m_cap = remaining // steps_b
+        if gain_b > 0:
+            m_cap = min(m_cap, (acc_max - acc) // gain_b)
+            if target is not None:
+                m_cap = min(m_cap, (target - 1 - acc) // gain_b)
+        if m_cap >= 1:
+            candidates.append((abs(shift) / steps_b, p, b, steps_b, gain_b, shift, m_cap))
+    candidates.sort(key=lambda c: (c[0], c[1]))
+    best = None
+    used = 0
+    for _drift, _p, b, steps_b, gain_b, shift, m_cap in candidates[:3]:
+
+        def holds(m: int, b=b, shift=shift, gain_b=gain_b) -> bool:
+            nonlocal used
+            ca = acc + (m - 1) * gain_b
+            cf = f + (m - 1) * shift
+            if not 0.0 <= cf < 1.0:
+                return False
+            for c in b:
+                s, ca2, cf2, sig, _g, status, w = _carry_cycle(
+                    q, base, acc_max, None, ca, cf, c[2], budget - used
+                )
+                used += w
+                if status != "carry" or s != c[2] or sig is None or tuple(sig) != c[4]:
+                    return False
+                if ca2 - ca != c[3]:
+                    return False
+                ca, cf = ca2, cf2
+            return cf == f + m * shift
+
+        good = 0
+        m = 1
+        while m <= m_cap and used < budget and holds(m):
+            good = m
+            m *= 2
+        bad = min(m, m_cap + 1)
+        while bad - good > 1 and used < budget:
+            mid = (good + bad) // 2
+            if holds(mid):
+                good = mid
+            else:
+                bad = mid
+        if good >= 1 and (best is None or good * steps_b > best[0]):
+            best = (good * steps_b, good * gain_b, good * shift)
+            if good == m_cap:
+                break
+        if used >= budget:
+            break
+    if best is None:
+        return None
+    return best[0], best[1], best[2], used
+
+
+def _carry_run(
+    acc: int,
+    f: float,
+    q: float,
+    acc_max: int,
+    n: int | None,
+    target: int | None = None,
+    work_cap: int | None = _CARRY_WORK_CAP,
+) -> tuple[int, int, float, str]:
+    """Advance the carry recurrence *n* scans (``None``: unbounded) or until ``acc >= target``.
+
+    Exact: real float steps plus the regime jumps and cycle translations they
+    certify (see the comment above).  Returns ``(steps, acc, f, status)`` with
+    status ``"target"``, ``"limit"`` or ``"work"``: *work_cap* real steps were
+    spent first, and *steps* scans were advanced exactly.  When the
+    accelerations do not pay (a quantum whose cycles repeat only after
+    hundreds of carries), the rest is plain stepping under the same cap.
+    """
+    cap = _BIG if work_cap is None else work_cap
+    base = int(q)
+    remaining = _BIG if n is None else n
+    steps = 0
+    work = 0
+    cycles: list[tuple] = []  # (acc0, f0, steps, gain, sig, gtop) per completed carry cycle
+    since = 0  # cycles recorded since the last translation attempt
+    while remaining > 0:
+        if work >= 4096 and steps < 8 * work:
+            return _carry_plain(acc, f, q, acc_max, remaining, target, steps, cap - work)
+        jumped = None
+        if (len(cycles) in (2, 8, 32, 128, 512) and since == len(cycles)) or since >= 256:
+            since = 0
+            jumped = _carry_translate(
+                q, base, acc_max, target, acc, f, remaining, cycles, cap - work
+            )
+        if jumped is not None:
+            m_steps, m_gain, m_shift, used = jumped
+            work += used
+            steps += m_steps
+            remaining -= m_steps
+            acc += m_gain
+            f = f + m_shift
+            cycles.clear()
+            if remaining <= 0:
+                break
+        s, acc2, f2, sig, gtop, status, w = _carry_cycle(
+            q, base, acc_max, target, acc, f, remaining, cap - work
+        )
+        work += w
+        if status == "carry" and sig is not None:
+            cycles.append((acc, f, s, acc2 - acc, tuple(sig), gtop))
+            since += 1
+            if len(cycles) > 512:
+                del cycles[0]
+        elif status == "carry":
+            cycles.clear()
+        acc, f = acc2, f2
+        steps += s
+        remaining -= s
+        if status == "target":
+            return steps, acc, f, "target"
+        if status == "work" or work >= cap:
+            return steps, acc, f, "work"
+    return steps, acc, f, "limit"
+
+
+def _carry_plain(
+    acc: int, f: float, q: float, acc_max: int, n: int, target: int | None, steps: int, budget: int
+) -> tuple[int, int, float, str]:
+    """Plain stepping of the carry recurrence (see :func:`_carry_run`)."""
+    budget = min(n, max(0, budget))
+    for _ in range(budget):
+        x = q + f
+        i = int(x)
+        f = x - i
+        acc = acc + i if acc + i < acc_max else acc_max
+        steps += 1
+        if target is not None and acc >= target:
+            return steps, acc, f, "target"
+    return steps, acc, f, ("limit" if budget == n else "work")
+
+
 def _timer_after(move: _TimerMove, n: int) -> tuple[int, float]:
     """The timer's ``(acc, frac)`` after *n* more scans of its recurrence."""
     acc, frac, q, acc_max = move.acc, move.frac, move.quantum, move.src.acc_max
@@ -2422,17 +2682,18 @@ def _timer_after(move: _TimerMove, n: int) -> tuple[int, float]:
         big_q, big_f, big_n, g = grid
         total = big_f + n * big_q
         return min(acc + total // big_n, acc_max), (total % big_n) * g
-    for _ in range(n):
-        acc, frac = _timer_step(acc, frac, q, acc_max)
+    steps, acc, frac, _status = _carry_run(acc, frac, q, acc_max, n, work_cap=None)
+    assert steps == n
     return acc, frac
 
 
 def _timer_scans_to_reach(move: _TimerMove, target: int, cap: int | None) -> int | None:
     """First scan count ``k >= 1`` after which the accumulator is ``>= target``.
 
-    ``None`` when it never gets there.  A replayed (non-integer) carry is
-    searched at most ``cap`` scans (or :data:`_TIMER_REPLAY_CAP`); not found by
-    then returns ``cap + 1``, which bounds a window no farther than the search.
+    ``None`` when it never gets there.  An off-grid carry is searched no
+    farther than ``cap`` scans, nor past :data:`_CARRY_WORK_CAP` real steps;
+    not found by then returns the scans searched plus one, which bounds a
+    window no farther than the search.
     """
     acc, frac, q, acc_max = move.acc, move.frac, move.quantum, move.src.acc_max
     if acc >= target or target > acc_max or not q > 0.0:
@@ -2442,12 +2703,13 @@ def _timer_scans_to_reach(move: _TimerMove, target: int, cap: int | None) -> int
         big_q, big_f, big_n, _g = grid
         need = (target - acc) * big_n - big_f
         return max(1, -(-need // big_q))
-    limit = _TIMER_REPLAY_CAP if cap is None else max(1, min(cap, _TIMER_REPLAY_CAP))
-    for k in range(1, limit + 1):
-        acc, frac = _timer_step(acc, frac, q, acc_max)
-        if acc >= target:
-            return k
-    return limit + 1
+    limit = None if cap is None else max(1, cap)
+    steps, _acc, _frac, status = _carry_run(acc, frac, q, acc_max, limit, target)
+    if status == "target":
+        return steps
+    if status == "limit" and limit is None:
+        return None
+    return steps + 1
 
 
 def _timer_reading(state: Any, acc_name: str) -> tuple[int, float]:

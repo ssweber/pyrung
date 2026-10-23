@@ -2625,6 +2625,65 @@ class TestTimerCarryExact:
         assert folded.state.tags["Long_Acc"] == 32_767
 
     @pytest.mark.parametrize(
+        "quantum",
+        [
+            0.01,
+            0.05,
+            0.3,
+            0.7,
+            0.007,
+            0.013,
+            0.0013,
+            0.01 / 60,
+            0.03 / 60,
+            0.01 / 3600,
+            1.1,
+            1.5,
+            1.9,
+        ],
+    )
+    def test_accelerated_carry_equals_the_recurrence(self, quantum: float) -> None:
+        from pyrung.core.fold import _carry_run, _timer_step
+
+        for acc0, frac0, n, target in (
+            (0, 0.0, 30_000, None),
+            (32_700, 0.0, 30_000, None),
+            (5, 0.37, 20_000, 120),
+            (0, 0.0, 40_000, 400),
+        ):
+            acc, frac, reached = acc0, frac0, None
+            for k in range(1, n + 1):
+                acc, frac = _timer_step(acc, frac, quantum, 32_767)
+                if target is not None and acc >= target:
+                    reached = k
+                    break
+            steps, f_acc, f_frac, status = _carry_run(acc0, frac0, quantum, 32_767, n, target)
+            assert status == ("target" if reached else "limit")
+            assert (steps, f_acc, f_frac) == (reached or n, acc, frac)
+
+    @pytest.mark.parametrize(
+        ("unit", "seconds", "max_kernel"), [("min", 360_000.0, 4), ("h", 86_400.0, 4)]
+    )
+    def test_sub_unit_timer_folds_long_runs_cheaply(
+        self, unit: str, seconds: float, max_kernel: int
+    ) -> None:
+        # 36M / 8.6M scans of a timer whose step is a fraction of its unit.
+        def build() -> Program:
+            Long = Timer.clone("Long")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Long, 32_000, unit)
+                with Rung(Long.Done):
+                    out(Bool("Hit"))
+            return prog
+
+        plc = PLC(build(), dt=0.010)
+        plc.step()
+        counter = _count_kernel_scans(plc)
+        plc.run_for(seconds)
+        assert counter["n"] <= max_kernel
+
+    @pytest.mark.parametrize(
         ("quantum", "frac"),
         [(10.0, 0.0), (700.0000000000001, 0.0), (300.0, 0.25), (0.1, 0.0), (1023.5, 0.5)],
     )
