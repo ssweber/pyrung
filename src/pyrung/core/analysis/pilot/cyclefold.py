@@ -479,7 +479,7 @@ def cycle_fold_until(
     def judge(state: SystemState) -> bool:
         if not trace_reads:
             return bool(predicate(state))
-        hit, ordinary.predicate_reads = _traced_call(predicate, state)
+        hit, ordinary.predicate_reads = _traced_call(predicate, plc)
         return hit
 
     ring: list[Mapping[str, Any]] = []

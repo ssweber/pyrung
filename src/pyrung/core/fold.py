@@ -3982,15 +3982,22 @@ def _reads_untraced() -> Iterator[None]:
 
 
 def _traced_call(
-    predicate: Callable[[SystemState], bool], state: SystemState
+    predicate: Callable[[SystemState], bool], runner: PLC
 ) -> tuple[bool, frozenset[str]]:
-    """``predicate(state)`` and every tag (or state field) it read."""
+    """``predicate(runner.state)`` and every tag (or state field) it read.
+
+    The tip itself is swapped for the traced state during the call, so a
+    predicate that reads ``plc.state`` instead of its argument is traced too.
+    """
+    state = runner._state
     traced = _PMAP.__new__(_traced_state_class(), state._size, state._buckets)
     reads: set[str] = set()
     _READ_TRACES.append(reads)
+    runner._state = traced
     try:
         hit = bool(predicate(traced))
     finally:
+        runner._state = state
         _READ_TRACES.pop()
     return hit, frozenset(reads)
 
@@ -4352,7 +4359,7 @@ def fold_run_until(
     def judge(state: SystemState) -> bool:
         if not trace_reads:
             return bool(predicate(state))
-        hit, strategy.predicate_reads = _traced_call(predicate, state)
+        hit, strategy.predicate_reads = _traced_call(predicate, runner)
         return hit
 
     used = 0

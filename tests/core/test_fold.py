@@ -3418,6 +3418,23 @@ class TestReadsOutsideTheCrossings:
         assert kernel["n"] < 50
 
 
+class TestCallableReadsThePlc:
+    def test_a_closure_over_the_plc_is_traced(self) -> None:
+        def build() -> Program:
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Timer.clone("Tmr"), 5_000)
+            return prog
+
+        def run(plc: PLC, fold: bool) -> None:
+            plc.run_until(
+                lambda _s: plc.state.tags["Tmr_Acc"] >= 1_234, max_cycles=3_000, fold=fold
+            )
+
+        folded = _assert_fold_is_exact(build, run)
+        assert folded.state.tags["Tmr_Acc"] < 1_300
+
+
 class TestFoldedHistoryQueries:
     """History materializes the scans a fold skipped; recorded cause() refuses
     them clearly instead of answering from the one-step landing."""
