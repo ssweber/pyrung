@@ -3411,7 +3411,7 @@ class TestReadsOutsideTheCrossings:
                     kernel["n"] += 1
                     return scan(**kw)
 
-                plc._run_single_scan = counted  # type: ignore[method-assign]
+                setattr(plc, "_run_single_scan", counted)  # noqa: B010
             _run_scans(plc, 1_500, fold=fold)
 
         _assert_fold_is_exact(lambda: self._folding_kept(shape), run)
