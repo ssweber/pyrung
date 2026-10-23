@@ -2303,6 +2303,18 @@ def _scans_to_cross(pa: float, delta: float, target: float, strict: bool) -> int
     return max(1, math.ceil((target - pa) / delta))
 
 
+def _crossed_between(before: float, after: float, target: float, strict: bool) -> bool:
+    """Whether the probe scan, moving a coordinate *before* -> *after*, crossed ``target``.
+
+    A rung above the moving instruction read *before* during the probe and
+    reads *after* on the next scan, so a crossing inside the probe still
+    flips that rung one scan later: no window may start there.
+    """
+    if strict:
+        return (before > target) != (after > target)
+    return (before >= target) != (after >= target)
+
+
 def _comparisons_saturated(progress: float, kind: str, cmps: Sequence[tuple[str, float]]) -> bool:
     """True iff every comparison in *cmps* has made its final transition already.
 
@@ -2341,28 +2353,35 @@ def _scans_to_uncross(pa: float, delta: float, target: float, strict: bool) -> i
     return max(1, math.floor((target - pa) / delta) + 1)
 
 
+def _cmp_truth(v: float, form: str, k: float) -> bool:
+    if form == "eq":
+        return v == k
+    if form == "ne":
+        return v != k
+    if form == "lt":
+        return v < k
+    if form == "le":
+        return v <= k
+    if form == "gt":
+        return v > k
+    return v >= k  # ge
+
+
+def _modwrap_truths(v: Any, cmps: list[tuple[str, float]]) -> list[bool] | None:
+    """Each comparison's truth at *v* (``None`` for a non-numeric *v*)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return [_cmp_truth(v, form, k) for form, k in cmps]
+
+
 def _modwrap_first_flip(v0: int, c: int, m: int, cmps: list[tuple[str, float]]) -> int | None:
     """Scans until any comparison's truth first differs from its truth now."""
-
-    def truth(v: int, form: str, k: float) -> bool:
-        if form == "eq":
-            return v == k
-        if form == "ne":
-            return v != k
-        if form == "lt":
-            return v < k
-        if form == "le":
-            return v <= k
-        if form == "gt":
-            return v > k
-        return v >= k  # ge
-
-    base = [truth(v0, form, k) for form, k in cmps]
+    base = [_cmp_truth(v0, form, k) for form, k in cmps]
     v = v0
     for step in range(1, m + 1):
         v = (v + c) % m
         for (form, k), b in zip(cmps, base, strict=True):
-            if truth(v, form, k) != b:
+            if _cmp_truth(v, form, k) != b:
                 return step
     return None
 
@@ -2383,6 +2402,7 @@ class _TimerMove:
     frac: float
     quantum: float
     delta: float  # the probe's progress, ``acc + frac`` after minus before
+    acc_before: int | None = None  # the accumulator the probe scan started from
 
 
 def _timer_step(acc: int, frac: float, quantum: float, acc_max: int) -> tuple[int, float]:
@@ -2752,7 +2772,7 @@ def _timer_moves(
         # held at its clamp with a whole-unit quantum): the landing still runs
         # the timer once with the aggregate dt, so it needs the edits too.
         delta = (float(acc) + frac) - (float(acc_b) + frac_b)
-        moves.append(_TimerMove(src, acc, frac, quantum, delta))
+        moves.append(_TimerMove(src, acc, frac, quantum, delta, acc_b))
     return tuple(moves)
 
 
@@ -2803,7 +2823,11 @@ def _nearest_timer_crossing(
         nearest: int | None = None
         for target, strict in targets:
             t = _timer_integer_target(target, strict)
-            if t is None or t <= move.acc:
+            if t is None:
+                continue
+            if move.acc_before is not None and move.acc_before < t <= move.acc:
+                return 1  # crossed inside the probe (see _crossed_between)
+            if t <= move.acc:
                 continue
             if t > src.acc_max:
                 # The accumulator clamps first, so this threshold never flips.
@@ -2915,6 +2939,8 @@ def _nearest_acc_crossing(
             best = 1 if best is None else min(best, 1)
             continue
         for target, strict in bounds:
+            if _crossed_between(pb, pa, target, strict):
+                return 1
             if delta > 0:
                 scans = _scans_to_cross(pa, delta, target, strict)
             else:
@@ -2980,10 +3006,16 @@ def _nearest_mod_flip(
     ctx: _FoldContext,
     state: Any,
     extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
+    before: Sequence[Any] = (),
 ) -> int | None:
-    """Scans to the nearest comparison truth-flip among mod-wrap sources."""
+    """Scans to the nearest comparison truth-flip among mod-wrap sources.
+
+    *before* holds each source's value before the probe scan: a flip between
+    it and the current value happened inside the probe, and a rung above the
+    self-calc reads it on the next scan (``1``).
+    """
     best: int | None = None
-    for mw in ctx.modwrap:
+    for i, mw in enumerate(ctx.modwrap):
         cmps_raw = ctx.comparisons.get(mw.name, ())
         if extra_comparisons:
             cmps_raw = cmps_raw + extra_comparisons.get(mw.name, ())
@@ -3001,6 +3033,12 @@ def _nearest_mod_flip(
         if unresolved or isinstance(v0, bool) or not isinstance(v0, int):
             best = 1 if best is None else min(best, 1)
             continue
+        if (
+            i < len(before)
+            and before[i] != v0
+            and _modwrap_truths(before[i], resolved) != (_modwrap_truths(v0, resolved))
+        ):
+            return 1
         flip = _modwrap_first_flip(v0, mw.c, mw.m, resolved)
         if flip is not None:
             best = flip if best is None else min(best, flip)
@@ -3442,6 +3480,8 @@ class _FoldProbe:
     scan_id: int
     # ``(acc, frac)`` of each of ``ctx.timed_sources`` before the probe scan.
     timers: tuple[tuple[int, float], ...] = ()
+    # Each of ``ctx.modwrap``'s values before the probe scan.
+    mods: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -3520,6 +3560,7 @@ class _OrdinaryFoldStrategy:
             timestamp=state.timestamp,
             scan_id=state.scan_id,
             timers=timers,
+            mods=tuple(state.tags.get(mw.name) for mw in self.ctx.modwrap),
         )
 
     def plan(
@@ -3572,6 +3613,7 @@ class _OrdinaryFoldStrategy:
             self.ctx,
             state,
             self.extra_comparisons,
+            probe.mods,
         )
         candidates = [n for n in (acc_scans, mod_scans) if n is not None]
         skip = min(candidates) - 1 if candidates else None

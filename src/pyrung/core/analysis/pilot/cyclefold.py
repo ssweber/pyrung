@@ -252,7 +252,13 @@ def _monotone_read_surface(
     an unresolvable threshold, or a coordinate with no resolvable surface at
     all).
     """
-    from pyrung.core.fold import _acc_totals, _progress_bound, _resolve_num, _scans_to_cross
+    from pyrung.core.fold import (
+        _acc_totals,
+        _crossed_between,
+        _progress_bound,
+        _resolve_num,
+        _scans_to_cross,
+    )
 
     sources = {s.acc_name: s for s in fold_ctx.sources}
     totals = _acc_totals(state, fold_ctx.sources)
@@ -285,6 +291,12 @@ def _monotone_read_surface(
 
         tag_best: int | None = None
         for target, strict in bounds:
+            # Crossed within the last period (one unit of slack for a timer's
+            # integer reading): a rung above the accumulating one may not have
+            # read it yet, so the jump waits for a fresh observation.
+            if _crossed_between(prog - d - 1.0, prog, target, strict):
+                tag_best = 1
+                break
             periods = _scans_to_cross(prog, d, target, strict)
             if periods is not None:
                 tag_best = periods if tag_best is None else min(tag_best, periods)

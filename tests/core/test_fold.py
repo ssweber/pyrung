@@ -3109,3 +3109,52 @@ class TestFoldedHistoryReplays:
 
 def _plain_tags_of(state: Any) -> dict[str, Any]:
     return {k: v for k, v in state.tags.items() if not k.startswith("sys.scan_time")}
+
+
+def _scan_stamp_program(source: Callable[[], None], reader: Any, above: bool) -> Program:
+    """*reader* gates ``L``; a rise of ``L`` stamps the scan counter ``SC``."""
+    SC = Counter.clone("SC")
+    with Program(strict=False) as prog:
+        with Rung():
+            count_up(SC, 2_000_000_000).reset(Bool("SCR"))
+        if not above:
+            source()
+        with Rung(reader()):
+            out(Bool("L"))
+        with Rung(rise(Bool("L"))):
+            from pyrung import copy
+
+            copy(SC.Acc, Int("Stamp"))
+        if above:
+            source()
+    return prog
+
+
+class TestReadAboveTheSource:
+    """A rung above an accumulating rung reads the scan-entry value: it flips
+    one scan after the crossing, so a crossing inside the probe still bounds
+    the next window."""
+
+    @staticmethod
+    def _shape(kind: str, above: bool) -> Callable[[], Program]:
+        T, C, S, M = Timer.clone("T"), Counter.clone("C"), Int("S"), Int("M")
+        sources = {
+            "timer": (lambda: on_delay(T, 2_000), lambda: T.Acc >= 500),
+            "timer_gt": (lambda: on_delay(T, 2_000), lambda: T.Acc > 500),
+            "counter": (lambda: count_up(C, 2_000).reset(Bool("CR")), lambda: C.Acc >= 50),
+            "selfcalc": (lambda: calc(S + 1, S), lambda: S >= 50),
+            "modwrap": (lambda: calc((M + 1) % 1_000, M), lambda: M >= 50),
+        }
+        body, reader = sources[kind]
+
+        def source() -> None:
+            with Rung():
+                body()
+
+        return lambda: _scan_stamp_program(source, reader, above)
+
+    @pytest.mark.parametrize("kind", ["timer", "timer_gt", "counter", "selfcalc", "modwrap"])
+    @pytest.mark.parametrize("above", [True, False])
+    def test_flip_scan_matches_stepping(self, kind: str, above: bool) -> None:
+        folded = _assert_fold_is_exact(self._shape(kind, above), _scans(300))
+        assert folded.state.tags["Stamp"] > 0
