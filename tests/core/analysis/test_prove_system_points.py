@@ -457,6 +457,24 @@ class TestCalendarRanges:
         assert isinstance(result, Counterexample)
         assert {"rtc.hour": 12, "rtc.minute": 30}.items() <= result.trace[-1].inputs.items()
 
+    def test_joint_clock_fields_past_the_combo_cap_are_not_proven(self):
+        minute = Int("Minute")
+        second = Int("Second")
+        hour = Int("Hour")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(R.minute, minute)
+                copy(R.second, second)
+                copy(R.hour, hour)
+            with Rung(minute == 37, second == 13, hour == 5):
+                out(hit)
+        result = always(logic, ~hit)
+        assert isinstance(result, Intractable)
+        assert result.tags == ["rtc.hour", "rtc.minute", "rtc.second"]
+        assert "86,400" in result.reason
+        assert not any("choices=" in hint for hint in result.hints if "rtc." in hint)
+
     def test_year_arithmetic_hint_names_the_system_tag(self):
         stamp = Dint("Stamp")
         hit = Bool("Hit")

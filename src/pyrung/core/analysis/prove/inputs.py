@@ -17,15 +17,22 @@ if TYPE_CHECKING:
 _FREE_COMBO_CAP = 10_000
 
 
-def _thin_domain(domain: tuple[Any, ...], max_values: int) -> tuple[Any, ...]:
-    """Subsample a domain to at most *max_values* evenly-spaced representatives."""
-    if len(domain) <= max_values:
-        return domain
-    step = (len(domain) - 1) / (max_values - 1)
-    indices = {round(i * step) for i in range(max_values)}
-    indices.add(0)
-    indices.add(len(domain) - 1)
-    return tuple(domain[i] for i in sorted(indices))
+class _FreeComboOverflow(Exception):
+    """The free inputs live at one state have more joint values than the cap.
+
+    Free inputs are enumerated jointly from every state, so their domain
+    product is the per-state branching factor.  Past ``_FREE_COMBO_CAP`` the
+    search stops with ``Intractable``: a sample of the product could miss
+    the one combination that breaks the property.
+    """
+
+    def __init__(self, domain_sizes: dict[str, int]) -> None:
+        combos = 1
+        for size in domain_sizes.values():
+            combos *= size
+        super().__init__(f"{combos} joint free-input values")
+        self.domain_sizes = domain_sizes
+        self.combos = combos
 
 
 @dataclass(frozen=True, slots=True)
@@ -475,20 +482,12 @@ def _iter_input_assignments(
     )
     free_combos: list[dict[str, Any]] = [{}]
     if live_free:
-        free_domains_raw = [nondeterministic_dims[n] for n in live_free]
         combo_estimate = 1
-        for d in free_domains_raw:
-            combo_estimate *= len(d)
-            if combo_estimate > _FREE_COMBO_CAP:
-                break
+        for n in live_free:
+            combo_estimate *= len(nondeterministic_dims[n])
         if combo_estimate > _FREE_COMBO_CAP:
-            target_per = max(2, int(_FREE_COMBO_CAP ** (1.0 / len(live_free))))
-            free_domains = [
-                [(n, v) for v in _thin_domain(d, target_per)]
-                for n, d in zip(live_free, free_domains_raw, strict=True)
-            ]
-        else:
-            free_domains = [[(n, v) for v in nondeterministic_dims[n]] for n in live_free]
+            raise _FreeComboOverflow({n: len(nondeterministic_dims[n]) for n in live_free})
+        free_domains = [[(n, v) for v in nondeterministic_dims[n]] for n in live_free]
         for combo in itertools.product(*free_domains):
             d = dict(combo)
             if any(d[n] != stutter_dict.get(n) for n in d):

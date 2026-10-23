@@ -10,6 +10,7 @@ from dataclasses import replace
 from typing import Any
 
 from pyrung.core.kernel import ReplayKernel
+from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
 from . import _ExploreContext
 from .classify import _build_dimension_hints
@@ -22,7 +23,7 @@ from .events import (
     _settle_pending,
 )
 from .independence import _find_bridge_tags
-from .inputs import _iter_input_assignments
+from .inputs import _FREE_COMBO_CAP, _FreeComboOverflow, _iter_input_assignments
 from .kernel import (
     _EdgeCompressor,
     _extract_state_key,
@@ -119,6 +120,34 @@ _BFSResult = (
     | frozenset[frozenset[tuple[str, Any]]]
     | Intractable
 )
+
+
+def _free_combo_intractable(
+    context: _ExploreContext,
+    overflow: _FreeComboOverflow,
+    visited: int,
+) -> Intractable:
+    names = sorted(overflow.domain_sizes)
+    return Intractable(
+        reason=(
+            f"free inputs [{', '.join(names)}] take {overflow.combos:,} joint values on one"
+            f" scan, more than the {_FREE_COMBO_CAP:,} the verifier enumerates"
+        ),
+        dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+        estimated_space=visited,
+        tags=names,
+        hints=[
+            *(
+                f"  {name}: {size:,} values (system tag, set by the runtime)"
+                if name in SYSTEM_TAGS_BY_NAME
+                else f"  {name}: {size:,} values; narrow it with choices= or min=/max="
+                for name, size in sorted(overflow.domain_sizes.items(), key=lambda kv: -kv[1])
+            ),
+            "  every joint value of these inputs is a successor of one state; a property"
+            " that reads fewer of them together stays under the cap",
+        ],
+        journal=context.journal,
+    )
 
 
 def _bfs_explore(
@@ -457,18 +486,26 @@ def _bfs_explore_gen(
         if paced and just_flipped:
             assignments = [tuple(sorted(current_values.items()))]
         else:
-            assignments = _iter_input_assignments(
-                live,
-                context.nondeterministic_dims,
-                context.exclusive_input_groups if bfs_config.exclusive_input_grouping else (),
-                context.exclusive_input_group_by_member
-                if bfs_config.exclusive_input_grouping
-                else {},
-                current_values=current_values,
-                joint_inputs=context.joint_inputs,
-                free_inputs=context.free_input_names,
-                factored_free=_factored_names,
-            )
+            try:
+                assignments = _iter_input_assignments(
+                    live,
+                    context.nondeterministic_dims,
+                    context.exclusive_input_groups if bfs_config.exclusive_input_grouping else (),
+                    context.exclusive_input_group_by_member
+                    if bfs_config.exclusive_input_grouping
+                    else {},
+                    current_values=current_values,
+                    joint_inputs=context.joint_inputs,
+                    free_inputs=context.free_input_names,
+                    factored_free=_factored_names,
+                )
+            except _FreeComboOverflow as overflow:
+                intractable = _free_combo_intractable(context, overflow, len(visited))
+                if results is not None:
+                    yield [r if r is not None else intractable for r in results]
+                else:
+                    yield intractable
+                return
 
         if _factoring_active:
             assert _factoring is not None

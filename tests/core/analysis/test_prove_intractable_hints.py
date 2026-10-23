@@ -426,3 +426,31 @@ class TestMultipleBlockers:
         assert "Val" in result.tags
         assert "Other" in result.tags
         assert any("surviving dimensions" in h for h in result.hints)
+
+
+class TestFreeInputComboCap:
+    """Free inputs past the joint-value cap stop the search instead of sampling."""
+
+    def _joint_compare(self) -> tuple[Program, Bool]:
+        values = {v: f"v{v}" for v in range(25)}
+        a = Int("CapA", external=True, choices=values)
+        b = Int("CapB", external=True, choices=values)
+        c = Int("CapC", external=True, choices=values)
+        hit = Bool("CapHit")
+        with Program(strict=False) as logic:
+            with Rung(a == 9, b == 9, c == 9):
+                out(hit)
+        return logic, hit
+
+    def test_always_is_intractable_not_proven(self):
+        logic, hit = self._joint_compare()
+        result = always(logic, ~hit)
+        assert isinstance(result, Intractable)
+        assert result.tags == ["CapA", "CapB", "CapC"]
+        assert "15,625" in result.reason
+        assert any("CapA: 25 values" in hint for hint in result.hints)
+
+    def test_reachable_states_is_intractable_not_a_sample(self):
+        logic, _hit = self._joint_compare()
+        result = reachable_states(logic, project=["CapHit"])
+        assert isinstance(result, Intractable)
