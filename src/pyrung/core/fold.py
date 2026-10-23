@@ -2720,21 +2720,15 @@ def _timer_scans_to_reach(move: _TimerMove, target: int, cap: int | None) -> int
     return steps + 1
 
 
-def _timer_reading(state: Any, acc_name: str) -> tuple[int, float]:
-    """A timer's ``(acc, frac)`` in *state*."""
-    acc = state.tags.get(acc_name, 0)
-    if isinstance(acc, bool) or not isinstance(acc, int):
-        acc = int(acc or 0)
-    return acc, float(state.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
-
-
 def _timer_moves(
-    ctx: _FoldContext, before: tuple[tuple[int, float], ...], state: Any
+    ctx: _FoldContext,
+    before: tuple[tuple[int, float], ...],
+    after: tuple[tuple[int, float], ...],
 ) -> tuple[_TimerMove, ...] | None:
     """The timed sources advancing through the window, or ``None`` if unknown.
 
-    *before* holds each of ``ctx.timed_sources``' readings before the probe
-    scan.  A timer the probe moved by exactly one step of the carry
+    *before* and *after* hold each of ``ctx.timed_sources``' ``(acc, frac)``
+    before and after the probe scan (see :func:`_acc_readings`).  A timer the probe moved by exactly one step of the carry
     recurrence keeps doing so through the window, even when that step left
     it where it was; one otherwise left unchanged, or reset to zero, stays
     put.  Anything else (two steps in one scan, a patched
@@ -2743,8 +2737,7 @@ def _timer_moves(
     """
     moves: list[_TimerMove] = []
     dt = ctx.normal_dt
-    for src, (acc_b, frac_b) in zip(ctx.timed_sources, before, strict=True):
-        acc, frac = _timer_reading(state, src.acc_name)
+    for src, (acc_b, frac_b), (acc, frac) in zip(ctx.timed_sources, before, after, strict=True):
         still = (acc, frac) == (acc_b, frac_b) or (acc == 0 and frac == 0.0)
         if src.unit is None:
             if still:
@@ -3015,6 +3008,27 @@ def _nearest_mod_flip(
 
 
 # ── 11. State helpers ────────────────────────────────────────────────
+
+
+def _acc_readings(
+    state: Any, sources: tuple[_AccSource, ...]
+) -> tuple[dict[str, float], tuple[tuple[int, float], ...]]:
+    """:func:`_acc_totals` and each timed source's ``(acc, frac)``, in one pass."""
+    tags = state.tags
+    memory = state.memory
+    totals: dict[str, float] = {}
+    timers: list[tuple[int, float]] = []
+    for src in sources:
+        raw = tags.get(src.acc_name, 0)
+        acc = float(raw or 0)
+        if src.timed:
+            frac = float(memory.get(f"_frac:{src.acc_name}", 0.0) or 0.0)
+            acc += frac
+            timers.append(
+                (raw if isinstance(raw, int) and not isinstance(raw, bool) else int(raw or 0), frac)
+            )
+        totals[src.acc_name] = -acc if src.kind == "down" else acc
+    return totals, tuple(timers)
 
 
 def _acc_totals(state: Any, sources: tuple[_AccSource, ...]) -> dict[str, float]:
@@ -3499,12 +3513,13 @@ class _OrdinaryFoldStrategy:
 
     def capture_state(self, state: SystemState) -> _FoldProbe:
         """Capture a probe from a state-only executor such as compiled replay."""
+        totals, timers = _acc_readings(state, self.ctx.sources)
         return _FoldProbe(
-            totals=_acc_totals(state, self.ctx.sources),
+            totals=totals,
             visible=_visible_items(state, self.exclude),
             timestamp=state.timestamp,
             scan_id=state.scan_id,
-            timers=tuple(_timer_reading(state, src.acc_name) for src in self.ctx.timed_sources),
+            timers=timers,
         )
 
     def plan(
@@ -3542,10 +3557,10 @@ class _OrdinaryFoldStrategy:
 
         promoted = _runtime_soft_clocks(self.ctx, state)
         _mark_inert_soft(self.ctx, self.inert_soft, self.inert_run, probe.timestamp, promoted)
-        timer_moves = _timer_moves(self.ctx, probe.timers, state)
+        after_totals, after_timers = _acc_readings(state, self.ctx.sources)
+        timer_moves = _timer_moves(self.ctx, probe.timers, after_timers)
         if timer_moves is None:
             return None
-        after_totals = _acc_totals(state, self.ctx.sources)
         acc_scans = _nearest_acc_crossing(
             self.ctx,
             probe.totals,
