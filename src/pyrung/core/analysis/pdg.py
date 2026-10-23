@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
 from enum import Enum
@@ -1553,61 +1553,74 @@ def _build_program_graph(program: Program, observed_system: frozenset[str]) -> P
     return graph
 
 
+def _visit_indirect_refs(obj: Any, visit: Callable[[Any], None], seen: set[int]) -> None:
+    """Call *visit* on every IndirectRef/IndirectExprRef reachable from *obj*."""
+    if obj is None or isinstance(
+        obj,
+        (bool, int, float, str, bytes, FunctionType, BuiltinFunctionType, MethodType),
+    ):
+        return
+    obj_id = id(obj)
+    if obj_id in seen:
+        return
+    seen.add(obj_id)
+    if isinstance(obj, (IndirectRef, IndirectExprRef)):
+        visit(obj)
+        return
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        for item in obj:
+            _visit_indirect_refs(item, visit, seen)
+        return
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _visit_indirect_refs(v, visit, seen)
+        return
+    if isinstance(obj, Instruction):
+        fields = _instruction_fields(obj)
+        if fields is not None:
+            for field_name in fields:
+                _visit_indirect_refs(getattr(obj, field_name, None), visit, seen)
+            return
+    if isinstance(obj, Condition):
+        for _child_name, child_value in _condition_children(obj):
+            _visit_indirect_refs(child_value, visit, seen)
+        return
+    if hasattr(obj, "__dict__"):
+        for v in vars(obj).values():
+            _visit_indirect_refs(v, visit, seen)
+
+
+def indexed_blocks(obj: Any) -> frozenset[str]:
+    """Names of the blocks *obj* (a condition, instruction, ...) indexes."""
+    out: set[str] = set()
+    _visit_indirect_refs(obj, lambda ref: out.add(ref.block.name), set())
+    return frozenset(out)
+
+
 def _collect_pointer_tags(program: Program) -> dict[str, tuple[str, int, int]]:
     """Find tags used as pointers in IndirectRef/IndirectExprRef accesses."""
     from pyrung.core.validation._common import walk_instructions
 
     pointers: dict[str, tuple[str, int, int]] = {}
 
-    def _scan(obj: Any, seen: set[int]) -> None:
-        if obj is None or isinstance(
-            obj,
-            (bool, int, float, str, bytes, FunctionType, BuiltinFunctionType, MethodType),
-        ):
+    def _visit(ref: Any) -> None:
+        span = (ref.block.name, ref.block.start, ref.block.end)
+        if isinstance(ref, IndirectRef):
+            pointers.setdefault(ref.pointer.name, span)
             return
-        obj_id = id(obj)
-        if obj_id in seen:
-            return
-        seen.add(obj_id)
-        if isinstance(obj, IndirectRef):
-            pointers.setdefault(obj.pointer.name, (obj.block.name, obj.block.start, obj.block.end))
-            return
-        if isinstance(obj, IndirectExprRef):
-            base = _indirect_expr_base_tag(obj.expr)
-            if base is not None:
-                pointers.setdefault(base.name, (obj.block.name, obj.block.start, obj.block.end))
-            return
-        if isinstance(obj, (list, tuple, set, frozenset)):
-            for item in obj:
-                _scan(item, seen)
-            return
-        if isinstance(obj, dict):
-            for v in obj.values():
-                _scan(v, seen)
-            return
-        if isinstance(obj, Instruction):
-            fields = _instruction_fields(obj)
-            if fields is not None:
-                for field_name in fields:
-                    _scan(getattr(obj, field_name, None), seen)
-                return
-        if isinstance(obj, Condition):
-            for _child_name, child_value in _condition_children(obj):
-                _scan(child_value, seen)
-            return
-        if hasattr(obj, "__dict__"):
-            for v in vars(obj).values():
-                _scan(v, seen)
+        base = _indirect_expr_base_tag(ref.expr)
+        if base is not None:
+            pointers.setdefault(base.name, span)
 
     def _scan_rung_conditions(rung: Rung) -> None:
         for cond in rung._conditions:
-            _scan(cond, seen)
+            _visit_indirect_refs(cond, _visit, seen)
         for branch in rung._branches:
             _scan_rung_conditions(branch)
 
     seen: set[int] = set()
     for instr in walk_instructions(program):
-        _scan(instr, seen)
+        _visit_indirect_refs(instr, _visit, seen)
     for rung in program.rungs:
         _scan_rung_conditions(rung)
     for subroutine_rungs in program.subroutines.values():

@@ -3418,6 +3418,60 @@ class TestReadsOutsideTheCrossings:
         assert kernel["n"] < 50
 
 
+class TestIndexedDisplays:
+    """A display written to a block element is not provably unread when some
+    index into that block (``DS[Idx]``, Idx unbounded) names no element the
+    program graph can see: a window must not leave it stale.
+
+    The program-index cases are a documented gap (runner guide, "Folding"):
+    marking every element of such a block read costs the burner most of its
+    folds, since its alarm historian indexes DS with unbounded pointers.  The
+    fix needs pointer bounds from their writers, or the probe scan recording
+    which elements an index resolved to."""
+
+    @staticmethod
+    def _program(reader: str) -> Program:
+        from pyrung import Block, TagType, copy, latch
+
+        Tmr = Timer.clone("Tmr")
+        DS = Block("DS", TagType.INT, 1, 100)
+        Idx, Q = Int("Idx", default=5), Int("Q")
+        with Program(strict=False) as prog:
+            with Rung():
+                on_delay(Tmr, 20_000)
+            with Rung():
+                calc(Tmr.Acc // 1_000, DS[5])
+            if reader == "contact":
+                with Rung(DS[Idx] == 3):
+                    latch(Bool("Hit"))
+            elif reader == "copy":
+                with Rung():
+                    copy(DS[Idx], Q)
+                with Rung(Q == 3):
+                    latch(Bool("Hit"))
+        return prog
+
+    @pytest.mark.xfail(strict=True, reason="unbounded index into a landing-rebuilt display")
+    @pytest.mark.parametrize("reader", ["contact", "copy"])
+    def test_program_index_reads_the_display(self, reader: str) -> None:
+        def run(plc: PLC, fold: bool) -> None:
+            _run_scans(plc, 3_000, fold=fold)
+
+        folded = _assert_fold_is_exact(lambda: self._program(reader), run)
+        assert folded.state.tags["Hit"]
+
+    def test_run_until_through_an_index(self) -> None:
+        from pyrung import Block, TagType
+
+        DS = Block("DS", TagType.INT, 1, 100)
+
+        def run(plc: PLC, fold: bool) -> None:
+            plc.run_until(DS[Int("Idx", default=5)] == 3, max_cycles=3_000, fold=fold)
+
+        folded = _assert_fold_is_exact(lambda: self._program("none"), run)
+        assert folded.state.tags["DS5"] == 3
+
+
 class TestCallableReadsThePlc:
     def test_a_closure_over_the_plc_is_traced(self) -> None:
         def build() -> Program:
