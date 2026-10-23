@@ -2231,11 +2231,38 @@ def _build_fold_context(
     # on: if the program reads either, the fold cannot skip a single scan
     # without risking a dropped edge, so it degrades to scan-by-scan.
     from pyrung.core.system_points import _SCAN_DERIVED_NAMES
+    from pyrung.core.system_points import system as _sys_points
 
-    scan_derived_names = frozenset(read_tags & _SCAN_DERIVED_NAMES) | condition_scan_derived
+    # Likewise ``sys.dt`` and ``sys.scan_time_current_ms`` read mid-scan: the
+    # landing scan runs with the aggregate dt, so a rung reading either would
+    # see it.  Plant rungs read ``sys.dt`` on purpose (a ramp advances by the
+    # elapsed time); any other reader disables the fold.
+    landing_inflated = frozenset(
+        {_sys_points.sys.dt.name, _sys_points.sys.scan_time_current_ms.name}
+    )
+    syn_rungs = getattr(plc, "_synthesis", None)
+    plant_ids = (
+        {id(rung) for rung in syn_rungs.all_rungs()}
+        if syn_rungs is not None and not syn_rungs.is_empty()
+        else set()
+    )
+    node_derived: set[str] = set()
+    for node in pdg.rung_nodes:
+        node_reads = _node_reads(node)
+        node_derived |= node_reads & _SCAN_DERIVED_NAMES
+        inflated = node_reads & landing_inflated
+        if inflated:
+            top = _top_rung(program, node)
+            if top is None or id(top) not in plant_ids:
+                node_derived |= inflated
+    scan_derived_names = (
+        frozenset(read_tags & _SCAN_DERIVED_NAMES)
+        | frozenset(node_derived)
+        | condition_scan_derived
+    )
     if scan_derived_names and journal is not None:
         journal.add_note(
-            "fold: disabled by read scan-id-derived signal(s): "
+            "fold: disabled by read scan-id-derived or per-scan dt signal(s): "
             + ", ".join(sorted(scan_derived_names))
         )
 

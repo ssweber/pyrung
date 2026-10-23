@@ -107,11 +107,9 @@ def _run(spec: dict, *, fold: bool) -> dict:
     plc = PLC(prog, dt=spec["dt"])
     plc.patch({"Enable": True, "A": spec["a"], "B": spec["b"]})
     plc.run_until(done, max_cycles=40_000, fold=fold)
-    # Drop scan-timing diagnostics: a folded scan reports one big synthetic
-    # `dt_override` pass, so `sys.scan_time_*` legitimately differs from
-    # scan-by-scan.  They are runtime metrics, not program logic — outside the
-    # fold soundness contract (bit-equal *visible logic state*).
-    return {k: v for k, v in plc.state.tags.items() if not k.startswith("sys.scan_time")}
+    # Every tag, the scan-time diagnostics included: a landing records the
+    # normal dt of the scan it stands for.
+    return dict(plc.state.tags)
 
 
 def test_saturated_heartbeat_fold_is_bit_equal() -> None:
@@ -255,7 +253,7 @@ def _run_frozen(spec: dict, *, fold: bool) -> dict:
     plc = PLC(prog, dt=spec["dt"])
     plc.patch({"Enable": True, "A": spec["a"], "B": spec["b"]})
     plc.run_until(done, max_cycles=40_000, fold=fold)
-    return {k: v for k, v in plc.state.tags.items() if not k.startswith("sys.scan_time")}
+    return dict(plc.state.tags)
 
 
 def test_frozen_write_exclusion_is_bit_equal() -> None:

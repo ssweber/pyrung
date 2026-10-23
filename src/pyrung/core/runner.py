@@ -4284,6 +4284,10 @@ class PLC:
             self._landing_commit_dt = None
         landing_scan_id = self._landing_scan_id if is_fold_landing else None
         self._landing_scan_id = None
+        if is_fold_landing:
+            # The aggregate dt advanced the timers; the scan it stands for lasted
+            # one normal dt, which the scan-time extrema and ``_dt`` record.
+            ctx.set_memory("_dt", commit_dt)
         self._system_runtime.on_scan_end(ctx)
         if self._constrained_tags:
             self._bounds_violations = check_bounds(ctx._tags_pending, self._constrained_tags)

@@ -1372,9 +1372,7 @@ def _gated_hit_program(shape: Callable[[], Any]) -> tuple[Program, Bool, Timer]:
 
 
 def _plain_tags(plc: PLC) -> dict[str, Any]:
-    # The landing scan is one interpreter pass with an inflated dt, so the
-    # ``sys.scan_time_*`` readouts legitimately differ from stepping.
-    return {k: v for k, v in plc.state.tags.items() if not k.startswith("sys.scan_time")}
+    return dict(plc.state.tags)
 
 
 def _started(shape: Callable[[], Any]) -> tuple[PLC, Bool, Timer]:
@@ -2496,7 +2494,7 @@ class TestLandingScanRaises:
 def _full_state(plc: PLC) -> dict[str, Any]:
     """Every tag and memory slot except the per-scan diagnostics a landing inflates."""
     state = _plain_tags(plc)
-    state.update({f"mem:{k}": v for k, v in plc.state.memory.items() if k != "_dt"})
+    state.update({f"mem:{k}": v for k, v in plc.state.memory.items()})
     return state
 
 
@@ -3468,3 +3466,40 @@ class TestFoldedHistoryQueries:
         tip = folded.state.scan_id
         assert str(folded.cause("C_Acc", tip)) == str(stepped.cause("C_Acc", tip))
         assert str(folded.cause("Hit")) == str(stepped.cause("Hit"))
+
+
+class TestLandingDtReadouts:
+    """The landing scan runs with the aggregate dt, but the scan it stands
+    for lasted one normal dt: the scan-time extrema and ``_dt`` record that,
+    and a rung reading ``sys.dt`` mid-scan keeps the run unfolded."""
+
+    @staticmethod
+    def _shape(reader: str | None) -> Callable[[], Program]:
+        from pyrung import latch
+
+        def build() -> Program:
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Tmr, 3_000)
+                if reader == "dt":
+                    with Rung(system.sys.dt > 0.05):
+                        latch(Bool("Big"))
+                elif reader == "current":
+                    with Rung(system.sys.scan_time_current_ms > 50):
+                        latch(Bool("Big"))
+                elif reader == "max":
+                    with Rung(system.sys.scan_time_max_ms > 50):
+                        latch(Bool("Big"))
+                with Rung(Tmr.Done):
+                    out(Bool("Hit"))
+            return prog
+
+        return build
+
+    @pytest.mark.parametrize("reader", [None, "dt", "current", "max"])
+    def test_whole_state_matches_stepping(self, reader: str | None) -> None:
+        folded, stepped = _folded_and_stepped(self._shape(reader), _until_hit(1_000))
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert dict(folded.state.tags) == dict(stepped.state.tags)
+        assert dict(folded.state.memory) == dict(stepped.state.memory)
