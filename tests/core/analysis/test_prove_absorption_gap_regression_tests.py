@@ -732,6 +732,118 @@ class TestProgressAcrossCycles:
         assert any("more times to replay it" in caveat for caveat in result.caveats)
 
 
+class TestSelfResettingTimerLaps:
+    """A timer reset by its own Done is a pulse generator: every lap jumps to
+    the Done (a hidden-event jump of several scans), resets, and returns to
+    the first key with the lap counter one ahead.  The lap is a cycle even
+    though one of its links spans many scans and the timer falls back inside
+    it."""
+
+    def _generator(self, tag: str, preset: int = 50, *, enable: Bool | None = None):
+        timer = Timer.clone(tag + "Tmr")
+        with Rung(enable, ~timer.Done) if enable is not None else Rung(~timer.Done):
+            on_delay(timer, preset=preset)
+        return timer
+
+    def test_lap_counter_reaches_its_threshold(self):
+        count = Int("LapCount")
+        hit = Bool("LapHit")
+        with Program(strict=False) as logic:
+            timer = self._generator("Lap")
+            with Rung(timer.Done):
+                calc(count + 1, count)
+            with Rung(count >= 3):
+                out(hit)
+        result = always(logic, ~hit)
+        _assert_replays_to(logic, result, "LapHit")
+        assert not result.caveats
+        assert sum(step.scans for step in result.trace) == 17
+
+    def test_count_up_and_rising_edge_count_laps(self):
+        clear = Bool("LapCtuClear", external=True)
+        counter = Counter.clone("LapCtu")
+        hit = Bool("LapCtuHit")
+        with Program(strict=False) as logic:
+            timer = self._generator("LapCtu")
+            with Rung(timer.Done):
+                count_up(counter, preset=3).reset(clear)
+            with Rung(counter.Done):
+                out(hit)
+        _assert_replays_to(logic, always(logic, ~hit), "LapCtuHit")
+
+        count = Int("LapRiseCount")
+        hit = Bool("LapRiseHit")
+        with Program(strict=False) as logic:
+            timer = self._generator("LapRise")
+            with Rung(rise(timer.Done)):
+                calc(count + 1, count)
+            with Rung(count >= 3):
+                out(hit)
+        _assert_replays_to(logic, always(logic, ~hit), "LapRiseHit")
+
+    def test_gated_generator_counts_while_enabled(self):
+        enable = Bool("LapGateEn", external=True)
+        count = Int("LapGateCount")
+        hit = Bool("LapGateHit")
+        with Program(strict=False) as logic:
+            timer = self._generator("LapGate", 30, enable=enable)
+            with Rung(timer.Done):
+                calc(count + 1, count)
+            with Rung(count >= 3):
+                out(hit)
+        _assert_replays_to(logic, always(logic, ~hit), "LapGateHit")
+
+    def test_laps_racing_a_timer(self):
+        """Three 4-scan laps beat a 13-scan timer but not an 11-scan one."""
+        for preset, wins in ((130, True), (110, False)):
+            tag = f"LapRace{preset}"
+            clear = Bool(tag + "Clear", external=True)
+            counter = Counter.clone(tag + "Ctu")
+            deadline = Timer.clone(tag + "Deadline")
+            hit = Bool(tag + "Hit")
+            with Program(strict=False) as logic:
+                timer = self._generator(tag, 30)
+                with Rung(timer.Done):
+                    count_up(counter, preset=3).reset(clear)
+                with Rung():
+                    on_delay(deadline, preset=preset)
+                with Rung(counter.Done, ~deadline.Done):
+                    out(hit)
+            result = always(logic, ~hit)
+            if wins:
+                _assert_replays_to(logic, result, hit.name)
+            else:
+                assert isinstance(result, Proven)
+
+    def test_lap_counter_reset_or_stopped_stays_proven(self):
+        count = Int("LapResetCount")
+        hit = Bool("LapResetHit")
+        with Program(strict=False) as logic:
+            timer = self._generator("LapReset", 30)
+            with Rung(timer.Done):
+                calc(count + 1, count)
+            with Rung(count >= 2):
+                copy(0, count)
+            with Rung(count >= 3):
+                out(hit)
+        assert isinstance(always(logic, ~hit), Proven)
+
+        count = Int("LapStopCount")
+        stop = Bool("LapStop")
+        hit = Bool("LapStopHit")
+        with Program(strict=False) as logic:
+            timer = Timer.clone("LapStopTmr")
+            with Rung(~timer.Done, ~stop):
+                on_delay(timer, preset=30)
+            with Rung(timer.Done):
+                calc(count + 1, count)
+            with Rung(count >= 2):
+                latch(stop)
+            with Rung(count >= 3):
+                out(hit)
+        assert isinstance(always(logic, ~hit), Proven)
+
+
 class TestUnreadTimer:
     """A timer nothing reads (Done, accumulator, status bits) changes no other
     tag: it is left out of the key.  One read only by another instruction's

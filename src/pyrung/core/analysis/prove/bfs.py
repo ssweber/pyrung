@@ -452,7 +452,7 @@ def _bfs_explore_gen(
         hidden: tuple[Any, ...],
         chain: list[Any],
         input_dict: dict[str, Any],
-        bprev_dict: dict[str, Any],
+        edge_scans: int,
         deltas: dict[int, float],
         timer_steps: dict[int, int],
     ) -> bool:
@@ -460,13 +460,14 @@ def _bfs_explore_gen(
         visible = key[:-1] if paced else key
         untracked = cycles.untracked_values(kernel)
         timers_before = cycles.timer_readings(kernel)
-        for inputs, _prev in (*cycles.cycle_steps(chain), (input_dict, bprev_dict)):
-            if _has_demoted:
-                for name, value in zip(_demoted, _extract_bprev(kernel), strict=True):
-                    kernel.prev[name] = value
+        for inputs, scans in (*cycles.cycle_steps(chain), (input_dict, edge_scans)):
             for name, value in inputs.items():
                 kernel.tags[name] = value
-            _step_kernel(context, kernel)
+            for _ in range(scans):
+                if _has_demoted:
+                    for name, value in zip(_demoted, _extract_bprev(kernel), strict=True):
+                        kernel.prev[name] = value
+                _step_kernel(context, kernel)
         tv = _threshold_vector_key(kernel, context.threshold_vector_specs)
         live_after = (
             live_cache.live_inputs(kernel, threshold_vector=tv)
@@ -532,7 +533,7 @@ def _bfs_explore_gen(
             assert chain is not None
             x_snap = _snapshot_kernel(kernel, _mutable, _base_keys)
             if not _traverses_again(
-                key, hidden, chain, input_dict, bprev_dict, pumped.deltas, pumped.timer_steps
+                key, hidden, chain, input_dict, edge_scans, pumped.deltas, pumped.timer_steps
             ):
                 pumped = None
             _restore_kernel(kernel, x_snap)
@@ -626,11 +627,12 @@ def _bfs_explore_gen(
                 repeat=repeat,
             )
         # A pumped node's link spans many scans: no later cycle runs through
-        # it, and its successors inherit its progress instead.
+        # it, and its successors inherit its progress instead.  Nor through a
+        # link with a caveat: holding its inputs does not replay it.
         cycles.record_node(
             refined_tid,
             parent_key,
-            -1 if x_snap is not None else edge_scans,
+            -1 if x_snap is not None or edge_caveats else edge_scans,
             hidden,
             (input_dict, bprev_dict),
         )
@@ -940,7 +942,7 @@ def _bfs_explore_gen(
                 cycles.record_node(
                     tid,
                     parent_key,
-                    edge_scans,
+                    -1 if edge_caveats else edge_scans,
                     cycles.hidden_vector(kernel, key),
                     (input_dict, bprev_dict),
                 )

@@ -87,8 +87,10 @@ _TIMER_KINDS = frozenset((_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_
 # Kinds whose normalized progress is the raw accumulator value.
 _PLAIN_KINDS = frozenset((_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP, _PROGRESS_KIND_REAL_UP))
 
-# Longest ancestor chain walked when looking for the start of a cycle.
+# Longest ancestor chain walked when looking for the start of a cycle, and
+# most scans one traversal may span (it is replayed scan by scan).
 _MAX_CYCLE_LENGTH = 64
+_MAX_CYCLE_SCANS = 100_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -493,19 +495,24 @@ class _CycleTracker:
         """Ancestor chain from the parent back to a node with *base_tid*.
 
         Returns ``[parent, ..., start]`` (start last) when every link on the
-        way is a single scan, else None.
+        way replays by holding its inputs for its scans, else None.  A
+        hidden-event jump is such a link: a self-resetting timer's lap
+        (``Rung(~T.Done): on_delay(T, 50)``) jumps to its Done on the way.
         """
-        if edge_scans != 1:
+        if edge_scans < 1:
             return None
         chain: list[Any] = []
         current = parent_tid
+        scans = edge_scans
         for _ in range(_MAX_CYCLE_LENGTH):
             if current is None:
                 return None
             chain.append(current)
             if base_of(current) == base_tid:
                 return chain
-            if self._scans.get(current, 0) != 1:
+            link = self._scans.get(current, 0)
+            scans += link
+            if link < 1 or scans > _MAX_CYCLE_SCANS:
                 return None
             current = self._parent.get(current)
         return None
@@ -670,9 +677,9 @@ class _CycleTracker:
             (kernel.tags.get(name), kernel.memory.get(f"_frac:{name}")) for name in self._untracked
         )
 
-    def cycle_steps(self, chain: list[Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-        """Inputs and demoted prevs of the links from the cycle's start onward."""
-        return [self._step[tid] for tid in reversed(chain[:-1])]
+    def cycle_steps(self, chain: list[Any]) -> list[tuple[dict[str, Any], int]]:
+        """Inputs and scans of the links from the cycle's start onward."""
+        return [(self._step[tid][0], self._scans[tid]) for tid in reversed(chain[:-1])]
 
     def apply(self, kernel: ReplayKernel, pumped: _Pump) -> None:
         for i, (source, value) in enumerate(zip(self._sources, pumped.values, strict=True)):
