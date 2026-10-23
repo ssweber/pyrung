@@ -142,6 +142,19 @@ Follow-ups:
 - `sys.first_scan`, `sys.scan_counter` (and likely the clock bits) are constant in the prover's compiled kernel:
   `Rung(sys.first_scan, I)` and `scan_counter == 3` gates prove unreachable hits.
 - Implicit `fault.*` writes are missing from `writers_of`: `calc(100/DD)` then `Rung(fault.division_error)`.
+- System tags and fault writes: branch `p0/prove-sys` (system tags modeled: first_scan a state bit, constants at
+  runtime values, clocks/scan_counter/RTC free with caveats, scan-start resets; instructions declare fault writes,
+  counted only where a flag is read). Adversarial review: merge with fixes (property-only system tags unmodeled;
+  PILOT prior drift; RTC-through-calc Intractable). Fixes in progress.
+- Queued P0, already wrong on dev (adversarial review of `p0/prove-sys`, repros in session scratchpad `adv-prove-sys/`):
+  - Live-input pruning works from expressions only: `never()`, callable properties, DAP `scope=` and
+    `reachable_states(project=)` lose inputs that reach the observed tag through an unconditioned rung.
+    `calc(100 / D, Q)`: `never(p, Q == 50)` Proven; `reachable_states(project=["PQ1"])` returns 1 of 3 states, so
+    lock files can miss states. Repros `lam2.py`, `lam3.py`, `proj.py`.
+  - Accumulator absorption: `Rung(M != P): calc(N + 1, N); copy(M, P)` then `Rung(N >= 3)` Proven (P gets domain
+    `(0,)`, "default_only"); reachable in 3 scans. Repro `probes_c.py`.
+  - Low: `_pilot_sweep_domains` and the lints step without the system model (`bounds.py`, `lintsys.py`: false
+    CMP_ALWAYS_FALSE on `calc(rtc...)` destinations).
 - PDG indirect reads: `DS[agg]` with no base tag registers no reads; `DS[Ptr + k]` is narrowed by Ptr's range
   ignoring k; `DS[Ptr]` with unbounded Ptr registers none. A naive full-block fallback blew PackML from 58 s to over
   300 s (446 DH tags became ND inputs); a fix needs offset-aware narrowing plus "only elements with a writer" for
