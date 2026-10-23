@@ -637,6 +637,9 @@ class Epoch:
     rung_firing_timelines: RungFiringTimelines[int]
     committed_tag_timelines: RungFiringTimelines[str]
     node_firing_timelines: RungFiringTimelines[RungId]
+    # ``(first, last)`` scan ranges a live fold ran as one step, clipped to
+    # the interval: recorded cause()/effect() refuse scans inside them.
+    fold_windows: tuple[tuple[int, int], ...]
     synthesis: Any | None
     program: Any | None
     logic: tuple[Any, ...]
@@ -702,6 +705,11 @@ class Epoch:
             rung_firing_timelines=plc._rung_firing_timelines.snapshot(up_to=last_scan),
             committed_tag_timelines=plc._committed_tag_timelines.snapshot(up_to=last_scan),
             node_firing_timelines=plc._node_firing_timelines.snapshot(up_to=last_scan),
+            fold_windows=tuple(
+                (max(first, first_scan), min(last, last_scan))
+                for first, last in plc._fold_windows
+                if first <= last_scan and last >= first_scan
+            ),
             synthesis=synthesis,
             program=plc._program,
             logic=tuple(plc._logic),
@@ -774,6 +782,7 @@ class EpochQuery:
         runner._rung_firing_timelines = epoch.rung_firing_timelines
         runner._committed_tag_timelines = epoch.committed_tag_timelines
         runner._node_firing_timelines = epoch.node_firing_timelines
+        runner._fold_windows = list(epoch.fold_windows)
         runner._causal_initial_tags = dict(epoch.causal_initial_tags)
         runner._causal_lineage = CausalLineage(runner)
         runner._set_rtc_internal(epoch.rtc_base, epoch.rtc_base_sim_time)
@@ -1979,22 +1988,25 @@ class PLC:
 
         ``history`` materializes such scans by replay, but the recorded
         causal index holds one entry for the whole window (at its last
-        scan), so a transition inside it cannot be explained exactly.
+        scan), so a transition inside it cannot be explained exactly.  A
+        fork inherits its ancestors' windows through their sealed epochs.
         """
-        if scan is None or not self._fold_windows:
+        if scan is None:
             return
         from bisect import bisect_right
 
-        i = bisect_right(self._fold_windows, (scan, math.inf)) - 1
-        if i < 0:
-            return
-        first, last = self._fold_windows[i]
-        if first <= scan <= last:
-            raise ValueError(
-                f"{verb}(): scan {scan} was folded (scans {first}..{last} ran as one "
-                f"step), so its transitions were not recorded one by one; rerun with "
-                f"fold=False to explain it"
-            )
+        lineage = self._causal_lineage
+        for windows in (self._fold_windows, *(e.fold_windows for e in lineage.sealed_epochs)):
+            i = bisect_right(windows, (scan, math.inf)) - 1
+            if i < 0:
+                continue
+            first, last = windows[i]
+            if first <= scan <= last:
+                raise ValueError(
+                    f"{verb}(): scan {scan} was folded (scans {first}..{last} ran as one "
+                    f"step), so its transitions were not recorded one by one; rerun with "
+                    f"fold=False to explain it"
+                )
 
     def why(self, *tags: Tag | str) -> CausalChain:
         """Explain how tags reached their current values from a snapshot.

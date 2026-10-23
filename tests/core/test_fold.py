@@ -3538,6 +3538,24 @@ class TestFoldedHistoryQueries:
         assert str(folded.cause("C_Acc", tip)) == str(stepped.cause("C_Acc", tip))
         assert str(folded.cause("Hit")) == str(stepped.cause("Hit"))
 
+    def test_a_fork_refuses_its_parents_folded_scans(self) -> None:
+        folded, _stepped = self._runs()
+        first, last = folded._fold_windows[0]
+        mid = (first + last) // 2
+        for at in (None, mid):
+            child = folded.fork(at)
+            grandchild = child.fork()
+            for plc in (child, grandchild):
+                with pytest.raises(ValueError, match="folded"):
+                    plc.cause("C_Acc", first)
+                with pytest.raises(ValueError, match="folded"):
+                    plc.effect("C_Acc", first)
+        # Forked from inside a window, the child still owns that window's
+        # earlier scans (clipped at the fork point) and none after it.
+        child = folded.fork(mid)
+        with pytest.raises(ValueError, match=rf"scans {first}\.\.{mid} "):
+            child.cause("C_Acc", mid)
+
 
 class TestLandingDtReadouts:
     """The landing scan runs with the aggregate dt, but the scan it stands
