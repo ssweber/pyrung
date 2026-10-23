@@ -180,9 +180,24 @@ Decided after the overnight fold/prover rounds:
   (the compiled kernel inlines indexed reads, `circuitpy/codegen/compile/_primitives.py`).
 - Found, queued: cycle-fold jumps (`pilot/cyclefold.py`) never register fold windows, so cause() inside a
   PILOT coast jump is not refused. PILOT calls cause() heavily: check its callers before making it raise.
-- Next: land `p0/prove-timers` (race narrowing in progress: 770bd5c's strict revisit rule only where two
-  accumulators can race; PackML lock 113 s vs dev 58 s before it), then `make test-fold` (suite programs
-  folded vs stepped, scan by scan; fold fuzz seeded from the review probes), then feature 3.
+- **test-fold landed** `8fe261f..72b5ac1`. `make test-fold` (`--fold-check`, `tests/fold_check.py`) checks
+  every folded run_until/run_for/cycle coast against a stepped twin, scan by scan: tags and memory exactly,
+  timestamp to 1 us. Full suite: 4600 runs / 245k scans clean; tumbler under it too (wall budgets x10).
+  New composite fold-fuzz family from the review shapes (pinned probes all fail on 8e41f74). Its first
+  tumbler run found a cycle-jump bug (pre-existing): jumps were bounded on a timer's fractional progress,
+  not the integer a rung reads (seconds timer at 2.07 s reads 2, so `Acc > 2` was skipped; tumbler rotate
+  step 11 scans late). Fixed `8fe261f`; burner how 2275 -> 2675 kernel scans (5 -> 3 cycle folds),
+  tumbler 18492 -> 19893; goldens regenerated (user: "so it's correct, we can regen the goldens").
+- **prove-timers landed** `4fdd2d3..55baf16`: coarse-unit timers, self-resetting TON pulses, head-start
+  race (exact, user decision), callable/projection reads of absorbed accumulators, instruction-condition
+  edges, tag presets around cycles, plus `prove/deadness.py` (a counter dead behind its subroutine's call
+  guard leaves the hidden vector; value-set analysis bounds pointers). Race-only narrowing was unsound (a
+  single counter races latched state); now regression tests. Reviewed: soundness argument checked
+  (continued() snapshots included), system-derived pointers refuse the guard, 290 mutated guard programs
+  agree with brute force (session scratchpad `dead/`). PackML lock 91 s vs dev 61 s, byte-identical:
+  **accepted by the user**; the rest of the gap is pulse laps (`a11909b`, ~+26 s) and tag presets
+  (`e0fe4fe`, ~+13 s), unprofiled. make test 6986 on the combined tree, tumbler 40/40.
+- Next: feature 3 (`time_event_drum`). Every feature now runs `make test-fold` alongside `make test`.
 
 ## Prover gaps found by the audit (wrong verdicts with every optimization off, so not pruning)
 
