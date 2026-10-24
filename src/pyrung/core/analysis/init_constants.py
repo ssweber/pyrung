@@ -54,6 +54,8 @@ def _normalize_literal_write_value(raw_value: Any, target: Any) -> Any | object:
     from pyrung.core.tag import ImmediateRef, Tag
 
     value = raw_value.value if isinstance(raw_value, ImmediateRef) else raw_value
+    if isinstance(value, Tag) and value.readonly:
+        value = value.default  # a readonly tag is a named constant
     if isinstance(value, (Tag, Expression)):
         return _NO_LITERAL_WRITE
     if not isinstance(value, (bool, int, float)):

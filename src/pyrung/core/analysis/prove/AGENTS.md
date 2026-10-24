@@ -42,7 +42,7 @@ Each module has a docstring with implementation details. This map is for navigat
 - **`classify.py`** — Dimension classification (stateful / nondeterministic / combinational) and domain inference. See docstring for the 7-level domain inference stack.
 - **`absorb.py`** — Accumulator absorption and threshold abstraction. Three paths: redundant Acc, threshold vector, comparison-only. All gated by the exclusivity check. See northstar docstring.
 - **`cycles.py`** — Hidden progress across multi-scan cycles: refined revisits, the time-like probe, cycle pumping with repeated traces.
-- **`deadness.py`** — Dead guards for hidden counters: the subroutine region every read is in, the guard on every call into it, the writes that raise the guard, and a value-set bound on indirect addresses.
+- **`deadness.py`** — Dead guards for hidden counters: the subroutine region every read is in, the guard on every call into it, the writes that raise the guard, and a value-set bound on indirect addresses (`../value_sets.py`, shared with the PDG's `unbounded_index_reads` graph, which `_pass_build_graph` builds for BFS so an index with no declared bounds reads the block elements that can change).
 - **`events.py`** — Hidden-event scheduling. Settles pending timers/counters without stepping through every tick. See docstring for the settle cascade.
 - **`kernel.py`** — Kernel integration. Snapshot/restore, state key extraction, edge compression, live input caching. See docstring for state key composition.
 - **`expr.py`** — Expression tree helpers. Partial evaluation, tag reference collection, atom indexing, edge-bearing input partition.

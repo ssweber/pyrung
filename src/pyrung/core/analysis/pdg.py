@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable, Collection
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
 from enum import Enum
@@ -21,6 +22,7 @@ from pyrung.core.memory_block import (
     IndirectBlockRange,
     IndirectExprRef,
     IndirectRef,
+    InputBlock,
 )
 from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
@@ -173,7 +175,7 @@ class ProgramGraph:
     fault_writes: frozenset[str] = frozenset()
     unread_fault_writes: frozenset[str] = frozenset()
     _observed_variants: (
-        dict[tuple[frozenset[str], tuple[tuple[str, int], ...]], ProgramGraph] | None
+        dict[tuple[frozenset[str], tuple[tuple[str, int], ...], bool], ProgramGraph] | None
     ) = field(default=None, init=False, repr=False)
     _main_node_index: dict[int, int] | None = field(default=None, init=False, repr=False)
     _call_site_cache: dict[str, frozenset[int]] | None = field(default=None, init=False, repr=False)
@@ -788,6 +790,82 @@ def _indirect_expr_base_tag(expr: Any) -> Tag | None:
 _RANGE_COLLAPSE_THRESHOLD = 3
 
 
+class _UnboundedReads:
+    """What an index with no declared bounds reads, in an ``unbounded_index_reads`` graph.
+
+    The elements of its block that can change (some instruction writes them,
+    they belong to an ``InputBlock``, or they are ``external``), narrowed to
+    the addresses the pointer's writers can produce when the value-set
+    fixpoint bounds them (``DS[HistorianId * 10 + 2991]`` with ``HistorianId``
+    clamped to 0..4).  Every other element holds its power-on value, so which
+    one the index picks is decided by the pointer alone.
+
+    Not covered: a write through an unbounded index into a block past
+    ``_INDIRECT_BLOCK_CAP`` is in no ``writers_of`` entry (``indirect_writes``
+    keeps it), so the elements it reaches do not count as written here.
+    """
+
+    def __init__(self, program: Program, graph: ProgramGraph) -> None:
+        from pyrung.core.validation._common import walk_instructions
+
+        from .value_sets import _ValueSets
+
+        # An unwritten tag is an input to the verifier (any value may reach
+        # it) unless it is readonly, a constant at its default.
+        unwritten = frozenset(
+            name
+            for name, tag in graph.tags.items()
+            if name not in graph.writers_of and not tag.readonly
+        )
+        instructions = list(walk_instructions(program))
+        self._values = _ValueSets(
+            instructions,
+            graph.tags,
+            unwritten,
+            None,
+            follow_indirect_reads=True,
+            declared_inputs=True,
+        )
+        self._written: dict[str, list[Tag]] = defaultdict(list)
+        for name in sorted(graph.writers_of):
+            tag = graph.tags.get(name)
+            block = getattr(tag, "_pyrung_block", None)
+            if tag is not None and block is not None:
+                self._written[block.name].append(tag)
+
+    def tags(self, ref: IndirectRef | IndirectExprRef) -> list[Tag]:
+        block = ref.block
+        changing = {tag.name: tag for tag in self._written.get(block.name, ())}
+        for tag in _input_slots(block):
+            changing.setdefault(tag.name, tag)
+        addresses = self._values.addresses(ref)
+        if addresses is None:
+            return list(changing.values())
+        return [
+            tag
+            for tag in changing.values()
+            if getattr(tag, "_pyrung_block_addr", None) in addresses
+        ]
+
+
+_UNBOUNDED_READS: ContextVar[_UnboundedReads | None] = ContextVar("_UNBOUNDED_READS", default=None)
+
+
+def _unbounded_read_tags(ref: IndirectRef | IndirectExprRef) -> list[Tag] | None:
+    """What *ref* reads in an ``unbounded_index_reads`` build; ``None`` outside one."""
+    reads = _UNBOUNDED_READS.get()
+    return None if reads is None else reads.tags(ref)
+
+
+def _input_slots(block: Block) -> list[Tag]:
+    """The elements of *block* that change with nothing in the program writing them."""
+    if isinstance(block, InputBlock) or block._pyrung_field_external:
+        return _full_block_tags(block)
+    addrs = {addr for addr, entry in block._slot_config.items() if entry.external is True}
+    addrs.update(addr for addr, tag in block._mapped_tags.items() if tag.external)
+    return [block._get_tag(addr) for addr in sorted(addrs) if block.start <= addr <= block.end]
+
+
 def _record_range(
     ranges: dict[str, list[str]],
     block_name: str,
@@ -856,6 +934,8 @@ def _extract_tag_names(
         if isinstance(current, IndirectRef):
             walk(current.pointer)
             tags = _indirect_ref_tags(current.block, current.pointer)
+            if tags is None:
+                tags = _unbounded_read_tags(current)
             if tags is not None:
                 for tag in tags:
                     _register_tag(tag, tag_refs, found)
@@ -869,6 +949,8 @@ def _extract_tag_names(
             if tags is None and _indirect_affine(current.expr) is None:
                 # No pointer range bounds a non-affine index: it may read any element.
                 tags = _full_block_tags(current.block)
+            if not tags:
+                tags = _unbounded_read_tags(current) or tags
             if tags is not None:
                 for tag in tags:
                     _register_tag(tag, tag_refs, found)
@@ -1496,6 +1578,7 @@ def build_program_graph(
     *,
     observed_system: Collection[str] = (),
     observed_tags: Collection[Tag] = (),
+    unbounded_index_reads: bool = False,
 ) -> ProgramGraph:
     """Build the static PDG summary for a Program.
 
@@ -1506,6 +1589,11 @@ def build_program_graph(
     graph variant cached beside the program's own.  *observed_tags* are other
     tags read from outside: the ones no rung reads or writes join ``tags`` the
     same way, with no readers or writers.
+
+    An index with no bounds (``DS[Ptr]``, ``Ptr`` without min/max/choices)
+    registers no reads by default.  *unbounded_index_reads* makes it read the
+    elements of its block that can change, as the verifier needs (see
+    ``_UnboundedReads``).
     """
     from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
@@ -1523,18 +1611,27 @@ def build_program_graph(
     for tag in observed_tags:
         if tag.name not in cached_graph.tags and tag.name not in SYSTEM_TAGS_BY_NAME:
             outside.setdefault(tag.name, tag)
-    if not extra and not outside:
+    if not extra and not outside and not unbounded_index_reads:
         return cached_graph
     variants = cached_graph._observed_variants
     if variants is None:
         variants = cached_graph._observed_variants = {}
     # The variant holds its tags, so their ids stay unique while it is cached.
-    key = (extra, tuple(sorted((name, id(tag)) for name, tag in outside.items())))
+    key = (
+        extra,
+        tuple(sorted((name, id(tag)) for name, tag in outside.items())),
+        unbounded_index_reads,
+    )
     graph = variants.get(key)
     if graph is None:
-        graph = variants[key] = _build_program_graph(
-            program, extra, tuple(outside[name] for name in sorted(outside))
-        )
+        reads = _UnboundedReads(program, cached_graph) if unbounded_index_reads else None
+        token = _UNBOUNDED_READS.set(reads)
+        try:
+            graph = variants[key] = _build_program_graph(
+                program, extra, tuple(outside[name] for name in sorted(outside))
+            )
+        finally:
+            _UNBOUNDED_READS.reset(token)
     return graph
 
 

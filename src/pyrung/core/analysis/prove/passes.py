@@ -866,7 +866,15 @@ def _observed_system_tags(ctx: _PassContext) -> frozenset[str]:
 def _pass_build_graph(ctx: _PassContext) -> None:
     observed = _observed_system_tags(ctx)
     outside = () if ctx.domains_only else ctx.observed_tags
-    ctx.graph = build_program_graph(ctx.program, observed_system=observed, observed_tags=outside)
+    # BFS needs every element an unbounded index may read; the how() prior
+    # (domains_only) keeps PILOT's graph.
+    unbounded = not ctx.domains_only
+    ctx.graph = build_program_graph(
+        ctx.program,
+        observed_system=observed,
+        observed_tags=outside,
+        unbounded_index_reads=unbounded,
+    )
     if (
         not ctx.domains_only
         and FIRST_SCAN not in ctx.graph.tags
@@ -875,7 +883,10 @@ def _pass_build_graph(ctx: _PassContext) -> None:
         # The scan-time min/max ride on the first_scan bit, which then needs
         # a tag of its own.
         ctx.graph = build_program_graph(
-            ctx.program, observed_system=observed | {FIRST_SCAN}, observed_tags=outside
+            ctx.program,
+            observed_system=observed | {FIRST_SCAN},
+            observed_tags=outside,
+            unbounded_index_reads=unbounded,
         )
     ctx.all_exprs = _collect_all_exprs(ctx.program, ctx.graph, scope=ctx.scope)
     if ctx.extra_exprs:

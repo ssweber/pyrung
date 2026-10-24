@@ -1959,3 +1959,120 @@ class TestIndexedAccess:
         result = always(logic, ~hit)
         assert isinstance(result, Intractable)
         assert any("min=-1/max=1998" in hint for hint in result.hints), result.hints
+
+
+class TestUnboundedIndexReads:
+    """An index with no bounds reads every element that can change."""
+
+    def test_written_element_through_unbounded_pointer(self):
+        ptr = Int("Ptr")
+        logic, hit = _indexed_program(lambda ds: ds[ptr], write=lambda ds: ds[1])
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_written_element_through_unbounded_offset(self):
+        """DS[Ptr + 3] reaches DS1 at Ptr = -2, outside DS's own address range."""
+        ptr = Int("Ptr")
+        logic, hit = _indexed_program(lambda ds: ds[ptr + 3], write=lambda ds: ds[1])
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_pointer_rewritten_every_scan(self):
+        start, hit = Bool("Start"), Bool("Hit")
+        inp = Int("In", min=0, max=1)
+        ptr, n = Int("Ptr"), Int("N")
+        ds = Block("DS", TagType.INT, 1, 4)
+
+        with Program(strict=False) as logic:
+            with Rung(start):
+                fill(7, ds.select(3, 4))
+            with Rung():
+                calc(inp + 3, ptr)
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_external_element_nothing_writes(self):
+        hit = Bool("Hit")
+        ptr, n = Int("Ptr", external=True), Int("N")
+        ds = Block("DS", TagType.INT, 1, 4)
+        ds.slot(2, external=True, choices={0: "off", 7: "on"})
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_unwritten_elements_still_prove(self):
+        """Elements nothing writes keep their power-on 0, whichever one Ptr picks."""
+        hit = Bool("Hit")
+        ptr, n = Int("Ptr", external=True), Int("N")
+        ds = Block("DS", TagType.INT, 1, 4)
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        assert isinstance(always(logic, ~hit), Proven)
+
+    @pytest.mark.parametrize(("written", "expected"), [(110, Counterexample), (5, Proven)])
+    def test_pointer_bounded_by_its_writers(self, written, expected):
+        """Ptr = Sel * 10 + 100 reaches DS100 and DS110 only, so DS5 stays out of reach."""
+        start, hit = Bool("Start"), Bool("Hit")
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        ptr, n = Int("Ptr"), Int("N")
+        ds = Block("DS", TagType.INT, 1, 200)
+
+        with Program(strict=False) as logic:
+            with Rung(start):
+                copy(7, ds[written])
+            with Rung():
+                calc(sel * 10 + 100, ptr)
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, expected)
+        if expected is Counterexample:
+            _assert_trace_replays(logic, result, "Hit")
+
+    def test_jump_table_state_machine_is_bounded(self):
+        """State steps through a literal table at DS[State + 10]; a write at DS3 is unreachable."""
+        idle = Int("S_IDLE", default=1, readonly=True)
+        run = Int("S_RUN", default=2, readonly=True)
+        go, hit = Bool("Go", external=True), Bool("Hit")
+        init = Bool("Init")
+        state, idx, n = Int("State"), Int("Idx"), Int("N")
+        ds = Block("DS", TagType.INT, 1, 20)
+
+        with Program(strict=False) as logic:
+            with Rung(~init):
+                copy(run, ds[11])
+                copy(idle, ds[12])
+                copy(7, ds[3])
+                latch(init)
+            with Rung(go):
+                calc(state + 10, idx)
+                copy(ds[idx], state)
+            with Rung():
+                copy(ds[state], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        assert isinstance(always(logic, ~hit), Proven)

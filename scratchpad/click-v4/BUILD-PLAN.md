@@ -112,13 +112,19 @@ Prover (wrong Proven unless noted):
   (`a11909b`, ~+26 s) and tag presets (`e0fe4fe`, ~+13 s), unprofiled.
 
 PDG (shared with prover, PILOT, causal, lints):
-- **Next, wrong Proven:** `DS[Ptr]` / `DS[Ptr + k]` with unbounded Ptr register no reads, so an element
-  only such an index reads looks unread and the prover drops it as combinational (`copy(7, DS[1])` under an
-  input, `copy(DS[Ptr], N)`, `Rung(N == 7)` is Proven; also a pointer rewritten every scan,
-  `calc(In + 3, Ptr)`). Wrong on dev before the affine fix too. A naive full-block fallback blew PackML from
-  58 s to over 300 s (446 DH tags became ND inputs) and cost the tumbler most of its folds; the planned fix is
-  "only elements with a writer" for unbounded reads, prover-side (a `build_program_graph` option) so fold
-  keeps its documented gap. Sweep: `tools/index_sweep.py` (b, e, j still wrong Proven).
+- Unbounded index reads (done): the prover builds `build_program_graph(unbounded_index_reads=True)`
+  (`_pass_build_graph`, BFS only; the how() prior keeps PILOT's graph). `pdg._UnboundedReads`: an index
+  with no declared bounds reads the block's changing elements (written, `external`, `InputBlock`),
+  narrowed by `analysis/value_sets.py` (moved out of `prove/deadness.py`; new opt-ins
+  `follow_indirect_reads` for jump tables, `declared_inputs` for inputs with choices/min/max). PackML
+  needed both opt-ins plus readonly sources counting as init-constant literals (`init_constants.py`) to
+  stay at dev's dimensions and time. **Still open:** a write through an unbounded index into a block past
+  `_INDIRECT_BLOCK_CAP` (1000) is in no `writers_of`, so its elements are not read through an index
+  either (PackML's historian DS3000..3040: written then read the same scan, harmless there). Registering
+  them needs `classify._expand_indirect_tag_names` (about ten callers) to see the value-set addresses,
+  or the slots come back with no domain and PackML goes Intractable. The value sets are also
+  flow-insensitive: a pointer recomputed just before its read still counts its default (the historian
+  reaches DS5/6/9 at `HistIdIdx = 0`).
 - Index mapping (done, affine fix): `pdg.PointerUse` per access (`DS[Ptr + k]`, `DS[k - Ptr]`, integer k),
   `ProgramGraph.pointer_uses`, `opaque_index_blocks` (non-affine index: reads/writes the whole block up to
   `_INDIRECT_BLOCK_CAP`), `index_tags` (every tag an index reads, counted as comparison-influencing so an
