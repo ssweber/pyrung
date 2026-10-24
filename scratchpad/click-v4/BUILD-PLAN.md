@@ -98,12 +98,10 @@ Fold:
   jump isn't refused. PILOT calls `cause()` heavily: check its callers before making it raise.
 
 Prover (wrong Proven unless noted):
-- HIGH, also on dev: three timers where B must be pressed partway through T1. `Rung(A): latch(L1)`,
-  `Rung(B): latch(L2)`, `Rung(L1): on_delay(T1,100)`, `Rung(L1): on_delay(T3,120)`, `Rung(L2): on_delay(T2,50)`,
-  `Rung(T1.Done,~T2.Done): latch(X)`, `Rung(T2.Done,~T3.Done): latch(Y)`, `Rung(X,Y): out(H)` is Proven;
-  brute force reaches H in 11 scans (presets 60/30/80 and 80/40/100 too). Suspect `cycles.covered()`: a
-  revisit ahead on one time-like timer and equal on another is treated as reachable by stuttering, but
-  stuttering advances both. `tools/prove_three_timers_r4.py`.
+- Timer-race stop points (three-timer fix) leave gaps, none seen in a wrong Proven yet: an idle absorbed
+  integer/real counter gets no stop points (rate unknown); a start more than `_STOP_START_DELAY` (2) scans
+  behind its input; a retentive timer frozen at a key at different values is still one first node plus one
+  seed (`cycles.py` "What is left"). Sweep: `tools/race_sweep.py` against brute force.
 - MEDIUM: CTUD, `count_up(c, 4).down(rise(Y))` (classification: don't absorb, or model as bidirectional).
 - Absorption gate blind spot: `_has_forbidden_data_read` misses reads through an unbounded index
   (`_indirect_ref_tags` returns None), so an accumulator mapped into a bank (`LoopIndex = ds[7]`) could be read

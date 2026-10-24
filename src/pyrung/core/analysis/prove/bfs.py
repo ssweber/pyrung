@@ -22,6 +22,7 @@ from .events import (
     _HiddenEventOutcome,
     _maybe_jump_hidden_event,
     _settle_pending,
+    _stop_point_outcome,
 )
 from .independence import _find_bridge_tags
 from .inputs import _FREE_COMBO_CAP, _FreeComboOverflow, _iter_input_assignments
@@ -426,8 +427,8 @@ def _bfs_explore_gen(
         base = _base_tid(tid)
         return base[0] if _has_demoted else base
 
-    def _probe_stutter(key: tuple[Any, ...], hidden: tuple[Any, ...]) -> set[int]:
-        """Hidden accumulators a held-input scan advances while keeping *key*."""
+    def _probe_stutter(key: tuple[Any, ...], hidden: tuple[Any, ...]) -> dict[int, float | None]:
+        """Hidden accumulators a held-input scan advances while keeping *key*, by how much."""
         probe_snap = _snapshot_kernel(kernel, _mutable, _base_keys)
         if _has_demoted:
             for name, value in zip(_demoted, _extract_bprev(kernel), strict=True):
@@ -442,9 +443,9 @@ def _bfs_explore_gen(
         probe_key = _state_key(kernel, live=live_after, threshold_vector=tv)
         visible = key[:-1] if paced else key
         advanced = (
-            cycles.advanced(hidden, cycles.hidden_vector(kernel, key))
+            cycles.stutter_advance(hidden, cycles.hidden_vector(kernel, key))
             if probe_key == visible
-            else set()
+            else {}
         )
         _restore_kernel(kernel, probe_snap)
         return advanced
@@ -506,23 +507,28 @@ def _bfs_explore_gen(
         differing = cycles.differing(base_hidden, hidden)
         if not differing or cycles.covered(tid, base_hidden, hidden):
             return None
-        chain = cycles.cycle_start(parent_key, tid, _base_tid, edge_scans)
-        inherited = cycles.is_pumped(parent_key)
-        pulsed = cycles.counters(cycles.advanced(cycles.node_hidden(parent_key), hidden, differing))
-        if (
-            chain is None
-            and not inherited
-            and not pulsed
-            and not cycles.counters(differing)
-            and cycles.timer_seeded(tid)
-            and cycles.ahead(base_hidden, hidden, differing)
-        ):
-            return None
         probe_key = (tid, tuple(sorted(input_dict.items(), key=lambda kv: kv[0])))
         if not cycles.probed(probe_key):
             cycles.note_timelike(tid, probe_key, _probe_stutter(key, hidden))
             if cycles.covered(tid, base_hidden, hidden):
                 return None
+        chain = cycles.cycle_start(parent_key, tid, _base_tid, edge_scans)
+        inherited = cycles.is_pumped(parent_key)
+        pulsed = cycles.counters(cycles.advanced(cycles.node_hidden(parent_key), hidden, differing))
+        # A timer seed stands for revisits ahead on a timer that holds still at
+        # the key.  One that differs only on time-like accumulators, and that
+        # no kept node stutters to, is a different phase between running
+        # timers (``B`` pressed partway through ``T1``): kept in its own right.
+        if (
+            chain is None
+            and not inherited
+            and not pulsed
+            and not cycles.counters(differing)
+            and not differing <= cycles.timelike(tid)
+            and cycles.timer_seeded(tid)
+            and cycles.ahead(base_hidden, hidden, differing)
+        ):
+            return None
         pulse = differing - cycles.timelike(tid)
         pulsed &= pulse
         x_hidden = hidden
@@ -655,6 +661,58 @@ def _bfs_explore_gen(
         )
         if x_snap is not None:
             _restore_kernel(kernel, x_snap)
+        return None
+
+    def _enqueue_stop_point(
+        *,
+        key: tuple[Any, ...],
+        input_dict: dict[str, Any],
+        edge_scans: int,
+        child_flipped: bool,
+        parent_key: Any,
+        bprev_dict: dict[str, Any],
+        depth: int,
+    ) -> Intractable | None:
+        """Keep a plateau partway to a crossing as a node beside its key's node.
+
+        Stuttering reaches it from the node, so as a revisit it would be
+        covered; but an input flip from here can start a timer that ties a
+        running one, which a flip at the node or at the crossing cannot
+        (``events._stop_point_outcome``).
+        """
+        bprev = _extract_bprev(kernel)
+        tid = _trace_id(key, bprev)
+        base_hidden = cycles.node_hidden(tid)
+        hidden = cycles.hidden_vector(kernel, key)
+        if base_hidden is None or hidden is None:
+            return None
+        if not cycles.claim_stop(tid, base_hidden, hidden):
+            return None
+        refined_tid = (_REFINED, tid, hidden)
+        cycles.refined_nodes += 1
+        if len(visited) + cycles.refined_nodes > max_states:
+            return Intractable(
+                reason="max_states exceeded",
+                dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+                estimated_space=len(visited) + cycles.refined_nodes,
+                hints=_build_intractable_hints(context),
+                journal=context.journal,
+            )
+        if parent_map is not None:
+            parent_map[refined_tid] = _ParentLink(
+                parent_key, input_dict, edge_scans, (), prev=bprev_dict
+            )
+        # A multi-scan link: no cycle runs through it (``cycle_start``).
+        cycles.record_node(refined_tid, parent_key, -1, hidden, (input_dict, bprev_dict))
+        queue.append(
+            (
+                _snapshot_kernel(kernel, _mutable, _base_keys),
+                depth + 1,
+                refined_tid,
+                child_flipped,
+                bprev,
+            )
+        )
         return None
 
     queue: deque[tuple[_KernelSnapshot, int, tuple[Any, ...], bool, tuple[Any, ...]]] = deque()
@@ -823,6 +881,15 @@ def _bfs_explore_gen(
                 journal=context.journal,
             )
 
+        def _stop_point(
+            key: tuple[Any, ...], before_snap: _KernelSnapshot
+        ) -> _HiddenEventOutcome | None:
+            # A plateau needs the cycle tracker to be kept beside its key's node.
+            if not cycles_active or (paced and key[-1]):
+                return None
+            visible = key[:-1] if paced else key
+            return _stop_point_outcome(context, kernel, before_snap, visible, edge_comp)
+
         def _collect_hidden_outcomes(
             key: tuple[Any, ...],
             before_snap: _KernelSnapshot,
@@ -866,6 +933,9 @@ def _bfs_explore_gen(
                         edge_comp,
                         hidden_event_cache,
                     )
+                    stop = _stop_point(key, before_snap)
+                    if stop is not None:
+                        jumped = [*jumped, stop]
                     return jumped or None
                 return None
 
@@ -897,6 +967,9 @@ def _bfs_explore_gen(
                         hidden_event_cache,
                     )
                 )
+                stop = _stop_point(key, before_snap)
+                if stop is not None:
+                    event_outcomes.append(stop)
             return event_outcomes or None
 
         def _enqueue_current_successor(
@@ -1073,6 +1146,20 @@ def _bfs_explore_gen(
                 _record_projection_for_current(branch_key, seen_outcomes)
 
                 if not is_new_branch:
+                    continue
+
+                if outcome.stop_point:
+                    intractable = _enqueue_stop_point(
+                        key=branch_key,
+                        input_dict=branch_input_dict,
+                        edge_scans=branch_edge_scans,
+                        child_flipped=child_flipped,
+                        parent_key=parent_key,
+                        bprev_dict=bprev_dict,
+                        depth=depth,
+                    )
+                    if intractable is not None:
+                        return intractable
                     continue
 
                 intractable = _enqueue_current_successor(

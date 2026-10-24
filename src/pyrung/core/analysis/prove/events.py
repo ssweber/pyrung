@@ -13,6 +13,23 @@ same PENDING state repeatedly.  The event scheduler accelerates this:
    work remains.
 4. ``_maybe_jump_hidden_event`` — when BFS revisits a known PENDING
    state, jump directly to the crossed successor.
+5. ``_stop_point_outcome`` — the plateau partway to that crossing where an
+   input that starts another timer would race a running one to a tie.
+
+Stop points (races between timers started at different times):
+A jump skips every plateau between the node and the crossing, so an input
+flip is only ever tried at the node and at the crossing.  When the flip
+starts another timer, *when* it comes decides which of the two crosses
+first: ``Rung(A): latch(L1)``, ``Rung(B): latch(L2)``, ``T1`` (100) and
+``T3`` (120) under ``L1``, ``T2`` (50) under ``L2``; ``T2`` lands between
+the other two only when ``B`` comes while ``T1`` is between 50 and 70.
+Within one key the running accumulators advance together, so the order of
+future crossings changes only where a running source and an idle one would
+cross on the same scan: ``s_i - m_j`` scans ahead, for a source ``i`` that
+crosses in ``s_i`` scans and an idle one ``j`` that needs ``m_j`` scans once
+started.  The BFS gets a plateau node on each side of every such tie (and on
+it), for a start that takes up to ``_STOP_START_DELAY`` scans to reach the
+idle accumulator, and tries every input flip there as at any node.
 
 Abstract thresholds (dynamic presets):
 ``_materialize_abstract_threshold_outcome`` creates a representative
@@ -106,6 +123,9 @@ class _HiddenEventOutcome:
     pre_event_snapshot: _KernelSnapshot | None = None
     caveats: tuple[str, ...] = ()
     event_inputs: dict[str, Any] | None = None
+    # A plateau partway to a crossing, still at the node's key (see
+    # ``_stop_point_outcome``): kept as a node of its own, not as a revisit.
+    stop_point: bool = False
 
 
 @dataclass(frozen=True)
@@ -1253,6 +1273,147 @@ def _settle_pending(
     if outcomes and active_cache is not None and cache_key is not None:
         active_cache._settle_cache[cache_key] = tuple(outcomes)
     return outcomes
+
+
+# Scans a flip may take to start an idle timer or counter (a latch, then the
+# rung that runs it, may sit a scan or two behind the input).
+_STOP_START_DELAY = 2
+_IDLE_COUNTER_KINDS = frozenset((_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN))
+
+
+def _idle_scans_to_cross(
+    context: _ExploreContext,
+    kernel: ReplayKernel,
+    key: tuple[Any, ...],
+    running: set[str],
+) -> list[int] | None:
+    """Scans each idle timer or counter needs to cross a threshold once started.
+
+    Idle: its Done is not pending in *key*, it does not advance on a held
+    scan, and it is still below the threshold.  None when one of them cannot
+    be timed (no single per-scan quantum, a preset that does not resolve).
+    """
+    needs: list[int] = []
+    for spec in context.done_event_specs:
+        if spec.acc_name in running or key[spec.state_index] == PENDING:
+            continue
+        if spec.kind not in (_TIMER_DELAY_KINDS | _IDLE_COUNTER_KINDS):
+            continue
+        if spec.kind == _DONE_KIND_TIME_DRUM:
+            continue
+        preset = _resolve_done_preset(spec.preset, spec.preset_memory_key, kernel)
+        if preset is None:
+            return None
+        if spec.kind in _TIMER_DELAY_KINDS:
+            acc, frac = _timer_reading(kernel, spec.acc_name)
+            if acc >= preset:
+                continue
+            quantum = context.timer_quanta.get(spec.acc_name)
+            if quantum is None or not quantum > 0.0:
+                return None
+            scans = _timer_scans_to_reach(acc, frac, quantum, preset)
+            if scans is None:
+                continue
+        else:
+            acc = int(kernel.tags.get(spec.acc_name, 0) or 0)
+            progress = acc if spec.kind == _DONE_KIND_COUNT_UP else -acc
+            if progress >= preset:
+                continue
+            scans = preset - progress
+        needs.append(scans)
+
+    vector_offset = len(context.stateful_names)
+    for spec in context.threshold_event_specs:
+        if spec.acc_name in running or spec.mode != _THRESHOLD_MODE_EXACT:
+            continue
+        if spec.kind not in _TIMER_DELAY_KINDS or spec.kind == _DONE_KIND_TIME_DRUM:
+            continue
+        if key[vector_offset + spec.vector_index][spec.atom_index]:
+            continue
+        value = _threshold_value(kernel, spec.threshold)
+        if not _is_numeric_literal(value):
+            return None
+        target = _timer_integer_target(float(value), spec.form)
+        quantum = context.timer_quanta.get(spec.acc_name)
+        if target is None or quantum is None or not quantum > 0.0:
+            return None
+        acc, frac = _timer_reading(kernel, spec.acc_name)
+        if acc >= target:
+            continue
+        scans = _timer_scans_to_reach(acc, frac, quantum, target)
+        if scans is not None:
+            needs.append(scans)
+    return needs
+
+
+def _stop_point_outcome(
+    context: _ExploreContext,
+    kernel: ReplayKernel,
+    snap: _KernelSnapshot,
+    new_key: tuple[Any, ...],
+    edge_comp: _EdgeCompressor,
+) -> _HiddenEventOutcome | None:
+    """The nearest plateau before the next crossing where a started timer could tie.
+
+    *kernel* is one held scan past the node in *snap*, back at its key.  The
+    outcome is the plateau that many held scans further on (0: *kernel*
+    itself, whose own revisit would be covered), still at that key, with every
+    running accumulator advanced; None when no tie falls before the crossing.
+    See the module docstring.
+    """
+    if not context.done_event_specs and not context.threshold_event_specs:
+        return None
+    all_sources = _collect_all_pending_sources(context, kernel, snap, new_key)
+    if not all_sources:
+        return None
+    nearest = min(src.scans for src in all_sources.values())
+    running = {src.acc_name for src in all_sources.values()}
+    needs = _idle_scans_to_cross(context, kernel, new_key, running)
+    if needs is None:
+        # An idle source that cannot be timed: stop at every scan.
+        stop = 0
+    else:
+        # A flip on the scan after a plateau ``e`` scans on starts an idle
+        # source that crosses ``e + delay + m_j`` scans on; a running one
+        # crosses ``s_i`` scans on.  Plateaus on, before and after each tie.
+        found: int | None = None
+        for s_i in {src.scans for src in all_sources.values()}:
+            for m_j in needs:
+                for offset in range(-_STOP_START_DELAY - 1, 2):
+                    candidate = s_i - m_j + offset
+                    if 0 <= candidate < nearest and (found is None or candidate < found):
+                        found = candidate
+        if found is None:
+            return None
+        stop = found
+    base_snap = _snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys)
+    if stop:
+        advanced: set[tuple[str, str]] = set()
+        for src in all_sources.values():
+            acc_key = (src.kind, src.acc_name)
+            if acc_key in advanced:
+                continue
+            advanced.add(acc_key)
+            _advance_hidden_progress(
+                src.kind,
+                src.acc_name,
+                stop - 1,
+                snap,
+                kernel,
+                context.timer_quanta.get(src.acc_name),
+            )
+        _step_kernel(context, kernel)
+    key = edge_comp.state_key(kernel)
+    outcome = None
+    if key == new_key:
+        outcome = _HiddenEventOutcome(
+            snapshot=_snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys),
+            key=key,
+            additional_scans=stop,
+            stop_point=True,
+        )
+    _restore_kernel(kernel, base_snap)
+    return outcome
 
 
 def _maybe_jump_hidden_event(

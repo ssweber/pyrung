@@ -1791,3 +1791,57 @@ class TestEqNeOtherValue:
         assert isinstance(result, Counterexample)
         value = _replayed_value(logic, result, n)
         assert isinstance(value, int) and value != 0
+
+
+# ===================================================================
+# Timer races started at different times
+#
+# A hidden-event jump leaps from a node to the next crossing, so an input
+# flip was tried only there and at the node.  When the flip starts another
+# timer, when it comes decides which timer crosses first.  The jump now
+# also stops where the started timer would tie a running one.
+# ===================================================================
+
+
+def _three_timer_race(p1, p2, p3):
+    """H needs B pressed while T1 is between p1 - p2 and p3 - p2."""
+    a = Bool("A", external=True)
+    b = Bool("B", external=True)
+    l1, l2, x, y, h = (Bool(name) for name in ("L1", "L2", "X", "Y", "H"))
+    t1, t2, t3 = (Timer.clone(name) for name in ("T1", "T2", "T3"))
+    with Program(strict=False) as logic:
+        with Rung(a):
+            latch(l1)
+        with Rung(b):
+            latch(l2)
+        with Rung(l1):
+            on_delay(t1, preset=p1)
+        with Rung(l1):
+            on_delay(t3, preset=p3)
+        with Rung(l2):
+            on_delay(t2, preset=p2)
+        with Rung(t1.Done, ~t2.Done):
+            latch(x)
+        with Rung(t2.Done, ~t3.Done):
+            latch(y)
+        with Rung(x, y):
+            out(h)
+    return logic, h
+
+
+class TestTimerRaceStopPoints:
+    @pytest.mark.parametrize(
+        "presets",
+        [(100, 50, 120), (60, 30, 80), (80, 40, 100), (100, 90, 120)],
+    )
+    def test_window_partway_through_a_running_timer(self, presets):
+        logic, h = _three_timer_race(*presets)
+        result = always(logic, ~h)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "H")
+
+    @pytest.mark.parametrize("presets", [(100, 50, 110), (100, 50, 100), (70, 20, 80)])
+    def test_window_too_narrow_or_closed_still_proves(self, presets):
+        """No press time puts T2 strictly between T1 and T3 (brute force agrees)."""
+        logic, h = _three_timer_race(*presets)
+        assert isinstance(always(logic, ~h), Proven)

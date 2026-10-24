@@ -18,12 +18,17 @@ reachable crossing (``N >= 3``, the timer's Done) is never seen.
 - The *hidden vector* of a state is the normalized progress of every hidden
   accumulator that still has an uncrossed threshold at its key.
 - A revisit is *covered*, and dropped, when a node kept at its key has every
-  counter equal and every *time-like* accumulator at or below the revisit's:
-  stepping that node with its inputs held returns to the same key and
-  advances those, so it reaches the revisit by stuttering, and its self-loop
-  jump schedules the crossing (the existing timer treatment).  A revisit
-  *behind* on a time-like accumulator is not covered: it has more time left
-  before a threshold (a timer started later on another branch).
+  counter equal and reaches the revisit's *time-like* accumulators by
+  stuttering: one number of held-input scans, at each accumulator's per-scan
+  advance (measured by the probe), takes the node's values to the revisit's.
+  Stepping that node with its inputs held returns to the same key, so it
+  reaches the revisit, and its self-loop jump schedules the crossing (the
+  existing timer treatment).  Stuttering advances every time-like
+  accumulator together: a revisit ahead on one timer and level with another
+  (``B`` pressed partway through a timer started with ``A``) is not covered,
+  since no kept node gets there.  Nor is one *behind* on a time-like
+  accumulator: it has more time left before a threshold (a timer started
+  later on another branch).
 - When the revisit descends from a node with the same key, the path between
   them is a cycle.  If every link on it replays by holding its inputs for its
   scans (one scan, or a hidden-event jump with no caveat, as a self-resetting
@@ -271,10 +276,45 @@ def _max_repeats(value: float, delta: float, limits: list[tuple[float, bool]]) -
     return best or 0
 
 
-def _at_or_below(kept: Any, value: Any) -> bool:
-    if kept is None or value is None:
-        return kept is value
-    return kept <= value
+# Timer progress carries a float fraction: advances and scan counts are
+# compared at this precision (``_progress_value`` rounds the same way).
+_RATE_DIGITS = 9
+_STEP_TOLERANCE = 1e-6
+
+
+def _round_rate(delta: Any) -> float:
+    return round(float(delta), _RATE_DIGITS)
+
+
+def _stutters_to(
+    kept: tuple[Any, ...],
+    hidden: tuple[Any, ...],
+    timelike: Any,
+    rates: dict[int, float | None],
+) -> bool:
+    """Whether one number of held scans takes *kept* to *hidden* on every time-like slot."""
+    steps: int | None = None
+    for i in timelike:
+        a, b = kept[i], hidden[i]
+        if a is None or b is None:
+            if a is not b:
+                return False
+            continue
+        if a == b:
+            needed = 0
+        else:
+            rate = rates.get(i)
+            if rate is None or rate <= 0:
+                return False
+            exact = (b - a) / rate
+            needed = round(exact)
+            if needed < 0 or abs(exact - needed) > _STEP_TOLERANCE:
+                return False
+        if steps is None:
+            steps = needed
+        elif steps != needed:
+            return False
+    return True
 
 
 def _max_timer_repeats(
@@ -319,6 +359,7 @@ class _CycleTracker:
         "_step",
         "_sources",
         "_timelike",
+        "_rates",
         "_timer_seeded",
         "_pumped",
         "_probed",
@@ -355,6 +396,9 @@ class _CycleTracker:
             Any, tuple[frozenset[int], dict[tuple[Any, ...], list[tuple[Any, ...]]]]
         ] = {}
         self._timelike: dict[Any, set[int]] = {}
+        # Per-scan advance of each time-like accumulator at the key, or None
+        # when two probes there measured different advances.
+        self._rates: dict[Any, dict[int, float | None]] = {}
         self._probed: set[tuple[Any, ...]] = set()
         self._timer_seeded: set[Any] = set()
         self._pumped: set[Any] = set()
@@ -403,10 +447,11 @@ class _CycleTracker:
     def covered(self, base_tid: Any, base_hidden: tuple[Any, ...], hidden: tuple[Any, ...]) -> bool:
         """Whether a node kept at the key reaches *hidden* by stuttering there.
 
-        Every counter equal, and every time-like accumulator at or below
-        *hidden*'s: held inputs keep the key and advance those, so the kept
-        node gets there.  One *behind* on a time-like accumulator is not
-        covered: it has more time left before a threshold.
+        Every counter equal, and one number of held-input scans taking every
+        time-like accumulator from the node's value to *hidden*'s: held inputs
+        keep the key and advance them all together, so the kept node gets
+        there.  One *behind* on a time-like accumulator is not covered: it has
+        more time left before a threshold.
         """
         timelike = self._timelike.get(base_tid, ())
         projection = self._projection(timelike, hidden)
@@ -416,8 +461,9 @@ class _CycleTracker:
             candidates = (base_hidden,)
         else:
             return False
+        rates = self._rates.get(base_tid, {})
         for node in candidates:
-            if all(_at_or_below(node[i], hidden[i]) for i in timelike):
+            if _stutters_to(node, hidden, timelike, rates):
                 return True
         return False
 
@@ -490,10 +536,33 @@ class _CycleTracker:
         """The node -> hidden vector map, for the BFS's cheap revisit filter."""
         return self._hidden
 
-    def note_timelike(self, base_tid: Any, probe_key: tuple[Any, ...], advanced: set[int]) -> None:
+    def note_timelike(
+        self, base_tid: Any, probe_key: tuple[Any, ...], advanced: dict[int, float | None]
+    ) -> None:
+        """Record the accumulators one held scan advanced at the key, and by how much."""
         self._probed.add(probe_key)
         if advanced:
             self._timelike.setdefault(base_tid, set()).update(advanced)
+            rates = self._rates.setdefault(base_tid, {})
+            for i, rate in advanced.items():
+                if i in rates and rates[i] != rate:
+                    rates[i] = None
+                else:
+                    rates.setdefault(i, rate)
+
+    def stutter_advance(
+        self, before: tuple[Any, ...], after: tuple[Any, ...] | None
+    ) -> dict[int, float | None]:
+        """Accumulators that grew over one held scan, each with its advance.
+
+        None for one that grew from nothing: its advance is unknown.
+        """
+        if after is None:
+            return {}
+        return {
+            i: None if before[i] is None else _round_rate(after[i] - before[i])
+            for i in self.advanced(before, after)
+        }
 
     def probed(self, probe_key: tuple[Any, ...]) -> bool:
         return probe_key in self._probed
@@ -534,6 +603,21 @@ class _CycleTracker:
         self._kept(base_tid, base_hidden).setdefault(self._projection(timelike, hidden), []).append(
             hidden
         )
+        return True
+
+    def claim_stop(
+        self, base_tid: Any, base_hidden: tuple[Any, ...], hidden: tuple[Any, ...]
+    ) -> bool:
+        """Record a stop-point plateau with *hidden* at *base_tid*; False if already kept.
+
+        Not checked against ``covered``: stuttering reaches a plateau, but
+        flips from it are what it is kept for (``events._stop_point_outcome``).
+        """
+        timelike = self._timelike.get(base_tid, ())
+        nodes = self._kept(base_tid, base_hidden).setdefault(self._projection(timelike, hidden), [])
+        if hidden in nodes:
+            return False
+        nodes.append(hidden)
         return True
 
     def cycle_start(
