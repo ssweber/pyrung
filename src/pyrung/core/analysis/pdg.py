@@ -25,6 +25,7 @@ from pyrung.core.memory_block import (
 from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
 
+from .affine import extract_affine_expression
 from .write_sites import instruction_fault_writes, instruction_write_targets
 
 if TYPE_CHECKING:
@@ -48,6 +49,32 @@ class IndirectWriteRef:
     pointer_tag: str
     source_tags: frozenset[str]
     block: Block
+
+
+@dataclass(frozen=True)
+class PointerUse:
+    """One indexed access ``block[scale * pointer + offset]``.
+
+    ``DS[Ptr]`` is ``scale=1, offset=0``; ``DS[Ptr + 2]`` and ``DS[4 - Ptr]``
+    are the affine forms ``_indirect_affine`` accepts.
+    """
+
+    pointer: str
+    block: str
+    start: int
+    end: int
+    scale: int = 1
+    offset: int = 0
+
+    def address(self, value: Any) -> int:
+        """The block address the access resolves to when the pointer is *value*."""
+        return int(self.scale * value + self.offset)
+
+    def pointer_span(self) -> tuple[int, int]:
+        """The pointer values whose address lands in ``start..end``."""
+        if self.scale == 1:
+            return self.start - self.offset, self.end - self.offset
+        return self.offset - self.end, self.offset - self.start
 
 
 class TagRole(Enum):
@@ -131,6 +158,14 @@ class ProgramGraph:
     block_ranges: dict[str, list[str]]  # range label → member tag names
     pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
     indirect_writes: tuple[IndirectWriteRef, ...] = ()
+    # Every indexed access with a single affine pointer, and the blocks indexed
+    # by any other expression (``DS[Ptr * 2]``), whose elements no pointer
+    # range bounds.
+    pointer_uses: tuple[PointerUse, ...] = ()
+    opaque_index_blocks: frozenset[str] = frozenset()
+    # Every tag an index reads: pointers, the tags of index expressions, and
+    # ``IndirectBlockRange`` bounds.
+    index_tags: frozenset[str] = frozenset()
     # Fault flags whose implicit writes (``RungNode.implicit_writes``) count as
     # writes here: the ones a rung reads, plus any the caller observes
     # (``build_program_graph(observed_system=...)``).  A fault write nothing
@@ -671,21 +706,66 @@ def _full_block_tags(block: Block) -> list[Tag]:
     return [block._get_tag(addr) for addr in range(block.start, block.end + 1)]
 
 
-def _indirect_ref_tags(block: Block, pointer: Tag) -> list[Tag] | None:
+def _indirect_ref_tags(
+    block: Block, pointer: Tag, scale: int = 1, offset: int = 0
+) -> list[Tag] | None:
     """Narrow an indirect block access using pointer tag metadata.
 
-    Returns the bounded tag list when choices or min/max constrain the
-    pointer, or ``None`` when the address is statically unbounded.
+    The access is ``block[scale * pointer + offset]``.  Returns the bounded tag
+    list when choices or min/max constrain the pointer, or ``None`` when the
+    address is statically unbounded.
     """
     if pointer.choices is not None:
-        addrs = sorted(int(k) for k in pointer.choices if block.start <= int(k) <= block.end)
+        addrs = sorted(
+            {
+                addr
+                for addr in (int(scale * float(k) + offset) for k in pointer.choices)
+                if block.start <= addr <= block.end
+            }
+        )
         return [block._get_tag(a) for a in addrs]
     if pointer.min is not None and pointer.max is not None:
-        lo = max(int(pointer.min), block.start)
-        hi = min(int(pointer.max), block.end)
+        # int() truncates monotonically, so the end points bound every address.
+        lo_v, hi_v = sorted((scale * pointer.min + offset, scale * pointer.max + offset))
+        lo = max(int(lo_v), block.start)
+        hi = min(int(hi_v), block.end)
         if lo <= hi:
             return _block_tags(block.select(lo, hi))
     return None
+
+
+def _indirect_affine(expr: Any) -> tuple[Tag, int, int] | None:
+    """``(pointer, scale, offset)`` when *expr* is ``scale * pointer + offset``.
+
+    Accepts a bare tag and the single-tag forms of ``extract_affine_expression``
+    with an integer offset; ``None`` for anything else (``Ptr * 2``,
+    ``Ptr + Other``), whose addresses no pointer range bounds.
+    """
+    from pyrung.core.expression import TagExpr
+
+    if isinstance(expr, Tag):
+        return expr, 1, 0
+    if isinstance(expr, TagExpr):
+        return expr.tag, 1, 0
+    affine = extract_affine_expression(expr)
+    if affine is None:
+        return None
+    name, scale, offset = affine
+    if isinstance(offset, bool) or not isinstance(offset, int):
+        return None
+    pointer = _indirect_expr_base_tag(expr)
+    if pointer is None or pointer.name != name:
+        return None
+    return pointer, scale, offset
+
+
+def _indirect_expr_tags(block: Block, expr: Any) -> list[Tag] | None:
+    """The bounded tags ``block[expr]`` can touch, or ``None`` when unbounded."""
+    affine = _indirect_affine(expr)
+    if affine is None:
+        return None
+    pointer, scale, offset = affine
+    return _indirect_ref_tags(block, pointer, scale, offset)
 
 
 def _indirect_expr_base_tag(expr: Any) -> Tag | None:
@@ -785,8 +865,10 @@ def _extract_tag_names(
 
         if isinstance(current, IndirectExprRef):
             walk(current.expr)
-            base = _indirect_expr_base_tag(current.expr)
-            tags = _indirect_ref_tags(current.block, base) if base is not None else None
+            tags = _indirect_expr_tags(current.block, current.expr)
+            if tags is None and _indirect_affine(current.expr) is None:
+                # No pointer range bounds a non-affine index: it may read any element.
+                tags = _full_block_tags(current.block)
             if tags is not None:
                 for tag in tags:
                     _register_tag(tag, tag_refs, found)
@@ -888,8 +970,7 @@ def _extract_write_targets(
 
         if isinstance(current, IndirectExprRef):
             reads.update(_extract_tag_names(current.expr, tag_refs, ranges=ranges))
-            base = _indirect_expr_base_tag(current.expr)
-            tags = _indirect_ref_tags(current.block, base) if base is not None else None
+            tags = _indirect_expr_tags(current.block, current.expr)
             if tags is None:
                 tags = _full_block_tags(current.block)
             for tag in tags:
@@ -1551,6 +1632,7 @@ def _build_program_graph(
 
     _augment_return_early_guards(rung_nodes, program, tag_refs)
     frozen_nodes = tuple(rung_nodes)
+    pointer_tags, pointer_uses, opaque_index_blocks, index_tags = _collect_pointer_uses(program)
 
     graph = ProgramGraph(
         rung_nodes=frozen_nodes,
@@ -1561,8 +1643,11 @@ def _build_program_graph(
         writers_of={name: frozenset(indices) for name, indices in writers_of_mut.items()},
         tags=dict(sorted(tag_refs.items())),
         block_ranges=range_acc,
-        pointer_tags=_collect_pointer_tags(program),
+        pointer_tags=pointer_tags,
         indirect_writes=indirect_writes,
+        pointer_uses=pointer_uses,
+        opaque_index_blocks=opaque_index_blocks,
+        index_tags=index_tags,
         fault_writes=fault_writes,
         unread_fault_writes=frozenset(implicit) - fault_writes,
     )
@@ -1573,8 +1658,16 @@ def _build_program_graph(
     return graph
 
 
-def _visit_indirect_refs(obj: Any, visit: Callable[[Any], None], seen: set[int]) -> None:
-    """Call *visit* on every IndirectRef/IndirectExprRef reachable from *obj*."""
+def _visit_indirect_refs(
+    obj: Any,
+    visit: Callable[[Any], None],
+    seen: set[int],
+    visit_range: Callable[[IndirectBlockRange], None] | None = None,
+) -> None:
+    """Call *visit* on every IndirectRef/IndirectExprRef reachable from *obj*.
+
+    *visit_range*, when given, is also called on every ``IndirectBlockRange``.
+    """
     if obj is None or isinstance(
         obj,
         (bool, int, float, str, bytes, FunctionType, BuiltinFunctionType, MethodType),
@@ -1587,27 +1680,29 @@ def _visit_indirect_refs(obj: Any, visit: Callable[[Any], None], seen: set[int])
     if isinstance(obj, (IndirectRef, IndirectExprRef)):
         visit(obj)
         return
+    if visit_range is not None and isinstance(obj, IndirectBlockRange):
+        visit_range(obj)
     if isinstance(obj, (list, tuple, set, frozenset)):
         for item in obj:
-            _visit_indirect_refs(item, visit, seen)
+            _visit_indirect_refs(item, visit, seen, visit_range)
         return
     if isinstance(obj, dict):
         for v in obj.values():
-            _visit_indirect_refs(v, visit, seen)
+            _visit_indirect_refs(v, visit, seen, visit_range)
         return
     if isinstance(obj, Instruction):
         fields = _instruction_fields(obj)
         if fields is not None:
             for field_name in fields:
-                _visit_indirect_refs(getattr(obj, field_name, None), visit, seen)
+                _visit_indirect_refs(getattr(obj, field_name, None), visit, seen, visit_range)
             return
     if isinstance(obj, Condition):
         for _child_name, child_value in _condition_children(obj):
-            _visit_indirect_refs(child_value, visit, seen)
+            _visit_indirect_refs(child_value, visit, seen, visit_range)
         return
     if hasattr(obj, "__dict__"):
         for v in vars(obj).values():
-            _visit_indirect_refs(v, visit, seen)
+            _visit_indirect_refs(v, visit, seen, visit_range)
 
 
 def indexed_blocks(obj: Any) -> frozenset[str]:
@@ -1617,37 +1712,58 @@ def indexed_blocks(obj: Any) -> frozenset[str]:
     return frozenset(out)
 
 
-def _collect_pointer_tags(program: Program) -> dict[str, tuple[str, int, int]]:
-    """Find tags used as pointers in IndirectRef/IndirectExprRef accesses."""
+def _collect_pointer_uses(
+    program: Program,
+) -> tuple[dict[str, tuple[str, int, int]], tuple[PointerUse, ...], frozenset[str], frozenset[str]]:
+    """Find the indexed accesses in a program.
+
+    Returns ``pointer_tags`` (each pointer's first block span), every affine
+    ``PointerUse``, the blocks indexed by a non-affine expression, and every tag
+    an index reads.
+    """
     from pyrung.core.validation._common import walk_instructions
 
     pointers: dict[str, tuple[str, int, int]] = {}
+    uses: dict[PointerUse, None] = {}
+    opaque: set[str] = set()
+    index_tags: set[str] = set()
+    scratch_refs: dict[str, Tag] = {}
 
     def _visit(ref: Any) -> None:
-        span = (ref.block.name, ref.block.start, ref.block.end)
+        block = ref.block
         if isinstance(ref, IndirectRef):
-            pointers.setdefault(ref.pointer.name, span)
+            index_tags.update(_extract_tag_names(ref.pointer, scratch_refs))
+            affine: tuple[Tag, int, int] | None = (ref.pointer, 1, 0)
+        else:
+            index_tags.update(_extract_tag_names(ref.expr, scratch_refs))
+            affine = _indirect_affine(ref.expr)
+        if affine is None:
+            opaque.add(block.name)
             return
-        base = _indirect_expr_base_tag(ref.expr)
-        if base is not None:
-            pointers.setdefault(base.name, span)
+        pointer, scale, offset = affine
+        pointers.setdefault(pointer.name, (block.name, block.start, block.end))
+        uses.setdefault(PointerUse(pointer.name, block.name, block.start, block.end, scale, offset))
+
+    def _visit_range(ref: IndirectBlockRange) -> None:
+        index_tags.update(_extract_tag_names(ref.start_expr, scratch_refs))
+        index_tags.update(_extract_tag_names(ref.end_expr, scratch_refs))
 
     def _scan_rung_conditions(rung: Rung) -> None:
         for cond in rung._conditions:
-            _visit_indirect_refs(cond, _visit, seen)
+            _visit_indirect_refs(cond, _visit, seen, _visit_range)
         for branch in rung._branches:
             _scan_rung_conditions(branch)
 
     seen: set[int] = set()
     for instr in walk_instructions(program):
-        _visit_indirect_refs(instr, _visit, seen)
+        _visit_indirect_refs(instr, _visit, seen, _visit_range)
     for rung in program.rungs:
         _scan_rung_conditions(rung)
     for subroutine_rungs in program.subroutines.values():
         for rung in subroutine_rungs:
             _scan_rung_conditions(rung)
 
-    return pointers
+    return pointers, tuple(uses), frozenset(opaque), frozenset(index_tags)
 
 
 def _named_write_dests(instr: Any) -> list[str]:
@@ -1722,12 +1838,12 @@ def _collect_indirect_writes(
                     continue
                 pointer_name = dest.pointer.name
             else:
-                base = _indirect_expr_base_tag(dest.expr)
-                if base is None:
+                affine = _indirect_affine(dest.expr)
+                if affine is None:
                     continue
-                if _indirect_ref_tags(block, base) is not None:
+                if _indirect_ref_tags(block, *affine) is not None:
                     continue
-                pointer_name = base.name
+                pointer_name = affine[0].name
             source_tags: set[str] = set()
             for read_field in getattr(cls, "_reads", ()):
                 source_tags.update(_extract_tag_names(getattr(instr, read_field), tag_refs))

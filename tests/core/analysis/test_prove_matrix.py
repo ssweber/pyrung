@@ -1845,3 +1845,117 @@ class TestTimerRaceStopPoints:
         """No press time puts T2 strictly between T1 and T3 (brute force agrees)."""
         logic, h = _three_timer_race(*presets)
         assert isinstance(always(logic, ~h), Proven)
+
+
+# ===================================================================
+# Indexed access: block[ptr], block[ptr + k], block[k - ptr]
+#
+# The address is the pointer mapped through the affine index, not the
+# pointer itself; an unwritten pointer whose element feeds a comparison
+# is an input, not constant storage pinned to its default; an index that
+# is not affine in one pointer may touch any element.
+# ===================================================================
+
+
+def _indexed_program(index, *, fill_range=(3, 4), write=None):
+    """Start fills block elements with 7; Hit latches when block[index] reads 7."""
+    start = Bool("Start")
+    hit = Bool("Hit")
+    n = Int("N")
+    ds = Block("DS", TagType.INT, 1, 6)
+
+    with Program(strict=False) as logic:
+        with Rung(start):
+            if write is None:
+                fill(7, ds.select(*fill_range))
+            else:
+                copy(7, write(ds))
+        with Rung():
+            copy(index(ds), n)
+        with Rung(n == 7):
+            latch(hit)
+    return logic, hit
+
+
+class TestIndexedAccess:
+    def test_bounded_pointer_is_an_input(self):
+        """An unwritten Ptr in 3..4 reaches DS3 even though its default is 0."""
+        ptr = Int("Ptr", min=3, max=4)
+        logic, hit = _indexed_program(lambda ds: ds[ptr])
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    @pytest.mark.parametrize(
+        ("index", "fill_range", "expected"),
+        [
+            # Ptr in 1..2 reads DS3..4 through the +2 offset.
+            (lambda ds, p: ds[p + 2], (3, 4), Counterexample),
+            (lambda ds, p: ds[p + 2], (1, 2), Proven),
+            # 6 - Ptr reads DS4..5.
+            (lambda ds, p: ds[6 - p], (5, 5), Counterexample),
+            (lambda ds, p: ds[6 - p], (1, 3), Proven),
+        ],
+    )
+    def test_affine_index_maps_the_pointer_range(self, index, fill_range, expected):
+        ptr = Int("Ptr", min=1, max=2)
+        logic, hit = _indexed_program(lambda ds: index(ds, ptr), fill_range=fill_range)
+        result = always(logic, ~hit)
+        assert isinstance(result, expected)
+        if expected is Counterexample:
+            _assert_trace_replays(logic, result, "Hit")
+
+    def test_affine_write_reaches_the_offset_element(self):
+        """copy(7, DS[Ptr + 3]) with Ptr in 0..1 writes DS4, read by name."""
+        ptr = Int("Ptr", min=0, max=1)
+        logic, hit = _indexed_program(lambda ds: ds[4], write=lambda ds: ds[ptr + 3])
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_same_pointer_at_two_offsets(self):
+        ptr = Int("Ptr", min=1, max=2)
+        start, hit = Bool("Start"), Bool("Hit")
+        n, m = Int("N"), Int("M")
+        ds = Block("DS", TagType.INT, 1, 4)
+
+        with Program(strict=False) as logic:
+            with Rung(start):
+                fill(7, ds.select(3, 4))
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung():
+                copy(ds[ptr + 2], m)
+            with Rung(m == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_non_affine_index_reads_any_element(self):
+        """DS[Ptr * 2] with Ptr in 1..2 reads DS2 and DS4, outside Ptr's range."""
+        ptr = Int("Ptr", min=1, max=2)
+        logic, hit = _indexed_program(lambda ds: ds[ptr * 2])
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_unbounded_pointer_hint_names_the_offset_range(self):
+        """The suggested bounds are pointer values: DS[Ptr + 2] into DS1..2000 is -1..1998."""
+        start, hit = Bool("Start"), Bool("Hit")
+        ptr = Int("Ptr", external=True)
+        n = Int("N")
+        ds = Block("DS", TagType.INT, 1, 2000)
+
+        with Program(strict=False) as logic:
+            with Rung(start):
+                copy(7, ds[3])
+            with Rung():
+                copy(ds[ptr + 2], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Intractable)
+        assert any("min=-1/max=1998" in hint for hint in result.hints), result.hints

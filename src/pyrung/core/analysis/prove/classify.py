@@ -510,8 +510,13 @@ def _comparison_influencing_tags(
     ``_calc_reverse_edge`` can invert).  Multi-source expressions like
     ``DS.select(1, 2).sum()`` are NOT invertible, so genuinely constant block
     slots that only feed such expressions stay pinned to their default.
+
+    Every tag an index reads counts as well: ``copy(DS[Ptr], N)`` makes ``N``
+    depend on ``Ptr``, and the copy edge above sees no tag source there.  The
+    block slots behind the index stay constant storage.
     """
     influential: set[str] = {name for name in graph.tags if atom_idx.get(name)}
+    influential.update(graph.index_tags)
     if program is None:
         return frozenset(influential)
 
@@ -2376,9 +2381,10 @@ def _build_infeasible_hints(
             )
         elif ptr_info is not None:
             block_name, start, end = ptr_info
+            lo, hi = _pointer_span(graph, name, start, end)
             hints.append(
                 f"  {name}: pointer into {block_name}[{start}..{end}]"
-                f"; add choices=, min={start}/max={end}, or readonly=True"
+                f"; add choices=, min={lo}/max={hi}, or readonly=True"
             )
         elif tag is not None and tag.min is not None and tag.max is not None:
             hints.append(
@@ -2391,6 +2397,14 @@ def _build_infeasible_hints(
                 f"; add choices= for discrete values, or cover with dt= testing"
             )
     return hints
+
+
+def _pointer_span(graph: ProgramGraph, name: str, start: int, end: int) -> tuple[int, int]:
+    """The pointer values of *name*'s first use that land in ``start..end``."""
+    for use in graph.pointer_uses:
+        if use.pointer == name:
+            return use.pointer_span()
+    return start, end
 
 
 def _build_dimension_hints(context: _ExploreContext) -> list[str]:
@@ -2505,7 +2519,7 @@ def _classify_dimensions_from_graph(
             )
     known_domains = dict(structural_domains)
 
-    for ptr_name, (_block_name, start, end) in graph.pointer_tags.items():
+    for ptr_name in graph.pointer_tags:
         if ptr_name in known_domains:
             continue
         tag = graph.tags.get(ptr_name)
@@ -2515,10 +2529,18 @@ def _classify_dimensions_from_graph(
         if declared is not None:
             known_domains[ptr_name] = declared
             continue
-        bound_size = end - start + 1
-        if bound_size > 1000:
+        # The pointer values that land inside each block it indexes:
+        # DS[Ptr + 2] into DS1..4 needs Ptr in -1..2.
+        values = set()
+        for use in graph.pointer_uses:
+            if use.pointer != ptr_name:
+                continue
+            lo, hi = use.pointer_span()
+            values.update(range(lo, hi + 1))
+            if len(values) > 1000:
+                break
+        if not values or len(values) > 1000:
             continue
-        values = set(range(start, end + 1))
         values.add(tag.default)
         known_domains[ptr_name] = tuple(sorted(values))
     if profile:

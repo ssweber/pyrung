@@ -15,7 +15,6 @@ from pyrung.core.analysis.pdg import TagRole, build_program_graph
 from pyrung.core.analysis.simplified import Expr
 from pyrung.core.kernel import (
     PROVE_EFFECTIVE_PRESET_PREFIX,
-    BlockSpec,
     CompiledKernel,
     prove_effective_preset_key,
 )
@@ -126,65 +125,6 @@ def _infer_domain_source(
     if len(domain) == 1 and domain[0] == tag.default:
         return "default_only"
     return "expression_partition"
-
-
-def _narrow_indirect_block_specs(
-    specs: dict[str, BlockSpec],
-    compiled: CompiledKernel,
-    graph: ProgramGraph,
-    stateful_dims: dict[str, tuple[Any, ...]],
-    nondeterministic_dims: dict[str, tuple[Any, ...]],
-) -> dict[str, BlockSpec]:
-    """Narrow block specs for indirect blocks using known pointer domains.
-
-    For each indirect block, only sync the tags reachable through the pointer
-    domain plus any statically accessed addresses.  The array layout is
-    unchanged — ``tag_indices`` maps each narrowed tag to its original
-    ``addr - start`` position.
-    """
-    if not compiled.indirect_block_info:
-        return specs
-
-    all_domains: dict[str, tuple[Any, ...]] = dict(stateful_dims)
-    all_domains.update(nondeterministic_dims)
-
-    block_domains: dict[tuple[str, int, int], set[int]] = {}
-    for ptr_name, (block_name, start, end) in graph.pointer_tags.items():
-        domain = all_domains.get(ptr_name)
-        if domain is None:
-            continue
-        key = (block_name, start, end)
-        block_domains.setdefault(key, set()).update(
-            int(v) for v in domain if isinstance(v, (int, float)) and start <= int(v) <= end
-        )
-
-    result = dict(specs)
-
-    for symbol, (block_name, start, end, static_addrs) in compiled.indirect_block_info.items():
-        spec = specs.get(symbol)
-        if spec is None:
-            continue
-        domain = block_domains.get((block_name, start, end))
-        if domain is None:
-            continue
-
-        needed_addrs = sorted(domain | set(static_addrs))
-        if len(needed_addrs) >= spec.size:
-            continue
-
-        narrowed_tag_names = tuple(spec.tag_names[addr - start] for addr in needed_addrs)
-        narrowed_tag_indices = tuple(addr - start for addr in needed_addrs)
-
-        result[symbol] = BlockSpec(
-            symbol=symbol,
-            size=spec.size,
-            default=spec.default,
-            tag_type=spec.tag_type,
-            tag_names=narrowed_tag_names,
-            tag_indices=narrowed_tag_indices,
-        )
-
-    return result
 
 
 class _JournalBuilder:

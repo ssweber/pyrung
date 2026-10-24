@@ -137,14 +137,13 @@ def compute_reference_constants(
     for subroutine_rungs in getattr(program, "subroutines", {}).values():
         _scan_sources(subroutine_rungs)
 
-    from pyrung.core.analysis.pdg import _indirect_expr_base_tag, _indirect_ref_tags
+    from pyrung.core.analysis.pdg import _indirect_expr_tags, _indirect_ref_tags
 
     def _indirect_read_slots(source: Any) -> list[str]:
         if isinstance(source, IndirectRef):
             tags = _indirect_ref_tags(source.block, source.pointer)
         elif isinstance(source, IndirectExprRef):
-            base = _indirect_expr_base_tag(source.expr)
-            tags = _indirect_ref_tags(source.block, base) if base is not None else None
+            tags = _indirect_expr_tags(source.block, source.expr)
         else:
             return []
         return [tag.name for tag in tags] if tags is not None else []

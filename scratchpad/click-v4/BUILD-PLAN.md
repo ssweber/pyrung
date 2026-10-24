@@ -112,12 +112,18 @@ Prover (wrong Proven unless noted):
   (`a11909b`, ~+26 s) and tag presets (`e0fe4fe`, ~+13 s), unprofiled.
 
 PDG (shared with prover, PILOT, causal, lints):
-- Affine index narrowing, easy: `DS[Ptr + k]` is narrowed by Ptr's range ignoring k (`pdg.py`
-  `_indirect_expr_base_tag`). Map the pointer's bounded addresses through `analysis/affine.py`
-  `extract_affine_expression`; non-affine stays unresolved. Prover-visible: needs its own PackML lock check.
-- `DS[agg]` with no base tag and `DS[Ptr]` with unbounded Ptr register no reads. A naive full-block fallback blew
-  PackML from 58 s to over 300 s (446 DH tags became ND inputs); a fix needs offset-aware narrowing plus "only
-  elements with a writer" for unbounded reads.
+- **Next, wrong Proven:** `DS[Ptr]` / `DS[Ptr + k]` with unbounded Ptr register no reads, so an element
+  only such an index reads looks unread and the prover drops it as combinational (`copy(7, DS[1])` under an
+  input, `copy(DS[Ptr], N)`, `Rung(N == 7)` is Proven; also a pointer rewritten every scan,
+  `calc(In + 3, Ptr)`). Wrong on dev before the affine fix too. A naive full-block fallback blew PackML from
+  58 s to over 300 s (446 DH tags became ND inputs) and cost the tumbler most of its folds; the planned fix is
+  "only elements with a writer" for unbounded reads, prover-side (a `build_program_graph` option) so fold
+  keeps its documented gap. Sweep: `tools/index_sweep.py` (b, e, j still wrong Proven).
+- Index mapping (done, affine fix): `pdg.PointerUse` per access (`DS[Ptr + k]`, `DS[k - Ptr]`, integer k),
+  `ProgramGraph.pointer_uses`, `opaque_index_blocks` (non-affine index: reads/writes the whole block up to
+  `_INDIRECT_BLOCK_CAP`), `index_tags` (every tag an index reads, counted as comparison-influencing so an
+  unwritten pointer is an input, not default-pinned constant storage). Nested affine (`Ptr + 1 + 2`) is
+  non-affine for now. Block slots read through an index stay constant storage.
 
 time_event_drum (from feature 3):
 - **Prover has no exact model.** Its Acc is unmodeled whatever its declared domain (`classify.py`,

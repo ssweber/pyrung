@@ -1746,14 +1746,14 @@ def _opaque_indirect_tags(pdg: ProgramGraph) -> frozenset[str]:
     reader and writer sets for that block are incomplete.  Every known slot of
     such a block is reported here so the frozen-write pass can refuse it.
     """
-    opaque_blocks: set[str] = set()
-    for pointer, (block_name, _start, _end) in pdg.pointer_tags.items():
-        ptr = pdg.tags.get(pointer)
+    opaque_blocks: set[str] = set(pdg.opaque_index_blocks)
+    for use in pdg.pointer_uses:
+        ptr = pdg.tags.get(use.pointer)
         if ptr is None or (
             getattr(ptr, "choices", None) is None
             and (getattr(ptr, "min", None) is None or getattr(ptr, "max", None) is None)
         ):
-            opaque_blocks.add(block_name)
+            opaque_blocks.add(use.block)
     for ref in pdg.indirect_writes:
         opaque_blocks.add(ref.block.name)
     if not opaque_blocks:

@@ -406,6 +406,44 @@ def test_pointer_tag_scan_does_not_walk_program_backrefs() -> None:
     assert graph.pointer_tags == {"Index": ("DS", 1, 10)}
 
 
+def test_affine_index_maps_pointer_range_to_addresses() -> None:
+    from pyrung.core.analysis.pdg import PointerUse
+
+    ds = Block("DS", TagType.INT, 1, 10)
+    ptr = Int("Ptr", min=1, max=3)
+    other = Int("Other")
+    a, b, c = Int("A"), Int("B"), Int("C")
+
+    with Program() as prog:
+        with Rung():
+            copy(ds[ptr + 2], a)
+        with Rung():
+            copy(ds[9 - ptr], b)
+        with Rung():
+            copy(ds[ptr * 2], c)
+        with Rung():
+            copy(1, ds[ptr + other])
+
+    graph = build_program_graph(prog)
+
+    def readers(name: str) -> set[int]:
+        return set(graph.readers_of.get(name, ()))
+
+    # Ptr + 2 reads DS3..5, 9 - Ptr reads DS6..8; neither reads DS1..2.
+    assert {n for n in range(1, 11) if 0 in readers(f"DS{n}")} == {3, 4, 5}
+    assert {n for n in range(1, 11) if 1 in readers(f"DS{n}")} == {6, 7, 8}
+    # A non-affine index may read or write any element.
+    assert {n for n in range(1, 11) if 2 in readers(f"DS{n}")} == set(range(1, 11))
+    assert all(3 in graph.writers_of[f"DS{n}"] for n in range(1, 11))
+    assert set(graph.pointer_uses) == {
+        PointerUse("Ptr", "DS", 1, 10, 1, 2),
+        PointerUse("Ptr", "DS", 1, 10, -1, 9),
+    }
+    assert graph.opaque_index_blocks == frozenset({"DS"})
+    assert graph.index_tags == frozenset({"Ptr", "Other"})
+    assert PointerUse("Ptr", "DS", 1, 10, -1, 9).pointer_span() == (-1, 8)
+
+
 def test_walker_uses_declared_instruction_fields_without_unknowns() -> None:
     with Program() as prog:
         with subroutine("worker"):
