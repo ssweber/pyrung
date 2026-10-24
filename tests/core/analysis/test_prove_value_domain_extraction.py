@@ -123,7 +123,7 @@ class TestValueDomainExtraction:
         assert set(nd["Mode"]) == {0, 1, 2}
 
     def test_eq_ne_only_input_gets_literal_plus_other_domain(self):
-        """Pure-switch eq/ne inputs collapse to {literals..., OTHER}."""
+        """Pure-switch eq/ne inputs collapse to {literals..., one other value}."""
         mode = Int("Mode", external=True)
         light = Bool("Light")
         alarm = Bool("Alarm")
@@ -140,6 +140,24 @@ class TestValueDomainExtraction:
         assert 1 in nd["Mode"]
         assert 2 in nd["Mode"]
         assert len(nd["Mode"]) == 3
+        # The other value is the power-on default, a value the PLC can hold.
+        assert 0 in nd["Mode"]
+
+    def test_eq_ne_other_value_skips_literals_and_bounds(self):
+        """When the default is a literal, the other value is the nearest unused one."""
+        mode = Int("Mode", external=True, min=0)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(mode == 0):
+                out(light)
+            with Rung(mode != 1):
+                out(light)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        assert nd["Mode"] == (0, 1, 2)
 
     def test_eq_ne_only_closure_rejects_data_flow_usage(self):
         """Arithmetic/data-flow usage keeps eq/ne-only closure from applying."""

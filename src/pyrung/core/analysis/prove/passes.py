@@ -316,6 +316,10 @@ class _PassContext:
     # with no scope, which may read any tag.
     opaque_reads: tuple[str, ...] = ()
     opaque_reads_all: bool = False
+    # Tags the property reads (see ``_property_tags``).  Those no rung reads
+    # or writes join the graph, so classification treats them like any
+    # unwritten tag instead of leaving them out of the kernel's state.
+    observed_tags: tuple[Tag, ...] = ()
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -656,6 +660,11 @@ class _PassContext:
             mutable_tag_names = frozenset(mutable)
 
         dead_guards = {} if domains_only else self._hidden_dead_guards()
+        outside_defaults = tuple(
+            (tag.name, tag.default)
+            for tag in self.observed_tags
+            if tag.name in self.graph.tags and tag.name not in self.compiled._tag_template
+        )
 
         return _ExploreContext(
             compiled=self.compiled,
@@ -705,6 +714,7 @@ class _PassContext:
             base_tag_keys=(
                 frozenset(self.compiled._tag_template)
                 | _system_tag_keys(self.system_points, self.nondeterministic_dims)
+                | {name for name, _ in outside_defaults}
             )
             if mutable_tag_names is not None
             else None,
@@ -715,6 +725,7 @@ class _PassContext:
             init_constant_projections=dict(self._init_constant_projections or {}),
             stepping_tags=self._stepping_tags or frozenset(),
             system_points=self.system_points,
+            outside_tag_defaults=outside_defaults,
             free_system_inputs=frozenset()
             if self.domains_only
             else free_system_tags(self.nondeterministic_dims, self.graph.writers_of),
@@ -914,7 +925,8 @@ def _observed_system_tags(ctx: _PassContext) -> frozenset[str]:
 
 def _pass_build_graph(ctx: _PassContext) -> None:
     observed = _observed_system_tags(ctx)
-    ctx.graph = build_program_graph(ctx.program, observed_system=observed)
+    outside = () if ctx.domains_only else ctx.observed_tags
+    ctx.graph = build_program_graph(ctx.program, observed_system=observed, observed_tags=outside)
     if (
         not ctx.domains_only
         and FIRST_SCAN not in ctx.graph.tags
@@ -922,7 +934,9 @@ def _pass_build_graph(ctx: _PassContext) -> None:
     ):
         # The scan-time min/max ride on the first_scan bit, which then needs
         # a tag of its own.
-        ctx.graph = build_program_graph(ctx.program, observed_system=observed | {FIRST_SCAN})
+        ctx.graph = build_program_graph(
+            ctx.program, observed_system=observed | {FIRST_SCAN}, observed_tags=outside
+        )
     ctx.all_exprs = _collect_all_exprs(ctx.program, ctx.graph, scope=ctx.scope)
     if ctx.extra_exprs:
         ctx.all_exprs = ctx.all_exprs + ctx.extra_exprs

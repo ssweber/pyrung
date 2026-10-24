@@ -137,9 +137,9 @@ class ProgramGraph:
     # reads is dead, so it stays out of ``writers_of`` and the cones.
     fault_writes: frozenset[str] = frozenset()
     unread_fault_writes: frozenset[str] = frozenset()
-    _observed_variants: dict[frozenset[str], ProgramGraph] | None = field(
-        default=None, init=False, repr=False
-    )
+    _observed_variants: (
+        dict[tuple[frozenset[str], tuple[tuple[str, int], ...]], ProgramGraph] | None
+    ) = field(default=None, init=False, repr=False)
     _main_node_index: dict[int, int] | None = field(default=None, init=False, repr=False)
     _call_site_cache: dict[str, frozenset[int]] | None = field(default=None, init=False, repr=False)
     _call_sites_cache: tuple[CallSite, ...] | None = field(default=None, init=False, repr=False)
@@ -1414,6 +1414,7 @@ def build_program_graph(
     program: Program,
     *,
     observed_system: Collection[str] = (),
+    observed_tags: Collection[Tag] = (),
 ) -> ProgramGraph:
     """Build the static PDG summary for a Program.
 
@@ -1421,13 +1422,15 @@ def build_program_graph(
     for the fault flags some rung reads.  *observed_system* names system tags
     read from outside the program (a verifier property or projection): they
     join ``tags`` and, for fault flags, their implicit writes count too, in a
-    graph variant cached beside the program's own.
+    graph variant cached beside the program's own.  *observed_tags* are other
+    tags read from outside: the ones no rung reads or writes join ``tags`` the
+    same way, with no readers or writers.
     """
     from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
     cached_graph = getattr(program, "_cached_graph", None)
     if cached_graph is None:
-        cached_graph = _build_program_graph(program, frozenset())
+        cached_graph = _build_program_graph(program, frozenset(), ())
         program._cached_graph = cached_graph
     extra = frozenset(
         name
@@ -1435,18 +1438,30 @@ def build_program_graph(
         if name in cached_graph.unread_fault_writes
         or (name in SYSTEM_TAGS_BY_NAME and name not in cached_graph.tags)
     )
-    if not extra:
+    outside: dict[str, Tag] = {}
+    for tag in observed_tags:
+        if tag.name not in cached_graph.tags and tag.name not in SYSTEM_TAGS_BY_NAME:
+            outside.setdefault(tag.name, tag)
+    if not extra and not outside:
         return cached_graph
     variants = cached_graph._observed_variants
     if variants is None:
         variants = cached_graph._observed_variants = {}
-    graph = variants.get(extra)
+    # The variant holds its tags, so their ids stay unique while it is cached.
+    key = (extra, tuple(sorted((name, id(tag)) for name, tag in outside.items())))
+    graph = variants.get(key)
     if graph is None:
-        graph = variants[extra] = _build_program_graph(program, extra)
+        graph = variants[key] = _build_program_graph(
+            program, extra, tuple(outside[name] for name in sorted(outside))
+        )
     return graph
 
 
-def _build_program_graph(program: Program, observed_system: frozenset[str]) -> ProgramGraph:
+def _build_program_graph(
+    program: Program,
+    observed_system: frozenset[str],
+    observed_tags: tuple[Tag, ...],
+) -> ProgramGraph:
     from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
     tag_refs: dict[str, Tag] = {}
@@ -1526,6 +1541,8 @@ def _build_program_graph(program: Program, observed_system: frozenset[str]) -> P
     for name in observed_system:
         if name in SYSTEM_TAGS_BY_NAME:
             tag_refs.setdefault(name, SYSTEM_TAGS_BY_NAME[name])
+    for tag in observed_tags:
+        tag_refs.setdefault(tag.name, tag)
     if fault_writes:
         for node_index, node in enumerate(rung_nodes):
             for tag_name in node.implicit_writes & fault_writes:
@@ -1550,6 +1567,9 @@ def _build_program_graph(program: Program, observed_system: frozenset[str]) -> P
         unread_fault_writes=frozenset(implicit) - fault_writes,
     )
     graph.tag_roles = classify_tags(graph)
+    for tag in observed_tags:
+        # Read from outside and written by no rung: an input.
+        graph.tag_roles.setdefault(tag.name, TagRole.INPUT)
     return graph
 
 

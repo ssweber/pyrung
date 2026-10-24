@@ -1693,3 +1693,101 @@ class TestJournalSoundness:
         assert expl is not None
         disabled_notes = [n for n in expl.notes if "disabled" in n]
         assert len(disabled_notes) >= 3
+
+
+# ===================================================================
+# Property tags outside the program
+#
+# A property may read a tag no rung reads or writes.  The kernel has no
+# slot for it, and a tag missing from the state left the predicate
+# undecided, which read as holding: a wrong Proven.
+# ===================================================================
+
+
+def _replayed_value(program, result, tag):
+    plc = _replay_trace(program, result.trace)
+    return plc.current_state.tags.get(tag.name, tag.default)
+
+
+class TestPropertyTagsOutsideProgram:
+    def _rail_program(self, coil):
+        with Program(strict=False) as logic:
+            with Rung():
+                out(coil)
+        return logic
+
+    def test_unwritten_tag_in_property_is_not_assumed_true(self):
+        """Or(~M2, M0) with M2 on the rail and M0 untouched fails on scan 1."""
+        m0, m2 = Bool("M0"), Bool("M2")
+        logic = self._rail_program(m2)
+
+        result = always(logic, Or(~m2, m0))
+        assert isinstance(result, Counterexample)
+        assert _replayed_value(logic, result, m2) is True
+        assert _replayed_value(logic, result, m0) is False
+
+    def test_property_only_bool_is_an_input(self):
+        """Nothing writes M0, so it may be set from outside."""
+        m0 = Bool("M0")
+        logic = self._rail_program(Bool("M2"))
+
+        result = always(logic, ~m0)
+        assert isinstance(result, Counterexample)
+        assert _replayed_value(logic, result, m0) is True
+        assert isinstance(never(logic, m0), Counterexample)
+
+    def test_property_only_int_is_an_input(self):
+        n = Int("N")
+        logic = self._rail_program(Bool("M2"))
+
+        result = always(logic, n == 5)
+        assert isinstance(result, Counterexample)
+        assert _replayed_value(logic, result, n) != 5
+
+    def test_property_only_readonly_tag_is_constant(self):
+        ro = Int("RO", default=3, readonly=True)
+        logic = self._rail_program(Bool("M2"))
+
+        assert isinstance(always(logic, ro == 3), Proven)
+        assert isinstance(always(logic, ro == 4), Counterexample)
+
+    def test_batch_property_reads_outside_tag(self):
+        m0, m2 = Bool("M0"), Bool("M2")
+        ro = Bool("ROB", readonly=True)
+        logic = self._rail_program(m2)
+
+        results = always(logic, [Or(~m2, m0), ~ro])
+        assert isinstance(results, list)
+        assert isinstance(results[0], Counterexample)
+        assert isinstance(results[1], Proven)
+
+    def test_unlowerable_condition_is_intractable(self):
+        """A condition the verifier cannot lower is named, not assumed true."""
+        from pyrung.core.condition import Condition
+
+        class Opaque(Condition):
+            def evaluate(self, ctx):
+                return False
+
+        logic = self._rail_program(Bool("M2"))
+
+        result = always(logic, Opaque())
+        assert isinstance(result, Intractable)
+        assert result.tags == ["Opaque"]
+
+
+class TestEqNeOtherValue:
+    """An input read only through ==/!= gets one real value standing for the rest."""
+
+    def test_ordered_read_outside_the_cone_steps(self):
+        """The property's cone sees N == 0 only; the N > 3 rung still runs."""
+        n = Int("N")
+        m3 = Bool("M3")
+        with Program(strict=False) as logic:
+            with Rung(n > 3):
+                out(m3)
+
+        result = always(logic, n == 0)
+        assert isinstance(result, Counterexample)
+        value = _replayed_value(logic, result, n)
+        assert isinstance(value, int) and value != 0

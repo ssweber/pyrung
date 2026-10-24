@@ -108,6 +108,8 @@ from .system_points import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from pyrung.core.analysis.pdg import ProgramGraph, RungNode
     from pyrung.core.analysis.simplified import Atom
     from pyrung.core.program import Program
@@ -434,7 +436,54 @@ def _boundary_values_for_tag(other_tag: Tag) -> list[Any]:
 
 
 _NO_LITERAL_WRITE = object()
-_EQ_NE_OTHER = object()
+
+
+def _eq_ne_other_value(tag: Tag, literals: set[Any]) -> Any:
+    """A value of *tag* that no literal in *literals* names.
+
+    An input read only through ``==``/``!=`` against literals needs one more
+    value standing for all the others.  It is a real value of the tag's type,
+    so rungs outside the property's cone (which may compare it with ``>``)
+    and a replayed counterexample both get something the PLC can hold.  The
+    power-on default is preferred; otherwise the nearest unused value.
+    """
+    from pyrung.core.analysis.crossings._ranges import type_bounds
+
+    lo: Any = None
+    hi: Any = None
+    if tag.type == TagType.CHAR:
+        candidates: Iterable[Any] = itertools.chain(
+            (tag.default,), (chr(code) for code in range(32, 127))
+        )
+    else:
+        bounds = type_bounds(tag.type)
+        if bounds is not None:
+            lo, hi = bounds
+        if tag.min is not None:
+            lo = tag.min if lo is None else max(lo, tag.min)
+        if tag.max is not None:
+            hi = tag.max if hi is None else min(hi, tag.max)
+        start = tag.default
+        if lo is not None and start < lo:
+            start = lo
+        if hi is not None and start > hi:
+            start = hi
+        step = 1.0 if tag.type == TagType.REAL else 1
+        candidates = (
+            start + sign * offset * step
+            for offset in itertools.count()
+            for sign in ((1,) if offset == 0 else (1, -1))
+        )
+    for value in itertools.islice(candidates, len(literals) * 2 + 200):
+        if value in literals:
+            continue
+        if not isinstance(value, str):
+            if lo is not None and value < lo:
+                continue
+            if hi is not None and value > hi:
+                continue
+        return value
+    raise AssertionError(f"no value of {tag.name} outside {sorted(literals, key=repr)}")
 
 
 def _has_non_condition_data_read(tag_name: str, graph: ProgramGraph | None) -> bool:
@@ -1919,7 +1968,8 @@ def _extract_value_domain(
         ):
             if base_domain is not None:
                 return tuple(sorted(set(base_domain) | eq_ne_literals))
-            return tuple(sorted(eq_ne_literals)) + (_EQ_NE_OTHER,)
+            other = _eq_ne_other_value(tag, eq_ne_literals)
+            return tuple(sorted(eq_ne_literals | {other}))
 
     comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
     literals: set[Any] = set()
@@ -2701,17 +2751,14 @@ def _classify_dimensions_from_graph(
                 domain = clip_to_range(tag_name, tuple(domain))
             if tag.default not in domain and tag_name not in free_system:
                 # The power-on default is always a reachable initial value that
-                # BFS must cover, but only when it respects declared constraints
-                # and isn't already subsumed by the _EQ_NE_OTHER sentinel.  A
-                # free system tag has no power-on value of its own.
+                # BFS must cover, but only when it respects declared constraints.
+                # A free system tag has no power-on value of its own.
                 default_valid = True
                 if tag.min is not None and tag.default < tag.min:
                     default_valid = False
                 elif tag.max is not None and tag.default > tag.max:
                     default_valid = False
                 elif tag.choices is not None and tag.default not in tag.choices:
-                    default_valid = False
-                elif domain[-1] is _EQ_NE_OTHER:
                     default_valid = False
                 if default_valid:
                     domain = tuple(sorted(set(domain) | {tag.default}))

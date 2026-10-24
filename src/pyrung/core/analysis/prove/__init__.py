@@ -19,6 +19,7 @@ from pyrung.core.kernel import CompiledKernel
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
+    from pyrung.core.tag import Tag
 
     from .deadness import DeadGuard
     from .inputs import _ExclusiveInputGroup
@@ -90,6 +91,10 @@ class _ExploreContext:
     # and the system tags explored as free inputs.  See system_points.py.
     system_points: SystemPointModel | None = None
     free_system_inputs: frozenset[str] = field(default_factory=frozenset)
+    # Tags the property reads that no rung reads or writes, with their
+    # power-on values.  The compiled kernel has no slot for them, so BFS seeds
+    # them; the nondeterministic ones among them are then assigned as inputs.
+    outside_tag_defaults: tuple[tuple[str, Any], ...] = ()
     # Timer units added per scan at ``dt``, by accumulator (see
     # ``events._exact_timer_move``).
     timer_quanta: dict[str, float] = field(default_factory=dict)
@@ -238,6 +243,7 @@ def _build_explore_context(
     allow_partial: bool = False,
     opaque_reads: tuple[str, ...] = (),
     opaque_reads_all: bool = False,
+    observed_tags: tuple[Tag, ...] = (),
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for always()/reachable_states()."""
     split_at_tags = _validate_split_at(program, split_at) if split_at else None
@@ -261,6 +267,7 @@ def _build_explore_context(
         domains_only=_opt_config.domains_only,
         opaque_reads=opaque_reads,
         opaque_reads_all=opaque_reads_all,
+        observed_tags=observed_tags,
     )
     return _run_pre_bfs_pipeline(
         ctx, _passes_for_opt_config(_opt_config), allow_partial=allow_partial
@@ -349,7 +356,57 @@ def _compile_property(
     def _predicate(state: dict[str, Any]) -> bool:
         return _eval_expr_from_state(expr, state) is not False
 
+    setattr(_predicate, "_pyrung_tags", _condition_tags(normalized))  # noqa: B010
     return _predicate, tags_in_expr, expr
+
+
+def _condition_tags(condition: Any) -> tuple[Tag, ...]:
+    """The tags a property condition reads, for the ones no rung touches.
+
+    A property may name a tag the program never reads or writes.  The kernel
+    has no slot for it, and a missing tag leaves the predicate undecided,
+    which reads as holding, so the verifier must be told about it.
+    """
+    from pyrung.core.analysis.pdg import _extract_tag_names
+
+    refs: dict[str, Tag] = {}
+    _extract_tag_names(condition, refs)
+    return tuple(refs[name] for name in sorted(refs))
+
+
+def _property_tags(compiled_properties: list[_CompiledProperty]) -> tuple[Tag, ...]:
+    tags: dict[str, Tag] = {}
+    for predicate, _scope, _expr in compiled_properties:
+        for tag in getattr(predicate, "_pyrung_tags", ()):
+            tags.setdefault(tag.name, tag)
+    return tuple(tags[name] for name in sorted(tags))
+
+
+def _unknown_property_names(
+    compiled_properties: list[_CompiledProperty],
+    context: _ExploreContext,
+) -> Intractable | None:
+    """Intractable when a property names something that is not a tag.
+
+    A condition the verifier cannot lower becomes a synthetic atom named after
+    its type.  No state holds that name, so the property would read as holding.
+    """
+    unknown: set[str] = set()
+    for _predicate, _scope, expr in compiled_properties:
+        if expr is not None:
+            unknown.update(
+                name for name in _referenced_tags(expr) if name not in context.graph.tags
+            )
+    if not unknown:
+        return None
+    names = sorted(unknown)
+    return Intractable(
+        reason=f"property reads {', '.join(names)}, which the verifier cannot evaluate",
+        dimensions=0,
+        estimated_space=0,
+        tags=names,
+        journal=context.journal,
+    )
 
 
 def _is_condition_like(obj: Any) -> bool:
@@ -584,7 +641,10 @@ def _always_compiled(
             split_at=split_at,
             _opt_config=opt,
             journal=journal,
+            observed_tags=_property_tags(compiled_properties),
         )
+        if not isinstance(context, Intractable):
+            context = _unknown_property_names(compiled_properties, context) or context
         if isinstance(context, Intractable):
             if _debug:
                 return replace(context, _debug_context=context)
@@ -647,7 +707,13 @@ def _always_compiled(
             split_at=split_at,
             _opt_config=opt,
             journal=journal,
+            observed_tags=_property_tags([compiled_properties[i] for i in indices]),
         )
+        if not isinstance(context, Intractable):
+            context = (
+                _unknown_property_names([compiled_properties[i] for i in indices], context)
+                or context
+            )
         if isinstance(context, Intractable):
             for i in indices:
                 results[i] = replace(context, _debug_context=context) if _debug else context
@@ -748,9 +814,10 @@ def _negated_property(compiled: _CompiledProperty) -> _CompiledProperty:
     def _negated(state: dict[str, Any]) -> bool:
         return not predicate(state)
 
-    bind = getattr(predicate, "_pyrung_bind_system", None)
-    if bind is not None:
-        setattr(_negated, "_pyrung_bind_system", bind)  # noqa: B010
+    for attr in ("_pyrung_bind_system", "_pyrung_tags"):
+        value = getattr(predicate, attr, None)
+        if value is not None:
+            setattr(_negated, attr, value)
     return _negated, auto_scope, expr
 
 

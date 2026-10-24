@@ -267,6 +267,8 @@ def _bfs_explore_gen(
     _mutable = context.mutable_tag_names
     _base_keys = context.base_tag_keys
     _seed_synthetic_presets(context, kernel)
+    for name, value in context.outside_tag_defaults:
+        kernel.tags[name] = value
     if context.system_points is not None:
         context.system_points.seed(kernel.tags)
     if initial_state is not None:

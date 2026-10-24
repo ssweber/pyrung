@@ -166,8 +166,9 @@ Out family (from feature 4):
   ignores the variants, `CMP_PRESET_STAYS_ZERO` doesn't cover their presets. Fuzz grammar has no Out kinds.
 
 Found by the feature-4 review, pre-existing on HEAD:
-- **Prover, HIGH:** `always(prog, Or(~M2, M0))` is Proven when `Rung(): out(M2)` and M0 is a tag the program
-  never writes (plain `out`, no new instructions). Repro: reviewer session scratchpad (gone); restate from this.
+- A callable property that reads a tag the program never touches (`lambda s: s["M0"]`) raises KeyError from
+  `guarded_state`. Loud, not wrong; the condition form of the same property is handled (property-only tags
+  join the graph as inputs).
 - Fold: two `on_delay`s on one Timer (one rung false and resetting it, one ticking) plus any other moving timer
   folds Acc ahead (350 vs 70). A duplicate-out program, but it breaks "equal stepping or decline".
 - A Real preset tag: interpreted compares `acc >= 2.5`, compiled `acc >= int(2.5)` (on_delay, timed, debounce).
