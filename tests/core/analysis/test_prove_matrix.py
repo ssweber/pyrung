@@ -2164,6 +2164,31 @@ class TestUnboundedIndexReads:
         if expected is Counterexample:
             _assert_trace_replays(logic, result, "Hit")
 
+    @pytest.mark.parametrize("size", [10, 4500])
+    def test_counter_in_a_block_read_through_unbounded_pointer(self, size):
+        """DS7 counts to 5; abstracting it to below/at 5 would lose the 3 that DS[Ptr] reads."""
+        tick, hit = Bool("Tick", external=True), Bool("Hit")
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        ptr, n = Int("Ptr"), Int("N")
+        ds = Block("DS", TagType.INT, 1, size)
+        loop = ds[7]
+
+        with Program(strict=False) as logic:
+            with Rung(rise(tick)):
+                calc(loop + 1, loop)
+            with Rung(loop >= 5):
+                copy(0, loop)
+            with Rung():
+                calc(sel + 6, ptr)
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 3):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
     def test_counter_in_a_block_jumped_past_block_cap_is_not_absorbed(self):
         """copy(4, DS[WPtr]) can jump DS7 past 3: it is no counter that only steps and resets."""
         from pyrung.core.analysis.prove import _build_explore_context

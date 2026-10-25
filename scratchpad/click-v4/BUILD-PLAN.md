@@ -103,9 +103,11 @@ Prover (wrong Proven unless noted):
   behind its input; a retentive timer frozen at a key at different values is still one first node plus one
   seed (`cycles.py` "What is left"). Sweep: `tools/race_sweep.py` against brute force.
 - MEDIUM: CTUD, `count_up(c, 4).down(rise(Y))` (classification: don't absorb, or model as bidirectional).
-- Absorption gate blind spot: `_has_forbidden_data_read` misses reads through an unbounded index
-  (`_indirect_ref_tags` returns None), so an accumulator mapped into a bank (`LoopIndex = ds[7]`) could be read
-  by `copy(ds[ptr], ...)` unseen. PackML's pointer never reaches it; the gate doesn't check.
+- Absorption gate blind spot (done): `_has_forbidden_data_read(program, graph, ...)` also counts what an
+  unbounded index reads, from `ProgramGraph.indirect_read_reach` (`pdg.unbounded_read_names`); a counter
+  in `DS[7]` read by `copy(DS[Ptr], N)` was absorbed and lost the 3 the read needed (wrong Proven, any
+  block size). `_visit_indirect_refs` stops at `Tag`/`Block` (it walked whole blocks through `vars()`:
+  3.3M calls, +3 s on PackML's context build).
 - Low: `_pilot_sweep_domains` and the lints step without the system model (`bounds.py`, `lintsys.py`: false
   CMP_ALWAYS_FALSE on `calc(rtc...)` destinations).
 - Perf, accepted for now: PackML lock 91 s vs 61 s before the timer fixes; the gap is pulse laps

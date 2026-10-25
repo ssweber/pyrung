@@ -2153,7 +2153,7 @@ def _compressed_acc_boundary_domain(
     if kind is None:
         return None
 
-    if _has_forbidden_data_read(program, acc_name):
+    if _has_forbidden_data_read(program, graph, acc_name):
         return None
 
     atoms = _collect_atoms_for_tag(atom_index, acc_name)
@@ -2591,6 +2591,7 @@ def _classify_dimensions_from_graph(
             or atom_idx.get(acc_name)
             or _has_forbidden_data_read(
                 program,
+                graph,
                 acc_name,
             )
         ):

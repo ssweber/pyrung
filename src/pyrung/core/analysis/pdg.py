@@ -164,6 +164,9 @@ class ProgramGraph:
     # through an unbounded index reaches, by ``id`` of its destination ref
     # (refs overload ``==``).  Empty otherwise.
     indirect_reach: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    # Likewise the elements each read through an unbounded index reaches
+    # (``unbounded_read_names``).
+    indirect_read_reach: dict[int, tuple[str, ...]] = field(default_factory=dict)
     # Every indexed access with a single affine pointer, and the blocks indexed
     # by any other expression (``DS[Ptr * 2]``), whose elements no pointer
     # range bounds.
@@ -845,8 +848,10 @@ class _UnboundedReads:
             block = getattr(tag, "_pyrung_block", None)
             if tag is not None and block is not None:
                 self._written[block.name].append(tag)
-        # Elements an over-cap write through an unbounded index reaches.
+        # Elements an over-cap write through an unbounded index reaches, and
+        # what each read through one reaches, by id of the ref.
         self.reached: dict[int, list[Tag]] = {}
+        self.read_reach: dict[int, tuple[str, ...]] = {}
         for instr in instructions:
             for dest in instruction_write_targets(instr):
                 if isinstance(dest, ImmediateRef):
@@ -880,13 +885,11 @@ class _UnboundedReads:
         for tag in _input_slots(block):
             changing.setdefault(tag.name, tag)
         addresses = self._values.addresses(ref)
-        if addresses is None:
-            return list(changing.values())
-        return [
-            tag
-            for tag in changing.values()
-            if getattr(tag, "_pyrung_block_addr", None) in addresses
-        ]
+        tags = list(changing.values())
+        if addresses is not None:
+            tags = [tag for tag in tags if getattr(tag, "_pyrung_block_addr", None) in addresses]
+        self.read_reach[id(ref)] = tuple(tag.name for tag in tags)
+        return tags
 
 
 _UNBOUNDED_READS: ContextVar[_UnboundedReads | None] = ContextVar("_UNBOUNDED_READS", default=None)
@@ -904,6 +907,12 @@ def _unbounded_write_reach() -> dict[int, tuple[str, ...]]:
     if reads is None:
         return {}
     return {key: tuple(tag.name for tag in tags) for key, tags in reads.reached.items()}
+
+
+def _unbounded_read_reach() -> dict[int, tuple[str, ...]]:
+    """``ProgramGraph.indirect_read_reach`` for the graph being built."""
+    reads = _UNBOUNDED_READS.get()
+    return {} if reads is None else dict(reads.read_reach)
 
 
 def _unbounded_write_tags(ref: IndirectRef | IndirectExprRef | IndirectBlockRange) -> list[Tag]:
@@ -1800,6 +1809,7 @@ def _build_program_graph(
         pointer_tags=pointer_tags,
         indirect_writes=indirect_writes,
         indirect_reach=_unbounded_write_reach(),
+        indirect_read_reach=_unbounded_read_reach(),
         pointer_uses=pointer_uses,
         opaque_index_blocks=opaque_index_blocks,
         index_tags=index_tags,
@@ -1825,9 +1835,9 @@ def _visit_indirect_refs(
     """
     if obj is None or isinstance(
         obj,
-        (bool, int, float, str, bytes, FunctionType, BuiltinFunctionType, MethodType),
+        (bool, int, float, str, bytes, FunctionType, BuiltinFunctionType, MethodType, Tag, Block),
     ):
-        return
+        return  # a tag or block holds no index, only every other tag of its block
     obj_id = id(obj)
     if obj_id in seen:
         return
@@ -1864,6 +1874,21 @@ def indexed_blocks(obj: Any) -> frozenset[str]:
     """Names of the blocks *obj* (a condition, instruction, ...) indexes."""
     out: set[str] = set()
     _visit_indirect_refs(obj, lambda ref: out.add(ref.block.name), set())
+    return frozenset(out)
+
+
+def unbounded_read_names(obj: Any, graph: ProgramGraph) -> frozenset[str]:
+    """Tags the unbounded indexes in *obj* read, per *graph*'s ``indirect_read_reach``.
+
+    ``_extract_tag_names`` outside a graph build resolves an index with no
+    declared bounds to nothing; this is what the ``unbounded_index_reads``
+    graph found it reads.  Empty for any other graph.
+    """
+    reach = graph.indirect_read_reach
+    if not reach:
+        return frozenset()
+    out: set[str] = set()
+    _visit_indirect_refs(obj, lambda ref: out.update(reach.get(id(ref), ())), set())
     return frozenset(out)
 
 

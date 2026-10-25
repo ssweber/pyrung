@@ -330,18 +330,25 @@ def _all_write_targets(
 
 def _has_forbidden_data_read(
     program: Program,
+    graph: ProgramGraph,
     tag_name: str,
     *,
     allowed: Callable[[Any], bool] | None = None,
 ) -> bool:
-    """Detect non-condition data-flow reads of a candidate absorbed tag."""
-    from pyrung.core.analysis.pdg import _extract_tag_names
+    """Detect non-condition data-flow reads of a candidate absorbed tag.
+
+    A read through an index with no declared bounds counts where *graph*
+    found it can reach the tag (``copy(DS[Ptr], N)`` with an accumulator
+    mapped into ``DS``).
+    """
+    from pyrung.core.analysis.pdg import _extract_tag_names, unbounded_read_names
     from pyrung.core.validation._common import walk_instructions
 
     for instr in walk_instructions(program):
         for field_name in getattr(type(instr), "_reads", ()):
-            refs = _extract_tag_names(getattr(instr, field_name), {})
-            if tag_name not in refs:
+            value = getattr(instr, field_name)
+            reads = _extract_tag_names(value, {}) | unbounded_read_names(value, graph)
+            if tag_name not in reads:
                 continue
             if allowed is not None and allowed(instr):
                 continue
@@ -638,7 +645,7 @@ def _find_redundant_acc_absorptions(
             if not _is_acc_done_redundant(acc_name, match_values, kind, acc_atoms):
                 rejected[acc_name] = "accumulator comparisons not redundant"
                 continue
-            if _has_forbidden_data_read(program, acc_name):
+            if _has_forbidden_data_read(program, graph, acc_name):
                 rejected[acc_name] = "accumulator has forbidden data reads"
                 continue
 
@@ -950,7 +957,7 @@ def _find_comparison_absorptions(
             continue
         if not _comparison_domain_is_worth_absorbing(tag_name, tag, structural_domains):
             continue
-        if _has_forbidden_data_read(program, tag_name):
+        if _has_forbidden_data_read(program, graph, tag_name):
             continue
 
         atoms = _collect_atoms_for_tag(atom_index, tag_name)
@@ -1367,6 +1374,7 @@ def _collect_int_progress_source_kinds(
             continue
         if _has_forbidden_data_read(
             program,
+            graph,
             tag_name,
             allowed=lambda instr, name=tag_name: _is_int_progress_write(
                 instr, name, stable_int_tags
@@ -1542,6 +1550,7 @@ def _collect_real_progress_source_kinds(
             continue
         if _has_forbidden_data_read(
             program,
+            graph,
             tag_name,
             allowed=lambda instr, name=tag_name: _is_numeric_progress_write(
                 instr, name, graph, stable_int_tags
@@ -1658,7 +1667,7 @@ def _find_threshold_absorptions(
                         )
                     )
                     continue
-            if _has_forbidden_data_read(program, acc_name):
+            if _has_forbidden_data_read(program, graph, acc_name):
                 blockers.append(
                     _ThresholdBlocker(
                         acc_name,
@@ -1768,6 +1777,7 @@ def _find_threshold_absorptions(
                 break
             if _has_forbidden_data_read(
                 program,
+                graph,
                 threshold_name,
                 allowed=lambda instr, t=threshold_name, a=acc_name: _is_matching_owner_preset_read(
                     instr, t, a

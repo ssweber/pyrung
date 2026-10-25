@@ -1721,7 +1721,7 @@ def _pass_find_redundant_absorptions(ctx: _PassContext) -> None:
         acc_name
         for acc_name in ctx.done_acc_info.pairs.values()
         if _collect_atoms_for_tag(atom_index, acc_name)
-        or _has_forbidden_data_read(ctx.program, acc_name)
+        or _has_forbidden_data_read(ctx.program, ctx.graph, acc_name)
     }
     ctx.absorptions = _find_redundant_acc_absorptions(
         ctx.program,
