@@ -489,11 +489,14 @@ class _SliceElision:
         reader_rungs = graph.all_readers_of.get(candidate, frozenset())
         x_touching = writer_rungs | reader_rungs
 
-        # Step 2: condition seed + transitive closure.
+        # Step 2: condition seed + transitive closure.  An index decides which
+        # element a touching rung reaches (``copy(DS[P], N)`` reads X only at
+        # one P), so the tags it reads seed the closure like conditions do.
         seed: set[str] = set()
         for rung_idx in x_touching:
             node = graph.rung_nodes[rung_idx]
             seed.update(node.condition_reads)
+            seed.update(node.data_reads & graph.index_tags)
             if node.subroutine is not None:
                 seed.update(self.caller_condition_reads.get(node.subroutine, frozenset()))
         seed.discard(candidate)

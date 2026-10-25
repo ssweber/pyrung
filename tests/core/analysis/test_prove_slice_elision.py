@@ -7,11 +7,13 @@ slice elision edge cases.
 from __future__ import annotations
 
 from pyrung.core import (
+    Block,
     Bool,
     Int,
     Or,
     Program,
     Rung,
+    TagType,
     call,
     copy,
     latch,
@@ -20,6 +22,7 @@ from pyrung.core import (
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.prove import Counterexample, always
 from pyrung.core.analysis.prove.elision import _elide_scan_local_stateful_dims
 
 
@@ -179,3 +182,37 @@ def test_strategy_toggle_dispatches_both_paths() -> None:
     assert isinstance(elided, dict)
     assert isinstance(details, dict)
     assert isinstance(subs, dict)
+
+
+def _indexed_entry_read_program() -> tuple[Program, Bool]:
+    """``DS[P]`` reads DS2 before the rung that writes it, but only at P = 2."""
+    hit = Bool("Hit")
+    k = Int("K", external=True, choices={0: "a", 7: "b"})
+    p = Int("P", external=True, choices={0: "zero", 2: "two"})
+    n = Int("N")
+    ds = Block("DS", TagType.INT, 1, 4)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(ds[p], n)
+        with Rung():
+            copy(k, ds[2])
+        with Rung(n == 7):
+            latch(hit)
+    return logic, hit
+
+
+def test_index_pointer_seeds_the_slice() -> None:
+    """The pointer is enumerated, not fixed at its default 0, where DS2 looks unread."""
+    logic, _hit = _indexed_entry_read_program()
+
+    reduced, elided = _slice_elide(logic, {"DS2": (0, 7)}, {"K": (0, 7), "P": (0, 2)})
+
+    assert "DS2" not in elided
+    assert reduced == {"DS2": (0, 7)}
+
+
+def test_index_entry_read_is_found() -> None:
+    logic, hit = _indexed_entry_read_program()
+
+    assert isinstance(always(logic, ~hit), Counterexample)
