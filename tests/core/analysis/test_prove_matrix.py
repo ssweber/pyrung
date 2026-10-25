@@ -2076,3 +2076,158 @@ class TestUnboundedIndexReads:
                 latch(hit)
 
         assert isinstance(always(logic, ~hit), Proven)
+
+    @pytest.mark.parametrize(("read_base", "expected"), [(500, Counterexample), (600, Proven)])
+    def test_write_through_unbounded_pointer_past_block_cap(self, read_base, expected):
+        """DS1..4500 is past the 1000-element cap, so the write's value set names its elements."""
+        start, hit = Bool("Start"), Bool("Hit")
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        wptr, rptr, n = Int("WPtr"), Int("RPtr"), Int("N")
+        ds = Block("DS", TagType.INT, 1, 4500)
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(sel * 10 + 500, wptr)
+            with Rung(start):
+                copy(7, ds[wptr])
+            with Rung():
+                calc(sel * 10 + read_base, rptr)
+            with Rung():
+                copy(ds[rptr], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, expected)
+        if expected is Counterexample:
+            _assert_trace_replays(logic, result, "Hit")
+
+    def test_write_past_block_cap_read_by_name(self):
+        start, hit = Bool("Start"), Bool("Hit")
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        wptr = Int("WPtr")
+        ds = Block("DS", TagType.INT, 1, 4500)
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(sel * 10 + 500, wptr)
+            with Rung(start):
+                copy(7, ds[wptr])
+            with Rung(ds[510] == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_write_past_block_cap_with_unbounded_address(self):
+        """A write pointer nothing bounds may hit any element: no verdict."""
+        start, hit = Bool("Start"), Bool("Hit")
+        wptr = Int("WPtr", external=True)
+        rptr, n = Int("RPtr"), Int("N")
+        ds = Block("DS", TagType.INT, 1, 4500)
+
+        with Program(strict=False) as logic:
+            with Rung(start):
+                copy(7, ds[wptr])
+            with Rung():
+                copy(500, rptr)
+            with Rung():
+                copy(ds[rptr], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        assert isinstance(always(logic, ~hit), Intractable)
+
+    @pytest.mark.parametrize(("guarded", "expected"), [(False, Proven), (True, Counterexample)])
+    def test_pointer_default_past_block_cap(self, guarded, expected):
+        """Ptr's default 0 puts DS[Ptr + 5] on DS5 only when its calc can be skipped."""
+        start, go, clear, hit = Bool("Start"), Bool("Go"), Bool("Clear"), Bool("Hit")
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        ptr, dest = Int("Ptr"), Int("Dest")
+        ds = Block("DS", TagType.INT, 1, 4500)
+
+        with Program(strict=False) as logic:
+            with Rung(go) if guarded else Rung():
+                calc(sel * 10 + 500, ptr)
+            with Rung():
+                calc(ptr + 5, dest)
+            with Rung(start):
+                copy(7, ds[dest])
+            with Rung(clear):
+                copy(1, ds[5])
+            with Rung(ds[5] == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, expected)
+        if expected is Counterexample:
+            _assert_trace_replays(logic, result, "Hit")
+
+    def test_counter_in_a_block_jumped_past_block_cap_is_not_absorbed(self):
+        """copy(4, DS[WPtr]) can jump DS7 past 3: it is no counter that only steps and resets."""
+        from pyrung.core.analysis.prove import _build_explore_context
+
+        tick, clr = Bool("Tick", external=True), Bool("Clr", external=True)
+        seen3, hit = Bool("Seen3"), Bool("Hit")
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        wptr = Int("WPtr")
+        ds = Block("DS", TagType.INT, 1, 4500)
+        loop = ds[7]
+
+        with Program(strict=False) as logic:
+            with Rung(loop == 3):
+                latch(seen3)
+            with Rung(loop == 4, ~seen3):
+                latch(hit)
+            with Rung(rise(tick)):
+                calc(loop + 1, loop)
+            with Rung(loop >= 5):
+                copy(0, loop)
+            with Rung():
+                calc(sel + 6, wptr)
+            with Rung(clr):
+                copy(4, ds[wptr])
+
+        ctx = _build_explore_context(logic, project=("Hit",), scope=["Hit"])
+        assert "DS7" not in [spec.acc_name for spec in ctx.threshold_vector_specs]
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    @pytest.mark.parametrize("size", [40, 4500])
+    @pytest.mark.parametrize(
+        ("read", "expected"),
+        [("index", Counterexample), ("name", Counterexample), ("out_of_window", Proven)],
+    )
+    def test_blockcopy_into_an_indexed_window(self, size, read, expected):
+        """DS.select(WPtr, WPtr + 1) with WPtr in 6..7 covers DS6..DS8, never DS20."""
+        go, put, hit = Bool("Go", external=True), Bool("Put", external=True), Bool("Hit")
+        clr = Bool("Clr", external=True)
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        src = Block("SRC", TagType.INT, 1, 2)
+        wptr, n = Int("WPtr"), Int("N")
+        ds = Block("DS", TagType.INT, 1, size)
+
+        with Program(strict=False) as logic:
+            with Rung(go):
+                copy(9, src[2])
+            with Rung():
+                calc(sel + 6, wptr)
+            with Rung(put):
+                blockcopy(src.select(1, 2), ds.select(wptr, wptr + 1))
+            with Rung(clr):
+                copy(1, ds[20])
+            if read == "index":
+                with Rung():
+                    copy(ds[wptr + 1], n)
+                with Rung(n == 9):
+                    latch(hit)
+            else:
+                with Rung(ds[8 if read == "name" else 20] == 9):
+                    latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, expected)
+        if expected is Counterexample:
+            _assert_trace_replays(logic, result, "Hit")

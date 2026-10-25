@@ -1531,7 +1531,7 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
         admissible.update(ctx._elided_tags)
 
     for instr in walk_instructions(ctx.program):
-        targets = [name for name, _itype in _all_write_targets(instr)]
+        targets = [name for name, _itype in _all_write_targets(instr, ctx.graph.indirect_reach)]
         if not targets:
             continue
         fwd = extract_forward_affine(instr)
@@ -1630,7 +1630,10 @@ def _pass_detect_init_constants(ctx: _PassContext) -> None:
     from .absorb import _all_write_targets
     from .expr import _edge_source_tags
 
-    all_sites = _collect_write_sites(ctx.program, target_extractor=_all_write_targets)
+    reach = ctx.graph.indirect_reach
+    all_sites = _collect_write_sites(
+        ctx.program, target_extractor=lambda instr: _all_write_targets(instr, reach)
+    )
     sites_by_target: dict[str, list[Any]] = {}
     for site in all_sites:
         sites_by_target.setdefault(site.target_name, []).append(site)
@@ -1769,7 +1772,9 @@ def _get_structural_domain_info(
     """
     if ctx._structural_domain_info is None:
         assert ctx.graph is not None and ctx.all_exprs is not None
-        literal_write_domains = _collect_literal_write_domains(ctx.program, ctx.graph.tags)
+        literal_write_domains = _collect_literal_write_domains(
+            ctx.program, ctx.graph.tags, ctx.graph.indirect_reach
+        )
         ctx._structural_domain_info = _collect_structural_domain_info(
             ctx.program,
             ctx.graph,

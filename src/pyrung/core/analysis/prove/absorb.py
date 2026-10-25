@@ -46,6 +46,8 @@ from .expr import _build_atom_index, _collect_atoms_for_tag
 from .results import PENDING
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
 
@@ -185,8 +187,14 @@ def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:
     return False
 
 
-def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
-    """Extract (tag_name, instruction_type) for every write target."""
+def _all_write_targets(
+    instr: Any, reach: Mapping[int, tuple[str, ...]] | None = None
+) -> list[tuple[str, str]]:
+    """Extract (tag_name, instruction_type) for every write target.
+
+    *reach* (``ProgramGraph.indirect_reach``) names the elements an over-cap
+    write through an unbounded index reaches; without it that write has none.
+    """
     from pyrung.core.instruction.advanced import SearchInstruction, ShiftInstruction
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.coils import (
@@ -251,7 +259,7 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
         else:
             targets = _resolve_tag_names(dest)
             if not targets:
-                targets = _expand_indirect_tag_names(dest)
+                targets = _expand_indirect_tag_names(dest, reach)
     elif isinstance(instr, CalcInstruction):
         dest = instr.dest
         if isinstance(dest, Tag):
@@ -259,7 +267,7 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
         else:
             targets = _resolve_tag_names(dest)
             if not targets:
-                targets = _expand_indirect_tag_names(dest)
+                targets = _expand_indirect_tag_names(dest, reach)
     elif isinstance(instr, ShiftInstruction):
         targets = _resolve_tag_names(instr.bit_range)
     elif isinstance(instr, (TimeDrumInstruction, TimeEventDrumInstruction)):
@@ -275,10 +283,8 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
         for target in instr._outs.values():
             if isinstance(target, Tag):
                 targets.append(target.name)
-    elif isinstance(instr, BlockCopyInstruction):
-        targets = _resolve_tag_names(instr.dest)
-    elif isinstance(instr, FillInstruction):
-        targets = _resolve_tag_names(instr.dest)
+    elif isinstance(instr, (BlockCopyInstruction, FillInstruction)):
+        targets = _resolve_tag_names(instr.dest) or _expand_indirect_tag_names(instr.dest, reach)
     elif isinstance(
         instr,
         (
@@ -1268,15 +1274,24 @@ def _collect_progress_source_kinds(program: Program) -> dict[str, str]:
     return kinds
 
 
-def _acc_has_only_owner_writes(program: Program, acc_name: str, kind: str) -> bool:
-    """True when a progress accumulator has only owner/reset-safe writes."""
+def _acc_has_only_owner_writes(
+    program: Program,
+    acc_name: str,
+    kind: str,
+    reach: Mapping[int, tuple[str, ...]] | None = None,
+) -> bool:
+    """True when a progress accumulator has only owner/reset-safe writes.
+
+    *reach* (``ProgramGraph.indirect_reach``) adds the over-cap writes through
+    an unbounded index that can land on it.
+    """
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.validation._common import walk_instructions
 
     saw_owner = False
     for instr in walk_instructions(program):
-        if acc_name not in {name for name, _itype in _all_write_targets(instr)}:
+        if acc_name not in {name for name, _itype in _all_write_targets(instr, reach)}:
             continue
 
         is_owner = False
@@ -1315,7 +1330,7 @@ def _collect_int_progress_source_kinds(
     result: dict[str, str] = {}
     by_target: dict[str, list[Any]] = {}
     for instr in walk_instructions(program):
-        for target_name, _itype in _all_write_targets(instr):
+        for target_name, _itype in _all_write_targets(instr, graph.indirect_reach):
             by_target.setdefault(target_name, []).append(instr)
     stable_int_tags = _stable_int_tag_values(graph, by_target)
     # Only referenced-at-all matters here.
@@ -1491,7 +1506,7 @@ def _collect_real_progress_source_kinds(
     result: dict[str, str] = {}
     by_target: dict[str, list[Any]] = {}
     for instr in walk_instructions(program):
-        for target_name, _itype in _all_write_targets(instr):
+        for target_name, _itype in _all_write_targets(instr, graph.indirect_reach):
             by_target.setdefault(target_name, []).append(instr)
     stable_int_tags = _stable_int_tag_values(graph, by_target)
     if atom_index is None:
@@ -1621,7 +1636,7 @@ def _find_threshold_absorptions(
             _PROGRESS_KIND_REAL_UP,
             _PROGRESS_KIND_REAL_DOWN,
         }:
-            if not _acc_has_only_owner_writes(program, acc_name, kind):
+            if not _acc_has_only_owner_writes(program, acc_name, kind, graph.indirect_reach):
                 blockers.append(
                     _ThresholdBlocker(
                         acc_name,

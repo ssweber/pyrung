@@ -118,13 +118,25 @@ PDG (shared with prover, PILOT, causal, lints):
   narrowed by `analysis/value_sets.py` (moved out of `prove/deadness.py`; new opt-ins
   `follow_indirect_reads` for jump tables, `declared_inputs` for inputs with choices/min/max). PackML
   needed both opt-ins plus readonly sources counting as init-constant literals (`init_constants.py`) to
-  stay at dev's dimensions and time. **Still open:** a write through an unbounded index into a block past
-  `_INDIRECT_BLOCK_CAP` (1000) is in no `writers_of`, so its elements are not read through an index
-  either (PackML's historian DS3000..3040: written then read the same scan, harmless there). Registering
-  them needs `classify._expand_indirect_tag_names` (about ten callers) to see the value-set addresses,
-  or the slots come back with no domain and PackML goes Intractable. The value sets are also
-  flow-insensitive: a pointer recomputed just before its read still counts its default (the historian
-  reaches DS5/6/9 at `HistIdIdx = 0`).
+  stay at dev's dimensions and time.
+- Over-cap indexed writes (done): in the `unbounded_index_reads` graph a write through an unbounded index
+  into a block past `_INDIRECT_BLOCK_CAP` writes the elements its value set reaches
+  (`_UnboundedReads.reached`, by id of the destination ref), recorded on `ProgramGraph.indirect_reach`;
+  classify's writer and domain sites take that map (`_all_write_targets(instr, reach)`,
+  `_expand_indirect_tag_names(dest, reach)`). A write whose addresses are unbounded too stays
+  unregistered; its pointer has no domain, so the result is Intractable. Value sets drop the default of a
+  tag `unconditional_write_before_read` covers (`written_first`; an indexed read of its slot still takes
+  it), else the historian reaches DS5/6/9 at `HistIdIdx = 0` and `UnitModeCurrent` widens to 18 values.
+  The historian slots DS3000..3040 then became 5 stateful dimensions (PackML 106 -> 245 s); slice
+  elision's `_local_slice_check` (one call of the subroutine, its own closure, `HistIdIdx` /
+  `HistStatusIdx` written first, 10 combinations) elides them: lock byte-identical, 100 s. Follow-ups
+  (done): the absorb accumulator sites, `_has_inert_writer` and the literal-domain target list take the
+  reach too (an over-cap write could jump a counter in `DS[7]` that was then absorbed); `blockcopy`/`fill`
+  into an indexed window (`DS.select(Ptr, Ptr + 1)`) is a writer of what `_ValueSets.window` covers
+  (lowest start to highest end; the whole block when unbounded, as before), and `_domain_from_blockcopy`
+  gives those elements the union of the source elements' domains (was: every element of the block
+  Intractable, at any size). Left: `HistorianStatusEcho`'s domain reads 0..17 where it holds 0/1
+  (seeding only); PackML context build +0.3 s.
 - Index mapping (done, affine fix): `pdg.PointerUse` per access (`DS[Ptr + k]`, `DS[k - Ptr]`, integer k),
   `ProgramGraph.pointer_uses`, `opaque_index_blocks` (non-affine index: reads/writes the whole block up to
   `_INDIRECT_BLOCK_CAP`), `index_tags` (every tag an index reads, counted as comparison-influencing so an

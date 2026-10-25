@@ -160,6 +160,10 @@ class ProgramGraph:
     block_ranges: dict[str, list[str]]  # range label → member tag names
     pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
     indirect_writes: tuple[IndirectWriteRef, ...] = ()
+    # In an ``unbounded_index_reads`` graph, the elements each over-cap write
+    # through an unbounded index reaches, by ``id`` of its destination ref
+    # (refs overload ``==``).  Empty otherwise.
+    indirect_reach: dict[int, tuple[str, ...]] = field(default_factory=dict)
     # Every indexed access with a single affine pointer, and the blocks indexed
     # by any other expression (``DS[Ptr * 2]``), whose elements no pointer
     # range bounds.
@@ -800,9 +804,15 @@ class _UnboundedReads:
     clamped to 0..4).  Every other element holds its power-on value, so which
     one the index picks is decided by the pointer alone.
 
-    Not covered: a write through an unbounded index into a block past
-    ``_INDIRECT_BLOCK_CAP`` is in no ``writers_of`` entry (``indirect_writes``
-    keeps it), so the elements it reaches do not count as written here.
+    A write through an unbounded index into a block past
+    ``_INDIRECT_BLOCK_CAP`` has no element list of its own (``indirect_writes``
+    keeps it for the recorded walk); here it writes the elements its value set
+    reaches (``reached``, by id of the destination ref), so they join
+    ``writers_of`` and the reads above.  A write whose addresses are unbounded
+    too writes none of them: its pointer has no domain, and the verifier
+    reports it Intractable.  An indexed window (``block.select(Ptr, Ptr + 1)``)
+    past the cap writes from its lowest start to its highest end, or, unbounded,
+    the whole block as in any graph.
     """
 
     def __init__(self, program: Program, graph: ProgramGraph) -> None:
@@ -825,6 +835,9 @@ class _UnboundedReads:
             None,
             follow_indirect_reads=True,
             declared_inputs=True,
+            written_first=frozenset(
+                name for name in graph.writers_of if graph.unconditional_write_before_read(name)
+            ),
         )
         self._written: dict[str, list[Tag]] = defaultdict(list)
         for name in sorted(graph.writers_of):
@@ -832,6 +845,34 @@ class _UnboundedReads:
             block = getattr(tag, "_pyrung_block", None)
             if tag is not None and block is not None:
                 self._written[block.name].append(tag)
+        # Elements an over-cap write through an unbounded index reaches.
+        self.reached: dict[int, list[Tag]] = {}
+        for instr in instructions:
+            for dest in instruction_write_targets(instr):
+                if isinstance(dest, ImmediateRef):
+                    dest = dest.value
+                if not isinstance(dest, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
+                    continue
+                block = dest.block
+                if block.end - block.start + 1 <= _INDIRECT_BLOCK_CAP:
+                    continue  # writes the whole block
+                if isinstance(dest, IndirectBlockRange):
+                    addresses = self._values.window(dest)
+                elif isinstance(dest, IndirectRef):
+                    bounded = _indirect_ref_tags(block, dest.pointer)
+                    addresses = None if bounded is not None else self._values.addresses(dest)
+                else:
+                    bounded = _indirect_expr_tags(block, dest.expr)
+                    addresses = None if bounded is not None else self._values.addresses(dest)
+                if addresses is None:
+                    continue
+                tags: list[Tag] = [
+                    block._get_tag(addr)
+                    for addr in sorted(addresses)
+                    if block.start <= addr <= block.end
+                ]
+                self.reached[id(dest)] = tags
+                self._written[block.name].extend(tags)
 
     def tags(self, ref: IndirectRef | IndirectExprRef) -> list[Tag]:
         block = ref.block
@@ -855,6 +896,20 @@ def _unbounded_read_tags(ref: IndirectRef | IndirectExprRef) -> list[Tag] | None
     """What *ref* reads in an ``unbounded_index_reads`` build; ``None`` outside one."""
     reads = _UNBOUNDED_READS.get()
     return None if reads is None else reads.tags(ref)
+
+
+def _unbounded_write_reach() -> dict[int, tuple[str, ...]]:
+    """``ProgramGraph.indirect_reach`` for the graph being built."""
+    reads = _UNBOUNDED_READS.get()
+    if reads is None:
+        return {}
+    return {key: tuple(tag.name for tag in tags) for key, tags in reads.reached.items()}
+
+
+def _unbounded_write_tags(ref: IndirectRef | IndirectExprRef | IndirectBlockRange) -> list[Tag]:
+    """What an over-cap *ref* writes in an ``unbounded_index_reads`` build."""
+    reads = _UNBOUNDED_READS.get()
+    return [] if reads is None else reads.reached.get(id(ref), [])
 
 
 def _input_slots(block: Block) -> list[Tag]:
@@ -1025,7 +1080,9 @@ def _extract_write_targets(
             return
 
         if isinstance(current, BlockRange | IndirectBlockRange):
-            tags = _block_tags(current)
+            tags = (
+                isinstance(current, IndirectBlockRange) and _unbounded_write_tags(current)
+            ) or _block_tags(current)
             for tag in tags:
                 _register_tag(tag, tag_refs, writes)
             if (
@@ -1043,7 +1100,7 @@ def _extract_write_targets(
             reads.update(_extract_tag_names(current.pointer, tag_refs, ranges=ranges))
             tags = _indirect_ref_tags(current.block, current.pointer)
             if tags is None:
-                tags = _full_block_tags(current.block)
+                tags = _full_block_tags(current.block) or _unbounded_write_tags(current)
             for tag in tags:
                 _register_tag(tag, tag_refs, writes)
             if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
@@ -1054,7 +1111,7 @@ def _extract_write_targets(
             reads.update(_extract_tag_names(current.expr, tag_refs, ranges=ranges))
             tags = _indirect_expr_tags(current.block, current.expr)
             if tags is None:
-                tags = _full_block_tags(current.block)
+                tags = _full_block_tags(current.block) or _unbounded_write_tags(current)
             for tag in tags:
                 _register_tag(tag, tag_refs, writes)
             if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
@@ -1742,6 +1799,7 @@ def _build_program_graph(
         block_ranges=range_acc,
         pointer_tags=pointer_tags,
         indirect_writes=indirect_writes,
+        indirect_reach=_unbounded_write_reach(),
         pointer_uses=pointer_uses,
         opaque_index_blocks=opaque_index_blocks,
         index_tags=index_tags,

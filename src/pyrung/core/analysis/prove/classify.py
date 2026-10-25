@@ -108,7 +108,7 @@ from .system_points import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
     from pyrung.core.analysis.pdg import ProgramGraph, RungNode
     from pyrung.core.analysis.simplified import Atom
@@ -260,11 +260,13 @@ def _tag_is_observable(
     return tag_name in set(scope or ()) or tag_name in set(project or ())
 
 
-def _has_inert_writer(program: Program, tag_name: str) -> bool:
+def _has_inert_writer(
+    program: Program, tag_name: str, reach: Mapping[int, tuple[str, ...]] | None = None
+) -> bool:
     from pyrung.core.validation._common import walk_instructions
 
     for instr in walk_instructions(program):
-        if tag_name not in {name for name, _itype in _all_write_targets(instr)}:
+        if tag_name not in {name for name, _itype in _all_write_targets(instr, reach)}:
             continue
         if getattr(instr, "is_inert_when_disabled", lambda: True)():
             return True
@@ -320,7 +322,7 @@ def _collect_all_exprs(
     tag_refs = dict(graph.tags)
 
     def _write_targets_with_faults(instr: Any) -> list[tuple[str, str]]:
-        seen: set[tuple[str, str]] = set(_all_write_targets(instr))
+        seen: set[tuple[str, str]] = set(_all_write_targets(instr, graph.indirect_reach))
         instr_type = type(instr).__name__
         for fault_name in sorted(_implicit_fault_writes(instr, tag_refs)):
             seen.add((fault_name, instr_type))
@@ -517,6 +519,7 @@ def _comparison_influencing_tags(
     """
     influential: set[str] = {name for name in graph.tags if atom_idx.get(name)}
     influential.update(graph.index_tags)
+    reach = graph.indirect_reach
     if program is None:
         return frozenset(influential)
 
@@ -538,7 +541,7 @@ def _comparison_influencing_tags(
                 continue
             target_names = _resolve_tag_names(instr.dest)
             if not target_names:
-                target_names = _expand_indirect_tag_names(instr.dest)
+                target_names = _expand_indirect_tag_names(instr.dest, reach)
             for tn in target_names:
                 target_to_sources.setdefault(tn, set()).add(source_name)
         elif isinstance(instr, FillInstruction):
@@ -547,7 +550,7 @@ def _comparison_influencing_tags(
                 continue
             target_names = _resolve_tag_names(instr.dest)
             if not target_names:
-                target_names = _expand_indirect_tag_names(instr.dest)
+                target_names = _expand_indirect_tag_names(instr.dest, reach)
             for tn in target_names:
                 target_to_sources.setdefault(tn, set()).add(source_name)
         elif isinstance(instr, BlockCopyInstruction):
@@ -556,9 +559,9 @@ def _comparison_influencing_tags(
             source_names = _resolve_tag_names(instr.source)
             dest_names = _resolve_tag_names(instr.dest)
             if not source_names:
-                source_names = _expand_indirect_tag_names(instr.source)
+                source_names = _expand_indirect_tag_names(instr.source, reach)
             if not dest_names:
-                dest_names = _expand_indirect_tag_names(instr.dest)
+                dest_names = _expand_indirect_tag_names(instr.dest, reach)
             if source_names and dest_names and len(source_names) == len(dest_names):
                 for src, dst in zip(source_names, dest_names, strict=True):
                     target_to_sources.setdefault(dst, set()).add(src)
@@ -605,6 +608,7 @@ def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
 def _literal_write_values(
     instr: Any,
     tags: dict[str, Tag],
+    reach: Mapping[int, tuple[str, ...]] | None = None,
 ) -> dict[str, Any] | None:
     """Return normalized literal values for copy/fill targets, if any."""
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
@@ -619,7 +623,7 @@ def _literal_write_values(
         return None
 
     values: dict[str, Any] = {}
-    for target_name, _itype in _all_write_targets(instr):
+    for target_name, _itype in _all_write_targets(instr, reach):
         target = tags.get(target_name)
         if target is None:
             return None
@@ -633,6 +637,7 @@ def _literal_write_values(
 def _collect_literal_write_domains(
     program: Program,
     tags: dict[str, Tag],
+    reach: Mapping[int, tuple[str, ...]] | None = None,
 ) -> dict[str, tuple[Any, ...]]:
     """Infer exact finite domains for tags written only by literal copy/fill."""
     from pyrung.core.validation._common import walk_instructions
@@ -641,11 +646,11 @@ def _collect_literal_write_domains(
     disqualified: set[str] = set()
 
     for instr in walk_instructions(program):
-        targets = [name for name, _itype in _all_write_targets(instr)]
+        targets = [name for name, _itype in _all_write_targets(instr, reach)]
         if not targets:
             continue
 
-        literal_values = _literal_write_values(instr, tags)
+        literal_values = _literal_write_values(instr, tags, reach)
         for target_name in targets:
             if target_name in disqualified:
                 continue
@@ -791,7 +796,7 @@ def _compute_stepping_tags(
     indirect_pending: list[tuple[str, Any]] = []
 
     for instr in walk_instructions(program):
-        targets = _all_write_targets(instr)
+        targets = _all_write_targets(instr, graph.indirect_reach)
         if not targets:
             continue
 
@@ -817,7 +822,7 @@ def _compute_stepping_tags(
                 elif source_name is None:
                     indirect_pending.append((target_name, instr.source))
 
-        lit = _literal_write_values(instr, graph.tags)
+        lit = _literal_write_values(instr, graph.tags, graph.indirect_reach)
         if lit is not None:
             for name, val in lit.items():
                 literal_values.setdefault(name, set()).add(val)
@@ -1135,17 +1140,27 @@ def _domain_from_blockcopy(
     instr: Any,
     target_name: str,
     known_domains: dict[str, tuple[Any, ...]],
+    reach: Mapping[int, tuple[str, ...]] | None = None,
 ) -> tuple[Any, ...] | None:
-    """Infer target domain for a blockcopy by mapping the corresponding source element."""
+    """Infer target domain for a blockcopy by mapping the corresponding source element.
+
+    With an indexed window on either side (``DS.select(Ptr, Ptr + 1)``) the
+    position is unknown, so the target takes any source element's value.
+    """
+    from pyrung.core.memory_block import IndirectBlockRange
     from pyrung.core.validation._common import _resolve_tag_names
 
-    source_names = _resolve_tag_names(instr.source)
-    dest_names = _resolve_tag_names(instr.dest)
-    if not source_names or not dest_names:
-        source_names = _expand_indirect_tag_names(instr.source)
-        dest_names = _expand_indirect_tag_names(instr.dest)
+    source_names = _resolve_tag_names(instr.source) or _expand_indirect_tag_names(
+        instr.source, reach
+    )
+    dest_names = _resolve_tag_names(instr.dest) or _expand_indirect_tag_names(instr.dest, reach)
     if not dest_names or target_name not in dest_names:
         return ()
+    if isinstance(instr.source, IndirectBlockRange) or isinstance(instr.dest, IndirectBlockRange):
+        if not source_names or any(name not in known_domains for name in source_names):
+            return None
+        values = {value for name in source_names for value in known_domains[name]}
+        return tuple(sorted(values, key=repr))
     idx = dest_names.index(target_name)
     if idx >= len(source_names):
         return None
@@ -1187,7 +1202,7 @@ def _domain_from_write_instruction(
     if isinstance(instr, BlockCopyInstruction):
         if instr.convert is not None:
             return None
-        return _domain_from_blockcopy(instr, target_name, known_domains)
+        return _domain_from_blockcopy(instr, target_name, known_domains, graph.indirect_reach)
 
     if isinstance(instr, CalcInstruction):
         if instr.dest.name != target_name:
@@ -1276,14 +1291,15 @@ def _collect_structural_domain_info(
     profile_start = profile_last = time.perf_counter() if profile else 0.0
 
     known_domains = dict(
-        literal_write_domains or _collect_literal_write_domains(program, graph.tags)
+        literal_write_domains
+        or _collect_literal_write_domains(program, graph.tags, graph.indirect_reach)
     )
     if profile:
         profile_last = _classify_profile_mark(timings, "literal_domain_seed", profile_last)
 
     by_target: dict[str, list[Any]] = {}
     for instr in walk_instructions(program):
-        for target_name, _itype in _all_write_targets(instr):
+        for target_name, _itype in _all_write_targets(instr, graph.indirect_reach):
             by_target.setdefault(target_name, []).append(instr)
     if profile:
         profile_last = _classify_profile_mark(timings, "writer_index", profile_last)
@@ -1504,7 +1520,7 @@ def collect_produced_value_domains(
 
     by_target: dict[str, list[Any]] = {}
     for instr in walk_instructions(program):
-        for target_name, _itype in _all_write_targets(instr):
+        for target_name, _itype in _all_write_targets(instr, graph.indirect_reach):
             by_target.setdefault(target_name, []).append(instr)
 
     # An over-cap indirect destination is intentionally absent from the normal
@@ -1622,14 +1638,24 @@ def collect_produced_value_domains(
     return known
 
 
-def _expand_indirect_tag_names(dest: Any) -> list[str]:
+def _expand_indirect_tag_names(
+    dest: Any, reach: Mapping[int, tuple[str, ...]] | None = None
+) -> list[str]:
     """Expand indirect refs to possible concrete target tag names.
 
     For IndirectRef, uses pointer min/max/choices to tighten the range.
     For unbounded IndirectRef, IndirectBlockRange, or IndirectExprRef, falls
     back to already-materialized tags in the block (avoids forcing creation
-    of all block elements in large blocks).
+    of all block elements in large blocks).  Past 1000 elements that is none,
+    unless *reach* (``ProgramGraph.indirect_reach``) bounds the ref.
     """
+    names = _expand_bounded_indirect_tag_names(dest)
+    if not names and reach:
+        return list(reach.get(id(dest), ()))
+    return names
+
+
+def _expand_bounded_indirect_tag_names(dest: Any) -> list[str]:
     from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 
     if isinstance(dest, IndirectRef):
@@ -1664,6 +1690,7 @@ def _expand_indirect_tag_names(dest: Any) -> list[str]:
 def _unsupported_reverse_sources(
     instr: Any,
     covered_pairs: set[tuple[str, str]],
+    reach: Mapping[int, tuple[str, ...]] | None = None,
 ) -> list[tuple[str, list[str]]]:
     """Identify (source_tag, [target_tags]) for writes not covered by reverse edges.
 
@@ -1693,7 +1720,7 @@ def _unsupported_reverse_sources(
             return []
         target_names = _resolve_tag_names(instr.dest)
         if not target_names:
-            target_names = _expand_indirect_tag_names(instr.dest)
+            target_names = _expand_indirect_tag_names(instr.dest, reach)
         uncovered = [
             tn
             for tn in target_names
@@ -1710,7 +1737,7 @@ def _unsupported_reverse_sources(
         dest = instr.dest
         target_names = _resolve_tag_names(dest)
         if not target_names:
-            target_names = _expand_indirect_tag_names(dest)
+            target_names = _expand_indirect_tag_names(dest, reach)
         uncovered = [
             tn
             for tn in target_names
@@ -1723,9 +1750,9 @@ def _unsupported_reverse_sources(
         source_names = _resolve_tag_names(instr.source)
         dest_names = _resolve_tag_names(instr.dest)
         if not source_names:
-            source_names = _expand_indirect_tag_names(instr.source)
+            source_names = _expand_indirect_tag_names(instr.source, reach)
         if not dest_names:
-            dest_names = _expand_indirect_tag_names(instr.dest)
+            dest_names = _expand_indirect_tag_names(instr.dest, reach)
         result: list[tuple[str, list[str]]] = []
         if source_names and dest_names:
             if len(source_names) == len(dest_names):
@@ -1783,7 +1810,7 @@ def _backward_propagate_comparison_boundaries(
                 continue
             target_names = _resolve_tag_names(instr.dest)
             if not target_names:
-                target_names = _expand_indirect_tag_names(instr.dest)
+                target_names = _expand_indirect_tag_names(instr.dest, graph.indirect_reach)
             for target_name in target_names:
                 reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY))
                 covered_pairs.add((source_name, target_name))
@@ -1794,7 +1821,7 @@ def _backward_propagate_comparison_boundaries(
                 continue
             target_names = _resolve_tag_names(instr.dest)
             if not target_names:
-                target_names = _expand_indirect_tag_names(instr.dest)
+                target_names = _expand_indirect_tag_names(instr.dest, graph.indirect_reach)
             for target_name in target_names:
                 reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY))
                 covered_pairs.add((source_name, target_name))
@@ -1805,7 +1832,7 @@ def _backward_propagate_comparison_boundaries(
             source_names = _resolve_tag_names(instr.source)
             dest_names = _resolve_tag_names(instr.dest)
             if not dest_names:
-                dest_names = _expand_indirect_tag_names(instr.dest)
+                dest_names = _expand_indirect_tag_names(instr.dest, graph.indirect_reach)
             if source_names and dest_names:
                 if len(source_names) == len(dest_names):
                     for src, dst in zip(source_names, dest_names, strict=True):
@@ -1911,7 +1938,7 @@ def _backward_propagate_comparison_boundaries(
 
     reverse_soundness_blockers: set[str] = set()
     for instr in walk_instructions(program):
-        source_targets = _unsupported_reverse_sources(instr, covered_pairs)
+        source_targets = _unsupported_reverse_sources(instr, covered_pairs, graph.indirect_reach)
         for source_name, target_names in source_targets:
             has_downstream_comparison = any(atom_idx.get(tn) for tn in target_names)
             if not has_downstream_comparison:
@@ -2494,7 +2521,9 @@ def _classify_dimensions_from_graph(
     if profile:
         profile_last = _classify_profile_mark(timings, "done_acc_pairs", profile_last)
     # Always needed below (feeds _extract_value_domain); cheap to recompute.
-    literal_write_domains = _collect_literal_write_domains(program, graph.tags)
+    literal_write_domains = _collect_literal_write_domains(
+        program, graph.tags, graph.indirect_reach
+    )
     if profile:
         profile_last = _classify_profile_mark(timings, "literal_write_domains", profile_last)
     if structural_domain_info is not None and discovered_domains is None:
@@ -2913,7 +2942,7 @@ def _classify_dimensions_from_graph(
             and not (
                 _tag_is_observable(tag_name, scope=scope, project=project)
                 and (
-                    _has_inert_writer(program, tag_name)
+                    _has_inert_writer(program, tag_name, graph.indirect_reach)
                     or _has_out_oneshot_writer(program, tag_name)
                 )
             )

@@ -121,6 +121,13 @@ class _ValueSets:
     ``Requested = T``) stays bounded.  With *declared_inputs*, an input with
     declared ``choices`` or ``min``/``max`` holds those values (and its
     default), as the verifier explores it, instead of any value.
+
+    A tag in *written_first* is written, unconditionally, before anything
+    reads it by name (``ProgramGraph.unconditional_write_before_read``), so its
+    default never reaches those reads and its set holds only what its writers
+    store (``HistIdIdx = HistorianId * 10 + 2991``, never 0 where it indexes).
+    An index can read its slot at any point in the scan, so an indexed read
+    still takes its default.
     """
 
     def __init__(
@@ -132,8 +139,10 @@ class _ValueSets:
         *,
         follow_indirect_reads: bool = False,
         declared_inputs: bool = False,
+        written_first: Collection[str] = (),
     ) -> None:
         self._tags = tags
+        self._written_first = written_first
         self._follow_indirect_reads = follow_indirect_reads
         self._declared_inputs = declared_inputs
         self._unbounded = unbounded
@@ -186,14 +195,31 @@ class _ValueSets:
                 return None
             return values
         if isinstance(ref, IndirectExprRef):
-            out = self._evaluate(ref.expr)
-            if out is None:
-                return None
-            try:
-                return frozenset(int(v) for v in out)
-            except (TypeError, ValueError, OverflowError):
-                return None
+            return self._integers(ref.expr)
         return None
+
+    def window(self, ref: IndirectBlockRange, values=None) -> frozenset[int] | None:
+        """Every address ``block.select(start, end)`` can cover: lowest start to highest end."""
+        starts = self._integers(ref.start_expr, values)
+        ends = self._integers(ref.end_expr, values)
+        if not starts or not ends:
+            return None
+        lo, hi = min(starts), max(ends)
+        if hi - lo >= _VALUE_CAP:
+            return None
+        return frozenset(range(lo, hi + 1))
+
+    def _integers(self, expr: Any, values=None) -> frozenset[int] | None:
+        """The integer values *expr* takes, or None when unbounded."""
+        if values is None and self._values is None:
+            self._values = self._fixpoint()
+        out = self._evaluate(expr, values)
+        if out is None:
+            return None
+        try:
+            return frozenset(int(v) for v in out)
+        except (TypeError, ValueError, OverflowError):
+            return None
 
     def values(self, name: str) -> frozenset[Any] | None:
         if self._values is None:
@@ -245,6 +271,8 @@ class _ValueSets:
             tag = block._get_tag(addr)
             if tag.name in lookup:
                 domain = lookup[tag.name]
+                if domain is not None and tag.name in self._written_first:
+                    domain = domain | self._initial_values(tag)
             elif tag.external or isinstance(tag, InputTag):
                 domain = None
             else:
@@ -289,10 +317,15 @@ class _ValueSets:
             return None
         if name in self._unbounded or tag.external or isinstance(tag, InputTag):
             return self._declared(tag) if self._declared_inputs else None
-        base = {tag.default}
-        if name in self._initial:
-            base.add(self._initial[name])
-        return frozenset(base)
+        if name in self._written_first:
+            return frozenset()
+        return self._initial_values(tag)
+
+    def _initial_values(self, tag: Tag) -> frozenset[Any]:
+        """The values *tag* holds before anything writes it."""
+        if tag.name in self._initial:
+            return frozenset({tag.default, self._initial[tag.name]})
+        return frozenset({tag.default})
 
     @staticmethod
     def _declared(tag: Tag) -> frozenset[Any] | None:
@@ -346,6 +379,11 @@ class _ValueSets:
             if not slots:
                 continue
             if isinstance(ref, IndirectBlockRange):
+                # Which element gets which source value is positional: unbounded,
+                # unless the window cannot reach this tag's slot at all.
+                window = self.window(ref, values)
+                if window is not None and not (window & slots):
+                    continue
                 return None
             addresses = self._addresses_with(ref, values)
             if addresses is not None and not (addresses & slots):
@@ -363,13 +401,7 @@ class _ValueSets:
                 return None
             return domain
         if isinstance(ref, IndirectExprRef):
-            out = self._evaluate(ref.expr, values)
-            if out is None:
-                return None
-            try:
-                return frozenset(int(v) for v in out)
-            except (TypeError, ValueError, OverflowError):
-                return None
+            return self._integers(ref.expr, values)
         return None
 
 

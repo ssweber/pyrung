@@ -476,3 +476,29 @@ class TestValueDomainExtraction:
         assert domain is not None
         assert "a" in domain
         assert "b" in domain
+
+
+def test_literal_domain_counts_a_write_past_the_block_cap():
+    """``copy(Val, DS[WPtr])`` can land on DS7, so DS7's writes are not all literals."""
+    from pyrung.core import Block, TagType
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.classify import _collect_literal_write_domains
+
+    go, put = Bool("Go", external=True), Bool("Put", external=True)
+    sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+    val = Int("Val", external=True, choices={0: "zero", 9: "nine"})
+    wptr = Int("WPtr")
+    ds = Block("DS", TagType.INT, 1, 4500)
+
+    with Program(strict=False) as logic:
+        with Rung(go):
+            copy(1, ds[7])
+        with Rung():
+            calc(sel + 6, wptr)
+        with Rung(put):
+            copy(val, ds[wptr])
+
+    graph = build_program_graph(logic, unbounded_index_reads=True)
+    domains = _collect_literal_write_domains(logic, graph.tags, graph.indirect_reach)
+
+    assert "DS7" not in domains
