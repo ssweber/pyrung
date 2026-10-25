@@ -14,6 +14,7 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
+    calc,
     call,
     copy,
     latch,
@@ -30,12 +31,14 @@ def _slice_elide(
     program: Program,
     stateful_dims: dict[str, tuple[object, ...]],
     nondeterministic_dims: dict[str, tuple[object, ...]],
+    observed_tags: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, tuple[object, ...]], dict[str, str]]:
     reduced, elided, _details, _subs = _elide_scan_local_stateful_dims(
         program,
         build_program_graph(program),
         stateful_dims,
         nondeterministic_dims,
+        observed_tags=observed_tags,
     )
     return reduced, elided
 
@@ -214,5 +217,107 @@ def test_index_pointer_seeds_the_slice() -> None:
 
 def test_index_entry_read_is_found() -> None:
     logic, hit = _indexed_entry_read_program()
+
+    assert isinstance(always(logic, ~hit), Counterexample)
+
+
+def _historian_program(shape: str) -> tuple[Program, Bool]:
+    """A slot per id, reached through ``Idx = Hid * 10 + 9`` inside one subroutine.
+
+    ``"write_then_read"`` writes the slot on both branches of ``Bit`` and reads
+    it back; ``"read_first"`` reads it before writing; ``"compare_first"``
+    compares it in a rung condition before writing it on both branches;
+    ``"write_some"`` writes it only under ``Bit`` and reads it on every call.
+    ``Hit`` latches when a call with ``Bit`` off sees 7.
+    """
+    go1, go2 = Bool("Go1", external=True), Bool("Go2", external=True)
+    bit, hit = Bool("Bit", external=True), Bool("Hit")
+    hid, idx, echo = Int("Hid"), Int("Idx"), Int("Echo")
+    ds = Block("DS", TagType.INT, 1, 40)
+
+    @subroutine("hist", strict=False)
+    def hist() -> None:
+        with Rung():
+            calc(hid * 10 + 9, idx)
+        if shape == "read_first":
+            with Rung():
+                copy(ds[idx], echo)
+        if shape == "compare_first":
+            with Rung(~bit, ds[idx] == 7):
+                latch(hit)
+        with Rung(bit):
+            copy(7, ds[idx])
+        if shape in ("write_then_read", "compare_first"):
+            with Rung(~bit):
+                copy(0, ds[idx])
+        if shape != "read_first":
+            with Rung():
+                copy(ds[idx], echo)
+        with Rung(~bit, echo == 7):
+            latch(hit)
+
+    with Program(strict=False) as logic:
+        with Rung(go1):
+            copy(1, hid)
+            call(hist)
+        with Rung(go2):
+            copy(2, hid)
+            call(hist)
+    return logic, hit
+
+
+_HISTORIAN_DIMS = {"DS19": (0, 7), "Hid": (0, 1, 2)}
+_HISTORIAN_INPUTS = {"Bit": (False, True), "Go1": (False, True), "Go2": (False, True)}
+
+
+def test_slot_written_then_read_in_each_call_is_elided() -> None:
+    """The call sites' conditions don't matter: each call writes DS19 before reading it."""
+    logic, _hit = _historian_program("write_then_read")
+
+    _reduced, elided = _slice_elide(logic, dict(_HISTORIAN_DIMS), dict(_HISTORIAN_INPUTS))
+
+    assert "DS19" in elided
+
+
+def test_slot_read_before_its_write_is_kept() -> None:
+    logic, _hit = _historian_program("read_first")
+
+    _reduced, elided = _slice_elide(logic, dict(_HISTORIAN_DIMS), dict(_HISTORIAN_INPUTS))
+
+    assert "DS19" not in elided
+
+
+def test_slot_compared_before_its_write_is_kept() -> None:
+    """A rung condition's read counts: running the body alone must see it too."""
+    logic, hit = _historian_program("compare_first")
+
+    _reduced, elided = _slice_elide(logic, dict(_HISTORIAN_DIMS), dict(_HISTORIAN_INPUTS))
+
+    assert "DS19" not in elided
+    assert isinstance(always(logic, ~hit), Counterexample)
+
+
+def test_slot_a_call_reads_without_writing_is_kept() -> None:
+    logic, _hit = _historian_program("write_some")
+
+    _reduced, elided = _slice_elide(logic, dict(_HISTORIAN_DIMS), dict(_HISTORIAN_INPUTS))
+
+    assert "DS19" not in elided
+
+
+def test_observed_slot_is_kept() -> None:
+    """A projection would see what DS19 kept from an earlier call."""
+    logic, _hit = _historian_program("write_then_read")
+
+    _reduced, elided = _slice_elide(
+        logic, dict(_HISTORIAN_DIMS), dict(_HISTORIAN_INPUTS), frozenset({"DS19"})
+    )
+
+    assert "DS19" not in elided
+
+
+def test_slot_kept_from_an_earlier_call_is_found() -> None:
+    """A call with Bit on stores 7; a later one with Bit off echoes it."""
+    logic, hit = _historian_program("write_some")
 
     assert isinstance(always(logic, ~hit), Counterexample)

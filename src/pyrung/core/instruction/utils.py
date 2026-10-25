@@ -69,12 +69,10 @@ def instruction_condition_view(ctx: ScanContext) -> ConditionView:
     execute outside a rung, so we fall back to a one-off frozen snapshot taken at
     instruction entry.
     """
-    from pyrung.core.context import ConditionView
-
     snapshot = ctx._condition_snapshot
     if snapshot is not None:
         return snapshot
-    return ConditionView(ctx)
+    return ctx._new_condition_view()
 
 
 def resolve_preset_ctx(preset: Tag | int, ctx: ScanContext) -> int:

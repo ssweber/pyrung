@@ -51,7 +51,7 @@ Each module has a docstring with implementation details. This map is for navigat
 - **`inputs.py`** — Input-group detection and successor enumeration. Cross-product of three dimensions: edge single-flips, encoder-group canonicals, free-input combos.
 - **`elision/`** — Slice-based state-key elision.
   - **`__init__.py`** — Pipeline entry point (delegates to slice.py).
-  - **`slice.py`** — Sound-by-construction write-before-read enumeration: per candidate, enumerates entry-state combinations over the tag's slice and checks that every path writes before reading.
+  - **`slice.py`** — Sound-by-construction write-before-read enumeration: per candidate, enumerates entry-state combinations over the tag's slice and checks that every path writes before reading. A tag touched only inside one subroutine, and read by nothing outside the program, is checked per call of that subroutine instead (`_local_slice_check`), so its call sites' conditions stay out of the enumeration.
 
 ## Pipeline overview
 

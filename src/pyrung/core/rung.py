@@ -163,8 +163,6 @@ class Rung:
 
     def _resolve_condition_view(self, ctx: ScanContext) -> ConditionView:
         """Resolve the frozen snapshot this rung should use for conditions."""
-        from pyrung.core.context import ConditionView
-
         if self._use_prior_snapshot:
             condition_view = ctx._condition_snapshot
             if (
@@ -177,7 +175,7 @@ class Rung:
                     "a program or subroutine, and cannot cross into or out of a subroutine."
                 )
         else:
-            condition_view = ConditionView(ctx)
+            condition_view = ctx._new_condition_view()
 
         ctx._condition_snapshot = condition_view
         return condition_view

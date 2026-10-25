@@ -29,6 +29,15 @@ Pipeline per candidate:
    and detect whether any read of ``X`` saw its scan-entry value.
 6. Decide — all combinations write-before-read ⇒ elidable.
 
+When every rung that touches ``X`` is in one subroutine, and nothing outside
+the program reads ``X``, a cheaper check runs first (``_local_slice_check``):
+one call of that subroutine's body, from every entry state of the tags its own
+rungs decide ``X``'s accesses by.  If each call writes ``X`` before reading it,
+no read anywhere sees a value from before the call, so ``X`` need not be
+written every scan.  The historian idiom needs it: a slot per id, written and
+read back in the same call, behind call sites whose conditions reach the whole
+program.
+
 Soundness notes:
 
 * Free variables are restricted to ``stateful_dims`` ∪ ``nondeterministic_dims``.
@@ -380,11 +389,14 @@ class _SliceElision:
         graph: ProgramGraph,
         stateful_dims: Mapping[str, tuple[Any, ...]],
         nondeterministic_dims: Mapping[str, tuple[Any, ...]],
+        observed: frozenset[str] = frozenset(),
     ) -> None:
         self.program = program
         self.graph = graph
         self.stateful_dims = stateful_dims
         self.nondeterministic_dims = nondeterministic_dims
+        # Tags read from outside the program (properties, the projection).
+        self.observed = observed
 
         tag_refs = dict(graph.tags)
         self.drum_shift_writes, self.oneshot_key_writes = _collect_hidden_memory_info(
@@ -488,6 +500,8 @@ class _SliceElision:
         writer_rungs = graph.writers_of.get(candidate, frozenset())
         reader_rungs = graph.all_readers_of.get(candidate, frozenset())
         x_touching = writer_rungs | reader_rungs
+        if self._local_slice_check(candidate, x_touching):
+            return True
 
         # Step 2: condition seed + transitive closure.  An index decides which
         # element a touching rung reaches (``copy(DS[P], N)`` reads X only at
@@ -599,6 +613,107 @@ class _SliceElision:
 
         return True
 
+    def _local_slice_check(self, candidate: str, x_touching: frozenset[int]) -> bool:
+        """Write-before-read within each call of the one subroutine touching X.
+
+        The free variables are the tags the subroutine's own rungs decide X's
+        accesses by: the conditions and indexes of the touching rungs, closed
+        over the subroutine's writers only, each taking any value of its
+        domain at the call.  A tag the subroutine writes unconditionally
+        above every rung of it that reads the tag (``HistIdIdx`` from
+        ``HistorianId``) holds a value from that write wherever it matters,
+        so it stays at its default.  A call that never reaches X leaves X
+        alone, and a later call writes before it reads too, so no read sees
+        what X held before.  Bails on a projected or property-read X (its
+        exit value would show), on a subroutine that calls another, and on
+        anything the global check bails on.
+        """
+        graph = self.graph
+        nodes = [graph.rung_nodes[i] for i in x_touching]
+        sub = nodes[0].subroutine if nodes else None
+        if sub is None or any(node.subroutine != sub for node in nodes):
+            return False
+        if candidate in self.observed or candidate in self.edge_tags:
+            return False
+        sub_nodes = [node for node in graph.rung_nodes if node.subroutine == sub]
+        if any(node.calls for node in sub_nodes):
+            return False
+
+        def writes_first(name: str) -> bool:
+            """Written by an unconditional rung of *sub* above its first reader there."""
+            if name in self.oneshot_written_tags:
+                return False
+            reads = [
+                node.rung_index
+                for node in sub_nodes
+                if name in node.condition_reads | node.data_reads | node.exclusive_reads
+            ]
+            writes = [
+                node.rung_index
+                for node in sub_nodes
+                if name in node.all_writes
+                and not node.branch_path
+                and not node.condition_reads - node.guard_reads
+            ]
+            return bool(writes) and (not reads or min(writes) < min(reads))
+
+        closure: set[str] = set()
+        pending: list[str] = []
+        for node in nodes:
+            pending.extend(node.condition_reads | (node.data_reads & graph.index_tags))
+        while pending:
+            name = pending.pop()
+            if name == candidate or name in closure:
+                continue
+            closure.add(name)
+            for node in sub_nodes:
+                if name in node.all_writes:
+                    pending.extend(node.condition_reads | node.data_reads | node.exclusive_reads)
+
+        relevant = closure | {candidate}
+        if relevant & (self.drum_shift_writes | self.edge_tags):
+            return False
+        if any(targets & relevant for _key, targets in self.oneshot_key_writes):
+            return False
+
+        names: list[str] = []
+        domains: list[tuple[Any, ...]] = []
+        total = 1
+        for name in sorted(closure):
+            if writes_first(name):
+                continue
+            if name in self.stateful_dims:
+                domain = self.stateful_dims[name]
+                if PENDING in domain:
+                    return False
+            elif name in self.nondeterministic_dims:
+                domain = self.nondeterministic_dims[name]
+            else:
+                closure_tag = graph.tags.get(name)
+                if closure_tag is not None and closure_tag.readonly:
+                    continue
+                return False
+            if not domain:
+                return False
+            total *= len(domain)
+            if total > _SLICE_COMBO_CAP:
+                return False
+            names.append(name)
+            domains.append(tuple(domain))
+
+        x_default = graph.tags[candidate].default
+        for combo in itertools.product(*domains):
+            tag_values = dict(zip(names, combo, strict=True))
+            if x_default is not None:
+                tag_values[candidate] = x_default
+            state = SystemState().with_tags(tag_values) if tag_values else SystemState()
+            ctx = _WriteBeforeReadContext(state, candidate)
+            ctx.set_memory("_dt", _SLICE_DT)
+            self.program._call_subroutine_ctx(sub, ctx)
+            if ctx.entry_read_seen:
+                return False
+        return True
+
     def _prev_domain(self, name: str) -> tuple[Any, ...] | None:
         """Domain for an edge tag's ``_prev:`` memory key, or None to bail."""
         domain = self.stateful_dims.get(name) or self.nondeterministic_dims.get(name)
@@ -624,6 +739,7 @@ def _elide_sliced(
     observer_exprs: tuple[Expr, ...] = (),
     observer_tag_names: frozenset[str] = frozenset(),
     projected_observers: frozenset[str] = frozenset(),
+    observed_tags: frozenset[str] = frozenset(),
     progress: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
     unclassified_tags: frozenset[str] = frozenset(),
@@ -638,6 +754,10 @@ def _elide_sliced(
 
     Returns ``(reduced_stateful_dims, elided_dict, proof_details, substitutions)``
     matching the contract of ``_elide_scan_local_stateful_dims``.
+
+    *observed_tags* are read from outside the program besides the observers
+    (the projection, what a callable property reads); the subroutine-local
+    check leaves them alone.
     """
     del projected_observers  # slice elision does not need scratch projection
 
@@ -650,13 +770,19 @@ def _elide_sliced(
         header = f"{progress_prefix()}elision | sliced {len(stateful_dims)} tags "
         print(header, end="", file=sys.stderr, flush=True)
 
-    analyzer = _SliceElision(program, graph, stateful_dims, nondeterministic_dims)
-
     stateful_names = sorted(name for name, domain in stateful_dims.items() if PENDING not in domain)
 
     observer_seeds: set[str] = set(observer_tag_names)
     for expr in observer_exprs:
         observer_seeds.update(_referenced_tags(expr))
+
+    analyzer = _SliceElision(
+        program,
+        graph,
+        stateful_dims,
+        nondeterministic_dims,
+        observed=frozenset(observer_seeds) | observed_tags,
+    )
 
     elidable: dict[str, str] = {}
     proof_details: dict[str, tuple[tuple[str, str], ...]] = {}

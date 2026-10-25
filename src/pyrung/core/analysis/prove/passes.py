@@ -1327,6 +1327,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         observer_exprs=tuple(ctx.extra_exprs or ()),
         observer_tag_names=observer_tag_names,
         projected_observers=projected_stateful,
+        observed_tags=frozenset(_observed_project(ctx) or ()),
         progress=ctx.progress_info,
         progress_prefix=ctx.progress_prefix,
         unclassified_tags=ctx._unclassified_written,
