@@ -97,8 +97,8 @@ def test_forloop_zero_or_negative_literal_count_raises(count):
         forloop(count)
 
 
-def test_branch_inside_forloop_is_rejected():
-    with pytest.raises(RuntimeError, match="branch\\(\\) is not permitted inside forloop\\(\\)"):
+def test_branch_directly_in_forloop_body_is_rejected():
+    with pytest.raises(RuntimeError, match="must sit in a body rung"):
         with Program(strict=False):
             with Rung():
                 with forloop(2):

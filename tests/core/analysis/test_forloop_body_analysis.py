@@ -254,3 +254,43 @@ def test_counterfactual_body_rung_boundary_carries_the_holding_branch():
     observed = {boundary.branch_path for _patch, boundary in receipt.encountered_candidates}
     assert observed == {(0,)}
     assert receipt.applications == ()
+
+
+def _body_branch_program() -> Program:
+    """A body rung with no contacts of its own and a contacted branch."""
+    with Program() as logic:
+        with Rung(Enable):
+            with forloop(3):
+                with Rung():
+                    calc(A + 1, A)
+                    with branch(Gate):
+                        out(Y)
+    return logic
+
+
+def test_pdg_node_reads_and_writes_through_a_body_rung_branch():
+    graph = build_program_graph(_body_branch_program())
+    node = graph.rung_nodes[0]
+    assert {"Enable", "Gate"} <= node.condition_reads
+    assert {"A", "Y"} <= node.writes
+    assert "Y" not in node.ote_writes
+    assert 0 in graph.readers_of["Gate"]
+    assert graph.def_use_chains["Gate"][0].read_by
+
+
+def test_write_sites_carry_body_rung_branch_contacts():
+    sites = [s for s in _collect_write_sites(_body_branch_program()) if s.target_name == "Y"]
+    assert len(sites) == 1
+    names = {repr(c) for c in sites[0].conditions}
+    assert any("Enable" in n for n in names)
+    assert any("Gate" in n for n in names)
+
+
+def test_prover_names_a_body_rung_branch_as_intractable():
+    logic = _body_branch_program()
+    with logic:
+        with Rung(Y):
+            out(Stop)
+    result = always(logic, ~Stop)
+    assert isinstance(result, Intractable)
+    assert "forloop body rung" in result.reason

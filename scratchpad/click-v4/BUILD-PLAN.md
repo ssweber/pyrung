@@ -188,8 +188,15 @@ For/Next (from feature 5):
   per scope): the callee's loop clobbers the caller's index until its next iteration.
 - `IndirectExprRef` has no comparisons, so `Rung(Dst[loop.idx + 1] == 0)` is not a valid contact
   (`DS[Ptr]` is). RESEARCH's example used it.
-- `branch()` stays forbidden anywhere in a loop, including inside a body rung. A CLICK body rung with an
-  OR-branch output imports as `with branch()` inside the loop and fails at program build.
+- `branch()` inside a body rung landed 2026-10-26 (still refused directly in the loop body). `body_rungs`
+  yields each body rung then its nested branches (so the prover gate, fold, PDG condition reads and the slice
+  see branch contacts); `instructions`/`iter_body()` include branch instructions with body+branch locals;
+  `iter_loop_body_rungs` stays direct body rungs (callers recurse branches); export re-roots branches
+  (`_loop_items._shadow`). The operand walker now walks body-rung contacts (was a phase-1 hole: CLICK
+  validation never saw them), as `body_rung[n].condition[i]` with `instruction_index=None`.
+  `break_loop()`/`continue_loop()` in a body-rung branch are still refused (unknown whether CLICK takes
+  Break on a branch output). CLICK's editor splits a branch off a For or Next rung (user, 2026-10-26); the
+  exporter already refuses a For rung with other items and a loop inside a branch.
 - laddercodec needs Break/Continue encoding (func codes 9232/9233) and nested For/Next (TOUCHPOINTS 5.L;
   not checked in laddercodec this session). The `loop` group's F9-F13 use Break/Continue, F9 nesting.
 - F15 (inner one-shot: does CLICK reject or ignore it?) is a CLICK-editor question, not a case; F16 needs

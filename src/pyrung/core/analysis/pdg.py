@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
@@ -1315,6 +1315,13 @@ def _implicit_fault_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:
     return writes
 
 
+def _rung_and_branches(rung: Rung) -> Iterator[Rung]:
+    """*rung*, then every branch nested in it."""
+    yield rung
+    for branch in rung._branches:
+        yield from _rung_and_branches(branch)
+
+
 def _rung_condition_reads(
     rung: Rung,
     tag_refs: dict[str, Tag],
@@ -1403,19 +1410,31 @@ def _build_access_sequence(
         if isinstance(item, ForLoopInstruction):
             for child in item.body:
                 if isinstance(child, RungClass):
-                    # A body rung reads its contacts when it runs, in body order.
-                    local_reads = _rung_condition_reads(child, tag_refs, local_only=True)
+                    # A body rung reads its contacts, and its branches' (which
+                    # see the same snapshot), when it runs, in body order.
+                    local_reads = frozenset().union(
+                        *(
+                            _rung_condition_reads(rung, tag_refs, local_only=True)
+                            for rung in _rung_and_branches(child)
+                        )
+                    )
                     if local_reads:
                         events.append(
                             _AccessEvent(node_index=node_index, condition_reads=local_reads)
                         )
-                    for body_instr in child._instructions:
-                        walk_instruction(body_instr, node_index)
+                    walk_body_rung(child, node_index)
                 else:
                     walk_instruction(child, node_index)
 
         if isinstance(item, CallInstruction):
             inline_subroutine(item.subroutine_name)
+
+    def walk_body_rung(rung: Rung, node_index: int) -> None:
+        for item in rung._execution_items:
+            if isinstance(item, RungClass):
+                walk_body_rung(item, node_index)
+            else:
+                walk_instruction(item, node_index)
 
     def walk_execution(rung: Rung) -> None:
         node_index = node_index_by_rung[id(rung)]

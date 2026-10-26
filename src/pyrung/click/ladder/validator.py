@@ -110,13 +110,18 @@ def _rung_comments(rung: Rung) -> list[str | None]:
     """A rung's comment, then its forloop body rungs' (nested loops included)."""
     comments: list[str | None] = [rung.comment]
 
+    def _rung_loops(body_rung: Rung) -> None:
+        for instruction in body_rung._instructions:
+            if isinstance(instruction, ForLoopInstruction):
+                _loop(instruction)
+        for branch in body_rung._branches:
+            _rung_loops(branch)
+
     def _loop(loop: ForLoopInstruction) -> None:
         for item in loop.body:
             if isinstance(item, Rung):
                 comments.append(item.comment)
-                for instruction in item._instructions:
-                    if isinstance(instruction, ForLoopInstruction):
-                        _loop(instruction)
+                _rung_loops(item)
             elif isinstance(item, ForLoopInstruction):
                 _loop(item)
 

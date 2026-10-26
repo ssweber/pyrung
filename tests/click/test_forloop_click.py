@@ -161,3 +161,61 @@ with Program(strict=False) as p:
         call("work")
 """
     assert _loop_codes(source) == ["CLK_FORLOOP_INNER_ONESHOT", "CLK_FORLOOP_RETURN_INSIDE"]
+
+
+_BRANCH_SOURCE = """
+with Program(strict=False) as p:
+    with rung(X1):
+        with forloop(3):
+            with rung(X2):
+                out(Y1)
+                with branch(X3):
+                    out(Y2)
+                with branch(C1):
+                    copy(1, DS1)
+"""
+
+
+def test_body_rung_branches_round_trip():
+    logic, mapping = build_program(_BRANCH_SOURCE)
+    bundle = pyrung_to_ladder(logic, mapping)
+    code = ladder_to_pyrung(bundle)
+    assert strip_pyrung_boilerplate(code) == normalize_pyrung(
+        textwrap.dedent(
+            """
+            with rung(X001):
+                with forloop(3):
+                    with rung(X002):
+                        out(Y001)
+                        with branch(X003):
+                            out(Y002)
+                        with branch(C1):
+                            copy(1, DS1)
+            """
+        )
+    )
+    namespace: dict[str, object] = {}
+    exec(code, namespace)  # noqa: S102
+    again = pyrung_to_ladder(namespace["logic"], mapping)
+    assert normalize_csv(again.main_rows) == normalize_csv(bundle.main_rows)
+
+
+def test_validation_sees_body_rung_and_branch_contacts():
+    from pyrung.click import ClickBlocks, TagMap
+    from pyrung.click.validation import validate_click_program
+    from pyrung.core import Program, Rung, branch, forloop, out
+
+    blocks = ClickBlocks()
+    with Program(strict=False) as logic:
+        with Rung(blocks.x[1]):
+            with forloop(2):
+                with Rung(blocks.ds[blocks.ds[1]] == 0):
+                    out(blocks.y[1])
+                    with branch(blocks.ds[blocks.ds[2]] == 0):
+                        out(blocks.y[2])
+    report = validate_click_program(logic, TagMap(include_system=False), mode="strict")
+    locations = sorted(f.location for f in report.errors if f.code == "CLK_PTR_CONTEXT_ONLY_COPY")
+    assert locations == [
+        "main.rung[0].body_rung[0].condition[0].indirect_ref",
+        "main.rung[0].body_rung[1].condition[0].indirect_ref",
+    ]

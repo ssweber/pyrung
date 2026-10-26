@@ -362,11 +362,12 @@ def _condition_children(cond: Condition) -> list[tuple[str, Any]]:
 class _Walker:
     """Internal walker state — one instance per walk_program() call."""
 
-    __slots__ = ("_facts", "_seen")
+    __slots__ = ("_body_rung_counts", "_facts", "_seen")
 
     def __init__(self) -> None:
         self._facts: list[OperandFact] = []
         self._seen: set[tuple[int, str]] = set()
+        self._body_rung_counts: dict[tuple[FactScope, str | None, int, tuple[int, ...]], int] = {}
 
     # -- public entry point ------------------------------------------------
 
@@ -491,6 +492,24 @@ class _Walker:
 
         # ForLoopInstruction captures nested child instructions.
         if class_name == "ForLoopInstruction":
+            # Body-rung and body-branch contacts (each rung's own) are
+            # contacts of the rung holding the loop, numbered apart from its own.
+            site = (scope, subroutine, rung_index, branch_path)
+            for body_rung in instr.body_rungs:
+                body_idx = self._body_rung_counts.get(site, 0)
+                self._body_rung_counts[site] = body_idx + 1
+                local = body_rung._conditions[body_rung._branch_condition_start :]
+                for cond_idx, cond in enumerate(local):
+                    self._walk_value(
+                        cond,
+                        scope,
+                        subroutine,
+                        rung_index,
+                        branch_path,
+                        None,
+                        None,
+                        f"body_rung[{body_idx}].condition[{cond_idx}]",
+                    )
             for child_instr in instr.instructions:
                 self._walk_instruction(
                     child_instr,
