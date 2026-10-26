@@ -171,55 +171,6 @@ def test_body_rung_contact_driven_by_same_iteration_write(runner_factory):
     _assert_paths_agree(logic, {"Enable": True}, A=3, Trip=True)
 
 
-def test_branch_in_body_rung_reads_the_iteration_snapshot(runner_factory):
-    light = Bool("BranchLight")
-
-    with Program() as logic:
-        with Rung(Enable):
-            with forloop(4) as loop:
-                with Rung(loop.idx >= 1):
-                    calc(A + 1, A)
-                    # Snapshot of this iteration, taken before the calc above:
-                    # A == 2 at entry to iteration 3, not after it in iteration 2.
-                    with branch(A == 2):
-                        calc(B + loop.idx, B)
-                    with branch(loop.idx == 2):
-                        out(light)
-
-    runner = runner_factory(logic)
-    runner.patch({"Enable": True})
-    runner.step()
-    tags = runner.current_state.tags
-    # The last iteration (idx 3) leaves the light's branch unpowered.
-    assert (tags["A"], tags["B"], tags["BranchLight"]) == (3, 3, False)
-    _assert_paths_agree(logic, {"Enable": True}, A=3, B=3, BranchLight=False)
-
-
-def test_branch_in_body_rung_is_part_of_the_loop_body():
-    light = Bool("BranchLight")
-
-    with Program() as logic:
-        with Rung(Enable):
-            with forloop(2):
-                with Rung(Rst):
-                    calc(A + 1, A)
-                    with branch(N > 0):
-                        out(light)
-                calc(B + 1, B)
-
-    loop = _loop(logic)
-    assert [type(instr).__name__ for instr in loop.instructions] == [
-        "CalcInstruction",
-        "OutInstruction",
-        "CalcInstruction",
-    ]
-    locals_by_instr = [tuple(str(c) for c in local) for _instr, local in loop.iter_body()]
-    assert len(locals_by_instr[0]) == 1
-    assert len(locals_by_instr[1]) == 2
-    assert locals_by_instr[2] == ()
-    assert len(loop.body_rungs) == 2
-
-
 def test_loop_rung_false_turns_body_rung_outs_off(runner_factory):
     light = Bool("Light")
     gate = Bool("Gate")
@@ -327,12 +278,13 @@ def test_rung_and_branch_placement_inside_loops():
                         with Rung(Enable):
                             pass
 
-    with pytest.raises(RuntimeError, match="must sit in a body rung"):
+    with pytest.raises(RuntimeError, match="not permitted inside forloop"):
         with Program(strict=False):
             with Rung():
                 with forloop(2):
-                    with branch(Enable):
-                        pass
+                    with Rung(Enable):
+                        with branch(Enable):
+                            pass
 
     with pytest.raises(RuntimeError, match="continued"):
         with Program(strict=False):

@@ -148,49 +148,33 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         self.body: tuple[Instruction | Rung, ...] = tuple(
             body if body is not None else (instructions or ())
         )
-        self.instructions = [instruction for instruction, _local in self.iter_body()]
+        flat: list[Instruction] = []
+        for item in self.body:
+            if isinstance(item, Instruction):
+                flat.append(item)
+            else:
+                flat.extend(item._instructions)
+        self.instructions = flat
 
     @property
     def body_rungs(self) -> tuple[Rung, ...]:
-        """The conditioned body rungs, in source order, each followed by the
-        branches nested in it.  A branch's local contacts are its own."""
-        rungs: list[Rung] = []
-
-        def _add(rung: Rung) -> None:
-            rungs.append(rung)
-            for branch in rung._branches:
-                _add(branch)
-
-        for item in self.body:
-            if not isinstance(item, Instruction):
-                _add(item)
-        return tuple(rungs)
+        """The conditioned body rungs, in source order."""
+        return tuple(item for item in self.body if not isinstance(item, Instruction))
 
     def iter_body(self) -> Iterator[tuple[Instruction, tuple[Condition, ...]]]:
         """Each direct body instruction, in ``instructions`` order, with the
         local contacts of the body rung it sits in (empty for a bare item).
-        An instruction in a branch of a body rung carries the body rung's
-        contacts and the branch's.
 
         A walker that threads rung conditions down to instructions appends
         these to the loop rung's own.
         """
-
-        def _from_rung(
-            rung: Rung, start: int
-        ) -> Iterator[tuple[Instruction, tuple[Condition, ...]]]:
-            local = tuple(rung._conditions[start:])
-            for item in rung._execution_items:
-                if isinstance(item, Instruction):
-                    yield item, local
-                else:
-                    yield from _from_rung(item, start)
-
         for item in self.body:
             if isinstance(item, Instruction):
                 yield item, ()
             else:
-                yield from _from_rung(item, item._branch_condition_start)
+                local = tuple(item._conditions[item._branch_condition_start :])
+                for instruction in item._instructions:
+                    yield instruction, local
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
@@ -248,13 +232,10 @@ class ForLoopInstruction(OneShotMixin, Instruction):
 
 
 def iter_loop_body_rungs(instructions: Any) -> Iterator[Rung]:
-    """Every forloop body rung among *instructions*, nested loops included.
-
-    Only the body rungs themselves: a caller walks their branches.
-    """
+    """Every forloop body rung among *instructions*, nested loops included."""
     for instruction in instructions:
         if isinstance(instruction, ForLoopInstruction):
-            yield from (item for item in instruction.body if not isinstance(item, Instruction))
+            yield from instruction.body_rungs
             yield from iter_loop_body_rungs(instruction.instructions)
 
 

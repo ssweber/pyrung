@@ -16,7 +16,6 @@ from . import _state
 from ._program import Program, _validate_subroutine_name
 from ._rung import Rung, _set_scope_end_line
 from ._state import (
-    _current_forloop_body,
     _current_rung,
     _new_capture_context,
     _pop_rung_context,
@@ -277,11 +276,8 @@ class Branch:
         self._source_line = source_line
 
     def __enter__(self) -> Branch:
-        if _current_forloop_body() is not None:
-            raise RuntimeError(
-                "branch() inside forloop() must sit in a body rung: "
-                "with Rung(...): with branch(...): ..."
-            )
+        if _state._forloop_stack:
+            raise RuntimeError("branch() is not permitted inside forloop()")
 
         # Get parent rung context
         self._parent_ctx = _current_rung()

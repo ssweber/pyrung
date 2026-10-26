@@ -100,21 +100,8 @@ with at least one contact, as in CLICK. When the loop's own rung is false, the
 body runs once with power off: its `out()` coils turn off and its one-shots
 re-arm.
 
-A body rung can have branches, as any rung can. A branch's contacts see the
-same per-iteration snapshot as its body rung's:
-
-```python
-with rung(Enable):
-    with forloop(10) as loop:
-        with rung(Src[loop.idx] > 0):
-            copy(Src[loop.idx], Dst[loop.idx])
-            with branch(Alarm):
-                out(Flag)
-```
-
-`branch()` must sit in a body rung, not directly in the loop body, and a body
-rung cannot hold another `with rung()`. `break_loop()` and `continue_loop()`
-go on the body rung itself, not in its branches.
+`branch()` is not allowed inside a loop, and a body rung cannot hold another
+`with rung()`.
 
 ### Nested loops
 
