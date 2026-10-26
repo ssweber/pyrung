@@ -8,6 +8,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 from pyrung.core.instruction import (
     CallInstruction,
     ForLoopInstruction,
+    Instruction,
+    LoopBreakSignal,
+    LoopContinueSignal,
     SubroutineReturnSignal,
     resolve_tag_or_value_ctx,
 )
@@ -189,15 +192,52 @@ class ForLoopInstructionDebugHandler:
         count_value = resolve_tag_or_value_ctx(instruction.count, execution.ctx)
         iterations = max(1, int(count_value))
 
+        ctx = execution.ctx
         child_execution = execution.with_overrides(enabled=True, enabled_state="enabled")
         for i in range(iterations):
-            execution.ctx.set_tag(instruction.idx_tag.name, i)
-            for child in instruction.instructions:
-                yield from debugger._iter_instruction_steps(
-                    debugger._make_instruction_state(
-                        execution=child_execution,
-                        rung=instruction_state.rung,
-                        instruction=child,
-                        step_trace=instruction_state.step_trace,
-                    )
-                )
+            ctx.set_tag(instruction.idx_tag.name, i)
+            try:
+                for child in instruction.body:
+                    if isinstance(child, Instruction):
+                        yield from debugger._iter_instruction_steps(
+                            debugger._make_instruction_state(
+                                execution=child_execution,
+                                rung=instruction_state.rung,
+                                instruction=child,
+                                step_trace=instruction_state.step_trace,
+                            )
+                        )
+                        continue
+                    outer_view = ctx._condition_snapshot
+                    try:
+                        body_view = ctx._new_condition_view()
+                        ctx._condition_snapshot = body_view
+                        local = child._conditions[child._branch_condition_start :]
+                        body_enabled, body_traces = debugger._evaluate_conditions_with_trace(
+                            execution.runner, local, body_view
+                        )
+                        body_execution = execution.with_overrides(
+                            kind="loop_body",
+                            depth=execution.depth + 1,
+                            enabled=body_enabled,
+                            parent_enabled=True,
+                            enabled_state=debugger._enabled_state_for(
+                                kind="loop_body",
+                                enabled=body_enabled,
+                                parent_enabled=True,
+                            ),
+                            condition_view=body_view,
+                        )
+                        yield from debugger._iter_rung_steps(
+                            debugger._make_rung_state(
+                                execution=body_execution,
+                                rung=child,
+                                rung_condition_traces=body_traces,
+                            )
+                        )
+                    finally:
+                        ctx._condition_snapshot = outer_view
+            except LoopContinueSignal:
+                continue
+            except LoopBreakSignal:
+                break

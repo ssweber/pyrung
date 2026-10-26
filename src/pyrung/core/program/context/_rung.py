@@ -13,8 +13,9 @@ from pyrung.core._source import (
 from pyrung.core.condition import ConditionTerm
 from pyrung.core.rung import Rung as RungLogic
 
+from . import _state
 from ._program import Program
-from ._state import _pop_rung_context, _push_rung_context
+from ._state import _current_forloop_body, _pop_rung_context, _push_rung_context
 
 
 def _set_scope_end_line(
@@ -45,6 +46,13 @@ class Rung:
     """
 
     def __init__(self, *conditions: ConditionTerm) -> None:
+        # Inside forloop() a Rung is a body rung of the innermost loop.
+        self._loop = _current_forloop_body()
+        if self._loop is None and _state._forloop_stack:
+            raise RuntimeError(
+                "Rung() inside forloop() must sit directly in the loop body, "
+                "not inside another body rung"
+            )
         source_file, source_line = _capture_source(depth=2)
         self._rung = RungLogic(*conditions, source_file=source_file, source_line=source_line)
         self._pending_required_builder: tuple[int, str] | None = None
@@ -71,6 +79,15 @@ class Rung:
                 else:
                     condition.source_line = source_line
 
+        if self._loop is not None:
+            # Like a branch: the loop rung's contacts come first, so builders
+            # that capture the enable condition see the whole chain; only the
+            # local contacts are evaluated on each iteration.
+            assert self._loop._capture_rung is not None
+            inherited = list(self._loop._capture_rung._conditions)
+            self._rung._conditions = inherited + self._rung._conditions
+            self._rung._branch_condition_start = len(inherited)
+
     def continued(self) -> Rung:
         """Mark this rung as a continuation of the previous rung's condition snapshot.
 
@@ -83,6 +100,8 @@ class Rung:
         Returns:
             self, for chaining: ``with Rung(B).continued(): ...``
         """
+        if self._loop is not None:
+            raise RuntimeError("continued() is not permitted on a forloop body rung")
         if self._rung.comment is not None:
             raise RuntimeError(
                 "A continued() rung cannot have its own comment. "
@@ -145,6 +164,9 @@ class Rung:
             source_line=self._rung.source_line,
             context_name="Rung",
         )
+        if self._loop is not None:
+            self._loop._add_body_rung(self._rung)
+            return
         # Add rung to current program
         prog = Program._current()
         if prog is not None:

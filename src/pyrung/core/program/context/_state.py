@@ -7,11 +7,15 @@ from typing import TYPE_CHECKING
 from pyrung.core.rung import Rung as RungLogic
 
 if TYPE_CHECKING:
+    from ._control_flow import ForLoop
     from ._rung import Rung
 
 _rung_stack: list[Rung] = []
 
-_forloop_active: bool = False
+# Open forloop() scopes, innermost last.  Its length is the nesting depth.
+_forloop_stack: list[ForLoop] = []
+
+_MAX_FORLOOP_DEPTH = 3
 
 
 def _current_rung() -> Rung | None:
@@ -25,6 +29,21 @@ def _require_rung_context(func_name: str) -> Rung:
     if rung is None:
         raise RuntimeError(f"{func_name}() must be called inside a Rung context")
     return rung
+
+
+def _current_forloop_body() -> ForLoop | None:
+    """The forloop whose body is the current capture scope, if any.
+
+    Inside ``with forloop(...)`` the current rung context is the loop's
+    capture context until a body ``Rung`` (or a nested loop) opens.
+    """
+    if not _forloop_stack:
+        return None
+    loop = _forloop_stack[-1]
+    current = _current_rung()
+    if current is not None and current is loop._capture_ctx:
+        return loop
+    return None
 
 
 def _push_rung_context(ctx: Rung) -> None:

@@ -97,15 +97,6 @@ def test_forloop_zero_or_negative_literal_count_raises(count):
         forloop(count)
 
 
-def test_nested_forloop_raises_runtime_error():
-    with pytest.raises(RuntimeError, match="Nested forloop is not permitted"):
-        with Program(strict=False):
-            with Rung():
-                with forloop(2):
-                    with forloop(1):
-                        pass
-
-
 def test_branch_inside_forloop_is_rejected():
     with pytest.raises(RuntimeError, match="branch\\(\\) is not permitted inside forloop\\(\\)"):
         with Program(strict=False):

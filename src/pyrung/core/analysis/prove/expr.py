@@ -380,6 +380,18 @@ def _partition_edge_bearing_inputs(
     return explicit | implicit
 
 
+def _loop_body_rungs(instructions: Any) -> list[Any]:
+    """Forloop body rungs among *instructions*, nested loops included."""
+    from pyrung.core.instruction.control import ForLoopInstruction
+
+    found: list[Any] = []
+    for instr in instructions:
+        if isinstance(instr, ForLoopInstruction):
+            found.extend(instr.body_rungs)
+            found.extend(_loop_body_rungs(instr.instructions))
+    return found
+
+
 def _edge_source_tags(program: Any) -> frozenset[str]:
     from pyrung.core.analysis.simplified import _condition_to_expr
 
@@ -399,6 +411,8 @@ def _edge_source_tags(program: Any) -> frozenset[str]:
             _walk_expr(_condition_to_expr(condition))
         for branch in rung._branches:
             _walk_rung(branch)
+        for body_rung in _loop_body_rungs(rung._instructions):
+            _walk_rung(body_rung)
 
     for rung in program.rungs:
         _walk_rung(rung)

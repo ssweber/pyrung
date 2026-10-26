@@ -16,6 +16,8 @@ from pyrung.core.instruction import (
     CallInstruction,
     ForLoopInstruction,
     Instruction,
+    LoopBreakSignal,
+    LoopContinueSignal,
     SubroutineReturnSignal,
     resolve_tag_or_value_ctx,
 )
@@ -23,6 +25,7 @@ from pyrung.core.instruction.base import (
     _EXECUTOR_BRANCH,
     _EXECUTOR_CALL,
     _EXECUTOR_FOR_LOOP,
+    _EXECUTOR_LOOP_EXIT,
     _EXECUTOR_RETURN,
 )
 from pyrung.core.rung import Rung
@@ -33,7 +36,9 @@ if TYPE_CHECKING:
 
 
 ExecutionMode = Literal["natural", "forced_on", "forced_off"]
-ExecutionKind = Literal["rung", "branch", "subroutine", "synthetic"]
+# ``loop_body`` is a ``with Rung(...)`` inside a forloop body: one run per
+# iteration, a fresh condition view each time, local contacts only.
+ExecutionKind = Literal["rung", "branch", "subroutine", "synthetic", "loop_body"]
 
 
 @dataclass(frozen=True)
@@ -885,7 +890,7 @@ class ConditionViewCapture(_NoopExecutionObserver):
         if view is not None:
             self._active_runs[-1].view = view
             view._read_sink = self._record_read
-        if kind == "branch":
+        if kind == "branch" or kind == "loop_body":
             return
         if view is not None:
             key = ctx._current_node_id or RungId(None, rung_index)
@@ -1210,16 +1215,19 @@ def _execute_for_loop_natural(
     enabled: bool,
 ) -> None:
     if not enabled:
-        for child in instruction.instructions:
-            _execute_instruction_natural(
-                program,
-                ctx,
-                rung_index,
-                rung,
-                child,
-                False,
-                item_kind=child._executor_kind,
-            )
+        for child in instruction.body:
+            if isinstance(child, Instruction):
+                _execute_instruction_natural(
+                    program,
+                    ctx,
+                    rung_index,
+                    rung,
+                    child,
+                    False,
+                    item_kind=child._executor_kind,
+                )
+            else:
+                _execute_body_rung_natural(program, ctx, rung_index, child, parent_enabled=False)
         instruction._reset_oneshot_state(ctx)
         return
 
@@ -1230,16 +1238,48 @@ def _execute_for_loop_natural(
     iterations = max(1, int(count_value))
     for i in range(iterations):
         ctx.set_tag(instruction.idx_tag.name, i)
-        for child in instruction.instructions:
-            _execute_instruction_natural(
-                program,
-                ctx,
-                rung_index,
-                rung,
-                child,
-                True,
-                item_kind=child._executor_kind,
-            )
+        try:
+            for child in instruction.body:
+                if isinstance(child, Instruction):
+                    _execute_instruction_natural(
+                        program,
+                        ctx,
+                        rung_index,
+                        rung,
+                        child,
+                        True,
+                        item_kind=child._executor_kind,
+                    )
+                else:
+                    _execute_body_rung_natural(program, ctx, rung_index, child, parent_enabled=True)
+        except LoopContinueSignal:
+            continue
+        except LoopBreakSignal:
+            break
+
+
+def _execute_body_rung_natural(
+    program: Program,
+    ctx: ScanContext,
+    rung_index: int,
+    body_rung: Rung,
+    *,
+    parent_enabled: bool,
+) -> None:
+    """Run one forloop body rung, restoring the loop's snapshot afterwards."""
+    outer_view = ctx._condition_snapshot
+    try:
+        condition_view = ctx._new_condition_view() if parent_enabled else outer_view
+        _execute_rung_natural(
+            program,
+            ctx,
+            rung_index,
+            body_rung,
+            parent_enabled=parent_enabled,
+            condition_view=condition_view,
+        )
+    finally:
+        ctx._condition_snapshot = outer_view
 
 
 def _resolve_subroutine_plan(
@@ -1306,15 +1346,18 @@ def _execute_rung(
     condition_view: ConditionView | None = None,
 ) -> None:
     observer.begin_rung(ctx, rung_index, rung, kind, depth, subroutine_name, call_stack)
-    if kind == "branch":
+    if kind == "branch" or (kind == "loop_body" and not parent_enabled):
         if condition_view is None:
-            raise RuntimeError("Internal executor error: branch missing parent condition view")
+            raise RuntimeError(f"Internal executor error: {kind} missing parent condition view")
+        ctx._condition_snapshot = condition_view
+    elif kind == "loop_body":
+        condition_view = ctx._new_condition_view()
         ctx._condition_snapshot = condition_view
     else:
         condition_view = _resolve_condition_view(ctx, rung)
     observer.begin_condition(ctx, rung_index, rung, kind, depth, subroutine_name, call_stack)
 
-    if kind == "branch":
+    if kind == "branch" or kind == "loop_body":
         natural_enabled = parent_enabled and rung._evaluate_local_conditions(condition_view)
         enabled = False if mode == "forced_off" else natural_enabled
     else:
@@ -1445,7 +1488,7 @@ def _execute_instruction(
             )
             return
 
-        if mode == "forced_on" and item_kind == _EXECUTOR_RETURN:
+        if mode == "forced_on" and item_kind in (_EXECUTOR_RETURN, _EXECUTOR_LOOP_EXIT):
             instruction.execute(ctx, False)
             return
 
@@ -1532,21 +1575,46 @@ def _execute_for_loop_instruction(
     depth: int,
     call_stack: tuple[str, ...],
 ) -> None:
-    if not enabled:
-        for child in instruction.instructions:
-            _execute_instruction(
+    subroutine_name = call_stack[-1] if call_stack else None
+
+    def _run_body_rung(body_rung: Rung, parent_enabled: bool) -> None:
+        outer_view = ctx._condition_snapshot
+        try:
+            _execute_rung(
                 program,
                 ctx,
                 rung_index,
-                rung,
-                child,
-                False,
+                body_rung,
                 mode=mode,
                 observer=observer,
+                kind="loop_body",
                 depth=depth + 1,
+                parent_enabled=parent_enabled,
+                subroutine_name=subroutine_name,
                 call_stack=call_stack,
-                item_kind=child._executor_kind,
+                condition_view=outer_view,
             )
+        finally:
+            ctx._condition_snapshot = outer_view
+
+    if not enabled:
+        for child in instruction.body:
+            if isinstance(child, Instruction):
+                _execute_instruction(
+                    program,
+                    ctx,
+                    rung_index,
+                    rung,
+                    child,
+                    False,
+                    mode=mode,
+                    observer=observer,
+                    depth=depth + 1,
+                    call_stack=call_stack,
+                    item_kind=child._executor_kind,
+                )
+            else:
+                _run_body_rung(child, False)
         instruction._reset_oneshot_state(ctx)
         return
 
@@ -1560,20 +1628,27 @@ def _execute_for_loop_instruction(
         observer.begin_loop_iteration(ctx, rung_index, instruction, i, depth, call_stack)
         try:
             ctx.set_tag(instruction.idx_tag.name, i)
-            for child in instruction.instructions:
-                _execute_instruction(
-                    program,
-                    ctx,
-                    rung_index,
-                    rung,
-                    child,
-                    True,
-                    mode=mode,
-                    observer=observer,
-                    depth=depth + 1,
-                    call_stack=call_stack,
-                    item_kind=child._executor_kind,
-                )
+            for child in instruction.body:
+                if isinstance(child, Instruction):
+                    _execute_instruction(
+                        program,
+                        ctx,
+                        rung_index,
+                        rung,
+                        child,
+                        True,
+                        mode=mode,
+                        observer=observer,
+                        depth=depth + 1,
+                        call_stack=call_stack,
+                        item_kind=child._executor_kind,
+                    )
+                else:
+                    _run_body_rung(child, True)
+        except LoopContinueSignal:
+            continue
+        except LoopBreakSignal:
+            break
         finally:
             observer.end_loop_iteration(
                 ctx,

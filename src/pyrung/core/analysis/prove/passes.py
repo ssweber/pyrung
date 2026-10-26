@@ -863,7 +863,41 @@ def _observed_system_tags(ctx: _PassContext) -> frozenset[str]:
     return frozenset(name for name in observed if name in SYSTEM_TAGS_BY_NAME)
 
 
+def _conditioned_loop_body_rung(program: Program) -> Any:
+    """The first forloop body rung with contacts of its own, if any."""
+    from pyrung.core.validation._common import walk_instructions
+
+    for instr in walk_instructions(program):
+        for body_rung in getattr(instr, "body_rungs", ()):
+            if len(body_rung._conditions) > body_rung._branch_condition_start:
+                return body_rung
+    return None
+
+
 def _pass_build_graph(ctx: _PassContext) -> None:
+    if not ctx.domains_only:
+        body_rung = _conditioned_loop_body_rung(ctx.program)
+        if body_rung is not None:
+            # The expression layer (simplified forms, write-site guards,
+            # don't-care pruning) reads a rung's contacts from the rung that
+            # holds the loop; a body rung's contacts and its break_loop() /
+            # continue_loop() are evaluated per iteration, which it does not
+            # model.  how()'s domain prior (domains_only) still runs.
+            where = (
+                f" at {body_rung.source_file}:{body_rung.source_line}"
+                if body_rung.source_file and body_rung.source_line
+                else ""
+            )
+            ctx.intractable = Intractable(
+                reason=f"forloop body rung with contacts{where}",
+                dimensions=0,
+                estimated_space=0,
+                hints=[
+                    "  the prover does not model forloop body rungs (with Rung(...) inside "
+                    "forloop), break_loop() or continue_loop() yet; cover them with tests"
+                ],
+            )
+            return
     observed = _observed_system_tags(ctx)
     outside = () if ctx.domains_only else ctx.observed_tags
     # BFS needs every element an unbounded index may read; the how() prior
@@ -1445,6 +1479,15 @@ def _writers_all_unconditional(
     return True
 
 
+def _has_loop_body_rungs(instructions: Iterable[Any]) -> bool:
+    for instr in instructions:
+        if getattr(instr, "body_rungs", ()):
+            return True
+        if _has_loop_body_rungs(getattr(instr, "instructions", None) or ()):
+            return True
+    return False
+
+
 def _is_sequential_unconditional_same_scope(
     x_name: str,
     y_name: str,
@@ -1458,8 +1501,10 @@ def _is_sequential_unconditional_same_scope(
     - Y's writer follows X's last writer in node order within that scope
     - Y's writer rung is unconditional (no conditions on the rung itself)
     - No ``return_early()`` between X's last writer and Y's writer
+    - Y's writer rung holds no forloop body rung (its contacts, and any
+      ``break_loop()`` / ``continue_loop()``, gate the writes inside the loop)
     """
-    from pyrung.core.instruction.control import ReturnInstruction
+    from pyrung.core.analysis.pdg import _rung_has_return
 
     x_writers = graph.writers_of.get(x_name, frozenset())
     y_writers = graph.writers_of.get(y_name, frozenset())
@@ -1482,6 +1527,8 @@ def _is_sequential_unconditional_same_scope(
             return False
         if scope_rungs[y_node.rung_index]._conditions:
             return False
+        if _has_loop_body_rungs(scope_rungs[y_node.rung_index]._instructions):
+            return False
 
     x_in_scope = [
         i
@@ -1501,7 +1548,7 @@ def _is_sequential_unconditional_same_scope(
     for ri in range(x_last_rung_index + 1, y_first_rung_index):
         if ri >= len(scope_rungs):
             break
-        if any(isinstance(instr, ReturnInstruction) for instr in scope_rungs[ri]._instructions):
+        if _rung_has_return(scope_rungs[ri]):
             return False
 
     return True

@@ -19,6 +19,7 @@ _EXECUTOR_CALL = 1
 _EXECUTOR_FOR_LOOP = 2
 _EXECUTOR_RETURN = 3
 _EXECUTOR_BRANCH = 4
+_EXECUTOR_LOOP_EXIT = 5
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,14 @@ class Instruction(ABC):
 
 class SubroutineReturnSignal(Exception):
     """Internal control-flow signal used by return_early() inside subroutines."""
+
+
+class LoopBreakSignal(Exception):
+    """Internal control-flow signal used by break_loop() inside a forloop body."""
+
+
+class LoopContinueSignal(Exception):
+    """Internal control-flow signal used by continue_loop() inside a forloop body."""
 
 
 class OneShotMixin:

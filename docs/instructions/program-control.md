@@ -76,3 +76,45 @@ with rung():
 ```
 
 End and return instructions aren't needed — Python indentation handles scope.
+
+### Body rungs
+
+The loop body is a run of rungs between For and Next. A bare instruction is a
+body rung with no contacts. A body rung with contacts is a `with rung(...)`
+inside the loop; its contacts are evaluated on every iteration, against the
+values the earlier body rungs just wrote:
+
+```python
+with rung(Enable):
+    with forloop(10) as loop:
+        with rung(Src[loop.idx] == 0):
+            continue_loop()
+        copy(Src[loop.idx], Dst[loop.idx])
+        with rung(Fault):
+            break_loop()
+```
+
+`continue_loop()` skips the rest of the current iteration. `break_loop()` leaves
+the innermost loop; the scan carries on after its Next. Both need a body rung
+with at least one contact, as in CLICK. When the loop's own rung is false, the
+body runs once with power off: its `out()` coils turn off and its one-shots
+re-arm.
+
+`branch()` is not allowed inside a loop, and a body rung cannot hold another
+`with rung()`.
+
+### Nested loops
+
+Loops nest up to three deep. Each one has its own index (`_forloop_idx`,
+`_forloop_idx2`, `_forloop_idx3`), and `break_loop()` / `continue_loop()` act
+on the innermost:
+
+```python
+with rung(Enable):
+    with forloop(Rows) as row:
+        with forloop(Cols) as col:
+            calc(Total + Grid[row.idx * 8 + col.idx], Total)
+```
+
+A nested loop is a body rung of the outer loop, so it can have contacts:
+`with rung(Ready): with forloop(3): ...` inside the outer loop.

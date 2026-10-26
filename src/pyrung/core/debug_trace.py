@@ -86,7 +86,7 @@ class TraceEvent:
 class RungTraceEvent:
     """One debug event captured for a rung during scan execution."""
 
-    kind: Literal["rung", "branch", "subroutine", "instruction"]
+    kind: Literal["rung", "branch", "subroutine", "loop_body", "instruction"]
     source_file: str | None
     source_line: int | None
     end_line: int | None

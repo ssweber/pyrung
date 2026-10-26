@@ -23,7 +23,10 @@ _BOOL_HINT = "Use `And()` / `Or()` for compound conditions"
 _NOT_HINT = "Use `~Tag` for normally-closed contacts"
 
 
-_LOOP_HINT = "Each rung is independent; express repeated patterns as separate rungs"
+_LOOP_HINT = (
+    "Each rung is independent; express repeated patterns as separate rungs, "
+    "or repeat a block within a scan with `forloop()` (`break_loop()` / `continue_loop()`)"
+)
 
 
 _ASSIGN_HINT = "DSL instructions write to tags directly; no intermediate Python variables needed"
@@ -59,16 +62,25 @@ _COMMENT_IN_RUNG_HINT = (
 )
 
 
-def _is_rung_context(node: ast.With) -> bool:
-    """True if the with-statement opens a rung scope (``with rung(...):``)."""
+def _with_call_names(node: ast.With) -> set[str]:
+    names: set[str] = set()
     for item in node.items:
         expr = item.context_expr
         while isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute):
             expr = expr.func.value
         if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name):
-            if expr.func.id in ("rung", "Rung", "RungContext"):
-                return True
-    return False
+            names.add(expr.func.id)
+    return names
+
+
+def _is_rung_context(node: ast.With) -> bool:
+    """True if the with-statement opens a rung scope (``with rung(...):``)."""
+    return not _with_call_names(node).isdisjoint(("rung", "Rung", "RungContext"))
+
+
+def _is_forloop_context(node: ast.With) -> bool:
+    """True if the with-statement opens a forloop body, which holds rungs."""
+    return "forloop" in _with_call_names(node)
 
 
 def _is_comment_call(node: ast.Expr) -> bool:
@@ -259,7 +271,12 @@ def _check_statement_list(
                 filename=filename,
                 line_offset=line_offset,
                 opt_out_hint=opt_out_hint,
-                inside_rung=inside_rung or _is_rung_context(statement),
+                # A forloop body is a run of body rungs, so a comment() there
+                # attaches to the next body rung.
+                inside_rung=(
+                    _is_rung_context(statement)
+                    or (inside_rung and not _is_forloop_context(statement))
+                ),
             )
             continue
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.tag import Tag
@@ -10,8 +10,11 @@ from pyrung.core.tag import Tag
 from .base import (
     _EXECUTOR_CALL,
     _EXECUTOR_FOR_LOOP,
+    _EXECUTOR_LOOP_EXIT,
     _EXECUTOR_RETURN,
     Instruction,
+    LoopBreakSignal,
+    LoopContinueSignal,
     OneShotMixin,
     SubroutineReturnSignal,
 )
@@ -29,6 +32,7 @@ if TYPE_CHECKING:
     from pyrung.core.condition import Condition
     from pyrung.core.context import ScanContext
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    from pyrung.core.rung import Rung
 
 
 class FunctionCallInstruction(OneShotMixin, Instruction):
@@ -116,7 +120,11 @@ class EnabledFunctionCallInstruction(Instruction):
 class ForLoopInstruction(OneShotMixin, Instruction):
     """For-loop instruction.
 
-    Executes a captured instruction list N times within one scan.
+    Executes its body N times within one scan.  The body is an ordered mix of
+    bare instructions (implicit always-true body rungs) and body rungs, which
+    evaluate their own contacts afresh on every iteration.  ``instructions``
+    is the flat view: every body instruction in source order, body-rung
+    instructions included, nested loops as single items.
     """
 
     _reads = ("count",)
@@ -129,18 +137,52 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         self,
         count: Tag | IndirectRef | IndirectExprRef | Any,
         idx_tag: Tag,
-        instructions: list[Instruction],
+        instructions: list[Instruction] | None = None,
         oneshot: bool = False,
+        *,
+        body: list[Instruction | Rung] | None = None,
     ):
         OneShotMixin.__init__(self, oneshot)
         self.count = count
         self.idx_tag = idx_tag
-        self.instructions = instructions
+        self.body: tuple[Instruction | Rung, ...] = tuple(
+            body if body is not None else (instructions or ())
+        )
+        flat: list[Instruction] = []
+        for item in self.body:
+            if isinstance(item, Instruction):
+                flat.append(item)
+            else:
+                flat.extend(item._instructions)
+        self.instructions = flat
+
+    @property
+    def body_rungs(self) -> tuple[Rung, ...]:
+        """The conditioned body rungs, in source order."""
+        return tuple(item for item in self.body if not isinstance(item, Instruction))
+
+    def iter_body(self) -> Iterator[tuple[Instruction, tuple[Condition, ...]]]:
+        """Each direct body instruction, in ``instructions`` order, with the
+        local contacts of the body rung it sits in (empty for a bare item).
+
+        A walker that threads rung conditions down to instructions appends
+        these to the loop rung's own.
+        """
+        for item in self.body:
+            if isinstance(item, Instruction):
+                yield item, ()
+            else:
+                local = tuple(item._conditions[item._branch_condition_start :])
+                for instruction in item._instructions:
+                    yield instruction, local
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
-            for instruction in self.instructions:
-                instruction.execute(ctx, False)
+            for item in self.body:
+                if isinstance(item, Instruction):
+                    item.execute(ctx, False)
+                else:
+                    item._execute_in_loop(ctx, parent_enabled=False)
             self._reset_oneshot_state(ctx)
             return
 
@@ -153,8 +195,16 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         for i in range(iterations):
             # Keep loop index in tag space so indirect refs resolve via ctx.get_tag().
             ctx.set_tag(self.idx_tag.name, i)
-            for instruction in self.instructions:
-                instruction.execute(ctx, True)
+            try:
+                for item in self.body:
+                    if isinstance(item, Instruction):
+                        item.execute(ctx, True)
+                    else:
+                        item._execute_in_loop(ctx, parent_enabled=True)
+            except LoopContinueSignal:
+                continue
+            except LoopBreakSignal:
+                break
 
     def _should_execute(self, ctx: ScanContext) -> bool:
         """Return whether this loop should execute, using memory-backed oneshot state."""
@@ -221,3 +271,33 @@ class ReturnInstruction(Instruction):
         if not enabled:
             return
         raise SubroutineReturnSignal
+
+
+class BreakInstruction(Instruction):
+    """Leave the innermost forloop immediately (CLICK Break)."""
+
+    _reads = ()
+    _writes = ()
+    _conditions = ()
+    _structural_fields = ()
+    _executor_kind = _EXECUTOR_LOOP_EXIT
+
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:  # noqa: ARG002
+        if not enabled:
+            return
+        raise LoopBreakSignal
+
+
+class ContinueInstruction(Instruction):
+    """Skip the rest of the current forloop iteration (CLICK Continue)."""
+
+    _reads = ()
+    _writes = ()
+    _conditions = ()
+    _structural_fields = ()
+    _executor_kind = _EXECUTOR_LOOP_EXIT
+
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:  # noqa: ARG002
+        if not enabled:
+            return
+        raise LoopContinueSignal

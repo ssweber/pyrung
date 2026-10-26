@@ -141,6 +141,8 @@ def _off_rail_edge_exprs(program: Program) -> list[Expr]:
                 cond = getattr(instr, field_name, None)
                 if cond is not None:
                     exprs.append(_condition_to_expr(cond))
+            for body_rung in getattr(instr, "body_rungs", ()):
+                exprs.extend(_condition_to_expr(c) for c in body_rung._conditions)
             body = getattr(instr, "instructions", None)
             if isinstance(body, list):
                 instructions(body)

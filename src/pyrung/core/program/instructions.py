@@ -11,8 +11,10 @@ from pyrung.core._source import (
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction import (
     BlockCopyInstruction,
+    BreakInstruction,
     CalcInstruction,
     CallInstruction,
+    ContinueInstruction,
     CopyInstruction,
     EnabledFunctionCallInstruction,
     FillInstruction,
@@ -471,3 +473,47 @@ def return_early() -> None:
     if prog is None or prog._current_subroutine is None:
         raise RuntimeError("return_early() must be used inside a subroutine")
     _attach_instruction(ctx, ReturnInstruction(), source_file, source_line)
+
+
+def _loop_exit_context(func_name: str) -> tuple[Any, str | None, int | None]:
+    ctx, source_file, source_line = _capture_instruction_context(func_name, source_depth=4)
+    if getattr(ctx, "_loop", None) is None:
+        raise RuntimeError(
+            f"{func_name}() must be inside a conditioned body rung of a forloop: "
+            "with forloop(...): with Rung(...): ..."
+        )
+    body_rung = ctx._rung
+    if len(body_rung._conditions) <= body_rung._branch_condition_start:
+        raise RuntimeError(f"{func_name}() needs a body rung with at least one contact")
+    return ctx, source_file, source_line
+
+
+def break_loop() -> None:
+    """Leave the innermost forloop now; the scan continues after the loop.
+
+    Must sit in a body rung with a contact (CLICK Break).
+
+    Example:
+        with Rung(Enable):
+            with forloop(10) as loop:
+                with Rung(Fault):
+                    break_loop()
+    """
+    ctx, source_file, source_line = _loop_exit_context("break_loop")
+    _attach_instruction(ctx, BreakInstruction(), source_file, source_line)
+
+
+def continue_loop() -> None:
+    """Skip the rest of this forloop iteration and start the next one.
+
+    Must sit in a body rung with a contact (CLICK Continue).
+
+    Example:
+        with Rung(Enable):
+            with forloop(10) as loop:
+                with Rung(Src[loop.idx] == 0):
+                    continue_loop()
+                copy(Src[loop.idx], Dst[loop.idx])
+    """
+    ctx, source_file, source_line = _loop_exit_context("continue_loop")
+    _attach_instruction(ctx, ContinueInstruction(), source_file, source_line)

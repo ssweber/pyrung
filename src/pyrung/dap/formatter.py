@@ -28,6 +28,8 @@ class DAPFormatter:
         elif current_step.kind == "subroutine":
             sub_name = current_step.subroutine_name or "subroutine"
             step_name = f"{sub_name} (rung {current_step.rung_index + 1})"
+        elif current_step.kind == "loop_body":
+            step_name = f"Loop rung (rung {current_step.rung_index + 1})"
         elif current_step.kind == "instruction":
             kind_name = current_step.instruction_kind or "Instruction"
             if current_step.subroutine_name:
@@ -314,6 +316,8 @@ class DAPFormatter:
             label = "Branch"
         elif kind == "subroutine":
             label = "Subroutine"
+        elif kind == "loop_body":
+            label = "Loop rung"
         else:
             label = "Rung"
         return f"{prefix} {label}"

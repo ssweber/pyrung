@@ -43,7 +43,9 @@ from pyrung.core.instruction.coils import (
     ResetInstruction,
 )
 from pyrung.core.instruction.control import (
+    BreakInstruction,
     CallInstruction,
+    ContinueInstruction,
     EnabledFunctionCallInstruction,
     ForLoopInstruction,
     FunctionCallInstruction,
@@ -117,7 +119,9 @@ EXPECTED_WITH_CROSSINGS = frozenset(
 # opaque.
 EXEMPT = frozenset(
     {
+        BreakInstruction,
         CallInstruction,
+        ContinueInstruction,
         EnabledFunctionCallInstruction,
         ForLoopInstruction,
         FunctionCallInstruction,

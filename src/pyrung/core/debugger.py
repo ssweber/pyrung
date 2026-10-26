@@ -23,8 +23,8 @@ if TYPE_CHECKING:
     from pyrung.core.rung import Rung
 
 
-RungKind = Literal["rung", "branch", "subroutine"]
-StepKind = Literal["rung", "branch", "subroutine", "instruction"]
+RungKind = Literal["rung", "branch", "subroutine", "loop_body"]
+StepKind = Literal["rung", "branch", "subroutine", "loop_body", "instruction"]
 
 
 @dataclass(frozen=True)

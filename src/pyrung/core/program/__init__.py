@@ -54,8 +54,10 @@ from .context import (
 from .decorators import program
 from .instructions import (
     blockcopy,
+    break_loop,
     calc,
     call,
+    continue_loop,
     copy,
     fill,
     latch,
@@ -90,6 +92,8 @@ __all__ = [
     "branch",
     "comment",
     "forloop",
+    "break_loop",
+    "continue_loop",
     "program",
     "subroutine",
     # Conditions

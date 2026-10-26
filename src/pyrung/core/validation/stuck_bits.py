@@ -187,6 +187,37 @@ def _return_rungs(program: Program) -> dict[str, tuple[int, ...]]:
     return {name: tuple(indices) for name, indices in returns.items()}
 
 
+def _loop_exit_skippable(program: Program) -> frozenset[int]:
+    """Ids of instructions in a forloop whose body can break or continue.
+
+    A ``break_loop()`` or ``continue_loop()`` may skip any of them on a scan
+    (and the outer loop's, for a nested one), so none is proved to execute.
+    """
+    from pyrung.core.instruction.control import (
+        BreakInstruction,
+        ContinueInstruction,
+        ForLoopInstruction,
+    )
+    from pyrung.core.validation._common import walk_instructions
+
+    def _flat(loop: ForLoopInstruction) -> list[Any]:
+        out: list[Any] = []
+        for instr in loop.instructions:
+            out.append(instr)
+            if isinstance(instr, ForLoopInstruction):
+                out.extend(_flat(instr))
+        return out
+
+    skippable: set[int] = set()
+    for instr in walk_instructions(program):
+        if not isinstance(instr, ForLoopInstruction):
+            continue
+        body = _flat(instr)
+        if any(isinstance(item, (BreakInstruction, ContinueInstruction)) for item in body):
+            skippable.update(id(item) for item in body)
+    return frozenset(skippable)
+
+
 def _site_run_chains(
     site: WriteSite,
     reach_chains: dict[str, tuple[tuple[Condition, ...], ...]],
@@ -515,7 +546,13 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
     # Coils whose out() instructions run on every scan de-energize themselves; the
     # rest hold their last value on the scans nothing writes them, and their out()
     # is a latch with no matching reset.
-    self_clearing = _self_clearing_coils(out_sites, reach_chains, return_rungs, domains)
+    # An out() a break_loop()/continue_loop() can skip proves nothing either.
+    skippable = _loop_exit_skippable(program)
+    provable_out_sites = {
+        tag: [s for s in tag_sites if id(s.instruction) not in skippable]
+        for tag, tag_sites in out_sites.items()
+    }
+    self_clearing = _self_clearing_coils(provable_out_sites, reach_chains, return_rungs, domains)
 
     latch_sites: dict[str, list[WriteSite]] = defaultdict(list)
     reset_sites: dict[str, list[WriteSite]] = defaultdict(list)

@@ -341,6 +341,9 @@ def _collect_edge_tags(program: Program) -> frozenset[str]:
                     if isinstance(item, Condition):
                         walk_condition(item)
         if isinstance(instr, ForLoopInstruction):
+            for body_rung in instr.body_rungs:
+                for cond in body_rung._conditions:
+                    walk_condition(cond)
             for child in instr.instructions:
                 walk_instruction(child)
 

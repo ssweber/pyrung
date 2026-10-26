@@ -588,6 +588,11 @@ def _audit_coordinate_reads(
         seen: set[str] = set()
         for cond in rung._conditions:
             seen |= _audit_condition(cond, coords, tags, rung_cmps, unmodeled)
+        # forloop body-rung contacts are read inside the scan like any rung's.
+        for loop in _nested_instructions(rung._instructions):
+            for body_rung in getattr(loop, "body_rungs", ()):
+                for cond in body_rung._conditions[body_rung._branch_condition_start :]:
+                    seen |= _audit_condition(cond, coords, tags, rung_cmps, unmodeled)
         gates: frozenset[str] = frozenset()
         top_level = dormant is not None and node.scope == "main" and not node.branch_path
         if top_level:

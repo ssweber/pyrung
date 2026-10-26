@@ -1178,7 +1178,7 @@ def _extract_rung_node(
     for condition in rung._conditions:
         condition_reads.update(_extract_reads_from_condition(condition, tag_refs))
 
-    def walk_instruction(instr: Any) -> None:
+    def walk_instruction(instr: Any, *, in_body_rung: bool = False) -> None:
         if isinstance(instr, CallInstruction):
             calls.append(instr.subroutine_name)
 
@@ -1199,7 +1199,9 @@ def _extract_rung_node(
         writes.update(instruction_writes)
         implicit_writes.update(instr_implicit_writes)
         data_reads.update(target_reads)
-        if isinstance(instr, OutInstruction):
+        # An out() in a forloop body rung follows that rung's contacts on its
+        # last iteration, not this node's guard: not a level follower here.
+        if isinstance(instr, OutInstruction) and not in_body_rung:
             ote_writes.update(instruction_writes)
 
         for field_name in getattr(cls, "_exclusive_fields", ()):
@@ -1211,8 +1213,13 @@ def _extract_rung_node(
             condition_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
 
         if isinstance(instr, ForLoopInstruction):
-            for child_instr in instr.instructions:
-                walk_instruction(child_instr)
+            # Body-rung contacts gate their writes and, through break/continue,
+            # every later body instruction.  The node has one guard, so they
+            # all join it (over-approximate, the safe direction).
+            for body_rung in instr.body_rungs:
+                condition_reads.update(_rung_condition_reads(body_rung, tag_refs, local_only=True))
+            for child_instr, local in instr.iter_body():
+                walk_instruction(child_instr, in_body_rung=in_body_rung or bool(local))
 
     for instruction in rung._instructions:
         walk_instruction(instruction)
@@ -1384,31 +1391,39 @@ def _build_access_sequence(
             walk_execution(sub_rung)
         active_calls.discard(name)
 
+    def walk_instruction(item: Any, node_index: int) -> None:
+        instruction_event = _extract_instruction_event(item, node_index, tag_refs, fault_writes)
+        if (
+            instruction_event.condition_reads
+            or instruction_event.data_reads
+            or instruction_event.writes
+        ):
+            events.append(instruction_event)
+
+        if isinstance(item, ForLoopInstruction):
+            for child in item.body:
+                if isinstance(child, RungClass):
+                    # A body rung reads its contacts when it runs, in body order.
+                    local_reads = _rung_condition_reads(child, tag_refs, local_only=True)
+                    if local_reads:
+                        events.append(
+                            _AccessEvent(node_index=node_index, condition_reads=local_reads)
+                        )
+                    for body_instr in child._instructions:
+                        walk_instruction(body_instr, node_index)
+                else:
+                    walk_instruction(child, node_index)
+
+        if isinstance(item, CallInstruction):
+            inline_subroutine(item.subroutine_name)
+
     def walk_execution(rung: Rung) -> None:
         node_index = node_index_by_rung[id(rung)]
         for item in rung._execution_items:
             if isinstance(item, RungClass):
                 walk_execution(item)
                 continue
-
-            instruction_event = _extract_instruction_event(item, node_index, tag_refs, fault_writes)
-            if (
-                instruction_event.condition_reads
-                or instruction_event.data_reads
-                or instruction_event.writes
-            ):
-                events.append(instruction_event)
-
-            if isinstance(item, ForLoopInstruction):
-                for child_instr in item.instructions:
-                    child_event = _extract_instruction_event(
-                        child_instr, node_index, tag_refs, fault_writes
-                    )
-                    if child_event.condition_reads or child_event.data_reads or child_event.writes:
-                        events.append(child_event)
-
-            if isinstance(item, CallInstruction):
-                inline_subroutine(item.subroutine_name)
+            walk_instruction(item, node_index)
 
     for rung in program.rungs:
         emit_condition_prepass(rung, emit_own_conditions=True)
@@ -1532,8 +1547,6 @@ def _augment_return_early_guards(
     on the guard's condition_reads — make that visible in the graph so
     upstream_slice discovers the dependency.
     """
-    from pyrung.core.instruction.control import ReturnInstruction
-
     for sub_name in sorted(program.subroutines):
         sub_rungs = program.subroutines[sub_name]
         sub_indices = [
@@ -1551,8 +1564,39 @@ def _augment_return_early_guards(
                     condition_reads=node.condition_reads | guard_reads,
                     guard_reads=guard_reads,
                 )
-            if any(isinstance(instr, ReturnInstruction) for instr in rung._instructions):
-                guard_reads = guard_reads | _rung_condition_reads(rung, tag_refs)
+            if _rung_has_return(rung):
+                guard_reads = guard_reads | _rung_return_condition_reads(rung, tag_refs)
+
+
+def _rung_has_return(rung: Rung) -> bool:
+    """Whether ``return_early()`` sits in the rung's own items or its loop bodies."""
+    from pyrung.core.instruction.control import ReturnInstruction
+
+    def _in(instructions: list[Any]) -> bool:
+        for instr in instructions:
+            if isinstance(instr, ReturnInstruction):
+                return True
+            if isinstance(instr, ForLoopInstruction) and _in(instr.instructions):
+                return True
+        return False
+
+    return _in(rung._instructions)
+
+
+def _rung_return_condition_reads(rung: Rung, tag_refs: dict[str, Tag]) -> frozenset[str]:
+    """Reads that decide whether a ``return_early()`` in this rung fires."""
+    reads = set(_rung_condition_reads(rung, tag_refs))
+
+    def _loop_reads(instructions: list[Any]) -> None:
+        for instr in instructions:
+            if isinstance(instr, ForLoopInstruction):
+                for body_rung in instr.body_rungs:
+                    reads.update(_rung_condition_reads(body_rung, tag_refs, local_only=True))
+                reads.update(_extract_tag_names(instr.count, tag_refs))
+                _loop_reads(instr.instructions)
+
+    _loop_reads(rung._instructions)
+    return frozenset(reads)
 
 
 def _always_run_subroutines(graph: ProgramGraph) -> frozenset[str]:
@@ -2043,11 +2087,12 @@ def _collect_indirect_writes(
         rung = resolve_rung(program, node)
         if rung is None:
             continue
-        for instr in rung._instructions:
+        pending = list(rung._instructions)
+        while pending:
+            instr = pending.pop(0)
             _check_instruction(instr, node_index)
             if isinstance(instr, ForLoopInstruction):
-                for child in instr.instructions:
-                    _check_instruction(child, node_index)
+                pending[:0] = instr.instructions
 
     return tuple(refs), {ni: frozenset(slots) for ni, slots in attribution.items()}
 

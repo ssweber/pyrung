@@ -7,6 +7,7 @@ from typing import Any
 
 from pyrung.circuitpy.codegen._constants import _FAULT_DIVISION_ERROR_TAG
 from pyrung.circuitpy.codegen._util import (
+    _bool_literal,
     _indent_body,
     _source_location,
     _store_coerce_expr,
@@ -43,8 +44,10 @@ from pyrung.core.expression import (
 )
 from pyrung.core.instruction import (
     BlockCopyInstruction,
+    BreakInstruction,
     CalcInstruction,
     CallInstruction,
+    ContinueInstruction,
     CopyInstruction,
     CountDownInstruction,
     CountUpInstruction,
@@ -620,6 +623,10 @@ def compile_instruction(
         return _compile_call_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, ReturnInstruction):
         return _compile_return_instruction(enabled_expr, indent)
+    if isinstance(instr, BreakInstruction):
+        return _compile_loop_exit_instruction("break", enabled_expr, indent)
+    if isinstance(instr, ContinueInstruction):
+        return _compile_loop_exit_instruction("continue", enabled_expr, indent)
     if isinstance(instr, ForLoopInstruction):
         return _compile_for_loop_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, ModbusSendInstruction):
@@ -638,19 +645,29 @@ def compile_rung(
     indent: int = 0,
     *,
     condition_snapshot: _ConditionSnapshotBindings | None = None,
+    local_conditions: bool = False,
 ) -> list[str]:
-    """Compile one rung into Python source lines."""
+    """Compile one rung into Python source lines.
+
+    ``local_conditions`` compiles only the rung's own contacts (a forloop body
+    rung, whose inherited loop-rung contacts are already true).
+    """
     previous = ctx._current_function
     ctx.set_current_function(fn_name)
     saved_snapshots = dict(ctx._helper_condition_snapshots)
     try:
         rung_id = ctx.next_name("rung")
         enabled_var = f"_{rung_id}_enabled"
+        conditions = (
+            rung._conditions[rung._branch_condition_start :]
+            if local_conditions
+            else rung._conditions
+        )
         cond_expr = (
             "True"
             if ctx.force_rung_enable
             else _compile_condition_group(
-                rung._conditions,
+                conditions,
                 ctx,
                 condition_snapshot=condition_snapshot,
             )
@@ -925,12 +942,20 @@ def _compile_for_loop_instruction(
     indent: int,
 ) -> list[str]:
     count_expr = _compile_value(instr.count, ctx)
-    disabled_children = _compile_instruction_list(instr.instructions, "False", ctx, indent=0)
-    enabled_children = _compile_instruction_list(instr.instructions, "True", ctx, indent=0)
+    depth = ctx._for_loop_depth
+    suffix = "" if depth == 0 else f"_{depth + 1}"
+    iterations_var = f"_iterations{suffix}"
+    index_var = f"_for_i{suffix}"
+    ctx._for_loop_depth = depth + 1
+    try:
+        disabled_children = _compile_loop_body(instr, "False", ctx)
+        enabled_children = _compile_loop_body(instr, "True", ctx)
+    finally:
+        ctx._for_loop_depth = depth
     body = [
-        f"_iterations = max(1, int({count_expr}))",
-        "for _for_i in range(_iterations):",
-        *_indent_body(_compile_assignment_lines(instr.idx_tag, "_for_i", ctx, indent=0), 4),
+        f"{iterations_var} = max(1, int({count_expr}))",
+        f"for {index_var} in range({iterations_var}):",
+        *_indent_body(_compile_assignment_lines(instr.idx_tag, index_var, ctx, indent=0), 4),
         *_indent_body(enabled_children, 4),
     ]
     return _compile_guarded_instruction(
@@ -941,6 +966,45 @@ def _compile_for_loop_instruction(
         body,
         disabled_body=disabled_children,
     )
+
+
+def _compile_loop_body(
+    instr: ForLoopInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+) -> list[str]:
+    """Compile one pass over a loop body: bare instructions and body rungs."""
+    lines: list[str] = []
+    for item in instr.body:
+        if not isinstance(item, LogicRung):
+            lines.extend(compile_instruction(item, enabled_expr, ctx, 0))
+        elif enabled_expr == "False":
+            lines.extend(
+                _compile_rung_items(
+                    rung=item,
+                    enabled_expr="False",
+                    ctx=ctx,
+                    indent=0,
+                    scope_key=ctx.next_name("loop_rung"),
+                )
+            )
+        else:
+            # A body rung reads live tags: its contacts are evaluated afresh
+            # on every iteration, as a rung of its own.
+            fn_name = ctx._current_function
+            assert fn_name is not None
+            lines.extend(compile_rung(item, fn_name, ctx, indent=0, local_conditions=True))
+    return lines
+
+
+def _compile_loop_exit_instruction(keyword: str, enabled_expr: str, indent: int) -> list[str]:
+    sp = " " * indent
+    enabled_literal = _bool_literal(enabled_expr)
+    if enabled_literal is False:
+        return []
+    if enabled_literal is True:
+        return [f"{sp}{keyword}"]
+    return [f"{sp}if {enabled_expr}:", f"{sp}    {keyword}"]
 
 
 def _compile_instruction_list(

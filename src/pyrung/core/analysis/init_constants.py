@@ -27,6 +27,11 @@ if TYPE_CHECKING:
 
 def find_instruction_at_site(program: Program, site: Any) -> Any:
     """Retrieve the instruction object at a WriteSite's location."""
+    # A forloop child's index counts within the loop body, not the rung, so
+    # the site's own instruction is the only reliable answer.
+    recorded = getattr(site, "instruction", None)
+    if recorded is not None:
+        return recorded
     if site.subroutine is not None:
         rungs = program.subroutines.get(site.subroutine, [])
     else:

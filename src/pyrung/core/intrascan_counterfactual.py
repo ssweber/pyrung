@@ -27,7 +27,7 @@ class OccurrenceBoundary:
     """Exact dynamic rung boundary immediately before its condition snapshot."""
 
     rung_id: RungId
-    execution_kind: Literal["rung", "branch", "subroutine", "synthetic"]
+    execution_kind: Literal["rung", "branch", "subroutine", "synthetic", "loop_body"]
     caller_rung: int
     call_stack: tuple[str, ...]
     depth: int

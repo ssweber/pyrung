@@ -192,6 +192,9 @@ class CodegenContext:
     uses_board_neopixel: bool = False
     uses_board_save_memory_cmd: bool = False
     _current_function: str | None = None
+    # Open forloop nesting while compiling, so nested loops get their own
+    # counter names.
+    _for_loop_depth: int = 0
     _name_counters: dict[str, int] = field(default_factory=dict)
     _state_key_counter: int = 0
     _state_keys_by_obj: dict[int, str] = field(default_factory=dict)
@@ -294,6 +297,11 @@ class CodegenContext:
             if isinstance(child_instructions, list):
                 for child in child_instructions:
                     walk_instruction(child)
+            # forloop body rungs: their contacts live on the rung, not on any
+            # instruction in the flat ``instructions`` view.
+            for body_rung in getattr(instr, "body_rungs", ()):
+                for cond in body_rung._conditions:
+                    walk_value(cond)
 
         def walk_value(value: Any) -> None:
             value_id = id(value)

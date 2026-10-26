@@ -307,35 +307,55 @@ def _collect_write_sites(
         subroutine: str | None,
         rung_index: int,
         branch_path: tuple[int, ...],
+        conditions: tuple[Condition, ...] | list[tuple[Condition, ...]],
+    ) -> None:
+        # ``conditions`` may be one tuple for every instruction, or one tuple
+        # per instruction (a loop body, where body rungs add their contacts).
+        for instr_idx, instr in enumerate(instructions):
+            instr_conditions = (
+                conditions if isinstance(conditions, tuple) else conditions[instr_idx]
+            )
+            _walk_instruction(
+                instr, instr_idx, scope, subroutine, rung_index, branch_path, instr_conditions
+            )
+
+    def _walk_instruction(
+        instr: Any,
+        instr_idx: int,
+        scope: FactScope,
+        subroutine: str | None,
+        rung_index: int,
+        branch_path: tuple[int, ...],
         conditions: tuple[Condition, ...],
     ) -> None:
-        for instr_idx, instr in enumerate(instructions):
-            for tag_name, itype in target_extractor(instr):
-                sites.append(
-                    WriteSite(
-                        target_name=tag_name,
-                        scope=scope,
-                        subroutine=subroutine,
-                        rung_index=rung_index,
-                        branch_path=branch_path,
-                        instruction_index=instr_idx,
-                        instruction_type=itype,
-                        conditions=conditions,
-                        source_file=getattr(instr, "source_file", None),
-                        source_line=getattr(instr, "source_line", None),
-                        instruction=instr,
-                    )
+        for tag_name, itype in target_extractor(instr):
+            sites.append(
+                WriteSite(
+                    target_name=tag_name,
+                    scope=scope,
+                    subroutine=subroutine,
+                    rung_index=rung_index,
+                    branch_path=branch_path,
+                    instruction_index=instr_idx,
+                    instruction_type=itype,
+                    conditions=conditions,
+                    source_file=getattr(instr, "source_file", None),
+                    source_line=getattr(instr, "source_line", None),
+                    instruction=instr,
                 )
-            # Recurse into ForLoopInstruction children
-            if isinstance(instr, ForLoopInstruction) and hasattr(instr, "instructions"):
-                _walk_instructions(
-                    instr.instructions,
-                    scope,
-                    subroutine,
-                    rung_index,
-                    branch_path,
-                    conditions,
-                )
+            )
+        # Recurse into ForLoopInstruction children; a body rung's
+        # contacts gate the instructions inside it.
+        if isinstance(instr, ForLoopInstruction):
+            body = list(instr.iter_body())
+            _walk_instructions(
+                [child for child, _local in body],
+                scope,
+                subroutine,
+                rung_index,
+                branch_path,
+                [conditions + local for _child, local in body],
+            )
 
     def _walk_rung(
         rung: Rung,

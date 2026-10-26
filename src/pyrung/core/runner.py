@@ -147,7 +147,7 @@ class ScanStep:
     rung_index: int
     rung: Rung
     ctx: ScanContext
-    kind: Literal["rung", "branch", "subroutine", "instruction"]
+    kind: Literal["rung", "branch", "subroutine", "loop_body", "instruction"]
     subroutine_name: str | None
     depth: int
     call_stack: tuple[str, ...]

@@ -22,8 +22,10 @@ from pyrung.core import (
     Timer,
     Word,
     blockcopy,
+    break_loop,
     calc,
     call,
+    continue_loop,
     copy,
     count_down,
     count_up,
@@ -502,6 +504,19 @@ def _forloop_case() -> Program:
     return logic
 
 
+def _loop_exit_case(verb: Callable[[], None], prefix: str) -> Callable[[], Program]:
+    def build() -> Program:
+        with Program(strict=False) as logic:
+            with Rung(Bool(f"{prefix}Enable")):
+                with forloop(3):
+                    with Rung(Bool(f"{prefix}Exit")):
+                        verb()
+                    copy(Int(f"{prefix}Source"), Int(f"{prefix}Dest"))
+        return logic
+
+    return build
+
+
 def _send_case() -> Program:
     src = Int("SendSource")
     sending, success, error, ex = _status("Send")
@@ -936,6 +951,25 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
+        "break_loop",
+        "break_loop",
+        _loop_exit_case(break_loop, "Break"),
+        # The body rung's contact gates every later body write.
+        frozenset({"BreakEnable", "BreakExit"}),
+        data_reads=frozenset({"BreakSource"}),
+        writes=frozenset({"_forloop_idx", "BreakDest"}),
+        implicit_writes=_COPY_FAULTS,
+    ),
+    GraphCase(
+        "continue_loop",
+        "continue_loop",
+        _loop_exit_case(continue_loop, "Continue"),
+        frozenset({"ContinueEnable", "ContinueExit"}),
+        data_reads=frozenset({"ContinueSource"}),
+        writes=frozenset({"_forloop_idx", "ContinueDest"}),
+        implicit_writes=_COPY_FAULTS,
+    ),
+    GraphCase(
         "send",
         "send",
         _send_case,
@@ -987,6 +1021,8 @@ PUBLIC_RUNG_INSTRUCTIONS = frozenset(
         "time_drum",
         "time_event_drum",
         "forloop",
+        "break_loop",
+        "continue_loop",
         "send",
         "receive",
     }

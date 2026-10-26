@@ -110,18 +110,19 @@ def _walk_scoped_instructions(program: Program) -> list[_ScopedInstruction]:
                     instruction_depth=instruction_depth,
                 )
             )
-            if isinstance(instr, ForLoopInstruction) and hasattr(instr, "instructions"):
-                _walk_instruction_list(
-                    instr.instructions,
-                    scope=scope,
-                    subroutine=subroutine,
-                    rung_index=rung_index,
-                    branch_path=branch_path,
-                    conditions=conditions,
-                    rung_instruction_count=rung_instruction_count,
-                    has_branches=has_branches,
-                    instruction_depth=instruction_depth + 1,
-                )
+            if isinstance(instr, ForLoopInstruction):
+                for child, local in instr.iter_body():
+                    _walk_instruction_list(
+                        [child],
+                        scope=scope,
+                        subroutine=subroutine,
+                        rung_index=rung_index,
+                        branch_path=branch_path,
+                        conditions=conditions + local,
+                        rung_instruction_count=rung_instruction_count,
+                        has_branches=has_branches,
+                        instruction_depth=instruction_depth + 1,
+                    )
 
     def _walk_rung(
         rung: Rung,

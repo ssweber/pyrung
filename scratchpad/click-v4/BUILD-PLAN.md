@@ -61,7 +61,7 @@ classes from modules that have been imported.
 | 2 | Math aggregates + abs | S-M | RESEARCH 3, TOUCHPOINTS 1, GAPS 1, PILOT 8 | **Done** |
 | 3 | `time_event_drum` + drum hint | M | RESEARCH 2, TOUCHPOINTS 3, GAPS 3 | **Done** (reviewed). Own class; level events; Acc keeps counting while a timed step waits (D1 = pyrung's answer, unconfirmed); fold source (event-only steps place no crossing); preset rule is a v4 hint in every mode; `drum` conformance group (D1, D3). Prover: named Intractable, see Open queue |
 | 4 | Out family | L | RESEARCH 1, TOUCHPOINTS 4, GAPS 4, PILOT 2-5 | **Done** (reviewed). Debounce needs both sides; every phase shows for at least one scan; TD-only CSV token; `CLK_TIMER_PAIR_MISMATCH`; Timer/Counter retentive now CLICK's bank defaults and the importer conforms clones to their addresses (no invented nicknames). `out_variants.py`, own classes; state in tags (coil bit + each phase Timer's Done/Acc) except toggle's prev-rung key. Answers to O1-O6 are pyrung's, unconfirmed: debounce sides are TONs on the rung / its negation (TD counts past preset, a bounce restarts it), flasher Dones mark the running phase, timed is IEC TP (needs a fresh edge). Fold sources per phase; prover exact for toggle, Intractable naming the verb otherwise; PILOT profiles for toggle/debounce/timed (flasher has none: its writer trace reaches both values); CSV token is pyrung's; `out` conformance group (O1-O6) |
-| 5 | For/Next | L | RESEARCH 4, TOUCHPOINTS 5, GAPS 5, PILOT 6 | **Next.** Today: body instructions get no enable condition (`count_up` in a loop declines in PILOT); `with Rung()` in a loop silently hoists; journals need a body-rung + iteration address; return-shadow treatment for break/continue; `comment()` before a body rung. Index-heavy: do the PDG affine fix first (Open queue) |
+| 5 | For/Next | L | RESEARCH 4, TOUCHPOINTS 5, GAPS 5, PILOT 6 | **In progress.** Phase 1 (core) done: `ForLoopInstruction.body` (bare instructions and body `Rung`s in order; `.instructions` stays the flat view, `iter_body()` pairs each with its body rung's local contacts); body rungs are branch-like (loop rung's conditions first, `_branch_condition_start`), evaluated per iteration on a fresh view, local contacts only; `break_loop()`/`continue_loop()` (`BreakInstruction`/`ContinueInstruction`, `LoopBreakSignal`/`LoopContinueSignal`, `_EXECUTOR_LOOP_EXIT`) need a body rung with a contact; nesting via `_state._forloop_stack`, max 3, idx `_forloop_idx`/`_forloop_idx2`/`_forloop_idx3`; journal kind `loop_body`; X7 fixed (bare and body instructions capture the loop rung's condition). Prover: named Intractable for a conditioned body rung (BFS only; how() keeps its context). Next: Click export/import (phase 2), journal addressing (phase 3), conformance F1-F16 drafts |
 | 6 | `randint` | M-L | RESEARCH 3, TOUCHPOINTS 2, GAPS 2, PILOT 7 | Seed lives in `SystemState.memory`, not on the runner (forks); stable site ids for `PLC(logic=[...])`/synthesis/pilot rungs; override via `io_drains_by_scan` with interpreted replay; scan_id resets on restart |
 
 One at a time, each merged before the next starts.
@@ -164,9 +164,32 @@ time_event_drum (from feature 3):
 - **The ladder export precheck still blocks register drum durations.** RESEARCH says
   `CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED` was downgraded to a hint, but `pyrung_to_ladder()` raises
   `LadderExportError` on `time_drum(presets=[DS1302, ...])` (`click/ladder/validator.py` `_run_precheck`).
-  The capture generator (`captures/v4_capture.py`) works around it with `validate=False`.
+  The capture generator (laddercodec's `scratchpad/click-v4/captures/v4_capture.py`) works around it with `validate=False`.
 - `CMP_PRESET_STAYS_ZERO` (`cmp_conditions._preset_sites`) does not cover drum duration registers, and
   Click validation does not role-check register presets on either time drum.
+
+For/Next (from feature 5):
+- **Prover has no model of body rungs.** `_pass_build_graph` returns Intractable on the first body rung with
+  contacts. The expression layer (`simplified_forms`, `_collect_all_exprs`, don't-care pruning) builds a
+  writer's form from the rung that holds the loop; exact route: per-iteration forms are "last iteration that
+  ran the body rung", so likely a body-rung writer is an opaque (non-OTE) write guarded by outer AND local.
+  Walkers fixed so far: PDG node + access events, write sites, return guards, edge collectors (`kernel`,
+  `expr._edge_source_tags`, slice `_collect_edge_tags`), `inputs`, lints `choices_violation` /
+  `physical_realism`, `stuck_bits` (loop-exit-skippable outs), fold audit. Not yet: `deadness._collect`
+  (BFS-only, gated), `passes` func-dep "no return between writers" (break/continue analogue).
+- **Journals.** Body rungs run as `RungRun(kind="loop_body")` with the loop rung's address: `_dynamic_branch_paths`
+  gives them path `()` (collides with the loop rung), `OccurrenceBoundary` has no body/iteration coordinate,
+  so a patch at a body-rung boundary would match every iteration. PILOT's effect/requirement code is blind
+  to them (safe direction). Needs an address: (rung, branch_path, body index, iteration).
+- `loop.idx` of a loop inside a subroutine called from a loop body is `_forloop_idx` too (depth is lexical
+  per scope): the callee's loop clobbers the caller's index until its next iteration.
+- `IndirectExprRef` has no comparisons, so `Rung(Dst[loop.idx + 1] == 0)` is not a valid contact
+  (`DS[Ptr]` is). RESEARCH's example used it.
+- `branch()` stays forbidden anywhere in a loop, including inside a body rung.
+- Pre-existing, fixed on the way: `find_instruction_at_site` indexed a loop child into the parent rung;
+  `SubroutineFunc._register` reset `_current_subroutine` to None (a decorated `call()` inside a subroutine
+  sent the caller's later rungs to main); access events never inlined a `call()` in a loop body;
+  `_augment_return_early_guards` missed a return inside a loop.
 
 Out family (from feature 4):
 - **laddercodec**: no Out-type encoding (func codes 8224-8235). Until then the `out` conformance group cannot
