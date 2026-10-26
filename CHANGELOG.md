@@ -44,6 +44,7 @@
 
 ### Fixes
 
+- A `Program`, `subroutine` or `@program` built from code with no source file, such as `exec()` of a generated string or the REPL, skips the strict control-flow check quietly instead of warning; source that exists but cannot be parsed still warns.
 - CLICK import keeps the contacts of a rung between For and Next, which it dropped, and reads nested For/Next blocks.
 - `how()` drives a timer or counter inside a `forloop()`, which got no enable condition from the loop's rung and stopped waiting on it.
 - `call()` of a decorated subroutine inside another subroutine no longer sends the caller's later rungs to the main program.

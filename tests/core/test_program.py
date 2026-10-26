@@ -745,8 +745,9 @@ class TestStrictDslControlFlowGuard:
         runner.step()
         assert runner.current_state.tags["Light"] is True
 
-    def test_guard_warns_and_skips_when_source_is_unavailable(self, monkeypatch):
+    def test_guard_skips_quietly_when_source_is_unavailable(self, monkeypatch):
         import importlib
+        import warnings
 
         program_module = importlib.import_module("pyrung.core.program")
         validation_module = importlib.import_module("pyrung.core.program.validation")
@@ -758,6 +759,57 @@ class TestStrictDslControlFlowGuard:
             raise OSError("source unavailable")
 
         monkeypatch.setattr(validation_module.inspect, "getsourcelines", _raise_source_error)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with program_module.Program() as logic:
+                with program_module.Rung(Enable):
+                    program_module.out(Light)
+
+        assert len(logic.rungs) == 1
+
+    def test_guard_skips_quietly_for_exec_of_a_string(self):
+        import warnings
+
+        from pyrung.core.program import Program
+
+        source = (
+            "from pyrung import Bool, Program, Rung, out, subroutine\n"
+            "Enable = Bool('Enable')\n"
+            "Light = Bool('Light')\n"
+            "@subroutine('init')\n"
+            "def init():\n"
+            "    with Rung(Light):\n"
+            "        out(Enable)\n"
+            "with Program() as logic:\n"
+            "    with Rung(Enable):\n"
+            "        out(Light)\n"
+            "    with subroutine('nested'):\n"
+            "        with Rung(Light):\n"
+            "            out(Enable)\n"
+        )
+        namespace: dict[str, object] = {}
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            exec(compile(source, "<analysis>", "exec"), namespace)
+
+        logic = namespace["logic"]
+        assert isinstance(logic, Program)
+        assert len(logic.rungs) == 1
+
+    def test_guard_warns_and_skips_when_source_cannot_be_parsed(self, monkeypatch):
+        import importlib
+
+        program_module = importlib.import_module("pyrung.core.program")
+        validation_module = importlib.import_module("pyrung.core.program.validation")
+
+        Enable = Bool("Enable")
+        Light = Bool("Light")
+
+        def _unparsable_source(_obj: object) -> tuple[list[str], int]:
+            return ["def broken(:\n"], 1
+
+        monkeypatch.setattr(validation_module.inspect, "getsourcelines", _unparsable_source)
 
         with pytest.warns(RuntimeWarning, match="Unable to perform strict DSL control-flow check"):
             with program_module.Program() as logic:

@@ -119,7 +119,11 @@ _FORBIDDEN_NODE_RULES: tuple[tuple[tuple[type[ast.AST], ...], str | None, str], 
 
 
 def _warn_check_skipped(target: str, reason: Exception) -> None:
-    """Warn and skip strict checking when source inspection/parsing is unavailable."""
+    """Warn and skip strict checking when the source exists but cannot be checked.
+
+    Code with no source at all (``exec`` of a string, the REPL) skips the check
+    quietly instead: there is nothing to inspect, so there is nothing to warn about.
+    """
     warnings.warn(
         f"Unable to perform strict DSL control-flow check for {target}: {reason}",
         RuntimeWarning,
@@ -296,9 +300,11 @@ def _check_function_body_strict(
 ) -> None:
     try:
         source_lines, start_line = inspect.getsourcelines(fn)
-        source = textwrap.dedent("".join(source_lines))
-        module = ast.parse(source)
-    except (OSError, TypeError, SyntaxError) as exc:
+    except (OSError, TypeError):
+        return
+    try:
+        module = ast.parse(textwrap.dedent("".join(source_lines)))
+    except SyntaxError as exc:
         _warn_check_skipped(source_label, exc)
         return
 
@@ -345,9 +351,13 @@ def _check_with_body_from_frame(frame: FrameType, *, opt_out_hint: str) -> None:
             start_line = 1
         else:
             source_lines, start_line = inspect.getsourcelines(code)
-        source = textwrap.dedent("".join(source_lines))
-        module = ast.parse(source)
-    except (OSError, TypeError, SyntaxError) as exc:
+    except (OSError, TypeError):
+        return
+    if not source_lines:
+        return
+    try:
+        module = ast.parse(textwrap.dedent("".join(source_lines)))
+    except SyntaxError as exc:
         _warn_check_skipped(source_label, exc)
         return
 
