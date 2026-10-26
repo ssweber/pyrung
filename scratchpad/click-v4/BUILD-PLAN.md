@@ -1,262 +1,44 @@
-# CLICK v4 — build plan
+# CLICK v4 — what's left
 
-Work happens on `dev`. Build agents use their own worktrees and merge back into dev one at a time
-(rebase onto dev, fast-forward). Landed history lives in `git log`; this file holds what is decided and open.
+All six features have landed. This is the remaining work, most important first.
 
-## Source documents
+## Bugs
 
-| Doc | What it holds |
-|---|---|
-| `RESEARCH.md` | Decided design + syntax, CLICK semantics, probe IDs (O/D/M/F), capture list, conformance plan |
-| `TOUCHPOINTS.md` | First survey: per feature, categories A-L, file:line; addendum on crossings |
-| `TOUCHPOINTS-GAPS.md` | Mechanical gap audit: missed sites + 24 corrections to TOUCHPOINTS.md (corrections win) |
-| `PILOT-GOTCHAS.md` | PILOT audit: 12 cross-cutting items by severity, per-feature notes, suggested PILOT gates |
-| `BINARIES-PC.md` / `BINARIES-FIRMWARE.md` | Compile.dll func-code table; firmware encrypted (no semantics) |
-| `tools/` | Perf meters, brute-force prover harness, heavy-job lock (see "Measuring" below) |
+1. **Ladder export blocks register drum durations.** `pyrung_to_ladder()` raises `LadderExportError` on
+   `time_drum(presets=[DS1302, ...])` (`click/ladder/validator.py` `_run_precheck`), though
+   `CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED` is now a hint. laddercodec's capture generator works around it with
+   `validate=False`.
+2. **Real preset tags disagree between backends.** Interpreted compares `acc >= 2.5`, compiled
+   `acc >= int(2.5)` (`on_delay`, `timed`, `debounce`).
+3. **Fold lands ahead of stepping with two `on_delay`s on one Timer.** One rung false and resetting it, one
+   ticking, plus any other moving timer: Acc folds to 350 where stepping gives 70. A duplicate-out program, but
+   it breaks "equal stepping or decline".
+4. **`cause("T")` on a stepped `calc(T + 3, T)` raises RecursionError.**
+5. **Export doesn't enforce CLICK's 24-character nickname limit** (`pyclickplc.validation.NICKNAME_MAX_LENGTH`).
+   Add a validation finding.
+6. **The importer drops the comment on an un-nicknamed TD row.**
+7. **A callable property that reads a tag no rung touches** (`lambda s: s["M0"]`) raises KeyError from
+   `guarded_state`. The condition form of the same property works.
 
-When two docs disagree, the later audit wins, unless this file settles it.
+## Hardware
 
-Settled here: **crossings coverage test.** Putting a new class in `EXPECTED_WITH_CROSSINGS` forces an explicit
-`register()`, because `registered_classes()` must match that set exactly. Putting an `OutInstruction` subclass in
-`EXEMPT` passes the test while `crossing_for()` still hands it `OutCrossing` at runtime. The test only sees
-classes from modules that have been imported.
+- Real-PLC conformance runs for the `out` (O1-O6), `drum` (D1, D3), `math` (M1-M4, `rand_range`) and `loop`
+  (F1-F14) groups: `make test-conformance PLC=host[:port]`, then flip `confirmed=True` on what passes.
+- Depending on O6: if CLICK does not write T<n> for an Out type, add `CLK_OUT_TIMER_DONE_UNSET`.
+- F15 (inner one-shot: does CLICK reject or ignore it?) is a question for the CLICK editor.
+- Subroutine-call cases (F16, "call into subroutine", "subroutines: same rules") need a home called from main.
 
-## Fold and prover contract (decided 2026-10-23)
+## Gaps, accepted for now
 
-- **Fold has no caveats.** It is on by default, so it equals stepping (whole state, scan count) or declines.
-  Holes are found by `make test-fold`, not by more review rounds. One documented gap (runner guide,
-  "Folding"; strict xfails `TestIndexedDisplays` in `tests/core/test_fold.py`): a display copied from an
-  accumulator into a block element nothing reads by name goes stale inside a window when a rung reads it back
-  through an unbounded index (`DS[Idx]`, no min/max/choices).
-- **The prover may carry caveats.** A construct outside the exact fragment returns Intractable naming it.
-  Common idioms stay exact: coarse-unit timers, self-resetting TON pulses, the head-start race (counter vs
-  timer, timer vs timer). Weigh how common an idiom is before choosing Intractable over exact.
-
-## Rules for every feature brief
-
-- New instruction classes subclass neither `OutInstruction` nor `TimeDrumInstruction`. New expression classes
-  are siblings, not subclasses of `SumExpr`/`MathFuncExpr`/`LiteralExpr`; that applies to `RandIntExpr`.
-- Declare every written tag as its own `Tag` field in the field-declaration layer: `write_sites.py:73-88`
-  (`_writes`, `_status_fields`) and `pdg.py:946-969` (`_reads`, `_conditions`, `_exclusive_fields`). For a
-  Timer, store Done and Acc as separate fields, as `on_delay` does. If Done/Acc aren't declared, they show up
-  as unwritten inputs and PILOT may set them directly. Fold, the PDG and `prove/deadness.py` all trust these
-  declarations: an undeclared read is a soundness bug (a time drum's accumulator was one).
-- Write all internal memory keys every scan (the prover discovers keys from one scan).
-- Crossing per class, registered explicitly. `forward()` returns `UNKNOWN` unless the value is exact
-  (`sp_values.writer_value_facts` and `multitarget._writes_off` trust it).
-- Anything timed registers as a fold source (`core/fold.py` `_collect_acc_sources`) and as a cyclefold `_frac`
-  source (`pilot/cyclefold.py`), and gets a fold-vs-unfold equality test.
-- Hidden-memory instructions go in the elision bail list (`prove/elision/slice.py`).
-- A new finding code needs its row in `core/validation/registry.py`; without it the report hits a KeyError.
-- `make lint`, `make test` (both runner backends) and `make test-fold` must pass. Draft conformance cases go
-  in with pyrung's current answer marked unconfirmed.
-- Each feature checks that `how()` on a program using it still has its prover context (see Known risk).
-- Docs page, CHANGELOG Unreleased entry, cheatsheet. The two cheatsheets are one file: the docs copy includes the bundled one.
-
-## Features, in order
-
-| # | Feature | Size | Read | Status / notes |
-|---|---|---|---|---|
-| 1 | Conformance rename + Modbus runner | S + M | RESEARCH 6, TOUCHPOINTS 6, GAPS 6 | **Done.** One program, a `Conf_<Group>` subroutine per group, manifest, `confirmed=`; `math` group added. CLICK confirmed: pasting one subroutine works, nested calls unsupported, rail-wired outputs valid |
-| 2 | Math aggregates + abs | S-M | RESEARCH 3, TOUCHPOINTS 1, GAPS 1, PILOT 8 | **Done** |
-| 3 | `time_event_drum` + drum hint | M | RESEARCH 2, TOUCHPOINTS 3, GAPS 3 | **Done** (reviewed). Own class; level events; Acc keeps counting while a timed step waits (D1 = pyrung's answer, unconfirmed); fold source (event-only steps place no crossing); preset rule is a v4 hint in every mode; `drum` conformance group (D1, D3). Prover: named Intractable, see Open queue |
-| 4 | Out family | L | RESEARCH 1, TOUCHPOINTS 4, GAPS 4, PILOT 2-5 | **Done** (reviewed). Debounce needs both sides; every phase shows for at least one scan; TD-only CSV token; `CLK_TIMER_PAIR_MISMATCH`; Timer/Counter retentive now CLICK's bank defaults and the importer conforms clones to their addresses (no invented nicknames). `out_variants.py`, own classes; state in tags (coil bit + each phase Timer's Done/Acc) except toggle's prev-rung key. Answers to O1-O6 are pyrung's, unconfirmed: debounce sides are TONs on the rung / its negation (TD counts past preset, a bounce restarts it), flasher Dones mark the running phase, timed is IEC TP (needs a fresh edge). Fold sources per phase; prover exact for toggle, Intractable naming the verb otherwise; PILOT profiles for toggle/debounce/timed (flasher has none: its writer trace reaches both values); CSV token is pyrung's; `out` conformance group (O1-O6) |
-| 5 | For/Next | L | RESEARCH 4, TOUCHPOINTS 5, GAPS 5, PILOT 6 | **In progress.** Phase 1 (core) done: `ForLoopInstruction.body` (bare instructions and body `Rung`s in order; `.instructions` stays the flat view, `iter_body()` pairs each with its body rung's local contacts); body rungs are branch-like (loop rung's conditions first, `_branch_condition_start`), evaluated per iteration on a fresh view, local contacts only; `break_loop()`/`continue_loop()` (`BreakInstruction`/`ContinueInstruction`, `LoopBreakSignal`/`LoopContinueSignal`, `_EXECUTOR_LOOP_EXIT`) need a body rung with a contact; nesting via `_state._forloop_stack`, max 3, idx `_forloop_idx`/`_forloop_idx2`/`_forloop_idx3`; journal kind `loop_body`; X7 fixed (bare and body instructions capture the loop rung's condition). Prover: named Intractable for a conditioned body rung (BFS only; how() keeps its context). Phase 2 done: CLICK export (`click/ladder/_loop_items.py`: a body rung or nested loop renders through the ordinary rung path with its local contacts; bare items stay wire-only rows, goldens unchanged), `break()`/`continue()` tokens, import of contacted body rungs (was dropped) and nested For/Next, `CLK_FORLOOP_NESTING_DEPTH` (across `call()`), `CLK_FORLOOP_INNER_ONESHOT`, `CLK_FORLOOP_RETURN_INSIDE`; `loop` conformance group F1-F14 (pyrung's answers, unconfirmed; passes in-process and over Modbus). Next: journal addressing (phase 3), prover exact model |
-| 6 | `randint` | M-L | RESEARCH 3, TOUCHPOINTS 2, GAPS 2, PILOT 7 | **Done** (lightweight). The draw is an input: each site (`RandIntExpr`, a sibling class) owns a hidden `external` DINT tag `_rand.<n>` (min/max = the literal bounds, or the hull of the bound tags' declared min/max/choices), which the shared pre-scan drain (`InputOverrideManager.apply_randint_draws`, after patches and forces) writes with `randint_draw(site, scan_id, lo, hi)` (splitmix64, fixed seed). Not recorded: replay recomputes it; a `patch()`/`force()` of the tag is the override. Compiled kernel reads the tag; CircuitPython calls `random.randint`. Fold declines via `system_points.scan_derived_names` (fold, run_until gate, pilot coast). Prover: ordinary external input over the range (Intractable with a randint hint when a bound tag declares no range). Refused inside `forloop()` (one draw per scan). Not supported: settable seed; per-iteration draws (refused in `forloop()`). Differs from CLICK: restart repeats the sequence (no boot counter); M3 (lo > hi) is pyrung's answer (draws between). Tooling quirks: DAP condenser can drop draw-only spans, miner can mine coincidences. laddercodec needs nothing (operand regex needs digits; v4 compat flags RAND). Conformance: `math/rand_range`, range only, unconfirmed |
-
-One at a time, each merged before the next starts.
-
-## Measuring
-
-- **Heavy-job lock:** one heavy suite at a time machine-wide (make test, test-fold, test-pilot, test-prove,
-  tumbler, PackML lock, fuzz). `tools/heavy.sh <owner> <worktree> <timeout_s> <cmd...>` takes the mkdir lock
-  `C:/Users/Sam/Documents/GitHub/pyrung-wt/.heavy-lock` (15-min stale rule, exits 99 after 600 s waiting).
-  Timeouts: make test 600, make test-fold 1200, test-prove 120, test-pilot 270, tumbler 900, PackML lock 420.
-- **Fold/PILOT meters** (`tools/burner_meter.py` + `tools/fold_meter.py`): run from a worktree with
-  `PYTHONPATH="<wt>/src;<wt>;<repo>/scratchpad/click-v4/tools" uv run --no-sync python tools/burner_meter.py
-  <workload> out.json`, workloads `how_burner`, `run_for_idle`, `run_until_cmds`, `seek_replay`. The tumbler
-  meter: `FOLD_METER_OUT=out.json uv run --no-sync python -m pytest -p fold_meter -q tests/tumbler/`.
-  Baselines on dev 9a075b6 (kernel scans): how_burner 2675 (3 cycle folds), run_for_idle 12008,
-  run_until_cmds 7399, seek_replay 78, tumbler 19893 (15 cycle folds, ~180 s).
-- **Prover:** `uv run pyrung lock examples.packml_bench -o x.lock`: ~91 s on dev (accepted), 484 states; compare
-  byte-for-byte against a lock from the base commit. `tools/adv.py` `check(name, build, depth)` compares a
-  verdict with brute force (HOLE = wrong Proven).
-- make test ~6986 passed / 8 xfailed, ~6.5 min.
-
-## Open queue
-
-Not blocking features unless noted. Repro paths under `tools/` are in the repo; others were in session
-scratchpads and may be gone, so each item states its program.
-
-Fold:
-- **Unbounded-index display gap** (documented above). Fix needs pointer bounds from their writers (the
-  value-set analysis in `prove/deadness.py` is a starting point) or the probe scan recording what each index
-  resolved to (the compiled kernel inlines indexed reads, `circuitpy/codegen/compile/_primitives.py`).
-  Marking every element of an indexed block read is sound but cost the tumbler most of its folds (how
-  2275 -> 3355; AlmHistorian indexes DS with unbounded pointers).
-- **Cycle-fold jumps don't register fold windows** (`pilot/cyclefold.py`), so `cause()` inside a PILOT coast
-  jump isn't refused. PILOT calls `cause()` heavily: check its callers before making it raise.
-
-Prover (wrong Proven unless noted):
-- Timer-race stop points (three-timer fix) leave gaps, none seen in a wrong Proven yet: an idle absorbed
-  integer/real counter gets no stop points (rate unknown); a start more than `_STOP_START_DELAY` (2) scans
-  behind its input; a retentive timer frozen at a key at different values is still one first node plus one
-  seed (`cycles.py` "What is left"). Sweep: `tools/race_sweep.py` against brute force.
-- MEDIUM: CTUD, `count_up(c, 4).down(rise(Y))` (classification: don't absorb, or model as bidirectional).
-- Absorption gate blind spot (done): `_has_forbidden_data_read(program, graph, ...)` also counts what an
-  unbounded index reads, from `ProgramGraph.indirect_read_reach` (`pdg.unbounded_read_names`); a counter
-  in `DS[7]` read by `copy(DS[Ptr], N)` was absorbed and lost the 3 the read needed (wrong Proven, any
-  block size). `_visit_indirect_refs` stops at `Tag`/`Block` (it walked whole blocks through `vars()`:
-  3.3M calls, +3 s on PackML's context build).
-- Low: `_pilot_sweep_domains` and the lints step without the system model (`bounds.py`, `lintsys.py`: false
-  CMP_ALWAYS_FALSE on `calc(rtc...)` destinations).
-- Perf, accepted for now: PackML lock 91 s vs 61 s before the timer fixes; the gap is pulse laps
-  (`a11909b`, ~+26 s) and tag presets (`e0fe4fe`, ~+13 s), unprofiled.
-
-PDG (shared with prover, PILOT, causal, lints):
-- Unbounded index reads (done): the prover builds `build_program_graph(unbounded_index_reads=True)`
-  (`_pass_build_graph`, BFS only; the how() prior keeps PILOT's graph). `pdg._UnboundedReads`: an index
-  with no declared bounds reads the block's changing elements (written, `external`, `InputBlock`),
-  narrowed by `analysis/value_sets.py` (moved out of `prove/deadness.py`; new opt-ins
-  `follow_indirect_reads` for jump tables, `declared_inputs` for inputs with choices/min/max). PackML
-  needed both opt-ins plus readonly sources counting as init-constant literals (`init_constants.py`) to
-  stay at dev's dimensions and time.
-- Over-cap indexed writes (done): in the `unbounded_index_reads` graph a write through an unbounded index
-  into a block past `_INDIRECT_BLOCK_CAP` writes the elements its value set reaches
-  (`_UnboundedReads.reached`, by id of the destination ref), recorded on `ProgramGraph.indirect_reach`;
-  classify's writer and domain sites take that map (`_all_write_targets(instr, reach)`,
-  `_expand_indirect_tag_names(dest, reach)`). A write whose addresses are unbounded too stays
-  unregistered; its pointer has no domain, so the result is Intractable. Value sets drop the default of a
-  tag `unconditional_write_before_read` covers (`written_first`; an indexed read of its slot still takes
-  it), else the historian reaches DS5/6/9 at `HistIdIdx = 0` and `UnitModeCurrent` widens to 18 values.
-  The historian slots DS3000..3040 then became 5 stateful dimensions (PackML 106 -> 245 s); slice
-  elision's `_local_slice_check` (one call of the subroutine, its own closure, `HistIdIdx` /
-  `HistStatusIdx` written first, 10 combinations) elides them: lock byte-identical, 100 s. Follow-ups
-  (done): the absorb accumulator sites, `_has_inert_writer` and the literal-domain target list take the
-  reach too (an over-cap write could jump a counter in `DS[7]` that was then absorbed); `blockcopy`/`fill`
-  into an indexed window (`DS.select(Ptr, Ptr + 1)`) is a writer of what `_ValueSets.window` covers
-  (lowest start to highest end; the whole block when unbounded, as before), and `_domain_from_blockcopy`
-  gives those elements the union of the source elements' domains (was: every element of the block
-  Intractable, at any size). Left: `HistorianStatusEcho`'s domain reads 0..17 where it holds 0/1
-  (seeding only); PackML context build +0.3 s.
-- Index mapping (done, affine fix): `pdg.PointerUse` per access (`DS[Ptr + k]`, `DS[k - Ptr]`, integer k),
-  `ProgramGraph.pointer_uses`, `opaque_index_blocks` (non-affine index: reads/writes the whole block up to
-  `_INDIRECT_BLOCK_CAP`), `index_tags` (every tag an index reads, counted as comparison-influencing so an
-  unwritten pointer is an input, not default-pinned constant storage). Nested affine (`Ptr + 1 + 2`) is
-  non-affine for now. Block slots read through an index stay constant storage.
-
-time_event_drum (from feature 3):
-- **Prover has no exact model.** Its Acc is unmodeled whatever its declared domain (`classify.py`,
-  `unmodeled_accs`; the `_frac:` carry is in no state key, so a declared domain gave a wrong Proven before
-  the review fix), so any program using the drum is Intractable "unbounded domain on Acc" with a hint
-  naming `time_event_drum`, even for unrelated properties (as with any unbounded counter). how() keeps
-  its context. Exact route: a saturating key for Acc (only `Acc >= preset[step]`
-  matters when nothing else reads it), or a done/acc kind whose crossing is gated by the event.
-- laddercodec: no T&E encoding yet (`drum_kind` T&E, func codes 10505..10538, register-duration codes).
-  pyrung exports and imports the `time_event_drum(...)` CSV token, `None` for a blank preset or event.
-  Until then the `drum` conformance group (D1, D3) cannot reach a real CLICK.
-- D2 (which banks may hold a duration register) has no Click check.
-- Fold perf, also for `time_drum`: a coarse-unit (`sec`) drum steps most scans inside a step
-  (~1600 kernel scans of 2000 in `TestTimeEventDrum._event_only_tail`); not measured further.
-- Fuzz grammar has no T&E kind (`_TERMINAL_KINDS` etc. would need it).
-- PILOT declines (never unsound) on an Acc target past the preset: on a time-only last step
-  (`time_drum` plans `_auto` there) and on a timed+event step (holding the event off would work).
-- **The ladder export precheck still blocks register drum durations.** RESEARCH says
-  `CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED` was downgraded to a hint, but `pyrung_to_ladder()` raises
-  `LadderExportError` on `time_drum(presets=[DS1302, ...])` (`click/ladder/validator.py` `_run_precheck`).
-  The capture generator (laddercodec's `scratchpad/click-v4/captures/v4_capture.py`) works around it with `validate=False`.
-- `CMP_PRESET_STAYS_ZERO` (`cmp_conditions._preset_sites`) does not cover drum duration registers, and
-  Click validation does not role-check register presets on either time drum.
-
-For/Next (from feature 5):
-- **Prover has no model of body rungs.** `_pass_build_graph` returns Intractable on the first body rung with
-  contacts. The expression layer (`simplified_forms`, `_collect_all_exprs`, don't-care pruning) builds a
-  writer's form from the rung that holds the loop; exact route: per-iteration forms are "last iteration that
-  ran the body rung", so likely a body-rung writer is an opaque (non-OTE) write guarded by outer AND local.
-  Walkers fixed so far: PDG node + access events, write sites, return guards, edge collectors (`kernel`,
-  `expr._edge_source_tags`, slice `_collect_edge_tags`), `inputs`, lints `choices_violation` /
-  `physical_realism`, `stuck_bits` (loop-exit-skippable outs), fold audit. Not yet: `deadness._collect`
-  (BFS-only, gated), `passes` func-dep "no return between writers" (break/continue analogue).
-- **Journals.** Body rungs run as `RungRun(kind="loop_body")`. Their `branch_path` is the PDG holder's (the
-  rung or branch that holds the loop), because the program graph folds body rungs into that node and PILOT
-  matches journal paths against PDG paths. Fixed 2026-10-26: `_dynamic_branch_paths` and
-  `begin_rung` gave a body rung `()` even when its loop sat in a branch. `execution_kind` keeps a body
-  rung apart from its holder; body rungs of one loop and iterations still share one boundary, so a patch at
-  a body-rung boundary would match every iteration. Decision (2026-10-26): no iteration coordinate (For/Next
-  isn't a target use case); counterfactual/patch consumers decline on `loop_body` boundaries instead
-  (landed 2026-10-26): `theory_orientation._counterfactual_boundary` returns None for a body-rung read, and
-  `execute_counterfactual_program` raises `UnaddressableBoundaryError` on a `loop_body` patch, which
-  `research_intrascan_traceback` turns into a non-witness. A subroutine called from a loop body is exact
-  (each call gets its own `call_invocation`).
-- `loop.idx` of a loop inside a subroutine called from a loop body is `_forloop_idx` too (depth is lexical
-  per scope): the callee's loop clobbers the caller's index until its next iteration.
-- `IndirectExprRef` has no comparisons, so `Rung(Dst[loop.idx + 1] == 0)` is not a valid contact
-  (`DS[Ptr]` is). RESEARCH's example used it.
-- `branch()` stays forbidden anywhere in a loop, including inside a body rung: CLICK refuses branches on
-  every rung between For and Next, and its editor splits a branch off a For or Next rung (user, 2026-10-26).
-  Allowing it in core was built (0e3ff67) and reverted the same day. Kept from it: the operand walker
-  walks body-rung contacts (`body_rung[n].condition[i]`, `instruction_index=None`); CLICK validation never
-  saw them before.
-- laddercodec needs Break/Continue encoding (func codes 9232/9233) and nested For/Next (TOUCHPOINTS 5.L;
-  not checked in laddercodec this session). The `loop` group's F9-F13 use Break/Continue, F9 nesting.
-- F15 (inner one-shot: does CLICK reject or ignore it?) is a CLICK-editor question, not a case; F16 needs
-  the subroutine home (Other).
-- Pre-existing, fixed on the way: `find_instruction_at_site` indexed a loop child into the parent rung;
-  `SubroutineFunc._register` reset `_current_subroutine` to None (a decorated `call()` inside a subroutine
-  sent the caller's later rungs to main); access events never inlined a `call()` in a loop body;
-  `_augment_return_early_guards` missed a return inside a loop.
-
-Out family (from feature 4):
-- **laddercodec**: no Out-type encoding (func codes 8224-8235). Until then the `out` conformance group cannot
-  reach a real CLICK. First capture (debounce, 2026-10-23): class `Out`, type 0x2715 like a plain coil, 15
-  fields, a 3-row cell. `0x6066` target, `0x60B3`/`0x60B4` on preset/TD, `0x60B5`/`0x60B6` off preset/TD,
-  `0x3218` func code (8226 as predicted). Unknown: `0x1246`=0, `0x1247`=0, `0x21F9`=0, `0x2248`=1,
-  `0x20CA`=2 (output type?). No T field. laddercodec decoded it as a plain `out(C1)` until its coil parser
-  learned to reject unknown func codes (unreleased).
-- Out CSV token is TD-only (done): `debounce(Y001,on_acc=TD1,on_preset=100,off_acc=TD2,off_preset=DS5,unit=Tms)`;
-  the importer derives T<n> from TD<n>; `CLK_TIMER_PAIR_MISMATCH` covers a Done not on the T of its TD's
-  number (all timers and counters). `debounce()` requires both sides (done).
-- Semantics not probed yet: a phase no longer than a scan shows for one scan (pyrung's choice); the flasher's
-  first on phase counts the rung's first scan, so it is one scan shorter than later ones.
-- O6: if CLICK does not write T<n>, add `CLK_OUT_TIMER_DONE_UNSET` (a read of an Out-owned `Timer.Done`).
-- PILOT declines `how()` on a counter fed by a debounced bit's edges (strict xfail
-  `test_pilot_counts_debounced_edges`): the edge driver flips the input every scan, so the debounce never fires. The
-  oscillation would have to hold each level until the coil follows.
-- Prover: no exact model for debounce/flasher/timed (their Acc is unmodeled, as the time & event drum's).
-- Crossings fall through for all four; `forward()` must stay `UNKNOWN` (sp_values, multitarget proof).
-- Lint gaps (declines, not wrong): `stranded_bits` doesn't count a toggle target as persistent, `physical_realism`
-  ignores the variants, `CMP_PRESET_STAYS_ZERO` doesn't cover their presets. Fuzz grammar has no Out kinds.
-
-Found by the feature-4 review, pre-existing on HEAD:
-- A callable property that reads a tag the program never touches (`lambda s: s["M0"]`) raises KeyError from
-  `guarded_state`. Loud, not wrong; the condition form of the same property is handled (property-only tags
-  join the graph as inputs).
-- Fold: two `on_delay`s on one Timer (one rung false and resetting it, one ticking) plus any other moving timer
-  folds Acc ahead (350 vs 70). A duplicate-out program, but it breaks "equal stepping or decline".
-- A Real preset tag: interpreted compares `acc >= 2.5`, compiled `acc >= int(2.5)` (on_delay, timed, debounce).
-- The importer drops the comment on an un-nicknamed TD row.
-
-Other:
-- Function spelling in math export (done): the translator spaces every paren, comma and range colon the way
-  laddercodec's encoder does (`ABS ( DS1 )`, `LSH ( DH1 , 2 )`, `DS1 * ( DS2 + 1 )`, `- ( DS1 + 2 )`;
-  `translator._formula_call`). Native captures confirm the call spelling only; grouping parens follow
-  laddercodec's encode, which spaces every paren. The importer compacts the spaced form
-  (`codegen/utils._compact_click_formula`), so both spellings generate the same Python. laddercodec's
-  capture tool dropped `_click_formula`.
-- `cause("T")` on a stepped `calc(T + 3, T)` raises RecursionError (not fold).
-- Click exporter doesn't enforce CLICK's 24-character nickname limit (`pyclickplc.validation.NICKNAME_MAX_LENGTH`);
-  add a validation finding.
-- Conformance subroutine-call cases ("call into subroutine", "subroutines: same rules") need a home called from
-  main, since groups are already subroutines.
-
-## Known risk, not scheduled
-
-- PILOT's prover context is all-or-nothing (`drive_setup.py:300-385`). Any compile or prover failure silently strips
-  value domains, the world key and transition evidence from every `how()`. A new instruction that the prover can't
-  absorb yet degrades all `how()` calls on that program.
-
-## Waiting on the user
-
-- CLICK v4 capture session (RESEARCH 5, plus copying the `Compile\` folder), for laddercodec blobs (the T&E drum and
-  the Out types wait on it).
-- Real-PLC conformance runs (O/D/M/F).
+- Prover has no exact model for `time_event_drum`, `debounce`/`flasher`/`timed`, or conditioned forloop body
+  rungs; each is a named Intractable (BFS only, so `how()` keeps its prover context).
+- Fold: a display copied into an unread block element goes stale inside a window when read back through an
+  unbounded index (strict xfails `TestIndexedDisplays`).
+- Prover: CTUD (`count_up(c, 4).down(rise(Y))`) classification; timer-race stop-point gaps (`cycles.py`
+  "What is left", sweep `tools/race_sweep.py`); PackML lock 91 s.
+- PILOT declines a counter fed by a debounced bit's edges (strict xfail `test_pilot_counts_debounced_edges`), and
+  an Acc target past a drum's preset.
+- Lints: `CMP_PRESET_STAYS_ZERO` misses drum duration registers and Out presets; `stranded_bits` doesn't count a
+  toggle target as persistent; `physical_realism` ignores the Out types; D2 (which banks may hold a duration
+  register) has no Click check.
+- Fuzz grammar has no T&E drum or Out kinds.
