@@ -84,6 +84,8 @@ _INSTRUCTION_NAMES = {
     "timed",
     "call",
     "return",
+    "break",
+    "continue",
     "for",
     "next",
     "raw",

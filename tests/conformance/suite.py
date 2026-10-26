@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from pyrung.conformance import ConformanceProgram, build_program, load_manifest
-from tests.conformance import test_drum, test_math, test_out, test_rung_semantics
+from tests.conformance import test_drum, test_loop, test_math, test_out, test_rung_semantics
 
 MANIFEST_PATH = Path(__file__).with_name("manifest.toml")
 #: The ClickNick workspace linked to the conformance CLICK project.
@@ -28,6 +28,7 @@ ALL_GROUPS = [
     test_math.group,
     test_drum.group,
     test_out.group,
+    test_loop.group,
 ]
 
 

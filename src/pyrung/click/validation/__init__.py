@@ -28,6 +28,9 @@ from .findings import (
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
     CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
     CLK_EXPR_ONLY_IN_CALC,
+    CLK_FORLOOP_INNER_ONESHOT,
+    CLK_FORLOOP_NESTING_DEPTH,
+    CLK_FORLOOP_RETURN_INSIDE,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
     CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
@@ -68,6 +71,7 @@ from .hardware import (
 from .identity import _evaluate_address_identity_conflicts
 from .portability import (
     _evaluate_fact,
+    _evaluate_forloop_structure,
     _evaluate_immediate_usage,
     _evaluate_instruction_portability,
     _evaluate_range_aggregates,
@@ -164,6 +168,7 @@ def validate_click_program(
         _evaluate_immediate_usage(facts.operands, instruction_sites, tag_map, mode, resolver)
     )
     findings.extend(_evaluate_status_bit_usage(program, mode))
+    findings.extend(_evaluate_forloop_structure(program, mode))
 
     for instruction, base_location in instruction_sites:
         findings.extend(_evaluate_instruction_portability(instruction, base_location, mode))
@@ -263,6 +268,9 @@ __all__ = [
     "CLK_TIMER_PRESET_OVERFLOW",
     "CLK_OUT_UNIT_UNSUPPORTED",
     "CLK_TIMER_PAIR_MISMATCH",
+    "CLK_FORLOOP_INNER_ONESHOT",
+    "CLK_FORLOOP_NESTING_DEPTH",
+    "CLK_FORLOOP_RETURN_INSIDE",
     "CLK_STATUS_BIT_NOT_PORTABLE",
     "ClickFinding",
     "ClickValidationReport",

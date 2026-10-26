@@ -16,6 +16,12 @@ from pyrung.core.expression import (
     UnaryExpr,
 )
 from pyrung.core.instruction.calc import CalcMode, infer_calc_mode
+from pyrung.core.instruction.control import (
+    CallInstruction,
+    ForLoopInstruction,
+    ReturnInstruction,
+    iter_loop_body_rungs,
+)
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation.walker import ProgramLocation
@@ -30,6 +36,9 @@ from .findings import (
     CLK_CALC_RANGE_MIXED_BANKS,
     CLK_CALC_RANGE_NOT_CONTIGUOUS,
     CLK_EXPR_ONLY_IN_CALC,
+    CLK_FORLOOP_INNER_ONESHOT,
+    CLK_FORLOOP_NESTING_DEPTH,
+    CLK_FORLOOP_RETURN_INSIDE,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
     CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
@@ -722,6 +731,8 @@ def _evaluate_status_bit_usage(
                 _check_tag(tag, location_str)
         for branch in rung._branches:
             _walk_rung(branch, location_str)
+        for body_rung in iter_loop_body_rungs(rung._instructions):
+            _walk_rung(body_rung, location_str)
 
     for rung_index, rung in enumerate(program.rungs):
         _walk_rung(rung, f"main rung {rung_index}")
@@ -842,3 +853,115 @@ def _evaluate_instruction_portability(
             )
         )
     return findings
+
+
+_MAX_CLICK_FORLOOP_DEPTH = 3
+
+
+def _evaluate_forloop_structure(program: Any, mode: ValidationMode) -> list[ClickFinding]:
+    """CLICK's For/Next rules that pyrung's core does not enforce.
+
+    Loops nest at most three deep counting the loops of subroutines called
+    inside a loop (C010D); only the outermost For may be one-shot; RETURN may
+    not sit between For and Next.
+    """
+    findings: list[ClickFinding] = []
+    scopes: dict[str | None, list[Any]] = {None: list(program.rungs)}
+    scopes.update(program.subroutines)
+
+    def _label(sub: str | None, rung_index: int) -> str:
+        scope = "main" if sub is None else f"subroutine '{sub}'"
+        return f"{scope} rung {rung_index + 1}"
+
+    # Deepest loop nesting each scope reaches, counting into its calls.
+    depth_memo: dict[str | None, int] = {}
+
+    def _loop_depth(instructions: Any, depth: int, active: frozenset[str]) -> int:
+        deepest = depth
+        for instr in instructions:
+            if isinstance(instr, ForLoopInstruction):
+                deepest = max(deepest, _loop_depth(instr.instructions, depth + 1, active))
+            elif isinstance(instr, CallInstruction) and depth > 0:
+                deepest = max(deepest, depth + _scope_depth(instr.subroutine_name, active))
+        return deepest
+
+    def _scope_depth(sub: str | None, active: frozenset[str] = frozenset()) -> int:
+        if sub in depth_memo:
+            return depth_memo[sub]
+        if sub is not None and sub in active:
+            return 0
+        inner = active if sub is None else active | {sub}
+        deepest = 0
+        for rung in scopes.get(sub, ()):
+            deepest = max(deepest, _loop_depth(_rung_instructions(rung), 0, inner))
+        depth_memo[sub] = deepest
+        return deepest
+
+    for sub, rungs in scopes.items():
+        for rung_index, rung in enumerate(rungs):
+            location = _label(sub, rung_index)
+            for loop in _rung_instructions(rung):
+                if not isinstance(loop, ForLoopInstruction):
+                    continue
+                depth = _loop_depth([loop], 0, frozenset())
+                if depth > _MAX_CLICK_FORLOOP_DEPTH:
+                    findings.append(
+                        ClickFinding(
+                            code=CLK_FORLOOP_NESTING_DEPTH,
+                            severity=_route_severity(CLK_FORLOOP_NESTING_DEPTH, mode),
+                            message=(
+                                f"forloop at {location} nests {depth} deep, counting the "
+                                "loops of subroutines it calls; CLICK allows 3."
+                            ),
+                            location=location,
+                            suggestion="Flatten a level, or move the inner loop out of the call.",
+                        )
+                    )
+                for inner in _nested_loops(loop):
+                    if inner._oneshot:
+                        findings.append(
+                            ClickFinding(
+                                code=CLK_FORLOOP_INNER_ONESHOT,
+                                severity=_route_severity(CLK_FORLOOP_INNER_ONESHOT, mode),
+                                message=(
+                                    f"forloop(..., oneshot=True) nested in the loop at "
+                                    f"{location}; CLICK allows one-shot only on the outermost For."
+                                ),
+                                location=location,
+                                suggestion="Drop oneshot= from the inner loop.",
+                            )
+                        )
+                if any(isinstance(instr, ReturnInstruction) for instr in _flat_loop(loop)):
+                    findings.append(
+                        ClickFinding(
+                            code=CLK_FORLOOP_RETURN_INSIDE,
+                            severity=_route_severity(CLK_FORLOOP_RETURN_INSIDE, mode),
+                            message=(
+                                f"return_early() inside the forloop at {location}; CLICK does "
+                                "not allow RETURN between For and Next."
+                            ),
+                            location=location,
+                            suggestion="Use break_loop() to leave the loop, then return after it.",
+                        )
+                    )
+    return findings
+
+
+def _rung_instructions(rung: Any) -> list[Any]:
+    instructions = list(rung._instructions)
+    for branch in rung._branches:
+        instructions.extend(_rung_instructions(branch))
+    return instructions
+
+
+def _flat_loop(loop: ForLoopInstruction) -> list[Any]:
+    flat: list[Any] = []
+    for instr in loop.instructions:
+        flat.append(instr)
+        if isinstance(instr, ForLoopInstruction):
+            flat.extend(_flat_loop(instr))
+    return flat
+
+
+def _nested_loops(loop: ForLoopInstruction) -> list[ForLoopInstruction]:
+    return [instr for instr in _flat_loop(loop) if isinstance(instr, ForLoopInstruction)]

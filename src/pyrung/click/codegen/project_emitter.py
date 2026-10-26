@@ -795,6 +795,8 @@ def _emit_logic_imports(
         "flasher": "flasher",
         "timed": "timed",
         "return": "return_early",
+        "break": "break_loop",
+        "continue": "continue_loop",
     }
     for instr_name in sorted(refs.used_instructions):
         import_name = _INSTR_MAP.get(instr_name)

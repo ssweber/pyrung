@@ -231,6 +231,14 @@ class ForLoopInstruction(OneShotMixin, Instruction):
                 reset_fn()
 
 
+def iter_loop_body_rungs(instructions: Any) -> Iterator[Rung]:
+    """Every forloop body rung among *instructions*, nested loops included."""
+    for instruction in instructions:
+        if isinstance(instruction, ForLoopInstruction):
+            yield from instruction.body_rungs
+            yield from iter_loop_body_rungs(instruction.instructions)
+
+
 class CallInstruction(Instruction):
     """Call subroutine instruction.
 

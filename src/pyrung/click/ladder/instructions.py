@@ -8,6 +8,7 @@ from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.calc import infer_calc_mode
 
+from ._loop_items import is_own_rung, loop_item_rung
 from .translator import _quote
 
 
@@ -46,6 +47,7 @@ class _InstructionMixin:
         ) -> str: ...
         def _render_pattern(self, pattern: tuple[tuple[bool, ...], ...]) -> str: ...
         def _render_converter(self, converter: CopyConverter) -> str: ...
+        def _render_rung(self, rung: Any, *, path: str) -> list[tuple[str, ...]]: ...
 
     def _render_forloop_instruction(
         self,
@@ -76,8 +78,12 @@ class _InstructionMixin:
             first_marker=self._next_marker(),
         )
 
-        for child_index, child_instruction in enumerate(getattr(instruction, "instructions", ())):
-            child_path = f"{path}.instruction[{child_index}]({type(child_instruction).__name__})"
+        for child_index, child_instruction in enumerate(instruction.body):
+            child_path = f"{path}.body[{child_index}]({type(child_instruction).__name__})"
+            if is_own_rung(child_instruction):
+                # A conditioned body rung, or a nested loop: a rung of its own.
+                rows.extend(self._render_rung(loop_item_rung(child_instruction), path=child_path))
+                continue
             child_condition_rows = self._expand_conditions([], path=f"{child_path}.condition")
             child_rows = self._single_output_rows(
                 child_condition_rows,
@@ -630,6 +636,10 @@ class _InstructionMixin:
             return self._fn("call", _quote(str(instruction.subroutine_name)))
         if instruction_type == "ReturnInstruction":
             return self._fn("return")
+        if instruction_type == "BreakInstruction":
+            return self._fn("break")
+        if instruction_type == "ContinueInstruction":
+            return self._fn("continue")
 
         if instruction_type == "NopInstruction":
             return "NOP"

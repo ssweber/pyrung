@@ -798,18 +798,25 @@ def _analyze_rungs(
         af0 = rung.rows[0][-1] if rung.rows else ""
 
         if af0.startswith("for("):
-            # for/next block
+            # for/next block; nested blocks count their own for()/next() pair
             analyzed.append(analyze_one(i, role=RungRole.FORLOOP_START))
             i += 1
-            # Collect body rungs until next()
+            depth = 1
             while i < len(raw_rungs):
                 body_rung = raw_rungs[i]
                 body_af = body_rung.rows[0][-1] if body_rung.rows else ""
                 if body_af == "next()":
                     analyzed.append(analyze_one(i, role=RungRole.FORLOOP_NEXT))
                     i += 1
-                    break
-                analyzed.append(analyze_one(i, role=RungRole.FORLOOP_BODY))
+                    depth -= 1
+                    if depth == 0:
+                        break
+                    continue
+                if body_af.startswith("for("):
+                    analyzed.append(analyze_one(i, role=RungRole.FORLOOP_START))
+                    depth += 1
+                else:
+                    analyzed.append(analyze_one(i, role=RungRole.FORLOOP_BODY))
                 i += 1
         else:
             analyzed.extend(_split_continued(analyze_one(i)))

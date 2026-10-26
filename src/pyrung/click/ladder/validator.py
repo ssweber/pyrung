@@ -14,6 +14,7 @@ from pyrung.core.condition import AllCondition, AnyCondition, Condition
 from pyrung.core.instruction import ForLoopInstruction
 from pyrung.core.rung import Rung
 
+from ._loop_items import is_own_rung, loop_item_rung
 from .layout import _HEADER
 from .types import Issue, LadderExportError
 
@@ -105,6 +106,26 @@ class _ValidationMixin:
             )
 
 
+def _rung_comments(rung: Rung) -> list[str | None]:
+    """A rung's comment, then its forloop body rungs' (nested loops included)."""
+    comments: list[str | None] = [rung.comment]
+
+    def _loop(loop: ForLoopInstruction) -> None:
+        for item in loop.body:
+            if isinstance(item, Rung):
+                comments.append(item.comment)
+                for instruction in item._instructions:
+                    if isinstance(instruction, ForLoopInstruction):
+                        _loop(instruction)
+            elif isinstance(item, ForLoopInstruction):
+                _loop(item)
+
+    for instruction in rung._instructions:
+        if isinstance(instruction, ForLoopInstruction):
+            _loop(instruction)
+    return comments
+
+
 class _RoundTripValidationMixin:
     """Round-trip emitted ladder rows back through the analyzer and compare semantics."""
 
@@ -141,7 +162,9 @@ class _RoundTripValidationMixin:
     ) -> None:
         """Fail loudly when emitted CSV rows lose rung semantics."""
         actual_rungs = _analyze_rungs(_parse_rows([tuple(_HEADER), *rendered_rows]))
-        expected_comments = [rung.comment for rung in source_rungs if rung.comment is not None]
+        expected_comments = [
+            comment for rung in source_rungs for comment in _rung_comments(rung) if comment
+        ]
         actual_comments = [rung.comment for rung in actual_rungs if rung.comment is not None]
 
         if actual_comments != expected_comments:
@@ -243,10 +266,15 @@ class _RoundTripValidationMixin:
                     pins=(),
                 )
             ]
-            for child_index, child_instruction in enumerate(
-                getattr(instruction, "instructions", ())
-            ):
-                child_path = f"{path}.instruction[0](ForLoopInstruction).instruction[{child_index}]({type(child_instruction).__name__})"
+            for child_index, child_instruction in enumerate(instruction.body):
+                child_path = f"{path}.instruction[0](ForLoopInstruction).body[{child_index}]({type(child_instruction).__name__})"
+                if is_own_rung(child_instruction):
+                    outputs.extend(
+                        self._expected_outputs_for_rung(
+                            loop_item_rung(child_instruction), path=child_path
+                        )
+                    )
+                    continue
                 outputs.append(
                     _ScopeOutput(
                         af_token=self._instruction_token(child_instruction, path=child_path),

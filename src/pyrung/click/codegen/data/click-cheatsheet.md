@@ -24,6 +24,7 @@ from pyrung import (
     shift, event_drum, time_drum,            # drum/shift/search
     time_event_drum, search,
     call, subroutine, forloop, return_early, # program control
+    break_loop, continue_loop,
     send, receive, ModbusTcpTarget,          # communication
 )
 from pyrung.click import ClickBlocks, TagMap
@@ -239,10 +240,15 @@ with Program() as logic:
     with rung(AutoMode):
         call("init")
 
-# For loops
+# For loops: bare instructions are wire-only body rungs; a `with rung()` inside
+# the loop is a body rung with contacts, evaluated on every iteration
 with rung():
     with forloop(5) as loop:
         copy(Src[loop.idx + 1], Dst[loop.idx + 1])
+        with rung(Fault):
+            break_loop()      # leave the loop (CLICK Break, needs a contact)
+        with rung(Skip):
+            continue_loop()   # next iteration (CLICK Continue, needs a contact)
 ```
 
 ## Shift register

@@ -59,6 +59,8 @@ class _LadderExporter(
         ("CalcInstruction", "calc", "math"),
         ("ReturnInstruction", "return_early", "return"),
         ("ForLoopInstruction", "forloop", "for"),
+        ("BreakInstruction", "break_loop", "break"),
+        ("ContinueInstruction", "continue_loop", "continue"),
     )
 
     def __init__(self, *, tag_map: TagMap, program: Program, index: bool = False) -> None:
@@ -416,15 +418,17 @@ class _LadderExporter(
         all_rungs = list(program.rungs)
         for sub_rungs in program.subroutines.values():
             all_rungs.extend(sub_rungs)
-        for rung in all_rungs:
-            for instr in rung._instructions:
+
+        def _add(instructions: Any) -> None:
+            for instr in instructions:
                 types.add(type(instr).__name__)
-                # ForLoopInstruction has nested instructions
-                for child in getattr(instr, "instructions", ()):
-                    types.add(type(child).__name__)
+                # ForLoopInstruction has nested instructions, nested loops included
+                _add(getattr(instr, "instructions", ()))
+
+        for rung in all_rungs:
+            _add(rung._instructions)
             for branch_block in rung._branches:
-                for instr in branch_block._instructions:
-                    types.add(type(instr).__name__)
+                _add(branch_block._instructions)
         return types
 
     def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn:

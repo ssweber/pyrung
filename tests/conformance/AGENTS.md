@@ -216,6 +216,8 @@ Each line becomes a sentence, a ladder, and a row in the report.
 - forloop body sees its own prior-iteration writes
 - forloop loop.idx indirect addressing
 - forloop dynamic count == 0: pin down whether Click executes once, skips, or faults
+- forloop (`loop` group, F1-F14): a false For rung drives body coils off (F2); count 0/-1 runs once (F3); count read once (F4); body-rung contacts per iteration (F5); edges compare with the previous scan (F6); timers accumulate per iteration (F7); counters count per iteration (F8); Break leaves the innermost loop (F9) after the earlier body rungs (F10); Continue skips the rest of one iteration (F11, F12); a Break contact sees same-iteration writes (F13); a one-shot fires once per scan (F14)
+- forloop inner one-shot: does CLICK reject it (C0111) or ignore it (F15); a loop in a called subroutine counts toward depth 3 (F16, needs the subroutine home)
 
 ### Memory
 - rung N+1 sees rung N's writes, same scan

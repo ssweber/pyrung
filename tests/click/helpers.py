@@ -46,9 +46,11 @@ from pyrung.core import (
 from pyrung.core.program import (
     blockcopy,
     branch,
+    break_loop,
     calc,
     call,
     comment,
+    continue_loop,
     copy,
     count_down,
     count_up,
@@ -185,6 +187,8 @@ _EXEC_NAMESPACE: dict[str, object] = {
     "call": call,
     "subroutine": subroutine,
     "return_early": return_early,
+    "break_loop": break_loop,
+    "continue_loop": continue_loop,
     "comment": comment,
     # Click-specific
     "send": __import__("pyrung.click", fromlist=["send"]).send,

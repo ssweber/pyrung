@@ -46,3 +46,23 @@ debounce_bounce_restarts_on_side = 3
 flasher_restarts_with_on_phase = 4
 timed_needs_fresh_edge = 5
 out_coil_sets_timer_done = 6
+
+[groups.loop]
+base = 901 # Conf_Loop: DS901..DS1100
+slots = 19
+
+[groups.loop.cases]
+loop_runs_n_times = 1
+false_for_rung_turns_body_outs_off = 2
+zero_or_negative_count_runs_once = 3
+count_read_once = 4
+body_rung_contact_per_iteration = 5
+edge_contact_inside_loop = 6
+timer_inside_loop = 7
+counter_inside_loop = 8
+break_leaves_innermost_loop = 9
+break_runs_earlier_body_rungs = 10
+continue_skips_rest_of_iteration = 11
+continue_on_last_iteration = 12
+break_on_same_iteration_write = 13
+oneshot_inside_loop = 14

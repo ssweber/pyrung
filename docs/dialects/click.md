@@ -112,10 +112,12 @@ This DSL follows CLICK PLC instruction naming as closely as possible, departing 
 | `SET` | `latch` | Shadows Python builtin `set` |
 | `MATH` | `calc` | Shadows Python stdlib `math` |
 | `RET` | `return_early` | Normal return is implicit; only early exit needs a call |
+| `BREAK` | `break_loop` | `break` is a Python keyword |
+| `CONTINUE` | `continue_loop` | `continue` is a Python keyword |
 
 Math formula functions use the Python name where one exists: `LOG` → `log10`, `LN` → `log`, `ABS` → `abs`, `AVG` → `rng.mean()`, `MDN` → `rng.median()`. See [Range aggregates on CLICK](../instructions/math.md#range-aggregates-on-click).
 
-The CSV ladder export uses CLICK-facing token names: `calc` emits as `math(...)`, `return_early` as `return()`, and `forloop` as `for(...)`. See the [laddercodec CSV format guide](https://pyrung.com/laddercodec/guides/csv-format/) for the full token grammar.
+The CSV ladder export uses CLICK-facing token names: `calc` emits as `math(...)`, `return_early` as `return()`, `forloop` as `for(...)` with its body rungs and `next()`, and `break_loop` / `continue_loop` as `break()` / `continue()`. See the [laddercodec CSV format guide](https://pyrung.com/laddercodec/guides/csv-format/) for the full token grammar.
 
 ## Writing a CLICK program
 
@@ -420,6 +422,10 @@ on_delay(MyTimer, preset=60, unit="sec")
 ### Out coil variants
 
 `toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Each phase timer must map to `T<n>` with `TD<n>` of the same number (the coil names only the TD; CLICK claims the whole timer), and a register preset to `DS`. A timer or counter whose Done and Acc map to different numbers is `CLK_TIMER_PAIR_MISMATCH`, for `on_delay` and the counters too. The CSV token names each phase's TD: `debounce(Y001,on_acc=TD1,on_preset=100,off_acc=TD2,off_preset=DS5,unit=Tms)`. CLICK's Out dialog offers fewer units than its timers: `debounce` and `flasher` take `ms` or `sec`, `timed` takes `ms`, `sec` or `min`; any other unit is `CLK_OUT_UNIT_UNSUPPORTED`. Only `toggle` takes `immediate(...)`. Whether CLICK sets the phase timer's `T` bit is not yet confirmed; pyrung sets it.
+
+### For/Next
+
+A `forloop` exports as its For rung, one rung per body item, and `next()`: a bare instruction is a wire-only rung, a `with rung(...)` inside the loop keeps its contacts, and a nested loop is a For rung of its own. `break_loop()` and `continue_loop()` export as `break()` and `continue()`. CLICK allows three levels of loops, counting the loops of a subroutine called inside a loop (`CLK_FORLOOP_NESTING_DEPTH`), a one-shot only on the outermost For (`CLK_FORLOOP_INNER_ONESHOT`), and no `return_early()` between For and Next (`CLK_FORLOOP_RETURN_INSIDE`). `loop.idx` has no CLICK address; count iterations with a `DS` pointer instead. What CLICK does with an edge contact, a timer or a one-shot inside a loop is not yet confirmed on hardware.
 
 Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hints as errors.
 

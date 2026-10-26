@@ -359,6 +359,8 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         "timed": "timed",
         "call": "call",
         "return": "return_early",
+        "break": "break_loop",
+        "continue": "continue_loop",
     }
     for instr_name in sorted(collection.used_instructions):
         import_name = instruction_map.get(instr_name)
@@ -760,7 +762,7 @@ def _emit_rung_sequence(
                 lines.append("")
             first = False
             rung_number += 1
-            _emit_forloop(
+            end = _emit_forloop(
                 lines,
                 rungs,
                 i,
@@ -771,13 +773,9 @@ def _emit_rung_sequence(
                 call_func_map=call_func_map,
                 rung_number=rung_number if index else None,
             )
-            # Skip to after next()
-            i += 1
-            while i < len(rungs) and rungs[i].role is not RungRole.FORLOOP_NEXT:
-                rung_number += 1
-                i += 1
-            rung_number += 1  # next() rung
-            i += 1  # skip the next() rung
+            # The body rungs and next() rungs count, nested loops included.
+            rung_number += end - i - 1
+            i = end
             continue
 
         if rung.role is RungRole.FORLOOP_NEXT:
@@ -813,8 +811,13 @@ def _emit_forloop(
     structured_map: TagMap | None = None,
     call_func_map: dict[str, str] | None = None,
     rung_number: int | None = None,
-) -> None:
-    """Emit a for/next block."""
+    bare: bool = False,
+) -> int:
+    """Emit a for/next block; return the index after its next() rung.
+
+    A wire-only body rung becomes a bare instruction, any other body rung a
+    ``with rung(...)`` inside the loop, and a nested for() a nested loop.
+    """
     pad = "    " * indent
     for_rung = rungs[start_idx]
 
@@ -836,29 +839,57 @@ def _emit_forloop(
         count_arg = "1"
         kw_parts = []
 
-    # Emit rung with forloop
-    _emit_rung_header(lines, for_rung, conditions_str, indent, rung_number=rung_number)
+    # Emit rung with forloop; a bare nested loop has no rung of its own, so
+    # the caller passes one indent less and the header is skipped.
+    if not bare:
+        _emit_rung_header(lines, for_rung, conditions_str, indent, rung_number=rung_number)
 
     forloop_args = count_arg
     if kw_parts:
         forloop_args += ", " + ", ".join(kw_parts)
     lines.append(f"{pad}    with forloop({forloop_args}):")
 
-    # Body rungs — forloop body instructions are bare (not wrapped in Rung)
     body_pad = "    " * (indent + 2)
     body_count = 0
-    for j in range(start_idx + 1, len(rungs)):
-        if rungs[j].role is RungRole.FORLOOP_NEXT:
-            break
+    j = start_idx + 1
+    while j < len(rungs) and rungs[j].role is not RungRole.FORLOOP_NEXT:
         body_rung = rungs[j]
-        for instr in body_rung.instructions:
-            _emit_instruction(
-                lines, instr, collection, nicknames, indent + 2, structured_map, call_func_map
-            )
         body_count += 1
+        if body_rung.role is RungRole.FORLOOP_START:
+            # A For rung with no contacts or comment nests as a bare loop.
+            bare = body_rung.condition_tree is None and not body_rung.comment
+            j = _emit_forloop(
+                lines,
+                rungs,
+                j,
+                collection,
+                nicknames,
+                indent=indent + 1 if bare else indent + 2,
+                structured_map=structured_map,
+                call_func_map=call_func_map,
+                bare=bare,
+            )
+            continue
+        if body_rung.condition_tree is None and not body_rung.comment:
+            for instr in body_rung.instructions:
+                _emit_instruction(
+                    lines, instr, collection, nicknames, indent + 2, structured_map, call_func_map
+                )
+        else:
+            _emit_rung(
+                lines,
+                body_rung,
+                collection,
+                nicknames,
+                indent=indent + 2,
+                structured_map=structured_map,
+                call_func_map=call_func_map,
+            )
+        j += 1
 
     if body_count == 0:
         lines.append(f"{body_pad}pass")
+    return j + 1
 
 
 def _emit_rung_header(
@@ -1339,7 +1370,12 @@ def _render_af_token(
         raise ValueError(f"Unrecognised AF instruction: {func_name!r}")
 
     # Map CSV token names → Python DSL names
-    _CSV_TO_DSL = {"return": "return_early", "math": "calc"}
+    _CSV_TO_DSL = {
+        "return": "return_early",
+        "math": "calc",
+        "break": "break_loop",
+        "continue": "continue_loop",
+    }
     py_func = _CSV_TO_DSL.get(func_name, func_name)
 
     # In project mode, call("name") → call(func_name) using bare identifier
