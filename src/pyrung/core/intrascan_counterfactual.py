@@ -163,6 +163,11 @@ class _CounterfactualPatchObserver:
             if branch_index is None:
                 raise RuntimeError("counterfactual branch is absent from its parent rung")
             branch_path = (*parent.branch_path, branch_index)
+        elif kind == "loop_body":
+            # Same address as the rung or branch that holds the loop.
+            if not self._rung_frames:
+                raise RuntimeError("counterfactual loop body has no parent rung scope")
+            branch_path = self._rung_frames[-1].branch_path
         boundary = OccurrenceBoundary(
             rung_id=ctx._current_node_id or RungId(None, rung_index),
             execution_kind=kind,

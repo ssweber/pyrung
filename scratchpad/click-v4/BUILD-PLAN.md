@@ -177,10 +177,13 @@ For/Next (from feature 5):
   `expr._edge_source_tags`, slice `_collect_edge_tags`), `inputs`, lints `choices_violation` /
   `physical_realism`, `stuck_bits` (loop-exit-skippable outs), fold audit. Not yet: `deadness._collect`
   (BFS-only, gated), `passes` func-dep "no return between writers" (break/continue analogue).
-- **Journals.** Body rungs run as `RungRun(kind="loop_body")` with the loop rung's address: `_dynamic_branch_paths`
-  gives them path `()` (collides with the loop rung), `OccurrenceBoundary` has no body/iteration coordinate,
-  so a patch at a body-rung boundary would match every iteration. PILOT's effect/requirement code is blind
-  to them (safe direction). Needs an address: (rung, branch_path, body index, iteration).
+- **Journals.** Body rungs run as `RungRun(kind="loop_body")`. Their `branch_path` is the PDG holder's (the
+  rung or branch that holds the loop), because the program graph folds body rungs into that node and PILOT
+  matches journal paths against PDG paths. Fixed 2026-10-26: `_dynamic_branch_paths` and
+  `begin_rung` gave a body rung `()` even when its loop sat in a branch. `execution_kind` keeps a body
+  rung apart from its holder; body rungs of one loop and iterations still share one boundary, so a patch at
+  a body-rung boundary would match every iteration. Decision (2026-10-26): no iteration coordinate (For/Next
+  isn't a target use case); counterfactual/patch consumers must decline on `loop_body` boundaries instead.
 - `loop.idx` of a loop inside a subroutine called from a loop body is `_forloop_idx` too (depth is lexical
   per scope): the callee's loop clobbers the caller's index until its next iteration.
 - `IndirectExprRef` has no comparisons, so `Rung(Dst[loop.idx + 1] == 0)` is not a valid contact

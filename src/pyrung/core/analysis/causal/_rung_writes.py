@@ -927,6 +927,10 @@ def _dynamic_branch_paths(runs: tuple[RungRun, ...]) -> dict[int, tuple[int, ...
                     if branch_index is None:
                         raise RuntimeError("captured branch is absent from its parent rung")
                     path = (*parent_path, branch_index)
+                elif item.kind == "loop_body":
+                    # The program graph folds a body rung into the rung or
+                    # branch that holds its loop, so it shares that address.
+                    path = parent_path
                 result[id(item)] = path
                 _walk(item.body, item, path)
             elif isinstance(item, (InstructionRun, LoopIterationRun)):

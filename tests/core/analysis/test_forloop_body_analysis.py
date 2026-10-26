@@ -12,6 +12,7 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
+    branch,
     break_loop,
     calc,
     call,
@@ -24,9 +25,16 @@ from pyrung.core import (
     return_early,
     subroutine,
 )
+from pyrung.core.analysis.causal._rung_writes import build_scan_rung_write_projection
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import Counterexample, Intractable, always
 from pyrung.core.analysis.return_guards import return_early_guard_exprs
+from pyrung.core.context import RungId
+from pyrung.core.intrascan_counterfactual import (
+    CounterfactualPatch,
+    OccurrenceBoundary,
+    execute_counterfactual_program,
+)
 from pyrung.core.validation._common import _collect_write_sites
 from pyrung.core.validation.stuck_bits import _loop_exit_skippable
 
@@ -192,3 +200,57 @@ def test_timer_in_body_rung_folds_like_stepping():
         stepped.step()
     assert folded.current_state.scan_id == stepped.current_state.scan_id
     assert dict(folded.current_state.tags) == dict(stepped.current_state.tags)
+
+
+def _loop_in_branch_program() -> Program:
+    with Program() as logic:
+        with Rung(Enable):
+            with branch(Gate):
+                with forloop(2):
+                    with Rung(Stop):
+                        out(Y)
+    return logic
+
+
+def test_body_rung_writes_carry_the_branch_that_holds_the_loop():
+    logic = _loop_in_branch_program()
+    plc = PLC(logic)
+    plc.patch({"Enable": True, "Gate": True, "Stop": True})
+    plc.step()
+    scan_id = plc.history.scan_ids()[-1]
+    projection = build_scan_rung_write_projection(
+        plc.history, scan_id, plc._replay_rung_runs_at(scan_id)
+    )
+    assert projection is not None
+    body_writes = [write for write in projection.writes if write.occurrence.name == "Y"]
+    assert len(body_writes) == 2
+    assert {write.branch_path for write in body_writes} == {(0,)}
+    # The program graph folds the body rung into that branch's node.
+    (writer,) = [node for node in build_program_graph(logic).rung_nodes if "Y" in node.writes]
+    assert writer.branch_path == (0,)
+
+
+def test_counterfactual_body_rung_boundary_carries_the_holding_branch():
+    logic = _loop_in_branch_program()
+    plc = PLC(logic)
+    plc.patch({"Enable": True, "Gate": True, "Stop": True})
+    patch = CounterfactualPatch(
+        "A",
+        1,
+        Enable,
+        OccurrenceBoundary(
+            rung_id=RungId(None, 0),
+            execution_kind="loop_body",
+            caller_rung=0,
+            call_stack=(),
+            depth=2,
+            call_invocation=None,
+            branch_path=(),
+        ),
+    )
+    ctx, dt = plc._prepare_scan()
+    receipt = execute_counterfactual_program(logic, ctx, (patch,))
+    ctx.commit(dt=dt)
+    observed = {boundary.branch_path for _patch, boundary in receipt.encountered_candidates}
+    assert observed == {(0,)}
+    assert receipt.applications == ()
