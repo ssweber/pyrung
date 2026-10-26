@@ -756,11 +756,11 @@ def test_calc_token_uses_click_native_operators():
         "math(DS1 ^ 2,DS3,mode=decimal)",
         "math(DS1 MOD DS2,DS3,mode=decimal)",
         "math(DS1 + DS2,DS3,mode=decimal)",
-        "math(SQRT(DS1),DS3,mode=decimal)",
-        "math(LSH(DH1,3),DH3,mode=hex)",
-        "math(RSH(DH1,1),DH3,mode=hex)",
-        "math(LSH(DH1,4),DH3,mode=hex)",
-        "math(RSH(DH1,2),DH3,mode=hex)",
+        "math(SQRT ( DS1 ),DS3,mode=decimal)",
+        "math(LSH ( DH1 , 3 ),DH3,mode=hex)",
+        "math(RSH ( DH1 , 1 ),DH3,mode=hex)",
+        "math(LSH ( DH1 , 4 ),DH3,mode=hex)",
+        "math(RSH ( DH1 , 2 ),DH3,mode=hex)",
         "math(DH1 AND DH2,DH3,mode=hex)",
         "math(DH1 OR DH2,DH3,mode=hex)",
         "math(DH1 XOR DH2,DH3,mode=hex)",
@@ -814,7 +814,7 @@ def test_calc_math_func_names_use_click_convention():
         )
         bundle = pyrung_to_ladder(logic, mapping)
         tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-        assert tokens == [f"math({click_name}(DF1),DF2,mode=decimal)", "end()"], (
+        assert tokens == [f"math({click_name} ( DF1 ),DF2,mode=decimal)", "end()"], (
             f"{func.__name__} should export as {click_name}, tokens={tokens}"
         )
 
@@ -1620,7 +1620,7 @@ def test_calc_bool_range_sum_renders_plain_sum():
 
 
 def test_calc_abs_renders_uppercase():
-    """abs(x) renders as CLICK's ABS(x)."""
+    """abs(x) renders as CLICK's ABS ( x ), spaced the way CLICK's formula editor writes it."""
     Enable = Bool("Enable")
     Delta = Int("Delta")
     Result = Int("Result")
@@ -1634,8 +1634,30 @@ def test_calc_abs_renders_uppercase():
     bundle = pyrung_to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens == [
-        "math(ABS(DS50),DS100,mode=decimal)",
-        "math(ABS(DS50 - 5) * 2,DS100,mode=decimal)",
+        "math(ABS ( DS50 ),DS100,mode=decimal)",
+        "math(ABS ( DS50 - 5 ) * 2,DS100,mode=decimal)",
+        "end()",
+    ]
+
+
+def test_calc_grouping_parens_render_spaced():
+    """Grouping parens are spaced like a call's: CLICK writes ( a + b ) and - ( a + b )."""
+    Enable = Bool("Enable")
+    A = Int("A")
+    B = Int("B")
+    Result = Int("Result")
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(A * (B + 1), Result)
+            calc(-(A + 2), Result)
+
+    mapping = TagMap({Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]}, include_system=False)
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == [
+        "math(DS1 * ( DS2 + 1 ),DS3,mode=decimal)",
+        "math(- ( DS1 + 2 ),DS3,mode=decimal)",
         "end()",
     ]
 
@@ -1661,7 +1683,7 @@ def test_calc_range_aggregate_composes_with_abs():
     )
     bundle = pyrung_to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-    assert tokens == ["math(MAX ( DS1 : DS5 ) + ABS(DS50),DS100,mode=decimal)", "end()"]
+    assert tokens == ["math(MAX ( DS1 : DS5 ) + ABS ( DS50 ),DS100,mode=decimal)", "end()"]
 
 
 # ---- ExportSummary tests ----

@@ -159,8 +159,35 @@ def test_subroutine_name_is_data_in_both_output_formats() -> None:
         "SUM(C1:C8)",
         "ABS(DS1)",
         "MAX ( DS1 : DS4 ) + ABS(DS5)",
+        "ABS ( DS1 )",
+        "SQRT ( DS1 ) + SIN ( DS2 )",
+        "LSH ( DH1 , 2 )",
+        "DS1 + 2 * ( DS2 - 1 )",
+        "- ( DS1 + 2 )",
     ],
 )
 def test_supported_click_expressions_still_generate(expression: str) -> None:
     code = ladder_to_pyrung(_bundle(f"math({expression},DS10)"))
     ast.parse(code)
+
+
+@pytest.mark.parametrize(
+    ("spaced", "bare"),
+    [
+        ("ABS ( DS1 )", "ABS(DS1)"),
+        ("ABS ( DS50 - 5 ) * 2", "ABS(DS50 - 5) * 2"),
+        ("SQRT ( DS1 ) + SIN ( PI )", "SQRT(DS1) + SIN(PI)"),
+        ("LSH ( DH1 , 2 )", "LSH(DH1,2)"),
+        ("SUM ( DS1 : DS4 ) + ABS ( DS5 )", "SUM(DS1:DS4) + ABS(DS5)"),
+        ("DS1 * ( DS2 + 1 )", "DS1 * (DS2 + 1)"),
+        ("DS1 MOD ( DS2 + 1 )", "DS1 MOD (DS2 + 1)"),
+        ("- ( DS1 + 2 )", "-(DS1 + 2)"),
+        ("DS1 * - ( DS2 + 1 )", "DS1 * -(DS2 + 1)"),
+        ("ABS ( DH[DS1] )", "ABS(DH[DS1])"),
+    ],
+)
+def test_click_spaced_formula_imports_like_bare(spaced: str, bare: str) -> None:
+    """CLICK writes NAME ( a , b ) and ( a + b ); a hand-written CSV may not."""
+    assert ladder_to_pyrung(_bundle(f"math({spaced},DS10)")) == ladder_to_pyrung(
+        _bundle(f"math({bare},DS10)")
+    )

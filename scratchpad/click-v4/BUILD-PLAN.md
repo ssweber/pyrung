@@ -237,12 +237,12 @@ Found by the feature-4 review, pre-existing on HEAD:
 - The importer drops the comment on an un-nicknamed TD row.
 
 Other:
-- **Function spelling in math export.** CLICK spells a call `NAME ( a , b )`, with spaces around each paren and
-  separator (v4 capture: `ABS ( DS1411 )`, `RAND ( DD111 , DD112 )`, `SUM ( DS301 : DS350 )`). laddercodec
-  now normalizes to that form on encode (unreleased; `ABS( x )` was a Math instruction error in CLICK v4,
-  because CLICK splits the internal form on spaces). pyrung's translator still renders `ABS(DS1)`
-  (`tests/click/test_ladder_export.py` `test_calc_abs_renders_uppercase`), so its CSV doesn't match what a
-  copy-back decodes to. Render the spaced form, and check that the importer takes it.
+- Function spelling in math export (done): the translator spaces every paren, comma and range colon the way
+  laddercodec's encoder does (`ABS ( DS1 )`, `LSH ( DH1 , 2 )`, `DS1 * ( DS2 + 1 )`, `- ( DS1 + 2 )`;
+  `translator._formula_call`). Native captures confirm the call spelling only; grouping parens follow
+  laddercodec's encode, which spaces every paren. The importer compacts the spaced form
+  (`codegen/utils._compact_click_formula`), so both spellings generate the same Python. laddercodec's
+  capture tool dropped `_click_formula`.
 - `cause("T")` on a stepped `calc(T + 3, T)` raises RecursionError (not fold).
 - Click exporter doesn't enforce CLICK's 24-character nickname limit (`pyclickplc.validation.NICKNAME_MAX_LENGTH`);
   add a validation finding.

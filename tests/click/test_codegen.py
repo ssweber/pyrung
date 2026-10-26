@@ -2064,7 +2064,7 @@ class TestRoundTrip:
             """
         )
         bundle = pyrung_to_ladder(logic, mapping)
-        assert "math(ABS(DS1),DS2,mode=decimal)" in [row[-1] for row in bundle.main_rows]
+        assert "math(ABS ( DS1 ),DS2,mode=decimal)" in [row[-1] for row in bundle.main_rows]
         code = ladder_to_pyrung(bundle)
         assert "calc(abs(DS1), DS2)" in code
         assert "pyrung.core.expression" not in code

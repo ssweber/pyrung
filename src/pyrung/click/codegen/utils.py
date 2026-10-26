@@ -54,8 +54,10 @@ _CLICK_FUNC_TO_PYTHON: dict[str, str] = {
 # Python builtins in the table above: callable without an import.
 _BUILTIN_EXPR_FUNCS = frozenset({"abs"})
 
-# Regex matching Click function calls like SQRT(, LSH(, etc.
-_CLICK_FUNC_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in _CLICK_FUNC_TO_PYTHON) + r")\(")
+# Regex matching Click function calls like SQRT(, LSH ( , etc.
+_CLICK_FUNC_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in _CLICK_FUNC_TO_PYTHON) + r")\s*\("
+)
 
 # Regex matching standalone PI (not followed by digits, which would be a prefix match)
 _CLICK_PI_RE = re.compile(r"\bPI\b")
@@ -84,6 +86,17 @@ _RANGE_AGG_RE = re.compile(
 _RANGE_AGG_PLACEHOLDERS: dict[str, str] = {
     name: f"_range_{name.lower()}" for name in _RANGE_AGG_TO_METHOD
 }
+
+# CLICK's formula spelling NAME ( a , b ) and ( a + b ): spaces inside each paren and
+# before each separator. Compacted on import so CLICK's spelling and the bare
+# ABS(x) one generate the same code. A space before a call's paren goes only after
+# a function name, and before a group's paren only after a unary sign, since
+# DS1 MOD ( DS2 + 1 ) and DS1 - ( DS2 ) keep theirs.
+_SPACED_CALL_RE = re.compile(
+    r"\b(" + "|".join([*_CLICK_FUNC_TO_PYTHON, *_RANGE_AGG_TO_METHOD]) + r")\s+\("
+)
+_SPACED_UNARY_RE = re.compile(r"(^|\(|[-+*/^] |\b(?:MOD|AND|OR|XOR) )([-+~])\s+\(")
+_PAREN_INNER_SPACE_RE = re.compile(r"(?<=\()\s+|\s+(?=\))|\s+(?=,)")
 
 # Pointer/indirect addressing: DH[DS134] means "DH at index stored in DS134"
 _POINTER_RE = re.compile(r"(CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\[(.+?)\]")
@@ -247,6 +260,15 @@ def _sub_operand_kwarg(
     return _sub_operand(value, collection, nicknames, structured_map)
 
 
+def _compact_click_formula(text: str) -> str:
+    """``ABS ( DS1 - 5 ) * 2`` -> ``ABS(DS1 - 5) * 2``; quoted text is left alone."""
+    if '"' in text or "'" in text:
+        return text
+    text = _SPACED_CALL_RE.sub(r"\1(", text)
+    text = _PAREN_INNER_SPACE_RE.sub("", text)
+    return _SPACED_UNARY_RE.sub(r"\1\2(", text)
+
+
 def _validate_operand(text: str) -> ast.expr:
     """Validate Click syntax before substituting trusted generated references."""
     normalized = _pythonize_csv_strings(text)
@@ -298,6 +320,7 @@ def _sub_operand(
     if not text:
         return text
 
+    text = _compact_click_formula(text)
     expression = _validate_operand(text)
 
     # System operands (SC/SD → system.* path)

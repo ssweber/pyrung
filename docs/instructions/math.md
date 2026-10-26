@@ -87,9 +87,11 @@ Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal m
 | `rng.min()` | `MIN ( DS1 : DS10 )` | yes |
 | `rng.median()` | `MDN ( DS1 : DS10 )` | yes |
 | `rng.mean()` | `AVG ( DS1 : DS10 )` | yes |
-| `abs(x)` | `ABS(x)` | no |
+| `abs(x)` | `ABS ( x )` | no |
 
 pyrung spells these the way Python does (`statistics.median`, `statistics.mean`); the exporter writes CLICK's name and the importer reads it back. A sum over bits exports as plain `SUM ( C1 : C16 )`.
+
+The exporter spaces every paren and separator the way CLICK's formula editor does (`SQRT ( DS1 )`, `LSH ( DH1 , 2 )`, `DS1 * ( DS2 + 1 )`), so an exported CSV matches what a copy-back from CLICK decodes to. The importer also reads the unspaced form (`ABS(DS1)`) for hand-written CSVs.
 
 In pyrung the aggregates work anywhere an expression does (`copy()` sources, rung comparisons). CLICK accepts them only inside Math, and validation says so (`CLK_EXPR_ONLY_IN_CALC`). CLICK validation also checks each range:
 

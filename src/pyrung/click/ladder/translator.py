@@ -93,6 +93,16 @@ _RANGE_AGGREGATE_CLICK_NAME: dict[str, str] = {
     "mean": "AVG",
 }
 
+
+def _formula_call(name: str, *args: str) -> str:
+    """CLICK's formula spelling ``NAME ( a , b )``: spaces around each paren and separator.
+
+    CLICK splits a formula's internal form on these spaces (``ABS( x )`` is a Math
+    instruction error in CLICK v4), and a copy-back decodes to this spelling.
+    """
+    return f"{name} ( {' , '.join(args)} )"
+
+
 _COMPARE_OPS: dict[type[Condition], str] = {
     CompareEq: "==",
     CompareNe: "!=",
@@ -425,10 +435,10 @@ class _TranslatorMixin:
             click_name = expression.name.upper()
             val = self._render_expression(expression.value, path=f"{path}.value", source=source)
             cnt = self._render_expression(expression.count, path=f"{path}.count", source=source)
-            return self._fn(click_name, val, cnt)
+            return _formula_call(click_name, val, cnt)
         if isinstance(expression, MathFuncExpr):
             click_name = _MATH_FUNC_CLICK_NAME.get(expression.name, expression.name.upper())
-            return self._fn(
+            return _formula_call(
                 click_name,
                 self._render_expression(expression.operand, path=f"{path}.operand", source=source),
             )
@@ -437,9 +447,9 @@ class _TranslatorMixin:
                 expression.operand, path=f"{path}.operand", source=source
             )
             if expression.symbol == "abs":
-                return self._fn("ABS", inner)
+                return _formula_call("ABS", inner)
             if isinstance(expression.operand, BinaryExpr):
-                return f"{expression.symbol}({inner})"
+                return f"{expression.symbol} ( {inner} )"
             return f"{expression.symbol}{inner}"
         if isinstance(expression, BinaryExpr):
             # << and >> map to Click shift functions
@@ -447,14 +457,14 @@ class _TranslatorMixin:
                 click_name = "LSH" if expression.symbol == "<<" else "RSH"
                 val = self._render_expression(expression.left, path=f"{path}.left", source=source)
                 cnt = self._render_expression(expression.right, path=f"{path}.right", source=source)
-                return self._fn(click_name, val, cnt)
+                return _formula_call(click_name, val, cnt)
             symbol = _BINARY_OP_CLICK[expression.symbol]
             left = self._render_expression(expression.left, path=f"{path}.left", source=source)
             right = self._render_expression(expression.right, path=f"{path}.right", source=source)
             if isinstance(expression.left, BinaryExpr):
-                left = f"({left})"
+                left = f"( {left} )"
             if isinstance(expression.right, BinaryExpr):
-                right = f"({right})"
+                right = f"( {right} )"
             return f"{left}{symbol}{right}"
         if isinstance(expression, SumExpr):
             return self._render_range_aggregate("sum", expression.block_range, path, source)
@@ -473,7 +483,7 @@ class _TranslatorMixin:
         tags = br.tags()
         first = self._resolve_tag(tags[0], path=f"{path}.block_range[0]", source=source)
         last = self._resolve_tag(tags[-1], path=f"{path}.block_range[-1]", source=source)
-        return f"{_RANGE_AGGREGATE_CLICK_NAME[kind]} ( {first} : {last} )"
+        return _formula_call(_RANGE_AGGREGATE_CLICK_NAME[kind], f"{first} : {last}")
 
     def _render_condition_sequence(self, values: tuple[Any, ...], *, path: str, source: Any) -> str:
         rendered: list[str] = []
