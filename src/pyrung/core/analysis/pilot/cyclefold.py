@@ -778,11 +778,14 @@ def cycle_fold_until(
         memory = plc._state.memory
         for key, value in fractions.items():
             memory = memory.set(key, value)
+        first_skipped = plc._state.scan_id + 1
         plc._state = plc._state.set(
             memory=memory,
             scan_id=plc._state.scan_id + jump_scans,
             timestamp=plc._state.timestamp + jump_scans * dt,
         )
+        # The jumped scans never ran: recorded cause() / effect() refuse them.
+        plc._record_fold_landing(first_skipped)
         macro_folds += 1
         cycle_folds += 1
         cycle_folded_scans += jump_scans

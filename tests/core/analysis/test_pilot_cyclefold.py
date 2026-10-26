@@ -656,6 +656,19 @@ class TestCycleFoldRtcTicks:
         assert folded.state.scan_id == ref.state.scan_id
         assert folded.state.tags == ref.state.tags
 
+    def test_cause_refuses_a_jumped_scan(self) -> None:
+        """A cycle jump's skipped scans never ran: recorded cause() refuses them."""
+        folded = self._plc()
+        stats: dict[str, int] = {}
+        cycle_fold_until(folded, lambda _s: False, budget=6_000, kernel_budget=False, stats=stats)
+
+        assert stats["cycle_folds"] >= 1
+        assert folded._fold_windows
+        first, last = folded._fold_windows[0]
+        assert first < last
+        with pytest.raises(ValueError, match="folded"):
+            folded.cause("RcTmr_Acc", first)
+
 
 def _clock_mirror_cycle_program(*, live_stamp: bool = False, continued: bool = False) -> Program:
     """A period-2 oscillation, a ``clock_1s`` contact (so a cycle spans whole
