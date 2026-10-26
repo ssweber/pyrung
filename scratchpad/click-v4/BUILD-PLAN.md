@@ -183,7 +183,11 @@ For/Next (from feature 5):
   `begin_rung` gave a body rung `()` even when its loop sat in a branch. `execution_kind` keeps a body
   rung apart from its holder; body rungs of one loop and iterations still share one boundary, so a patch at
   a body-rung boundary would match every iteration. Decision (2026-10-26): no iteration coordinate (For/Next
-  isn't a target use case); counterfactual/patch consumers must decline on `loop_body` boundaries instead.
+  isn't a target use case); counterfactual/patch consumers decline on `loop_body` boundaries instead
+  (landed 2026-10-26): `theory_orientation._counterfactual_boundary` returns None for a body-rung read, and
+  `execute_counterfactual_program` raises `UnaddressableBoundaryError` on a `loop_body` patch, which
+  `research_intrascan_traceback` turns into a non-witness. A subroutine called from a loop body is exact
+  (each call gets its own `call_invocation`).
 - `loop.idx` of a loop inside a subroutine called from a loop body is `_forloop_idx` too (depth is lexical
   per scope): the callee's loop clobbers the caller's index until its next iteration.
 - `IndirectExprRef` has no comparisons, so `Rung(Dst[loop.idx + 1] == 0)` is not a valid contact

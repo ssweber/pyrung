@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from pyrung.core import (
@@ -27,12 +29,14 @@ from pyrung.core import (
 )
 from pyrung.core.analysis.causal._rung_writes import build_scan_rung_write_projection
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.theory_orientation import _counterfactual_boundary
 from pyrung.core.analysis.prove import Counterexample, Intractable, always
 from pyrung.core.analysis.return_guards import return_early_guard_exprs
 from pyrung.core.context import RungId
 from pyrung.core.intrascan_counterfactual import (
     CounterfactualPatch,
     OccurrenceBoundary,
+    UnaddressableBoundaryError,
     execute_counterfactual_program,
 )
 from pyrung.core.validation._common import _collect_write_sites
@@ -230,10 +234,10 @@ def test_body_rung_writes_carry_the_branch_that_holds_the_loop():
     assert writer.branch_path == (0,)
 
 
-def test_counterfactual_body_rung_boundary_carries_the_holding_branch():
+def test_counterfactual_refuses_a_body_rung_boundary():
+    # Every body rung of a loop, on every iteration, shares this boundary.
     logic = _loop_in_branch_program()
     plc = PLC(logic)
-    plc.patch({"Enable": True, "Gate": True, "Stop": True})
     patch = CounterfactualPatch(
         "A",
         1,
@@ -245,12 +249,25 @@ def test_counterfactual_body_rung_boundary_carries_the_holding_branch():
             call_stack=(),
             depth=2,
             call_invocation=None,
-            branch_path=(),
+            branch_path=(0,),
         ),
     )
-    ctx, dt = plc._prepare_scan()
-    receipt = execute_counterfactual_program(logic, ctx, (patch,))
-    ctx.commit(dt=dt)
-    observed = {boundary.branch_path for _patch, boundary in receipt.encountered_candidates}
-    assert observed == {(0,)}
-    assert receipt.applications == ()
+    ctx, _dt = plc._prepare_scan()
+    with pytest.raises(UnaddressableBoundaryError):
+        execute_counterfactual_program(logic, ctx, (patch,))
+
+
+@pytest.mark.parametrize(("kind", "addressable"), [("rung", True), ("loop_body", False)])
+def test_pilot_asks_no_counterfactual_at_a_body_rung_read(kind: str, addressable: bool):
+    read = SimpleNamespace(
+        kind="read",
+        execution_kind=kind,
+        rung=(None, 0),
+        caller_rung=0,
+        call_stack=(),
+        depth=1,
+        call_invocation=None,
+        run_order=3,
+        branch_path=(),
+    )
+    assert (_counterfactual_boundary(read) is not None) is addressable

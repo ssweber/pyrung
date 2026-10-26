@@ -1595,6 +1595,10 @@ def _counterfactual_boundary(
 
     if occurrence.kind != "read":
         return None
+    if occurrence.execution_kind == "loop_body":
+        # Every body rung of a loop, on every iteration, shares one boundary;
+        # a patch there cannot name the one occurrence it means.
+        return None
     subroutine, rung_index = occurrence.rung
     return OccurrenceBoundary(
         rung_id=RungId(subroutine, rung_index),

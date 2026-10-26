@@ -60,6 +60,10 @@ class OccurrenceBoundary:
         )
 
 
+class UnaddressableBoundaryError(ValueError):
+    """A patch boundary that names more than one occurrence in a scan."""
+
+
 @dataclass(frozen=True)
 class CounterfactualPatch:
     """One explicitly invalid-for-production write used by analysis only."""
@@ -332,6 +336,13 @@ def execute_counterfactual_program(
 
     from pyrung.core.executor import CompositeExecutionObserver, execute_program
 
+    for patch in patches:
+        if patch.boundary.execution_kind == "loop_body":
+            # Body rungs of one loop and all their iterations share a boundary,
+            # so the patch would match every one of them.
+            raise UnaddressableBoundaryError(
+                "a forloop body rung boundary has no body or iteration coordinate"
+            )
     hypothetical = _CounterfactualPatchObserver(
         patches,
         run_order_offset=len(capture.runs) if capture is not None else 0,
