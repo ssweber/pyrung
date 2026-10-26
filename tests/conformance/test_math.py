@@ -16,7 +16,8 @@ that does not fit an Int slot is read back as a compare (Result = 1 when equal).
 The expectations are pyrung's answers, unconfirmed on a CLICK. They are the
 open probes M1 (AVG/MDN of an integer range: truncate or round), M2 (MDN of an
 even count: mean of the middle two, or one of them) and M4 (MAX/MIN on DH:
-signed or unsigned).
+signed or unsigned), plus M3 (RAND with lo > hi). RAND cases check only the
+range, never a value.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from pathlib import Path
 
 from pyrung.click import ClickBlocks
 from pyrung.conformance import Group, assert_all_passed, case, load_manifest, run
-from pyrung.core import Rung, calc, copy
+from pyrung.core import Rung, calc, copy, randint
 
 _blocks = ClickBlocks()
 ds, dd, df, dh = _blocks.ds, _blocks.dd, _blocks.df, _blocks.dh
@@ -108,6 +109,14 @@ def prove_max_min_word_unsigned(slot):
         copy(1, slot.Fired)
 
 
+def prove_rand_range(slot):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        calc(randint(1, 6), slot.Result1)
+        calc(randint(10, 12), slot.Result2)
+        calc(randint(6, 1), slot.Result3)
+        copy(1, slot.Fired)
+
+
 group = Group(
     "math",
     [
@@ -144,6 +153,12 @@ group = Group(
             "MAX is 0xFFFF (Result1 = 1) and MIN is 0x0001 (Result2 = 1)",
             ladder=prove_max_min_word_unsigned,
             expect={"Result1": 1, "Result2": 1},
+        ),
+        case(
+            "RAND ( 1 , 6 ) draws 1..6 and RAND ( 10 , 12 ) draws 10..12, both ends included; "
+            "RAND ( 6 , 1 ) with its bounds reversed draws 1..6",
+            ladder=prove_rand_range,
+            expect={"Result1": range(1, 7), "Result2": range(10, 13), "Result3": range(1, 7)},
         ),
     ],
 )

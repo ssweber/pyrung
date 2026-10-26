@@ -1790,6 +1790,32 @@ class TestRuntimeSplit:
         compile(result.runtime, "pyrung_rt.py", "exec")
 
 
+class TestRandIntCodegen:
+    def test_randint_draws_on_the_board(self):
+        """The board has no replay: randint calls random.randint, and imports random."""
+        from pyrung.core import randint
+
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        lo = Int("Lo")
+        with Program(strict=False) as prog:
+            with Rung(Bool("Enable")):
+                calc(randint(lo, 6), Int("Out"))
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        compile(source_code, "code.py", "exec")
+        assert "\nimport random\n" in source_code
+        assert "random.randint(min(int(" in source_code
+
+    def test_no_random_import_without_randint(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        with Program(strict=False) as prog:
+            with Rung(Bool("Enable")):
+                calc(Int("A") + 1, Int("Out"))
+        assert "import random" not in generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+
+
 class TestRangeAggregateCodegen:
     def test_aggregates_emit_inline_without_statistics(self):
         """CircuitPython has no statistics module: max/min/median/mean are inline."""

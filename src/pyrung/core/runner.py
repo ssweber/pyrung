@@ -41,6 +41,7 @@ from pyrung.core.executor import (
     execute_observed_rung,
     execute_program,
 )
+from pyrung.core.expression import RandIntExpr, randint_sites
 from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel
@@ -1375,6 +1376,7 @@ class PLC:
         self._fold_context_cache: Any | None = None
         self._fork_seed_cache: tuple[SystemState, int, SystemState] | None = None
         self._bounds_violations: dict[str, BoundsViolation] = {}
+        self._randint_sites_cache: tuple[int, tuple[RandIntExpr, ...]] | None = None
         if _tag_index is not None:
             # fork() pre-seeds defaults into initial_state, so the
             # membership scan below is skipped along with the AST walk
@@ -4175,7 +4177,19 @@ class PLC:
             )
         ctx._read_sink = None
         self._this_scan_drained_patches = self._input_overrides.apply_pre_scan(ctx)
+        sites = self._randint_site_list()
+        if sites:
+            self._input_overrides.apply_randint_draws(ctx, sites, self._this_scan_drained_patches)
         return ctx, dt
+
+    def _randint_site_list(self) -> tuple[RandIntExpr, ...]:
+        """The program's ``randint`` sites, from its known tags."""
+        count = len(self._known_tags_by_name)
+        cached = self._randint_sites_cache
+        if cached is None or cached[0] != count:
+            cached = (count, randint_sites(self._known_tags_by_name))
+            self._randint_sites_cache = cached
+        return cached[1]
 
     def _evaluate_synthesis(
         self,
@@ -4726,11 +4740,11 @@ class PLC:
             # churn-excluded / frozen-write tag must break the plateau, and a
             # condition-read clock or scan-derived signal must bound the fold
             # even when no program rung reads it.
-            from pyrung.core.system_points import _CLOCK_HALF_PERIODS, _SCAN_DERIVED_NAMES
+            from pyrung.core.system_points import _CLOCK_HALF_PERIODS, scan_derived_names
 
             reads = _extract_condition_reads(normalized)
             clock_reads = reads & frozenset(_CLOCK_HALF_PERIODS)
-            scan_derived = reads & frozenset(_SCAN_DERIVED_NAMES)
+            scan_derived = scan_derived_names(reads)
             protected_reads = reads - clock_reads - scan_derived
         self._ensure_running()
         if fold and self._logic:

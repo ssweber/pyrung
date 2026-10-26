@@ -41,6 +41,7 @@ from pyrung.core import (
     Word,
     fall,
     immediate,
+    randint,
     rise,
 )
 from pyrung.core.program import (
@@ -162,6 +163,7 @@ _EXEC_NAMESPACE: dict[str, object] = {
     "reset": reset,
     "copy": copy,
     "calc": calc,
+    "randint": randint,
     "on_delay": on_delay,
     "off_delay": off_delay,
     "count_up": count_up,

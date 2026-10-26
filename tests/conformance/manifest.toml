@@ -26,6 +26,7 @@ avg_odd_count = 3
 avg_dint_no_overflow = 4
 mdn_even_count = 5
 max_min_word_unsigned = 6
+rand_range = 7
 
 [groups.drum]
 base = 501 # Conf_Drum: DS501..DS700

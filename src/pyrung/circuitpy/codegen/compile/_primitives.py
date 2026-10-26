@@ -26,6 +26,7 @@ from pyrung.core.expression import (
     Expression,
     LiteralExpr,
     MathFuncExpr,
+    RandIntExpr,
     RangeAggregateExpr,
     ShiftFuncExpr,
     SumExpr,
@@ -199,6 +200,24 @@ def _compile_expression_impl(
             for tag in expr.block_range
         ]
         return f"({' + '.join(terms)})"
+
+    if isinstance(expr, RandIntExpr):
+        if ctx.kernel_runtime:
+            # The runner's input drain wrote this scan's draw into the site tag.
+            return _snapshot_tag_symbol(
+                expr.tag,
+                ctx,
+                scalar_snapshots=scalar_snapshots,
+                block_snapshots=block_snapshots,
+            )
+        lo = _compile_expression_impl(
+            expr.lo, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots
+        )
+        hi = _compile_expression_impl(
+            expr.hi, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots
+        )
+        ctx.uses_random = True
+        return f"random.randint(min(int({lo}), int({hi})), max(int({lo}), int({hi})))"
 
     if isinstance(expr, RangeAggregateExpr):
         return _compile_range_aggregate(

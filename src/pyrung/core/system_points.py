@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -299,6 +299,16 @@ _SCAN_DERIVED_NAMES = frozenset(
         system.sys.scan_counter.name,
     }
 )
+
+
+def scan_derived_names(names: Iterable[str]) -> frozenset[str]:
+    """The names among *names* that change every scan: the scan-id-derived
+    system points and each ``randint`` site's draw tag."""
+    from pyrung.core.expression import is_randint_tag
+
+    return frozenset(n for n in names if n in _SCAN_DERIVED_NAMES or is_randint_tag(n))
+
+
 _MODE_RUN_KEY = "_sys.mode.run"
 _BATTERY_PRESENT_KEY = "_sys.battery_present"
 _SD_READY_KEY = "_sys.storage.sd.ready"

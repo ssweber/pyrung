@@ -7,14 +7,18 @@ Enables native Python expressions with Tags in conditions and instruction argume
 
 from __future__ import annotations
 
+import itertools
 import math
 import operator
+import weakref
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core._source import _capture_source
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.memory_block import BlockRange
     from pyrung.core.tag import Tag
@@ -466,6 +470,127 @@ def rro(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
 
 
 # =============================================================================
+# Random Draw (CLICK RAND)
+# =============================================================================
+
+#: Name prefix of the hidden tag each ``randint`` site reads its draw from.
+RANDINT_TAG_PREFIX = "_rand."
+
+#: Stream seed for every draw.  Fixed, so two runs of one program agree.
+RANDINT_SEED = 0x5EED
+
+_MASK64 = (1 << 64) - 1
+_randint_site_counter = itertools.count(1)
+_randint_sites: weakref.WeakValueDictionary[str, RandIntExpr] = weakref.WeakValueDictionary()
+
+
+def _splitmix64(x: int) -> int:
+    x = (x + 0x9E3779B97F4A7C15) & _MASK64
+    x = ((x ^ (x >> 30)) * 0xBF58476D1CE4E5B9) & _MASK64
+    x = ((x ^ (x >> 27)) * 0x94D049BB133111EB) & _MASK64
+    return x ^ (x >> 31)
+
+
+def randint_draw(site: int, scan_id: int, lo: int, hi: int) -> int:
+    """The draw of *site* on scan *scan_id*: a pure function, so replay, seek
+    and fork reproduce it.  ``lo > hi`` draws from ``hi..lo``."""
+    if lo > hi:
+        lo, hi = hi, lo
+    z = _splitmix64(_splitmix64(RANDINT_SEED ^ site) ^ (scan_id & _MASK64))
+    return lo + z % (hi - lo + 1)
+
+
+def _operand_span(operand: Expression) -> tuple[int, int] | None:
+    """Lowest and highest integer a ``randint`` bound can take, if declared."""
+    if isinstance(operand, LiteralExpr):
+        return int(operand.value), int(operand.value)
+    if isinstance(operand, TagExpr):
+        tag = operand.tag
+        if tag.choices:
+            keys = [int(k) for k in tag.choices]
+            return min(keys), max(keys)
+        if tag.min is not None and tag.max is not None:
+            return math.ceil(tag.min), math.floor(tag.max)
+    return None
+
+
+class RandIntExpr(Expression):
+    """``randint(lo, hi)``: an integer drawn each scan, ``lo..hi`` inclusive.
+
+    The draw is an input, not a computation.  Each site owns a hidden external
+    tag (``_rand.<n>``) that the scan's input drain writes after patches, so a
+    ``patch()`` of that tag overrides the draw for one scan and a ``force()``
+    pins it.  Logic reads the tag; the prover sees an external input over
+    ``lo..hi`` (inclusive), or over the hull of a bound tag's declared
+    ``min``/``max``/``choices``.  Bounds that are tags are read at the start of
+    the scan.
+
+    A sibling of the other expression classes, never a subclass: no
+    ``LiteralExpr`` / ``MathFuncExpr`` arm may treat a draw as a pure function
+    of its operands.
+    """
+
+    def __init__(self, lo: Expression, hi: Expression) -> None:
+        from pyrung.core.tag import Tag, TagType
+
+        self.lo = lo
+        self.hi = hi
+        self.site = next(_randint_site_counter)
+        # The draw's range: the bounds themselves when literal, else the hull of
+        # what each bound tag declares (a draw never leaves min(lo, hi)..max(lo, hi)).
+        lo_span = _operand_span(lo)
+        hi_span = _operand_span(hi)
+        bounds: dict[str, Any] = {}
+        if lo_span is not None and hi_span is not None:
+            low = min(lo_span[0], hi_span[0])
+            high = max(lo_span[1], hi_span[1])
+            bounds["default"] = low
+            if low < high:
+                bounds["min"], bounds["max"] = low, high
+        self.tag = Tag(
+            f"{RANDINT_TAG_PREFIX}{self.site}",
+            TagType.DINT,
+            external=True,
+            comment="randint draw",
+            **bounds,
+        )
+        _randint_sites[self.tag.name] = self
+
+    def draw(self, ctx: ScanContext) -> int:
+        """This scan's draw, from the bounds as the scan starts."""
+        return randint_draw(
+            self.site, ctx.scan_id, int(self.lo.evaluate(ctx)), int(self.hi.evaluate(ctx))
+        )
+
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
+        return ctx.get_tag(self.tag.name, self.tag.default)
+
+    def __repr__(self) -> str:
+        return f"randint({format_expr(self.lo)}, {format_expr(self.hi)})"
+
+
+def randint(lo: Expression | int | Tag, hi: Expression | int | Tag) -> RandIntExpr:
+    """Random integer from ``lo`` to ``hi`` inclusive, drawn once per scan (CLICK ``RAND``).
+
+    Use it inside ``calc()``.  Draws are deterministic per scan, so replay, seek
+    and fork see the same values; ``patch()`` or ``force()`` the site's tag
+    (``expr.tag``) to choose a draw in a test.
+    """
+    return RandIntExpr(_wrap(lo), _wrap(hi))
+
+
+def is_randint_tag(name: str) -> bool:
+    """Whether *name* is a ``randint`` site's hidden draw tag."""
+    return name.startswith(RANDINT_TAG_PREFIX)
+
+
+def randint_sites(tag_names: Iterable[str]) -> tuple[RandIntExpr, ...]:
+    """The live ``randint`` sites among *tag_names*, in site order."""
+    sites = [_randint_sites.get(name) for name in tag_names if is_randint_tag(name)]
+    return tuple(sorted((s for s in sites if s is not None), key=lambda s: s.site))
+
+
+# =============================================================================
 # Aggregate Functions
 # =============================================================================
 
@@ -579,6 +704,8 @@ def format_expr(expr: Expression) -> str:
         return f"{_range_dsl(expr.block_range)}.sum()"
     if isinstance(expr, RangeAggregateExpr):
         return f"{_range_dsl(expr.block_range)}.{expr.kind}()"
+    if isinstance(expr, RandIntExpr):
+        return f"randint({format_expr(expr.lo)}, {format_expr(expr.hi)})"
     # ShiftFuncExpr — two-argument shift/rotate functions (before MathFuncExpr)
     if isinstance(expr, ShiftFuncExpr):
         return f"{expr.name}({format_expr(expr.value)}, {format_expr(expr.count)})"

@@ -65,6 +65,7 @@ from pyrung.core.analysis.reverse_edges import (
     tag_name_from_value as _tag_name_from_value,
 )
 from pyrung.core.analysis.simplified import Expr, _condition_to_expr, simplified_forms
+from pyrung.core.expression import is_randint_tag, randint_sites
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import TagType
@@ -2400,7 +2401,14 @@ def _build_infeasible_hints(
             continue
         tag = graph.tags.get(name)
         ptr_info = graph.pointer_tags.get(name)
-        if name in SYSTEM_TAGS_BY_NAME:
+        if is_randint_tag(name):
+            site = randint_sites((name,))
+            spelled = repr(site[0]) if site else "randint()"
+            hints.append(
+                f"  {name}: draw of {spelled} with tag bounds; give it literal bounds"
+                f", or declare min=/max= on the bound tags and narrow scope="
+            )
+        elif name in SYSTEM_TAGS_BY_NAME:
             hints.append(
                 f"  {name}: system tag explored as a free input with no finite range"
                 f"; compare it with literals where it is read (e.g. {name} >= 2030)"

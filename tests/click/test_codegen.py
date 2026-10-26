@@ -2071,6 +2071,26 @@ class TestRoundTrip:
         ns: dict = {}
         exec_with_source(code, ns)
 
+    def test_calc_randint_codegen(self):
+        """RAND imports as randint, from pyrung.core.expression."""
+        logic, mapping = build_program(
+            """
+            with Program() as p:
+                with rung(X1):
+                    calc(randint(1, 6), ds[2])
+                    calc(randint(ds[1], 6) + 1, ds[3])
+            """
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        rows = [row[-1] for row in bundle.main_rows]
+        assert "math(RAND ( 1 , 6 ),DS2,mode=decimal)" in rows
+        code = ladder_to_pyrung(bundle)
+        assert "from pyrung.core.expression import randint" in code
+        assert "calc(randint(1, 6), DS2)" in code
+        assert "calc(randint(DS1, 6) + 1, DS3)" in code
+        ns: dict = {}
+        exec_with_source(code, ns)
+
     def test_calc_aggregates_and_abs_full_round_trip(self, tmp_path: Path):
         """pyrung -> CSV -> pyrung -> CSV is stable, and the import runs the same."""
         from pyrung.core import PLC

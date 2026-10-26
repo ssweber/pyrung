@@ -9,6 +9,7 @@ from pyrung.core.expression import (
     Expression,
     LiteralExpr,
     MathFuncExpr,
+    RandIntExpr,
     RangeAggregateExpr,
     ShiftFuncExpr,
     SumExpr,
@@ -444,6 +445,10 @@ def _expr_paren_depth(expr: Any) -> int:
     # Range aggregates: SUM ( a : b ), MAX ( a : b ), ... — one paren level
     if isinstance(expr, (SumExpr, RangeAggregateExpr)):
         return 1
+
+    # RAND ( lo , hi ) — one paren level
+    if isinstance(expr, RandIntExpr):
+        return max(_expr_paren_depth(expr.lo), _expr_paren_depth(expr.hi)) + 1
 
     # ShiftFuncExpr: FUNC(val, cnt) — one paren level
     if isinstance(expr, ShiftFuncExpr):

@@ -26,6 +26,7 @@ from pyrung.core.expression import (
     lro,
     lsh,
     radians,
+    randint,
     rro,
     rsh,
     sin,
@@ -289,4 +290,5 @@ __all__ = [
     "rsh",
     "lro",
     "rro",
+    "randint",
 ]

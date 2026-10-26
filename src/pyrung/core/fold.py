@@ -2271,7 +2271,7 @@ def _build_fold_context(
     # clocks, are resolved on read and never stored.  No periodic edge to land
     # on: if the program reads either, the fold cannot skip a single scan
     # without risking a dropped edge, so it degrades to scan-by-scan.
-    from pyrung.core.system_points import _SCAN_DERIVED_NAMES
+    from pyrung.core.system_points import scan_derived_names as _scan_derived
     from pyrung.core.system_points import system as _sys_points
 
     # Likewise ``sys.dt`` and ``sys.scan_time_current_ms`` read mid-scan: the
@@ -2290,17 +2290,13 @@ def _build_fold_context(
     node_derived: set[str] = set()
     for node in pdg.rung_nodes:
         node_reads = _node_reads(node)
-        node_derived |= node_reads & _SCAN_DERIVED_NAMES
+        node_derived |= _scan_derived(node_reads)
         inflated = node_reads & landing_inflated
         if inflated:
             top = _top_rung(program, node)
             if top is None or id(top) not in plant_ids:
                 node_derived |= inflated
-    scan_derived_names = (
-        frozenset(read_tags & _SCAN_DERIVED_NAMES)
-        | frozenset(node_derived)
-        | condition_scan_derived
-    )
+    scan_derived_names = _scan_derived(read_tags) | frozenset(node_derived) | condition_scan_derived
     if scan_derived_names and journal is not None:
         journal.add_note(
             "fold: disabled by read scan-id-derived or per-scan dt signal(s): "

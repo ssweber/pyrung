@@ -142,6 +142,7 @@ calc(DH[1] | DH[2], DH[3])   # WORD-only → hex mode (unsigned)
 calc(DS.select(1, 10).sum(), Total)  # SUM ( DS1 : DS10 ); Bool ranges count True bits
 calc(DS.select(1, 10).max(), Peak)   # MAX; also .min() MIN, .median() MDN, .mean() AVG
 calc(abs(Error), Magnitude)          # ABS (decimal mode only)
+calc(randint(1, 6), Die)             # RAND ( 1 , 6 ), inclusive, a draw per scan
 ```
 
 - `calc()` wraps on overflow (modular arithmetic). `copy()` clamps.

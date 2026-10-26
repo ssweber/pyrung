@@ -36,6 +36,7 @@ from pyrung.core.expression import (
     Expression,
     LiteralExpr,
     MathFuncExpr,
+    RandIntExpr,
     RangeAggregateExpr,
     ShiftFuncExpr,
     SumExpr,
@@ -431,6 +432,10 @@ class _TranslatorMixin:
             if isinstance(expression.value, bool):
                 return _bool_bit(expression.value)
             return repr(expression.value)
+        if isinstance(expression, RandIntExpr):
+            lo = self._render_expression(expression.lo, path=f"{path}.lo", source=source)
+            hi = self._render_expression(expression.hi, path=f"{path}.hi", source=source)
+            return _formula_call("RAND", lo, hi)
         if isinstance(expression, ShiftFuncExpr):
             click_name = expression.name.upper()
             val = self._render_expression(expression.value, path=f"{path}.value", source=source)

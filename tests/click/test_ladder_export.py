@@ -38,6 +38,7 @@ from pyrung.core import (
     TagType,
     Timer,
     immediate,
+    randint,
 )
 from pyrung.core.program import (
     blockcopy,
@@ -1636,6 +1637,28 @@ def test_calc_abs_renders_uppercase():
     assert tokens == [
         "math(ABS ( DS50 ),DS100,mode=decimal)",
         "math(ABS ( DS50 - 5 ) * 2,DS100,mode=decimal)",
+        "end()",
+    ]
+
+
+def test_calc_randint_renders_rand():
+    """randint(lo, hi) renders as CLICK's RAND ( lo , hi ); the hidden draw tag never shows."""
+    Enable = Bool("Enable")
+    Lo = Int("Lo")
+    Hi = Int("Hi")
+    Result = Int("Result")
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(randint(1, 100), Result)
+            calc(randint(Lo, Hi) * 2, Result)
+
+    mapping = TagMap({Enable: x[1], Lo: ds[1], Hi: ds[2], Result: ds[100]}, include_system=False)
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == [
+        "math(RAND ( 1 , 100 ),DS100,mode=decimal)",
+        "math(RAND ( DS1 , DS2 ) * 2,DS100,mode=decimal)",
         "end()",
     ]
 

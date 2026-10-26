@@ -213,14 +213,38 @@ class ForLoop:
             context_name="forloop",
         )
 
+        body = self._ordered_body()
+        if _contains_randint(body, set()):
+            # Every iteration would read the scan's one draw; CLICK draws per execution.
+            raise ValueError("randint() is not supported inside a forloop body")
         instruction = ForLoopInstruction(
             count=self.count,
             idx_tag=self.idx,
             oneshot=self.oneshot,
-            body=self._ordered_body(),
+            body=body,
         )
         instruction.source_file, instruction.source_line = self._source_file, self._source_line
         self._parent_ctx._rung.add_instruction(instruction)
+
+
+def _contains_randint(value: Any, seen: set[int]) -> bool:
+    """Whether a ``randint`` expression is reachable from *value*'s fields."""
+    from pyrung.core.expression import RandIntExpr
+
+    if isinstance(value, RandIntExpr):
+        return True
+    if value is None or isinstance(value, (str, bytes, int, float, bool, Tag)):
+        return False
+    if id(value) in seen:
+        return False
+    seen.add(id(value))
+    if isinstance(value, dict):
+        return any(_contains_randint(v, seen) for v in value.values())
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(_contains_randint(v, seen) for v in value)
+    if hasattr(value, "__dict__"):
+        return any(_contains_randint(v, seen) for v in vars(value).values())
+    return False
 
 
 def forloop(count: Tag | int, oneshot: bool = False) -> ForLoop:

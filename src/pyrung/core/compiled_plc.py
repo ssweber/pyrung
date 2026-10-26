@@ -15,6 +15,7 @@ from types import MappingProxyType
 from typing import Any, Literal, cast
 
 from pyrung.core.context import ScanContext
+from pyrung.core.expression import randint_sites
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
 from pyrung.core.state import SystemState
@@ -232,6 +233,7 @@ class CompiledPLC:
         self._input_overrides = InputOverrideManager(is_read_only=self._system_runtime.is_read_only)
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
+        self._randint_sites = randint_sites(self._compiled.referenced_tags)
         self._referenced_system_tags = frozenset(
             name for name in self._compiled.referenced_tags if name in SYSTEM_TAGS_BY_NAME
         )
@@ -304,6 +306,11 @@ class CompiledPLC:
         drained = self._input_overrides.apply_pre_scan(scan_ctx)
         for name in drained:
             self._mark_override_name_live(name)
+        if self._randint_sites:
+            for name in self._input_overrides.apply_randint_draws(
+                scan_ctx, self._randint_sites, drained
+            ):
+                self._mark_override_name_live(name)
         for name in force_names:
             self._mark_override_name_live(name)
 

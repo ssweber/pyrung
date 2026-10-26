@@ -181,7 +181,7 @@ def _fold_metadata(
     cannot record a transition the fold skipped.
     """
     from pyrung.core.fold import _extract_condition_crossings, _extract_condition_reads
-    from pyrung.core.system_points import _CLOCK_HALF_PERIODS, _SCAN_DERIVED_NAMES
+    from pyrung.core.system_points import _CLOCK_HALF_PERIODS, scan_derived_names
 
     crossings: dict[str, tuple[tuple[str, Any], ...]] = {}
     reads: set[str] = set()
@@ -203,7 +203,7 @@ def _fold_metadata(
         predicate_reads |= condition_reads
 
     clock_reads = frozenset(reads) & frozenset(_CLOCK_HALF_PERIODS)
-    scan_derived = frozenset(reads) & frozenset(_SCAN_DERIVED_NAMES)
+    scan_derived = scan_derived_names(reads)
     protected = frozenset(reads) - clock_reads - scan_derived
     return (
         crossings or None,

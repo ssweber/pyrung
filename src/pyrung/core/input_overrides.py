@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from typing import Any
 
     from pyrung.core.context import ScanContext
+    from pyrung.core.expression import RandIntExpr
     from pyrung.core.tag import Tag
 
 
@@ -125,6 +126,27 @@ class InputOverrideManager:
         if self._forces:
             self._apply_forces_if_changed(ctx)
         return drained
+
+    def apply_randint_draws(
+        self,
+        ctx: ScanContext,
+        sites: tuple[RandIntExpr, ...],
+        drained: Mapping[str, object],
+    ) -> tuple[str, ...]:
+        """Write this scan's ``randint`` draws after the drain.
+
+        A site whose tag was patched this scan or is forced keeps that value
+        (the test override).  Draws are a pure function of the scan id, so they
+        are not recorded: replay recomputes them.  Returns the drawn names.
+        """
+        draws = {
+            site.tag.name: site.draw(ctx)
+            for site in sites
+            if site.tag.name not in drained and site.tag.name not in self._forces
+        }
+        if draws:
+            ctx.set_tags(draws)
+        return tuple(draws)
 
     def apply_post_logic(self, ctx: ScanContext) -> None:
         if self._forces:

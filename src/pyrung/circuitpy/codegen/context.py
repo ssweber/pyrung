@@ -191,6 +191,7 @@ class CodegenContext:
     uses_board_led: bool = False
     uses_board_neopixel: bool = False
     uses_board_save_memory_cmd: bool = False
+    uses_random: bool = False
     _current_function: str | None = None
     # Open forloop nesting while compiling, so nested loops get their own
     # counter names.

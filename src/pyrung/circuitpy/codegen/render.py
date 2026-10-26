@@ -191,6 +191,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "import json",
             "import math",
             "import os",
+            *(["import random"] if ctx.uses_random else []),
             "import re",
             "import struct",
             "import time",

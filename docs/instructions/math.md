@@ -78,6 +78,32 @@ calc(abs(Error), Magnitude)
 
 Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only, so `abs()` of WORD tags is a portability finding.
 
+## `randint()`
+
+```python
+from pyrung.core import randint
+
+calc(randint(1, 6), Die)                 # 1..6 inclusive, a new draw every scan
+calc(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan starts
+```
+
+`randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them.
+
+Draws are deterministic, so the simulation stays replayable. Each `randint` call in the program is one site, and its value is a fixed function of the site and the scan number. Two runs of the same program draw the same sequence; replay, `history.at()`, seek and `fork()` see the values the original run saw; and a fork draws what its parent would have. Restarting (STOP -> RUN, `reboot()`) resets the scan number, so the sequence starts over.
+
+A site's draw is an input: the scan writes it into a hidden tag (`expr.tag`, named `_rand.<n>`) before logic runs. A test chooses a draw the way it sets any input:
+
+```python
+roll = randint(1, 6)
+# ... calc(roll, Die) in the program ...
+plc.patch({roll.tag: 6})                 # next scan draws 6
+plc.force(roll.tag, 3)                   # every scan draws 3 until unforced
+```
+
+The verifier explores every value a draw can take: `lo..hi` for literal bounds, or the range a bound tag declares (`min`/`max` or `choices`). A bound tag with no declared range makes the result `Intractable`, with a hint naming the draw. `run_for()` and `run_until()` do not skip scans in a program that uses `randint`. `how()` treats a draw like any other input, so a plan may say to wait for a lucky draw or to patch the site's tag.
+
+`randint` is not allowed inside a `forloop()`: every iteration would read the scan's one draw, while CLICK draws again on each execution. On CircuitPython the board calls `random.randint` directly, so its draws are not replayable.
+
 ## Range aggregates on CLICK
 
 | pyrung | CLICK formula | Hex mode |
@@ -88,6 +114,7 @@ Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal m
 | `rng.median()` | `MDN ( DS1 : DS10 )` | yes |
 | `rng.mean()` | `AVG ( DS1 : DS10 )` | yes |
 | `abs(x)` | `ABS ( x )` | no |
+| `randint(lo, hi)` | `RAND ( lo , hi )` | yes |
 
 pyrung spells these the way Python does (`statistics.median`, `statistics.mean`); the exporter writes CLICK's name and the importer reads it back. A sum over bits exports as plain `SUM ( C1 : C16 )`.
 

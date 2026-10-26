@@ -47,6 +47,7 @@ _CLICK_FUNC_TO_PYTHON: dict[str, str] = {
     "RSH": "rsh",
     "LRO": "lro",
     "RRO": "rro",
+    "RAND": "randint",
     # ABS maps to the Python builtin; it is never imported (see _EXPR_FUNC_IMPORT_NAMES).
     "ABS": "abs",
 }
