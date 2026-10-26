@@ -2,9 +2,10 @@
 
 The harness sees the implementation only through DS registers: it reads the
 program's layout hash and each selected group's hash, zeroes the slots of the
-groups that match, writes each slot's ``Cmd``, waits for every ``Fired``, and
-reads the slots back twice.  A group whose hash does not match is stale: its
-cases are reported without touching its registers.  The same client code talks
+groups that match, waits for each case's reset to raise ``Ready``, writes each
+ready slot's ``Cmd``, waits for every ``Fired``, and reads the slots back
+twice.  A group whose hash does not match is stale: its cases are reported
+without touching its registers.  The same client code talks
 to pyrung's soft PLC (:class:`SimServer`, the default) or to a real CLICK
 running the exported program; only the endpoint differs.
 
@@ -372,25 +373,30 @@ async def _drive(
         if not live:
             return results
 
-        # 1-3. Zero the live groups' slots (no case stages inputs yet), then read back.
+        # 1-3. Zero the live groups' slots, then wait for every case's reset:
+        # Ready, with Cmd and Fired still 0.  A case whose reset never
+        # completes is judged, not fired.
         for g in live:
             start, width = g.span
             await _write_ds(client, start, [0] * width)
-        await _poll(
-            lambda: _read_spans(client, live),
-            lambda regs: not any(regs),
-            timeout,
-            f"Slots on {endpoint} did not read back as zero: writes were dropped",
-        )
+        slots = [(g, i) for g in live for i, _ in g.cases]
+        deadline = time.monotonic() + timeout
+        while True:
+            regs = _by_register(live, await _read_spans(client, live))
+            unready = {(g.name, i) for g, i in slots if not _reset_done(g, i, regs)}
+            if not unready or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(POLL_S)
+        reset_regs = regs
+        ready = [(g, i) for g, i in slots if (g.name, i) not in unready]
 
         # 4. Cmd = 1, one single-register write per slot so a slot's other
         # registers are never rewritten after its case has fired.
-        for g in live:
-            for i, _ in g.cases:
-                await client.ds.write(g.register(i, "Cmd"), 1)
+        for g, i in ready:
+            await client.ds.write(g.register(i, "Cmd"), 1)
 
         # 5. Wait for every Fired (a case that never fires is judged, not raised).
-        fired_registers = [g.register(i, "Fired") for g in live for i, _ in g.cases]
+        fired_registers = [g.register(i, "Fired") for g, i in ready]
         deadline = time.monotonic() + timeout
         while True:
             regs = _by_register(live, await _read_spans(client, live))
@@ -415,12 +421,15 @@ async def _drive(
             met_first = expectation_met(c.expect, actual_first)
             met_second = expectation_met(c.expect, actual)
             note = ""
-            if met_first != met_second:
+            if (g.name, i) in unready:
+                state = {f: reset_regs[g.register(i, f)] for f in ("Cmd", "Fired", "Ready")}
+                note = f"reset did not complete within {timeout:g} s: {state}"
+            elif met_first != met_second:
                 note = f"unstable: first read {actual_first}, second read {actual}"
             group_results.append(
                 CaseResult(
                     case=c,
-                    passed=fired and met_first and met_second,
+                    passed=fired and met_first and met_second and (g.name, i) not in unready,
                     actual=actual,
                     slot_index=i,
                     fired=fired,
@@ -430,6 +439,15 @@ async def _drive(
             )
         results[g.name] = group_results
     return results
+
+
+def _reset_done(g: GroupBuild, index: int, regs: dict[int, int]) -> bool:
+    """The case's reset ran: ``Ready`` is up while ``Cmd`` and ``Fired`` read 0."""
+    return (
+        regs[g.register(index, "Ready")] != 0
+        and regs[g.register(index, "Cmd")] == 0
+        and regs[g.register(index, "Fired")] == 0
+    )
 
 
 async def _read_spans(client: Any, groups: Sequence[GroupBuild]) -> list[int]:

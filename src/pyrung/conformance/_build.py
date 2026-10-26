@@ -2,8 +2,9 @@
 
 The main program writes the layout hash to ``DS1`` every scan and calls every
 group's subroutine unconditionally.  Each subroutine writes its own hash (of
-its exported case rungs) to its group header every scan, then runs its cases,
-each gated by its slot's ``Cmd``/``Fired``.
+its exported case rungs) to its group header every scan, then runs its cases.
+Each case starts with its commented reset rung (see ``_ladder.py``), then its
+ladder, gated by its slot's ``Cmd``/``Fired``.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING
 from pyclickplc.validation import NICKNAME_MAX_LENGTH
 
 from pyrung.conformance._case import Case, Group
+from pyrung.conformance._ladder import check_disjoint, emit_case
 from pyrung.conformance._manifest import GroupLayout, Manifest
 from pyrung.conformance._slot import (
     PROGRAM_HASH_REGISTER,
@@ -35,7 +37,8 @@ if TYPE_CHECKING:
     from pyrung.core.tag import Tag
 
 #: Bump when the header protocol changes, so an old program bails as a mismatch.
-LAYOUT_VERSION = 2
+#: 3: slots gained ``Ready``, raised by each case's reset rung.
+LAYOUT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -175,8 +178,8 @@ def build_program(
     Raises:
         ManifestError: A wire case or group has no manifest entry; the message
             says what to add.
-        ValueError: No case can run over Modbus, group names repeat, or a
-            nickname would be longer than CLICK allows.
+        ValueError: No case can run over Modbus, group names repeat, two cases
+            share memory, or a nickname would be longer than CLICK allows.
     """
     from pyrung.click import ClickBlocks, TagMap
     from pyrung.click.ladder import pyrung_to_ladder
@@ -192,6 +195,7 @@ def build_program(
     wire_groups = [g for g in group_list if any(c.in_process_only is None for c in g.cases)]
     if not wire_groups:
         raise ValueError("No cases can run over Modbus.")
+    check_disjoint([(g.name, c) for g in wire_groups for c in g.cases if c.in_process_only is None])
 
     ds = ClickBlocks().ds
     program_hash_tag = Int("Conf_ProgramHash")
@@ -215,7 +219,7 @@ def build_program(
     for g, layout, cases, slot, hash_tag in staged:
         with Program(strict=False) as body:
             with subroutine(g.subroutine):
-                _case_rungs(cases, slot)
+                _case_rungs(g.name, cases, slot)
         # Validated export: a case the CLICK exporter rejects fails here, before
         # any wire traffic.  Mark such a case ``in_process_only``.
         bundle = pyrung_to_ladder(body, tag_map)
@@ -234,7 +238,7 @@ def build_program(
             with subroutine(gb.subroutine):
                 with Rung():
                     copy(gb.group_hash, gb.hash_tag)
-                _case_rungs(gb.cases, gb.slot)
+                _case_rungs(gb.name, gb.cases, gb.slot)
 
     return ConformanceProgram(
         groups=tuple(built),
@@ -246,9 +250,9 @@ def build_program(
     )
 
 
-def _case_rungs(cases: Sequence[tuple[int, Case]], slot: _NamedArrayRuntime) -> None:
+def _case_rungs(group: str, cases: Sequence[tuple[int, Case]], slot: _NamedArrayRuntime) -> None:
     for index, c in cases:
-        c.ladder(slot[index])
+        emit_case(group, c, slot, index)
 
 
 def _check_nicknames(group: Group, hash_tag: Tag, slot: _NamedArrayRuntime, slots: int) -> None:

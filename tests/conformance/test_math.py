@@ -10,6 +10,7 @@ registers it owns:
 
 Each case stages its sources in its first rung (gated on ``Cmd``/``Fired`` like
 every case), computes in the next rung, and writes what it saw into its slot.
+Its ``init`` fills its sources and results back to zero.
 A Real result is read back through an Int slot scaled by 10; a DD or DH result
 that does not fit an Int slot is read back as a compare (Result = 1 when equal).
 
@@ -26,7 +27,7 @@ from pathlib import Path
 
 from pyrung.click import ClickBlocks
 from pyrung.conformance import Group, assert_all_passed, case, load_manifest, run
-from pyrung.core import Rung, calc, copy, randint
+from pyrung.core import Rung, calc, copy, fill, randint
 
 _blocks = ClickBlocks()
 ds, dd, df, dh = _blocks.ds, _blocks.dd, _blocks.df, _blocks.dh
@@ -117,6 +118,32 @@ def prove_rand_range(slot):
         copy(1, slot.Fired)
 
 
+def init_avg_mdn_positive(slot):
+    fill(0, ds.select(4401, 4402))
+    copy(0, df[1])
+
+
+def init_avg_mdn_negative(slot):
+    fill(0, ds.select(4411, 4412))
+
+
+def init_avg_odd_count(slot):
+    fill(0, ds.select(4421, 4423))
+
+
+def init_avg_dint_no_overflow(slot):
+    fill(0, dd.select(1, 3))
+
+
+def init_mdn_even_count(slot):
+    fill(0, ds.select(4431, 4434))
+    copy(0, df[2])
+
+
+def init_max_min_word_unsigned(slot):
+    fill(0, dh.select(1, 4))
+
+
 group = Group(
     "math",
     [
@@ -124,34 +151,40 @@ group = Group(
             "AVG and MDN of the DS range {1, 2} truncate 1.5 to 1 in an Int; AVG into a Real "
             "keeps 1.5 (read back x10 as 15), and AVG * 10 into an Int is 15",
             ladder=prove_avg_mdn_positive,
+            init=init_avg_mdn_positive,
             expect={"Result1": 1, "Result2": 1, "Result3": 15, "Result4": 15},
         ),
         case(
             "AVG and MDN of the DS range {-1, -2} truncate -1.5 toward zero to -1 in an Int",
             ladder=prove_avg_mdn_negative,
+            init=init_avg_mdn_negative,
             expect={"Result1": -1, "Result2": -1},
         ),
         case(
             "AVG of the DS range {1, 1, 2} truncates 1.33 to 1 in an Int",
             ladder=prove_avg_odd_count,
+            init=init_avg_odd_count,
             expect={"Result1": 1},
         ),
         case(
             "AVG of the DD range {2147483647, 2147483647} into a Dint is 2147483647 (the sum "
             "does not overflow); Result1 = 1 when it is",
             ladder=prove_avg_dint_no_overflow,
+            init=init_avg_dint_no_overflow,
             expect={"Result1": 1},
         ),
         case(
             "MDN of the DS range {4, 1, 3, 10} (even count) is the mean of the middle two, "
             "3.5: 3 in an Int, 35 as MDN * 10 into an Int, and 3.5 into a Real (read back x10)",
             ladder=prove_mdn_even_count,
+            init=init_mdn_even_count,
             expect={"Result1": 3, "Result2": 35, "Result3": 35},
         ),
         case(
             "MAX and MIN of the DH range {0x0001, 0xFFFF} (hex mode) treat WORD as unsigned: "
             "MAX is 0xFFFF (Result1 = 1) and MIN is 0x0001 (Result2 = 1)",
             ladder=prove_max_min_word_unsigned,
+            init=init_max_min_word_unsigned,
             expect={"Result1": 1, "Result2": 1},
         ),
         case(

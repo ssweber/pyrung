@@ -2,7 +2,7 @@
 
 Plain-English cases for PLC semantics. Same case, same ladder, same check -- run in-process, over Modbus against pyrung's soft PLC, or over Modbus against a real CLICK.
 
-A conformance suite in the Modbus sense: the harness observes the implementation **only through registers**. The ladder computes its own answer and writes it into its slot; the harness writes `Cmd`, waits, and reads the slot back.
+A conformance suite in the Modbus sense: the harness observes the implementation **only through registers**. The ladder computes its own answer and writes it into its slot; the harness writes `Cmd`, waits, and reads the slot back. Everything else -- the reset between runs, the handshake that says the reset is done, the documentation -- lives in the ladder too, so any target that runs the ladder and serves its DS registers over Modbus runs the suite unchanged: pyrung's soft PLC, a real CLICK, or (later) a P1AM-200 running the CircuitPython codegen output.
 
 The whole suite is **one CLICK program**: a main program that calls one subroutine per group (`Conf_Rungs`, later `Conf_Math`, `Conf_Drum`, ...). Load the full project once; after that, editing a group means pasting its changed rungs (through the ClickNick workspace, see "Running against the real PLC") and rerunning that group.
 
@@ -19,6 +19,7 @@ Add `GROUP=name[,name...]` (or `--conformance-group`, or env `PYRUNG_CONFORMANCE
 1. A sentence that says what should be true.
 2. A pyrung ladder that proves it by writing the answer into a known slot.
 3. A check that reads the slot and compares to what we expected.
+4. A reset that puts everything the case touches back the way a fresh PLC has it (see "Reset").
 
 The ladder writes its own answer because Modbus only reads addresses — we can't peek at variables from Python.
 
@@ -35,12 +36,13 @@ def test_rungs():
 - **Group**: a named set of cases, one per case module (`group = Group(...)`). The name is snake_case; the subroutine is `Conf_<Name>` (`rung_order` -> `Conf_RungOrder`) and slot nicknames start with `<Name>`. CLICK nicknames are at most 24 characters and `<Name><slot>_ErrorCode` must fit, so keep `<Name>` to 12 characters (build fails otherwise). `suite.py` lists every group in `ALL_GROUPS`; a new case module adds its `group` there.
 - **Case id**: the stable key of the case's slot in the manifest. It defaults to the ladder function's name without a leading `_` or `prove_` (`prove_source_order` -> `source_order`); pass `id=` to pin it. Renaming the ladder function renames the id, and the build then asks for a manifest entry -- pin `id=` if you rename.
 - **confirmed**: `case(..., confirmed=False)` by default. Flip it to `True` once the case has passed against a real CLICK. The report counts unconfirmed cases.
+- **Comment**: generated, never written by hand. Each case's first rung carries `Case <group>/<id>`, the sentence, and `Expect: Result1 = 5, Result2 in 1..6` (`case_comment()` in `src/pyrung/conformance/_ladder.py`), so the ladder in CLICK documents itself and Python stays the single source. The comment is part of the exported ladder, so editing a sentence or an expectation changes the group hash: the group reports stale until its rungs are pushed again, and Preview Changes shows the comment as a diff.
 
 ## One-shot pattern
 
 Every test ladder gates on `slot.Cmd != 0, slot.Fired == 0` and sets `copy(1, slot.Fired)` in its last rung. This ensures instructions fire exactly once:
 
-- Scan 0: `Cmd = 0`, nothing fires.
+- Scans with `Cmd = 0`: the case's reset rung runs (see "Reset"), nothing fires.
 - Scan 1 (after Cmd patched to 1): `Cmd != 0` and `Fired == 0`, logic fires, `Fired` set to 1.
 - Scan 2+: `Fired != 0`, logic skipped.
 
@@ -64,6 +66,38 @@ def prove_ton_resets(slot):
 
 Setup copies fire on the first scan the rung is true, then stop. Observation copies keep overwriting Results every scan — the last read wins by the time the harness checks. Over Modbus the harness reads twice, so a Result that is still moving (`timer.Acc` above) needs a `range` expectation; see Expectations.
 
+## Reset
+
+`Cmd = 0` resets the case; `Cmd != 0` runs it. Every case's first rung is emitted by the framework (`emit_case()`), is true every scan while `Cmd == 0`, and does three things in order:
+
+1. `fill(0, <the whole slot>)` -- one instruction, `fill(0, DS111..DS119)` for `rungs` slot 1. This also zeroes `Cmd` (already 0) and `Ready`.
+2. The case's `init(slot)`, if it has one: instructions that put the case's own state back.
+3. `copy(1, slot.Ready)`. A case with `ready=` raises `Ready` in a second rung instead, `Rung(slot.Cmd == 0, *ready(slot))`, so `Ready` is 1 at the end of a scan only once those conditions hold.
+
+The harness writes `Cmd = 1` only after it reads `Ready = 1` with `Cmd = 0` and `Fired = 0`. Modbus is served between scans, so that read means a whole scan ran with `Cmd = 0` and the reset was complete.
+
+Reset with the instructions' own semantics, not by poking registers an instruction owns:
+
+- **Timers** (TON, Out coils): the case's rungs are gated on `Cmd != 0`, so the rung goes false and the instruction resets itself. A debounce coil turns off only once its off side times out: `ready=lambda slot: ~c[1811]`.
+- **Counters, RTON, drums, shift registers**: tie the reset input to the reset, `count_up(ct, 100).reset(slot.Cmd == 0)`, `time_event_drum(...).reset(slot.Cmd == 0)`.
+- **Latched or toggled bits, and bits driven from inside a loop**: `reset(c[1801])` in `init`.
+- **Staged registers** (a case's raw DS/DD/DF/DH): `fill(0, ds.select(4401, 4402))` or `copy(0, df[1])` in `init`.
+- **Edge history and one-shots** need nothing: they rearm on the scans the rung is false.
+
+**A reset must not depend on an open probe.** If what CLICK does is the question a case asks (F2: does a false For rung scan its body?), the reset cannot rely on pyrung's answer. The `loop` timer and counter cases keep their For rung true and gate a body rung instead, so their reset inputs are scanned either way.
+
+**`keep=`** names tags the reset leaves alone on purpose. Two kinds:
+
+- An accumulator that keeps running while the case is idle, so it never matches a fresh PLC. A debounce coil's off-side TD counts from power-up while the input stays off: `keep=[t[311], td[311]]`.
+- A retentive value the experiment carries across the reset. The case must still pass on every repeat. Cases that need a power cycle or STOP->RUN in between ("retentive survives STOP->RUN") also need a harness that can switch modes; that does not exist yet.
+
+Two checks keep resets honest:
+
+- **Leak check (in-process).** `run()` runs every case twice on one PLC. After the second reset it compares the whole state -- tags and instruction memory (timer fractions, edge history, one-shot memory) -- with the state after the first reset on a fresh PLC. Anything that differs, other than system tags, pyrung's internal `_` tags and `keep` tags, fails the case that owns it: `state left after the reset: CTD201 = 5 (fresh 0)`. A case that passes its first run and fails its second also says `run 1 of 2: actual ...`.
+- **Disjoint memory (build time).** `run()` and `build_program()` refuse cases where one writes a tag another reads or writes (`g/a and h/b share DS4000`), across groups too. Shared memory is shared state: a case's result would depend on its neighbours.
+
+The leak check reads pyrung's state, so it only runs in-process. On the wire, `test_suite_repeats_without_restarting` is the check: against whatever endpoint the run targets, it runs the whole suite twice on one PLC without restarting it, then each group alone in the order A -> B -> ... -> B -> A.
+
 ## Program and register layout
 
 ```
@@ -71,7 +105,9 @@ main:           copy(<layout hash>, DS1)         every scan
                 call("Conf_Rungs")               every scan, one rung per group
                 ...
 Conf_Rungs:     copy(<group hash>, DS101)        every scan, first rung
-                <case rungs, each gated by its slot's Cmd/Fired>
+                per case: # Case rungs/<id>      generated comment
+                          reset rung             while Cmd == 0: fill slot, init, Ready
+                          <case rungs, gated by its slot's Cmd/Fired>
                 return()
 ```
 
@@ -81,9 +117,9 @@ Conf_Rungs:     copy(<group hash>, DS101)        every scan, first rung
 | `DS2`..`DS10` | Spare program header. |
 | `DS<base>` | Group hash (1..32767): SHA-256 of the CLICK export of the group's case rungs, folded into a register. Changes whenever that subroutine's exported ladder would. |
 | `DS<base+1>`..`DS<base+9>` | Spare group header. |
-| `DS<base+10N>`..`DS<base+10N+7>` | Slot N of the group; the last two registers of each 10 are spare. |
+| `DS<base+10N>`..`DS<base+10N+8>` | Slot N of the group; the last register of each 10 is spare. |
 
-Each slot is a `named_array` instance with 8 Int fields:
+Each slot is a `named_array` instance with 9 Int fields:
 
 | Field     | Offset | `rungs` slot 1 | Purpose                  |
 |-----------|--------|--------|--------------------------|
@@ -92,8 +128,9 @@ Each slot is a `named_array` instance with 8 Int fields:
 | Result1-4 | +2..+5 | DS113-116 | Outputs to check      |
 | Fired     | +6     | DS117  | One-shot gate            |
 | ErrorCode | +7     | DS118  | Error reporting          |
+| Ready     | +8     | DS119  | Reset done (reset rung writes) |
 
-Cases cannot share memory. A case that needs a contiguous source range (the `math` group's `AVG`/`MDN`/`MAX`/`MIN`) stages it in raw registers it owns, outside every group block: the `math` group uses DS4401..DS4500 (its test checks that no manifest block reaches them) and DD, DF and DH, which no other group uses. `build_program(groups, manifest)` returns the program, its TagMap, the layout hash, and one `GroupBuild` per group (subroutine, block, slots, group hash). The build exports each group's subroutine through the validating CLICK exporter, so a case the exporter rejects fails at build time -- mark it in-process-only. Without a manifest, `build_program` packs the groups in order from DS11 (`Manifest.packed`): fine for harness tests and the local sim, never for a real CLICK, because adding a case moves registers.
+Cases cannot share memory, and the build checks it (see "Reset"). A case that needs a contiguous source range (the `math` group's `AVG`/`MDN`/`MAX`/`MIN`) stages it in raw registers it owns, outside every group block: the `math` group uses DS4401..DS4500 (its test checks that no manifest block reaches them) and DD, DF and DH, which no other group uses. `build_program(groups, manifest)` returns the program, its TagMap, the layout hash, and one `GroupBuild` per group (subroutine, block, slots, group hash). The build exports each group's subroutine through the validating CLICK exporter, so a case the exporter rejects fails at build time -- mark it in-process-only. Without a manifest, `build_program` packs the groups in order from DS11 (`Manifest.packed`): fine for harness tests and the local sim, never for a real CLICK, because adding a case moves registers.
 
 CLICK does not support nested subroutine calls (confirmed in the CLICK editor), so a case cannot `call()` a subroutine of its own: its rungs already run inside `Conf_<Group>`. Subroutine tests must be called from main instead; that home is not built yet.
 
@@ -126,24 +163,24 @@ A case that cannot run over Modbus passes `in_process_only="reason"`. The Modbus
 
 ## 8-step protocol
 
-In-process (`run(group)`; a plain case list also works):
+In-process (`run(group)`; a plain case list also works), twice on one fixed-step `PLC`:
 
-1. Zero every slot (fresh `PLC`). A group's cases run inside its `Conf_<Group>` subroutine, called unconditionally, as on the wire.
-2. Stage inputs with `Cmd = 0` so nothing fires (scan 0).
-3. -- (nothing can be dropped in-process).
-4. Patch `Cmd = 1` everywhere.
+1. Patch every slot to zero. A group's cases run inside its `Conf_<Group>` subroutine, called unconditionally, as on the wire.
+2. -- (no case stages inputs; the reset rung initializes it).
+3. Scan until every slot reads `Ready = 1`, up to 10 s of scans. A case that never does is judged a failure and not fired. After the first reset, snapshot the state; after the second, compare with it (the leak check).
+4. Patch `Cmd = 1` on every ready slot.
 5. Run `max(case.scans)` scans.
 6. Read every slot from `current_state`.
-7. Compare to `expect`. Verify `Fired` went up.
+7. Compare to `expect`. Verify `Fired` went up. Both runs must pass and the reset must leave no state behind.
 8. Report.
 
 Over Modbus (`run_modbus(build, endpoint, groups=None)`), every step is a register read or write, and only the selected groups' registers are touched:
 
 0. Read `DS1` until it is nonzero (timeout -> `ConformanceError`, "program is not running"). If it is not this build's layout hash, raise `BuildMismatchError` ("Export the whole project again and load it") before writing anything. Then read each selected group's hash register. A group whose hash does not match is **stale**: its cases come back with `stale=True` and the note `Conf_Math is stale: repush (DS301 reads ..., this build writes ...)`, its registers are not written, and the other groups carry on.
 1. Zero the used slots of every live group (one block write per group, chunked at 100 registers). `Cmd` is the first register of each slot, so it is never left at 1 after its `Fired` is cleared.
-2. Stage inputs with `Cmd = 0`. No case stages inputs yet; this is the zeroing.
-3. Read the slots back until they are all zero (timeout -> `ConformanceError`, "writes were dropped").
-4. Write `Cmd = 1`, one single-register write per slot. A block write would rewrite a slot's other registers after its case might already have fired (the sim applies each register as a patch on the next scan, so one request can span scans).
+2. -- (no case stages inputs; each case's reset rung initializes it while `Cmd = 0`).
+3. Poll until every slot reads `Cmd = 0`, `Fired = 0` and `Ready = 1`, or until the timeout. A slot that never does is judged a failure with the note `reset did not complete within 10 s: {'Cmd': .., 'Fired': .., 'Ready': ..}` and is not fired; the other cases carry on. A dropped zeroing write shows up here too (`Cmd` still 1).
+4. Write `Cmd = 1` to every ready slot, one single-register write per slot. A block write would rewrite a slot's other registers after its case might already have fired (the sim applies each register as a patch on the next scan, so one request can span scans).
 5. Poll every 20 ms until every `Fired != 0`, or until the timeout (default 10 s). A case that never fires is judged a failure, not raised. Then sleep the settle time, `max(case.scans) * 10 ms`.
 6. Read every slot, wait `max(100 ms, settle)`, read every slot again.
 7. A case passes only if it fired and **both** reads meet `expect`. If one read passes and the other does not, the result's `note` says "unstable" with both reads.
@@ -155,7 +192,7 @@ Over Modbus nothing counts scans, so waits are wall clock: "Fired, then settle, 
 
 The local sim (`SimServer`) is `ClickDataProvider` behind `pyclickplc.server.ClickServer` on a free localhost port, serving a `PLC(realtime=True)` that free-runs on its own thread at one scan per 10 ms of wall clock (late scans are not burst to catch up). Timers therefore see wall-clock time, as on a CLICK. Modbus reads and writes take the same lock as the scan, and each write becomes a `patch()` applied at the start of the next scan. A scan exception stops the sim and fails the run.
 
-The default 10 s timeout is far above what the sim needs (a whole run is about 0.3 s); it is sized for a real CLICK on a busy network.
+The default 10 s timeout is far above what the sim needs (a debounce coil's 1 s off side is the longest reset, and no case runs past 1 s); it is sized for a real CLICK on a busy network.
 
 ## Running against the real PLC
 
@@ -168,6 +205,8 @@ First load:
 3. In ClickNick's Workspace controls, find an existing workspace and pick `tests/conformance/workspace/`. ClickNick asks a project without a PLC name for one: enter `PYRUNG_CONFORMANCE`. It refuses the folder if the project already has another name; rename the PLC in CLICK.
 4. Save in CLICK (ClickNick fills `src/plc/` and `csv/`), write to the PLC, put it in RUN.
 5. `make test-conformance PLC=192.168.0.10` (port defaults to 502).
+
+A change to the header protocol (`LAYOUT_VERSION`, now 3 for the `Ready` field) changes the layout hash in `DS1`; every run then bails with `BuildMismatchError` until the whole project is exported and loaded again.
 
 Then, per edit:
 

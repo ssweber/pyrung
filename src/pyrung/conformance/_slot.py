@@ -14,13 +14,23 @@ from pyrung.core import Int, named_array
 if TYPE_CHECKING:
     from pyrung.core.structure import _NamedArrayRuntime
 
-SLOT_FIELDS = ("Cmd", "Scratch", "Result1", "Result2", "Result3", "Result4", "Fired", "ErrorCode")
+SLOT_FIELDS = (
+    "Cmd",
+    "Scratch",
+    "Result1",
+    "Result2",
+    "Result3",
+    "Result4",
+    "Fired",
+    "ErrorCode",
+    "Ready",
+)
 
 #: DS register that holds the program (layout) hash, written every scan by the main program.
 PROGRAM_HASH_REGISTER = 1
 #: DS1..DS10 are the program header; group blocks start after it.
 HEADER_END = 10
-#: Registers per slot (8 fields plus 2 spare); also the size of a group header.
+#: Registers per slot (9 fields plus 1 spare); also the size of a group header.
 SLOT_STRIDE = 10
 #: Highest DS register on a CLICK.
 DS_LAST = 4500
@@ -36,6 +46,7 @@ class _SlotTemplate:
     Result4 = 0
     Fired = 0
     ErrorCode = 0
+    Ready = 0
 
 
 _TEMPLATE: _NamedArrayRuntime = cast(Any, _SlotTemplate)

@@ -7,8 +7,12 @@ Runs against pyrung's soft PLC on localhost unless ``--conformance-plc`` (or
 
 from __future__ import annotations
 
+from collections.abc import Generator
+from contextlib import contextmanager
+
 import pytest
 
+from pyrung.click import ClickBlocks
 from pyrung.conformance import (
     BuildMismatchError,
     ConformanceError,
@@ -23,8 +27,10 @@ from pyrung.conformance import (
     format_report,
     run_modbus,
 )
-from pyrung.core import Rung, copy
+from pyrung.core import Rung, calc, copy
 from tests.conformance import suite
+
+ds = ClickBlocks().ds
 
 pytestmark = pytest.mark.conformance
 
@@ -38,6 +44,42 @@ def test_all_groups_over_modbus(
     if conformance_groups is None:
         assert len(results) == sum(len(g.cases) for g in suite.ALL_GROUPS)
     assert_all_passed(results)
+
+
+@contextmanager
+def _one_plc(build: ConformanceProgram, endpoint: Endpoint | None) -> Generator[Endpoint]:
+    """*endpoint*, or one local sim kept running for the whole block."""
+    if endpoint is not None:
+        yield endpoint
+        return
+    with SimServer(build) as sim:
+        assert sim.endpoint is not None
+        yield sim.endpoint
+        sim.raise_if_failed()
+
+
+def _passes(results, label: str) -> None:
+    try:
+        assert_all_passed(results)
+    except AssertionError as exc:
+        raise AssertionError(f"{label}:\n{exc}") from None
+
+
+def test_suite_repeats_without_restarting(
+    conformance_endpoint: Endpoint | None, conformance_groups: list[str] | None
+) -> None:
+    """The suite twice on one PLC, then each group alone, A -> B -> ... -> B -> A.
+
+    Every case resets its own state while ``Cmd == 0``, so a run never depends
+    on what ran before it on the same PLC.
+    """
+    build = suite.build()
+    names = conformance_groups or [g.name for g in build.groups]
+    with _one_plc(build, conformance_endpoint) as endpoint:
+        for n in (1, 2):
+            _passes(run_modbus(build, endpoint, groups=names), f"suite run {n} of 2")
+        for step, name in enumerate(names + names[-2::-1], start=1):
+            _passes(run_modbus(build, endpoint, groups=[name]), f"step {step}: {name} alone")
 
 
 # --- harness self-checks (always on the local sim) ---------------------------
@@ -176,6 +218,57 @@ def test_in_process_only_case_is_reported_skipped() -> None:
     assert [r.skipped for r in results] == [None, "in-process only: reads simulator internals"]
     assert results[0].passed
     assert_all_passed(results)
+
+
+def _prove_counts_runs(slot):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        calc(ds[4000] + 1, ds[4000])
+        copy(ds[4000], slot.Result1)
+        copy(1, slot.Fired)
+
+
+def _init_counts_runs(slot):
+    copy(0, ds[4000])
+
+
+def test_a_leak_shows_on_the_second_run_and_init_fixes_it() -> None:
+    leaky = Group("g", [case("Counts its runs", ladder=_prove_counts_runs, expect={"Result1": 1})])
+    build = build_program(leaky)
+    with SimServer(build) as sim:
+        assert_all_passed(run_modbus(build, sim.endpoint))
+        (second,) = run_modbus(build, sim.endpoint)
+    assert not second.passed
+    assert second.actual == {"Result1": 2}
+
+    reset = case(
+        "Counts its runs", ladder=_prove_counts_runs, init=_init_counts_runs, expect={"Result1": 1}
+    )
+    build = build_program(Group("g", [reset]))
+    with SimServer(build) as sim:
+        for _ in range(2):
+            assert_all_passed(run_modbus(build, sim.endpoint))
+
+
+def test_a_reset_that_never_completes_is_judged_not_fired() -> None:
+    stuck = case(
+        "Never ready",
+        ladder=_prove_constant,
+        expect={"Result1": 7},
+        ready=lambda slot: slot.Cmd != 0,
+        id="stuck",
+    )
+    build = build_program(
+        Group("g", [stuck, case("Ready", ladder=_prove_constant, expect={"Result1": 7})])
+    )
+    with SimServer(build) as sim:
+        results = run_modbus(build, sim.endpoint, timeout=0.5)
+        # The stuck case's Cmd was never written.
+        assert _slot_value(sim, build, "g", "Cmd") == 0
+    assert [r.passed for r in results] == [False, True]
+    assert not results[0].fired
+    assert (
+        "reset did not complete within 0.5 s: {'Cmd': 0, 'Fired': 0, 'Ready': 0}" in results[0].note
+    )
 
 
 def test_unreachable_endpoint_raises() -> None:

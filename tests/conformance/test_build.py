@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from pyrung.click import ClickBlocks
 from pyrung.conformance import (
     Case,
     Group,
@@ -17,9 +18,12 @@ from pyrung.conformance import (
     parse_endpoint,
     run,
 )
+from pyrung.conformance._ladder import case_comment
 from pyrung.conformance._slot import DS_LAST, slot_register
-from pyrung.core import PLC, Rung, copy
+from pyrung.core import PLC, Rung, calc, copy
 from tests.conformance import suite
+
+ds = ClickBlocks().ds
 
 
 def _prove_constant(slot):
@@ -260,3 +264,92 @@ def test_parse_endpoint() -> None:
 def test_slot_register_layout() -> None:
     assert slot_register(101, 1, "Cmd") == 111
     assert slot_register(101, 19, "ErrorCode") == 298
+    assert slot_register(101, 19, "Ready") == 299
+
+
+# --- comments and the reset ------------------------------------------------------
+
+
+def test_each_case_starts_with_its_comment() -> None:
+    c = case(
+        "Seven, or a draw",
+        ladder=_prove_constant,
+        expect={"Result1": 7, "Result2": range(1, 7)},
+        id="seven",
+    )
+    text = case_comment("g", c)
+    assert text.splitlines() == [
+        "Case g/seven",
+        "Seven, or a draw",
+        "Expect: Result1 = 7, Result2 in 1..6",
+    ]
+    build = build_program(Group("g", [c]))
+    rungs = build.program.subroutines["Conf_G"]
+    # Rung 1 writes the group hash; the case's reset rung follows, carrying the comment.
+    assert [r.comment for r in rungs[:2]] == [None, text]
+
+
+def test_the_reset_rung_zeroes_the_slot_with_one_fill(tmp_path) -> None:
+    out = build_program(Group("g", [_seven()])).export(tmp_path)
+    sub = (out / "subroutines" / "Conf_G.csv").read_text(encoding="utf-8")
+    assert "#,Case g/seven" in sub
+    assert "fill(0,DS21..DS29)" in sub.replace(" ", "")
+
+
+def _prove_counts_runs(slot):
+    # Leaks unless DS4000 is reset: each run adds one to it.
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        calc(ds[4000] + 1, ds[4000])
+        copy(ds[4000], slot.Result1)
+        copy(1, slot.Fired)
+
+
+def _init_counts_runs(slot):
+    copy(0, ds[4000])
+
+
+def test_state_left_after_the_reset_fails_the_case() -> None:
+    leaky = case("Counts its runs", ladder=_prove_counts_runs, expect={"Result1": 1})
+    (result,) = run([leaky])
+    assert not result.passed
+    assert result.actual == {"Result1": 2}
+    assert "run 1 of 2: actual {'Result1': 1}" in result.note
+    assert "state left after the reset: DS4000 = 1 (fresh 0)" in result.note
+
+    reset = case(
+        "Counts its runs",
+        ladder=_prove_counts_runs,
+        init=_init_counts_runs,
+        expect={"Result1": 1},
+    )
+    assert_all_passed(run([reset]))
+    # keep= exempts the tag from the leak check, not from the repeat.
+    kept = case(
+        "Counts its runs", ladder=_prove_counts_runs, expect={"Result1": 1}, keep=[ds[4000]]
+    )
+    (result,) = run([kept])
+    assert not result.passed
+    assert "state left" not in result.note
+
+
+def test_a_reset_that_never_completes_fails_only_its_case() -> None:
+    stuck = case(
+        "Never ready",
+        ladder=_prove_constant,
+        expect={"Result1": 7},
+        ready=lambda slot: slot.Cmd != 0,
+        id="stuck",
+    )
+    results = run(Group("g", [stuck, _seven()]))
+    assert [r.passed for r in results] == [False, True]
+    assert not results[0].fired
+    assert "reset did not complete" in results[0].note
+
+
+def test_cases_that_share_memory_are_rejected() -> None:
+    a = case("A", ladder=_prove_counts_runs, expect={"Result1": 1}, id="a")
+    b = case("B", ladder=_prove_counts_runs, expect={"Result1": 1}, id="b")
+    with pytest.raises(ValueError, match="g/a and g/b share DS4000"):
+        run(Group("g", [a, b]))
+    with pytest.raises(ValueError, match="g/a and h/b share DS4000"):
+        build_program([Group("g", [a]), Group("h", [b])])

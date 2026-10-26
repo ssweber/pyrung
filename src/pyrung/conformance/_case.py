@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from pyrung.conformance._slot import SLOT_FIELDS
+from pyrung.core.tag import Tag
 
 #: An expected slot value: an exact int, or a ``range`` the value must fall in.
 #: Use a range for anything wall-clock dependent over the wire (timer Acc).
 Expectation = int | range
+
+#: Slot fields a case may expect: the harness owns ``Cmd`` and the reset owns ``Ready``.
+RESULT_FIELDS = tuple(f for f in SLOT_FIELDS if f not in ("Cmd", "Ready"))
 
 _CASE_ID = re.compile(r"[A-Za-z0-9_]+")
 _GROUP_NAME = re.compile(r"[a-z][a-z0-9]*(_[a-z0-9]+)*")
@@ -28,6 +32,12 @@ class Case:
     in_process_only: str | None = None
     #: True once the case has passed against a real CLICK.
     confirmed: bool = False
+    #: Instructions run every scan while ``Cmd == 0``, after the slot is zeroed.
+    init: Callable[[Any], None] | None = None
+    #: Conditions that must hold, while ``Cmd == 0``, before the case reports ``Ready``.
+    ready: Callable[[Any], Any] | None = None
+    #: Tags the reset leaves alone on purpose; the leak check skips them.
+    keep: tuple[Tag, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -93,6 +103,9 @@ def case(
     in_process_only: str | None = None,
     id: str | None = None,
     confirmed: bool = False,
+    init: Callable[[Any], None] | None = None,
+    ready: Callable[[Any], Any] | None = None,
+    keep: Sequence[Tag] = (),
 ) -> Case:
     """Define a conformance case.
 
@@ -108,9 +121,20 @@ def case(
         id: Stable key of the case's slot in the manifest.  Defaults to the
             ladder function's name without a leading ``_`` or ``prove_``.
         confirmed: True once the case has passed against a real CLICK.
+        init: Puts the case's own state back the way a fresh PLC has it, using
+            the instructions' own semantics (a counter's reset input, a drum's
+            reset, ``reset()`` on a latched bit, ``fill(0, ...)`` on staged
+            registers).  Given the slot, it adds instructions to a rung that is
+            true every scan while ``Cmd == 0``; the slot itself is already zeroed.
+        ready: Given the slot, a condition (or a sequence of them) the reset
+            must reach before the case reports ``Ready``, for state that takes
+            more than one scan to settle (a debounce coil's off side).
+        keep: Tags the reset leaves alone on purpose: an accumulator that keeps
+            running while the case is idle, or a value the experiment carries
+            across the reset.  The in-process leak check skips them; the case
+            must still pass on every repeat.
     """
-    result_fields = set(SLOT_FIELDS) - {"Cmd"}
-    bad = set(expect) - result_fields
+    bad = set(expect) - set(RESULT_FIELDS)
     if bad:
         raise ValueError(f"Unknown slot fields in expect: {bad}")
     for field_name, value in expect.items():
@@ -132,6 +156,9 @@ def case(
         scans=scans,
         in_process_only=in_process_only,
         confirmed=confirmed,
+        init=init,
+        ready=ready,
+        keep=tuple(keep),
     )
 
 
@@ -157,11 +184,19 @@ def expectation_met(expect: Mapping[str, Expectation], actual: Mapping[str, int]
 
 def format_expect(expect: Mapping[str, Expectation]) -> str:
     """Render an expectation dict in ASCII, showing ranges as ``lo..hi``."""
-    parts = []
-    for field_name, wanted in expect.items():
-        if isinstance(wanted, range):
-            text = f"{wanted.start}..{wanted.stop - 1}" if wanted.step == 1 else repr(wanted)
-        else:
-            text = str(wanted)
-        parts.append(f"{field_name!r}: {text}")
+    parts = [f"{field_name!r}: {_value_text(wanted)}" for field_name, wanted in expect.items()]
     return "{" + ", ".join(parts) + "}"
+
+
+def describe_expect(expect: Mapping[str, Expectation]) -> str:
+    """Render an expectation as a sentence fragment: ``Result1 = 5, Result2 in 1..6``."""
+    return ", ".join(
+        f"{field_name} {'in' if isinstance(wanted, range) else '='} {_value_text(wanted)}"
+        for field_name, wanted in expect.items()
+    )
+
+
+def _value_text(wanted: Expectation) -> str:
+    if isinstance(wanted, range):
+        return f"{wanted.start}..{wanted.stop - 1}" if wanted.step == 1 else repr(wanted)
+    return str(wanted)

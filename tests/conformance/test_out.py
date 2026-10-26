@@ -6,6 +6,12 @@ number).  The cases own C1801..C1900 (``BITS_C``) and T301..T400 / TD301..TD400
 (``TIMERS``), which no other group uses.  A case that needs its input to drop
 or bounce at a known time drives it from a clock timer of its own.
 
+Every coil's rung is gated on ``Cmd``, so the reset drops each coil's input.
+A debounce coil then turns off only when its off side times out, so those
+cases are ``ready`` once the coil is off, and ``keep`` the off side's timer:
+its TD keeps counting while the input stays off, from power-up on, so it never
+matches a fresh PLC's.
+
 The expectations are pyrung's answers, unconfirmed on a CLICK: the open probes
 O1-O6 in ``scratchpad/click-v4/RESEARCH.md``.
 """
@@ -47,8 +53,6 @@ def _timer(n: int) -> _ClickTimer:
 
 def prove_toggle_flips_once_per_edge(slot):
     # O1: the rung goes true and stays true; the bit flips once.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
-        reset(c[1801])
     with Rung(slot.Cmd != 0):
         toggle(c[1801])
     with Rung(slot.Cmd != 0, c[1801]):
@@ -130,6 +134,10 @@ def prove_out_coil_sets_timer_done(slot):
         copy(1, slot.Fired, oneshot=True)
 
 
+def init_toggle_flips_once_per_edge(slot):
+    reset(c[1801])
+
+
 group = Group(
     "out",
     [
@@ -137,6 +145,7 @@ group = Group(
             "A toggle coil flips once when its rung goes true and holds while it stays "
             "true (Result1 = 1 for on)",
             ladder=prove_toggle_flips_once_per_edge,
+            init=init_toggle_flips_once_per_edge,
             expect={"Result1": 1},
             scans=20,
         ),
@@ -145,6 +154,8 @@ group = Group(
             "stays on, as a TON's does (Result2 = 1 once it passes 300 ms on a 100 ms "
             "preset)",
             ladder=prove_debounce_td_keeps_counting,
+            ready=lambda slot: ~c[1811],
+            keep=[t[311], td[311]],
             expect={"Result1": 1, "Result2": 1},
             scans=50,
         ),
@@ -153,6 +164,8 @@ group = Group(
             "100 ms, then on with a 300 ms on side, the coil is still off at 450-550 ms "
             "(Result2 = 0) and on later (Result1 = 1)",
             ladder=prove_debounce_bounce_restarts_on_side,
+            ready=lambda slot: ~c[1821],
+            keep=[t[304], td[304]],
             expect={"Result1": 1, "Result2": 0},
             scans=80,
         ),
@@ -174,6 +187,8 @@ group = Group(
             "An Out coil sets its Timer's done bit T<n> when its phase is done (Result1 = "
             "1); pyrung's answer, the open probe O6",
             ladder=prove_out_coil_sets_timer_done,
+            ready=lambda slot: ~c[1851],
+            keep=[t[312], td[312]],
             expect={"Result1": 1},
             scans=40,
         ),

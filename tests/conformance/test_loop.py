@@ -5,6 +5,12 @@ counters CT201..CT300 / CTD201..CTD300, which no other group uses.  CLICK has no
 loop index, so a case counts iterations in a slot register it increments in the
 body.  Each loop rung is gated on ``Fired == 0`` so the loop runs on one scan.
 
+A reset must not depend on an open probe.  What a false For rung does to its
+body is F2, so the timer and counter cases keep their For rung true and gate a
+body rung instead: the timer's rung-false reset and the counter's ``Cmd == 0``
+reset input are scanned during the reset either way.  Bits a case latches, or
+drives from inside a loop, are reset in its ``init``.
+
 The expectations are pyrung's answers, unconfirmed on a CLICK: the probe
 matrix F1-F14 in ``scratchpad/click-v4/RESEARCH.md`` section 4.  F2 (does a
 false For rung drive its body coils off?), F6 (edges inside a loop), F7 (timers
@@ -158,9 +164,10 @@ def prove_timer_inside_loop(slot):
     # F7: a TON inside For 10 against the same TON outside; once the outside
     # one passes 100 ms, Result1 = 1 if the loop's is ahead by more than 5x.
     loop_timer, plain_timer = _ClickTimer(201), _ClickTimer(202)
-    with Rung(slot.Cmd != 0):
+    with Rung():
         with forloop(10):
-            on_delay(loop_timer, 30000)
+            with Rung(slot.Cmd != 0):
+                on_delay(loop_timer, 30000)
     with Rung(slot.Cmd != 0):
         on_delay(plain_timer, 30000)
     with Rung(slot.Cmd != 0, plain_timer.Acc >= 100, slot.Fired == 0):
@@ -176,9 +183,10 @@ def prove_timer_inside_loop(slot):
 def prove_counter_inside_loop(slot):
     # F8
     counter = _ClickCounter(201)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with Rung():
         with forloop(5):
-            count_up(counter, 100).reset(c[1741])
+            with Rung(slot.Cmd != 0, slot.Fired == 0):
+                count_up(counter, 100).reset(slot.Cmd == 0)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(counter.Acc, slot.Result1)
     _fire(slot)
@@ -258,6 +266,22 @@ def prove_oneshot_inside_loop(slot):
     _fire(slot)
 
 
+def init_false_for_rung_turns_body_outs_off(slot):
+    reset(c[1701])
+
+
+def init_body_rung_contact_per_iteration(slot):
+    reset(c[1711])
+
+
+def init_edge_contact_inside_loop(slot):
+    reset(c[1721])
+
+
+def init_break_on_same_iteration_write(slot):
+    reset(c[1731])
+
+
 group = Group(
     "loop",
     [
@@ -270,6 +294,7 @@ group = Group(
             "A For rung that is false runs its body unpowered: an out() in the body "
             "turns off (Result1 = 2), not left as it was (1)",
             ladder=prove_false_for_rung_turns_body_outs_off,
+            init=init_false_for_rung_turns_body_outs_off,
             expect={"Result1": 2},
         ),
         case(
@@ -288,12 +313,14 @@ group = Group(
             "only, its out() ends off (Result1 = 2), and a later body rung counts two "
             "of three iterations (Result2 = 2)",
             ladder=prove_body_rung_contact_per_iteration,
+            init=init_body_rung_contact_per_iteration,
             expect={"Result1": 2, "Result2": 2},
         ),
         case(
             "An edge contact inside a loop compares with the previous scan: a bit that "
             "comes on in iterations 1 and 3 counts two rises (Result1 = 2)",
             ladder=prove_edge_contact_inside_loop,
+            init=init_edge_contact_inside_loop,
             expect={"Result1": 2},
         ),
         case(
@@ -335,6 +362,7 @@ group = Group(
             "A Break contact written by an earlier body rung in the same iteration "
             "breaks on that iteration (Result1 = 2, Result2 = 3)",
             ladder=prove_break_on_same_iteration_write,
+            init=init_break_on_same_iteration_write,
             expect={"Result1": 2, "Result2": 3},
         ),
         case(
