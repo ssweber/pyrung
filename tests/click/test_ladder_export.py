@@ -1663,6 +1663,25 @@ def test_calc_randint_renders_rand():
     ]
 
 
+def test_calc_randint_of_words_is_hex():
+    """The hidden draw tag is not an operand: RAND of WORD bounds into a WORD is hex mode."""
+    Enable = Bool("Enable")
+    Lo = Tag("Lo", TagType.WORD)
+    Hi = Tag("Hi", TagType.WORD)
+    Result = Tag("Result", TagType.WORD)
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(randint(Lo, Hi), Result)
+
+    mapping = TagMap(
+        {Enable: x[1], Lo: dh[105], Hi: dh[106], Result: dh[205]}, include_system=False
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == ["math(RAND ( DH105 , DH106 ),DH205,mode=hex)", "end()"]
+
+
 def test_calc_grouping_parens_render_spaced():
     """Grouping parens are spaced like a call's: CLICK writes ( a + b ) and - ( a + b )."""
     Enable = Bool("Enable")

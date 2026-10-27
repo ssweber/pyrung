@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from pyrung.core.expression import Expression
+from pyrung.core.expression import Expression, RandIntExpr
 from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
@@ -68,6 +68,12 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
 
     if isinstance(value, BlockRange):
         found.add(value.block.type)
+        return
+
+    if isinstance(value, RandIntExpr):
+        # The draw's hidden DINT tag holds the result; the bounds set the family.
+        _collect_calc_tag_types(value.lo, found, seen)
+        _collect_calc_tag_types(value.hi, found, seen)
         return
 
     if isinstance(value, Expression):
