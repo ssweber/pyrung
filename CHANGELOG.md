@@ -45,6 +45,7 @@
 
 ### Fixes
 
+- CLICK import reads Send and Receive remote addresses written in MODBUS hex (`50Eh` with its register type), which it refused, and reads MODBUS 984 coil addresses (`000001`..`065536`) as coils instead of holding registers.
 - A `Program`, `subroutine` or `@program` built from code with no source file, such as `exec()` of a generated string or the REPL, skips the strict control-flow check quietly instead of warning; source that exists but cannot be parsed still warns.
 - CLICK import keeps the contacts of a rung between For and Next, which it dropped, and reads nested For/Next blocks.
 - `how()` drives a timer or counter inside a `forloop()`, which got no enable condition from the loop's rung and stopped waiting on it.

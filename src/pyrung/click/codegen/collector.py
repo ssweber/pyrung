@@ -39,10 +39,12 @@ from pyrung.click.codegen.utils import (
     _CLICK_FUNC_TO_PYTHON,
     _CLICK_PI_RE,
     _EXPR_FUNC_IMPORT_NAMES,
+    _MODBUS_ADDRESS_RE,
     _POINTER_RE,
     _PREFIX_TO_BLOCK,
     _RANGE_AGG_RE,
     _make_safe_identifier,
+    _parse_modbus_address,
     _parse_operand_prefix,
     _strip_quoted_strings,
 )
@@ -990,8 +992,10 @@ def _scan_af_token(
             collection.has_modbus_target = True
         if "ModbusRtuTarget(" in args_str:
             collection.has_modbus_rtu_target = True
-        if "ModbusAddress(" in args_str:
+        for match in _MODBUS_ADDRESS_RE.finditer(args_str):
             collection.has_modbus_address = True
+            if _parse_modbus_address(match.group(1))[1] is not None:
+                collection.has_register_type = True
 
     if func_name == "call":
         collection.has_subroutine = True
@@ -1241,8 +1245,10 @@ def _ref_af_token(
             refs.has_modbus_target = True
         if "ModbusRtuTarget(" in args_str:
             refs.has_modbus_rtu_target = True
-        if "ModbusAddress(" in args_str:
+        for match in _MODBUS_ADDRESS_RE.finditer(args_str):
             refs.has_modbus_address = True
+            if _parse_modbus_address(match.group(1))[1] is not None:
+                refs.has_register_type = True
 
     if func_name == "call":
         # Extract subroutine name for cross-file import tracking

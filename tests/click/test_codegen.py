@@ -2533,6 +2533,125 @@ class TestRoundTrip:
             """,
         )
 
+    @pytest.mark.parametrize(
+        ("csv_address", "python_address", "register_type", "raw", "csv_984"),
+        [
+            # laddercodec writes CLICK's hex addressing with the register type it implies.
+            (
+                "ModbusAddress(address=50Eh,register_type=holding)",
+                'ModbusAddress(address="50Eh", register_type=RegisterType.HOLDING)',
+                "HOLDING",
+                0x50E,
+                401295,
+            ),
+            (
+                "ModbusAddress(address=0h,register_type=coil)",
+                'ModbusAddress(address="0h", register_type=RegisterType.COIL)',
+                "COIL",
+                0,
+                1,
+            ),
+            (
+                "ModbusAddress(address=FFFEh,register_type=input)",
+                'ModbusAddress(address="FFFEh", register_type=RegisterType.INPUT)',
+                "INPUT",
+                0xFFFE,
+                365535,
+            ),
+            (
+                "ModbusAddress(address=10h,register_type=discrete_input)",
+                'ModbusAddress(address="10h", register_type=RegisterType.DISCRETE_INPUT)',
+                "DISCRETE_INPUT",
+                0x10,
+                100017,
+            ),
+            # MODBUS 984 coils are 000001..065536.
+            (
+                "ModbusAddress(address=000017)",
+                "ModbusAddress(address=16, register_type=RegisterType.COIL)",
+                "COIL",
+                16,
+                17,
+            ),
+            (
+                "ModbusAddress(address=300005)",
+                "ModbusAddress(address=300005)",
+                "INPUT",
+                4,
+                300005,
+            ),
+        ],
+    )
+    def test_receive_csv_modbus_address(
+        self, csv_address, python_address, register_type, raw, csv_984
+    ):
+        """CSV remote addresses import as the same Modbus register and export as 984."""
+        from pyrung.click.ladder.types import LadderBundle
+
+        header = (
+            "marker",
+            *tuple(
+                [chr(ord("A") + i) for i in range(26)] + [f"A{chr(ord('A') + i)}" for i in range(5)]
+            ),
+            "AF",
+        )
+        af = (
+            'receive(target=ModbusTcpTarget(name="tcp",ip="192.168.1.10",port=502,device_id=1),'
+            f"remote_start={csv_address},dest=DS1,receiving=C1,success=C2,error=C3,"
+            "exception_response=DS2)"
+        )
+        bundle = LadderBundle(
+            main_rows=(header, tuple(_make_row("R", {0: "X001"}, af))),
+            subroutine_rows=(),
+        )
+
+        code = ladder_to_pyrung(bundle)
+        assert f"remote_start={python_address}" in code
+        assert ("RegisterType" in code.split("with Program")[0]) == (
+            "register_type=" in python_address
+        )
+
+        ns: dict = {}
+        exec_with_source(code, ns)
+        instruction = ns["logic"].rungs[0]._instructions[0]
+        assert instruction.remote_address.register_type.name == register_type
+        assert instruction.remote_address.address == raw
+
+        rows = pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows
+        assert f"remote_start=ModbusAddress(address={csv_984})" in rows[1][-1]
+
+    @pytest.mark.parametrize(
+        "csv_address",
+        [
+            "ModbusAddress(address=50Eh,register_type=bogus)",
+            "ModbusAddress(address=400001,register_type=holding)",
+            "ModbusAddress(address=DS1)",
+            "ModbusAddress(offset=1)",
+        ],
+    )
+    def test_receive_csv_modbus_address_rejects_unknown_forms(self, csv_address):
+        from pyrung.click.ladder.types import LadderBundle
+
+        header = (
+            "marker",
+            *tuple(
+                [chr(ord("A") + i) for i in range(26)] + [f"A{chr(ord('A') + i)}" for i in range(5)]
+            ),
+            "AF",
+        )
+        af = (
+            'receive(target=ModbusTcpTarget(name="tcp",ip="192.168.1.10",port=502,device_id=1),'
+            f"remote_start={csv_address},dest=DS1,receiving=C1,success=C2,error=C3,"
+            "exception_response=DS2)"
+        )
+        bundle = LadderBundle(
+            main_rows=(header, tuple(_make_row("R", {0: "X001"}, af))),
+            subroutine_rows=(),
+        )
+
+        with pytest.raises(ValueError, match="Unsupported CSV operand expression"):
+            ladder_to_pyrung(bundle)
+
     def test_send_block_range(self):
         """Send with BlockRange source round-trips through DS1..DS3."""
         _assert_codegen_body(

@@ -67,6 +67,16 @@ _CLICK_PI_RE = re.compile(r"\bPI\b")
 # Safe on raw Click text because operand prefixes use uppercase H (DH, TH).
 # Used as fullmatch in _sub_operand (standalone) and .sub() in expressions.
 _CLICK_HEX_RE = re.compile(r"\b([0-9A-Fa-f]+)h\b")
+_MODBUS_ADDRESS_RE = re.compile(r"ModbusAddress\(([^()]*)\)")
+_MODBUS_984_RE = re.compile(r"\d+")
+_MODBUS_HEX_RE = re.compile(r"[0-9A-Fa-f]+[hH]")
+_MODBUS_984_COIL_MAX = 65536
+_REGISTER_TYPE_MEMBERS = {
+    "coil": "COIL",
+    "discrete_input": "DISCRETE_INPUT",
+    "holding": "HOLDING",
+    "input": "INPUT",
+}
 
 # Click range aggregates (colon-range argument) -> BlockRange method name.
 _RANGE_AGG_TO_METHOD: dict[str, str] = {
@@ -261,6 +271,37 @@ def _sub_operand_kwarg(
     return _sub_operand(value, collection, nicknames, structured_map)
 
 
+def _parse_modbus_address(args_str: str) -> tuple[str, str | None]:
+    """CSV ``ModbusAddress(...)`` args -> (Python address, ``RegisterType`` member or None).
+
+    CLICK shows a remote address either as MODBUS 984 (``400001``; coils are
+    ``1``..``65536``) or as hex with its register type
+    (``address=50Eh,register_type=holding``).
+    """
+    args, kwargs = _parse_af_args(args_str)
+    fields = dict(kwargs)
+    address = fields.get("address", "")
+    register_type = fields.get("register_type")
+    if not args and set(fields) <= {"address", "register_type"}:
+        if _MODBUS_HEX_RE.fullmatch(address):
+            member = _REGISTER_TYPE_MEMBERS.get(register_type or "holding")
+            if member is not None:
+                return f'"{address}"', member
+        elif _MODBUS_984_RE.fullmatch(address) and register_type is None:
+            number = int(address)
+            if 1 <= number <= _MODBUS_984_COIL_MAX:
+                return str(number - 1), "COIL"
+            return str(number), None
+    raise ValueError(f"Unsupported CSV operand expression: 'ModbusAddress({args_str})'")
+
+
+def _render_modbus_address(args_str: str) -> str:
+    address, member = _parse_modbus_address(args_str)
+    if member is None:
+        return f"ModbusAddress(address={address})"
+    return f"ModbusAddress(address={address}, register_type=RegisterType.{member})"
+
+
 def _compact_click_formula(text: str) -> str:
     """``ABS ( DS1 - 5 ) * 2`` -> ``ABS(DS1 - 5) * 2``; quoted text is left alone."""
     if '"' in text or "'" in text:
@@ -295,7 +336,6 @@ def _validate_operand(text: str) -> ast.expr:
             "any",
             "ModbusTcpTarget",
             "ModbusRtuTarget",
-            "ModbusAddress",
             "_range",
             *_RANGE_AGG_PLACEHOLDERS.values(),
             "immediate",
@@ -322,6 +362,9 @@ def _sub_operand(
         return text
 
     text = _compact_click_formula(text)
+    modbus_address = _MODBUS_ADDRESS_RE.fullmatch(text)
+    if modbus_address:
+        return _render_modbus_address(modbus_address.group(1))
     expression = _validate_operand(text)
 
     # System operands (SC/SD → system.* path)
@@ -380,12 +423,6 @@ def _sub_operand(
             for k, v in kwargs:
                 rendered.append(f"{k}={_sub_operand(v, collection, nicknames, structured_map)}")
             return f"ModbusRtuTarget({', '.join(rendered)})"
-        if func_name == "ModbusAddress":
-            args, kwargs = _parse_af_args(inner_args_str)
-            rendered: list[str] = []
-            for k, v in kwargs:
-                rendered.append(f"{k}={_sub_operand(v, collection, nicknames, structured_map)}")
-            return f"ModbusAddress({', '.join(rendered)})"
         if func_name in {"all", "any"}:
             args, kwargs = _parse_af_args(inner_args_str)
             rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]

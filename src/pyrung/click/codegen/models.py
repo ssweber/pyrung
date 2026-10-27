@@ -273,6 +273,7 @@ class _OperandCollection:
     has_modbus_target: bool = False
     has_modbus_rtu_target: bool = False
     has_modbus_address: bool = False
+    has_register_type: bool = False
     has_system_operands: bool = False
     unmapped_defaults: dict[tuple[str, int], object] = field(default_factory=dict)
     unmapped_retentive: dict[tuple[str, int], bool] = field(default_factory=dict)
@@ -314,6 +315,7 @@ class _FileRefs:
     has_modbus_target: bool = False
     has_modbus_rtu_target: bool = False
     has_modbus_address: bool = False
+    has_register_type: bool = False
     has_system_import: bool = False
     tc_clone_var_names: set[str] = field(default_factory=set)
     subroutine_func_names: set[str] = field(default_factory=set)
