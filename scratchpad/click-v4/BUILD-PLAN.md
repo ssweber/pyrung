@@ -4,20 +4,16 @@ All six features have landed. This is the remaining work, most important first.
 
 ## Bugs
 
-1. **Ladder export blocks register drum durations.** `pyrung_to_ladder()` raises `LadderExportError` on
-   `time_drum(presets=[DS1302, ...])` (`click/ladder/validator.py` `_run_precheck`), though
-   `CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED` is now a hint. laddercodec's capture generator works around it with
-   `validate=False`.
-2. **Real preset tags disagree between backends.** Interpreted compares `acc >= 2.5`, compiled
+1. **Real preset tags disagree between backends.** Interpreted compares `acc >= 2.5`, compiled
    `acc >= int(2.5)` (`on_delay`, `timed`, `debounce`).
-3. **Fold lands ahead of stepping with two `on_delay`s on one Timer.** One rung false and resetting it, one
+2. **Fold lands ahead of stepping with two `on_delay`s on one Timer.** One rung false and resetting it, one
    ticking, plus any other moving timer: Acc folds to 350 where stepping gives 70. A duplicate-out program, but
    it breaks "equal stepping or decline".
-4. **`cause("T")` on a stepped `calc(T + 3, T)` raises RecursionError.**
-5. **Export doesn't enforce CLICK's 24-character nickname limit** (`pyclickplc.validation.NICKNAME_MAX_LENGTH`).
+3. **`cause("T")` on a stepped `calc(T + 3, T)` raises RecursionError.**
+4. **Export doesn't enforce CLICK's 24-character nickname limit** (`pyclickplc.validation.NICKNAME_MAX_LENGTH`).
    Add a validation finding.
-6. **The importer drops the comment on an un-nicknamed TD row.**
-7. **A callable property that reads a tag no rung touches** (`lambda s: s["M0"]`) raises KeyError from
+5. **The importer drops the comment on an un-nicknamed TD row.**
+6. **A callable property that reads a tag no rung touches** (`lambda s: s["M0"]`) raises KeyError from
    `guarded_state`. The condition form of the same property works.
 
 ## Hardware

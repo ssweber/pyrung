@@ -17,7 +17,6 @@ from .findings import (
     CLK_COPY_BANK_INCOMPATIBLE,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
-    CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
     CLK_OUT_UNIT_UNSUPPORTED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_TIMER_PAIR_MISMATCH,
@@ -497,24 +496,6 @@ def _evaluate_drums(
                     role="drum_event_condition",
                     location=event_location,
                     unresolved_reason="event condition bank unresolved",
-                )
-
-    if instruction_type == "TimeDrumInstruction":
-        presets = getattr(instruction, "presets", ())
-        for idx, preset in enumerate(presets):
-            if isinstance(preset, Tag):
-                location = _instruction_location(base_location, f"instruction.presets[{idx}]")
-                location_text = _format_location(location)
-                findings.append(
-                    ClickFinding(
-                        code=CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
-                        severity=_route_severity(CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED, mode),
-                        message=(
-                            "time_drum preset from a register needs CLICK v4 firmware; "
-                            f"earlier firmware takes literal durations only, at {location_text}."
-                        ),
-                        location=location_text,
-                    )
                 )
 
     jump_step = getattr(instruction, "jump_step", None)

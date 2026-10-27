@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung.click import ClickBlocks, TagMap
+from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click import validation as click_validation
@@ -13,7 +13,6 @@ from pyrung.click.validation import (
     CLK_COPY_BANK_INCOMPATIBLE,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
-    CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
@@ -353,7 +352,6 @@ def test_drum_stage3_valid_mapping_passes_without_role_or_literal_findings():
     report = validate_click_program(prog, tag_map, mode="warn")
     codes = _codes(report)
     assert CLK_BANK_WRONG_ROLE not in codes
-    assert CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED not in codes
     assert CLK_DRUM_JUMP_STEP_TAG_REQUIRED not in codes
 
 
@@ -407,7 +405,8 @@ def test_drum_stage3_wrong_role_failures_are_reported():
     assert len(wrong_role_locations) == len(set(wrong_role_locations))
 
 
-def test_time_drum_register_preset_hints_it_needs_click_v4():
+def test_time_drum_register_preset_validates_and_exports():
+    """CLICK v4 takes register durations; version checks belong to whoever pastes into CLICK."""
     enable = Bool("Enable")
     reset = Bool("Reset")
     step = Int("Step")
@@ -441,12 +440,10 @@ def test_time_drum_register_preset_hints_it_needs_click_v4():
         include_system=False,
     )
 
-    for mode in ("warn", "strict"):
-        report = validate_click_program(prog, tag_map, mode=mode)
-        hints = [f for f in report.hints if f.code == CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED]
-        assert hints, mode
-        assert "CLICK v4" in hints[0].message
-        assert CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED not in {f.code for f in report.errors}
+    report = validate_click_program(prog, tag_map, mode="strict")
+    assert not (*report.errors, *report.warnings, *report.hints)
+    tokens = [row[-1] for row in pyrung_to_ladder(prog, tag_map).main_rows]
+    assert any("presets=[DS2]" in token for token in tokens)
 
 
 def test_event_drum_literal_jump_step_reports_tag_required():
