@@ -43,6 +43,7 @@ from pyrung.core import (
     immediate,
     randint,
     rise,
+    to_text,
 )
 from pyrung.core.program import (
     blockcopy,
@@ -164,6 +165,7 @@ _EXEC_NAMESPACE: dict[str, object] = {
     "copy": copy,
     "calc": calc,
     "randint": randint,
+    "to_text": to_text,
     "on_delay": on_delay,
     "off_delay": off_delay,
     "count_up": count_up,

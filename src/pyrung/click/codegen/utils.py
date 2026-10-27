@@ -71,6 +71,9 @@ _MODBUS_ADDRESS_RE = re.compile(r"ModbusAddress\(([^()]*)\)")
 _MODBUS_984_RE = re.compile(r"\d+")
 _MODBUS_HEX_RE = re.compile(r"[0-9A-Fa-f]+[hH]")
 _MODBUS_984_COIL_MAX = 65536
+_TO_TEXT_RE = re.compile(r"to_text\(([^()]*)\)")
+_TO_TEXT_FLAGS = {"0": "False", "1": "True"}
+_TERMINATION_CODE_RE = re.compile(r"\$[0-9A-Fa-f]{1,2}")
 _REGISTER_TYPE_MEMBERS = {
     "coil": "COIL",
     "discrete_input": "DISCRETE_INPUT",
@@ -248,6 +251,29 @@ def _classify_arg(
     args.append(token)
 
 
+def _render_to_text(args_str: str) -> str:
+    """CSV ``to_text(suppress_zero=1,exponential=0,termination_code=$0D)`` -> Python.
+
+    CLICK writes ``termination_code=none`` when the option is off.
+    """
+    args, kwargs = _parse_af_args(args_str)
+    fields = dict(kwargs)
+    rendered: list[str] = []
+    valid = not args and set(fields) <= {"suppress_zero", "exponential", "termination_code"}
+    for key in ("suppress_zero", "exponential"):
+        if key in fields:
+            flag = _TO_TEXT_FLAGS.get(fields[key])
+            valid = valid and flag is not None
+            rendered.append(f"{key}={flag}")
+    code = fields.get("termination_code", "none")
+    if code != "none":
+        valid = valid and _TERMINATION_CODE_RE.fullmatch(code) is not None
+        rendered.append(f'termination_code="{code}"')
+    if not valid:
+        raise ValueError(f"Unsupported CSV operand expression: 'to_text({args_str})'")
+    return f"to_text({', '.join(rendered)})"
+
+
 def _sub_operand_kwarg(
     key: str,
     value: str,
@@ -266,6 +292,9 @@ def _sub_operand_kwarg(
         return "True" if value == "1" else "False"
     # Conversion syntax is source too; validate it before passing it through.
     if key == "convert":
+        to_text = _TO_TEXT_RE.fullmatch(value)
+        if to_text:
+            return _render_to_text(to_text.group(1))
         _validate_operand(value)
         return _pythonize_csv_strings(value)
     return _sub_operand(value, collection, nicknames, structured_map)

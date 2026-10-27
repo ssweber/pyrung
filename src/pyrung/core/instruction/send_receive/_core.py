@@ -13,6 +13,7 @@ during simulation and exists only for code generation.
 
 from __future__ import annotations
 
+import itertools
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -23,7 +24,7 @@ from pyrung.core._source import _capture_source
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.program.context import _require_rung_context
 from pyrung.core.scan_log import IoResultRecord, IoSubmitRecord
-from pyrung.core.tag import Tag
+from pyrung.core.tag import Tag, TagType
 
 from ..base import Instruction
 from ..conversions import _store_copy_value_to_tag_type
@@ -168,6 +169,48 @@ def _submit_raw_receive_request(
         register_type=register_type,
         count=count,
         device_id=device_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Status bits
+# ---------------------------------------------------------------------------
+
+#: Name prefix of the hidden tag a status bit gets when it is left off.
+MODBUS_STATUS_TAG_PREFIX = "_modbus."
+
+_status_site_counter = itertools.count(1)
+
+
+def is_modbus_status_tag(name: str) -> bool:
+    """Whether *name* is the hidden tag of a send/receive status bit that was left off."""
+    return name.startswith(MODBUS_STATUS_TAG_PREFIX)
+
+
+def _status_tags(
+    busy_name: str,
+    busy: Tag | None,
+    success: Tag | None,
+    error: Tag | None,
+    exception_response: Tag | None,
+) -> tuple[Tag, Tag, Tag, Tag]:
+    """The four status tags, a hidden one for each bit left off (CLICK allows any)."""
+    site = next(_status_site_counter)
+
+    def resolve(tag: Tag | None, field_name: str, tag_type: TagType) -> Tag:
+        if tag is not None:
+            return tag
+        return Tag(
+            f"{MODBUS_STATUS_TAG_PREFIX}{site}.{field_name}",
+            tag_type,
+            comment=f"{field_name} left off",
+        )
+
+    return (
+        resolve(busy, busy_name, TagType.BOOL),
+        resolve(success, "success", TagType.BOOL),
+        resolve(error, "error", TagType.BOOL),
+        resolve(exception_response, "exception_response", TagType.INT),
     )
 
 
@@ -614,10 +657,10 @@ def send(
     target: str | ModbusTcpTarget | ModbusRtuTarget,
     remote_start: str | ModbusAddress,
     source: Tag | BlockRange,
-    sending: Tag,
-    success: Tag,
-    error: Tag,
-    exception_response: Tag,
+    sending: Tag | None = None,
+    success: Tag | None = None,
+    error: Tag | None = None,
+    exception_response: Tag | None = None,
     count: int | None = None,
     word_swap: bool = False,
 ) -> None:
@@ -628,7 +671,13 @@ def send(
 
     ``remote_start`` may be a Click address string (e.g. ``"DS1"``) for Click
     PLCs, or a :class:`ModbusAddress` for raw Modbus devices.
+
+    Status bits are optional, as in CLICK: one left off still runs, on a
+    hidden tag that CLICK export leaves off.
     """
+    sending, success, error, exception_response = _status_tags(
+        "sending", sending, success, error, exception_response
+    )
     _validate_status_tags(
         busy=sending,
         success=success,
@@ -674,10 +723,10 @@ def receive(
     target: str | ModbusTcpTarget | ModbusRtuTarget,
     remote_start: str | ModbusAddress,
     dest: Tag | BlockRange,
-    receiving: Tag,
-    success: Tag,
-    error: Tag,
-    exception_response: Tag,
+    receiving: Tag | None = None,
+    success: Tag | None = None,
+    error: Tag | None = None,
+    exception_response: Tag | None = None,
     count: int | None = None,
     word_swap: bool = False,
 ) -> None:
@@ -688,7 +737,13 @@ def receive(
 
     ``remote_start`` may be a Click address string (e.g. ``"DS1"``) for Click
     PLCs, or a :class:`ModbusAddress` for raw Modbus devices.
+
+    Status bits are optional, as in CLICK: one left off still runs, on a
+    hidden tag that CLICK export leaves off.
     """
+    receiving, success, error, exception_response = _status_tags(
+        "receiving", receiving, success, error, exception_response
+    )
     _validate_status_tags(
         busy=receiving,
         success=success,
@@ -730,6 +785,7 @@ def receive(
 
 
 __all__ = [
+    "MODBUS_STATUS_TAG_PREFIX",
     "ModbusAddress",
     "ModbusReceiveInstruction",
     "ModbusRtuTarget",
@@ -738,6 +794,7 @@ __all__ = [
     "RegisterType",
     "VALID_COM_PORTS",
     "WordOrder",
+    "is_modbus_status_tag",
     "receive",
     "send",
 ]

@@ -2652,6 +2652,82 @@ class TestRoundTrip:
         with pytest.raises(ValueError, match="Unsupported CSV operand expression"):
             ladder_to_pyrung(bundle)
 
+    @pytest.mark.parametrize("instruction", ["send", "receive"])
+    @pytest.mark.parametrize("left_off", ["busy", "success", "error", "exception_response"])
+    def test_status_bit_left_off_round_trips(self, instruction, left_off):
+        """CLICK lets any Send/Receive status bit be left off; it stays off through import."""
+        busy = "sending" if instruction == "send" else "receiving"
+        operand = "source=DS1" if instruction == "send" else "dest=DS1"
+        bits = {busy: "C1", "success": "C2", "error": "C3", "exception_response": "DS2"}
+        del bits[busy if left_off == "busy" else left_off]
+        call = (
+            f'{instruction}(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, '
+            f'device_id=1), remote_start="DS1", {operand}, '
+            + ", ".join(f"{k}={v}" for k, v in bits.items())
+            + ")"
+        )
+        _assert_codegen_body(f"with rung(X1):\n    {call}", f"with rung(X001):\n    {call}")
+
+        logic, mapping = build_program(f"with rung(X1):\n    {call}")
+        bundle = pyrung_to_ladder(logic, mapping)
+        ns: dict = {}
+        exec_with_source(ladder_to_pyrung(bundle), ns)
+        assert pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows == bundle.main_rows
+
+    def test_event_drum_jump_step_is_keyword(self):
+        """A drum's jump pin imports as .jump(cond, step=...); step is keyword-only."""
+        _assert_codegen_body(
+            """
+            with rung(X1):
+                event_drum(outputs=[C1, C2], events=[C3, C4], pattern=[[1, 0], [0, 1]], current_step=DS1, completion_flag=C5).reset(C6).jump(C7, step=DS2).jog(C8)
+            """,
+            """
+            with rung(X001):
+                event_drum(outputs=[C1, C2], events=[C3, C4], pattern=[[1, 0], [0, 1]], current_step=DS1, completion_flag=C5).reset(C6).jump(C7, step=DS2).jog(C8)
+            """,
+        )
+        logic, mapping = build_program(
+            """
+            with rung(X1):
+                event_drum(outputs=[C1, C2], events=[C3, C4], pattern=[[1, 0], [0, 1]], current_step=DS1, completion_flag=C5).reset(C6).jump(C7, step=DS2).jog(C8)
+            """
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        ns: dict = {}
+        exec_with_source(ladder_to_pyrung(bundle), ns)
+        assert pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows == bundle.main_rows
+
+    @pytest.mark.parametrize(
+        ("source", "generated"),
+        [
+            ("to_text()", "to_text(suppress_zero=True, exponential=False)"),
+            (
+                "to_text(suppress_zero=False, exponential=True)",
+                "to_text(suppress_zero=False, exponential=True)",
+            ),
+            (
+                'to_text(termination_code="$0D")',
+                'to_text(suppress_zero=True, exponential=False, termination_code="$0D")',
+            ),
+            (
+                "to_text(termination_code=19)",
+                'to_text(suppress_zero=True, exponential=False, termination_code="$13")',
+            ),
+        ],
+    )
+    def test_copy_to_text(self, source, generated):
+        """to_text options survive export + import, including CLICK's termination_code=none."""
+        _assert_codegen_body(
+            f"""
+            with rung(X1):
+                copy(DS1, TXT1, convert={source})
+            """,
+            f"""
+            with rung(X001):
+                copy(DS1, TXT1, convert={generated})
+            """,
+        )
+
     def test_send_block_range(self):
         """Send with BlockRange source round-trips through DS1..DS3."""
         _assert_codegen_body(

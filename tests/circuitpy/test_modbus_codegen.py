@@ -1458,6 +1458,30 @@ def test_raw_send_int_single_register(monkeypatch):
     assert ns["_t_Sending"] is False
 
 
+def test_raw_send_with_status_bits_left_off(monkeypatch):
+    """CLICK lets a status bit be left off; the send still runs on the board."""
+    enable = Bool("Enable", default=True)
+    source = Int("Source", default=123)
+    success = Bool("Success")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            send(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x100),
+                source=source,
+                success=success,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    expected_pdu = struct.pack(">BHH", 6, 0x100, 123)
+    ns["service_modbus_client"]()  # connect
+    ns["service_modbus_client"]()  # send
+    sockets[-1].recv_chunks.append(_mbap(1, expected_pdu, uid=17))
+    ns["service_modbus_client"]()  # receive
+    assert ns["_t_Success"] is True
+
+
 def test_raw_send_dint_high_low(monkeypatch):
     """Raw send DINT with HIGH_LOW word order → FC 16, big-endian word pair."""
     enable = Bool("Enable", default=True)

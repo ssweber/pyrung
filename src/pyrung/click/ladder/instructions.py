@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.calc import infer_calc_mode
+from pyrung.core.instruction.send_receive import is_modbus_status_tag
 
 from ._loop_items import is_own_rung, loop_item_rung
 from .translator import _quote
@@ -579,25 +580,8 @@ class _InstructionMixin:
                 source=self._render_operand(
                     instruction.source, path=f"{path}.source", source=instruction
                 ),
-                sending=self._render_operand(
-                    instruction.sending,
-                    path=f"{path}.sending",
-                    source=instruction,
-                ),
-                success=self._render_operand(
-                    instruction.success,
-                    path=f"{path}.success",
-                    source=instruction,
-                ),
-                error=self._render_operand(
-                    instruction.error, path=f"{path}.error", source=instruction
-                ),
-                exception_response=self._render_operand(
-                    instruction.exception_response,
-                    path=f"{path}.exception_response",
-                    source=instruction,
-                ),
             )
+            kwargs.update(self._render_status_bits(instruction, "sending", path))
             if instruction.word_swap:
                 kwargs["word_swap"] = "1"
             return self._fn("send", **kwargs)
@@ -610,25 +594,8 @@ class _InstructionMixin:
                 dest=self._render_operand(
                     instruction.dest, path=f"{path}.dest", source=instruction
                 ),
-                receiving=self._render_operand(
-                    instruction.receiving,
-                    path=f"{path}.receiving",
-                    source=instruction,
-                ),
-                success=self._render_operand(
-                    instruction.success,
-                    path=f"{path}.success",
-                    source=instruction,
-                ),
-                error=self._render_operand(
-                    instruction.error, path=f"{path}.error", source=instruction
-                ),
-                exception_response=self._render_operand(
-                    instruction.exception_response,
-                    path=f"{path}.exception_response",
-                    source=instruction,
-                ),
             )
+            kwargs.update(self._render_status_bits(instruction, "receiving", path))
             if instruction.word_swap:
                 kwargs["word_swap"] = "1"
             return self._fn("receive", **kwargs)
@@ -652,6 +619,17 @@ class _InstructionMixin:
             message=f"Unsupported instruction type: {instruction_type}.",
             source=instruction,
         )
+
+    def _render_status_bits(self, instruction: Any, busy_name: str, path: str) -> dict[str, str]:
+        """Send/Receive status kwargs; a bit on a hidden tag was left off and stays off."""
+        rendered: dict[str, str] = {}
+        for name in (busy_name, "success", "error", "exception_response"):
+            tag = getattr(instruction, name)
+            if not is_modbus_status_tag(tag.name):
+                rendered[name] = self._render_operand(
+                    tag, path=f"{path}.{name}", source=instruction
+                )
+        return rendered
 
     def _fn(self, name: str, *args: str, **kwargs: str) -> str:
         parts = list(args)

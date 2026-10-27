@@ -392,3 +392,33 @@ def test_bytes_estimate_includes_io():
     empty_size = log.bytes_estimate()
     log.record_io_submit(1, "k", IoSubmitRecord(tag_writes=(("A", True),)))
     assert log.bytes_estimate() > empty_size
+
+
+def test_status_bits_left_off_get_hidden_tags(monkeypatch: pytest.MonkeyPatch):
+    """CLICK lets any status bit be left off; each gets its own hidden tag and still runs."""
+    futures = _fake_send_submit(monkeypatch)
+    Enable = Bool("Enable")
+    Source = Int("Source")
+    Success = Bool("Success")
+    with Program(strict=False) as logic:
+        with Rung(Enable):
+            _sr.send(target=_TARGET, remote_start="DS1", source=Source, success=Success)
+            _sr.send(target=_TARGET, remote_start="DS2", source=Source)
+
+    first, second = logic.rungs[0]._instructions
+    assert first.success is Success
+    hidden = [first.sending, first.error, first.exception_response, second.sending]
+    assert all(_sr.is_modbus_status_tag(tag.name) for tag in hidden)
+    assert len({tag.name for tag in hidden}) == len(hidden)
+    assert first._io_key != second._io_key
+
+    runner = PLC(logic=logic)
+    runner.patch({"Enable": True, "Source": 42})
+    runner.step()  # submit
+    assert runner.current_state.tags[first.sending.name] is True
+    for future in futures:
+        future.set_result(_sr._RequestResult(ok=True, exception_code=0))
+    runner.patch({"Enable": True})
+    runner.step()  # drain
+    assert runner.current_state.tags["Success"] is True
+    assert runner.replay_to(2).current_state.tags["Success"] is True

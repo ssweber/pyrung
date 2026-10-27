@@ -398,6 +398,8 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         click_imports.append("send")
     if "receive" in collection.used_instructions:
         click_imports.append("receive")
+    if "raw" in collection.used_instructions:
+        click_imports.append("raw")
 
     lines.append(f"from pyrung.click import {', '.join(click_imports)}")
 
@@ -1464,15 +1466,11 @@ def _render_pin(
                 f"got {len(pin.conditions)} flat condition tokens."
             )
         cond = _render_condition(pin.conditions[0], collection, nicknames, structured_map)
-    if cond:
-        if pin.arg:
-            arg = _sub_operand(pin.arg, collection, nicknames, structured_map)
-            return f".{pin.name}({cond}, {arg})"
-        return f".{pin.name}({cond})"
+    args = [cond] if cond else []
     if pin.arg:
-        arg = _sub_operand(pin.arg, collection, nicknames, structured_map)
-        return f".{pin.name}({arg})"
-    return f".{pin.name}()"
+        # Only .jump() takes an argument: its keyword-only step.
+        args.append(f"step={_sub_operand(pin.arg, collection, nicknames, structured_map)}")
+    return f".{pin.name}({', '.join(args)})"
 
 
 def _comment_triple_delimiter(comment: str) -> str | None:

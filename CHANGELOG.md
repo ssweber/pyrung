@@ -46,6 +46,10 @@
 ### Fixes
 
 - CLICK import reads Send and Receive remote addresses written in MODBUS hex (`50Eh` with its register type), which it refused, and reads MODBUS 984 coil addresses (`000001`..`065536`) as coils instead of holding registers.
+- `send()` and `receive()` status bits (`sending`/`receiving`, `success`, `error`, `exception_response`) are optional, as in CLICK: one left off runs on a hidden tag and CLICK export leaves it off, so CLICK programs that turn a status bit off import instead of failing.
+- CLICK import of a program with `raw(...)` instructions (Email, Home and other unsupported ones) imports `raw` in the generated code, which failed with a NameError.
+- CLICK import reads Copy's `to_text` options as CLICK writes them, including `termination_code=none` and `$XX`, which failed to import or run.
+- CLICK import writes a drum's jump pin as `.jump(cond, step=...)`; the step was passed positionally and the generated code failed to run.
 - `calc(randint(...))` over WORD tags runs and exports in hex mode; the draw's hidden tag made it count as mixing hex and decimal, so it ran in decimal mode and CLICK export refused it.
 - A `Program`, `subroutine` or `@program` built from code with no source file, such as `exec()` of a generated string or the REPL, skips the strict control-flow check quietly instead of warning; source that exists but cannot be parsed still warns.
 - CLICK import keeps the contacts of a rung between For and Next, which it dropped, and reads nested For/Next blocks.

@@ -830,6 +830,8 @@ def _emit_logic_imports(
         click_parts.append("send")
     if "receive" in refs.used_instructions:
         click_parts.append("receive")
+    if "raw" in refs.used_instructions:
+        click_parts.append("raw")
     if click_parts:
         lines.append(f"from pyrung.click import {', '.join(click_parts)}")
 

@@ -49,7 +49,7 @@ with rung(Enable):
 
 ### Status tags
 
-Both instructions require four status tags:
+Both instructions take four status tags, each optional as in CLICK (one left off runs on a hidden tag and exports as off):
 
 - **sending** / **receiving** (`BOOL`) — True while the transaction is in progress
 - **success** (`BOOL`) — Latches True on successful completion; cleared when the next request starts
