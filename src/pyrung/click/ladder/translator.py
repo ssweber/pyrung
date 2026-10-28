@@ -752,6 +752,10 @@ class _TranslatorMixin:
 
 
 # ---- String/render utilities ----
+#: Significant digits CLICK keeps of a REAL constant.
+_CLICK_REAL_DIGITS = 7
+
+
 def _float32(value: float) -> float | None:
     """*value* rounded to float32, or None when it overflows float32."""
     try:
@@ -763,10 +767,17 @@ def _float32(value: float) -> float | None:
 def click_real_literal(value: float) -> str | None:
     """CLICK's spelling of a REAL constant, or None when CLICK cannot hold it.
 
-    CLICK stores REALs as float32, so the digits are the shortest that read
-    back to the same float32.  Magnitudes Python writes positionally stay
-    positional (``3.14``, ``100.0``); the rest use CLICK's exponent form with
-    a decimal point and uppercase ``E`` (``3.4028235E+38``, ``1.0E-10``).
+    CLICK stores REALs as float32 but keeps at most 7 significant digits of a
+    constant: a pasted ``3.40282347E+38`` comes back ``3.402823e+38``.  So the
+    digits are the shortest that read back to the same float32, capped at 7.
+    The cap also keeps the REAL maximum in range: its shortest spelling,
+    ``3.4028235E+38``, is past float32's largest value as written, and CLICK
+    v4's syntax check rejects it.  A value needing 8 or 9 digits (``1 / 3``)
+    is written as the 7-digit constant CLICK will hold.
+
+    Magnitudes Python writes positionally stay positional (``3.14``,
+    ``100.0``); the rest use CLICK's exponent form with a decimal point and
+    uppercase ``E`` (``3.402823E+38``, ``1.0E-10``).
     """
     if not math.isfinite(value):
         return None
@@ -776,7 +787,7 @@ def click_real_literal(value: float) -> str | None:
     if f32 == 0:
         return "0.0"
     digits = repr(f32)
-    for precision in range(1, 10):
+    for precision in range(1, _CLICK_REAL_DIGITS + 1):
         digits = f"{f32:.{precision - 1}e}"
         if _float32(float(digits)) == f32:
             break

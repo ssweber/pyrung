@@ -230,9 +230,11 @@ def prove_real_overflow_stays_finite(slot):
         calc(df[121] * -10, df[123])
     with Rung(slot.Cmd != 0, on_scan, system.fault.out_of_range):
         copy(1, slot.Result3)
-    with Rung(slot.Cmd != 0, on_scan, df[122] == 3.4028235e38):
+    # CLICK keeps 7 significant digits of a constant, so the REAL maximum
+    # itself can't be written; only a saturated value reaches past 3.402823E+38.
+    with Rung(slot.Cmd != 0, on_scan, df[122] >= 3.402823e38):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, on_scan, df[123] == -3.4028235e38):
+    with Rung(slot.Cmd != 0, on_scan, df[123] <= -3.402823e38):
         copy(1, slot.Result2)
     with Rung(slot.Cmd != 0, on_scan):
         calc(df[122] / df[121], slot.Result4)

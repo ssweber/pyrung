@@ -4,8 +4,8 @@ CLICK reads digits in a hex context (hex-mode Math, a DH/XD/YD value or
 compare) as hex and appends ``h`` when a rung is typed; a pasted rung gets no
 such fix-up.  pyrung literals stay decimal, so pyrung ``255`` exports as
 ``FFh`` (unpadded: CLICK's Math normalizes ``000Ah`` to ``Ah``, and Copy
-and Compare keep either spelling).  REAL constants are float32 in CLICK and are written the way CLICK
-writes them (``3.4028235E+38``).
+and Compare keep either spelling).  REAL constants are float32 in CLICK, keep at most 7
+significant digits, and are written the way CLICK writes them (``3.402823E+38``).
 """
 
 from __future__ import annotations
@@ -163,10 +163,13 @@ def test_importer_reads_bare_digits_in_hex_math_as_hex(mode: str, expected: str)
         (100.0, "100.0"),
         (0.1, "0.1"),
         (0.0, "0.0"),
-        (1 / 3, "0.33333334"),
+        # CLICK keeps 7 significant digits: a pasted 3.40282347E+38 reads back
+        # 3.402823e+38, and the 8-digit 3.4028235E+38 fails v4's range check.
+        (1 / 3, "0.3333333"),
         (3e38, "3.0E+38"),
-        (3.4028234663852886e38, "3.4028235E+38"),
-        (-3.4028234663852886e38, "-3.4028235E+38"),
+        (3.4028234663852886e38, "3.402823E+38"),
+        (-3.4028234663852886e38, "-3.402823E+38"),
+        (16777215.0, "16777220.0"),
         (1e-10, "1.0E-10"),
         (-2.5e-7, "-2.5E-07"),
         (2.5e20, "2.5E+20"),
