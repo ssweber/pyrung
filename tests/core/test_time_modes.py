@@ -3,6 +3,7 @@
 TDD: Write tests first, then implement to pass.
 """
 
+import itertools
 import time
 
 import pytest
@@ -246,3 +247,79 @@ class TestRunUntil:
         result = runner.run_until(lambda s: s.scan_id == 3)
 
         assert result.scan_id == 3
+
+
+class TestRealtimeClockEdges:
+    """rise()/fall() on a system clock compare with the clock the previous scan read."""
+
+    @staticmethod
+    def _fake_wall_clock(monkeypatch: pytest.MonkeyPatch, steps: list[float]) -> None:
+        """Make the runner's wall clock advance by *steps* in turn, one per read."""
+        from types import SimpleNamespace
+
+        import pyrung.core.runner as runner_module
+
+        now = [100.0]
+        pending = list(steps)
+
+        def perf_counter() -> float:
+            if pending:
+                now[0] += pending.pop(0)
+            return now[0]
+
+        monkeypatch.setattr(runner_module, "time", SimpleNamespace(perf_counter=perf_counter))
+
+    @staticmethod
+    def _edge_program():
+        from pyrung.core import Int, Rung, calc, fall, rise
+        from pyrung.core.system_points import system
+
+        rises, falls = Int("Rises"), Int("Falls")
+        clock = system.sys.clock_100ms
+        with Program() as logic:
+            with Rung(rise(clock)):
+                calc(rises + 1, rises)
+            with Rung(fall(clock)):
+                calc(falls + 1, falls)
+        return logic
+
+    @pytest.mark.parametrize(
+        "pattern",
+        [(0.001,), (0.030,), (0.001, 0.030, 0.004), (0.017, 0.0005)],
+        ids=["1ms", "30ms", "mixed", "uneven"],
+    )
+    def test_realtime_clock_edges_count_transitions(self, monkeypatch, pattern):
+        from pyrung.core import PLC
+        from pyrung.core.system_points import clock_high
+
+        scans = 400
+        # The first wall-clock read anchors the PLC; each scan reads once more.
+        dts = [pattern[i % len(pattern)] for i in range(scans)]
+        self._fake_wall_clock(monkeypatch, [0.0, *dts])
+        plc = PLC(self._edge_program(), realtime=True)
+
+        read_times = [0.0]
+        for dt in dts:
+            plc.step()
+            read_times.append(read_times[-1] + dt)
+        # Scan k reads the clock at read_times[k]; an edge shows on scan k
+        # when that differs from what scan k - 1 read.
+        levels = [clock_high(t, 0.050) for t in read_times[:-1]]
+        expected_rises = sum(1 for a, b in itertools.pairwise(levels) if b and not a)
+        expected_falls = sum(1 for a, b in itertools.pairwise(levels) if a and not b)
+        tags = plc.current_state.tags
+        assert expected_rises >= 2
+        assert tags.get("Rises", 0) == expected_rises
+        assert tags.get("Falls", 0) == expected_falls
+
+    def test_realtime_clock_edges_replay_the_same(self, monkeypatch):
+        from pyrung.core import PLC
+
+        dts = [0.001, 0.030, 0.004] * 40
+        self._fake_wall_clock(monkeypatch, [0.0, *dts])
+        plc = PLC(self._edge_program(), realtime=True)
+        for _ in dts:
+            plc.step()
+        replay = plc.replay_to(plc.current_state.scan_id)
+        assert replay.current_state.tags["Rises"] == plc.current_state.tags["Rises"]
+        assert replay.current_state.tags["Falls"] == plc.current_state.tags["Falls"]

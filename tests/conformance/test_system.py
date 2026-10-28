@@ -37,12 +37,8 @@ whose SC3 starts on, reads Result2 = 0.
 Clocks.  ``clock_bits_toggle_at_their_rate`` counts rising edges of SC5 and
 SC6 over a 2 s timer: 20 and 4 when the named time is the full period (on
 half, off half), as pyrung has it.  Clocks named for their half period read 10
-and 2; for a quarter period 40 and 8.  The case finds an edge itself (the clock
-is on and a bit that copies it every scan is still off) rather than with
-``rise()``: in pyrung's realtime mode, which the local sim runs, ``rise()`` and
-``fall()`` on a clock compare with the clock at ``timestamp + dt - 10 ms``
-instead of at the previous scan, so they miss edges after long scans and repeat
-them after short ones.  Over the wire the window is wall clock
+and 2; for a quarter period 40 and 8.  The edges are ``rise()`` contacts, first
+on their rungs.  Over the wire the window is wall clock
 and its ends fall between scans, so each count may be one off.  A scan longer
 than 40 ms (SD10, pyrung's time since the previous scan) could hide a whole
 half period of SC5, and the local sim does stall that long on a loaded
@@ -75,9 +71,9 @@ so this group's faults can only make one of those pass, never fail.
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, calc, copy, fall, fill, on_delay, out, rise
+from pyrung.core import Or, Rung, calc, copy, fall, fill, on_delay, rise
 from pyrung.core.system_points import system
-from tests.conformance.memory import ClickTimer, c, dd
+from tests.conformance.memory import ClickTimer, dd
 from tests.conformance.scans import WINDOW, count_scans, done, edges, scans_for
 
 SCANS = scans_for()
@@ -87,10 +83,8 @@ FAULT_SCANS = (3, 4, 6)
 #: Timer windows (ms) for the wall-clock cases.
 CLOCK_WINDOW_MS = 2000
 RTC_WINDOW_MS = 1500
-#: SC5 and SC6, and the bits that hold what each read on the previous scan.
-#: Those follow the clocks whatever Cmd is, so the clock case keeps them.
+#: SC5 and SC6.
 CLOCKS = (system.sys.clock_100ms, system.sys.clock_500ms)
-CLOCK_LAST = (c[901], c[902])
 #: A scan (SD10, ms) longer than this restarts the clock case's window.
 LONG_SCAN_MS = 40
 
@@ -189,11 +183,9 @@ def prove_clock_bits_toggle_at_their_rate(slot):
     scan_ms = system.sys.scan_time_current_ms
     with Rung(slot.Cmd != 0, Or(slot.Fired != 0, scan_ms <= LONG_SCAN_MS)):
         on_delay(window, CLOCK_WINDOW_MS)
-    for clock, last, field in zip(CLOCKS, CLOCK_LAST, (slot.Result1, slot.Result2), strict=True):
-        with Rung(slot.Cmd != 0, ~window.Done, clock, ~last):
+    for clock, field in zip(CLOCKS, (slot.Result1, slot.Result2), strict=True):
+        with Rung(rise(clock), slot.Cmd != 0, ~window.Done):
             calc(field + 1, field)
-        with Rung(clock):
-            out(last)
     with Rung(slot.Cmd != 0, window.Done):
         copy(1, slot.Fired)
     with Rung(slot.Cmd != 0, slot.Fired == 0, scan_ms > LONG_SCAN_MS):
@@ -291,7 +283,6 @@ group = Group(
             ladder=prove_clock_bits_toggle_at_their_rate,
             expect={"Result1": range(19, 22), "Result2": range(3, 6)},
             scans=CLOCK_WINDOW_MS // 10 + 5,
-            keep=CLOCK_LAST,
         ),
         case(
             "The ladder reads the PLC mode bit SC11 and the mode switch bit SC10 on "

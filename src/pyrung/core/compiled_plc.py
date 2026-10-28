@@ -516,7 +516,7 @@ class CompiledPLC:
         ctx.blocks_live = False
         self._flush_blocks_tracked(tracked)
 
-        self._capture_previous_states(effective_dt=self._dt, normal_dt=self._dt)
+        self._capture_previous_states()
         self._system_runtime.on_scan_end(scan_ctx)
         self._discover_new_commit_tags()
 
@@ -591,11 +591,7 @@ class CompiledPLC:
             self._flush_blocks_tracked(tracked)
 
             # The kernel clock already sits at the last folded scan's start.
-            self._capture_previous_states(
-                effective_dt=normal_dt,
-                normal_dt=normal_dt,
-                ctx=ctx,
-            )
+            self._capture_previous_states(ctx=ctx)
             self._system_runtime.on_scan_end(scan_ctx)
             if logical_scans > 1:
                 # The large dt advances timers, but it is not a historical scan
@@ -710,19 +706,17 @@ class CompiledPLC:
     def _should_seed_tag(self, name: str) -> bool:
         return name not in self._block_element_names or name in self._materialized_block_tag_names
 
-    def _capture_previous_states(
-        self,
-        *,
-        effective_dt: float,
-        normal_dt: float,
-        ctx: _KernelRuntimeContext | None = None,
-    ) -> None:
-        """Capture edge memory at the true scan immediately before a landing."""
-        prior_clock_ts = self._kernel.timestamp + effective_dt - normal_dt
+    def _capture_previous_states(self, *, ctx: _KernelRuntimeContext | None = None) -> None:
+        """Capture edge memory: a system clock's value is the one this scan read.
+
+        A macro (folded) scan's kernel clock already sits at the last folded
+        scan's start, so its read time is the kernel timestamp too.
+        """
+        clock_ts = self._kernel.timestamp
         for name in self._compiled.edge_tags:
             half_period = _CLOCK_HALF_PERIODS.get(name)
             if half_period is not None and half_period > 0:
-                value = clock_high(prior_clock_ts, half_period)
+                value = clock_high(clock_ts, half_period)
             elif name in self._kernel.tags:
                 value = self._kernel.tags[name]
             elif ctx is not None:

@@ -153,7 +153,8 @@ def _diff(fresh: SystemState, now: SystemState, kept: Collection[str]) -> dict[s
     """Tags and instruction memory that differ between two states, as ``key -> (now, fresh)``.
 
     System tags, pyrung's internal tags (a leading ``_``), system memory and
-    *kept* tags (and memory keyed by them, such as a timer's ``_frac:TD1``) are skipped.
+    *kept* tags are skipped, and so is memory keyed by a system or kept tag (a
+    clock's edge history ``_prev:sys.clock_100ms``, a timer's ``_frac:TD1``).
     """
     out: dict[str, tuple] = {}
     for name in set(fresh.tags) | set(now.tags):
@@ -163,7 +164,10 @@ def _diff(fresh: SystemState, now: SystemState, kept: Collection[str]) -> dict[s
         if before != after:
             out[name] = (after, before)
     for key in set(fresh.memory) | set(now.memory):
-        if key == "_dt" or key.startswith("_sys.") or key.rsplit(":", 1)[-1] in kept:
+        if key == "_dt" or key.startswith("_sys."):
+            continue
+        keyed_by = key.rsplit(":", 1)[-1]
+        if keyed_by in kept or keyed_by in SYSTEM_TAGS_BY_NAME:
             continue
         before, after = fresh.memory.get(key), now.memory.get(key)
         if before != after and (before or after):

@@ -3191,7 +3191,7 @@ class PLC:
         # replay. Post-logic forces and scan-end runtime writes remain part of
         # the same root journal, while timelines/history/monitors stay untouched.
         replay._input_overrides.apply_post_logic(ctx)
-        replay._capture_previous_states(ctx, _dt)
+        replay._capture_previous_states(ctx)
         replay._system_runtime.on_scan_end(ctx)
         capture.exit_tags = ctx.commit(dt=_dt).tags
         return capture
@@ -4242,28 +4242,22 @@ class PLC:
             ctx._condition_snapshot = saved_snapshot
             ctx._condition_scope_token = saved_scope
 
-    def _capture_previous_states(self, ctx: ScanContext, dt: float) -> None:
+    def _capture_previous_states(self, ctx: ScanContext) -> None:
         """Write _prev:* only for tags used in rise()/fall() edge detection.
 
-        *dt* is this scan's effective step.  It equals the normal dt for an
-        ordinary scan, but a time-fold step advances many scans at once with a
-        large ``dt`` — and a system clock is a pure function of the timestamp,
-        resolved on read and never stored.  Capturing such a clock at this
-        scan's *start* would leave the next scan's rise()/fall() comparing
-        against a value ``dt - normal_dt`` in the past, so a fold landing just
-        after a clock edge misfires (or misses) the edge.  Resolve those clocks
-        at ``start + dt - normal_dt`` — the value the immediately-prior scan
-        would have left — which is exactly the start for an ordinary scan.
+        A system clock is a pure function of the timestamp, resolved on read
+        and never stored, so its ``_prev`` is the value this scan read: the
+        clock at ``ctx.timestamp``.  That holds for every scan: an ordinary
+        one, a REALTIME one whose dt is wall-clock elapsed time, and a fold
+        landing, which already starts at the last folded scan's timestamp
+        (see ``fold._do_fold``).
         """
         from pyrung.core.system_points import _CLOCK_HALF_PERIODS, clock_high
 
         state_memory = self._state.memory
         tags_pending = ctx._tags_pending
         state_tags = self._state.tags
-        # A fold landing already starts at the last folded scan's timestamp.
-        prior_clock_ts = (
-            ctx.timestamp if self._landing_commit_dt is not None else ctx.timestamp + dt - self._dt
-        )
+        clock_ts = ctx.timestamp
         for name in self._edge_tag_names:
             current = tags_pending.get(name, _SENTINEL)
             if current is _SENTINEL:
@@ -4273,12 +4267,10 @@ class PLC:
                 # read and never stored, so the lookups above miss them.
                 hp = _CLOCK_HALF_PERIODS.get(name)
                 if hp is not None and hp > 0:
-                    # Clock = pure function of timestamp; capture the value one
-                    # normal scan before the landing so rise()/fall() compare
-                    # against the true previous scan even across a fold step.
-                    # Grid-snapped phase (clock_high) so the captured _prev agrees
-                    # with the on-read value across a fold's big-step timestamps.
-                    current = clock_high(prior_clock_ts, hp)
+                    # Clock = pure function of timestamp; capture the value
+                    # this scan read so the next scan's rise()/fall() compare
+                    # against it.  Grid-snapped phase (clock_high), as on read.
+                    current = clock_high(clock_ts, hp)
                 else:
                     # Other resolved-on-read edge tags (e.g. scan-derived) carry
                     # no timestamp half-period; fall back to the on-read value
@@ -4309,7 +4301,7 @@ class PLC:
         previous_tip_scan_id = previous_state.scan_id
         self._input_overrides.apply_post_logic(ctx)
 
-        self._capture_previous_states(ctx, dt)
+        self._capture_previous_states(ctx)
         commit_dt = dt
         # A fold landing commits here at its first scan id and is then moved to
         # the scan it stands for; it is cached and checkpointed there (see
