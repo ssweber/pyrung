@@ -10,6 +10,7 @@ from pyrung.click.codegen.analyzer import _analyze_rungs
 from pyrung.click.codegen.constants import _PIN_RE
 from pyrung.click.codegen.models import _AnalyzedRung, _PinInfo
 from pyrung.click.codegen.parser import _parse_rows
+from pyrung.click.codegen.shaping import emitted_logic_mismatch
 from pyrung.core.condition import AllCondition, AnyCondition, Condition
 from pyrung.core.instruction import ForLoopInstruction
 from pyrung.core.rung import Rung
@@ -162,13 +163,26 @@ class _RoundTripValidationMixin:
     ) -> None:
         """Fail loudly when emitted CSV rows lose rung semantics."""
         actual_rungs = _analyze_rungs(_parse_rows([tuple(_HEADER), *rendered_rows]))
+        scope_path = f"subroutine[{subroutine_name}]" if scope == "subroutine" else "main"
+
+        # The rows must also come back as the same logic through codegen:
+        # ladder_to_pyrung renders the blocks this check walks.
+        mismatch = emitted_logic_mismatch(actual_rungs)
+        if mismatch is not None:
+            self._raise_issue(
+                path=scope_path,
+                message=(
+                    "CSV round-trip validation failed: importing these rows would change "
+                    f"the rung logic: {mismatch}"
+                ),
+                source=source_rungs[0] if source_rungs else None,
+            )
         expected_comments = [
             comment for rung in source_rungs for comment in _rung_comments(rung) if comment
         ]
         actual_comments = [rung.comment for rung in actual_rungs if rung.comment is not None]
 
         if actual_comments != expected_comments:
-            scope_path = f"subroutine[{subroutine_name}]" if scope == "subroutine" else "main"
             self._raise_issue(
                 path=scope_path,
                 message=(
@@ -186,7 +200,6 @@ class _RoundTripValidationMixin:
         actual = self._flatten_analyzed_outputs(actual_rungs)
 
         if len(actual) != len(expected):
-            scope_path = f"subroutine[{subroutine_name}]" if scope == "subroutine" else "main"
             source = (
                 source_rungs[min(len(source_rungs) - 1, len(expected) - 1)]
                 if source_rungs

@@ -48,7 +48,9 @@ from pyrung.click.codegen.models import (
     _InstructionInfo,
     _PinInfo,
     _RawRung,
+    _SourceOutput,
 )
+from pyrung.click.codegen.shaping import NOP, series_tree
 
 # ---------------------------------------------------------------------------
 # Rung Analysis
@@ -707,6 +709,7 @@ def _split_continued(rung: _AnalyzedRung) -> list[_AnalyzedRung]:
             comment=rung.comment,
             condition_tree=first.branch_tree,
             instructions=[_InstructionInfo(first.af_token, None, first.pins)],
+            is_continued=rung.is_continued,
         )
     ]
 
@@ -755,6 +758,68 @@ def _split_continued(rung: _AnalyzedRung) -> list[_AnalyzedRung]:
             )
 
     return result
+
+
+def _split_nop_outputs(rung: _AnalyzedRung) -> list[_AnalyzedRung]:
+    """Give each NOP that shares a rung with other outputs a rung of its own.
+
+    A pyrung NOP is a whole empty rung (``pass``); it cannot sit beside other
+    instructions or inside a branch, so the emitter drops it.  CLICK rows get
+    this shape from a NOP rung next to ``.continued()`` rungs, and dropping the
+    NOP while the other outputs stay grouped under the NOP's contacts used to
+    lose those outputs' own contacts.
+
+    Cut the rung at each NOP in source order.  Each run of other outputs
+    between NOPs regroups into one rung, each NOP becomes a ``pass`` rung with
+    its full condition, and every piece after the first is ``.continued()`` so
+    all of them still read the original rung's snapshot.
+    """
+    if len(rung.instructions) < 2 or all(i.af_token != NOP for i in rung.instructions):
+        return [rung]
+
+    pieces: list[_AnalyzedRung] = []
+    run: list[_InstructionInfo] = []
+
+    def flush() -> None:
+        if not run:
+            return
+        trees = [
+            (series_tree(rung.condition_tree, instr.branch_tree), instr.af_token, index)
+            for index, instr in enumerate(run)
+        ]
+        cond_tree, grouped, _ = _group_outputs(trees)
+        for grouped_instr, orig in zip(grouped, run, strict=True):
+            grouped_instr.pins = orig.pins
+        pieces.append(
+            _AnalyzedRung(
+                comment=None,
+                condition_tree=cond_tree,
+                instructions=grouped,
+                role=rung.role,
+                is_continued=True,
+            )
+        )
+        run.clear()
+
+    for instr in rung.instructions:
+        if instr.af_token != NOP:
+            run.append(instr)
+            continue
+        flush()
+        pieces.append(
+            _AnalyzedRung(
+                comment=None,
+                condition_tree=series_tree(rung.condition_tree, instr.branch_tree),
+                instructions=[_InstructionInfo(NOP, None, [])],
+                role=rung.role,
+                is_continued=True,
+            )
+        )
+    flush()
+
+    pieces[0].comment = rung.comment
+    pieces[0].is_continued = rung.is_continued
+    return pieces
 
 
 def _analyze_rungs(
@@ -819,7 +884,15 @@ def _analyze_rungs(
                     analyzed.append(analyze_one(i, role=RungRole.FORLOOP_BODY))
                 i += 1
         else:
-            analyzed.extend(_split_continued(analyze_one(i)))
+            whole = analyze_one(i)
+            source_outputs = whole.source_outputs
+            pieces = [
+                split for piece in _split_nop_outputs(whole) for split in _split_continued(piece)
+            ]
+            for piece in pieces:
+                piece.source_outputs = None
+            pieces[0].source_outputs = source_outputs
+            analyzed.extend(pieces)
             i += 1
 
     return analyzed
@@ -855,6 +928,7 @@ def _analyze_single_rung(
             condition_tree=None,
             instructions=[],
             role=role,
+            source_outputs=(),
         )
 
     # Separate pin rows from content rows
@@ -868,8 +942,9 @@ def _analyze_single_rung(
             return _AnalyzedRung(
                 comment=comment,
                 condition_tree=None,
-                instructions=[_InstructionInfo("NOP", None, [])],
+                instructions=[_InstructionInfo(NOP, None, [])],
                 role=role,
+                source_outputs=(_SourceOutput(NOP, None, ()),),
             )
         if _rows_have_content(rows):
             raise ValueError(
@@ -880,6 +955,7 @@ def _analyze_single_rung(
             condition_tree=None,
             instructions=[],
             role=role,
+            source_outputs=(),
         )
 
     # SP Reduction (per output)
@@ -954,7 +1030,9 @@ def _analyze_single_rung(
     # merge equal conditions from different source positions, so checking its
     # factored trees would mistake that merge for a dropped source occurrence.
     # Positions absent from every pre-group tree were pruned as dead-end edges
-    # (unwired conditions) and silently omitted from the logic.
+    # (unwired conditions) and silently omitted from the logic.  This only sees
+    # drops made here; a contact lost later (splitting, emission) is caught by
+    # shaping.emitted_logic_mismatch against source_outputs.
     present: set[tuple[int, int]] = set()
     for tree, _af_token, _af_row in output_trees:
         for leaf in _walk_tree_leaves(tree):
@@ -979,9 +1057,25 @@ def _analyze_single_rung(
                 "invalid topology."
             )
 
+    # Record each output as the source wired it (full condition + pins) so the
+    # logic check can compare the generated code against it after grouping,
+    # splitting and emission (see shaping.emitted_logic_mismatch).
+    instruction_index_by_row = {af_row: index for index, af_row in enumerate(af_rows)}
+    source_outputs = tuple(
+        _SourceOutput(
+            af_token,
+            tree,
+            tuple(instructions[instruction_index_by_row[af_row]].pins)
+            if af_row in instruction_index_by_row
+            else (),
+        )
+        for tree, af_token, af_row in output_trees
+    )
+
     return _AnalyzedRung(
         comment=comment,
         condition_tree=condition_tree,
         instructions=instructions,
         role=role,
+        source_outputs=source_outputs,
     )

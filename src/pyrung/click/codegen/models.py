@@ -60,6 +60,15 @@ class _InstructionInfo:
     pins: list[_PinInfo]
 
 
+@dataclass(frozen=True)
+class _SourceOutput:
+    """One output as the source rows wired it, before grouping or splitting."""
+
+    af_token: str
+    tree: SPNode | None  # full condition from the power rail to this output
+    pins: tuple[_PinInfo, ...]
+
+
 @dataclass
 class _AnalyzedRung:
     """Fully analyzed rung topology."""
@@ -69,6 +78,9 @@ class _AnalyzedRung:
     instructions: list[_InstructionInfo]
     role: RungRole = RungRole.NORMAL
     is_continued: bool = False
+    # Per-output source wiring of the raw CSV rung this rung starts; None on
+    # pieces split off a raw rung (they share the first piece's entry).
+    source_outputs: tuple[_SourceOutput, ...] | None = None
 
 
 # ---------------------------------------------------------------------------
