@@ -70,8 +70,20 @@ break_on_same_iteration_write = 13
 oneshot_inside_loop = 14
 
 [groups.timers]
-base = 1101 # Conf_Timers: DS1101..DS1300 (reserved)
+base = 1101 # Conf_Timers: DS1101..DS1300
 slots = 19
+
+[groups.timers.cases]
+ton_auto_reset = 1
+ton_done_on_enabling_scan = 2
+rton_holds_across_rung_false = 3
+rton_reset_gap = 4
+tof_never_enabled = 5
+tof_times_only_when_false = 6
+tof_enable_atomic = 7
+preset_raised_resumes = 8
+preset_lowered_fires_at_once = 9
+fractional_accumulation = 10
 
 [groups.counters]
 base = 1301 # Conf_Counters: DS1301..DS1500
