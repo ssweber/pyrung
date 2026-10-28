@@ -84,6 +84,26 @@ def resolve_preset_ctx(preset: Tag | int, ctx: ScanContext) -> int:
     return preset
 
 
+def validate_preset(preset: object, *, label: str) -> None:
+    """Reject presets that are not an int literal or an INT, DINT or WORD tag.
+
+    A REAL preset has no single comparison every backend agrees on, and CLICK
+    refuses one anyway (DS timer presets, DS/DD counter presets).
+    """
+    from pyrung.core.tag import Tag as TagClass
+    from pyrung.core.tag import TagType
+
+    allowed = (TagType.INT, TagType.DINT, TagType.WORD)
+    if isinstance(preset, TagClass):
+        assert_tag_type(preset, allowed, label=label, include_tag_name=True)
+        return
+    if isinstance(preset, bool) or not isinstance(preset, int):
+        raise TypeError(
+            f"{label} must be an int or an {_allowed_type_text(allowed)} tag; "
+            f"got {type(preset).__name__}"
+        )
+
+
 def _allowed_type_text(allowed_types: Iterable[TagType]) -> str:
     names = [tag_type.name for tag_type in allowed_types]
     if len(names) == 1:

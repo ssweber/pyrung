@@ -26,6 +26,7 @@ from pyrung.core.instruction import (
     TimeEventDrumInstruction,
     ToggleInstruction,
 )
+from pyrung.core.instruction.utils import validate_preset
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.structure import DoneAccUDT
 from pyrung.core.tag import ImmediateRef, Tag, TagType
@@ -893,6 +894,7 @@ def count_up(
         Builder for chaining .down() and .reset().
     """
     done_bit, accumulator = _extract_done_acc(counter, "count_up")
+    validate_preset(preset, label="count_up() preset")
     cu_bit, cd_bit = _extract_status_tags(counter, "CU", "CD")
     up_condition, source_file, source_line = _capture_rung_condition_and_source("count_up")
     return CountUpBuilder(
@@ -930,6 +932,7 @@ def count_down(
         Builder for chaining .reset().
     """
     done_bit, accumulator = _extract_done_acc(counter, "count_down")
+    validate_preset(preset, label="count_down() preset")
     cu_bit, cd_bit = _extract_status_tags(counter, "CU", "CD")
     down_condition, source_file, source_line = _capture_rung_condition_and_source("count_down")
     return CountDownBuilder(
@@ -1112,6 +1115,7 @@ def on_delay(
     """
     canonical_unit = normalize_unit(unit)
     done_bit, accumulator = _extract_done_acc(timer, "on_delay")
+    validate_preset(preset, label="on_delay() preset")
     en_bit, tt_bit = _extract_status_tags(timer, "EN", "TT")
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("on_delay")
     return OnDelayBuilder(
@@ -1156,6 +1160,7 @@ def off_delay(
     """
     canonical_unit = normalize_unit(unit)
     done_bit, accumulator = _extract_done_acc(timer, "off_delay")
+    validate_preset(preset, label="off_delay() preset")
     en_bit, tt_bit = _extract_status_tags(timer, "EN", "TT")
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("off_delay")
     return OffDelayBuilder(
@@ -1196,8 +1201,7 @@ def _out_phase(phase: Any, func_name: str, side: str) -> tuple[Tag, Tag, Tag | i
         raise TypeError(f"{func_name}() {side}= takes (timer, preset), got {phase!r}.")
     timer, preset = phase
     done_bit, accumulator = _extract_done_acc(timer, func_name)
-    if isinstance(preset, bool) or not isinstance(preset, (int, Tag)):
-        raise TypeError(f"{func_name}() {side} preset must be an int or a tag, got {preset!r}.")
+    validate_preset(preset, label=f"{func_name}() {side} preset")
     return done_bit, accumulator, preset
 
 

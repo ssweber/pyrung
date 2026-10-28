@@ -21,7 +21,7 @@ from pyrung.core.time_mode import _parse_time_unit
 
 from .advance import AdvanceProfile, AdvanceStep, ConditionDemand, constraint_holds
 from .base import Instruction
-from .utils import resolve_preset_ctx, to_condition
+from .utils import resolve_preset_ctx, to_condition, validate_preset
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -132,6 +132,8 @@ class DebounceInstruction(Instruction):
         unit: str = "Tms",
         enable_condition: Any = None,
     ):
+        validate_preset(on_preset, label="debounce() on preset")
+        validate_preset(off_preset, label="debounce() off preset")
         self.target = target
         self.on_done = on_done
         self.on_acc = on_acc
@@ -212,6 +214,8 @@ class FlasherInstruction(Instruction):
         unit: str = "Tms",
         enable_condition: Any = None,
     ):
+        validate_preset(on_preset, label="flasher() on preset")
+        validate_preset(off_preset, label="flasher() off preset")
         self.target = target
         self.on_done = on_done
         self.on_acc = on_acc
@@ -314,6 +318,7 @@ class TimedInstruction(Instruction):
         maintained: bool = False,
         enable_condition: Any = None,
     ):
+        validate_preset(on_preset, label="timed() on preset")
         self.target = target
         self.timer_done = timer_done
         self.timer_acc = timer_acc

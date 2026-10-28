@@ -16,6 +16,7 @@ from .utils import (
     instruction_condition_view,
     resolve_preset_ctx,
     to_condition,
+    validate_preset,
 )
 
 if TYPE_CHECKING:
@@ -66,6 +67,7 @@ class CountUpInstruction(Instruction):
         cu_bit: Tag | None = None,
         cd_bit: Tag | None = None,
     ):
+        validate_preset(preset, label="count_up() preset")
         self.done_bit = done_bit
         self.accumulator = accumulator
         self.preset = preset
@@ -182,6 +184,7 @@ class CountDownInstruction(Instruction):
         cu_bit: Tag | None = None,
         cd_bit: Tag | None = None,
     ):
+        validate_preset(preset, label="count_down() preset")
         self.done_bit = done_bit
         self.accumulator = accumulator
         self.preset = preset

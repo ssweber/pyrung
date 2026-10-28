@@ -14,6 +14,7 @@ from .utils import (
     instruction_condition_view,
     resolve_preset_ctx,
     to_condition,
+    validate_preset,
 )
 
 if TYPE_CHECKING:
@@ -65,6 +66,7 @@ class OnDelayInstruction(Instruction):
         en_bit: Tag | None = None,
         tt_bit: Tag | None = None,
     ):
+        validate_preset(preset, label="on_delay() preset")
         self.done_bit = done_bit
         self.accumulator = accumulator
         self.preset = preset
@@ -211,6 +213,7 @@ class OffDelayInstruction(Instruction):
         en_bit: Tag | None = None,
         tt_bit: Tag | None = None,
     ):
+        validate_preset(preset, label="off_delay() preset")
         self.done_bit = done_bit
         self.accumulator = accumulator
         self.preset = preset
