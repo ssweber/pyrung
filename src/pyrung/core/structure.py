@@ -427,6 +427,7 @@ class _DoneAccRuntime(_StructRuntime):
         count: int | None = None,
         nicknames: Mapping[str, str] | None = None,
         retentive: Mapping[str, bool] | None = None,
+        comments: Mapping[str, str] | None = None,
         readonly: bool | None = None,
         external: bool | None = None,
         final: bool | None = None,
@@ -437,7 +438,8 @@ class _DoneAccRuntime(_StructRuntime):
 
         ``nicknames`` renames the ``Done``/``Acc`` tags (``count=1`` only);
         ``retentive`` overrides either field's retentive policy, for example
-        ``retentive={"Acc": True}`` for a timer whose time survives STOP -> RUN.
+        ``retentive={"Acc": True}`` for a timer whose time survives STOP -> RUN;
+        ``comments`` sets either field's comment (``count=1`` only).
         """
         field_specs = self._original_field_specs
         if retentive:
@@ -476,6 +478,17 @@ class _DoneAccRuntime(_StructRuntime):
                         f"Timer/Counter nickname for {field_name} must be a non-empty string."
                     )
                 clone._blocks[field_name].slot(1, name=nickname)
+        if comments:
+            if clone.count != 1:
+                raise ValueError("Timer/Counter comment overrides require count=1.")
+            unknown = set(comments) - {"Done", "Acc"}
+            if unknown:
+                fields = ", ".join(sorted(unknown))
+                raise ValueError(f"Unknown Timer/Counter comment fields: {fields}.")
+            for field_name, comment in comments.items():
+                if not isinstance(comment, str):
+                    raise ValueError(f"Timer/Counter comment for {field_name} must be a string.")
+                clone._blocks[field_name].slot(1, comment=comment)
         return clone
 
 

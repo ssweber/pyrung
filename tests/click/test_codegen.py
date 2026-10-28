@@ -3315,6 +3315,64 @@ class TestNicknameMerge:
         namespace["mapping"].to_nickname_file(out_path)
         assert pyclickplc.read_csv(out_path) == pyclickplc.read_csv(nick_path)
 
+    @pytest.mark.parametrize(
+        ("records", "expected_comments"),
+        [
+            ({("TD", 1): ("", "Elapsed")}, ", comments={'Acc': 'Elapsed'})"),
+            ({("T", 1): ("", "Cured")}, ", comments={'Done': 'Cured'})"),
+            (
+                {("T", 1): ("OvenTimer", "Cured"), ("TD", 1): ("", "Elapsed")},
+                ", comments={'Done': 'Cured', 'Acc': 'Elapsed'})",
+            ),
+            (
+                {("T", 1): ("OvenTimer", "Cured"), ("TD", 1): ("OvenTime", "Elapsed")},
+                ", comments={'Done': 'Cured', 'Acc': 'Elapsed'})",
+            ),
+        ],
+        ids=["unnamed-td", "unnamed-t", "named-t-unnamed-td", "named-t-named-td"],
+    )
+    def test_timer_clone_keeps_its_addresses_comments(
+        self, tmp_path: Path, records, expected_comments: str
+    ):
+        """A T/TD row's comment rides on the clone, named or not, and exports back
+        on the same row without gaining a nickname."""
+        import pyclickplc
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import BANKS
+
+        logic, mapping = build_program(
+            """
+            with rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            """
+        )
+        csv_dir = tmp_path / "csv"
+        pyrung_to_ladder(logic, mapping).write(csv_dir)
+        nick_path = tmp_path / "nicknames.csv"
+        source = {
+            get_addr_key(bank, index): AddressRecord(
+                memory_type=bank,
+                address=index,
+                nickname=nickname,
+                comment=comment,
+                initial_value="0",
+                retentive=False,
+                data_type=BANKS[bank].data_type,
+            )
+            for (bank, index), (nickname, comment) in records.items()
+        }
+        pyclickplc.write_csv(nick_path, source)
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+        clone_line = next(line for line in code.splitlines() if "Timer.clone(" in line)
+        assert clone_line.endswith(expected_comments)
+        assert "td.slot(" not in code and "t.slot(" not in code
+
+        namespace = exec_with_source(code)
+        out_path = tmp_path / "out.csv"
+        namespace["mapping"].to_nickname_file(out_path)
+        assert pyclickplc.read_csv(out_path) == pyclickplc.read_csv(nick_path)
+
     def test_named_counter(self):
         """Counter with nickname emits Counter.clone() declaration."""
         _assert_codegen_full(

@@ -38,6 +38,12 @@ A timer's `Done` and `Acc` reset on STOP->RUN; a counter's survive, as on a CLIC
 CureTimer = Timer.clone("CureTimer", retentive={"Acc": True})
 ```
 
+`comments=` gives either field a comment, exported to its address's row in the CLICK nickname file (single-instance clones only):
+
+```python
+CureTimer = Timer.clone("CureTimer", comments={"Acc": "Elapsed cure time"})
+```
+
 ### Status bits
 
 Timers and counters also have status bits that reflect instruction state each scan. These are available in the runner API (`.when()`, `.monitor()`, `.value`) but cannot be used in `with rung()` — CLICK PLCs manage these bits internally.
@@ -69,6 +75,10 @@ class MyCounter:
     Acc: Dint
     Faults: Dint  # extra fields are fine
 ```
+
+### Presets
+
+A preset is an int or an `Int`, `Dint` or `Word` tag. A `Real` preset raises `TypeError` — copy it into an `Int` first, as CLICK requires.
 
 ## Timers
 

@@ -215,7 +215,7 @@ The T (done-bit) nickname names the clone, or the TD/CTD nickname when the T has
 
 If the nickname already ends with `_Done` or `_Acc`, the suffix is stripped automatically — `"OvenTimer_Done"` becomes `Timer.clone("OvenTimer")`.
 
-The clone follows the retentive setting of its addresses. The built-in `Timer` and `Counter` match CLICK's bank defaults (T, TD non-retentive; CT, CTD retentive), so a field whose address differs gets an override, such as `Timer.clone("T1", ..., retentive={'Acc': True})` for a TD set retentive.
+The clone follows the retentive setting of its addresses. The built-in `Timer` and `Counter` match CLICK's bank defaults (T, TD non-retentive; CT, CTD retentive), so a field whose address differs gets an override, such as `Timer.clone("T1", ..., retentive={'Acc': True})` for a TD set retentive. A comment on either address rides along the same way, as `comments={'Acc': 'Elapsed cure time'}`.
 
 Condition references resolve through the clone. A rung conditioned on T1 renders as `OvenTimer.Done`:
 

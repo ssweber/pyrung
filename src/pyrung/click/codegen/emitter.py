@@ -505,8 +505,13 @@ def _emit_tc_clone_declarations(lines: list[str], collection: _OperandCollection
             f"{field_name!r}: {value!r}" for field_name, value in decl.retentive.items()
         )
         retentive_arg = f", retentive={{{retentive_items}}}" if retentive_items else ""
+        comment_items = ", ".join(
+            f"{field_name!r}: {comment!r}" for field_name, comment in decl.comments.items()
+        )
+        comments_arg = f", comments={{{comment_items}}}" if comment_items else ""
         lines.append(
-            f'{decl.var_name} = {decl.kind}.clone("{decl.var_name}"{nicknames_arg}{retentive_arg})'
+            f'{decl.var_name} = {decl.kind}.clone("{decl.var_name}"'
+            f"{nicknames_arg}{retentive_arg}{comments_arg})"
         )
 
 

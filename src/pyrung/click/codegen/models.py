@@ -139,6 +139,8 @@ class _TimerCounterCloneDecl:
     nicknames: dict[str, str] = field(default_factory=dict)
     # Fields whose address is set to a retentive policy other than the built-in's.
     retentive: dict[str, bool] = field(default_factory=dict)
+    # Comments carried by the Done/Acc addresses.
+    comments: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

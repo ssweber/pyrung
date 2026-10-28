@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import IntEnum
 from typing import Any, Literal, Protocol
 
@@ -145,6 +145,9 @@ class _DoneAccRuntime(_StructRuntime):
         name: str,
         *,
         count: int | None = None,
+        nicknames: Mapping[str, str] | None = None,
+        retentive: Mapping[str, bool] | None = None,
+        comments: Mapping[str, str] | None = None,
         readonly: bool | None = None,
         external: bool | None = None,
         final: bool | None = None,

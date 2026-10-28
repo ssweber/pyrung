@@ -1346,6 +1346,15 @@ class TestRetentiveDefaults:
         with pytest.raises(ValueError, match="Unknown Timer/Counter retentive fields: EN"):
             Timer.clone("BadTimer", retentive={"EN": True})
 
+    def test_clone_sets_field_comments(self):
+        noted = Timer.clone("NotedTimer", comments={"Acc": "Elapsed cure time"})
+        assert noted.Acc.comment == "Elapsed cure time"
+        assert not noted.Done.comment
+        with pytest.raises(ValueError, match="Unknown Timer/Counter comment fields: EN"):
+            Timer.clone("BadTimer", comments={"EN": "x"})
+        with pytest.raises(ValueError, match="comment overrides require count=1"):
+            Timer.clone("NotedPool", count=3, comments={"Acc": "x"})
+
     def test_rton_time_resets_on_stop_run_unless_retentive(self, runner_factory):
         enable = Bool("RtonEnable")
         plain, kept = Timer.clone("PlainRton"), Timer.clone("KeptRton", retentive={"Acc": True})

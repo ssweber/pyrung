@@ -963,12 +963,12 @@ def nickname_records(
             owner_name=entry.logical.name,
         )
         comment = _compose_address_comment(entry.logical.comment, tag_meta=tag_meta)
-        # A tag named after its own address (``T101`` at T101) and carrying nothing
-        # in its comment has no nickname; its default and retentive flag still
+        # A tag named after its own address (``T101`` at T101) and carrying no
+        # metadata has no nickname; its comment, default and retentive flag still
         # round-trip as the row's.  One with metadata keeps the name, since a row
         # without a nickname is read back as no tag.
         nickname = entry.logical.name
-        if not comment and nickname == self._hardware_address_name(entry.hardware):
+        if tag_meta is None and nickname == self._hardware_address_name(entry.hardware):
             nickname = ""
         records[get_addr_key(memory_type, address)] = AddressRecord(
             memory_type=memory_type,

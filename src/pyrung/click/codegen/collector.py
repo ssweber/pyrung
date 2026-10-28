@@ -694,8 +694,14 @@ def _enrich_with_ownership(
         _hw_address_name(entry.hardware): entry.logical for entry in structured_map.tags()
     }
 
-    # A Timer/Counter clone conforms to the retentive policy its addresses carry.
-    _conform_clone_retentive(collection, structured_map, tag_by_hardware)
+    # A Timer/Counter clone conforms to the retentive policy and comments its
+    # addresses carry.
+    _conform_clone_to_addresses(collection, structured_map, tag_by_hardware)
+    clone_operands = {
+        operand
+        for decl in collection.timer_counter_clones
+        for operand in (decl.done_operand, decl.acc_operand)
+    }
     for operand, decl in collection.tags.items():
         if operand in collection.semantic_operands or operand in collection.timer_counter_operands:
             continue
@@ -760,7 +766,10 @@ def _enrich_with_ownership(
         collection.used_blocks.add(block_var)
 
     for (memory_type, index), comment in structured_map._source_unmapped_comments.items():
-        parsed = _parse_operand_prefix(format_address_display(memory_type, index))
+        operand = format_address_display(memory_type, index)
+        if operand in clone_operands:
+            continue  # carried by the clone's comments=
+        parsed = _parse_operand_prefix(operand)
         if parsed is None:
             continue
         _, _tag_type, block_var, _index = parsed
@@ -828,12 +837,13 @@ def _scan_token_for_operands(
 _TC_NICK_SUFFIXES = ("_Done", "_Acc")
 
 
-def _conform_clone_retentive(
+def _conform_clone_to_addresses(
     collection: _OperandCollection,
     structured_map: TagMap,
     tag_by_hardware: dict[str, Any],
 ) -> None:
-    """Record each clone field whose address retentive differs from the built-in's."""
+    """Record each clone field whose address retentive differs from the built-in's,
+    and each field whose address has a comment."""
     from pyclickplc.addresses import parse_address
     from pyclickplc.banks import DEFAULT_RETENTIVE
 
@@ -846,12 +856,16 @@ def _conform_clone_retentive(
             logical = tag_by_hardware.get(operand)
             if logical is not None:
                 retentive = bool(logical.retentive)
+                comment = logical.comment or ""
             else:
                 retentive = structured_map._source_unmapped_retentive.get(
                     (memory_type, index), DEFAULT_RETENTIVE[memory_type]
                 )
+                comment = structured_map._source_unmapped_comments.get((memory_type, index), "")
             if retentive != getattr(builtin, field_name).retentive:
                 decl.retentive[field_name] = retentive
+            if comment:
+                decl.comments[field_name] = comment
 
 
 def _register_timer_counter_clone(
