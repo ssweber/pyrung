@@ -6,6 +6,7 @@ import json
 import struct
 from pathlib import Path
 
+import pytest
 from pyclickplc.modbus import plc_to_modbus
 
 from pyrung import Block, Bool, Char, Dint, Int, Program, Real, Rung, TagType, Word, calc
@@ -1239,6 +1240,39 @@ def test_codegen_client_receive_first_and_last_of_every_bank(monkeypatch):
             assert abs(actual - expected) < 1e-6, f"{label}: {actual}"
         else:
             assert actual == expected, f"{label}: {actual}"
+
+
+@pytest.mark.parametrize(
+    ("remote_start", "register"),
+    [("TXT1", ord("A") << 8), ("TXT2", ord("A"))],
+    ids=["odd_low_byte", "even_high_byte"],
+)
+def test_codegen_client_receive_zero_txt_byte_is_nul(monkeypatch, remote_start, register):
+    """A 0 byte received into a TXT is NUL, the blank a CLICK TXT holds (not '')."""
+    enable = Bool("Enable", default=True)
+    dest = Char("Dest", default="Q")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            receive(
+                target="peer",
+                remote_start=remote_start,
+                dest=dest,
+                receiving=Bool("Receiving"),
+                success=Bool("Success"),
+                error=Bool("Error"),
+                exception_response=Int("ExCode"),
+            )
+
+    ns, sockets = _run_client_job(monkeypatch, prog)
+    ns["service_modbus_client"]()
+    ns["service_modbus_client"]()
+    assert sockets
+    sockets[-1].recv_chunks.append(_mbap(1, struct.pack(">BBH", 3, 2, register), uid=17))
+    ns["service_modbus_client"]()
+
+    assert ns["_t_Success"] is True
+    assert ns["_t_Dest"] == "\x00"
 
 
 # ---------------------------------------------------------------------------

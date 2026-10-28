@@ -1195,7 +1195,7 @@ class TestIOMappingAndBranching:
             (Bool("ResetBool", default=True), "False"),
             (Int("ResetInt", default=7), "0"),
             (Real("ResetReal", default=2.5), "0.0"),
-            (Char("ResetChar", default="A"), repr("")),
+            (Char("ResetChar", default="A"), repr("\x00")),
         ],
     )
     def test_reset_emits_type_zero_independent_of_default(self, target, expected):
@@ -1656,6 +1656,69 @@ class TestCopyConverterCodegen:
         ch_values = _namespace_list(namespace, ch_symbol)
         assert ds_values[0:3] == [0, 0, 0]
         assert ch_values[10] == "\x00"
+
+    def test_ascii_code_of_blanked_char_writes_zero(self, monkeypatch):
+        # A TXT blanked by fill("") or reset() holds NUL, as in the core engine:
+        # its ASCII code is 0 and overwrites the destination.
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        ch = Block("CH", TagType.CHAR, 1, 12)
+        ds = Block("DS", TagType.INT, 1, 12)
+        enable = Bool("Enable", default=True)
+
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                copy("ZZZZ", ch[1])
+                fill("", ch.select(1, 2))
+                reset(ch[3])
+                reset(ch.select(4, 4))
+                fill(77, ds.select(1, 6))
+                copy(ch[1], ds[1], convert=to_ascii)
+                copy(ch[3], ds[2], convert=to_ascii)
+                copy(ch[4], ds[3], convert=to_ascii)
+                blockcopy(ch.select(1, 2), ds.select(4, 5), convert=to_ascii)
+
+        ctx = _context_for_program(prog, hw)
+        ch_symbol = ctx.symbol_for_block(ch)
+        ds_symbol = ctx.symbol_for_block(ds)
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
+
+        class StubBase:
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+            def writeDiscrete(self, value, slot):
+                return None
+
+            def readAnalog(self, slot, ch_num):
+                return 0
+
+            def writeAnalog(self, value, slot, ch_num):
+                return None
+
+            def readTemperature(self, slot, ch_num):
+                return 0.0
+
+        namespace = _run_single_scan_source(
+            result.code, monkeypatch, StubBase(), runtime_source=result.runtime
+        )
+        ds_values = _namespace_list(namespace, ds_symbol)
+        ch_values = _namespace_list(namespace, ch_symbol)
+        assert ch_values[0:4] == ["\x00"] * 4
+        assert ds_values[0:6] == [0, 0, 0, 0, 0, 77]
+
+    @pytest.mark.parametrize(
+        ("saved", "expected"), [("", "\x00"), (5, "\x00"), ("A", "A"), ("\x00", "\x00")]
+    )
+    def test_retentive_load_of_blank_char_is_nul(self, saved, expected):
+        # memory.json from an older build may hold "" (or junk) for a TXT; the
+        # load gives NUL, the only blank a TXT has.
+        from pyrung.circuitpy.codegen.compile._primitives import _load_cast_expr
+
+        assert eval(_load_cast_expr("saved", "CHAR"), {"saved": saved}) == expected
 
     def test_scalar_multi_char_copy_converter_faults_and_skips_write(self, monkeypatch):
         hw = P1AM()

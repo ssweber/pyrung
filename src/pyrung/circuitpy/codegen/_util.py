@@ -100,8 +100,8 @@ def _coil_reset_value(
 ) -> str:
     if isinstance(target, ImmediateRef):
         return _coil_reset_value(target.value, ctx)
-    # RESET writes the core engine's OFF/zero value, which for CHAR is "",
-    # not the NUL an unwritten TXT holds.
+    # RESET writes the core engine's OFF/zero value; for CHAR that is NUL,
+    # the same blank an unwritten TXT holds.
     if isinstance(target, Tag):
         return repr(reset_value_for_type(target.type))
     binding = ctx.block_bindings[id(target.block)]

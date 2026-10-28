@@ -765,7 +765,8 @@ def _load_cast_expr(value_expr: str, tag_type: str) -> str:
     if tag_type == "REAL":
         return f"float({value_expr})"
     if tag_type == "CHAR":
-        return f"({value_expr} if isinstance({value_expr}, str) else '')"
+        # A blank TXT is NUL; a saved "" (or a non-string) loads as one.
+        return f"(({value_expr} or '\\x00') if isinstance({value_expr}, str) else '\\x00')"
     return value_expr
 
 
