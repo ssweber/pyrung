@@ -95,8 +95,23 @@ base = 1701 # Conf_Numeric: DS1701..DS1900 (reserved)
 slots = 19
 
 [groups.text]
-base = 1901 # Conf_Text: DS1901..DS2100 (reserved)
+base = 1901 # Conf_Text: DS1901..DS2100
 slots = 19
+
+[groups.text.cases]
+value_vs_ascii = 1
+null_ascii = 2
+to_value_rejects = 3
+to_text_suppress = 4
+to_text_fixed = 5
+to_text_fixed_negative = 6
+to_text_termination = 7
+literal_fanout = 8
+to_binary = 9
+pack_text_word_hex = 10
+pack_text_int = 11
+pack_text_dint = 12
+pack_text_whitespace = 13
 
 [groups.block]
 base = 2101 # Conf_Block: DS2101..DS2300 (reserved)

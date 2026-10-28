@@ -23,6 +23,7 @@ from tests.conformance import (
     test_math,
     test_out,
     test_rung_semantics,
+    test_text,
 )
 
 MANIFEST_PATH = Path(__file__).with_name("manifest.toml")
@@ -37,6 +38,7 @@ ALL_GROUPS = [
     test_out.group,
     test_loop.group,
     test_coils.group,
+    test_text.group,
 ]
 
 

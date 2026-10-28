@@ -63,7 +63,12 @@ OWNED: Mapping[str, Mapping[str, range]] = {
     "counters": {"C": range(1301, 1401), "CT": range(1, 101)},
     "coils": {"C": range(1501, 1601)},
     "numeric": {"DD": range(101, 201), "DF": range(101, 201)},
-    "text": {"TXT": range(1, 201), "DS": range(3901, 4001)},
+    "text": {
+        "TXT": range(1, 201),
+        "DS": range(3901, 4001),
+        "DD": range(301, 401),
+        "DH": range(301, 401),
+    },
     "block": {
         "C": range(1201, 1301),
         "DS": range(4001, 4201),
