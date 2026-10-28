@@ -1,7 +1,7 @@
 """For/Next: the ``loop`` group (subroutine ``Conf_Loop``).
 
-The cases own C1701..C1800 (``BITS_C``), timers T201..T300 / TD201..TD300 and
-counters CT201..CT300 / CTD201..CTD300, which no other group uses.  CLICK has no
+The cases own C1701..C1800, timers T201..T300 and counters CT201..CT250
+(``memory.OWNED``).  CLICK has no
 loop index, so a case counts iterations in a slot register it increments in the
 body.  Each loop rung is gated on ``Fired == 0`` so the loop runs on one scan.
 
@@ -20,13 +20,9 @@ most likely to differ.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from pyrung.click import ClickBlocks
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Rung,
-    Tag,
     break_loop,
     calc,
     continue_loop,
@@ -39,40 +35,7 @@ from pyrung.core import (
     reset,
     rise,
 )
-
-_blocks = ClickBlocks()
-c, t, td, ct, ctd = _blocks.c, _blocks.t, _blocks.td, _blocks.ct, _blocks.ctd
-
-#: Raw C bits, timers and counters the loop cases own.
-BITS_C = range(1701, 1801)
-TIMERS = range(201, 301)
-COUNTERS = range(201, 301)
-
-
-@dataclass(frozen=True)
-class _ClickTimer:
-    n: int
-
-    @property
-    def Done(self) -> Tag:
-        return t[self.n]
-
-    @property
-    def Acc(self) -> Tag:
-        return td[self.n]
-
-
-@dataclass(frozen=True)
-class _ClickCounter:
-    n: int
-
-    @property
-    def Done(self) -> Tag:
-        return ct[self.n]
-
-    @property
-    def Acc(self) -> Tag:
-        return ctd[self.n]
+from tests.conformance.memory import ClickCounter, ClickTimer, c
 
 
 def _fire(slot) -> None:
@@ -163,7 +126,7 @@ def prove_edge_contact_inside_loop(slot):
 def prove_timer_inside_loop(slot):
     # F7: a TON inside For 10 against the same TON outside; once the outside
     # one passes 100 ms, Result1 = 1 if the loop's is ahead by more than 5x.
-    loop_timer, plain_timer = _ClickTimer(201), _ClickTimer(202)
+    loop_timer, plain_timer = ClickTimer(201), ClickTimer(202)
     with Rung():
         with forloop(10):
             with Rung(slot.Cmd != 0):
@@ -182,7 +145,7 @@ def prove_timer_inside_loop(slot):
 
 def prove_counter_inside_loop(slot):
     # F8
-    counter = _ClickCounter(201)
+    counter = ClickCounter(201)
     with Rung():
         with forloop(5):
             with Rung(slot.Cmd != 0, slot.Fired == 0):

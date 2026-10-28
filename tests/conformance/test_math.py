@@ -2,11 +2,8 @@
 
 CLICK's ``AVG``/``MDN``/``MAX``/``MIN`` take a range of consecutive registers,
 and a slot's fields are not one range, so each case stages its sources in raw
-registers it owns:
-
-- DS4401..DS4500, the top of DS (``SOURCE_DS``). No group block may reach it;
-  ``test_no_group_block_reaches_the_source_area`` checks the manifest.
-- DD, DF and DH, which no other group uses.
+registers it owns (``memory.OWNED``): DS4401..DS4500 at the top of the staging
+area, DD1..DD100, DF1..DF100 and DH1..DH100.
 
 Each case stages its sources in its first rung (gated on ``Cmd``/``Fired`` like
 every case), computes in the next rung, and writes what it saw into its slot.
@@ -23,17 +20,9 @@ range, never a value.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from pyrung.click import ClickBlocks
-from pyrung.conformance import Group, assert_all_passed, case, load_manifest, run
+from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, calc, copy, fill, randint
-
-_blocks = ClickBlocks()
-ds, dd, df, dh = _blocks.ds, _blocks.dd, _blocks.df, _blocks.dh
-
-#: Raw DS registers the math cases stage their source ranges in.
-SOURCE_DS = range(4401, 4501)
+from tests.conformance.memory import dd, df, dh, ds
 
 
 def prove_avg_mdn_positive(slot):
@@ -199,9 +188,3 @@ group = Group(
 
 def test_math():
     assert_all_passed(run(group))
-
-
-def test_no_group_block_reaches_the_source_area():
-    manifest = load_manifest(Path(__file__).with_name("manifest.toml"))
-    for layout in manifest.groups.values():
-        assert layout.last_register < SOURCE_DS.start, layout

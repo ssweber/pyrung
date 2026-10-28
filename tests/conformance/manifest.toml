@@ -5,6 +5,7 @@
 # Never renumber or move anything: a new case takes the next index in its
 # group, a removed case leaves a gap, a new group takes the next free block.
 # `make test-conformance` (and build_program) prints the exact lines to add.
+# Blocks end below DS3901: DS3901..DS4500 is raw staging (tests/conformance/memory.py).
 
 [groups.rungs]
 base = 101 # Conf_Rungs: DS101..DS300
@@ -67,3 +68,48 @@ continue_skips_rest_of_iteration = 11
 continue_on_last_iteration = 12
 break_on_same_iteration_write = 13
 oneshot_inside_loop = 14
+
+[groups.timers]
+base = 1101 # Conf_Timers: DS1101..DS1300 (reserved)
+slots = 19
+
+[groups.counters]
+base = 1301 # Conf_Counters: DS1301..DS1500 (reserved)
+slots = 19
+
+[groups.coils]
+base = 1501 # Conf_Coils: DS1501..DS1700
+slots = 19
+
+[groups.coils.cases]
+out_follows_rung = 1
+out_oneshot_fires_one_scan = 2
+out_oneshot_refires = 3
+rise_fall_fire_one_scan = 4
+edge_sees_previous_scan_end = 5
+edge_before_its_writer = 6
+latch_reset_sticky = 7
+
+[groups.numeric]
+base = 1701 # Conf_Numeric: DS1701..DS1900 (reserved)
+slots = 19
+
+[groups.text]
+base = 1901 # Conf_Text: DS1901..DS2100 (reserved)
+slots = 19
+
+[groups.block]
+base = 2101 # Conf_Block: DS2101..DS2300 (reserved)
+slots = 19
+
+[groups.shift]
+base = 2301 # Conf_Shift: DS2301..DS2500 (reserved)
+slots = 19
+
+[groups.search]
+base = 2501 # Conf_Search: DS2501..DS2700 (reserved)
+slots = 19
+
+[groups.system]
+base = 2701 # Conf_System: DS2701..DS2900 (reserved)
+slots = 19

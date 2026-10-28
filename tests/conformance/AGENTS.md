@@ -66,6 +66,16 @@ def prove_ton_resets(slot):
 
 Setup copies fire on the first scan the rung is true, then stop. Observation copies keep overwriting Results every scan — the last read wins by the time the harness checks. Over Modbus the harness reads twice, so a Result that is still moving (`timer.Acc` above) needs a `range` expectation; see Expectations.
 
+## Scan-paced tests
+
+A case about how a bit moves from scan to scan (coils, edges, one-shots) counts its own scans, with the helpers in `tests/conformance/scans.py`. `count_scans(slot)` makes `Scratch` the number of the scan in progress; the rungs under test key on it (`slot.Scratch >= 3, slot.Scratch <= 5`); `trace(slot, bit)` records how many scans a bit was on and its first and last scan, `edges(rise(bit), slot, count, at)` how often an edge contact passed power and when; `done(slot)` raises `Fired` once the window is recorded, not on the first scan. Nothing moves after the harness sees `Fired`, so every expectation is an exact int, in-process and on the wire, however late the scans come. `test_coils.py` is the example.
+
+An edge contact goes first on its rung (`edges()` puts it there), on the rail, so the case does not also ask whether an edge contact behind an open contact tracks its bit. That is a question of its own.
+
+## Checking a case checks something
+
+Before a case lands, change each of its expected values by one and check that the case fails, and remove its `init` (if it has one) and check that the leak check complains. A case that still passes asserts nothing. A case whose answer could differ on a CLICK should be able to tell the two apart: say in the module docstring which case shows which model, and what the other model would read.
+
 ## Reset
 
 `Cmd = 0` resets the case; `Cmd != 0` runs it. Every case's first rung is emitted by the framework (`emit_case()`), is true every scan while `Cmd == 0`, and does three things in order:
@@ -130,11 +140,19 @@ Each slot is a `named_array` instance with 9 Int fields:
 | ErrorCode | +7     | DS118  | Error reporting          |
 | Ready     | +8     | DS119  | Reset done (reset rung writes) |
 
-Cases cannot share memory, and the build checks it (see "Reset"). A case that needs a contiguous source range (the `math` group's `AVG`/`MDN`/`MAX`/`MIN`) stages it in raw registers it owns, outside every group block: the `math` group uses DS4401..DS4500 (its test checks that no manifest block reaches them) and DD, DF and DH, which no other group uses. `build_program(groups, manifest)` returns the program, its TagMap, the layout hash, and one `GroupBuild` per group (subroutine, block, slots, group hash). The build exports each group's subroutine through the validating CLICK exporter, so a case the exporter rejects fails at build time -- mark it in-process-only. Without a manifest, `build_program` packs the groups in order from DS11 (`Manifest.packed`): fine for harness tests and the local sim, never for a real CLICK, because adding a case moves registers.
+Cases cannot share memory, and the build checks it (see "Reset"). Anything a case touches outside its slot is raw CLICK memory its group owns (see "Raw memory"). `build_program(groups, manifest)` returns the program, its TagMap, the layout hash, and one `GroupBuild` per group (subroutine, block, slots, group hash). The build exports each group's subroutine through the validating CLICK exporter, so a case the exporter rejects fails at build time -- mark it in-process-only. Without a manifest, `build_program` packs the groups in order from DS11 (`Manifest.packed`): fine for harness tests and the local sim, never for a real CLICK, because adding a case moves registers.
 
 CLICK does not support nested subroutine calls (confirmed in the CLICK editor), so a case cannot `call()` a subroutine of its own: its rungs already run inside `Conf_<Group>`. Subroutine tests must be called from main instead; that home is not built yet.
 
 Unconditional rungs (an output wired straight to the rail, as in main's `copy`/`call` rungs and each group's hash rung) are valid in CLICK (confirmed).
+
+## Raw memory
+
+A slot is DS and comes from the manifest. Everything else a case touches -- C bits, timers, counters, staged DS/DD/DF/DH (a contiguous source range for `AVG`, a search table), TXT -- is a raw CLICK address, and nothing allocates it: a case picks addresses inside its group's ranges in `OWNED` (`tests/conformance/memory.py`). Import the banks (`c`, `t`, `td`, `ct`, `ctd`, `ds`, `dd`, `df`, `dh`, `txt`, `sc`, `sd`) and the `ClickTimer(n)` / `ClickCounter(n)` handles (`T<n>`/`TD<n>`, `CT<n>`/`CTD<n>` as `.Done`/`.Acc`) from there too.
+
+A timer number claims both `T<n>` and `TD<n>`; a counter number both `CT<n>` and `CTD<n>`. Raw DS lives in the staging area DS3901..DS4500 (`STAGING_DS`), which no manifest block may reach. SC and SD belong to no one: any case may read them. `OWNED` is the only record of who owns what; a new group takes its ranges there before its first case. Within a group, each case takes its own run of 10 (the `out` cases use C1801.., C1811.., C1821..), so a case can grow without moving its neighbours.
+
+`test_build.py` checks it: every tag a case touches (its `footprint`, outside its slot) lies in its group's ranges (`coils/x: T5 is outside the group's memory (C1501..C1600; ...)`), the ranges are disjoint and inside CLICK's banks, and no manifest block reaches the staging area. A case that strays fails in its own module's run, not when another group lands.
 
 ## Manifest
 
@@ -151,7 +169,7 @@ source_order = 2
 global_mutation = 3
 ```
 
-A block is `10 * (slots + 1)` registers starting at `base` (header, then the slots). Blocks may not overlap, start in the program header, or run past DS4500. Nothing ever moves: a new case takes the next index in its group, a removed case leaves its line (or its gap) behind, a new group takes the next free block. So editing one group never changes another group's hash or any other case's registers.
+A block is `10 * (slots + 1)` registers starting at `base` (header, then the slots). Blocks may not overlap, start in the program header, or run past DS4500, and the checked-in ones end below the staging area at DS3901. A group header with no cases reserves its block (`timers`, `counters`, `coils`, `numeric`, `text`, `block`, `shift`, `search`, `system` are reserved at DS1101..DS2900); the build ignores it until the suite has that group. Nothing ever moves: a new case takes the next index in its group, a removed case leaves its line (or its gap) behind, a new group takes the next free block. So editing one group never changes another group's hash or any other case's registers.
 
 Entries are added by hand, guided by the build. When a wire case or group has no entry, `build_program` (and so `make test-conformance`) fails with `ManifestError` and prints the exact lines to paste, with the next free index (`b = 4`) or the next free block (`[groups.math]`, `base = 301`, `slots = 19`, and every case). A group that outgrows its slots says so: raise `slots` if the next block allows, or split the group. In-process-only cases need no entry.
 

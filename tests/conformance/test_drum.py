@@ -2,8 +2,7 @@
 
 A drum's outputs, events and completion flag are C bits and its accumulator a
 TD register, and no slot field is either, so each case uses raw registers it
-owns: C1901..C2000 (``BITS_C``) and TD401..TD500 (``ACC_TD``), which no other
-group uses.  The current step is a slot field (DS).  Each drum's reset input is
+owns: C1901..C2000 and TD401..TD500 (``memory.OWNED``).  The current step is a slot field (DS).  Each drum's reset input is
 ``Cmd == 0``, so the reset puts it back on step 1 with its time cleared.
 
 The expectations are pyrung's answers, unconfirmed on a CLICK.  They are the
@@ -14,16 +13,9 @@ event already on when the time is up end the step?).
 
 from __future__ import annotations
 
-from pyrung.click import ClickBlocks
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, copy, latch, reset, time_event_drum
-
-_blocks = ClickBlocks()
-c, td = _blocks.c, _blocks.td
-
-#: Raw C bits and TD registers the drum cases own.
-BITS_C = range(1901, 2001)
-ACC_TD = range(401, 501)
+from tests.conformance.memory import c, td
 
 
 def prove_te_acc_counts_while_waiting(slot):

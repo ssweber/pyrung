@@ -21,7 +21,7 @@ from pyrung.conformance import (
 from pyrung.conformance._ladder import case_comment
 from pyrung.conformance._slot import DS_LAST, slot_register
 from pyrung.core import PLC, Rung, calc, copy
-from tests.conformance import suite
+from tests.conformance import memory, suite
 
 ds = ClickBlocks().ds
 
@@ -53,6 +53,33 @@ def test_checked_in_manifest_covers_the_suite() -> None:
     manifest = load_manifest(suite.MANIFEST_PATH)
     for group in suite.ALL_GROUPS:
         manifest.layout_for(group)
+
+
+def test_cases_stay_in_their_groups_raw_memory() -> None:
+    problems = memory.outside_owned(suite.ALL_GROUPS)
+    assert not problems, "\n".join(problems)
+
+
+def test_owned_memory_is_disjoint_and_inside_clicks_banks() -> None:
+    claims: dict[tuple[str, int], str] = {}
+    for group, banks in memory.OWNED.items():
+        assert len(group) <= 12, group
+        for bank, owned in banks.items():
+            assert bank in memory.BANKS, (group, bank)
+            assert 1 <= owned.start and owned.stop - 1 <= memory.BANKS[bank], (group, bank)
+            for n in owned:
+                other = claims.setdefault((bank, n), group)
+                assert other == group, f"{group} and {other} both own {bank}{n}"
+
+
+def test_owned_ds_is_staging_and_no_group_block_reaches_it() -> None:
+    staging = memory.STAGING_DS
+    for group, banks in memory.OWNED.items():
+        owned = banks.get("DS")
+        if owned is not None:
+            assert staging.start <= owned.start and owned.stop <= staging.stop, group
+    for layout in load_manifest(suite.MANIFEST_PATH).groups.values():
+        assert layout.last_register < staging.start, layout
 
 
 def test_groups_live_at_fixed_ds_registers() -> None:
