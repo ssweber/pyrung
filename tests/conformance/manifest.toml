@@ -15,6 +15,13 @@ slots = 19
 memory_is_immediate = 1
 source_order = 2
 global_mutation = 3
+branch_sees_rung_entry = 4
+nested_branches_see_rung_entry = 5
+branch_and_with_parent = 6
+last_rung_wins_shared_coil = 7
+continued_shares_snapshot = 8
+continued_chain_breaks = 9
+nop_rung_takes_snapshot = 10
 
 [groups.math]
 base = 301 # Conf_Math: DS301..DS500
