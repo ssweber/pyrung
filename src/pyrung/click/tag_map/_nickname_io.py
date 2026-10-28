@@ -920,6 +920,15 @@ def write_tag_map_to_nickname_file(
     Returns:
         Number of rows written.
     """
+    return pyclickplc.write_csv(path, nickname_records(self, blocks=blocks))
+
+
+def nickname_records(
+    self,
+    *,
+    blocks: Iterable[Any] | None = None,
+) -> dict[int, AddressRecord]:
+    """Build the nickname CSV rows ``write_tag_map_to_nickname_file`` writes, keyed by address."""
     records: dict[int, AddressRecord] = {}
 
     def block_tag_name_for_entry(entry: _BlockEntry) -> str | None:
@@ -1137,7 +1146,7 @@ def write_tag_map_to_nickname_file(
         )
         write_boundary_comment(memory_type, end_address, format_block_tag(block_name, "close"))
 
-    return pyclickplc.write_csv(path, records)
+    return records
 
 
-__all__ = ["tag_map_from_nickname_file", "write_tag_map_to_nickname_file"]
+__all__ = ["nickname_records", "tag_map_from_nickname_file", "write_tag_map_to_nickname_file"]

@@ -37,6 +37,7 @@ from .findings import (
     CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
+    CLK_NICKNAME_TOO_LONG,
     CLK_OUT_UNIT_UNSUPPORTED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
@@ -68,6 +69,7 @@ from .hardware import (
     _load_default_profile as _hardware_load_default_profile,
 )
 from .identity import _evaluate_address_identity_conflicts
+from .nicknames import _evaluate_nickname_lengths
 from .portability import (
     _evaluate_fact,
     _evaluate_forloop_structure,
@@ -160,6 +162,7 @@ def validate_click_program(
 
     findings: list[ClickFinding] = []
     findings.extend(_evaluate_address_identity_conflicts(program, facts, tag_map, mode))
+    findings.extend(_evaluate_nickname_lengths(program, facts, tag_map, mode))
     for fact in facts.operands:
         findings.extend(_evaluate_fact(fact, tag_map, mode, resolver))
 
@@ -252,6 +255,7 @@ __all__ = [
     "CLK_CALC_BIT_RANGE_AGGREGATE",
     "CLK_PROFILE_UNAVAILABLE",
     "CLK_ADDRESS_IDENTITY_CONFLICT",
+    "CLK_NICKNAME_TOO_LONG",
     "CLK_BANK_UNRESOLVED",
     "CLK_BANK_NOT_WRITABLE",
     "CLK_BANK_WRONG_ROLE",

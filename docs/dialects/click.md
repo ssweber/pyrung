@@ -378,7 +378,7 @@ Export to CLICK nickname CSV for import into CLICK Programming Software:
 mapping.to_nickname_file("project.csv")
 ```
 
-Mapped tags and blocks emit rows with canonical logical names, initial values, retentive flags, and preserved address comments. If a row needs both a block marker and user comment text, both are emitted in the same CSV comment field. Unmapped tags are omitted.
+Mapped tags and blocks emit rows with canonical logical names, initial values, retentive flags, and preserved address comments. If a row needs both a block marker and user comment text, both are emitted in the same CSV comment field. Unmapped tags are omitted. CLICK nicknames hold at most 24 characters; validation reports a longer one as `CLK_NICKNAME_TOO_LONG`, and ladder export refuses it.
 
 ## Validation
 

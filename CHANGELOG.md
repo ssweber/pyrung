@@ -67,6 +67,7 @@
 - A rung with a coil before a drum, timer, counter or shift register that has `.reset()`, `.jump()`, `.jog()` or `.clock()` now exports to CLICK; the instruction's pin rows were dropped and the export failed its round-trip check.
 - An `immediate(...)` coil target used only there now runs on the compiled backend instead of failing with a missing-symbol error.
 - CLICK validation reports `CLK_TIMER_PAIR_MISMATCH` when a timer's or counter's Done and Acc map to different numbers (`T5` with `TD7`), which CLICK cannot store and the export used to write silently.
+- CLICK validation reports `CLK_NICKNAME_TOO_LONG` for a nickname longer than CLICK's 24 characters, mapped or set on a bank slot, so ladder export refuses it; export used to write it silently.
 - `abs()` exports to CLICK as `ABS ( ... )` instead of lowercase `abs(...)`, imports back as Python's `abs`, and is flagged in hex-mode math, where CLICK has no `ABS`.
 - CLICK math formulas export spaced the way CLICK's formula editor writes them (`SQRT ( DS1 )`, `LSH ( DH1 , 2 )`, `DS1 * ( DS2 + 1 )`), so an exported CSV matches a copy-back from CLICK v4, which reports `ABS( x )` as a Math instruction error; the importer reads both the spaced and unspaced forms.
 - `.sum()` over a Bool range (C, X, Y, ...) exports and imports as plain `SUM ( C1 : C8 )`.
