@@ -1942,10 +1942,12 @@ class TestRuntimeSplit:
         code_lines = result.code.strip().splitlines()
         runtime_lines = result.runtime.strip().splitlines()
         # code.py should be smaller than a single-file version: the runtime
-        # absorbs helpers + Modbus infrastructure, so code.py < 65% of total.
+        # absorbs helpers + Modbus infrastructure, so code.py < 67% of total.
+        # (The TagMap serves every system point, so code.py also derives
+        # SD9, the clocks and the RTC each scan.)
         total = len(code_lines) + len(runtime_lines)
-        assert len(code_lines) < total * 0.65, (
-            f"code.py should be <65% of total ({len(code_lines)}/{total})"
+        assert len(code_lines) < total * 0.67, (
+            f"code.py should be <67% of total ({len(code_lines)}/{total})"
         )
 
     def test_non_modbus_program_produces_empty_runtime(self):

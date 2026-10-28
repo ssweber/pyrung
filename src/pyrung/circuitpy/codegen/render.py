@@ -11,6 +11,7 @@ from pyrung.circuitpy.codegen._constants import (
     _BOARD_SWITCH_TAG,
     _DINT_MAX,
     _DINT_MIN,
+    _FAULT_ADDRESS_ERROR_TAG,
     _FAULT_MATH_OPERATION_ERROR_TAG,
     _HELPER_ORDER,
     _INT_MAX,
@@ -49,6 +50,162 @@ from pyrung.circuitpy.codegen.render_modbus import (
     _render_modbus_server_init,
 )
 from pyrung.core.storage import REAL_MAX
+from pyrung.core.system_points import system
+
+#: The free-running clocks and their half periods in ms.  A clock reads on in
+#: the odd half periods since RUN started, as core's ``clock_high`` has it.
+_CLOCK_HALF_PERIOD_MS = (
+    (system.sys.clock_10ms.name, 5),
+    (system.sys.clock_100ms.name, 50),
+    (system.sys.clock_500ms.name, 250),
+    (system.sys.clock_1s.name, 500),
+    (system.sys.clock_1m.name, 30000),
+    (system.sys.clock_1h.name, 1800000),
+)
+#: The RTC points and their expression over ``_rtc_now = time.localtime()``.
+#: Weekday is CLICK's: Sunday = 1 ... Saturday = 7 (``tm_wday`` is Monday = 0).
+_RTC_FIELDS = (
+    (system.rtc.year4.name, "_rtc_now[0]"),
+    (system.rtc.year2.name, "_rtc_now[0] % 100"),
+    (system.rtc.month.name, "_rtc_now[1]"),
+    (system.rtc.day.name, "_rtc_now[2]"),
+    (system.rtc.weekday.name, "((_rtc_now[6] + 1) % 7) + 1"),
+    (system.rtc.hour.name, "_rtc_now[3]"),
+    (system.rtc.minute.name, "_rtc_now[4]"),
+    (system.rtc.second.name, "_rtc_now[5]"),
+)
+#: Fault flags cleared at the start of every scan; an instruction that faults
+#: sets its flag again for the rest of that scan.
+_SCAN_CLEARED_FAULTS = (
+    system.fault.division_error.name,
+    system.fault.out_of_range.name,
+    system.fault.address_error.name,
+)
+
+
+def _system_clock_symbols(ctx: CodegenContext) -> list[tuple[str, int]]:
+    return [
+        (symbol, half_ms)
+        for name, half_ms in _CLOCK_HALF_PERIOD_MS
+        if (symbol := ctx.symbol_if_referenced(name)) is not None
+    ]
+
+
+def _system_scan_count_needed(ctx: CodegenContext) -> bool:
+    return any(
+        name in ctx.referenced_tags
+        for name in (system.sys.scan_counter.name, system.sys.scan_clock_toggle.name)
+    )
+
+
+def _system_first_needed(ctx: CodegenContext) -> bool:
+    return system.sys.first_scan.name in ctx.referenced_tags or bool(_system_clock_symbols(ctx))
+
+
+def _render_system_point_state_lines(ctx: CodegenContext) -> list[str]:
+    """Module-level state behind the derived system points the program uses.
+
+    As in core, the scan counter and the clocks count from the first scan in
+    RUN, and a STOP->RUN transition starts them again.
+    """
+    lines: list[str] = []
+    if _system_scan_count_needed(ctx):
+        lines.append("_sys_scan_n = 0")
+    if _system_first_needed(ctx):
+        lines.append("_sys_first = True")
+    if _system_clock_symbols(ctx):
+        lines.extend(["_sys_t0_ns = 0", "_sys_prev_ns = 0"])
+    if lines:
+        lines.append("")
+    return lines
+
+
+def _system_point_reset_globals(ctx: CodegenContext) -> list[str]:
+    names: list[str] = []
+    if _system_scan_count_needed(ctx):
+        names.append("_sys_scan_n")
+    if _system_first_needed(ctx):
+        names.append("_sys_first")
+    return names
+
+
+def _render_system_point_reset_lines(ctx: CodegenContext) -> list[str]:
+    """Restart the scan counter and the clocks on STOP->RUN, as core restarts scan_id."""
+    lines: list[str] = []
+    if _system_scan_count_needed(ctx):
+        lines.append("    _sys_scan_n = 0")
+    if _system_first_needed(ctx):
+        lines.append("    _sys_first = True")
+    return lines
+
+
+def _render_system_point_scan_lines(ctx: CodegenContext, indent: int) -> list[str]:
+    """Derived system points for the scan about to run, as core resolves them.
+
+    The fault flags clear; then the scan counter (SD9, ``scan_id % 32768``),
+    the scan clock (SC3, on when SD9 is odd), the first-scan bit, the
+    free-running clocks over the time of the RUN scans before this one (0 on
+    the first scan, so every clock starts off), the scan time (SD10) and the
+    RTC.
+    """
+    sp = " " * indent
+    lines: list[str] = []
+    for name in _SCAN_CLEARED_FAULTS:
+        symbol = ctx.symbol_if_referenced(name)
+        if symbol is not None:
+            lines.append(f"{sp}{symbol} = False")
+    always_on = ctx.symbol_if_referenced(system.sys.always_on.name)
+    if always_on is not None:
+        lines.append(f"{sp}{always_on} = True")
+    counter = ctx.symbol_if_referenced(system.sys.scan_counter.name)
+    if counter is not None:
+        lines.append(f"{sp}{counter} = _sys_scan_n")
+    scan_clock = ctx.symbol_if_referenced(system.sys.scan_clock_toggle.name)
+    if scan_clock is not None:
+        lines.append(f"{sp}{scan_clock} = (_sys_scan_n & 1) == 1")
+    first_scan = ctx.symbol_if_referenced(system.sys.first_scan.name)
+    if first_scan is not None:
+        lines.append(f"{sp}{first_scan} = _sys_first")
+    clocks = _system_clock_symbols(ctx)
+    if clocks:
+        # Integer ms from monotonic_ns(): a float monotonic() loses ms
+        # resolution within hours on CircuitPython's 30-bit floats.
+        lines.extend(
+            [
+                f"{sp}_sys_now_ns = time.monotonic_ns()",
+                f"{sp}if _sys_first:",
+                f"{sp}    _sys_t0_ns = _sys_now_ns",
+                f"{sp}    _sys_prev_ns = _sys_now_ns",
+                f"{sp}_sys_ms = (_sys_prev_ns - _sys_t0_ns) // 1000000",
+                f"{sp}_sys_prev_ns = _sys_now_ns",
+            ]
+        )
+        for symbol, half_ms in clocks:
+            lines.append(f"{sp}{symbol} = ((_sys_ms // {half_ms}) & 1) == 1")
+    scan_ms = ctx.symbol_if_referenced(system.sys.scan_time_current_ms.name)
+    if scan_ms is not None:
+        lines.append(f"{sp}{scan_ms} = int(round(dt * 1000.0))")
+    rtc = [
+        (symbol, expr)
+        for name, expr in _RTC_FIELDS
+        if (symbol := ctx.symbol_if_referenced(name)) is not None
+    ]
+    if rtc:
+        lines.append(f"{sp}_rtc_now = time.localtime()")
+        for symbol, expr in rtc:
+            lines.append(f"{sp}{symbol} = {expr}")
+    return lines
+
+
+def _render_system_point_advance_lines(ctx: CodegenContext, indent: int) -> list[str]:
+    """After a scan in RUN: step the scan counter, drop the first-scan bit."""
+    sp = " " * indent
+    lines: list[str] = []
+    if _system_scan_count_needed(ctx):
+        lines.append(f"{sp}_sys_scan_n = (_sys_scan_n + 1) % 32768")
+    if _system_first_needed(ctx):
+        lines.append(f"{sp}_sys_first = False")
+    return lines
 
 
 def _tag_is_input_endpoint(ctx: CodegenContext, tag_name: str) -> bool:
@@ -370,6 +527,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
                 "",
             ]
         )
+    lines.extend(_render_system_point_state_lines(ctx))
     if has_runtime:
         if modbus_server_init_lines or modbus_client_codepy_lines:
             lines.append(_section("Modbus TCP"))
@@ -649,6 +807,7 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
                 "_sd_eject_cmd",
                 "_sd_delete_all_cmd",
                 *scalar_symbols,
+                *_system_point_reset_globals(ctx),
             }
         )
         lines.append("def _reset_for_run_transition():")
@@ -661,6 +820,7 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
                 "    _sd_save_cmd = False",
                 "    _sd_eject_cmd = False",
                 "    _sd_delete_all_cmd = False",
+                *_render_system_point_reset_lines(ctx),
             ]
         )
         if reset_lines:
@@ -678,18 +838,32 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
         lines.append("    _write_outputs()")
         lines.append("")
 
+    address_fault_symbol = ctx.symbol_if_referenced(_FAULT_ADDRESS_ERROR_TAG)
+    address_fault_global = (
+        ctx.global_symbol_for_tag(ctx.referenced_tags[_FAULT_ADDRESS_ERROR_TAG])
+        if address_fault_symbol is not None
+        else None
+    )
     for binding in sorted(
         (ctx.block_bindings[bid] for bid in ctx.used_indirect_blocks),
         key=lambda b: ctx.index_helper_name(b.block_id),
     ):
         helper_name = ctx.index_helper_name(binding.block_id)
         lines.append(f"def {helper_name}(addr):")
+        # An out-of-range pointer raises the address-error flag (SC44), as the
+        # kernel's copy of this helper does (render_kernel.py).
+        if address_fault_global is not None:
+            lines.append(f"    global {address_fault_global}")
         lines.append(f"    if addr < {binding.start} or addr > {binding.end}:")
+        if address_fault_symbol is not None:
+            lines.append(f"        {address_fault_symbol} = True")
         lines.append(
             f'        raise IndexError(f"Address {{addr}} out of range for {binding.logical_name} ({binding.start}-{binding.end})")'
         )
         if binding.valid_addresses is not None:
             lines.append(f"    if addr not in {binding.valid_addresses!r}:")
+            if address_fault_symbol is not None:
+                lines.append(f"        {address_fault_symbol} = True")
             lines.append(
                 f'        raise IndexError(f"Address {{addr}} out of range for {binding.logical_name} ({binding.start}-{binding.end})")'
             )
@@ -1139,6 +1313,7 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
     mode_run_symbol = ctx.symbol_if_referenced(_SYS_MODE_RUN_TAG)
     cmd_mode_stop_symbol = ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG)
     math_error_symbol = ctx.symbol_if_referenced(_FAULT_MATH_OPERATION_ERROR_TAG)
+    mode_switch_symbol = ctx.symbol_if_referenced(system.sys.mode_switch_run.name)
 
     lines = [
         "while True:",
@@ -1238,23 +1413,41 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
                 "        _mode_run = _desired_run",
             ]
         )
+        if mode_switch_symbol is not None:
+            # SC10 is the switch itself, set after the STOP->RUN reset: on in
+            # RUN even while a math error or cmd_mode_stop holds the PLC in STOP.
+            switch_run = (
+                "bool(_runstop_debounced)"
+                if ctx.runstop.run_when_high
+                else "(not bool(_runstop_debounced))"
+            )
+            lines.append(f"    {mode_switch_symbol} = {switch_run}")
         if ctx.runstop.expose_mode_tags and mode_run_symbol is not None:
             lines.append(f"    {mode_run_symbol} = bool(_mode_run)")
         lines.extend(
             [
                 "    if _mode_run:",
+                *_render_system_point_scan_lines(ctx, 8),
                 "        _run_main_rungs()",
                 "        _write_outputs()",
+                *_render_system_point_advance_lines(ctx, 8),
                 "    else:",
                 "        _force_outputs_off()",
                 "",
             ]
         )
     else:
+        # No RUN/STOP switch: the code is always in RUN, as core's mode bits
+        # read with no mode change (SC10 and SC11 on).
+        for symbol in (mode_switch_symbol, mode_run_symbol):
+            if symbol is not None:
+                lines.append(f"    {symbol} = True")
         lines.extend(
             [
+                *_render_system_point_scan_lines(ctx, 4),
                 "    _run_main_rungs()",
                 "    _write_outputs()",
+                *_render_system_point_advance_lines(ctx, 4),
                 "",
             ]
         )
