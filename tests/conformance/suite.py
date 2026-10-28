@@ -17,6 +17,7 @@ from pathlib import Path
 
 from pyrung.conformance import ConformanceProgram, build_program, load_manifest
 from tests.conformance import (
+    test_block,
     test_coils,
     test_drum,
     test_loop,
@@ -39,6 +40,7 @@ ALL_GROUPS = [
     test_loop.group,
     test_coils.group,
     test_text.group,
+    test_block.group,
 ]
 
 

@@ -117,6 +117,18 @@ pack_text_whitespace = 13
 base = 2101 # Conf_Block: DS2101..DS2300 (reserved)
 slots = 19
 
+[groups.block.cases]
+blockcopy_range = 1
+blockcopy_overlap = 2
+blockcopy_types = 3
+fill_constant = 4
+every_scan = 5
+pack_bits_int = 6
+pack_bits_real = 7
+unpack_bits = 8
+pack_words = 9
+unpack_words = 10
+
 [groups.shift]
 base = 2301 # Conf_Shift: DS2301..DS2500 (reserved)
 slots = 19
