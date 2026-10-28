@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Never, cast, overload
 
 from pyrung.core.physical import Physical
+from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.tag import (
     ChoiceMap,
     LiveInputTag,
@@ -256,7 +257,7 @@ _TYPE_DEFAULTS: dict[TagType, Any] = {
     TagType.DINT: 0,
     TagType.REAL: 0.0,
     TagType.WORD: 0,
-    TagType.CHAR: "",
+    TagType.CHAR: BLANK_CHAR,
 }
 
 

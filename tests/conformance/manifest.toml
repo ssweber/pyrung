@@ -168,6 +168,7 @@ pack_text_word_hex = 10
 pack_text_int = 11
 pack_text_dint = 12
 pack_text_whitespace = 13
+fill_blank_ascii = 14
 
 [groups.block]
 base = 2101 # Conf_Block: DS2101..DS2300

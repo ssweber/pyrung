@@ -1947,12 +1947,26 @@ class TestPackTextInstruction:
 
         CH = Block("CH", TagType.CHAR, 1, 10)
         Dest = Real("Dest")
-        instr = PackTextInstruction(CH.select(1, 6), Dest)
-        state = SystemState().with_tags(
-            {"CH1": "1", "CH2": "e", "CH3": "-", "CH4": "2", "CH5": "", "CH6": ""}
-        )
+        instr = PackTextInstruction(CH.select(1, 4), Dest)
+        state = SystemState().with_tags({"CH1": "1", "CH2": "e", "CH3": "-", "CH4": "2"})
         new_state = execute(instr, state)
         assert new_state.tags["Dest"] == pytest.approx(0.01)
+
+    @pytest.mark.parametrize("blank", ["\x00", ""])
+    def test_pack_text_blank_in_range_is_refused(self, blank):
+        # A blank TXT is NUL, a non-numeric character: CLICK sets SC43 and
+        # leaves the destination alone (clickplc_reference/copy_pack.md).
+        from pyrung.core.instruction import PackTextInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Dest = Real("Dest")
+        instr = PackTextInstruction(CH.select(1, 6), Dest)
+        state = SystemState().with_tags(
+            {"CH1": "1", "CH2": "e", "CH3": "-", "CH4": "2", "CH5": blank, "CH6": blank}
+        )
+        new_state = execute(instr, state)
+        assert new_state.tags["fault.out_of_range"] is True
+        assert new_state.tags.get("Dest", 0.0) == 0.0
 
     def test_pack_text_word_hex(self):
         from pyrung.core.instruction import PackTextInstruction
@@ -2041,3 +2055,100 @@ class TestNopInstruction:
                 with Rung():
                     out(Light)
                     nop()
+
+
+class TestBlankCharIsNul:
+    """A blank TXT is NUL: a CLICK TXT is one byte, with no separate empty state.
+
+    ``fill("")`` and ``reset()`` blank a CHAR to the same NUL an unwritten one
+    holds, so Copy ASCII Code Value of it writes 0 instead of nothing.
+    """
+
+    @staticmethod
+    def _run(build, patches=None):
+        from pyrung.core import PLC, Program, Rung
+
+        Go = Bool("Go", default=True)
+        with Program(strict=False) as logic:
+            with Rung(Go):
+                build()
+        plc = PLC(logic, dt=0.01)
+        if patches:
+            plc.patch(patches)
+        plc.step()
+        return plc.current_state.tags
+
+    def test_reset_value_for_char_is_nul(self):
+        from pyrung.core.instruction.coils import reset_value_for_type
+
+        assert reset_value_for_type(TagType.CHAR) == "\x00"
+
+    def test_fill_blank_stores_nul(self):
+        from pyrung.core import fill
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        tags = self._run(lambda: fill("", CH.select(1, 3)), {"CH1": "A", "CH2": "B", "CH3": "C"})
+
+        assert [tags[f"CH{i}"] for i in (1, 2, 3)] == ["\x00"] * 3
+
+    def test_reset_stores_nul(self):
+        from pyrung.core import reset
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Single = CH[5]
+
+        def build():
+            reset(Single)
+            reset(CH.select(1, 2))
+
+        tags = self._run(build, {"CH1": "A", "CH2": "B", "CH5": "E"})
+
+        assert [tags["CH1"], tags["CH2"], tags["CH5"]] == ["\x00"] * 3
+
+    def test_ascii_of_fill_blanked_char_writes_zero(self):
+        from pyrung.core import copy, fill, to_ascii
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        DS = Block("DS", TagType.INT, 1, 10)
+
+        def build():
+            copy("Z", CH[1])
+            fill("", CH.select(1, 1))
+            copy(77, DS[1])
+            copy(CH[1], DS[1], convert=to_ascii)
+
+        tags = self._run(build)
+
+        assert tags["DS1"] == 0
+
+    def test_ascii_of_reset_char_writes_zero(self):
+        from pyrung.core import copy, reset, to_ascii
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        DS = Block("DS", TagType.INT, 1, 10)
+
+        def build():
+            copy("Z", CH[1])
+            reset(CH[1])
+            copy(77, DS[1])
+            copy(CH[1], DS[1], convert=to_ascii)
+
+        tags = self._run(build)
+
+        assert tags["DS1"] == 0
+
+    def test_blockcopy_ascii_of_blanked_range_writes_zero(self):
+        from pyrung.core import blockcopy, fill, to_ascii
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        DS = Block("DS", TagType.INT, 1, 10)
+
+        def build():
+            fill("", CH.select(1, 2))
+            fill(77, DS.select(1, 2))
+            blockcopy(CH.select(1, 2), DS.select(1, 2), convert=to_ascii)
+
+        tags = self._run(build, {"CH1": "A", "CH2": "B"})
+
+        assert [tags["DS1"], tags["DS2"]] == [0, 0]
+        assert tags.get("fault.out_of_range", False) is False

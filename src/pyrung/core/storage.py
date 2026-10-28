@@ -22,6 +22,19 @@ IDENTITY_STORE = StoreTransform()
 #: REAL at 64-bit precision but never outside this range.
 REAL_MAX = 3.4028235e38
 
+#: The blank CHAR.  A CLICK TXT is one byte, so blank and NUL ($00) are the
+#: same value: an unwritten TXT, ``fill("")`` and ``reset()`` all leave NUL.
+BLANK_CHAR = "\x00"
+
+
+def store_char(value: Any) -> Any:
+    """The value a CHAR holds when *value* is stored: ``""`` becomes NUL.
+
+    Every path that stores into a CHAR (instruction writes, reset, patch and
+    force, tag defaults) goes through here, so the engine has one blank.
+    """
+    return BLANK_CHAR if value == "" else value
+
 
 def real_in_range(value: Any) -> bool:
     """True when *value* fits a REAL: finite and within +/-``REAL_MAX``."""
@@ -62,7 +75,7 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
     if kind == "bool":
         return bool(value)
     if kind == "char":
-        return "\x00" if value == "" else value
+        return store_char(value)
     if kind not in {"clamp", "wrap"}:
         raise ValueError(f"unknown store transform: {kind!r}")
     if storage.lower is None or storage.upper is None:
@@ -91,11 +104,13 @@ def check_real_literal(value: Any, dest: Any, what: str) -> None:
 
 
 __all__ = [
+    "BLANK_CHAR",
     "IDENTITY_STORE",
     "REAL_MAX",
     "StoreTransform",
     "check_real_literal",
     "check_real_value",
     "real_in_range",
+    "store_char",
     "store_value",
 ]

@@ -352,9 +352,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
         try:
             updates = {}
             for src_tag, dst_tag in zip(src_tags, dst_tags, strict=True):
+                # A blank source reads as NUL: ASCII 0, and a fault for to_value.
                 char = _as_single_ascii_char(ctx.get_tag(src_tag.name, src_tag.default))
-                if char == "":
-                    raise ValueError("empty CHAR cannot be converted to numeric")
                 updates[dst_tag.name] = _store_numeric_text_digits(
                     char, [dst_tag], mode=converter.mode
                 )[dst_tag.name]

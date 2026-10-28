@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
+from pyrung.core.storage import store_char
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from typing import Any
@@ -49,9 +51,8 @@ class InputOverrideManager:
 
     @staticmethod
     def _normalize_char_value(value: bool | int | float | str) -> bool | int | float | str:
-        if value == "":
-            return "\x00"
-        return value
+        # Only a CHAR can be written "": patch/force of a blank stores NUL.
+        return store_char(value)
 
     def _normalize_tag_updates(
         self,

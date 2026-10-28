@@ -46,6 +46,14 @@ tells apart:
 - ``pack_text_whitespace``: leading or trailing whitespace faults and leaves
   the destination alone unless ``allow_whitespace``, which trims it.  A model
   that always trims reads 12 in Result1.
+- ``fill_blank_ascii``: Fill with empty text blanks a TXT to NUL, the one blank
+  a TXT byte has, so ASCII Code Value of it writes 0 over the destination's 77
+  and 66.  A model where Fill of empty text writes nothing reads the seed's 90;
+  one with an empty state apart from NUL, which ASCII Code Value skips, leaves
+  77 and 66 (pyrung did, before a blank TXT was stored as NUL).
+- ``reset_blank_ascii`` (in-process only): ``reset()`` of a TXT stores the same
+  NUL, so its ASCII code is 0 too.  CLICK's Reset coil takes bit memory only
+  (X, Y, C, T, CT, SC), so this is pyrung's answer with nothing to compare.
 """
 
 from __future__ import annotations
@@ -56,6 +64,7 @@ from pyrung.core import (
     copy,
     fill,
     pack_text,
+    reset,
     system,
     to_ascii,
     to_binary,
@@ -280,6 +289,26 @@ def prove_pack_text_whitespace(slot):
     _fired(slot)
 
 
+def prove_fill_blank_ascii(slot):
+    with _go(slot):
+        _seed(191, "ZZ")
+        fill("", txt.select(191, 192))
+        copy(77, slot.Result1)
+        _code(191, slot.Result1)
+        copy(66, slot.Result2)
+        _code(192, slot.Result2)
+    _fired(slot)
+
+
+def prove_reset_blank_ascii(slot):
+    with _go(slot):
+        _seed(196, "Z")
+        reset(txt[196])
+        copy(77, slot.Result1)
+        _code(196, slot.Result1)
+    _fired(slot)
+
+
 def init_value_vs_ascii(slot):
     _clear(1, 2)
 
@@ -341,6 +370,14 @@ def init_pack_text_dint(slot):
 def init_pack_text_whitespace(slot):
     _clear(181, 189)
     fill(0, ds.select(3921, 3923))
+
+
+def init_fill_blank_ascii(slot):
+    _clear(191, 192)
+
+
+def init_reset_blank_ascii(slot):
+    _clear(196, 196)
 
 
 group = Group(
@@ -436,6 +473,21 @@ group = Group(
             ladder=prove_pack_text_whitespace,
             init=init_pack_text_whitespace,
             expect={"Result1": 99, "Result2": 1, "Result3": 12, "Result4": 12},
+        ),
+        case(
+            "Fill with empty text blanks a TXT to NUL, so ASCII Code Value of it writes 0 over "
+            "the destination, as for a TXT nothing wrote",
+            ladder=prove_fill_blank_ascii,
+            init=init_fill_blank_ascii,
+            expect={"Result1": 0, "Result2": 0},
+        ),
+        case(
+            "Reset of a TXT blanks it to NUL, so ASCII Code Value of it writes 0 over the "
+            "destination",
+            ladder=prove_reset_blank_ascii,
+            init=init_reset_blank_ascii,
+            expect={"Result1": 0},
+            in_process_only="CLICK's Reset coil takes bit memory only (X, Y, C, T, CT, SC), not TXT",
         ),
     ],
 )

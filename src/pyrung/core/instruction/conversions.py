@@ -7,7 +7,7 @@ import re
 import struct
 from typing import Any
 
-from pyrung.core.storage import StoreTransform, real_in_range, store_value
+from pyrung.core.storage import StoreTransform, real_in_range, store_char, store_value
 from pyrung.core.tag import Tag
 
 _DINT_MIN = -2147483648
@@ -89,18 +89,20 @@ def _ascii_char_from_code(code: int) -> str:
 
 
 def _as_single_ascii_char(value: Any) -> str:
+    """The CHAR *value* stores as: one ASCII character, a blank stored as NUL."""
     if not isinstance(value, str):
         raise ValueError("CHAR value must be a string")
     if value == "":
-        return value
+        return store_char(value)
     if len(value) != 1 or ord(value) > 127:
         raise ValueError("CHAR value must be blank or one ASCII character")
     return value
 
 
 def _text_from_source_value(value: Any) -> str:
+    """Source text for a text->numeric copy; a blank reads as one NUL."""
     if isinstance(value, str):
-        return value
+        return store_char(value)
     raise ValueError("text conversion source must resolve to str")
 
 

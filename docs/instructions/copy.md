@@ -45,6 +45,8 @@ copy(ModeChar, DS[1], convert=to_value)    # CHAR '5' → numeric 5   (Copy Char
 copy(ModeChar, DS[1], convert=to_ascii)    # CHAR '5' → ASCII 53    (Copy ASCII Code Value)
 ```
 
+A CLICK TXT is one byte, so a blank TXT is NUL (`$00`): one nothing has written, one cleared with `fill("", ...)` or `reset()`, and one set to `""`. `to_ascii` of a blank TXT writes 0; `to_value` of it sets the out-of-range fault.
+
 ### Numeric → Text
 
 ```python

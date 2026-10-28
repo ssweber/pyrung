@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from pyrung.core._source import _capture_source
 from pyrung.core.live_binding import get_active_runner
-from pyrung.core.storage import check_real_value
+from pyrung.core.storage import BLANK_CHAR, check_real_value, store_char
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
@@ -161,13 +161,13 @@ class Tag:
                 TagType.DINT: 0,
                 TagType.REAL: 0.0,
                 TagType.WORD: 0,
-                TagType.CHAR: "\x00",
+                TagType.CHAR: BLANK_CHAR,
             }
             # Use object.__setattr__ because frozen=True
             object.__setattr__(self, "default", defaults.get(self.type, 0))
 
-        if self.type == TagType.CHAR and self.default == "":
-            object.__setattr__(self, "default", "\x00")
+        if self.type == TagType.CHAR:
+            object.__setattr__(self, "default", store_char(self.default))
         if self.type == TagType.REAL:
             check_real_value(self.default, f"Tag {self.name!r}: default")
 
@@ -209,8 +209,8 @@ class Tag:
                     return k
             if value not in self.choices:
                 self.choice(value)
-        if self.type == TagType.CHAR and value == "":
-            return "\x00"
+        if self.type == TagType.CHAR:
+            return store_char(value)
         return value
 
     def choice(self, label: str) -> ChoiceKey:

@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.tag import Tag, TagType
 
 _TYPE_DEFAULTS: dict[TagType, bool | int | float | str] = {
@@ -20,7 +21,7 @@ _TYPE_DEFAULTS: dict[TagType, bool | int | float | str] = {
     TagType.DINT: 0,
     TagType.REAL: 0.0,
     TagType.WORD: 0,
-    TagType.CHAR: "",
+    TagType.CHAR: BLANK_CHAR,
 }
 
 PROVE_EFFECTIVE_PRESET_PREFIX = "_prove:effective_preset:"
