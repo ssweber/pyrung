@@ -93,7 +93,7 @@ def test_groups_live_at_fixed_ds_registers() -> None:
     assert m.resolve(rungs.slot[1].Fired.name) == "DS117"
     assert m.resolve(rungs.slot[3].ErrorCode.name) == "DS138"
     assert rungs.register(3, "ErrorCode") == 138
-    assert rungs.span == (111, 30)
+    assert rungs.span == (111, 10 * max(i for i, _ in rungs.cases))
     assert rungs.layout.last_register == 300
 
 

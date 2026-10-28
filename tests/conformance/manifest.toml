@@ -129,7 +129,7 @@ edge_before_its_writer = 6
 latch_reset_sticky = 7
 
 [groups.numeric]
-base = 1701 # Conf_Numeric: DS1701..DS1900 (reserved)
+base = 1701 # Conf_Numeric: DS1701..DS1900
 slots = 19
 
 [groups.numeric.cases]
@@ -169,7 +169,7 @@ pack_text_dint = 12
 pack_text_whitespace = 13
 
 [groups.block]
-base = 2101 # Conf_Block: DS2101..DS2300 (reserved)
+base = 2101 # Conf_Block: DS2101..DS2300
 slots = 19
 
 [groups.block.cases]
@@ -215,7 +215,7 @@ dint_real_tables = 11
 text_windows = 12
 
 [groups.system]
-base = 2701 # Conf_System: DS2701..DS2900 (reserved)
+base = 2701 # Conf_System: DS2701..DS2900
 slots = 19
 
 [groups.system.cases]

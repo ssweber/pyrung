@@ -26,11 +26,11 @@ from tests.conformance import (
     test_numeric,
     test_out,
     test_rung_semantics,
-    test_text,
-    test_shift,
     test_search,
-    test_timers,
+    test_shift,
     test_system,
+    test_text,
+    test_timers,
 )
 
 MANIFEST_PATH = Path(__file__).with_name("manifest.toml")
@@ -39,6 +39,9 @@ WORKSPACE_PATH = Path(__file__).with_name("workspace")
 
 #: Every group in the suite.  A new case module adds its ``group`` here.
 ALL_GROUPS = [
+    # First, so its fault-flag cases read SC40/SC43/SC44 before any other
+    # group can raise them on the same scan.
+    test_system.group,
     test_rung_semantics.group,
     test_math.group,
     test_drum.group,
@@ -52,7 +55,6 @@ ALL_GROUPS = [
     test_counters.group,
     test_numeric.group,
     test_timers.group,
-    test_system.group,
 ]
 
 

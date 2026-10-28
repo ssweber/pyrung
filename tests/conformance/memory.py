@@ -58,19 +58,16 @@ OWNED: Mapping[str, Mapping[str, range]] = {
     "drum": {"C": range(1901, 2001), "T": range(401, 501)},
     "out": {"C": range(1801, 1901), "T": range(301, 401)},
     "loop": {"C": range(1701, 1801), "T": range(201, 301), "CT": range(201, 251)},
-    # Reserved for groups not written yet.
     "timers": {"C": range(1401, 1501), "T": range(1, 101)},
     "counters": {"C": range(1301, 1401), "CT": range(1, 101)},
     "coils": {"C": range(1501, 1601)},
-    "numeric": {"DD": range(101, 201), "DF": range(101, 201)},
+    "numeric": {"DD": range(101, 201), "DF": range(101, 201), "DH": range(201, 301)},
     "text": {
         "TXT": range(1, 201),
         "DS": range(3901, 4001),
         "DD": range(301, 401),
         "DH": range(301, 401),
     },
-    "numeric": {"DD": range(101, 201), "DF": range(101, 201), "DH": range(201, 301)},
-    "text": {"TXT": range(1, 201), "DS": range(3901, 4001)},
     "block": {
         "C": range(1201, 1301),
         "DS": range(4001, 4201),
@@ -86,8 +83,6 @@ OWNED: Mapping[str, Mapping[str, range]] = {
         "DF": range(301, 401),
         "TXT": range(201, 301),
     },
-    "system": {"C": range(901, 1001), "T": range(101, 151)},
-    "search": {"DS": range(4201, 4401)},
     "system": {"C": range(901, 1001), "T": range(101, 151), "DD": range(901, 1001)},
 }
 

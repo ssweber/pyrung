@@ -64,9 +64,12 @@ RUN, but it says nothing about which scan, and it only means something on a
 CLICK that went to RUN after its program was loaded.
 
 The fault cases share their flags with every other group on the wire.  This
-group's subroutine is called last, so under pyrung's semantics no other group
-sees its faults (they are gone by the start of the next scan).  A group called
-before it that faults on one of its recorded scans would show up in Result1.
+group's subroutine is called first (``suite.ALL_GROUPS``), so at its first rung
+no instruction has run yet this scan and, under pyrung's semantics, Result1
+reads 0 whatever the other groups do; Result2 and Result3 are read before any
+other group runs.  Called later, a group that faulted on one of its recorded
+scans would show up in Result1.  The other groups' flag reads expect a flag on,
+so this group's faults can only make one of those pass, never fail.
 """
 
 from __future__ import annotations
