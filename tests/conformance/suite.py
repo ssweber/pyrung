@@ -30,6 +30,7 @@ from tests.conformance import (
     test_shift,
     test_search,
     test_timers,
+    test_system,
 )
 
 MANIFEST_PATH = Path(__file__).with_name("manifest.toml")
@@ -51,6 +52,7 @@ ALL_GROUPS = [
     test_counters.group,
     test_numeric.group,
     test_timers.group,
+    test_system.group,
 ]
 
 

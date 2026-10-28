@@ -87,6 +87,8 @@ OWNED: Mapping[str, Mapping[str, range]] = {
         "TXT": range(201, 301),
     },
     "system": {"C": range(901, 1001), "T": range(101, 151)},
+    "search": {"DS": range(4201, 4401)},
+    "system": {"C": range(901, 1001), "T": range(101, 151), "DD": range(901, 1001)},
 }
 
 #: Prefixes any case may read without owning them.

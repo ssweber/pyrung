@@ -217,3 +217,13 @@ text_windows = 12
 [groups.system]
 base = 2701 # Conf_System: DS2701..DS2900 (reserved)
 slots = 19
+
+[groups.system.cases]
+division_flag_clears_each_scan = 1
+out_of_range_flag_clears_each_scan = 2
+address_flag_clears_each_scan = 3
+scan_counter_steps_by_one = 4
+scan_clock_follows_counter = 5
+clock_bits_toggle_at_their_rate = 6
+mode_bits_on_in_run = 7
+rtc_seconds_advance = 8
