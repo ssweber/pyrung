@@ -77,7 +77,13 @@ OWNED: Mapping[str, Mapping[str, range]] = {
         "DH": range(101, 201),
     },
     "shift": {"C": range(1001, 1201)},
-    "search": {"DS": range(4201, 4401)},
+    "search": {
+        "C": range(851, 901),
+        "DS": range(4201, 4401),
+        "DD": range(401, 501),
+        "DF": range(301, 401),
+        "TXT": range(201, 301),
+    },
     "system": {"C": range(901, 1001), "T": range(101, 151)},
 }
 

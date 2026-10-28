@@ -142,8 +142,22 @@ reset_beats_clock = 5
 reset_swallows_the_edge = 6
 
 [groups.search]
-base = 2501 # Conf_Search: DS2501..DS2700 (reserved)
+base = 2501 # Conf_Search: DS2501..DS2700
 slots = 19
+
+[groups.search.cases]
+hit_returns_address = 1
+miss_writes_minus_one = 2
+operators_signed = 3
+range_ends_inclusive = 4
+false_rung_preserves = 5
+continuous_walks = 6
+continuous_exhausted = 7
+continuous_zero_restarts = 8
+plain_search_ignores_result = 9
+continuous_cursor_is_address = 10
+dint_real_tables = 11
+text_windows = 12
 
 [groups.system]
 base = 2701 # Conf_System: DS2701..DS2900 (reserved)
