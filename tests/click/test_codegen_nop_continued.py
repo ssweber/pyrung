@@ -4,12 +4,15 @@ A NOP sits alone on a bare wire in CLICK.  CLICK refuses a contact in front of
 NOP (C0003, "There is no Coil instruction in the rung"), and deletes a NOP row
 that shares its rung with another row, which is what an empty rung next to a
 ``.continued()`` rung exports as.  The exporter refuses both rather than write
-a rung CLICK would reject or quietly change.
+a rung CLICK would reject or quietly change, and the importer refuses a
+hand-written CSV with a NOP row beside another row.
 """
 
 from __future__ import annotations
 
+import csv
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -161,3 +164,13 @@ def test_shape_change_is_not_a_logic_change():
             copy(2, ds[2])
     code = strip_pyrung_boilerplate(ladder_to_pyrung(pyrung_to_ladder(logic, TagMap())))
     assert "with branch(C2):" in code
+
+
+def test_import_refuses_nop_beside_another_row(tmp_path: Path):
+    header = ["marker", *(f"{chr(65 + i)}" for i in range(26)), "AA", "AB", "AC", "AD", "AE", "AF"]
+    nop_row = ["R", *(["-"] * 31), "NOP"]
+    copy_row = ["", "C1", "C2", *(["-"] * 29), "copy(1,DS1)"]
+    with (tmp_path / "main.csv").open("w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerows([header, nop_row, copy_row])
+    with pytest.raises(ValueError, match="rung 1: NOP shares this rung with other outputs"):
+        ladder_to_pyrung(tmp_path / "main.csv")

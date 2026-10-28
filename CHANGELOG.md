@@ -50,7 +50,7 @@
 
 ### Fixes
 
-- CLICK ladder export refuses an empty rung with conditions (`with Rung(C1): pass`) and an empty rung that shares a CLICK rung with a `.continued()` rung, instead of writing a NOP that CLICK rejects (a contact in front of NOP) or deletes (a NOP row beside another row).
+- CLICK ladder export refuses an empty rung with conditions (`with Rung(C1): pass`) and an empty rung that shares a CLICK rung with a `.continued()` rung, instead of writing a NOP that CLICK rejects (a contact in front of NOP) or deletes (a NOP row beside another row); CLICK import refuses a CSV with a NOP row beside another row.
 - CLICK ladder export writes a one-register `fill`, `blockcopy`, `pack_*` or other range operand as `TXT12..TXT12`; it wrote a bare `TXT12`, which ClickNick's Guided Paste refused.
 - Generated CircuitPython code no longer fails to import when a program with a `calc()` is split into `code.py` and `pyrung_rt.py`, and a text literal copied into a TXT (`copy("ABC", txt[1])`) fills consecutive registers, as on the other backends, instead of stopping the scan with `ValueError`.
 - `cause()` explains a writer that feeds on its own output once instead of once per scan: an accumulator `calc(T + 3, T)` shows the rung that added and the rung that seeded `T` (a `copy(Setpoint, T)` on reset) instead of thousands of lines, or a `RecursionError` after about 500 scans, and two calcs feeding each other show one round.
