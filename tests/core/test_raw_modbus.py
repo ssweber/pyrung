@@ -100,6 +100,13 @@ class TestModbusAddress:
         with pytest.raises(AttributeError):
             addr.address = 200  # ty: ignore[invalid-assignment]
 
+    def test_notation_records_the_written_form_without_changing_identity(self):
+        assert ModbusAddress("64h") == ModbusAddress(400101) == ModbusAddress(100)
+        assert hash(ModbusAddress("64h")) == hash(ModbusAddress(100))
+        assert ModbusAddress("64h").notation == "hex"
+        assert ModbusAddress(400101).notation == "984"
+        assert ModbusAddress(100).notation == "raw"
+
 
 class TestModbusRtuTarget:
     def test_defaults(self):

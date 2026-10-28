@@ -46,7 +46,7 @@
 
 ### Fixes
 
-- CLICK import reads Send and Receive remote addresses written in MODBUS hex (`50Eh` with its register type), which it refused, and reads MODBUS 984 coil addresses (`000001`..`065536`) as coils instead of holding registers.
+- CLICK import reads Send and Receive remote addresses written in MODBUS hex (`50Eh` with its register type), which it refused, and reads MODBUS 984 coil addresses (`1`..`65536`) as coils instead of holding registers. CLICK export keeps a remote address in the form it was written: `ModbusAddress("50Eh")` exports as hex instead of turning into `401295`, so a hex program imported and exported again keeps its addressing.
 - `send()` and `receive()` status bits (`sending`/`receiving`, `success`, `error`, `exception_response`) are optional, as in CLICK: one left off runs on a hidden tag and CLICK export leaves it off, so CLICK programs that turn a status bit off import instead of failing.
 - CLICK import of a program with `raw(...)` instructions (Email, Home and other unsupported ones) imports `raw` in the generated code, which failed with a NameError.
 - CLICK import reads Copy's `to_text` options as CLICK writes them, including `termination_code=none` and `$XX`, which failed to import or run.

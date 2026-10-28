@@ -677,11 +677,19 @@ _984_BASES = {
 
 
 def _render_remote_start(instruction: object) -> str:
-    """Render remote_start as Click address string or ModbusAddress(...)."""
+    """Render remote_start as Click address string or ModbusAddress(...).
+
+    A hex-written address stays hex; anything else is MODBUS 984, written as
+    CLICK writes it (a coil is ``17``, not ``000017``).
+    """
     remote_address = getattr(instruction, "remote_address", None)
     if remote_address is not None:
-        base = _984_BASES[remote_address.register_type.value]
-        addr_984 = base + remote_address.address
+        register_type = remote_address.register_type.value
+        if remote_address.notation == "hex":
+            return (
+                f"ModbusAddress(address={remote_address.address:X}h,register_type={register_type})"
+            )
+        addr_984 = _984_BASES[register_type] + remote_address.address
         return f"ModbusAddress(address={addr_984})"
 
     bank = getattr(instruction, "bank", "")

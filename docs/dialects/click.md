@@ -590,7 +590,7 @@ receive(
 )
 ```
 
-`ModbusAddress` accepts MODBUS 984 addresses (e.g. `400001` for holding, `300001` for input, `100001` for discrete input) or hex strings with an `h` suffix (e.g. `"0h"`, `"FFFEh"`). For 984 addresses, the register type is inferred from the prefix. Hex addresses need an explicit `RegisterType` since the offset alone is ambiguous.
+`ModbusAddress` accepts MODBUS 984 addresses (e.g. `400001` for holding, `300001` for input, `100001` for discrete input) or hex strings with an `h` suffix (e.g. `"0h"`, `"FFFEh"`). For 984 addresses, the register type is inferred from the prefix. Hex addresses need an explicit `RegisterType` since the offset alone is ambiguous. CLICK export keeps the form you wrote: a hex address exports as MODBUS Hex, and a 984 address or a raw offset exports as MODBUS 984.
 
 `word_swap` controls how 32-bit values (DINT, REAL) are packed across register pairs. `False` (default) = high word first, `True` = low word first. Only relevant for 32-bit CLICK types (DD, DF, etc.).
 

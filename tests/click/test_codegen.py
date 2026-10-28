@@ -2534,7 +2534,7 @@ class TestRoundTrip:
         )
 
     @pytest.mark.parametrize(
-        ("csv_address", "python_address", "register_type", "raw", "csv_984"),
+        ("csv_address", "python_address", "register_type", "raw"),
         [
             # laddercodec writes CLICK's hex addressing with the register type it implies.
             (
@@ -2542,50 +2542,42 @@ class TestRoundTrip:
                 'ModbusAddress(address="50Eh", register_type=RegisterType.HOLDING)',
                 "HOLDING",
                 0x50E,
-                401295,
             ),
             (
                 "ModbusAddress(address=0h,register_type=coil)",
                 'ModbusAddress(address="0h", register_type=RegisterType.COIL)',
                 "COIL",
                 0,
-                1,
             ),
             (
                 "ModbusAddress(address=FFFEh,register_type=input)",
                 'ModbusAddress(address="FFFEh", register_type=RegisterType.INPUT)',
                 "INPUT",
                 0xFFFE,
-                365535,
             ),
             (
                 "ModbusAddress(address=10h,register_type=discrete_input)",
                 'ModbusAddress(address="10h", register_type=RegisterType.DISCRETE_INPUT)',
                 "DISCRETE_INPUT",
                 0x10,
-                100017,
             ),
-            # MODBUS 984 coils are 000001..065536.
+            # MODBUS 984 coils are 1..65536; CLICK writes them without padding.
             (
-                "ModbusAddress(address=000017)",
+                "ModbusAddress(address=17)",
                 "ModbusAddress(address=16, register_type=RegisterType.COIL)",
                 "COIL",
                 16,
-                17,
             ),
             (
                 "ModbusAddress(address=300005)",
                 "ModbusAddress(address=300005)",
                 "INPUT",
                 4,
-                300005,
             ),
         ],
     )
-    def test_receive_csv_modbus_address(
-        self, csv_address, python_address, register_type, raw, csv_984
-    ):
-        """CSV remote addresses import as the same Modbus register and export as 984."""
+    def test_receive_csv_modbus_address(self, csv_address, python_address, register_type, raw):
+        """CSV remote addresses import as the same Modbus register and export as written."""
         from pyrung.click.ladder.types import LadderBundle
 
         header = (
@@ -2618,7 +2610,7 @@ class TestRoundTrip:
         assert instruction.remote_address.address == raw
 
         rows = pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows
-        assert f"remote_start=ModbusAddress(address={csv_984})" in rows[1][-1]
+        assert f"remote_start={csv_address}," in rows[1][-1]
 
     @pytest.mark.parametrize(
         "csv_address",

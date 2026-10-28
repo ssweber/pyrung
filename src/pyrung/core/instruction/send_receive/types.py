@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Literal
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -55,15 +56,22 @@ class ModbusAddress:
     * **MODBUS 984** ``int`` — e.g. ``400001`` (prefix encodes register type)
     * **MODBUS Hex** ``str`` with ``h`` suffix — e.g. ``"0h"``, ``"FFFEh"``
     * **Raw** ``int`` 0–0xFFFE — low-level register offset
+
+    ``notation`` records which form was written, so CLICK export can keep it.
+    It takes no part in equality: ``"64h"`` and ``400101`` are the same register.
     """
 
     address: int
     register_type: RegisterType = RegisterType.HOLDING
+    notation: Literal["984", "hex", "raw"] = field(
+        default="raw", init=False, compare=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         addr = self.address
         # --- hex string with "h" suffix (e.g. "0h", "FFFEh") ---
         if isinstance(addr, str):
+            object.__setattr__(self, "notation", "hex")
             raw = addr.rstrip("hH")
             try:
                 addr = int(raw, 16)
@@ -79,6 +87,7 @@ class ModbusAddress:
         if result is not None:
             raw_addr, inferred_rt = result
             object.__setattr__(self, "address", raw_addr)
+            object.__setattr__(self, "notation", "984")
             if self.register_type != RegisterType.HOLDING:
                 # Caller explicitly set register_type — must match
                 if self.register_type != inferred_rt:

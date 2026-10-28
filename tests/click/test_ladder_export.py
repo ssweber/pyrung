@@ -2017,6 +2017,39 @@ def test_receive_rtu_modbus_address_token():
     )
 
 
+@pytest.mark.parametrize(
+    ("remote_start", "dest", "csv_address"),
+    [
+        ('ModbusAddress("50eh")', "DS1", "address=50Eh,register_type=holding"),
+        ('ModbusAddress("10h", RegisterType.COIL)', "C11", "address=10h,register_type=coil"),
+        ("ModbusAddress(300005)", "DS1", "address=300005"),
+        ("ModbusAddress(0x50E)", "DS1", "address=401295"),
+        ("ModbusAddress(16, RegisterType.COIL)", "C11", "address=17"),
+    ],
+    ids=["hex", "hex-coil", "984", "raw", "raw-coil"],
+)
+def test_receive_modbus_address_keeps_its_notation(remote_start, dest, csv_address):
+    """Hex stays hex; 984 and raw offsets export as MODBUS 984."""
+    _assert_export_main_rows(
+        f"""
+        with Program() as p:
+            with Rung(X1):
+                receive(
+                    target=ModbusTcpTarget("plc2", "192.168.1.2", device_id=1),
+                    remote_start={remote_start},
+                    dest={dest},
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
+                )
+        """,
+        f"""
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,receive(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),remote_start=ModbusAddress({csv_address}),dest={dest},receiving=C1,success=C2,error=C3,exception_response=DS2)
+        """,
+    )
+
+
 def test_send_block_range_token():
     _assert_export_main_rows(
         """
