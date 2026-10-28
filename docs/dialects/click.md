@@ -467,6 +467,8 @@ with rung():
 
 Both forms produce identical CSV output.
 
+A NOP has to sit alone on a bare wire, so the exporter refuses two shapes CLICK will not hold: an empty rung with conditions (`with Rung(C1): pass`; CLICK rejects a contact in front of NOP) and an empty rung next to a `.continued()` rung (they would share one CLICK rung, and CLICK deletes the NOP row).
+
 ## Loading PLC state
 
 Use CLICK Programming Software's **PLC > Read Data from PLC** to dump the live state of a CLICK PLC to CSV, then load that snapshot into a pyrung runner so it starts right where the PLC was.

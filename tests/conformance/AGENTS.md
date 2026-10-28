@@ -295,7 +295,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] last rung wins on shared coil (`rungs/last_rung_wins_shared_coil`)
 - [x] continued rungs share snapshot (`rungs/continued_shares_snapshot`)
 - [x] continued chain breaks on a normal rung (`rungs/continued_chain_breaks`)
-- [x] empty rung (NOP) executes and survives round-trip (`rungs/nop_rung_takes_snapshot`)
+- [ ] empty rung (NOP): nothing to observe. CLICK refuses a contact before NOP and deletes a NOP row that shares its rung (so `rungs/nop_rung_takes_snapshot` is retired); the exporter refuses both, and a bare NOP round-trips (`tests/click/test_codegen.py`)
 - [x] subroutines: same rules (every case runs inside its group's subroutine)
 - [ ] call into subroutine (not inside a group: CLICK has no nested calls)
 - [ ] subroutine memory writes visible to the caller after the call

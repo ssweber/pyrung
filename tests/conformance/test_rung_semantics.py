@@ -47,9 +47,6 @@ what that model would read instead:
 - ``continued_chain_breaks``: a continued rung after a normal rung still
   sharing the chain's first snapshot -> Result3 = 0; each wire solved fresh
   -> Result1 = 0, Result2 = 0.
-- ``nop_rung_takes_snapshot``: an empty rung that is not a rung (dropped, so
-  the continued wire after it shares the rung above) -> Result1 = 0.  Wires
-  solved fresh read 1 here too; the continued cases above catch that.
 
 On a CLICK a continued wire is one more row of the rung, starting at the
 rail, so the continued cases ask the branch cases' question of rows that
@@ -187,19 +184,6 @@ def prove_continued_chain_breaks(slot):
         copy(1, slot.Fired)
 
 
-def prove_nop_rung_takes_snapshot(slot):
-    # C1661 is set above an empty rung; a wire continuing the empty rung
-    # reads it.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
-        latch(c[1661])
-    with Rung(slot.Cmd != 0):
-        pass
-    with Rung(c[1661], slot.Cmd != 0, slot.Fired == 0).continued():
-        copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
-        copy(1, slot.Fired)
-
-
 def init_branch_sees_rung_entry(slot):
     reset(c[1601])
     reset(c[1602])
@@ -218,10 +202,6 @@ def init_continued_shares_snapshot(slot):
 def init_continued_chain_breaks(slot):
     reset(c[1651])
     reset(c[1652])
-
-
-def init_nop_rung_takes_snapshot(slot):
-    reset(c[1661])
 
 
 group = Group(
@@ -290,13 +270,6 @@ group = Group(
             ladder=prove_continued_chain_breaks,
             init=init_continued_chain_breaks,
             expect={"Result1": 1, "Result2": 1, "Result3": 1},
-        ),
-        case(
-            "An empty rung (NOP) is a rung: a wire continuing it reads memory as the "
-            "empty rung found it, and sees a bit set by the rung above (Result1 = 1)",
-            ladder=prove_nop_rung_takes_snapshot,
-            init=init_nop_rung_takes_snapshot,
-            expect={"Result1": 1},
         ),
     ],
 )

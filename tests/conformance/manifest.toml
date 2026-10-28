@@ -21,7 +21,7 @@ branch_and_with_parent = 6
 last_rung_wins_shared_coil = 7
 continued_shares_snapshot = 8
 continued_chain_breaks = 9
-nop_rung_takes_snapshot = 10
+nop_rung_takes_snapshot = 10 # retired: CLICK deletes a NOP row that shares its rung, so the shape cannot be built
 
 [groups.math]
 base = 301 # Conf_Math: DS301..DS500

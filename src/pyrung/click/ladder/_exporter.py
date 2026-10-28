@@ -154,6 +154,8 @@ class _LadderExporter(
                 if scope == "subroutine"
                 else f"main.rung[{rung_index}]"
             )
+            next_rung = rungs[rung_index + 1] if rung_index + 1 < len(rungs) else None
+            self._check_nop_alone(rung, next_rung, path=base_path)
             rendered = self._render_rung(rung, path=base_path)
             rows.extend(rendered)
             source = LadderSourceSpan(
@@ -287,6 +289,34 @@ class _LadderExporter(
             parts = ",".join(self._condition_signature(child) for child in condition.conditions)
             return f"OR({parts})"
         return self._condition_leaf_token(condition, path="normalize.condition")
+
+    def _check_nop_alone(self, rung: Rung, next_rung: Rung | None, *, path: str) -> None:
+        """Refuse the NOP shapes CLICK will not hold.
+
+        CLICK refuses a contact in front of NOP (C0003, no coil), and deletes a
+        NOP row that shares its rung with another row.
+        """
+        if rung._instructions or rung._branches:
+            return
+        if rung._conditions:
+            self._raise_issue(
+                path=f"{path}.condition",
+                message=(
+                    "CLICK refuses an empty rung with conditions: NOP must sit on a "
+                    "bare wire. Drop the conditions (they do nothing without an "
+                    "instruction) or give the rung an instruction."
+                ),
+                source=rung,
+            )
+        if rung._use_prior_snapshot or (next_rung is not None and next_rung._use_prior_snapshot):
+            self._raise_issue(
+                path=path,
+                message=(
+                    "CLICK deletes a NOP that shares its rung with a continued() rung. "
+                    "Drop the empty rung, or start the next rung without continued()."
+                ),
+                source=rung,
+            )
 
     def _render_rung(self, rung: Rung, *, path: str) -> list[tuple[str, ...]]:
         comment_rows = self._comment_rows(rung)
