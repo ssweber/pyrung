@@ -19,14 +19,11 @@ from dataclasses import replace
 import pytest
 
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
-from pyrung.click._topology import Series, make_compound
 from pyrung.click.codegen import analyzer, shaping
-from pyrung.click.codegen.analyzer import _analyze_rungs
-from pyrung.click.codegen.parser import _parse_rows
 from pyrung.click.ladder.types import LadderExportError
 from pyrung.core import Or, Program, Rung, Timer
 from pyrung.core.program import branch, call, copy, on_delay, out, subroutine
-from tests.click.helpers import exec_with_source, strip_pyrung_boilerplate
+from tests.click.helpers import round_trip_logic, strip_pyrung_boilerplate
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
@@ -164,38 +161,10 @@ def _build(shape: Callable[[], None]) -> Program:
     return logic
 
 
-def _logic(rows) -> list[tuple]:
-    """Per-output (AF, full condition, pins) of exported rows, NOPs included."""
-    outputs = []
-    for rung in _analyze_rungs(_parse_rows(rows)):
-        for instr in rung.instructions:
-            parts = [p for p in (rung.condition_tree, instr.branch_tree) if p is not None]
-            tree = make_compound(parts, Series) if parts else None
-            outputs.append(
-                (
-                    instr.af_token,
-                    shaping._tree_key(tree),
-                    tuple((p.name, p.arg, shaping._tree_key(p.condition_tree)) for p in instr.pins),
-                )
-            )
-    return outputs
-
-
-def _bundle_logic(bundle) -> dict[str, list[tuple]]:
-    scopes = {"main": _logic(bundle.main_rows)}
-    for name, rows in bundle.subroutine_rows:
-        scopes[name] = _logic(rows)
-    return scopes
-
-
 @pytest.mark.parametrize("name", list(SHAPES))
 def test_round_trip_keeps_logic(name: str):
-    original = pyrung_to_ladder(_build(SHAPES[name]), _tag_map())
-    code = ladder_to_pyrung(original)
-    ns: dict = {}
-    exec_with_source(code, ns)
-    reproduced = pyrung_to_ladder(ns["logic"], ns["mapping"])
-    assert _bundle_logic(reproduced) == _bundle_logic(original), code
+    code, before, after = round_trip_logic(_build(SHAPES[name]), _tag_map())
+    assert after == before, code
 
 
 def test_repro_imports_as_source_program():

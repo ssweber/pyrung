@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import math
 import re
-from typing import TYPE_CHECKING, Any, NoReturn
+import struct
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 from pyclickplc.banks import BANKS
 
+from pyrung.click.capabilities import HEX_CONSTANT_BANKS
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -126,6 +131,72 @@ class _TranslatorMixin:
 
     _tag_map: TagMap
 
+    # How integer constants are spelled right now (see _hex_constants):
+    # None = decimal; "wrap" = hex, masked to 16 bits like the Word write it
+    # feeds; "exact" = hex, and a value outside 0..FFFFh is an export error.
+    _hex_constant_mode: Literal["wrap", "exact"] | None = None
+
+    @contextmanager
+    def _hex_constants(self, mode: Literal["wrap", "exact"] | None) -> Iterator[None]:
+        """Spell integer constants rendered inside the block in CLICK hex.
+
+        CLICK reads digits typed into a hex context as hex and appends ``h``
+        (``255`` becomes ``255h`` = 0x255); a pasted rung gets no such fix-up,
+        so a bare decimal there is an error.  pyrung literals stay decimal, so
+        pyrung ``255`` exports as ``00FFh``.
+        """
+        previous = self._hex_constant_mode
+        self._hex_constant_mode = mode
+        try:
+            yield
+        finally:
+            self._hex_constant_mode = previous
+
+    @staticmethod
+    def _is_hex_bank_operand(rendered: str) -> bool:
+        """True when a rendered operand (``DH1``, ``DH1..DH4``, ``DH[DS1]``) is a hex bank."""
+        match = re.match(r"[A-Za-z]+", rendered)
+        return match is not None and match.group(0).upper() in HEX_CONSTANT_BANKS
+
+    def _render_number(self, value: int | float, *, path: str, source: Any) -> str:
+        """Spell an int or float constant the way CLICK writes it."""
+        mode = self._hex_constant_mode
+        if mode is not None:
+            if isinstance(value, float):
+                if not value.is_integer():
+                    self._raise_issue(
+                        path=path,
+                        message=(
+                            f"Constant {value!r} is not an integer; CLICK hex constants "
+                            "are whole 16-bit values (0000h..FFFFh)."
+                        ),
+                        source=source,
+                    )
+                value = int(value)
+            if mode == "exact" and not 0 <= value <= 0xFFFF:
+                self._raise_issue(
+                    path=path,
+                    message=(
+                        f"Constant {value} is outside 0..65535; CLICK hex constants "
+                        "are 0000h..FFFFh, so this compare cannot be written in CLICK."
+                    ),
+                    source=source,
+                )
+            return f"{value & 0xFFFF:04X}h"
+        if isinstance(value, float):
+            text = click_real_literal(value)
+            if text is None:
+                self._raise_issue(
+                    path=path,
+                    message=(
+                        f"REAL constant {value!r} is not representable in CLICK "
+                        "(finite values within +/-3.4028235E+38 only)."
+                    ),
+                    source=source,
+                )
+            return text
+        return str(value)
+
     if TYPE_CHECKING:
 
         def _fn(self, name: str, *args: str, **kwargs: str) -> str: ...
@@ -161,15 +232,17 @@ class _TranslatorMixin:
             )
         if isinstance(condition, IntTruthyCondition):
             left = self._resolve_tag(condition.tag, path=f"{path}.tag", source=condition)
-            return f"{left}!=0"
+            zero = "0000h" if self._is_hex_bank_operand(left) else "0"
+            return f"{left}!={zero}"
 
         if isinstance(condition, ExprCompare):
             left = self._render_expression(condition.left, path=f"{path}.left", source=condition)
-            right = self._render_expression(
-                condition.right,
-                path=f"{path}.right",
-                source=condition,
-            )
+            with self._hex_constants("exact" if self._is_hex_bank_operand(left) else None):
+                right = self._render_expression(
+                    condition.right,
+                    path=f"{path}.right",
+                    source=condition,
+                )
             return f"{left}{condition.symbol}{right}"
 
         compare_op = _COMPARE_OPS.get(type(condition))
@@ -186,11 +259,12 @@ class _TranslatorMixin:
                 ),
             ):
                 left = self._resolve_tag(condition.tag, path=f"{path}.left", source=condition)
-                right = self._render_condition_value(
-                    condition.value,
-                    path=f"{path}.right",
-                    source=condition,
-                )
+                with self._hex_constants("exact" if self._is_hex_bank_operand(left) else None):
+                    right = self._render_condition_value(
+                        condition.value,
+                        path=f"{path}.right",
+                        source=condition,
+                    )
                 return f"{left}{compare_op}{right}"
 
             if isinstance(
@@ -209,11 +283,12 @@ class _TranslatorMixin:
                     path=f"{path}.left",
                     source=condition,
                 )
-                right = self._render_condition_value(
-                    condition.value,
-                    path=f"{path}.right",
-                    source=condition,
-                )
+                with self._hex_constants("exact" if self._is_hex_bank_operand(left) else None):
+                    right = self._render_condition_value(
+                        condition.value,
+                        path=f"{path}.right",
+                        source=condition,
+                    )
                 return f"{left}{compare_op}{right}"
 
         self._raise_issue(
@@ -313,7 +388,7 @@ class _TranslatorMixin:
         if value is None:
             return "none"
         if isinstance(value, (int, float)):
-            return repr(value)
+            return self._render_number(value, path=path, source=source)
         if isinstance(value, tuple | list):
             return self._render_sequence(value, path=path, source=source)
         self._raise_issue(
@@ -431,6 +506,8 @@ class _TranslatorMixin:
         if isinstance(expression, LiteralExpr):
             if isinstance(expression.value, bool):
                 return _bool_bit(expression.value)
+            if isinstance(expression.value, (int, float)):
+                return self._render_number(expression.value, path=path, source=source)
             return repr(expression.value)
         if isinstance(expression, RandIntExpr):
             lo = self._render_expression(expression.lo, path=f"{path}.lo", source=source)
@@ -658,6 +735,43 @@ class _TranslatorMixin:
 
 
 # ---- String/render utilities ----
+def _float32(value: float) -> float | None:
+    """*value* rounded to float32, or None when it overflows float32."""
+    try:
+        return struct.unpack("<f", struct.pack("<f", value))[0]
+    except OverflowError:
+        return None
+
+
+def click_real_literal(value: float) -> str | None:
+    """CLICK's spelling of a REAL constant, or None when CLICK cannot hold it.
+
+    CLICK stores REALs as float32, so the digits are the shortest that read
+    back to the same float32.  Magnitudes Python writes positionally stay
+    positional (``3.14``, ``100.0``); the rest use CLICK's exponent form with
+    a decimal point and uppercase ``E`` (``3.4028235E+38``, ``1.0E-10``).
+    """
+    if not math.isfinite(value):
+        return None
+    f32 = _float32(value)
+    if f32 is None:
+        return None
+    if f32 == 0:
+        return "0.0"
+    digits = repr(f32)
+    for precision in range(1, 10):
+        digits = f"{f32:.{precision - 1}e}"
+        if _float32(float(digits)) == f32:
+            break
+    mantissa, exponent_text = digits.split("e")
+    exponent = int(exponent_text)
+    if -4 <= exponent < 16:
+        return repr(float(digits))
+    if "." not in mantissa:
+        mantissa += ".0"
+    return f"{mantissa}E{'+' if exponent >= 0 else '-'}{abs(exponent):02d}"
+
+
 def _quote(value: str) -> str:
     escaped = value.replace('"', '""')
     return f'"{escaped}"'

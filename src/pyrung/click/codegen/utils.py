@@ -68,6 +68,22 @@ _CLICK_PI_RE = re.compile(r"\bPI\b")
 # Used as fullmatch in _sub_operand (standalone) and .sub() in expressions.
 _CLICK_HEX_RE = re.compile(r"\b([0-9A-Fa-f]+)h\b")
 _MODBUS_ADDRESS_RE = re.compile(r"ModbusAddress\(([^()]*)\)")
+# A bare digit run that is not part of an address, a hex literal or a decimal.
+_BARE_DIGITS_RE = re.compile(r"(?<![0-9A-Za-z_.])(\d+)(?![0-9A-Za-z_.])")
+
+
+def _hex_math_bare_numbers(formula: str) -> str:
+    """Read bare digits in a hex-mode Math formula as hex, as CLICK does.
+
+    CLICK's Math dialog in hex mode treats typed digits as hex and appends
+    ``h`` (``DH1 + 255`` is stored as ``255h`` = 0x255).  Its own exports
+    always carry the ``h``; this covers hand-written or legacy CSV.
+    """
+    if '"' in formula:
+        return formula
+    return _BARE_DIGITS_RE.sub(lambda m: f"{m.group(1)}h", formula)
+
+
 _MODBUS_984_RE = re.compile(r"\d+")
 _MODBUS_HEX_RE = re.compile(r"[0-9A-Fa-f]+[hH]")
 _MODBUS_984_COIL_MAX = 65536

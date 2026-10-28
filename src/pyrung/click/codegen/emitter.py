@@ -46,6 +46,7 @@ from pyrung.click.codegen.utils import (
     _CLICK_HEX_RE,
     _CLICK_PI_RE,
     _EXPR_FUNC_IMPORT_NAMES,
+    _hex_math_bare_numbers,
     _parse_af_args,
     _parse_operand_prefix,
     _sub_operand,
@@ -1354,6 +1355,9 @@ def _render_af_token(
         return f"{py_func}()"
 
     args, kwargs = _parse_af_args(args_str)
+
+    if func_name == "math" and args and ("mode", "hex") in kwargs:
+        args = [_hex_math_bare_numbers(args[0]), *args[1:]]
 
     # search("cond",value=V,search_range=R,...) → search(R <op> V, ...)
     if func_name == "search":
