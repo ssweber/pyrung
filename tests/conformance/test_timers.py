@@ -32,8 +32,11 @@ tells pyrung's model from which other model:
   reset scan reads Done off even with a 0 ms preset and the rung true.  A reset
   that then re-judges Done (Acc 0 >= preset 0) reads Result1 = 0; one that also
   counts the enabled rung's time on the reset scan reads Result4 = 0.
-- ``tof_never_enabled``: a TOF that counts whenever its rung is false, enabled
-  or not, reads Result4 = 0 (its TD is not 0).
+- ``tof_never_enabled``: two TOFs with 1000 ms presets, one whose rung is true
+  on scans 1..2 and one whose rung is never true.  A TOF that times whenever
+  its rung is false, enabled or not, reads Result3 > 0; one that starts done,
+  as if it had been enabled, reads Result1 = 8; one done only while its rung
+  is true (no off-delay) reads Result2 = 2.
 - ``tof_times_only_when_false``: a TOF that counts while the rung is true
   reads Result1 > 0; one whose Done is judged before its Acc moves (Done a scan
   late) reads Result2 = 1; one that drops Done at once reads Result3 = 0; one
@@ -125,15 +128,26 @@ def prove_rton_reset_gap(slot):
     done(slot)
 
 
+#: The ``tof_never_enabled`` presets: far longer than the window takes, so the
+#: TOF that was enabled is still timing (and done) when the window ends.
+TOF_LONG_PRESET = 1000
+
+
 def prove_tof_never_enabled(slot):
-    # Scratch is 1 or more on every scan Cmd != 0, so the TOF's rung is never true.
-    tof = ClickTimer(41)
+    # T41's rung is true on scans 1..2, then false.  Scratch is 1 or more on
+    # every scan Cmd != 0, so T42's rung is never true.
+    dropped, never = ClickTimer(41), ClickTimer(42)
     count_scans(slot)
+    with Rung(slot.Cmd != 0, slot.Scratch <= 2):
+        off_delay(dropped, TOF_LONG_PRESET)
     with Rung(slot.Cmd != 0, slot.Scratch == 0):
-        off_delay(tof, 100)
-    trace(slot, tof.Done)
-    with Rung(slot.Cmd != 0, slot.Scratch == WINDOW, tof.Acc == 0):
-        copy(1, slot.Result4)
+        off_delay(never, TOF_LONG_PRESET)
+    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, never.Done):
+        calc(slot.Result1 + 1, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, dropped.Done):
+        calc(slot.Result2 + 1, slot.Result2)
+    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, never.Acc != 0):
+        calc(slot.Result3 + 1, slot.Result3)
     done(slot)
 
 
@@ -288,11 +302,14 @@ group = Group(
             scans=SCANS,
         ),
         case(
-            "A TOF whose rung has never been true is not done and does not time: Done is "
-            "on for 0 scans (Result1 = 0, Result2 = 0, Result3 = 0) and Acc reads 0 "
-            "(Result4 = 1)",
+            "A TOF whose rung has never been true is not done and does not time, unlike "
+            "one whose rung was true and fell: with 1000 ms presets, the never-enabled "
+            "TOF is done for 0 of 8 scans (Result1 = 0) with Acc 0 on all of them "
+            "(Result3 = 0), while the one true on scans 1..2 is done on all 8 "
+            "(Result2 = 8)",
             ladder=prove_tof_never_enabled,
-            expect={"Result1": 0, "Result2": 0, "Result3": 0, "Result4": 1},
+            keep=[ClickTimer(41).Done, ClickTimer(41).Acc],
+            expect={"Result1": 0, "Result2": 8, "Result3": 0},
             scans=SCANS,
         ),
         case(

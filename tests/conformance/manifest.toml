@@ -13,7 +13,7 @@ slots = 19
 
 [groups.rungs.cases]
 memory_is_immediate = 1
-source_order = 2
+source_order = 2 # retired: no model read it differently; branch_sees_rung_entry asks it
 global_mutation = 3
 branch_sees_rung_entry = 4
 nested_branches_see_rung_entry = 5

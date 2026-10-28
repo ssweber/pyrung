@@ -34,7 +34,7 @@ def test_rungs():
 ```
 
 - **Group**: a named set of cases, one per case module (`group = Group(...)`). The name is snake_case; the subroutine is `Conf_<Name>` (`rung_order` -> `Conf_RungOrder`) and slot nicknames start with `<Name>`. CLICK nicknames are at most 24 characters and `<Name><slot>_ErrorCode` must fit, so keep `<Name>` to 12 characters (build fails otherwise). `suite.py` lists every group in `ALL_GROUPS`; a new case module adds its `group` there.
-- **Case id**: the stable key of the case's slot in the manifest. It defaults to the ladder function's name without a leading `_` or `prove_` (`prove_source_order` -> `source_order`); pass `id=` to pin it. Renaming the ladder function renames the id, and the build then asks for a manifest entry -- pin `id=` if you rename.
+- **Case id**: the stable key of the case's slot in the manifest. It defaults to the ladder function's name without a leading `_` or `prove_` (`prove_source_order` -> `source_order`); pass `id=` to pin it. Renaming the ladder function renames the id, and the build then asks for a manifest entry -- pin `id=` if you rename. To change a case, rewrite it in place (same id, same slot) while its id still names the question it asks; the group goes stale until it is pushed again, as for any edit. When the id no longer fits, or the case asks nothing (no model reads it differently), retire it: drop the case and leave its manifest line, commented `# retired: why`, so the slot is never reused; a replacement takes a new id at the next index.
 - **confirmed**: `case(..., confirmed=False)` by default. Flip it to `True` once the case has passed against a real CLICK. The report counts unconfirmed cases.
 - **Comment**: generated, never written by hand. Each case's first rung carries `Case <group>/<id>`, the sentence, and `Expect: Result1 = 5, Result2 in 1..6` (`case_comment()` in `src/pyrung/conformance/_ladder.py`), so the ladder in CLICK documents itself and Python stays the single source. The comment is part of the exported ladder, so editing a sentence or an expectation changes the group hash: the group reports stale until its rungs are pushed again, and Preview Changes shows the comment as a diff.
 
@@ -148,9 +148,9 @@ Unconditional rungs (an output wired straight to the rail, as in main's `copy`/`
 
 ## Raw memory
 
-A slot is DS and comes from the manifest. Everything else a case touches -- C bits, timers, counters, staged DS/DD/DF/DH (a contiguous source range for `AVG`, a search table), TXT -- is a raw CLICK address, and nothing allocates it: a case picks addresses inside its group's ranges in `OWNED` (`tests/conformance/memory.py`). Import the banks (`c`, `t`, `td`, `ct`, `ctd`, `ds`, `dd`, `df`, `dh`, `txt`, `sc`, `sd`) and the `ClickTimer(n)` / `ClickCounter(n)` handles (`T<n>`/`TD<n>`, `CT<n>`/`CTD<n>` as `.Done`/`.Acc`) from there too.
+A slot is DS and comes from the manifest. Everything else a case touches -- C bits, timers, counters, staged DS/DD/DF/DH (a contiguous source range for `AVG`, a search table), TXT -- is a raw CLICK address, and nothing allocates it: a case picks addresses inside its group's ranges in `OWNED` (`tests/conformance/memory.py`). Import the banks (`c`, `t`, `td`, `ct`, `ctd`, `ds`, `dd`, `df`, `dh`, `txt`) and the `ClickTimer(n)` / `ClickCounter(n)` handles (`T<n>`/`TD<n>`, `CT<n>`/`CTD<n>` as `.Done`/`.Acc`) from there too.
 
-A timer number claims both `T<n>` and `TD<n>`; a counter number both `CT<n>` and `CTD<n>`. Raw DS lives in the staging area DS3901..DS4500 (`STAGING_DS`), which no manifest block may reach. SC and SD belong to no one: any case may read them. `OWNED` is the only record of who owns what; a new group takes its ranges there before its first case. Within a group, each case takes its own run of 10 (the `out` cases use C1801.., C1811.., C1821..), so a case can grow without moving its neighbours.
+A timer number claims both `T<n>` and `TD<n>`; a counter number both `CT<n>` and `CTD<n>`. Raw DS lives in the staging area DS3901..DS4500 (`STAGING_DS`), which no manifest block may reach. System points (SC/SD) are not raw memory: read them as `system.*` tags (`system.fault.out_of_range` is SC43, `system.sys.mode_run` SC11), which the runtime drives and the exporter maps to the CLICK address. A raw `sc[43]` is a plain tag nothing writes (it reads 0 in-process and on the sim, and the exporter refuses it beside the system point), so `memory.py` does not export `sc`/`sd` and the build check reports a case that uses one. `OWNED` is the only record of who owns what; a new group takes its ranges there before its first case. Within a group, each case takes its own run of 10 (the `out` cases use C1801.., C1811.., C1821..), so a case can grow without moving its neighbours.
 
 `test_build.py` checks it: every tag a case touches (its `footprint`, outside its slot) lies in its group's ranges (`coils/x: T5 is outside the group's memory (C1501..C1600; ...)`), the ranges are disjoint and inside CLICK's banks, and no manifest block reaches the staging area. A case that strays fails in its own module's run, not when another group lands.
 
@@ -252,142 +252,147 @@ If you forget step 3, that group reports `Conf_<Group> is stale: repush` and its
 
 ## Coverage checklist
 
-Each line becomes a sentence, a ladder, and a row in the report.
+Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines name the cases that cover them (`group/id`); `[ ]` lines are still open, most of them waiting on a harness that does not exist yet (mode switching for STOP->RUN, a subroutine home called from main, send/receive).
 
 ### Scan
-- patch values consumed after one scan
-- patch applied before logic, on the same scan
-- forces persist across scans
-- fault flags (SC40/SC43/SC44) auto-clear at scan start
-- fault flags auto-clear only if NOT retriggered same scan
-- first_scan true once, on scan 0
-- first_scan re-triggers on STOP->RUN
-- scan clock initial state is False on first scan
-- scan_counter resets on STOP->RUN
-- clock toggles fire at their nominal rate under fixed dt
-- mode_run readable from ladder, false in STOP
-- RTC advances with sim time after set_rtc
-- STOP->RUN clears scan_id and scan_counter
+- [ ] patch values consumed after one scan
+- [ ] patch applied before logic, on the same scan
+- [ ] forces persist across scans
+- [x] fault flags (SC40/SC43/SC44) auto-clear at scan start (`system/division_flag_clears_each_scan`, `system/out_of_range_flag_clears_each_scan`, `system/address_flag_clears_each_scan`)
+- [x] fault flags auto-clear only if NOT retriggered same scan (the same three)
+- [ ] first_scan true once, on scan 0
+- [ ] first_scan re-triggers on STOP->RUN
+- [x] scan clock initial state is False on first scan (`system/scan_clock_follows_counter`)
+- [x] scan_counter steps by one every scan (`system/scan_counter_steps_by_one`)
+- [ ] scan_counter resets on STOP->RUN
+- [x] clock toggles fire at their nominal rate (`system/clock_bits_toggle_at_their_rate`)
+- [x] mode_run readable from ladder (`system/mode_bits_on_in_run`), false in STOP (read by the harness: `stop_*`)
+- [x] RTC advances while the ladder runs (`system/rtc_seconds_advance`)
+- [ ] RTC set from the ladder (SC53/SC55) applies
+- [ ] STOP->RUN clears scan_id and scan_counter
 
 ### Rung semantics
-- rung snapshot on entry
-- conditions before instructions
-- source order within a rung
-- branches AND with parent
-- nested branches all see the same rung-entry snapshot
-- last rung wins on shared coil
-- continued rungs share snapshot
-- continued chain breaks on a normal rung
-- empty rung (NOP) executes and survives round-trip
-- subroutines: same rules
-- call into subroutine (not inside a group: CLICK has no nested calls)
-- subroutine memory writes visible immediately
-- forloop runs N times in one scan
-- forloop body sees its own prior-iteration writes
-- forloop loop.idx indirect addressing
-- forloop dynamic count == 0: pin down whether Click executes once, skips, or faults
-- forloop (`loop` group, F1-F14): a false For rung drives body coils off (F2); count 0/-1 runs once (F3); count read once (F4); body-rung contacts per iteration (F5); edges compare with the previous scan (F6); timers accumulate per iteration (F7); counters count per iteration (F8); Break leaves the innermost loop (F9) after the earlier body rungs (F10); Continue skips the rest of one iteration (F11, F12); a Break contact sees same-iteration writes (F13); a one-shot fires once per scan (F14)
-- forloop inner one-shot: does CLICK reject it (C0111) or ignore it (F15); a loop in a called subroutine counts toward depth 3 (F16, needs the subroutine home)
+- [x] rung snapshot on entry (`rungs/branch_sees_rung_entry`)
+- [x] conditions before instructions (`rungs/branch_sees_rung_entry`)
+- [x] source order within a rung (`rungs/memory_is_immediate`)
+- [x] branches AND with parent (`rungs/branch_and_with_parent`)
+- [x] nested branches all see the same rung-entry snapshot (`rungs/nested_branches_see_rung_entry`)
+- [x] last rung wins on shared coil (`rungs/last_rung_wins_shared_coil`)
+- [x] continued rungs share snapshot (`rungs/continued_shares_snapshot`)
+- [x] continued chain breaks on a normal rung (`rungs/continued_chain_breaks`)
+- [x] empty rung (NOP) executes and survives round-trip (`rungs/nop_rung_takes_snapshot`)
+- [x] subroutines: same rules (every case runs inside its group's subroutine)
+- [ ] call into subroutine (not inside a group: CLICK has no nested calls)
+- [ ] subroutine memory writes visible to the caller after the call
+- [x] forloop runs N times in one scan (`loop/loop_runs_n_times`)
+- [x] forloop body sees its own prior-iteration writes (`loop/loop_runs_n_times`)
+- [ ] forloop loop.idx indirect addressing
+- [x] forloop dynamic count == 0: pyrung runs the body once (`loop/zero_or_negative_count_runs_once`)
+- [x] forloop (`loop` group, F1-F14): a false For rung drives body coils off (F2); count 0/-1 runs once (F3); count read once (F4); body-rung contacts per iteration (F5); edges compare with the previous scan (F6); timers accumulate per iteration (F7); counters count per iteration (F8); Break leaves the innermost loop (F9) after the earlier body rungs (F10); Continue skips the rest of one iteration (F11, F12); a Break contact sees same-iteration writes (F13); a one-shot fires once per scan (F14)
+- [ ] forloop inner one-shot: does CLICK reject it (C0111) or ignore it (F15); a loop in a called subroutine counts toward depth 3 (F16, needs the subroutine home)
 
 ### Memory
-- rung N+1 sees rung N's writes, same scan
-- Bool default False
-- Int default 0
-- per-slot default override
-- default_factory by address
-- Bool non-retentive by default
-- Int / Dint / Real retentive by default
-- retentive survives STOP->RUN
-- non-retentive resets on STOP->RUN
-- both reset on cold (no battery) reboot
+- [x] rung N+1 sees rung N's writes, same scan (`rungs/global_mutation`)
+- [x] Bool default False (`rungs/branch_and_with_parent`)
+- [ ] Int default 0
+- [ ] per-slot default override
+- [ ] default_factory by address
+- [ ] Bool non-retentive by default
+- [ ] Int / Dint / Real retentive by default
+- [ ] retentive survives STOP->RUN
+- [ ] non-retentive resets on STOP->RUN
+- [ ] both reset on cold (no battery) reboot
 
 ### Numerical handling
-- Int wrap at 32767
-- Dint wrap at 2^31
-- Word wrap at 65535
-- Real precision (32-bit)
-- division by zero -> 0 + fault
-- non-finite float (NaN, +/-Inf) -> 0 + fault
-- copy clamps, calc wraps
-- copy argument order is source -> dest
-- calc mode inference (hex vs decimal)
-- calc WORD-only infers hex mode
-- calc mixing WORD and non-WORD: validator finding CLK_CALC_MODE_MIXED
-- pyrung uses Python-precision intermediates, Click uses 32-bit
-- agree when intermediates fit in 32 bits
-- disagree when intermediates exceed 32 bits — measured by harness, not assumed
+- [x] Int wrap at 32767 (`numeric/int_calc_wraps`)
+- [x] Dint wrap at 2^31 (`numeric/dint_calc_wraps`)
+- [x] Word wrap at 65535 (`numeric/word_calc_wraps`)
+- [x] Real precision: pyrung keeps 64 bits, CLICK 32 (`numeric/real_is_64_bit_in_pyrung`, expected to fail on a CLICK: a documented deviation)
+- [x] Real range: an overflow saturates at +/-3.4028235E+38 with SC43 (`numeric/real_overflow_stays_finite`)
+- [x] division by zero -> 0 + fault (`numeric/div_by_zero`)
+- [x] non-finite float (NaN, +/-Inf) -> 0 + fault (`numeric/real_div_by_zero`)
+- [x] math domain error (sqrt, ln/log, asin/acos) -> 0 + SC46, STOP with SC50 on (`stop_sqrt`, `stop_ln0`, `stop_ln_neg`, `stop_log0`, `stop_log_neg`, `stop_asin`, `stop_acos`; one per run)
+- [x] copy clamps, calc wraps (`numeric/copy_clamps_calc_wraps`)
+- [x] copy argument order is source -> dest (`numeric/copy_source_to_dest`)
+- [x] calc mode inference (hex vs decimal) (`numeric/word_math_unsigned`)
+- [x] calc WORD-only infers hex mode (`numeric/word_math_unsigned`, `numeric/hex_literal_is_decimal`)
+- [ ] calc mixing WORD and non-WORD: validator finding CLK_CALC_MODE_MIXED (a static finding, not a ladder case)
+- [x] pyrung uses Python-precision intermediates, Click uses 32-bit (`numeric/intermediate_exceeds_32_bits`)
+- [x] agree when intermediates fit in 32 bits (`numeric/intermediate_fits_32_bits`)
+- [x] disagree when intermediates exceed 32 bits -- measured by harness, not assumed (`numeric/intermediate_exceeds_32_bits`)
 
 ### Per instruction
-- out follows rung
-- out oneshot fires for one scan only (True on rising edge, False while rung stays True)
-- out oneshot re-fires after rung goes False then True again
-- rise / fall fire one scan
-- rise/fall see the value carried from end of previous scan
-- latch / reset stickiness
-- toggle flips once per OFF->ON and holds (O1)
-- debounce TD keeps counting past its preset while steady (O2); a bounce restarts the timing side (O3)
-- flasher rung-false clears both TDs; the restart is a full on phase (O4)
-- timed (not maintained) needs a fresh edge after timing out (O5)
-- Out coil variants set the phase timer's T bit (O6)
-- TON auto-reset, drops Acc and Done together when rung goes false
-- TON enable: no immediate tick on the scan that enables — Done stays whatever it was before until the next tick
-- RTON holds Acc and Done across rung-false
-- RTON reset sets Acc=0, Done=False, frac=0 — same one-scan gap as counter reset
-- TOF never-enabled: Done stays False when rung has never been True
-- TOF: Done True and Acc 0 while rung True; Acc counts only when rung false
-- TOF enable sets Done=True, Acc=0, frac=0 in a single atomic write — no transition scan where Done is stale
-- TOF Done flips False when Acc reaches preset
-- timer Acc clamp at 32767
-- timer Acc continues past preset up to 32767 clamp
-- timer fractional ms accumulation across scans
-- timer resumes if preset raised mid-count
-- timer fires immediately if preset lowered below Acc
-- timer preset resolved dynamically each tick (same as counter — no stale window)
-- counter increments every scan the rung is true (not per edge)
-- counter resumes if preset raised mid-count
-- counter survives rung going false (no auto-reset)
-- counter Acc clamp at Dint range
-- counter reset sets Done=False, Acc=0 and returns — Done is NOT recomputed against preset until the next counting scan
-- counter reset with preset<=0: Done stays False for one scan even though Acc>=preset
-- counter preset resolved dynamically each scan (no stale window — preset change takes effect on the very next scan that hits the counting branch)
-- count_up edge vs level
-- count_down starts at 0, counts negative
-- copy converters: to_value, to_ascii, to_text, to_binary
-- to_value vs to_ascii on the same CHAR ('5' -> 5 vs 53)
-- to_ascii of default/null TXT ($00) writes 0 to destination (not a no-op)
-- to_text suppress_zero default vs fixed-width
-- to_text with termination_code appends one char after the digits
-- copy literal string fans out across consecutive txt slots
-- blockcopy only supports to_value / to_ascii converters
-- blockcopy length match
-- fill writes constant
-- pack_bits / unpack_to_bits
-- pack_bits into REAL stores the raw IEEE-754 bit pattern
-- pack_words / unpack_to_words
-- pack_words first source is the low word
-- pack_text into WORD parses hex; into INT/DINT parses signed decimal
-- pack_text on numeric with leading whitespace faults unless allow_whitespace
-- copy/fill executes every scan while rung true (not edge-triggered)
-- shift register direction by range order
-- shift register: reset takes precedence over clock if both true same scan
-- shift register: rung power is the shift-in value
-- drum events are edge-based
-- time & event drum events are levels: one already on ends the step when its time is up (D3)
-- time & event step keeps timing past its duration while it waits for the event (D1)
-- drum pause/reset/jump precedence order
-- drum reset sets step=1, completion=False, then applies outputs for step 1 — no stale output scan
-- drum jump/jog do NOT clear completion flag — only reset does
-- drum jump/jog are edge-triggered (no double-fire on sustained condition)
-- drum time accumulator resets on step transition (jump, jog, advance, reset)
-- drum event_ready re-evaluates on step change (new step's event may already be True)
-- drum step auto-corrects to 1 if current_step tag holds an invalid value
-- search hit / miss / continuous
-- search returns 1-based address, -1 on miss
-- search continuous resumes from last position; result=0 restarts
-- search rung false preserves result and found
-- send / receive status tags
-- send/receive success and error pulse for one scan
-- send/receive status tags reset to defaults when rung goes false
-- send/receive values applied atomically
-- send sparse addresses split into multiple writes
-- exception_response holds last code until next transaction
+- [x] out follows rung (`coils/out_follows_rung`)
+- [x] out oneshot fires for one scan only (`coils/out_oneshot_fires_one_scan`)
+- [x] out oneshot re-fires after rung goes False then True again (`coils/out_oneshot_refires`)
+- [x] rise / fall fire one scan (`coils/rise_fall_fire_one_scan`)
+- [x] rise/fall see the value carried from end of previous scan (`coils/edge_sees_previous_scan_end`, `coils/edge_before_its_writer`)
+- [x] latch / reset stickiness (`coils/latch_reset_sticky`)
+- [x] toggle flips once per OFF->ON and holds (O1) (`out/toggle_flips_once_per_edge`)
+- [x] debounce TD keeps counting past its preset while steady (O2); a bounce restarts the timing side (O3) (`out/debounce_td_keeps_counting`, `out/debounce_bounce_restarts_on_side`)
+- [x] flasher rung-false clears both TDs; the restart is a full on phase (O4) (`out/flasher_restarts_with_on_phase`)
+- [x] timed (not maintained) needs a fresh edge after timing out (O5) (`out/timed_needs_fresh_edge`)
+- [x] Out coil variants set the phase timer's T bit (O6) (`out/out_coil_sets_timer_done`)
+- [x] TON auto-reset, drops Acc and Done together when rung goes false (`timers/ton_auto_reset`)
+- [x] TON enable: the enabling scan's dt counts and Done is judged on that scan, so a 0 ms preset is done on the scan its rung goes true (hardware-verified per `tests/core/test_timers.py`; `timers/ton_done_on_enabling_scan`)
+- [x] RTON holds Acc and Done across rung-false (`timers/rton_holds_across_rung_false`)
+- [x] RTON reset sets Acc=0, Done=False, frac=0 and does not judge Done again on the reset scan (`timers/rton_reset_gap`)
+- [x] TOF never-enabled: Done stays False and Acc 0 while the rung has never been True, unlike a TOF whose rung fell (`timers/tof_never_enabled`)
+- [x] TOF: Done True and Acc 0 while rung True; Acc counts only when rung false (`timers/tof_times_only_when_false`)
+- [x] TOF enable sets Done=True, Acc=0, frac=0 in a single atomic write -- no transition scan where Done is stale (`timers/tof_enable_atomic`)
+- [x] TOF Done flips False when Acc reaches preset (`timers/tof_times_only_when_false`)
+- [x] timer Acc clamp at 32767 (`timers/acc_clamps_at_32767`, in-process only)
+- [x] timer Acc continues past preset up to 32767 clamp (`timers/acc_clamps_at_32767`, `timers/tof_times_only_when_false`)
+- [x] timer fractional ms accumulation across scans (`timers/fractional_accumulation`)
+- [x] timer resumes if preset raised mid-count (`timers/preset_raised_resumes`)
+- [x] timer fires immediately if preset lowered below Acc (`timers/preset_lowered_fires_at_once`)
+- [x] timer preset resolved dynamically each tick (the two preset cases above)
+- [x] counter increments every scan the rung is true (not per edge) (`counters/level_vs_edge`)
+- [x] counter resumes if preset raised mid-count (`counters/preset_raised_resumes`)
+- [x] counter survives rung going false (no auto-reset) (`counters/survives_rung_false`)
+- [x] counter Acc clamp at Dint range (`counters/acc_clamps_at_dint_range`)
+- [x] counter reset sets Done=False, Acc=0 and returns; Done is recomputed against the preset on the very next scan, counting or not, as CLICK's help says of a down counter ("CT1 is turned on immediately after [Reset] is turned off", `clickplc_reference/counters.md`) (`counters/reset_zero_preset`)
+- [x] counter preset lowered while idle: Done turns on without a count (undocumented by CLICK; `counters/preset_lowered_while_idle` is the probe)
+- [x] counter reset with preset<=0: Done stays False for one scan even though Acc>=preset (`counters/reset_zero_preset`)
+- [x] counter preset resolved dynamically each scan (`counters/preset_raised_resumes`, `counters/preset_lowered_while_idle`)
+- [x] count_up edge vs level (`counters/level_vs_edge`)
+- [x] count_down starts at 0, counts negative (`counters/count_down_negative`)
+- [x] copy converters: to_value, to_ascii, to_text, to_binary (`text/value_vs_ascii`, `text/to_text_suppress`, `text/to_binary`)
+- [x] to_value vs to_ascii on the same CHAR ('5' -> 5 vs 53) (`text/value_vs_ascii`)
+- [x] to_ascii of default/null TXT ($00) writes 0 to destination (not a no-op) (`text/null_ascii`)
+- [x] to_text suppress_zero default vs fixed-width (`text/to_text_suppress`, `text/to_text_fixed`, `text/to_text_fixed_negative`)
+- [x] to_text with termination_code appends one char after the digits (`text/to_text_termination`)
+- [x] copy literal string fans out across consecutive txt slots (`text/literal_fanout`)
+- [ ] blockcopy only supports to_value / to_ascii converters
+- [x] blockcopy length match (`block/blockcopy_range`)
+- [x] fill writes constant (`block/fill_constant`)
+- [x] pack_bits / unpack_to_bits (`block/pack_bits_int`, `block/unpack_bits`)
+- [x] pack_bits into REAL stores the raw IEEE-754 bit pattern (`block/pack_bits_real`)
+- [x] pack_words / unpack_to_words (`block/pack_words`, `block/unpack_words`)
+- [x] pack_words first source is the low word (`block/pack_words`)
+- [x] pack_text into WORD parses hex; into INT/DINT parses signed decimal (`text/pack_text_word_hex`, `text/pack_text_int`, `text/pack_text_dint`)
+- [x] pack_text on numeric with leading whitespace faults unless allow_whitespace (`text/pack_text_whitespace`)
+- [x] copy/fill executes every scan while rung true (not edge-triggered) (`block/every_scan`)
+- [x] shift register direction by range order (`shift/forward_range_shifts_up`; `shift/reversed_range_shifts_down` in-process only)
+- [x] shift register: reset takes precedence over clock if both true same scan (`shift/reset_beats_clock`, `shift/reset_swallows_the_edge`)
+- [x] shift register: rung power is the shift-in value (`shift/data_is_the_rung_at_the_edge`)
+- [x] drum events are edge-based (`drum/events_are_edges`)
+- [x] time & event drum events are levels: one already on ends the step when its time is up (D3) (`drum/te_level_event_already_on`)
+- [x] time & event step keeps timing past its duration while it waits for the event (D1) (`drum/te_acc_counts_while_waiting`)
+- [x] drum pause/reset/jump precedence order (`drum/reset_jump_jog_order`, `drum/pause_holds_and_drops_jog`)
+- [x] drum reset sets step=1, completion=False, then applies outputs for step 1 -- no stale output scan (`drum/reset_no_stale_outputs`)
+- [x] drum jump/jog do NOT clear completion flag -- only reset does (`drum/jump_jog_keep_completion`)
+- [x] drum jump/jog are edge-triggered (no double-fire on sustained condition) (`drum/jump_jog_edge_triggered`)
+- [x] drum time accumulator resets on step transition (jump, jog, advance, reset) (`drum/time_acc_clears_on_every_transition`)
+- [x] drum event_ready re-evaluates on step change (`drum/events_are_edges`, `drum/te_level_event_already_on`)
+- [x] drum step auto-corrects to 1 if current_step tag holds an invalid value (`drum/invalid_step_corrects_to_1`)
+- [x] search hit / miss / continuous (`search/hit_returns_address`, `search/miss_writes_minus_one`, `search/continuous_walks`)
+- [x] search returns the register number of the match, -1 on miss (`search/hit_returns_address`, `search/miss_writes_minus_one`)
+- [x] search continuous resumes from last position; result=0 restarts (`search/continuous_walks`, `search/continuous_zero_restarts`, `search/continuous_cursor_is_address`)
+- [x] search rung false preserves result and found (`search/false_rung_preserves`)
+- [ ] send / receive status tags
+- [ ] send/receive success and error pulse for one scan
+- [ ] send/receive status tags reset to defaults when rung goes false
+- [ ] send/receive values applied atomically
+- [ ] send sparse addresses split into multiple writes
+- [ ] exception_response holds last code until next transaction
