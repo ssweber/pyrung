@@ -54,8 +54,11 @@ tells pyrung's model from which other model:
   leaves a 1 s timer at 0 when every scan is 10 ms (Result1 = 0); one that
   counts seconds on a free-running 1 s tick, not from its enable, is almost
   always done early (Result2 = 0).
-- ``acc_clamps_at_32767`` (in-process only, 33 s): an accumulator that wraps
-  reads negative; one that stops at the preset never fires.
+- ``acc_clamps_at_32767``: once the TON is timing, its TD is written to 32000,
+  so it reaches the clamp in under a second rather than 33 s.  An accumulator
+  that wraps reads negative; one that stops at the preset never fires; a TON
+  that keeps its own count and ignores the write never fires and reads
+  Result3 = 0.
 
 The 0 ms presets (``ton_done_on_enabling_scan``, ``rton_reset_gap``,
 ``tof_enable_atomic``) keep those cases about scans, not milliseconds: they
@@ -251,10 +254,16 @@ def prove_fractional_accumulation(slot):
 
 
 def prove_acc_clamps_at_32767(slot):
-    # A 100 ms TON held on for 33 s; Scratch counts the scans its Acc reads 32767.
+    # A 100 ms TON whose TD is written to 32000 once it is timing (not on the
+    # enabling scan, in case a TON clears TD as it starts), so it reaches the
+    # clamp in 767 ms.  Scratch counts the scans its Acc reads 32767.
     ton = ClickTimer(96)
     with Rung(slot.Cmd != 0):
         on_delay(ton, 100)
+    with Rung(slot.Cmd != 0, ton.Acc > 0):
+        copy(32000, ton.Acc, oneshot=True)
+    with Rung(slot.Cmd != 0, ton.Acc >= 32000):
+        copy(1, slot.Result3)
     with Rung(slot.Cmd != 0, ton.Acc == 32767, slot.Scratch < 10):
         calc(slot.Scratch + 1, slot.Scratch)
     with Rung(slot.Cmd != 0, slot.Scratch >= 10):
@@ -357,19 +366,16 @@ group = Group(
             scans=170,
         ),
         case(
-            "A timer's Acc runs on past its preset and stops at 32767: a 100 ms TON held "
-            "on for 33 s reads 32767 (Result1) and is still done (Result2 = 1)",
+            "A timer's Acc runs on past its preset and stops at 32767: a 100 ms TON whose "
+            "TD is written to 32000 once it is timing keeps counting from there "
+            "(Result3 = 1), reads 32767 (Result1) and is still done (Result2 = 1)",
             ladder=prove_acc_clamps_at_32767,
-            expect={"Result1": 32767, "Result2": 1},
-            scans=3300,
-            in_process_only="takes 33 s of wall clock to reach the clamp",
+            expect={"Result1": 32767, "Result2": 1, "Result3": 1},
+            scans=100,
         ),
     ],
 )
 
 
 def test_timers():
-    # The clamp case takes 3300 scans; on its own, the other cases do not scan that long.
-    slow = [c for c in group.cases if c.in_process_only]
-    fast = [c for c in group.cases if not c.in_process_only]
-    assert_all_passed(run(Group(group.name, fast)) + run(Group(group.name, slow)))
+    assert_all_passed(run(group))

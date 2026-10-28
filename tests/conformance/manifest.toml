@@ -99,6 +99,7 @@ tof_enable_atomic = 7
 preset_raised_resumes = 8
 preset_lowered_fires_at_once = 9
 fractional_accumulation = 10
+acc_clamps_at_32767 = 11
 
 [groups.counters]
 base = 1301 # Conf_Counters: DS1301..DS1500

@@ -341,7 +341,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] TOF: Done True and Acc 0 while rung True; Acc counts only when rung false (`timers/tof_times_only_when_false`)
 - [x] TOF enable sets Done=True, Acc=0, frac=0 in a single atomic write -- no transition scan where Done is stale (`timers/tof_enable_atomic`)
 - [x] TOF Done flips False when Acc reaches preset (`timers/tof_times_only_when_false`)
-- [x] timer Acc clamp at 32767 (`timers/acc_clamps_at_32767`, in-process only)
+- [x] timer Acc clamp at 32767 (`timers/acc_clamps_at_32767`, TD seeded at 32000)
 - [x] timer Acc continues past preset up to 32767 clamp (`timers/acc_clamps_at_32767`, `timers/tof_times_only_when_false`)
 - [x] timer fractional ms accumulation across scans (`timers/fractional_accumulation`)
 - [x] timer resumes if preset raised mid-count (`timers/preset_raised_resumes`)
