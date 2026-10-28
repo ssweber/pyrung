@@ -74,8 +74,19 @@ base = 1101 # Conf_Timers: DS1101..DS1300 (reserved)
 slots = 19
 
 [groups.counters]
-base = 1301 # Conf_Counters: DS1301..DS1500 (reserved)
+base = 1301 # Conf_Counters: DS1301..DS1500
 slots = 19
+
+[groups.counters.cases]
+level_vs_edge = 1
+survives_rung_false = 2
+preset_raised_resumes = 3
+preset_lowered_while_idle = 4
+reset_wins_over_count = 5
+reset_zero_preset = 6
+count_down_negative = 7
+up_down_same_scan = 8
+acc_clamps_at_dint_range = 9
 
 [groups.coils]
 base = 1501 # Conf_Coils: DS1501..DS1700

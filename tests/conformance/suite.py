@@ -19,6 +19,7 @@ from pyrung.conformance import ConformanceProgram, build_program, load_manifest
 from tests.conformance import (
     test_block,
     test_coils,
+    test_counters,
     test_drum,
     test_loop,
     test_math,
@@ -45,6 +46,7 @@ ALL_GROUPS = [
     test_block.group,
     test_shift.group,
     test_search.group,
+    test_counters.group,
 ]
 
 
