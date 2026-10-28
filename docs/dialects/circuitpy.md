@@ -188,9 +188,17 @@ Pass `RunStopConfig(...)` to `generate_circuitpy()` to map `board.switch` to run
 
 - debounced switch sampling (`debounce_ms`, default `30`)
 - `run_when_high` polarity control
-- optional exposure of `sys.mode_run` and `sys.cmd_mode_stop` (`expose_mode_tags=True`)
+- `expose_mode_tags=True` (the default) includes `sys.mode_run` (SC11) and `sys.cmd_mode_stop` (SC50) in the generated code even when no rung uses them; a program that uses them gets them either way
 - STOP skips rung execution and forces physical outputs off each scan
 - STOP->RUN resets non-retentive runtime state while preserving retentive values; the first RUN scan's timers advance by that loop pass's time, as core's first scan after `start()` advances by a full `dt`
+
+A math error (SC46) or the STOP command (SC50) also puts the code in STOP, as in core:
+
+- A rung that turns SC50 on: the next scan takes the command (SC50 turns off, SC11 reads off for that scan), runs, and the code is in STOP at its end.
+- SC50 written on over Modbus: the code is in STOP before the next scan. SC50 is not stored, so it reads off, as with pyrung's soft PLC.
+- A math error: the code is in STOP at the end of the faulting scan, with SC46 and SC50 on.
+
+STOP then holds while the switch reads RUN. Moving the switch to STOP and back to RUN restarts the code (STOP->RUN), which clears SC46 and SC50. Without a `RunStopConfig`, nothing but a restart of the board returns the code to RUN.
 
 ### Watchdog
 

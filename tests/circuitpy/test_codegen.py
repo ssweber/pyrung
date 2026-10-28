@@ -1250,7 +1250,7 @@ class TestBoardPeripheralsAndRunStop:
         assert "_force_outputs_off()" in source_code
         assert "_t_sys_mode_run" in source_code
         assert "_t_sys_cmd_mode_stop" in source_code
-        assert "if bool(_t_sys_cmd_mode_stop):" in source_code
+        assert "_stop_cmd = _t_sys_cmd_mode_stop" in source_code
 
     def test_runstop_stop_mode_forces_outputs_off(self, monkeypatch):
         hw = P1AM()

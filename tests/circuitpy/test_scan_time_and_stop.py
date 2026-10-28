@@ -1,4 +1,4 @@
-"""Scan time in the generated scan loop, against core.
+"""Scan time and STOP in the generated scan loop, against core.
 
 Each test runs the generated ``code.py`` for a few scans on a stand-in board
 clock: ``time.monotonic_ns()`` reads an integer ns counter that moves only
@@ -16,7 +16,7 @@ import pytest
 
 from pyrung.circuitpy import P1AM, ModbusServerConfig, RunStopConfig, generate_circuitpy
 from pyrung.click import TagMap
-from pyrung.core import PLC, Int, Program, Rung, Timer, copy, on_delay
+from pyrung.core import PLC, Int, Program, Rung, Timer, calc, copy, on_delay, out
 from pyrung.core.system_points import system
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
 from tests.circuitpy.test_system_points import _StubBase
@@ -177,3 +177,138 @@ def test_first_scan_after_stop_to_run_times_a_full_scan(monkeypatch):
 
     assert read(FirstAcc) == core_first_acc
     assert read(Ton.Acc) == core_first_acc
+
+
+# -- Gaps 3 and 4: the STOP command holds -------------------------------------
+
+RunScans = Int("RunScans", retentive=True)
+ModeScans = Int("ModeScans", retentive=True)
+_SC50_WRITE = "_mb_write_coil_plc('SC', 50, True)"
+
+
+def _count_program() -> Program:
+    with Program(strict=False) as prog:
+        with Rung():
+            calc(RunScans + 1, RunScans)
+        with Rung(system.sys.mode_run):
+            calc(ModeScans + 1, ModeScans)
+    return prog
+
+
+_SWITCH_IN_RUN = RunStopConfig(debounce_ms=0, run_when_high=False)
+
+
+@pytest.mark.parametrize("runstop", [None, _SWITCH_IN_RUN], ids=["no-runstop", "switch-in-run"])
+def test_sc50_over_modbus_holds_stop(monkeypatch, runstop):
+    # Core's data provider stops the PLC on the write: no scan after it, SC50
+    # not stored, SC11 off.  Written after scan 1, held for the rest.
+    namespace, read = _run(
+        _count_program(),
+        monkeypatch,
+        scans=6,
+        runstop=runstop,
+        modbus=True,
+        at_loop_top=f"if __scan_once == 2: {_SC50_WRITE}",
+    )
+
+    assert namespace["_mode_run"] is False
+    assert read(RunScans) == 2
+    # The TagMap brings SC11 and SC50 in; the program alone does not.
+    assert namespace["_t_sys_mode_run"] is False
+    assert namespace["_t_sys_cmd_mode_stop"] is False
+
+
+@pytest.mark.parametrize(
+    ("scans", "run_scans"),
+    [
+        # Held through the switch's RUN; switch at STOP on 4..5, STOP on 5.
+        (6, 2),
+        # Back at RUN on 6, debounced on 7: STOP->RUN, and 7..9 run.
+        (10, 5),
+    ],
+    ids=["held", "switch-stop-then-run"],
+)
+def test_sc50_over_modbus_releases_at_switch_stop_then_run(monkeypatch, scans, run_scans):
+    namespace, read = _run(
+        _count_program(),
+        monkeypatch,
+        scans=scans,
+        runstop=_SWITCH_IN_RUN,
+        stop_scans=range(4, 6),
+        modbus=True,
+        at_loop_top=f"if __scan_once == 2: {_SC50_WRITE}",
+    )
+
+    mode_run = scans == 10
+    assert namespace["_mode_run"] is mode_run
+    assert read(system.sys.mode_run) is mode_run
+    assert read(RunScans) == run_scans
+
+
+def _rung_stop_program() -> Program:
+    # The second scan writes SC50; SC11 is read after it.
+    with Program(strict=False) as prog:
+        with Rung():
+            calc(RunScans + 1, RunScans)
+        with Rung(system.sys.mode_run):
+            calc(ModeScans + 1, ModeScans)
+        with Rung(RunScans == 2):
+            out(system.sys.cmd_mode_stop)
+    return prog
+
+
+def _core_until_stop(prog: Program, max_scans: int) -> dict[str, object]:
+    plc = PLC(logic=prog)
+    for _ in range(max_scans):
+        plc.step()
+        if plc.mode == "stop":
+            break
+    assert plc.mode == "stop"
+    tags = plc.current_state.tags
+    return {
+        "RunScans": tags[RunScans.name],
+        "ModeScans": tags[ModeScans.name],
+        "SC50": bool(tags.get(system.sys.cmd_mode_stop.name, False)),
+    }
+
+
+@pytest.mark.parametrize(
+    "runstop",
+    [None, RunStopConfig(debounce_ms=0, run_when_high=False, expose_mode_tags=False)],
+    ids=["no-runstop", "switch-in-run"],
+)
+def test_sc50_from_a_rung_stops_like_core(monkeypatch, runstop):
+    # Core: the scan after the write takes the command (SC50 clears, SC11
+    # reads off for it), runs, and the PLC is in STOP at its end, held there.
+    core = _core_until_stop(_rung_stop_program(), max_scans=10)
+    assert core == {"RunScans": 3, "ModeScans": 2, "SC50": False}
+
+    namespace, read = _run(_rung_stop_program(), monkeypatch, scans=6, runstop=runstop)
+
+    assert namespace["_mode_run"] is False
+    assert read(RunScans) == core["RunScans"]
+    assert read(ModeScans) == core["ModeScans"]
+    assert read(system.sys.cmd_mode_stop) is core["SC50"]
+    assert read(system.sys.mode_run) is False
+
+
+# -- Gap 5: SC11 follows the mode without expose_mode_tags --------------------
+
+
+@pytest.mark.parametrize(
+    ("scans", "mode_run"),
+    [(3, True), (5, False)],
+    ids=["run", "switch-at-stop"],
+)
+def test_referenced_sc11_follows_mode_without_expose_mode_tags(monkeypatch, scans, mode_run):
+    # Switch at STOP from pass 3, debounced on 4.
+    _namespace, read = _run(
+        _count_program(),
+        monkeypatch,
+        scans=scans,
+        runstop=RunStopConfig(debounce_ms=0, run_when_high=False, expose_mode_tags=False),
+        stop_scans=range(3, 10),
+    )
+
+    assert read(system.sys.mode_run) is mode_run
+    assert read(ModeScans) == read(RunScans) == min(scans, 4)

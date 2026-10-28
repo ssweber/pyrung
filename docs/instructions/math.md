@@ -41,7 +41,7 @@ A math function given an operand outside its domain — `sqrt` of a negative, `l
 
 An operand that is already infinite (from a division by zero earlier in the expression) is not a domain error: the result is not finite, so it is 0 with `division_error`.
 
-On a P1AM with a run/stop switch (`RunStopConfig`), the math error holds STOP while the switch reads RUN; moving the switch to STOP clears it. Without a switch there is no STOP mode: the flag stays on and the scan loop keeps running.
+On a P1AM with a run/stop switch (`RunStopConfig`), the math error holds STOP while the switch reads RUN; moving the switch to STOP and back to RUN restarts the code, which clears both flags. Without a switch the code stays in STOP until the board restarts.
 
 ## Mode inference
 

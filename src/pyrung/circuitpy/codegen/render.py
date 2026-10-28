@@ -112,29 +112,83 @@ def _math_stop_symbol(ctx: CodegenContext) -> str | None:
     return ctx.symbol_if_referenced(_FAULT_MATH_OPERATION_ERROR_TAG)
 
 
+def _stop_hold_needed(ctx: CodegenContext) -> bool:
+    """Whether something besides the switch can put the code in STOP.
+
+    A math error (SC46) or the STOP command (SC50, from a rung or over Modbus)
+    stops the code and ``_stop_hold`` keeps it there: with a RUN/STOP switch,
+    until the switch reads STOP; without one, until a restart.  Call after the
+    rungs are compiled.
+    """
+    return (
+        _math_stop_symbol(ctx) is not None
+        or ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG) is not None
+    )
+
+
+def _mode_state_needed(ctx: CodegenContext) -> bool:
+    """Whether the code has a STOP mode (``_mode_run``, ``_force_outputs_off``)."""
+    return ctx.runstop is not None or _stop_hold_needed(ctx)
+
+
+def _render_stop_lines(ctx: CodegenContext, sp: str) -> list[str]:
+    """Put the code in STOP and hold it there (see :func:`_stop_hold_needed`)."""
+    lines = [f"{sp}_mode_run = False", f"{sp}_stop_hold = True"]
+    mode_run_symbol = ctx.symbol_if_referenced(_SYS_MODE_RUN_TAG)
+    if mode_run_symbol is not None:
+        lines.append(f"{sp}{mode_run_symbol} = False")
+    lines.extend([f"{sp}save_memory()", f'{sp}print("Mode: STOP")'])
+    return lines
+
+
+def _render_stop_command_take_lines(ctx: CodegenContext, indent: int) -> list[str]:
+    """Start of a RUN scan: take the STOP command (SC50) a rung wrote.
+
+    As core's ``_process_mode_commands``: SC50 clears, this scan runs with
+    SC11 off, and the code is in STOP at its end
+    (:func:`_render_stop_command_end_lines`).  SC50 written over Modbus stops
+    the code before the next scan instead, as core's data provider calls
+    ``stop()`` (``_mb_write_coil_plc``).
+    """
+    cmd_mode_stop_symbol = ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG)
+    if cmd_mode_stop_symbol is None:
+        return []
+    sp = " " * indent
+    lines = [f"{sp}_stop_cmd = {cmd_mode_stop_symbol}", f"{sp}if _stop_cmd:"]
+    lines.append(f"{sp}    {cmd_mode_stop_symbol} = False")
+    mode_run_symbol = ctx.symbol_if_referenced(_SYS_MODE_RUN_TAG)
+    if mode_run_symbol is not None:
+        lines.append(f"{sp}    {mode_run_symbol} = False")
+    return lines
+
+
+def _render_stop_command_end_lines(ctx: CodegenContext, indent: int) -> list[str]:
+    """End of a RUN scan that took the STOP command: the code is in STOP."""
+    if ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG) is None:
+        return []
+    sp = " " * indent
+    # A math error in the same scan has already stopped the code.
+    return [f"{sp}if _stop_cmd and _mode_run:", *_render_stop_lines(ctx, sp + "    ")]
+
+
 def _render_math_stop_lines(ctx: CodegenContext, indent: int) -> list[str]:
     """End of a RUN scan: a math error (SC46) puts the code in STOP.
 
     As in core, the faulting scan runs to its end, then the PLC is in STOP
     with SC50 on and SC11 off; no scan runs in STOP, so SC46 and SC50 read on
-    until the STOP->RUN reset clears them.  With a RUN/STOP switch,
-    ``_math_stop_hold`` keeps STOP until the switch reads STOP; without one,
-    nothing returns the code to RUN but a restart.
+    until the STOP->RUN reset clears them.  ``_stop_hold`` keeps STOP: with a
+    RUN/STOP switch until the switch reads STOP; without one, nothing returns
+    the code to RUN but a restart.
     """
     math_error_symbol = _math_stop_symbol(ctx)
     if math_error_symbol is None:
         return []
     sp = " " * indent
-    lines = [f"{sp}if {math_error_symbol}:", f"{sp}    _mode_run = False"]
-    if ctx.runstop is not None:
-        lines.append(f"{sp}    _math_stop_hold = True")
+    lines = [f"{sp}if {math_error_symbol}:"]
     cmd_mode_stop_symbol = ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG)
     if cmd_mode_stop_symbol is not None:
         lines.append(f"{sp}    {cmd_mode_stop_symbol} = True")
-    mode_run_symbol = ctx.symbol_if_referenced(_SYS_MODE_RUN_TAG)
-    if mode_run_symbol is not None:
-        lines.append(f"{sp}    {mode_run_symbol} = False")
-    lines.extend([f"{sp}    save_memory()", f'{sp}    print("Mode: STOP")'])
+    lines.extend(_render_stop_lines(ctx, sp + "    "))
     return lines
 
 
@@ -554,21 +608,21 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "",
         ]
     )
+    if _mode_state_needed(ctx):
+        lines.append("_mode_run = True")
+        if _stop_hold_needed(ctx):
+            lines.append("_stop_hold = False")
     if ctx.runstop is not None:
         lines.extend(
             [
-                "_mode_run = True",
                 "_runstop_initialized = False",
                 "_runstop_raw = False",
                 "_runstop_debounced = False",
                 "_runstop_last_change_ns = 0",
             ]
         )
-        if _math_stop_symbol(ctx) is not None:
-            lines.append("_math_stop_hold = False")
+    if _mode_state_needed(ctx):
         lines.append("")
-    elif _math_stop_symbol(ctx) is not None:
-        lines.extend(["_mode_run = True", ""])
     lines.extend(_render_system_point_state_lines(ctx))
     if has_runtime:
         if modbus_server_init_lines or modbus_client_codepy_lines:
@@ -871,7 +925,7 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
             lines.append("    pass")
         lines.append("")
 
-    if ctx.runstop is not None or _math_stop_symbol(ctx) is not None:
+    if _mode_state_needed(ctx):
         scalar_symbols = [ctx.symbol_table[name] for name in sorted(ctx.scalar_tags)]
         lines.append("def _force_outputs_off():")
         if scalar_symbols:
@@ -1354,7 +1408,6 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
     )
     mode_run_symbol = ctx.symbol_if_referenced(_SYS_MODE_RUN_TAG)
     cmd_mode_stop_symbol = ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG)
-    math_error_symbol = _math_stop_symbol(ctx)
     mode_switch_symbol = ctx.symbol_if_referenced(system.sys.mode_switch_run.name)
 
     lines = [
@@ -1399,6 +1452,18 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             "    _read_inputs()",
         ]
     )
+    # The RUN scan: the STOP command a rung wrote last scan is taken first
+    # (core's on_scan_start), and a math error or that command stops the code
+    # at its end (core's on_scan_end).
+    run_scan_lines = [
+        *_render_stop_command_take_lines(ctx, 8),
+        *_render_system_point_scan_lines(ctx, 8),
+        "        _run_main_rungs()",
+        "        _write_outputs()",
+        *_render_system_point_advance_lines(ctx, 8),
+        *_render_math_stop_lines(ctx, 8),
+        *_render_stop_command_end_lines(ctx, 8),
+    ]
     if ctx.runstop is not None:
         if runstop_source_symbol is None:
             raise RuntimeError("RunStopConfig source tag was not referenced")
@@ -1423,33 +1488,18 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             lines.append("    _desired_run = bool(_runstop_debounced)")
         else:
             lines.append("    _desired_run = (not bool(_runstop_debounced))")
-        if math_error_symbol is not None:
-            # A math error put the code in STOP at the end of its scan
-            # (_render_math_stop_lines); the hold keeps STOP while the switch
-            # says RUN.  The switch reading STOP releases it, and its next RUN
-            # resets SC46 and SC50 with the other tags, as core's STOP->RUN.
+        if _stop_hold_needed(ctx):
+            # A math error or the STOP command put the code in STOP; the hold
+            # keeps STOP while the switch says RUN.  The switch reading STOP
+            # releases it, and its next RUN resets SC46 and SC50 with the
+            # other tags, as core's STOP->RUN.
             lines.extend(
                 [
-                    "    if _math_stop_hold:",
+                    "    if _stop_hold:",
                     "        if _desired_run:",
                     "            _desired_run = False",
                     "        else:",
-                    "            _math_stop_hold = False",
-                ]
-            )
-        if ctx.runstop.expose_mode_tags and cmd_mode_stop_symbol is not None:
-            # SC50 on with SC46 is the math error's STOP, not a command: it
-            # reads on until RUN.
-            cmd_condition = (
-                f"bool({cmd_mode_stop_symbol})"
-                if math_error_symbol is None
-                else f"bool({cmd_mode_stop_symbol}) and not {math_error_symbol}"
-            )
-            lines.extend(
-                [
-                    f"    if {cmd_condition}:",
-                    "        _desired_run = False",
-                    f"        {cmd_mode_stop_symbol} = False",
+                    "            _stop_hold = False",
                 ]
             )
         lines.extend(
@@ -1476,22 +1526,18 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
                 else "(not bool(_runstop_debounced))"
             )
             lines.append(f"    {mode_switch_symbol} = {switch_run}")
-        if ctx.runstop.expose_mode_tags and mode_run_symbol is not None:
+        if mode_run_symbol is not None:
             lines.append(f"    {mode_run_symbol} = bool(_mode_run)")
         lines.extend(
             [
                 "    if _mode_run:",
-                *_render_system_point_scan_lines(ctx, 8),
-                "        _run_main_rungs()",
-                "        _write_outputs()",
-                *_render_system_point_advance_lines(ctx, 8),
-                *_render_math_stop_lines(ctx, 8),
+                *run_scan_lines,
                 "    else:",
                 "        _force_outputs_off()",
                 "",
             ]
         )
-    elif math_error_symbol is None:
+    elif not _stop_hold_needed(ctx):
         # No RUN/STOP switch: the code is always in RUN, as core's mode bits
         # read with no mode change (SC10 and SC11 on).
         for symbol in (mode_switch_symbol, mode_run_symbol):
@@ -1507,8 +1553,13 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             ]
         )
     else:
-        # No RUN/STOP switch, but a math error still stops the code, as on a
-        # CLICK; with no switch to turn back to RUN, only a restart does.
+        # No RUN/STOP switch, but a math error or the STOP command still stops
+        # the code, as on a CLICK; with no switch to turn back to RUN, only a
+        # restart does.
+        if cmd_mode_stop_symbol is not None:
+            # SC50 written over Modbus (_mb_write_coil_plc) stops the code
+            # before the next scan.
+            lines.extend(["    if _stop_hold and _mode_run:", *_render_stop_lines(ctx, " " * 8)])
         if mode_switch_symbol is not None:
             lines.append(f"    {mode_switch_symbol} = True")
         lines.append("    if _mode_run:")
@@ -1516,11 +1567,7 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             lines.append(f"        {mode_run_symbol} = True")
         lines.extend(
             [
-                *_render_system_point_scan_lines(ctx, 8),
-                "        _run_main_rungs()",
-                "        _write_outputs()",
-                *_render_system_point_advance_lines(ctx, 8),
-                *_render_math_stop_lines(ctx, 8),
+                *run_scan_lines,
                 "    else:",
                 "        _force_outputs_off()",
                 "",

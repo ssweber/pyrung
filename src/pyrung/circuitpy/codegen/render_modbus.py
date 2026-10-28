@@ -239,8 +239,12 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
     reg_slots = [slot for slot in backed if slot.bank in _WORD_BANKS]
     coil_write_globals = sorted({_backing_global_for_slot(ctx, slot) for slot in coil_slots})
     reg_write_globals = sorted({_backing_global_for_slot(ctx, slot) for slot in reg_slots})
-    if ctx.runstop is not None:
-        coil_write_globals = sorted({*coil_write_globals, "_mode_run"})
+    if any(
+        slot.source == "system" and slot.logical_name == system.sys.cmd_mode_stop.name
+        for slot in coil_slots
+    ):
+        # The SC50 write below holds STOP; it does not store SC50.
+        coil_write_globals = sorted({*coil_write_globals, "_stop_hold"})
     # Build sparse reverse-lookup dicts from only the backed slots.
     coil_map: dict[int, tuple[str, int]] = {}
     for slot in coil_slots:
@@ -343,21 +347,18 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
     )
     for slot in coil_slots:
         if slot.source == "system" and slot.logical_name == system.sys.cmd_mode_stop.name:
+            # SC50 on stops the code before the next scan and holds STOP until
+            # the switch goes to STOP and back (or a restart), as core's data
+            # provider calls stop(); SC50 itself is not stored, so it reads
+            # off, as there.  The scan loop makes the STOP transition.
             lines.extend(
                 [
                     f'    if bank == "{slot.bank}" and index == {slot.index}:',
+                    "        if _value:",
+                    "            _stop_hold = True",
+                    "        return True",
                 ]
             )
-            if ctx.runstop is not None:
-                lines.extend(
-                    [
-                        "        if _value:",
-                        "            _mode_run = False",
-                    ]
-                )
-            if slot.symbol != "":
-                lines.append(f"        {slot.symbol} = _value")
-            lines.append("        return True")
             continue
         if slot.read_only:
             lines.extend(

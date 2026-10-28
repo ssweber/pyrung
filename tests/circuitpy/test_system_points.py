@@ -367,7 +367,12 @@ def test_math_error_stop_clears_at_stop_to_run(monkeypatch, scans, mode_run):
     assert read(RunScans) == (4 if mode_run else 1)
 
 
-@pytest.mark.parametrize("runstop", [None, RunStopConfig()], ids=["no-runstop", "runstop"])
+@pytest.mark.parametrize(
+    "runstop",
+    # expose_mode_tags=True would bring in SC50, whose command also holds STOP.
+    [None, RunStopConfig(expose_mode_tags=False)],
+    ids=["no-runstop", "runstop"],
+)
 def test_math_stop_emits_nothing_without_a_math_function(monkeypatch, runstop):
     with Program(strict=False) as prog:
         with Rung():
@@ -376,7 +381,7 @@ def test_math_stop_emits_nothing_without_a_math_function(monkeypatch, runstop):
     hw = _hw()
     code = generate_circuitpy(prog, hw, target_scan_ms=1.0, runstop=runstop).code
 
-    assert "_math_stop_hold" not in code
+    assert "_stop_hold" not in code
     if runstop is None:
         assert "_mode_run" not in code
         assert "_force_outputs_off" not in code
