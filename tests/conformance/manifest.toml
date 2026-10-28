@@ -130,8 +130,16 @@ pack_words = 9
 unpack_words = 10
 
 [groups.shift]
-base = 2301 # Conf_Shift: DS2301..DS2500 (reserved)
+base = 2301 # Conf_Shift: DS2301..DS2500
 slots = 19
+
+[groups.shift.cases]
+forward_range_shifts_up = 1
+clock_is_a_rising_edge = 2
+data_is_the_rung_at_the_edge = 3
+bit_leaves_the_end = 4
+reset_beats_clock = 5
+reset_swallows_the_edge = 6
 
 [groups.search]
 base = 2501 # Conf_Search: DS2501..DS2700 (reserved)
