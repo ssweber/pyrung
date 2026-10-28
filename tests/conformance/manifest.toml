@@ -43,6 +43,14 @@ slots = 19
 [groups.drum.cases]
 te_acc_counts_while_waiting = 1
 te_level_event_already_on = 2
+events_are_edges = 3
+jump_jog_edge_triggered = 4
+jump_jog_keep_completion = 5
+reset_no_stale_outputs = 6
+reset_jump_jog_order = 7
+pause_holds_and_drops_jog = 8
+invalid_step_corrects_to_1 = 9
+time_acc_clears_on_every_transition = 10
 
 [groups.out]
 base = 701 # Conf_Out: DS701..DS900
