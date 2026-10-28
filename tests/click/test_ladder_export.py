@@ -1867,21 +1867,22 @@ def test_summary_str_format():
     A = Int("A")
     B = Int("B")
     Result = Int("Result")
+    Coil = Bool("Coil")
 
     with Program() as logic:
         with Rung(Enable):
             calc(A + B, Result)
         with Rung(Enable):
             with forloop(3):
-                out(A)
+                out(Coil)
         with Rung(Enable):
             call("MySub")
         with subroutine("MySub"):
             with Rung(Enable):
-                out(A)
+                out(Coil)
 
     mapping = TagMap(
-        {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
+        {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3], Coil: c[1]},
         include_system=False,
     )
     bundle = pyrung_to_ladder(logic, mapping)

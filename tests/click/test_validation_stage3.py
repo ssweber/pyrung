@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import re
+
+import pytest
+
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click import validation as click_validation
+from pyrung.click.ladder.types import LadderExportError
 from pyrung.click.validation import (
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_UNRESOLVED,
@@ -27,9 +32,11 @@ from pyrung.core.program import (
     copy,
     event_drum,
     forloop,
+    latch,
     on_delay,
     out,
     pack_text,
+    reset,
     time_drum,
 )
 
@@ -878,3 +885,45 @@ def test_timer_done_and_acc_must_share_one_number():
     assert len(mismatches) == 2
     assert "T5 and TD7" in mismatches[0].message
     assert "T7 and TD5" in mismatches[1].message
+
+
+@pytest.mark.parametrize(
+    ("instruction", "target", "expected"),
+    [
+        (reset, txt[1], "reset(TXT1) at main.rung[0]"),
+        (reset, ds[1], "reset(DS1) at main.rung[0]"),
+        (reset, ds.select(1, 3), "reset(DS1..DS3) at main.rung[0]"),
+        (latch, dd[1], "latch(DD1) at main.rung[0]"),
+        (out, df[1], "out(DF1) at main.rung[0]"),
+    ],
+)
+def test_coil_on_non_bit_memory_is_refused(instruction, target, expected):
+    """CLICK's Out, Set and Reset coils take bit memory only (X, Y, C, T, CT, SC)."""
+    coil = {reset: "Reset", latch: "Set", out: "Out"}[instruction]
+
+    def logic():
+        with Rung(c[1]):
+            instruction(target)
+
+    prog = _build_program(logic)
+    report = validate_click_program(prog, TagMap(), mode="strict")
+    wrong = [f for f in report.errors if f.code == CLK_BANK_WRONG_ROLE]
+    assert len(wrong) == 1, _codes(report)
+    message = wrong[0].message
+    assert message.startswith(expected), message
+    assert f"CLICK's {coil} coil takes bit memory only" in message
+    assert message.isascii()
+    with pytest.raises(LadderExportError, match=re.escape(expected)):
+        pyrung_to_ladder(prog, TagMap())
+
+
+def test_coil_on_bit_memory_passes():
+    def logic():
+        with Rung(x[1]):
+            out(y[1])
+            latch(c[1])
+            reset(c.select(2, 4))
+            reset(sc[50])
+
+    report = validate_click_program(_build_program(logic), TagMap(), mode="strict")
+    assert CLK_BANK_WRONG_ROLE not in _codes(report)

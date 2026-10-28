@@ -49,6 +49,7 @@ from pyrung.core.expression import (
     UnaryExpr,
 )
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
+from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.time_mode import TimeUnit
 
@@ -384,7 +385,7 @@ class _TranslatorMixin:
         if isinstance(value, TimeUnit):
             return value.name
         if isinstance(value, str):
-            return _quote(value)
+            return self._render_text(value, path=path, source=source)
         if isinstance(value, bool):
             return _bool_bit(value)
         if value is None:
@@ -398,6 +399,25 @@ class _TranslatorMixin:
             message=f"Unsupported operand type: {type(value).__name__}.",
             source=source,
         )
+
+    def _render_text(self, value: str, *, path: str, source: Any) -> str:
+        """A text constant as CLICK spells it; the blank character is ``""``.
+
+        A TXT blank is NUL, but CLICK's text constants end at NUL, so a raw
+        NUL inside the quotes would cut the constant short.
+        """
+        if value == BLANK_CHAR:
+            return '""'
+        if BLANK_CHAR in value:
+            self._raise_issue(
+                path=path,
+                message=(
+                    f"Text constant {value!r} holds a NUL, which ends a CLICK text "
+                    'constant. Write the blank character on its own as "".'
+                ),
+                source=source,
+            )
+        return _quote(value)
 
     def _render_contact_token(self, value: Any, *, path: str, source: Any) -> str:
         return self._render_operand(
@@ -523,6 +543,8 @@ class _TranslatorMixin:
                 return _bool_bit(expression.value)
             if isinstance(expression.value, (int, float)):
                 return self._render_number(expression.value, path=path, source=source)
+            if isinstance(expression.value, str):
+                return self._render_text(expression.value, path=path, source=source)
             return repr(expression.value)
         if isinstance(expression, RandIntExpr):
             lo = self._render_expression(expression.lo, path=f"{path}.lo", source=source)

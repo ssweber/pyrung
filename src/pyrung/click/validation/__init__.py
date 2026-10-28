@@ -56,6 +56,7 @@ from .findings import (
     _route_severity,
 )
 from .hardware import (
+    _evaluate_coil_targets,
     _evaluate_copy_compatibility,
     _evaluate_drums,
     _evaluate_out_variant_unit,
@@ -200,6 +201,9 @@ def validate_click_program(
                 _evaluate_role_assignments(
                     instruction, base_location, tag_map, active_profile, mode, resolver
                 )
+            )
+            findings.extend(
+                _evaluate_coil_targets(instruction, base_location, active_profile, mode, resolver)
             )
             findings.extend(
                 _evaluate_copy_compatibility(

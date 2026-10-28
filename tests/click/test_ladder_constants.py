@@ -6,6 +6,8 @@ such fix-up.  pyrung literals stay decimal, so pyrung ``255`` exports as
 ``FFh`` (unpadded: CLICK's Math normalizes ``000Ah`` to ``Ah``, and Copy
 and Compare keep either spelling).  REAL constants are float32 in CLICK, keep at most 7
 significant digits, and are written the way CLICK writes them (``3.402823E+38``).
+A blank text constant is ``""``: a TXT blank is NUL, and CLICK ends a text
+constant at NUL.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import math
 
 import pytest
 
+from pyrung import PLC
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.ladder.translator import click_real_literal
 from pyrung.click.ladder.types import LadderBundle, LadderExportError
@@ -271,3 +274,75 @@ def test_real_exponent_round_trips():
     code, before, after = round_trip_logic(logic, TagMap())
     assert after == before, code
     assert "copy(3.0E+38, DF1)" in strip_pyrung_boilerplate(code)
+
+
+# ---------------------------------------------------------------------------
+# Text
+# ---------------------------------------------------------------------------
+
+
+def test_blank_text_constants_export_as_empty_quotes():
+    """A raw NUL inside the quotes would end the constant early on CLICK."""
+    with Program() as logic:
+        with Rung():
+            fill("\x00", txt.select(1, 2))
+        with Rung():
+            copy("", txt[3])
+        with Rung():
+            copy("\x00", txt[4])
+        with Rung(txt[1] == "\x00"):
+            out(c[1])
+        with Rung(txt[2] != ""):
+            out(c[2])
+        with Rung():
+            search(txt.select(1, 4) == "\x00", result=ds[1], found=c[3])
+        with Rung():
+            copy("AB", txt.select(5, 6))
+    tokens = _tokens(logic)
+    assert tokens == [
+        'fill("",TXT1..TXT2)',
+        'copy("",TXT3)',
+        'copy("",TXT4)',
+        'TXT1==""',
+        "out(C1)",
+        'TXT2!=""',
+        "out(C2)",
+        'search(TXT1..TXT4 == "",result=DS1,found=C3)',
+        'copy("AB",TXT5..TXT6)',
+    ]
+    assert not any("\x00" in token for token in tokens)
+
+
+def test_text_constant_with_embedded_nul_rejected():
+    with Program() as logic:
+        with Rung():
+            copy("A\x00", txt.select(1, 2))
+    with pytest.raises(LadderExportError, match="holds a NUL"):
+        pyrung_to_ladder(logic, TagMap())
+
+
+def test_blank_text_constants_import_as_nul():
+    with Program() as logic:
+        with Rung():
+            copy("A", txt[1])
+            copy("B", txt[2])
+            copy("C", txt[3])
+        with Rung():
+            fill("\x00", txt.select(1, 2))
+        with Rung():
+            copy("", txt[3])
+        with Rung(txt[1] == ""):
+            out(c[1])
+    code, before, after = round_trip_logic(logic, TagMap())
+    assert after == before, code
+    body = strip_pyrung_boilerplate(code)
+    assert 'fill("", txt.select(1, 2))' in body
+    assert r"\u0000" not in body
+
+    ns: dict = {}
+    exec_with_source(code, ns)
+    plc = PLC(ns["logic"])
+    plc.step()
+    tags = plc.current_state.tags
+    assert [tags["TXT1"], tags["TXT2"], tags["TXT3"]] == ["\x00"] * 3
+    assert tags["C1"] is True

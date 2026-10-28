@@ -398,6 +398,7 @@ Common findings:
 |-------|--------------|----------------|
 | Pointer in `copy` source | Any block, arithmetic | DS only, no arithmetic |
 | Inline expression in condition | `(A + B) > 100` | Must use `calc()` first |
+| `out` / `latch` / `reset` target | Any tag (`reset(DS1)`, `reset(TXT1)`) | Bit memory only: X, Y, C, T, CT, SC (`CLK_BANK_WRONG_ROLE`); clear a register with `copy()` or `fill()` |
 
 ### Timer preset limits
 
@@ -444,6 +445,8 @@ bundle.write("./output")  # write main.csv + subroutines/*.csv to disk
 For the consumer-facing CSV decode contract (files, row semantics, token formats, branch wiring, and supported tokens), see the [laddercodec CSV format guide](https://pyrung.com/laddercodec/guides/csv-format/).
 
 To convert ladder CSV back into pyrung Python source, see [CLICK Python Codegen](click-codegen.md).
+
+A blank TXT holds NUL, but CLICK ends a text constant at NUL, so a blank text constant (`""` or `"\x00"`, in `copy`, `fill`, a compare or a `search`) exports as CLICK's `""` and imports back as NUL. A longer text constant with a NUL in it is refused.
 
 ### Empty and comment-only rungs
 

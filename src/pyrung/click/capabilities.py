@@ -25,6 +25,7 @@ InstructionRole = Literal[
     "drum_jump_step",
     "drum_event_condition",
     "copy_pointer",
+    "coil_target",
 ]
 
 CopyOperation = Literal[
@@ -120,6 +121,8 @@ INSTRUCTION_ROLE_COMPATIBILITY: dict[InstructionRole, frozenset[str]] = {
     "drum_jump_step": frozenset({"DS"}),
     "drum_event_condition": frozenset({"X", "Y", "C", "T", "CT", "SC"}),
     "copy_pointer": frozenset({"DS"}),
+    # CLICK's Out, Set and Reset coils take bit memory only.
+    "coil_target": frozenset({"X", "Y", "C", "T", "CT", "SC"}),
 }
 
 _BIT_SOURCES: frozenset[str] = frozenset({"X", "Y", "C", "T", "CT", "SC"})
