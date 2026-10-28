@@ -84,6 +84,14 @@ OWNED: Mapping[str, Mapping[str, range]] = {
         "TXT": range(201, 301),
     },
     "system": {"C": range(901, 1001), "T": range(101, 151), "DD": range(901, 1001)},
+    # Math errors that stop the PLC (tests/conformance/test_math_stop.py).
+    "stop_sqrt": {"DF": range(401, 411)},
+    "stop_ln0": {"DF": range(411, 421)},
+    "stop_ln_neg": {"DF": range(421, 431)},
+    "stop_log0": {"DF": range(431, 441)},
+    "stop_log_neg": {"DF": range(441, 451)},
+    "stop_asin": {"DF": range(451, 461)},
+    "stop_acos": {"DF": range(461, 471)},
 }
 
 #: Prefixes any case may read without owning them.

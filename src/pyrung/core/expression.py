@@ -338,6 +338,35 @@ class ExprCompare(Condition):
 # =============================================================================
 
 
+class MathDomainError(ValueError):
+    """A math function was given an operand outside its domain.
+
+    ``sqrt`` of a negative, ``log``/``log10`` of 0 or a negative, ``asin``/``acos``
+    outside -1..1.  ``calc`` turns it into CLICK's math-operation error (SC46):
+    the destination gets 0 and the PLC goes to STOP.
+    """
+
+
+#: Math functions with a restricted domain: the ones that can raise MathDomainError.
+DOMAIN_LIMITED_MATH_FUNCS = frozenset({"sqrt", "log", "log10", "asin", "acos"})
+
+
+def math_func_value(func: Any, name: str, value: Numeric) -> Numeric:
+    """``func(value)``, with a non-finite operand passed through unchanged.
+
+    A non-finite operand comes from a division by zero (or a float overflow)
+    earlier in the expression; it propagates so ``calc`` reports that fault
+    (the result is not finite), not a domain error.  Any other ``ValueError``
+    from *func* is a domain error.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return value
+    try:
+        return func(value)
+    except ValueError:
+        raise MathDomainError(f"{name}({value!r}): math domain error") from None
+
+
 class MathFuncExpr(Expression):
     """Base class for single-argument math function expressions."""
 
@@ -347,7 +376,7 @@ class MathFuncExpr(Expression):
         self.name = name
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return self.func(self.operand.evaluate(ctx))
+        return math_func_value(self.func, self.name, self.operand.evaluate(ctx))
 
     def __repr__(self) -> str:
         return f"{self.name}({self.operand})"

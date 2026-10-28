@@ -392,6 +392,7 @@ class CodegenContext:
             system.fault.division_error,
             system.fault.out_of_range,
             system.fault.address_error,
+            system.fault.math_operation_error,
         ):
             self.referenced_tags.setdefault(fault_tag.name, fault_tag)
         self._refresh_board_usage()

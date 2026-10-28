@@ -74,6 +74,8 @@ def _needed_helpers(ctx: CodegenContext) -> set[str]:
         needed.update({"_as_single_ascii_char", "_ascii_char_from_code"})
     if "_render_text_from_numeric" in needed:
         needed.add("_format_int_text")
+    if "_math_func" in needed:
+        needed.add("_MathDomainError")
     if ctx.modbus_client is not None and ctx.modbus_client_specs:
         for spec in ctx.modbus_client_specs:
             for item in spec.items:
@@ -310,6 +312,20 @@ def _render_helper_defs(needed: set[str]) -> list[str]:
             "    if type(value) is float and not math.isfinite(value):",
             "        return 0.0",
             "    return float(value)",
+            "",
+        ],
+        "_math_func": [
+            "class _MathDomainError(ValueError):",
+            "    pass",
+            "",
+            "",
+            "def _math_func(func, value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return value",
+            "    try:",
+            "        return func(value)",
+            "    except ValueError:",
+            "        raise _MathDomainError()",
             "",
         ],
         "_store_bool": [

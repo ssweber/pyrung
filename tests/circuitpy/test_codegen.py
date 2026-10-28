@@ -143,8 +143,9 @@ def _run_single_scan_source(
     *,
     socket_factory=None,
     runtime_source: str = "",
+    scans: int = 1,
 ) -> dict[str, object]:
-    single_scan_source = source.replace("while True:", "for __scan_once in range(1):", 1)
+    single_scan_source = source.replace("while True:", f"for __scan_once in range({scans}):", 1)
 
     class _StubDigitalInOut:
         def __init__(self, pin: object):
@@ -539,7 +540,7 @@ class TestConditionAndExpressionCompiler:
         assert "<<" in compile_expression(a << 1, ctx)
         assert ">>" in compile_expression(a >> 1, ctx)
         assert "~int" in compile_expression(~a, ctx)
-        assert "math.sqrt(" in compile_expression(sqrt(a), ctx)
+        assert "_math_func(math.sqrt, " in compile_expression(sqrt(a), ctx)
         assert "0xFFFF" in compile_expression(lro(a, 1), ctx)
 
     def test_unknown_expression_type_raises(self):
@@ -1324,6 +1325,59 @@ class TestBoardPeripheralsAndRunStop:
         stub_base = StubBase()
         _run_single_scan_source(result.code, monkeypatch, stub_base, runtime_source=result.runtime)
         assert stub_base.discrete_writes[-1] == (2, 1)
+
+    def test_math_domain_error_writes_zero_and_holds_stop(self, monkeypatch):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        outputs = hw.slot(2, "P1-08TRS")
+        x = Real("X", default=-4.0)
+        dest = Real("Dest", default=9.0)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(sqrt(x), dest)
+                out(outputs[1])
+
+        result = generate_circuitpy(
+            prog,
+            hw,
+            target_scan_ms=10.0,
+            runstop=RunStopConfig(debounce_ms=0, run_when_high=False),
+        )
+        assert "except _MathDomainError:" in result.code
+
+        class StubBase:
+            def __init__(self):
+                self.discrete_writes: list[tuple[int, int]] = []
+
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+            def writeDiscrete(self, value, slot):
+                self.discrete_writes.append((slot, value))
+
+            def readAnalog(self, slot, ch):
+                return 0
+
+            def writeAnalog(self, value, slot, ch):
+                return None
+
+            def readTemperature(self, slot, ch):
+                return 0.0
+
+        stub_base = StubBase()
+        namespace = _run_single_scan_source(
+            result.code, monkeypatch, stub_base, runtime_source=result.runtime, scans=2
+        )
+        ctx = _context_for_program(prog, hw)
+        # Scan 1 runs the logic: the calc stores 0 and sets SC46, the output is on.
+        assert namespace[ctx.symbol_for_tag(dest)] == 0.0
+        assert namespace[ctx.symbol_for_tag(system.fault.math_operation_error)] is True
+        assert (2, 1) in stub_base.discrete_writes
+        # Scan 2 is in STOP with the switch still on RUN: outputs forced off.
+        assert stub_base.discrete_writes[-1] == (2, 0)
 
 
 class TestCopyConverterCodegen:

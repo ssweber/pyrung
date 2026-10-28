@@ -274,7 +274,7 @@ with rung(system.sys.first_scan):
     copy("g", State)
 ```
 
-**`system.fault`** — math and runtime fault flags: `division_error`, `out_of_range`, `math_operation_error`, `address_error`, `plc_error`, and `code` (the most recent fault code as an integer). Fault flags are auto-cleared at the start of each scan.
+**`system.fault`** — math and runtime fault flags: `division_error`, `out_of_range`, `math_operation_error`, `address_error`, `plc_error`, and `code` (the most recent fault code as an integer). Fault flags are auto-cleared at the start of each scan, except `math_operation_error`, which stops the PLC and holds until it returns to RUN.
 
 ```python
 with rung(system.fault.division_error):

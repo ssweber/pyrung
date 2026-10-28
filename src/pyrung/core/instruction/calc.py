@@ -6,7 +6,13 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from pyrung.core.expression import Expression, RandIntExpr
+from pyrung.core.expression import (
+    DOMAIN_LIMITED_MATH_FUNCS,
+    Expression,
+    MathDomainError,
+    MathFuncExpr,
+    RandIntExpr,
+)
 from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
@@ -17,6 +23,7 @@ from .conversions import (
 )
 from .resolvers import (
     _set_fault_division_error,
+    _set_fault_math_operation_error,
     _set_fault_out_of_range,
     resolve_tag_name_ctx,
     resolve_tag_or_value_ctx,
@@ -91,6 +98,23 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
             _collect_calc_tag_types(item, found, seen)
 
 
+def has_domain_limited_func(value: Any, seen: set[int] | None = None) -> bool:
+    """True when *value* (a calc expression) calls a math function that can raise
+    :class:`~pyrung.core.expression.MathDomainError` (``sqrt``, ``log``, ...)."""
+    if seen is None:
+        seen = set()
+    if id(value) in seen:
+        return False
+    seen.add(id(value))
+    if isinstance(value, MathFuncExpr) and value.name in DOMAIN_LIMITED_MATH_FUNCS:
+        return True
+    if isinstance(value, Expression):
+        return any(has_domain_limited_func(child, seen) for child in vars(value).values())
+    if isinstance(value, (list, tuple)):
+        return any(has_domain_limited_func(item, seen) for item in value)
+    return False
+
+
 def infer_calc_mode(expression: Any, dest: Tag) -> CalcModeInference:
     """Infer calc arithmetic mode and whether the expression mixes mode families."""
     tag_types: set[TagType] = set()
@@ -124,6 +148,12 @@ class CalcInstruction(OneShotMixin, Instruction):
     **Division by zero:** Result is forced to 0 and the division-error fault
     flag is set. The instruction completes normally.
 
+    **Math domain error** (``sqrt`` of a negative, ``log``/``log10`` of 0 or a
+    negative, ``asin``/``acos`` outside -1..1): Result is forced to 0 and the
+    math-operation error flag (``system.fault.math_operation_error``, CLICK's
+    SC46) is set.  The rest of the scan runs; at its end the PLC goes to STOP
+    with ``system.sys.cmd_mode_stop`` (SC50) on, as a CLICK does.
+
     **Mode inference:**
     - Uses ``"hex"`` only when all referenced tags (plus destination) are WORD.
     - Uses ``"decimal"`` otherwise.
@@ -138,7 +168,7 @@ class CalcInstruction(OneShotMixin, Instruction):
 
     _reads = ("expression",)
     _writes = ("dest",)
-    _fault_writes = ("fault.division_error", "fault.out_of_range")
+    _fault_writes: tuple[str, ...] = ("fault.division_error", "fault.out_of_range")
     _conditions = ()
     _structural_fields = ("mode",)
 
@@ -154,6 +184,10 @@ class CalcInstruction(OneShotMixin, Instruction):
         self.dest = dest
         self.mode_inference = infer_calc_mode(expression, dest)
         self.mode = self.mode_inference.mode
+        if has_domain_limited_func(expression):
+            # Only a calc that can hit a domain error sets SC46: the analyses
+            # (PDG, prover) see the flag written where it can be.
+            self._fault_writes = (*CalcInstruction._fault_writes, "fault.math_operation_error")
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -165,6 +199,9 @@ class CalcInstruction(OneShotMixin, Instruction):
             value = 0
         except OverflowError:
             _set_fault_out_of_range(ctx)
+            value = 0
+        except MathDomainError:
+            _set_fault_math_operation_error(ctx)
             value = 0
 
         # Expression division may return non-finite sentinels for divide-by-zero.

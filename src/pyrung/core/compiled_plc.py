@@ -34,6 +34,10 @@ from pyrung.core.system_points import (
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeMode
 
+# Kernel tags committed only once they are set, as the interpreter has them:
+# nothing writes SC46 until a math error does (it is not cleared each scan).
+_LAZY_COMMIT_TAGS = frozenset({system.fault.math_operation_error.name})
+
 # Sentinel for "key absent from the previous commit" during the diff below —
 # distinct from any real tag/memory value (including ``None``).
 _MISSING: Any = object()
@@ -684,7 +688,9 @@ class CompiledPLC:
         self._extra_commit_tag_names = {
             name
             for name in self._kernel.tags
-            if name not in self._block_element_names and name not in _DERIVED_TAG_NAMES
+            if name not in self._block_element_names
+            and name not in _DERIVED_TAG_NAMES
+            and name not in _LAZY_COMMIT_TAGS
         }
         self._kernel_tag_count = len(self._kernel.tags)
 
@@ -696,7 +702,9 @@ class CompiledPLC:
         self._extra_commit_tag_names.update(
             name
             for name in tags
-            if name not in self._block_element_names and name not in _DERIVED_TAG_NAMES
+            if name not in self._block_element_names
+            and name not in _DERIVED_TAG_NAMES
+            and name not in _LAZY_COMMIT_TAGS
         )
         self._kernel_tag_count = len(tags)
 
@@ -786,6 +794,10 @@ class CompiledPLC:
                 continue
             committed[name] = value
             evolver[name] = value
+        for name in _LAZY_COMMIT_TAGS:
+            if name not in committed and tags.get(name):
+                committed[name] = tags[name]
+                evolver[name] = tags[name]
         self._prev_committed_tags = committed
         return evolver.persistent()
 

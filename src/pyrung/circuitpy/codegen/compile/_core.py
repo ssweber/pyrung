@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pyrung.circuitpy.codegen._constants import _FAULT_DIVISION_ERROR_TAG
+from pyrung.circuitpy.codegen._constants import (
+    _FAULT_DIVISION_ERROR_TAG,
+    _FAULT_MATH_OPERATION_ERROR_TAG,
+)
 from pyrung.circuitpy.codegen._util import (
     _bool_literal,
     _indent_body,
@@ -76,6 +79,7 @@ from pyrung.core.instruction import (
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
 )
+from pyrung.core.instruction.calc import has_domain_limited_func
 from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
     ModbusSendInstruction,
@@ -845,6 +849,17 @@ def _compile_calc_instruction(
         "except OverflowError:",
         *_indent_body(out_of_range_body, 4),
         "    _calc_value = 0",
+    ]
+    if has_domain_limited_func(instr.expression):
+        math_err = ctx.symbol_if_referenced(_FAULT_MATH_OPERATION_ERROR_TAG)
+        enabled_body.extend(
+            [
+                "except _MathDomainError:",
+                f"    {math_err} = True" if math_err else "    pass",
+                "    _calc_value = 0",
+            ]
+        )
+    enabled_body += [
         "if isinstance(_calc_value, float) and not math.isfinite(_calc_value):",
         div_err_line,
         "    _calc_value = 0",

@@ -41,6 +41,7 @@ _HELPER_ORDER = (
     "_store_word",
     "_store_real",
     "_store_bool",
+    "_math_func",
 )
 
 _STORE_TYPE_HELPERS: dict[str, str] = {
@@ -89,6 +90,9 @@ _FAULT_OUT_OF_RANGE_TAG = "fault.out_of_range"
 
 
 _FAULT_ADDRESS_ERROR_TAG = "fault.address_error"
+
+
+_FAULT_MATH_OPERATION_ERROR_TAG = "fault.math_operation_error"
 
 
 _SYS_MODE_RUN_TAG = "sys.mode_run"

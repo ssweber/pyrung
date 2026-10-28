@@ -35,7 +35,7 @@ def case_comment(group: str, c: Case) -> str:
     It is part of the exported ladder, so it is part of the group hash: editing
     a sentence makes the group stale on the PLC until it is pushed again.
     """
-    return f"Case {case_label(group, c)}\n{c.sentence}\nExpect: {describe_expect(c.expect)}"
+    return f"Case {case_label(group, c)}\n{c.sentence}\nExpect: {describe_expect(c.checks)}"
 
 
 def emit_case(group: str, c: Case, slots: _NamedArrayRuntime, index: int) -> None:

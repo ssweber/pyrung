@@ -154,8 +154,11 @@ def _compile_expression_impl(
     if isinstance(expr, MathFuncExpr):
         if expr.name not in _ALLOWED_MATH_FUNCS:
             raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
+        # _math_func passes a non-finite operand through and raises
+        # _MathDomainError for a domain error, as MathFuncExpr.evaluate does.
+        ctx.mark_helper("_math_func")
         return (
-            f"math.{expr.name}("
+            f"_math_func(math.{expr.name}, "
             f"{_compile_expression_impl(expr.operand, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
             ")"
         )

@@ -491,6 +491,14 @@ class SystemPointRuntime:
         self._process_mode_commands(ctx)
 
     def on_scan_end(self, ctx: ScanContext) -> None:
+        if bool(_raw_get_tag(ctx, system.fault.math_operation_error.name, False)):
+            # A math error (SC46) puts the PLC in STOP at the end of the scan
+            # it happened on, with SC50 on (CLICK: "SC50 is turned to ON, the
+            # PLC is put in Stop Mode").  No scan runs in STOP, so both read on
+            # until the PLC returns to RUN, which resets them.
+            _set_memory_if_changed(ctx, _MODE_RUN_KEY, False)
+            _set_tags_if_changed(ctx, {system.sys.cmd_mode_stop.name: True})
+
         current_ms = self._scan_time_current_ms(ctx)
 
         min_name = system.sys.scan_time_min_ms.name
@@ -528,16 +536,14 @@ class SystemPointRuntime:
             ctx.set_memory(_SD_ERROR_CODE_KEY, _SD_ERROR_NONE)
 
     def _clear_transient_status(self, ctx: ScanContext) -> None:
-        _set_tags_if_changed(
-            ctx,
-            {
-                system.fault.division_error.name: False,
-                system.fault.out_of_range.name: False,
-                system.fault.address_error.name: False,
-                system.rtc.apply_date_error.name: False,
-                system.rtc.apply_time_error.name: False,
-            },
-        )
+        updates = {
+            system.fault.division_error.name: False,
+            system.fault.out_of_range.name: False,
+            system.fault.address_error.name: False,
+            system.rtc.apply_date_error.name: False,
+            system.rtc.apply_time_error.name: False,
+        }
+        _set_tags_if_changed(ctx, updates)
         _set_memory_if_changed(ctx, _SD_WRITE_STATUS_KEY, False)
 
     def _process_rtc_apply(self, ctx: ScanContext) -> None:

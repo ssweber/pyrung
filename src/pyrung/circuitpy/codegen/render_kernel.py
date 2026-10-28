@@ -266,6 +266,7 @@ def _render_imports(ctx: CodegenContext) -> list[str]:
         or "_parse_pack_text_value" in ctx.used_helpers
         or "_store_copy_value_to_type" in ctx.used_helpers
         or "_calc_math_isfinite" in ctx.used_helpers
+        or "_math_func" in ctx.used_helpers
         or bool(ctx.used_helpers & set(_STORE_TYPE_HELPERS.values()))
     )
     needs_struct = (
@@ -509,6 +510,20 @@ def _render_helpers(ctx: CodegenContext) -> list[str]:
             "    if type(value) is float and not math.isfinite(value):",
             "        return 0.0",
             "    return float(value)",
+            "",
+        ],
+        "_math_func": [
+            "class _MathDomainError(ValueError):",
+            "    pass",
+            "",
+            "",
+            "def _math_func(func, value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return value",
+            "    try:",
+            "        return func(value)",
+            "    except ValueError:",
+            "        raise _MathDomainError()",
             "",
         ],
         "_store_bool": [

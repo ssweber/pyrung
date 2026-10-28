@@ -5,7 +5,14 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from typing import TYPE_CHECKING, Any
 
-from pyrung.conformance._case import Case, CaseResult, Group, expectation_met, format_expect
+from pyrung.conformance._case import (
+    Case,
+    CaseResult,
+    Group,
+    expectation_met,
+    format_expect,
+    system_tag_name,
+)
 from pyrung.conformance._ladder import case_label, check_disjoint, emit_case
 from pyrung.conformance._slot import SLOT_FIELDS, make_slot
 from pyrung.core import PLC, Program, Rung, call, subroutine
@@ -92,7 +99,7 @@ def run(cases: Sequence[Case] | Group) -> list[CaseResult]:
     for i, c in enumerate(case_list, start=1):
         outcomes = [r.get(i, ({}, False)) for r in runs]
         actual, fired = outcomes[-1]
-        met = [f and expectation_met(c.expect, a) for a, f in outcomes]
+        met = [f and expectation_met(c.checks, a) for a, f in outcomes]
         notes: list[str] = []
         if i in unready:
             notes.append(
@@ -120,8 +127,12 @@ def run(cases: Sequence[Case] | Group) -> list[CaseResult]:
 def _reset(plc: Any, slot: _NamedArrayRuntime, indexes: Collection[int]) -> set[int]:
     """Zero every slot, as the wire harness does, and scan until each reports ``Ready``.
 
-    Returns the slots that never did.
+    A case that stopped the PLC (a math error) leaves it in STOP: put it back in
+    RUN first, as the operator of a real CLICK does by hand.  Returns the slots
+    that never reported ``Ready``.
     """
+    if plc.mode == "stop":
+        plc.start()
     plc.patch({getattr(slot[i], f).name: 0 for i in indexes for f in SLOT_FIELDS})
     waiting = set(indexes)
     for _ in range(round(RESET_TIMEOUT_S / DT)):
@@ -136,15 +147,27 @@ def _reset(plc: Any, slot: _NamedArrayRuntime, indexes: Collection[int]) -> set[
 def _fire(
     plc: Any, slot: _NamedArrayRuntime, case_list: Sequence[Case], indexes: Sequence[int]
 ) -> dict[int, tuple[dict[str, int], bool]]:
-    """Write ``Cmd = 1`` to *indexes*, run the longest case's scans, read their slots."""
+    """Write ``Cmd = 1`` to *indexes*, run the longest case's scans, read their slots.
+
+    A PLC in STOP does not scan: once a case stops it, the harness stops
+    stepping (``step()`` would put it back in RUN) and reads what it left.
+    """
     if not indexes:
         return {}
     plc.patch({slot[i].Cmd.name: 1 for i in indexes})
-    plc.run(cycles=max(case_list[i - 1].scans for i in indexes))
-    tags = plc.current_state.tags
+    for _ in range(max(case_list[i - 1].scans for i in indexes)):
+        if plc.mode == "stop":
+            break
+        plc.step()
+    state = plc.current_state
+    tags = state.tags
     out: dict[int, tuple[dict[str, int], bool]] = {}
     for i in indexes:
-        actual = {f: tags.get(getattr(slot[i], f).name, 0) for f in case_list[i - 1].expect}
+        c = case_list[i - 1]
+        actual = {f: tags.get(getattr(slot[i], f).name, 0) for f in c.expect}
+        for address in c.expect_system:
+            _, value = plc.debug.system_runtime.resolve(system_tag_name(address), state)
+            actual[address] = int(value)
         out[i] = (actual, tags.get(slot[i].Fired.name, 0) != 0)
     return out
 
@@ -186,7 +209,7 @@ def assert_all_passed(results: list[CaseResult]) -> None:
         if f.passed or f.skipped is not None:
             continue
         lines.append(f"FAIL: {_label(f)}: {f.case.sentence} (slot {f.slot_index})")
-        lines.append(f"  expected: {format_expect(f.case.expect)}")
+        lines.append(f"  expected: {format_expect(f.case.checks)}")
         lines.append(f"  actual:   {f.actual}")
         if not f.fired:
             lines.append("  Fired:    did not fire")

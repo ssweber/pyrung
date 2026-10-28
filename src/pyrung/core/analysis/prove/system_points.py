@@ -125,8 +125,15 @@ SCAN_START_RESETS: dict[str, Any] = {
 }
 
 # Fault flags instructions set implicitly (``Instruction._fault_writes``).
+# The math-operation error (SC46, a calc domain error) is not reset at scan
+# start: the runtime stops the PLC at the end of the scan that set it.
 FAULT_FLAGS: frozenset[str] = frozenset(
-    {_fault.division_error.name, _fault.out_of_range.name, _fault.address_error.name}
+    {
+        _fault.division_error.name,
+        _fault.out_of_range.name,
+        _fault.address_error.name,
+        _fault.math_operation_error.name,
+    }
 )
 
 # 0 on scan 0, the fixed scan time after: tracked through the first_scan bit.

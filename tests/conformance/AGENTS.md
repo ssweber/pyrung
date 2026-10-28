@@ -179,28 +179,41 @@ Entries are added by hand, guided by the build. When a wire case or group has no
 
 A case that cannot run over Modbus passes `in_process_only="reason"`. The Modbus run leaves it out of the program and reports it as skipped with that reason.
 
+`expect_system` maps a CLICK system bit (`"SC46"`) to an expected 0/1 (or a `range`) that the harness reads itself, after the case has run, in-process from the system runtime and over the wire with a Modbus read of the bit. It is for what the ladder cannot record: a PLC in STOP runs no ladder, so whether `SC11` (`_PLC_Mode`) is off has to be read from outside. The case comment lists these with the slot expectations (`Expect: Result1 = 0, SC46 = 1, SC11 = 0`).
+
+## Groups that stop the PLC
+
+A case whose answer is "the PLC goes to STOP" (a Math domain error: `SC46`, then STOP with `SC50` on) ends the run it is in: no other case can fire or reset after it. So each such case is a group of its own, listed in `suite.STOP_GROUPS`, not `suite.ALL_GROUPS` (`test_math_stop.py`: `stop_sqrt`, `stop_ln0`, ...):
+
+- **Project.** `suite.build()` builds `ALL_GROUPS + STOP_GROUPS`, so the exported project has their subroutines and one load covers everything. Their cases are gated on `Cmd` like any other, so they sit idle until a run writes their `Cmd`.
+- **Selection.** A run without `GROUP=` takes `ALL_GROUPS` only, so a normal wire run never stops the PLC. `GROUP=stop_sqrt` runs one. `test_suite_repeats_without_restarting` leaves STOP groups out (a second run would find the PLC stopped).
+- **The faulting scan.** The firing rung presets the destination, raises `Fired`, and only then runs the faulting Math, so `Fired` is up even on a PLC that stops at the instruction. The destination is a slot register: retentive, still served in STOP, read like any result. `SC46`, `SC50` and `SC11` are `expect_system`.
+- **In-process.** `run()` stops stepping a PLC that is in STOP (`step()` would put it back in RUN) and reads what the case left; before the next reset it calls `PLC.start()`, the operator putting it back in RUN. STOP -> RUN keeps the retentive slot and clears `SC46`/`SC50`, so the second run and the leak check work as for any case.
+- **Local sim.** `SimServer` does not scan a PLC in STOP; it keeps serving Modbus, as a CLICK does. Every `run_modbus()` without an endpoint starts a fresh sim, so each STOP group gets one: `make test-conformance` runs them all that way (`test_math_error_stops_the_local_sim`), one sim per group.
+- **Real CLICK.** Run one group per run, `make test-conformance PLC=... GROUP=stop_sqrt`, then put the CLICK back in RUN by hand (CLICK Programming Software, or the mode switch) before the next. Step 0 reads `SC11` and refuses a PLC in STOP ("put the PLC in RUN, then run again"); without that, its resets would never complete.
+
 ## 8-step protocol
 
 In-process (`run(group)`; a plain case list also works), twice on one fixed-step `PLC`:
 
 1. Patch every slot to zero. A group's cases run inside its `Conf_<Group>` subroutine, called unconditionally, as on the wire.
 2. -- (no case stages inputs; the reset rung initializes it).
-3. Scan until every slot reads `Ready = 1`, up to 10 s of scans. A case that never does is judged a failure and not fired. After the first reset, snapshot the state; after the second, compare with it (the leak check).
+3. Put a PLC that a case left in STOP back in RUN (`PLC.start()`), then scan until every slot reads `Ready = 1`, up to 10 s of scans. A case that never does is judged a failure and not fired. After the first reset, snapshot the state; after the second, compare with it (the leak check).
 4. Patch `Cmd = 1` on every ready slot.
-5. Run `max(case.scans)` scans.
+5. Run `max(case.scans)` scans, or fewer if a case put the PLC in STOP (a PLC in STOP does not scan; the next reset puts it back in RUN).
 6. Read every slot from `current_state`.
 7. Compare to `expect`. Verify `Fired` went up. Both runs must pass and the reset must leave no state behind.
 8. Report.
 
 Over Modbus (`run_modbus(build, endpoint, groups=None)`), every step is a register read or write, and only the selected groups' registers are touched:
 
-0. Read `DS1` until it is nonzero (timeout -> `ConformanceError`, "program is not running"). If it is not this build's layout hash, raise `BuildMismatchError` ("Export the whole project again and load it") before writing anything. Then read each selected group's hash register. A group whose hash does not match is **stale**: its cases come back with `stale=True` and the note `Conf_Math is stale: repush (DS301 reads ..., this build writes ...)`, its registers are not written, and the other groups carry on.
+0. Read `DS1` until it is nonzero (timeout -> `ConformanceError`, "program is not running"). Read `SC11`; if the PLC is in STOP, raise `ConformanceError` ("put the PLC in RUN"). If `DS1` is not this build's layout hash, raise `BuildMismatchError` ("Export the whole project again and load it") before writing anything. Then read each selected group's hash register. A group whose hash does not match is **stale**: its cases come back with `stale=True` and the note `Conf_Math is stale: repush (DS301 reads ..., this build writes ...)`, its registers are not written, and the other groups carry on.
 1. Zero the used slots of every live group (one block write per group, chunked at 100 registers). `Cmd` is the first register of each slot, so it is never left at 1 after its `Fired` is cleared.
 2. -- (no case stages inputs; each case's reset rung initializes it while `Cmd = 0`).
 3. Poll until every slot reads `Cmd = 0`, `Fired = 0` and `Ready = 1`, or until the timeout. A slot that never does is judged a failure with the note `reset did not complete within 10 s: {'Cmd': .., 'Fired': .., 'Ready': ..}` and is not fired; the other cases carry on. A dropped zeroing write shows up here too (`Cmd` still 1).
 4. Write `Cmd = 1` to every ready slot, one single-register write per slot. A block write would rewrite a slot's other registers after its case might already have fired (the sim applies each register as a patch on the next scan, so one request can span scans).
 5. Poll every 20 ms until every `Fired != 0`, or until the timeout (default 10 s). A case that never fires is judged a failure, not raised. Then sleep the settle time, `max(case.scans) * 10 ms`.
-6. Read every slot, wait `max(100 ms, settle)`, read every slot again.
+6. Read every slot (and every system bit a case's `expect_system` names), wait `max(100 ms, settle)`, read them again.
 7. A case passes only if it fired and **both** reads meet `expect`. If one read passes and the other does not, the result's `note` says "unstable" with both reads.
 8. Report. `assert_all_passed` lists stale groups (`STALE: ...`, once per group) and failures; in-process-only skips do not fail. `format_report` gives the per-case lines.
 
