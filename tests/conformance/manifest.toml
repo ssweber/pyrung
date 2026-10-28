@@ -105,6 +105,23 @@ latch_reset_sticky = 7
 base = 1701 # Conf_Numeric: DS1701..DS1900 (reserved)
 slots = 19
 
+[groups.numeric.cases]
+int_calc_wraps = 1
+dint_calc_wraps = 2
+word_calc_wraps = 3
+copy_clamps_calc_wraps = 4
+copy_source_to_dest = 5
+real_to_int_truncates = 6
+int_division_truncates = 7
+word_math_unsigned = 8
+hex_literal_is_decimal = 9
+intermediate_fits_32_bits = 10
+intermediate_exceeds_32_bits = 11
+real_is_64_bit_in_pyrung = 12
+real_overflow_stays_finite = 13
+div_by_zero = 14
+real_div_by_zero = 15
+
 [groups.text]
 base = 1901 # Conf_Text: DS1901..DS2100
 slots = 19

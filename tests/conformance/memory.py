@@ -69,6 +69,8 @@ OWNED: Mapping[str, Mapping[str, range]] = {
         "DD": range(301, 401),
         "DH": range(301, 401),
     },
+    "numeric": {"DD": range(101, 201), "DF": range(101, 201), "DH": range(201, 301)},
+    "text": {"TXT": range(1, 201), "DS": range(3901, 4001)},
     "block": {
         "C": range(1201, 1301),
         "DS": range(4001, 4201),

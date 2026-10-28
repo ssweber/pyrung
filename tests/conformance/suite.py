@@ -23,6 +23,7 @@ from tests.conformance import (
     test_drum,
     test_loop,
     test_math,
+    test_numeric,
     test_out,
     test_rung_semantics,
     test_text,
@@ -47,6 +48,7 @@ ALL_GROUPS = [
     test_shift.group,
     test_search.group,
     test_counters.group,
+    test_numeric.group,
 ]
 
 
