@@ -47,7 +47,7 @@ The model covers the system tags the rungs read and the ones the property,
 scope or projection names.  A callable property can read anything, so its
 state view (``guarded_state``) answers the constants and refuses
 (``UnmodeledSystemRead``) a free or scan-dependent tag the search did not
-explore.
+explore, and (``UnmodeledRead``) a tag no rung reads or writes.
 
 ``reachable`` / ``always`` only.  The ``how()`` domain prior
 (``domains_only``) keeps the old classification: PILOT drives the real
@@ -218,12 +218,16 @@ def clip_to_range(name: str, domain: tuple[Any, ...]) -> tuple[Any, ...]:
     return tuple(sorted({v for v in domain if lo <= v <= hi} | {lo, hi}))
 
 
-class UnmodeledSystemRead(Exception):
-    """A callable property read a system tag the search did not explore."""
+class UnmodeledRead(Exception):
+    """A callable property read a tag the search did not explore."""
 
     def __init__(self, name: str) -> None:
         super().__init__(name)
         self.name = name
+
+
+class UnmodeledSystemRead(UnmodeledRead):
+    """A callable property read a system tag the search did not explore."""
 
 
 class _GuardedState(Mapping[str, Any]):
@@ -246,7 +250,11 @@ class _GuardedState(Mapping[str, Any]):
             raise UnmodeledSystemRead(name)
         if name in self._state:
             return self._state[name]
-        return self._constants[name]
+        if name in self._constants:
+            return self._constants[name]
+        # No rung reads or writes it, so the kernel has no slot for it, and a
+        # callable names no tag the verifier could add as an input.
+        raise UnmodeledRead(name)
 
     def __iter__(self) -> Iterator[str]:
         yield from self._state
@@ -369,6 +377,7 @@ __all__ = [
     "FREE_SYSTEM_CAVEAT",
     "SCAN_START_RESETS",
     "SystemPointModel",
+    "UnmodeledRead",
     "UnmodeledSystemRead",
     "bounded_system_tag",
     "build_system_point_model",

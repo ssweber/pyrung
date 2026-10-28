@@ -39,7 +39,7 @@ from .kernel import (
 )
 from .passes import _DEFAULT_BFS_CONFIG, _BFSConfig
 from .results import Counterexample, Intractable, Proven, TraceStep, _ParentLink
-from .system_points import FIRST_SCAN, FREE_SYSTEM_CAVEAT, UnmodeledSystemRead
+from .system_points import FIRST_SCAN, FREE_SYSTEM_CAVEAT, UnmodeledRead, UnmodeledSystemRead
 
 
 def _projected_tuple(kernel: ReplayKernel, project_names: tuple[str, ...]) -> tuple[Any, ...]:
@@ -213,17 +213,24 @@ def _bfs_explore(
             state_filter=state_filter,
             frontier_collector=frontier_collector,
         )
-    except UnmodeledSystemRead as exc:
+    except UnmodeledRead as exc:
         assert predicates is not None
+        if isinstance(exc, UnmodeledSystemRead):
+            hint = (
+                f"  {exc.name}: system tag the verifier explores only where a rung or a"
+                f" condition property names it; write the property as a condition"
+            )
+        else:
+            hint = (
+                f"  {exc.name}: no rung reads or writes it, so only a condition property"
+                f" brings it into the search; write the property as a condition"
+            )
         refusal = Intractable(
             reason=(f"callable property reads {exc.name}, which this search did not explore"),
             dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
             estimated_space=0,
             tags=[exc.name],
-            hints=[
-                f"  {exc.name}: system tag the verifier explores only where a rung or a"
-                f" condition property names it; write the property as a condition"
-            ],
+            hints=[hint],
             journal=context.journal,
         )
         return [refusal for _ in predicates]

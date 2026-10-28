@@ -424,6 +424,16 @@ class TestPropertyOnlySystemTags:
         assert isinstance(result, Intractable)
         assert result.tags == ["sys.clock_1s"]
 
+    def test_callable_reading_a_tag_no_rung_touches_is_refused(self):
+        logic, _hit = _enable_hit()
+        result = always(logic, lambda s: not s["M0"])
+        assert isinstance(result, Intractable)
+        assert result.tags == ["M0"]
+        scoped = always(logic, lambda s: not s["M0"], scope=["M0"])
+        assert isinstance(scoped, Intractable)
+        assert scoped.tags == ["M0"]
+        assert isinstance(always(logic, ~Bool("M0")), Counterexample)
+
 
 class TestCalendarRanges:
     def test_impossible_rtc_values_are_proven_unreachable(self):
