@@ -16,8 +16,9 @@ could differ, and what it would read:
 the first address of the range and leaves at the last.  Clocked on scans 3, 5, 7
 with data 1, 0, 1, a forward range holds bits 1 and 3 (1 + 4 = 5) and a
 reversed range bits 8 and 6 (128 + 32 = 160).  A CLICK that ignores range
-order, or reads it the other way, swaps the two (160 and 5).  The reversed case
-is in-process only: the exporter writes its range as a bracket list.
+order, or reads it the other way, swaps the two (160 and 5).  The reversed
+range exports as ``shift(C1018..C1011)``, CLICK's ending address below its
+starting one.
 
 ``clock_is_a_rising_edge``: a clock high for scans 3..5 and 7..8 shifts twice,
 not five times (Result1 = 3).  A level-sensitive clock reads 31.
@@ -161,8 +162,6 @@ group = Group(
             id="reversed_range_shifts_down",
             expect={"Result1": 160},
             scans=SCANS,
-            in_process_only="the exporter writes a reversed shift range as a bracket "
-            "list, and ladder_to_pyrung cannot read it back (workspace source fails)",
         ),
         case(
             "A shift register shifts once per rising edge of its clock, not once "

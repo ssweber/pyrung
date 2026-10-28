@@ -16,6 +16,7 @@ from pyrung.click.codegen.constants import (
     _OPERAND_RE,
     _OUT_VARIANT_TIMER_INSTRUCTIONS,
     _RANGE_RE,
+    _ascending_range_str,
 )
 from pyrung.click.codegen.models import (
     RungRole,
@@ -1060,7 +1061,10 @@ def _register_operands_from_text(
         prefix2 = range_match.group(3)
         num2 = int(range_match.group(4))
         if prefix1 == prefix2:
-            range_str = range_match.group(0)
+            # A descending range (shift(C1018..C1011)) is the ascending window
+            # reversed; register the ascending one (see _render_range_expr).
+            num1, num2 = min(num1, num2), max(num1, num2)
+            range_str = _ascending_range_str(range_match.group(0))
             if range_str not in collection.ranges:
                 parsed = _parse_operand_prefix(f"{prefix1}{num1}")
                 if parsed:
@@ -1339,7 +1343,7 @@ def _ref_operands_in_text(
 
     # Check ranges
     for range_match in _RANGE_RE.finditer(text):
-        range_str = range_match.group(0)
+        range_str = _ascending_range_str(range_match.group(0))
         render = collection.semantic_ranges.get(range_str)
         if render is not None:
             _record_semantic_ref(render)

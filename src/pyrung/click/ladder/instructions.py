@@ -40,6 +40,7 @@ class _InstructionMixin:
         ) -> list[tuple[str, ...]]: ...
         def _expand_conditions(self, conditions: list[Condition], *, path: str) -> list[Any]: ...
         def _render_sequence(self, values: Any, *, path: str, source: Any) -> str: ...
+        def _render_shift_range(self, bit_range: Any, *, path: str, source: Any) -> str: ...
         def _hex_constants(
             self, mode: Literal["wrap", "exact"] | None
         ) -> AbstractContextManager[None]: ...
@@ -477,7 +478,7 @@ class _InstructionMixin:
         if instruction_type == "ShiftInstruction":
             return self._fn(
                 "shift",
-                self._render_operand(
+                self._render_shift_range(
                     instruction.bit_range,
                     path=f"{path}.bit_range",
                     source=instruction,

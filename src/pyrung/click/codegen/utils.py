@@ -571,14 +571,7 @@ def _sub_range(
     nicknames: dict[str, str] | None,
 ) -> str:
     """Substitute a range match."""
-    range_str = match.group(0)
-    prefix = match.group(1)
-    start_num = int(match.group(2))
-    end_num = int(match.group(4))
-    render = collection.semantic_ranges.get(range_str)
-    if render is not None:
-        return render.expr
-    return _render_inline_range(prefix, start_num, end_num)
+    return _render_range_expr(match.group(1), int(match.group(2)), int(match.group(4)), collection)
 
 
 def _render_range_expr(
@@ -587,7 +580,13 @@ def _render_range_expr(
     end_num: int,
     collection: _OperandCollection,
 ) -> str:
-    """Render a range using semantic ownership when available."""
+    """Render a range using semantic ownership when available.
+
+    An end below the start (``C1018..C1011``, CLICK's downward shift
+    register) renders as the ascending window ``.reverse()``.
+    """
+    if start_num > end_num:
+        return f"{_render_range_expr(prefix, end_num, start_num, collection)}.reverse()"
     range_str = f"{prefix}{start_num}..{prefix}{end_num}"
     render = collection.semantic_ranges.get(range_str)
     if render is not None:

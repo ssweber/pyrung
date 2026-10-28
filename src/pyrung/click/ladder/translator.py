@@ -618,6 +618,23 @@ class _TranslatorMixin:
             rendered.append(self._render_operand(value, path=f"{path}[{index}]", source=source))
         return f"[{','.join(rendered)}]"
 
+    def _render_shift_range(self, bit_range: Any, *, path: str, source: Any) -> str:
+        """A shift range; a reversed one is ``C1018..C1011`` (end below start).
+
+        CLICK stores the shift register's start and end as separate fields and
+        shifts from start toward end, so an ending address lower than the
+        starting one shifts downward.  pyrung spells that ``.reverse()``.
+        """
+        if isinstance(bit_range, BlockRange):
+            addresses = [
+                self._resolve_tag(tag, path=f"{path}[{index}]", source=source)
+                for index, tag in enumerate(bit_range.tags())
+            ]
+            descending = _compact_contiguous_range(addresses[::-1])
+            if len(addresses) > 1 and descending is not None:
+                return f"{addresses[0]}..{addresses[-1]}"
+        return self._render_operand(bit_range, path=path, source=source)
+
     def _render_block_range(self, block_range: BlockRange, *, path: str, source: Any) -> str:
         tags = block_range.tags()
         addresses = [
