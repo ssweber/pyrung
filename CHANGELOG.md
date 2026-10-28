@@ -50,6 +50,7 @@
 
 ### Fixes
 
+- CLICK ladder export writes a one-register `fill`, `blockcopy`, `pack_*` or other range operand as `TXT12..TXT12`; it wrote a bare `TXT12`, which ClickNick's Guided Paste refused.
 - Generated CircuitPython code no longer fails to import when a program with a `calc()` is split into `code.py` and `pyrung_rt.py`, and a text literal copied into a TXT (`copy("ABC", txt[1])`) fills consecutive registers, as on the other backends, instead of stopping the scan with `ValueError`.
 - `cause()` explains a writer that feeds on its own output once instead of once per scan: an accumulator `calc(T + 3, T)` shows the rung that added and the rung that seeded `T` (a `copy(Setpoint, T)` on reset) instead of thousands of lines, or a `RecursionError` after about 500 scans, and two calcs feeding each other show one round.
 - CLICK import reads Send and Receive remote addresses written in MODBUS hex (`50Eh` with its register type), which it refused, and reads MODBUS 984 coil addresses (`1`..`65536`) as coils instead of holding registers. CLICK export keeps a remote address in the form it was written: `ModbusAddress("50Eh")` exports as hex instead of turning into `401295`, so a hex program imported and exported again keeps its addressing.

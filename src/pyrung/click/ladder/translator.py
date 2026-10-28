@@ -645,8 +645,6 @@ class _TranslatorMixin:
         ]
         if not addresses:
             return "[]"
-        if len(addresses) == 1:
-            return addresses[0]
         compact = _compact_contiguous_range(addresses)
         if compact is not None:
             return compact
