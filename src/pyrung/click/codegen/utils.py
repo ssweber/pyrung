@@ -68,6 +68,22 @@ _CLICK_PI_RE = re.compile(r"\bPI\b")
 # Used as fullmatch in _sub_operand (standalone) and .sub() in expressions.
 _CLICK_HEX_RE = re.compile(r"\b([0-9A-Fa-f]+)h\b")
 _MODBUS_ADDRESS_RE = re.compile(r"ModbusAddress\(([^()]*)\)")
+# A bare digit run that is not part of an address, a hex literal or a decimal.
+_BARE_DIGITS_RE = re.compile(r"(?<![0-9A-Za-z_.])(\d+)(?![0-9A-Za-z_.])")
+
+
+def _hex_math_bare_numbers(formula: str) -> str:
+    """Read bare digits in a hex-mode Math formula as hex, as CLICK does.
+
+    CLICK's Math dialog in hex mode treats typed digits as hex and appends
+    ``h`` (``DH1 + 255`` is stored as ``255h`` = 0x255).  Its own exports
+    always carry the ``h``; this covers hand-written or legacy CSV.
+    """
+    if '"' in formula:
+        return formula
+    return _BARE_DIGITS_RE.sub(lambda m: f"{m.group(1)}h", formula)
+
+
 _MODBUS_984_RE = re.compile(r"\d+")
 _MODBUS_HEX_RE = re.compile(r"[0-9A-Fa-f]+[hH]")
 _MODBUS_984_COIL_MAX = 65536
@@ -555,14 +571,7 @@ def _sub_range(
     nicknames: dict[str, str] | None,
 ) -> str:
     """Substitute a range match."""
-    range_str = match.group(0)
-    prefix = match.group(1)
-    start_num = int(match.group(2))
-    end_num = int(match.group(4))
-    render = collection.semantic_ranges.get(range_str)
-    if render is not None:
-        return render.expr
-    return _render_inline_range(prefix, start_num, end_num)
+    return _render_range_expr(match.group(1), int(match.group(2)), int(match.group(4)), collection)
 
 
 def _render_range_expr(
@@ -571,7 +580,13 @@ def _render_range_expr(
     end_num: int,
     collection: _OperandCollection,
 ) -> str:
-    """Render a range using semantic ownership when available."""
+    """Render a range using semantic ownership when available.
+
+    An end below the start (``C1018..C1011``, CLICK's downward shift
+    register) renders as the ascending window ``.reverse()``.
+    """
+    if start_num > end_num:
+        return f"{_render_range_expr(prefix, end_num, start_num, collection)}.reverse()"
     range_str = f"{prefix}{start_num}..{prefix}{end_num}"
     render = collection.semantic_ranges.get(range_str)
     if render is not None:

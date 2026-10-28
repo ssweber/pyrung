@@ -30,7 +30,7 @@ from __future__ import annotations
 import warnings
 from collections import defaultdict
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from pyrung.click._topology import (
     Leaf,
@@ -41,14 +41,16 @@ from pyrung.click._topology import (
     make_compound,
     trees_equal,
 )
-from pyrung.click.codegen.constants import _ADJACENCY, _CONDITION_COLS, _PIN_RE
+from pyrung.click.codegen.constants import _ADJACENCY, _CONDITION_COLS, _FUNC_RE, _PIN_RE
 from pyrung.click.codegen.models import (
     RungRole,
     _AnalyzedRung,
     _InstructionInfo,
     _PinInfo,
     _RawRung,
+    _SourceOutput,
 )
+from pyrung.click.codegen.shaping import NOP, series_tree
 
 # ---------------------------------------------------------------------------
 # Rung Analysis
@@ -707,6 +709,7 @@ def _split_continued(rung: _AnalyzedRung) -> list[_AnalyzedRung]:
             comment=rung.comment,
             condition_tree=first.branch_tree,
             instructions=[_InstructionInfo(first.af_token, None, first.pins)],
+            is_continued=rung.is_continued,
         )
     ]
 
@@ -755,6 +758,68 @@ def _split_continued(rung: _AnalyzedRung) -> list[_AnalyzedRung]:
             )
 
     return result
+
+
+def _split_nop_outputs(rung: _AnalyzedRung) -> list[_AnalyzedRung]:
+    """Give each NOP that shares a rung with other outputs a rung of its own.
+
+    A pyrung NOP is a whole empty rung (``pass``); it cannot sit beside other
+    instructions or inside a branch, so the emitter drops it.  CLICK rows get
+    this shape from a NOP rung next to ``.continued()`` rungs, and dropping the
+    NOP while the other outputs stay grouped under the NOP's contacts used to
+    lose those outputs' own contacts.
+
+    Cut the rung at each NOP in source order.  Each run of other outputs
+    between NOPs regroups into one rung, each NOP becomes a ``pass`` rung with
+    its full condition, and every piece after the first is ``.continued()`` so
+    all of them still read the original rung's snapshot.
+    """
+    if len(rung.instructions) < 2 or all(i.af_token != NOP for i in rung.instructions):
+        return [rung]
+
+    pieces: list[_AnalyzedRung] = []
+    run: list[_InstructionInfo] = []
+
+    def flush() -> None:
+        if not run:
+            return
+        trees = [
+            (series_tree(rung.condition_tree, instr.branch_tree), instr.af_token, index)
+            for index, instr in enumerate(run)
+        ]
+        cond_tree, grouped, _ = _group_outputs(trees)
+        for grouped_instr, orig in zip(grouped, run, strict=True):
+            grouped_instr.pins = orig.pins
+        pieces.append(
+            _AnalyzedRung(
+                comment=None,
+                condition_tree=cond_tree,
+                instructions=grouped,
+                role=rung.role,
+                is_continued=True,
+            )
+        )
+        run.clear()
+
+    for instr in rung.instructions:
+        if instr.af_token != NOP:
+            run.append(instr)
+            continue
+        flush()
+        pieces.append(
+            _AnalyzedRung(
+                comment=None,
+                condition_tree=series_tree(rung.condition_tree, instr.branch_tree),
+                instructions=[_InstructionInfo(NOP, None, [])],
+                role=rung.role,
+                is_continued=True,
+            )
+        )
+    flush()
+
+    pieces[0].comment = rung.comment
+    pieces[0].is_continued = rung.is_continued
+    return pieces
 
 
 def _analyze_rungs(
@@ -819,10 +884,95 @@ def _analyze_rungs(
                     analyzed.append(analyze_one(i, role=RungRole.FORLOOP_BODY))
                 i += 1
         else:
-            analyzed.extend(_split_continued(analyze_one(i)))
+            whole = analyze_one(i)
+            source_outputs = whole.source_outputs
+            pieces = [
+                split for piece in _split_nop_outputs(whole) for split in _split_continued(piece)
+            ]
+            for piece in pieces:
+                piece.source_outputs = None
+            pieces[0].source_outputs = source_outputs
+            analyzed.extend(pieces)
             i += 1
 
     return analyzed
+
+
+# Pin labels each instruction takes, in the fixed order CLICK draws them.
+_PIN_ORDER: dict[str, tuple[str, ...]] = {
+    "on_delay": ("reset",),
+    "count_up": ("down", "reset"),
+    "count_down": ("reset",),
+    "shift": ("clock", "reset"),
+    "event_drum": ("reset", "jump", "jog"),
+    "time_drum": ("reset", "jump", "jog"),
+    "time_event_drum": ("reset", "jump", "jog"),
+}
+
+
+def _attach_pins(
+    rows: list[list[str]],
+    pin_row_set: set[int],
+    pin_trees: dict[int, SPNode | None],
+    instructions: list[_InstructionInfo],
+    af_rows: list[int],
+) -> None:
+    """Attach each pin row to the instruction it belongs to.
+
+    A pin label (``.reset()``, ``.jump(n)``, ...) belongs to the nearest
+    instruction row above it.  Rows without an AF token (OR branches, padding)
+    may sit anywhere between an instruction's pin rows: what a pin reads comes
+    from the wiring into its row, and a row wired into nothing is reported by
+    the dropped-contact check.  Labels must follow the instruction's fixed pin
+    order, each at most once.
+    """
+    instruction_by_row = {af_row: index for index, af_row in enumerate(af_rows)}
+    current_instruction: int | None = None
+    current_name = ""
+    seen: list[str] = []
+
+    for row_index, row in enumerate(rows):
+        af = row[-1]
+        if row_index not in pin_row_set:
+            if af:
+                current_instruction = instruction_by_row.get(row_index)
+                match = _FUNC_RE.match(af)
+                current_name = match.group(2) if match else af
+                seen = []
+            continue
+
+        if current_instruction is None:
+            raise ValueError(
+                f"Pin row {row_index} has no instruction row above it in this rung."
+                f"\n{_annotate_rung_rows(rows, row_index)}"
+            )
+        match = _PIN_RE.match(af)
+        if not match:
+            continue
+        name = match.group(1)
+        order = _PIN_ORDER.get(current_name)
+        if order is not None:
+            if name not in order:
+                raise ValueError(
+                    f"Pin .{name}() on row {row_index} is not a pin of {current_name}() "
+                    f"(its pins are {', '.join(f'.{p}()' for p in order)})."
+                    f"\n{_annotate_rung_rows(rows, row_index)}"
+                )
+            if seen and order.index(name) <= order.index(seen[-1]):
+                raise ValueError(
+                    f"Pin .{name}() on row {row_index} is out of order: {current_name}() "
+                    f"pins come in the order {', '.join(f'.{p}()' for p in order)}."
+                    f"\n{_annotate_rung_rows(rows, row_index)}"
+                )
+        seen.append(name)
+        instructions[current_instruction].pins.append(
+            _PinInfo(
+                name=name,
+                arg=match.group(2),
+                conditions=_extract_conditions(row, 0, _CONDITION_COLS),
+                condition_tree=pin_trees.get(row_index),
+            )
+        )
 
 
 def _analyze_single_rung(
@@ -855,6 +1005,7 @@ def _analyze_single_rung(
             condition_tree=None,
             instructions=[],
             role=role,
+            source_outputs=(),
         )
 
     # Separate pin rows from content rows
@@ -868,8 +1019,9 @@ def _analyze_single_rung(
             return _AnalyzedRung(
                 comment=comment,
                 condition_tree=None,
-                instructions=[_InstructionInfo("NOP", None, [])],
+                instructions=[_InstructionInfo(NOP, None, [])],
                 role=role,
+                source_outputs=(_SourceOutput(NOP, None, ()),),
             )
         if _rows_have_content(rows):
             raise ValueError(
@@ -880,6 +1032,7 @@ def _analyze_single_rung(
             condition_tree=None,
             instructions=[],
             role=role,
+            source_outputs=(),
         )
 
     # SP Reduction (per output)
@@ -906,55 +1059,25 @@ def _analyze_single_rung(
                 f"Rung drops output instruction(s) present in the source during grouping: {detail}."
             )
 
-    # Exporter pins immediately follow their owning AF row. Walk the raw rows
-    # in order so malformed layouts fail loudly instead of silently attaching
-    # to the wrong instruction.
-    # Compute SP trees for pin row conditions.
+    # Compute SP trees for pin row conditions.  A pin's condition comes from
+    # the wiring into its row, so OR branches and padding rows may sit between
+    # pin rows (above or below a label); _attach_pins decides ownership.
     pin_trees: dict[int, SPNode | None] = {}
     if pin_sinks and source is not None:
         for pr, ps in pin_sinks.items():
             pin_trees[pr] = _sp_reduce(source, ps, edges)
 
-    if pin_row_set and instructions:
-        instruction_by_row = {af_row: index for index, af_row in enumerate(af_rows)}
-        current_instruction: int | None = None
-
-        for row_index, row in enumerate(rows):
-            af = row[-1]
-
-            if row_index in pin_row_set:
-                if current_instruction is None:
-                    raise ValueError(
-                        f"Pin row {row_index} must immediately follow its owning instruction "
-                        f"row.\n{_annotate_rung_rows(rows, row_index)}"
-                    )
-
-                match = _PIN_RE.match(af)
-                if match:
-                    pin_conds = _extract_conditions(row, 0, _CONDITION_COLS)
-                    pin_tree = pin_trees.get(row_index)
-                    instructions[current_instruction].pins.append(
-                        _PinInfo(
-                            name=match.group(1),
-                            arg=match.group(2),
-                            conditions=pin_conds,
-                            condition_tree=pin_tree,
-                        )
-                    )
-                continue
-
-            if af and not af.startswith("."):
-                current_instruction = instruction_by_row.get(row_index)
-                continue
-
-            current_instruction = None
+    if pin_row_set:
+        _attach_pins(rows, pin_row_set, pin_trees, instructions, af_rows)
 
     # Dropped-condition detection: every content edge's Leaf should reach at
     # least one output or pin tree before output grouping. Grouping may safely
     # merge equal conditions from different source positions, so checking its
     # factored trees would mistake that merge for a dropped source occurrence.
     # Positions absent from every pre-group tree were pruned as dead-end edges
-    # (unwired conditions) and silently omitted from the logic.
+    # (unwired conditions) and silently omitted from the logic.  This only sees
+    # drops made here; a contact lost later (splitting, emission) is caught by
+    # shaping.emitted_logic_mismatch against source_outputs.
     present: set[tuple[int, int]] = set()
     for tree, _af_token, _af_row in output_trees:
         for leaf in _walk_tree_leaves(tree):
@@ -979,9 +1102,25 @@ def _analyze_single_rung(
                 "invalid topology."
             )
 
+    # Record each output as the source wired it (full condition + pins) so the
+    # logic check can compare the generated code against it after grouping,
+    # splitting and emission (see shaping.emitted_logic_mismatch).
+    instruction_index_by_row = {af_row: index for index, af_row in enumerate(af_rows)}
+    source_outputs = tuple(
+        _SourceOutput(
+            af_token,
+            tree,
+            tuple(replace(pin) for pin in instructions[instruction_index_by_row[af_row]].pins)
+            if af_row in instruction_index_by_row
+            else (),
+        )
+        for tree, af_token, af_row in output_trees
+    )
+
     return _AnalyzedRung(
         comment=comment,
         condition_tree=condition_tree,
         instructions=instructions,
         role=role,
+        source_outputs=source_outputs,
     )

@@ -195,6 +195,7 @@ data_is_the_rung_at_the_edge = 3
 bit_leaves_the_end = 4
 reset_beats_clock = 5
 reset_swallows_the_edge = 6
+reversed_range_shifts_down = 7
 
 [groups.search]
 base = 2501 # Conf_Search: DS2501..DS2700

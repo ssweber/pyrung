@@ -40,6 +40,23 @@ _RANGE_RE = re.compile(
     r"([A-Z]+)(\d+)\.\.([A-Z]+)(\d+)",
 )
 
+
+def _ascending_range_str(range_str: str) -> str:
+    """``C1018..C1011`` -> ``C1011..C1018``; ascending ranges pass through.
+
+    CLICK's shift register allows an end below the start (it then shifts
+    downward); pyrung spells that window ``.reverse()``, so range metadata is
+    kept under the ascending key.
+    """
+    match = _RANGE_RE.fullmatch(range_str)
+    if match is None or match.group(1) != match.group(3):
+        return range_str
+    start, end = int(match.group(2)), int(match.group(4))
+    if start <= end:
+        return range_str
+    return f"{match.group(1)}{end}..{match.group(3)}{start}"
+
+
 # Matches a function-call token like out(Y001) or on_delay(T1,TD1,preset=100,unit=Tms)
 _FUNC_RE = re.compile(r"^(\~?)(\w+)\((.*)?\)$")
 

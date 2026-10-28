@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, NoReturn
+from contextlib import AbstractContextManager
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
@@ -39,6 +40,12 @@ class _InstructionMixin:
         ) -> list[tuple[str, ...]]: ...
         def _expand_conditions(self, conditions: list[Condition], *, path: str) -> list[Any]: ...
         def _render_sequence(self, values: Any, *, path: str, source: Any) -> str: ...
+        def _render_shift_range(self, bit_range: Any, *, path: str, source: Any) -> str: ...
+        def _hex_constants(
+            self, mode: Literal["wrap", "exact"] | None
+        ) -> AbstractContextManager[None]: ...
+        @staticmethod
+        def _is_hex_bank_operand(rendered: str) -> bool: ...
         def _render_condition_sequence(
             self,
             values: tuple[Any, ...],
@@ -269,13 +276,12 @@ class _InstructionMixin:
             convert_kw = {}
             if instruction.convert is not None:
                 convert_kw["convert"] = self._render_converter(instruction.convert)
-            return self._fn(
-                "copy",
-                self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
-                self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
-                **convert_kw,
-                **oneshot_kw,
-            )
+            dest = self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction)
+            with self._hex_constants("wrap" if self._is_hex_bank_operand(dest) else None):
+                copy_source = self._render_operand(
+                    instruction.source, path=f"{path}.source", source=instruction
+                )
+            return self._fn("copy", copy_source, dest, **convert_kw, **oneshot_kw)
         if instruction_type == "BlockCopyInstruction":
             convert_kw = {}
             if instruction.convert is not None:
@@ -288,21 +294,24 @@ class _InstructionMixin:
                 **oneshot_kw,
             )
         if instruction_type == "FillInstruction":
-            return self._fn(
-                "fill",
-                self._render_operand(instruction.value, path=f"{path}.value", source=instruction),
-                self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
-                **oneshot_kw,
-            )
+            dest = self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction)
+            with self._hex_constants("wrap" if self._is_hex_bank_operand(dest) else None):
+                fill_value = self._render_operand(
+                    instruction.value, path=f"{path}.value", source=instruction
+                )
+            return self._fn("fill", fill_value, dest, **oneshot_kw)
         if instruction_type == "CalcInstruction":
             mode = infer_calc_mode(instruction.expression, instruction.dest).mode
-            return self._fn(
-                "math",
-                self._render_operand(
+            # Hex-mode Math reads every constant as hex (shift counts too).
+            with self._hex_constants("wrap" if str(mode) == "hex" else None):
+                formula = self._render_operand(
                     instruction.expression,
                     path=f"{path}.expression",
                     source=instruction,
-                ),
+                )
+            return self._fn(
+                "math",
+                formula,
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
                 mode=str(mode),
                 **oneshot_kw,
@@ -317,9 +326,10 @@ class _InstructionMixin:
                 path=f"{path}.search_range",
                 source=instruction,
             )
-            value_str = self._render_operand(
-                instruction.value, path=f"{path}.value", source=instruction
-            )
+            with self._hex_constants("exact" if self._is_hex_bank_operand(range_str) else None):
+                value_str = self._render_operand(
+                    instruction.value, path=f"{path}.value", source=instruction
+                )
             comparison = f"{range_str} {instruction.condition} {value_str}"
             return self._fn(
                 "search",
@@ -468,7 +478,7 @@ class _InstructionMixin:
         if instruction_type == "ShiftInstruction":
             return self._fn(
                 "shift",
-                self._render_operand(
+                self._render_shift_range(
                     instruction.bit_range,
                     path=f"{path}.bit_range",
                     source=instruction,
