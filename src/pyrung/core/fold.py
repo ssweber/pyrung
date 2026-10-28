@@ -163,6 +163,8 @@ class _FoldContext:
     # Unread tags a copy/calc writes from a coordinate: stale inside a window,
     # rebuilt by its landing scan (see _audit_coordinate_reads).
     landing_rebuilt: frozenset[str] = frozenset()
+    # Timed accumulators a scan may write more than once (see _timer_contests).
+    contested_timers: frozenset[str] = frozenset()
 
     @cached_property
     def coordinates(self) -> frozenset[str]:
@@ -179,6 +181,10 @@ class _FoldContext:
     def timed_sources(self) -> tuple[_AccSource, ...]:
         """The time-based sources, whose carry recurrence a fold replays exactly."""
         return tuple(src for src in self.sources if src.timed)
+
+    @cached_property
+    def timed_acc_names(self) -> frozenset[str]:
+        return frozenset(src.acc_name for src in self.timed_sources)
 
 
 # ── 3. Instruction registry ─────────────────────────────────────────
@@ -1456,6 +1462,103 @@ def _time_mirror_analysis(
     )
 
 
+def _timer_contests(
+    pdg: ProgramGraph,
+    program: Any,
+    sources: Sequence[_AccSource],
+) -> frozenset[str]:
+    """Timed accumulators a scan may write other than by one timing instruction, once.
+
+    The probe reads a timer's ``(acc, frac)`` only at scan boundaries, and the
+    landing scan runs every timing instruction once at the aggregate dt.  Both
+    are exact only while one execution of one timing instruction is the
+    accumulator's only write in a scan.  Otherwise a scan can reset the timer
+    and time it again (a second timer instruction on the same Timer, a
+    ``copy(0, Tmr.Acc)``, a For loop, a second call into the timer's
+    subroutine): the boundary readings stay put while the landing times the
+    whole window in one step.  A live run counts each scan's writes instead
+    (see :meth:`_OrdinaryFoldStrategy.capture`); this static answer is for
+    executors that cannot count them.
+    """
+    from pyrung.core.analysis.pdg import _extract_instruction_writes, resolve_rung
+    from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
+
+    registry = _ensure_registry()
+    nodes = pdg.rung_nodes
+    tags = dict(pdg.tags)
+    block_of = {
+        name: block.name
+        for name, tag in tags.items()
+        if (block := getattr(tag, "_pyrung_block", None)) is not None
+    }
+    sites_of: dict[str, list[Any]] = {}
+    for site in pdg.call_sites():
+        sites_of.setdefault(site.callee, []).append(site)
+
+    def walk(instrs: Sequence[Any], in_loop: bool) -> Iterator[tuple[Any, bool]]:
+        for instr in instrs:
+            yield instr, in_loop
+            children = getattr(instr, "instructions", None)
+            if children:
+                yield from walk(children, in_loop or isinstance(instr, ForLoopInstruction))
+
+    def once_a_scan(i: int, seen: frozenset[int] = frozenset()) -> bool:
+        node = nodes[i]
+        if node.scope == "main":
+            return True
+        sites = sites_of.get(node.subroutine or "", [])
+        if not sites:
+            return True  # never called: never runs
+        if len(sites) > 1 or i in seen:
+            return False
+        caller = sites[0].node_index
+        rung = resolve_rung(program, nodes[caller])
+        if rung is None or not any(
+            isinstance(instr, CallInstruction) and instr.subroutine_name == node.subroutine
+            for instr in rung._instructions
+        ):
+            return False  # the one call sits in a loop body
+        return once_a_scan(caller, seen | {i})
+
+    contested: set[str] = set()
+    for src in sources:
+        if not src.timed:
+            continue
+        acc = src.acc_name
+        block = block_of.get(acc)
+        writers = set(pdg.writers_of.get(acc, ()))
+        writers |= {ref.node_index for ref in pdg.indirect_writes if ref.block.name == block}
+        if not writers:
+            continue  # a plant timer, or one no rung reaches
+        timing = 0
+        sole = True
+        for i in writers:
+            rung = resolve_rung(program, nodes[i])
+            for instr, in_loop in walk(rung._instructions if rung is not None else (), False):
+                if type(instr) in registry and any(
+                    phase_acc.name == acc
+                    for phase_acc, _done, _preset in _instruction_phases(instr)
+                ):
+                    timing += 1
+                    sole = sole and not in_loop and once_a_scan(i)
+        if timing != 1 or not sole or len(writers) != 1:
+            contested.add(acc)
+            continue
+        (i,) = writers
+        rung = resolve_rung(program, nodes[i])
+        if any(ref.node_index == i for ref in pdg.indirect_writes):
+            contested.add(acc)
+            continue
+        for instr, _in_loop in walk(rung._instructions if rung is not None else (), False):
+            if type(instr) in registry:
+                continue
+            dests, _target_reads, implicit = _extract_instruction_writes(instr, tags)
+            if acc in dests or acc in implicit:
+                contested.add(acc)
+                break
+    return frozenset(contested)
+
+
 class _OffJudge:
     """Decides, from scan-boundary tag maps, which rungs are unpowered in a window.
 
@@ -2548,6 +2651,13 @@ def _build_fold_context(
     }
     unmodeled = unmodeled | frozenset(woken)
 
+    contested_timers = _timer_contests(pdg, program, sources)
+    if contested_timers and journal is not None:
+        journal.add_note(
+            "fold: timers another instruction also writes, folded only while a scan "
+            "writes each once: " + ", ".join(sorted(contested_timers))
+        )
+
     return _FoldContext(
         sources=tuple(sources),
         acc_names=acc_names,
@@ -2578,6 +2688,7 @@ def _build_fold_context(
         unmodeled=unmodeled,
         mirror_sources=mirror_sources,
         landing_rebuilt=landing_rebuilt,
+        contested_timers=contested_timers,
     )
 
 
@@ -4160,7 +4271,13 @@ class _OrdinaryFoldStrategy:
         affine views, proven unobservable/frozen writes, and clock mirrors the
         landing scan rebuilds, see :class:`_TimeMirrors`). Everything else
         is the plateau guard: one changed value declines the fold.
+
+        Also has *runner* count each timed accumulator's writes in the probe
+        scan, for :meth:`plan` (see :func:`_timer_contests`).
         """
+        names = self.ctx.timed_acc_names
+        if names and not names <= runner._acc_write_watch:
+            runner._acc_write_watch = runner._acc_write_watch | names
         return self.capture_state(runner._state)
 
     def capture_state(self, state: SystemState) -> _FoldProbe:
@@ -4186,6 +4303,7 @@ class _OrdinaryFoldStrategy:
         endpoint_is_boundary: bool = False,
         rtc_at: Callable[[float], datetime] | None = None,
         forced: Collection[str] | None = None,
+        acc_writes: Mapping[str, int] | None = None,
     ) -> _FoldPlan | None:
         """Certify a macro landing after a completed probe scan.
 
@@ -4197,7 +4315,10 @@ class _OrdinaryFoldStrategy:
 
         *rtc_at* resolves the executor's RTC at a simulation time.  A program
         that reads an ``rtc.*`` field cannot fold without it.  *forced* names
-        the executor's forced tags; without it every RTC tick stays a bound.
+        the executor's forced tags; without it every RTC tick stays a bound
+        and no window with a timer is certified.  *acc_writes* counts each
+        timed accumulator's writes in the probe scan; without it a program
+        with a contested timer is not folded (see :func:`_timer_contests`).
         """
         if not _visible_items_match(state, probe.visible, self.exclude):
             self.inert_soft.clear()
@@ -4213,6 +4334,8 @@ class _OrdinaryFoldStrategy:
         after_totals, after_timers = _acc_readings(state, self.ctx.sources)
         timer_moves = _timer_moves(self.ctx, probe.timers, after_timers)
         if timer_moves is None:
+            return None
+        if not self._sole_timer_writes(forced, acc_writes):
             return None
         unmodeled = self.unmodeled
         if self.predicate_reads is not None:
@@ -4291,6 +4414,27 @@ class _OrdinaryFoldStrategy:
             timer_landing=timer_landing,
         )
 
+    def _sole_timer_writes(
+        self, forced: Collection[str] | None, acc_writes: Mapping[str, int] | None
+    ) -> bool:
+        """Whether the probe wrote each timed accumulator at most once, unforced.
+
+        A second write in one scan (a reset, then the timing step) leaves the
+        boundary readings where they were while the landing scan would time the
+        whole window at once.  Forces are writes around the scan too.  The
+        window's scans run the same writers as the probe: which rungs act is
+        fixed by the plateau guard and the crossings.
+        """
+        ctx = self.ctx
+        names = ctx.timed_acc_names
+        if not names:
+            return True
+        if forced is None or not names.isdisjoint(forced):
+            return False
+        if acc_writes is None or not names <= acc_writes.keys():
+            return not ctx.contested_timers
+        return all(acc_writes[name] <= 1 for name in names)
+
     def _rtc_gap(
         self,
         state: SystemState,
@@ -4358,6 +4502,7 @@ class _OrdinaryFoldStrategy:
             harness_scan=harness_scan,
             rtc_at=runner._rtc_at_sim_time,
             forced=runner._input_overrides.forces_mutable.keys(),
+            acc_writes=runner._last_acc_writes,
         )
         if plan is None:
             return None

@@ -6,9 +6,14 @@ All six features have landed. This is the remaining work, most important first.
 
 1. **Real preset tags disagree between backends.** Interpreted compares `acc >= 2.5`, compiled
    `acc >= int(2.5)` (`on_delay`, `timed`, `debounce`).
-2. **Fold lands ahead of stepping with two `on_delay`s on one Timer.** One rung false and resetting it, one
-   ticking, plus any other moving timer: Acc folds to 350 where stepping gives 70. A duplicate-out program, but
-   it breaks "equal stepping or decline".
+2. ~~**Fold lands ahead of stepping with two `on_delay`s on one Timer.**~~ Fixed 2026-10-28:
+   not only duplicate-out; any second `Acc` write in a scan (`copy(0, Tmr.Acc)`, forced Acc, sub called twice,
+   off_delay pair) let a scan reset and re-time the timer while boundary readings stayed put. Live runs count
+   each timed Acc's writes in the probe scan (`ScanContext._acc_writes`, armed by `_OrdinaryFoldStrategy.capture`)
+   and decline on a second write; compiled history replay can't count, so it declines for any statically
+   contested timer (`fold._timer_contests`). A static off-proof (`_OffJudge` per window) was tried first and
+   dropped: tumbler idle lost every fold and ran 85 s -> 387 s. Tests: `TestContestedTimer`. Repros + meter:
+   `scratchpad/fold_dup_timer/`.
 3. **`cause("T")` on a stepped `calc(T + 3, T)` raises RecursionError.**
 4. **Export doesn't enforce CLICK's 24-character nickname limit** (`pyclickplc.validation.NICKNAME_MAX_LENGTH`).
    Add a validation finding.

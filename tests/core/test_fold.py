@@ -3735,3 +3735,122 @@ class TestOutVariants:
         counter = _count_kernel_scans(plc)
         plc.run_until(lambda _s: False, max_cycles=2_000)
         assert counter["n"] < 500
+
+
+class TestContestedTimer:
+    """A timer whose accumulator something else also writes in the scan (a
+    second timer instruction, a copy, a force, a second call into its
+    subroutine) can be reset and timed again every scan: its scan-boundary
+    readings stay put while the landing scan would time the whole window in
+    one step.  Such a window folds only while every other writer is proven off;
+    otherwise the run steps."""
+
+    @staticmethod
+    def _shape(kind: str) -> Callable[[], Program]:
+        from pyrung import call, copy, forloop, off_delay, subroutine
+
+        def build() -> Program:
+            Tmr, Slow = Timer.clone("Tmr"), Timer.clone("Slow")
+            A, B, Btn, Sel = Bool("A"), Bool("B"), Bool("Btn"), Int("Sel")
+
+            @subroutine("S")
+            def sub() -> None:
+                with Rung(Sel == 1):
+                    on_delay(Tmr, 300, "ms")
+
+            with Program(strict=False) as prog:
+                if kind == "two_on_delays":
+                    with Rung(A):
+                        on_delay(Tmr, 300, "ms")
+                    with Rung(B):
+                        on_delay(Tmr, 300, "ms")
+                elif kind == "two_off_delays":
+                    with Rung(B):
+                        off_delay(Tmr, 300, "ms")
+                    with Rung(A):
+                        off_delay(Tmr, 300, "ms")
+                elif kind == "copy_before":
+                    with Rung(Btn):
+                        copy(0, Tmr.Acc)
+                    with Rung(B):
+                        on_delay(Tmr, 300, "ms")
+                elif kind == "copy_after":
+                    with Rung(B):
+                        on_delay(Tmr, 300, "ms")
+                    with Rung(Tmr.Done):
+                        out(Bool("Seen"))
+                    with Rung(Btn):
+                        copy(0, Tmr.Acc)
+                elif kind == "sub_twice":
+                    for sel in (0, 1):
+                        with Rung():
+                            copy(sel, Sel)
+                        with Rung():
+                            call(sub)
+                elif kind == "forloop":
+                    with Rung(B), forloop(2):
+                        on_delay(Tmr, 300, "ms")
+                with Rung():
+                    on_delay(Slow, 60_000, "ms")
+                with Rung(Tmr.Done):
+                    out(Bool("Hit"))
+            return prog
+
+        return build
+
+    @pytest.mark.parametrize(
+        "kind",
+        ["two_on_delays", "two_off_delays", "copy_before", "copy_after", "sub_twice", "forloop"],
+    )
+    @pytest.mark.parametrize("btn", [False, True])
+    def test_matches_stepping(self, kind: str, btn: bool) -> None:
+        _assert_fold_is_exact(self._shape(kind), _scans(500), patch={"B": True, "Btn": btn})
+
+    def test_reset_writer_released_mid_run(self) -> None:
+        def run(plc: PLC, fold: bool) -> None:
+            plc.patch({"B": True, "Btn": True})
+            _run_scans(plc, 120, fold=fold)
+            plc.patch({"Btn": False})
+            _run_scans(plc, 400, fold=fold)
+
+        folded = _assert_fold_is_exact(self._shape("copy_before"), run)
+        assert folded.state.tags["Tmr_Done"]
+
+    def test_forced_accumulator_matches_stepping(self) -> None:
+        def run(plc: PLC, fold: bool) -> None:
+            plc.force("Tmr_Acc", 50)
+            _run_scans(plc, 500, fold=fold)
+
+        folded = _assert_fold_is_exact(self._shape("copy_before"), run, patch={"B": True})
+        assert not folded.state.tags["Tmr_Done"]
+
+    def test_reset_writer_proven_off_still_folds(self) -> None:
+        plc = PLC(self._shape("copy_before")(), dt=0.01)
+        plc.patch({"B": True, "Btn": False})
+        plc.step()
+        counter = _count_kernel_scans(plc)
+        _run_scans(plc, 2_000, fold=True)
+        assert counter["n"] < 100
+
+    @pytest.mark.parametrize("kind", ["two_on_delays", "copy_before", "copy_after", "sub_twice"])
+    def test_history_replay_matches_stepping(self, kind: str) -> None:
+        def run(plc: PLC, fold: bool) -> None:
+            plc.patch({"B": True, "Btn": True})
+            _run_scans(plc, 150, fold=fold)
+            plc.patch({"Btn": False})
+            _run_scans(plc, 300, fold=fold)
+
+        folded, stepped = _folded_and_stepped(self._shape(kind), run)
+        tip = folded.state.scan_id
+        for target in (5, 100, 160, 300, tip - 1, tip):
+            want = _full_state(stepped.replay_to(target))
+            assert _full_state(folded.replay_to(target)) == want
+            assert _full_state(folded._replay_seek(target)) == want
+
+    def test_reset_writer_held_on_steps(self) -> None:
+        plc = PLC(self._shape("copy_before")(), dt=0.01)
+        plc.patch({"B": True, "Btn": True})
+        plc.step()
+        counter = _count_kernel_scans(plc)
+        _run_scans(plc, 200, fold=True)
+        assert counter["n"] == 200

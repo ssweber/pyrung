@@ -1302,6 +1302,11 @@ class PLC:
         # fold computed as one macro step.
         self._landing_scan_id: int | None = None
         self._fold_windows: list[tuple[int, int]] = []
+        # Timed accumulators whose writes each scan counts, and the latest
+        # scan's counts (``None`` while nothing is watched); see
+        # ``fold._OrdinaryFoldStrategy.capture``.
+        self._acc_write_watch: frozenset[str] = frozenset()
+        self._last_acc_writes: dict[str, int] | None = None
         self._replay_mode: bool = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
         # Constant-size instrumentation for the most recent sparse point seek.
@@ -4141,6 +4146,11 @@ class PLC:
             replay_io=replay_io,
             state_tags_read=state_tags_read,
         )
+        # Writes per timed accumulator in this scan, for the fold's probe
+        # (fold._OrdinaryFoldStrategy.capture arms the watch).
+        if self._acc_write_watch:
+            ctx._acc_writes = dict.fromkeys(self._acc_write_watch, 0)
+        self._last_acc_writes = ctx._acc_writes
         if synthesis_observer is not None:
             # Start the selected historical journal before scan-start runtime,
             # patches, and pre-logic forces. Later synthesis and user runs nest
