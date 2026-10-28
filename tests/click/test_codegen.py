@@ -923,8 +923,8 @@ class TestGraphWalkEdgeCases:
         assert result.instructions[1].pins[0].name == "reset"
         assert result.instructions[1].pins[0].conditions == ["X002"]
 
-    def test_pin_row_requires_immediate_preceding_instruction(self):
-        """A separated pin row should fail instead of attaching heuristically."""
+    def test_pin_row_after_padding_row_attaches(self):
+        """A padding row between an instruction and its pin is allowed (CLICK draws it)."""
         from pyrung.click.codegen.analyzer import _analyze_single_rung
         from pyrung.click.codegen.models import _RawRung
 
@@ -933,7 +933,20 @@ class TestGraphWalkEdgeCases:
         row2 = _make_row("", _fill_dashes({0: "X002"}, 1, 31), af=".reset()")
         rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
 
-        with pytest.raises(ValueError, match="must immediately follow"):
+        result = _analyze_single_rung(rung)
+        assert [pin.name for pin in result.instructions[0].pins] == ["reset"]
+        assert result.instructions[0].pins[0].conditions == ["X002"]
+
+    def test_pin_row_without_instruction_rejected(self):
+        """A pin label with no instruction row above it cannot be attributed."""
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
+
+        row0 = _make_row("R", _fill_dashes({0: "X002"}, 1, 31), af=".reset()")
+        row1 = _make_row("", _fill_dashes({0: "X001"}, 1, 31), af="on_delay(T1)")
+        rung = _RawRung(comment_lines=[], rows=[row0, row1])
+
+        with pytest.raises(ValueError, match="no instruction row above it"):
             _analyze_single_rung(rung)
 
     def test_noncanonical_left_edge_not_col0(self):

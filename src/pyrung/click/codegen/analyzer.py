@@ -30,7 +30,7 @@ from __future__ import annotations
 import warnings
 from collections import defaultdict
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from pyrung.click._topology import (
     Leaf,
@@ -41,7 +41,7 @@ from pyrung.click._topology import (
     make_compound,
     trees_equal,
 )
-from pyrung.click.codegen.constants import _ADJACENCY, _CONDITION_COLS, _PIN_RE
+from pyrung.click.codegen.constants import _ADJACENCY, _CONDITION_COLS, _FUNC_RE, _PIN_RE
 from pyrung.click.codegen.models import (
     RungRole,
     _AnalyzedRung,
@@ -898,6 +898,83 @@ def _analyze_rungs(
     return analyzed
 
 
+# Pin labels each instruction takes, in the fixed order CLICK draws them.
+_PIN_ORDER: dict[str, tuple[str, ...]] = {
+    "on_delay": ("reset",),
+    "count_up": ("down", "reset"),
+    "count_down": ("reset",),
+    "shift": ("clock", "reset"),
+    "event_drum": ("reset", "jump", "jog"),
+    "time_drum": ("reset", "jump", "jog"),
+    "time_event_drum": ("reset", "jump", "jog"),
+}
+
+
+def _attach_pins(
+    rows: list[list[str]],
+    pin_row_set: set[int],
+    pin_trees: dict[int, SPNode | None],
+    instructions: list[_InstructionInfo],
+    af_rows: list[int],
+) -> None:
+    """Attach each pin row to the instruction it belongs to.
+
+    A pin label (``.reset()``, ``.jump(n)``, ...) belongs to the nearest
+    instruction row above it.  Rows without an AF token (OR branches, padding)
+    may sit anywhere between an instruction's pin rows: what a pin reads comes
+    from the wiring into its row, and a row wired into nothing is reported by
+    the dropped-contact check.  Labels must follow the instruction's fixed pin
+    order, each at most once.
+    """
+    instruction_by_row = {af_row: index for index, af_row in enumerate(af_rows)}
+    current_instruction: int | None = None
+    current_name = ""
+    seen: list[str] = []
+
+    for row_index, row in enumerate(rows):
+        af = row[-1]
+        if row_index not in pin_row_set:
+            if af:
+                current_instruction = instruction_by_row.get(row_index)
+                match = _FUNC_RE.match(af)
+                current_name = match.group(2) if match else af
+                seen = []
+            continue
+
+        if current_instruction is None:
+            raise ValueError(
+                f"Pin row {row_index} has no instruction row above it in this rung."
+                f"\n{_annotate_rung_rows(rows, row_index)}"
+            )
+        match = _PIN_RE.match(af)
+        if not match:
+            continue
+        name = match.group(1)
+        order = _PIN_ORDER.get(current_name)
+        if order is not None:
+            if name not in order:
+                raise ValueError(
+                    f"Pin .{name}() on row {row_index} is not a pin of {current_name}() "
+                    f"(its pins are {', '.join(f'.{p}()' for p in order)})."
+                    f"\n{_annotate_rung_rows(rows, row_index)}"
+                )
+            if seen and order.index(name) <= order.index(seen[-1]):
+                raise ValueError(
+                    f"Pin .{name}() on row {row_index} is out of order: {current_name}() "
+                    f"pins come in the order {', '.join(f'.{p}()' for p in order)}."
+                    f"\n{_annotate_rung_rows(rows, row_index)}"
+                )
+        seen.append(name)
+        instructions[current_instruction].pins.append(
+            _PinInfo(
+                name=name,
+                arg=match.group(2),
+                conditions=_extract_conditions(row, 0, _CONDITION_COLS),
+                condition_tree=pin_trees.get(row_index),
+            )
+        )
+
+
 def _analyze_single_rung(
     rung: _RawRung,
     *,
@@ -982,48 +1059,16 @@ def _analyze_single_rung(
                 f"Rung drops output instruction(s) present in the source during grouping: {detail}."
             )
 
-    # Exporter pins immediately follow their owning AF row. Walk the raw rows
-    # in order so malformed layouts fail loudly instead of silently attaching
-    # to the wrong instruction.
-    # Compute SP trees for pin row conditions.
+    # Compute SP trees for pin row conditions.  A pin's condition comes from
+    # the wiring into its row, so OR branches and padding rows may sit between
+    # pin rows (above or below a label); _attach_pins decides ownership.
     pin_trees: dict[int, SPNode | None] = {}
     if pin_sinks and source is not None:
         for pr, ps in pin_sinks.items():
             pin_trees[pr] = _sp_reduce(source, ps, edges)
 
-    if pin_row_set and instructions:
-        instruction_by_row = {af_row: index for index, af_row in enumerate(af_rows)}
-        current_instruction: int | None = None
-
-        for row_index, row in enumerate(rows):
-            af = row[-1]
-
-            if row_index in pin_row_set:
-                if current_instruction is None:
-                    raise ValueError(
-                        f"Pin row {row_index} must immediately follow its owning instruction "
-                        f"row.\n{_annotate_rung_rows(rows, row_index)}"
-                    )
-
-                match = _PIN_RE.match(af)
-                if match:
-                    pin_conds = _extract_conditions(row, 0, _CONDITION_COLS)
-                    pin_tree = pin_trees.get(row_index)
-                    instructions[current_instruction].pins.append(
-                        _PinInfo(
-                            name=match.group(1),
-                            arg=match.group(2),
-                            conditions=pin_conds,
-                            condition_tree=pin_tree,
-                        )
-                    )
-                continue
-
-            if af and not af.startswith("."):
-                current_instruction = instruction_by_row.get(row_index)
-                continue
-
-            current_instruction = None
+    if pin_row_set:
+        _attach_pins(rows, pin_row_set, pin_trees, instructions, af_rows)
 
     # Dropped-condition detection: every content edge's Leaf should reach at
     # least one output or pin tree before output grouping. Grouping may safely
@@ -1065,7 +1110,7 @@ def _analyze_single_rung(
         _SourceOutput(
             af_token,
             tree,
-            tuple(instructions[instruction_index_by_row[af_row]].pins)
+            tuple(replace(pin) for pin in instructions[instruction_index_by_row[af_row]].pins)
             if af_row in instruction_index_by_row
             else (),
         )
