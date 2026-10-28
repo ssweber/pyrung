@@ -4071,18 +4071,22 @@ class PLC:
             return
         registration.enabled = False
 
-    def _record_fold_landing(self, first_scan_id: int | None = None) -> None:
+    def _record_fold_landing(self, first_scan_id: int | None = None, *, exact: bool = True) -> None:
         """Cache the tip a fold landing moved to its scan, and checkpoint it there.
 
         The landing state is the exact state of the scan it lands on, so
         history may serve it, and a replay may anchor on it, as on any
         stepped scan.  *first_scan_id* is the first scan the landing stands
-        for; recorded ``cause()`` / ``effect()`` refuse the window.
+        for; recorded ``cause()`` / ``effect()`` refuse the window.  A tip
+        that is not *exact* (a cycle jump leaves tags it ignores to the next
+        scan) only registers the window: history replays that scan instead.
         """
         state = self._state
         scan_id = state.scan_id
         if first_scan_id is not None and first_scan_id <= scan_id:
             self._fold_windows.append((first_scan_id, scan_id))
+        if not exact:
+            return
         self._cache_state(state)
         if scan_id <= 0 or scan_id % self._checkpoint_interval != 0:
             return

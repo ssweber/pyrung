@@ -12,8 +12,8 @@ All six features have landed. This is the remaining work, most important first.
    each timed Acc's writes in the probe scan (`ScanContext._acc_writes`, armed by `_OrdinaryFoldStrategy.capture`)
    and decline on a second write; compiled history replay can't count, so it declines for any statically
    contested timer (`fold._timer_contests`). A static off-proof (`_OffJudge` per window) was tried first and
-   dropped: tumbler idle lost every fold and ran 85 s -> 387 s. Tests: `TestContestedTimer`. Repros + meter:
-   `scratchpad/fold_dup_timer/`.
+   dropped: tumbler idle lost every fold and ran 85 s -> 387 s. Tests: `TestContestedTimer`. The cycle-fold jump
+   (`how()` coasts) now lands its edits on the tip, clamped at 32767; tests in `test_pilot_cyclefold.py`.
 3. **`cause("T")` on a stepped `calc(T + 3, T)` raises RecursionError.**
 4. **Export doesn't enforce CLICK's 24-character nickname limit** (`pyclickplc.validation.NICKNAME_MAX_LENGTH`).
    Add a validation finding.

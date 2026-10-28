@@ -728,6 +728,16 @@ def _clock_mirror_cycle_program(*, live_stamp: bool = False, continued: bool = F
     return prog
 
 
+def _assert_history_matches(folded: PLC, ref: PLC) -> None:
+    """Every scan the folded run's history serves equals the stepped run's."""
+    served = sorted(sid for sid in folded._recent_state_cache if sid <= folded.state.scan_id)
+    assert served
+    for sid in served:
+        want = {k: v for k, v in ref.history.at(sid).tags.items() if not k.startswith("sys.scan")}
+        got = {k: v for k, v in folded.history.at(sid).tags.items() if not k.startswith("sys.scan")}
+        assert got == want, sid
+
+
 class TestCycleFoldClockMirrors:
     """Clock mirrors are ignored by the cycle observer, and a jump may cross RTC
     ticks while every reader is off.  The jump leaves them stale, so a real scan
@@ -770,6 +780,23 @@ class TestCycleFoldClockMirrors:
         assert stats["cycle_folds"] >= 1
         assert folded.state.scan_id == ref.state.scan_id
         assert folded.state.tags == ref.state.tags
+
+    def test_history_never_serves_a_stale_mirror(self) -> None:
+        """The jumped tip still holds the pre-jump clock copies, so history
+        replays that scan instead of serving it."""
+        ref = self._stepped(_clock_mirror_cycle_program(), 1_500)
+        folded = self._plc(_clock_mirror_cycle_program())
+        stats: dict[str, int] = {}
+        cycle_fold_until(
+            folded,
+            lambda _s: False,
+            budget=1_500,
+            kernel_budget=False,
+            predicate_reads=frozenset(),
+            stats=stats,
+        )
+        assert stats["cycle_folds"] >= 1
+        _assert_history_matches(folded, ref)
 
     def test_without_mirrors_the_cycle_never_repeats(self) -> None:
         plc = self._plc(_clock_mirror_cycle_program())
@@ -857,8 +884,8 @@ class TestCycleFoldClockMirrors:
 
 
 class TestCycleJumpPatchesLand:
-    """A cycle jump queues its accumulator edits as patches the next real scan
-    applies, so a logical budget never ends on the jump itself."""
+    """A cycle jump lands its accumulator edits on the tip, clamped where the
+    timer clamps, and a logical budget never ends on the jump itself."""
 
     @pytest.mark.parametrize("unit", ["s", "ms"])
     def test_budget_end_keeps_a_real_scan_after_the_jump(self, unit: str) -> None:
@@ -886,6 +913,7 @@ class TestCycleJumpPatchesLand:
         assert stats["cycle_folds"] >= 1
         assert plc.state.scan_id == ref.state.scan_id
         assert plc.state.tags == ref.state.tags
+        _assert_history_matches(plc, ref)
 
 
 class TestCycleJumpReadsTheIntegerAccumulator:

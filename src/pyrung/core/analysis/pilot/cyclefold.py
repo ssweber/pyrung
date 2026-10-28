@@ -400,6 +400,7 @@ def cycle_fold_until(
         _acc_totals,
         _harness_nearest_scan,
         _OrdinaryFoldStrategy,
+        _replace_tip_state,
         _rtc_hard_fields,
         _rtc_jump_room,
         _scan_callbacks,
@@ -482,6 +483,10 @@ def cycle_fold_until(
     if fold_ctx.time_mirrors is not None:
         ignore = ignore | fold_ctx.time_mirrors.names
     significant_keys = frozenset(plc.state.tags) - ignore
+    # A jump runs no scan: an ignored tag other than a frozen write keeps its
+    # pre-jump value until the next scan rebuilds it, so the jumped tip is then
+    # not the exact state of its scan.
+    jump_exact = not (ignore - fold_ctx.frozen_writes)
     ordinary = _OrdinaryFoldStrategy(fold_ctx, extra_comparisons, extra_unmodeled)
     trace_reads = predicate_reads is None
 
@@ -766,7 +771,8 @@ def cycle_fold_until(
                 else:
                     total = math.fsum((float(progress_now[tag]), delta * periods_to_jump))
                     whole, fraction = _split_timed_total(total)
-                patches[tag] = whole
+                # The accumulator clamps; its carry runs on (see _timer_step).
+                patches[tag] = min(whole, source.acc_max)
                 fractions[f"_frac:{tag}"] = fraction
             else:
                 patches[tag] = cur[tag] + round(delta * periods_to_jump)
@@ -774,18 +780,25 @@ def cycle_fold_until(
             # Presentation receipt: these are the exact accumulator edits a
             # technician would make to reproduce the proved-safe jump.
             advances.extend(patches.items())
-        plc.patch(patches)
+        # Direct tip edits, not patches: the landed state is the exact state of
+        # its scan, cached and checkpointed as such (a patch would only land on
+        # the next scan, and a replay would apply it as an input).
         memory = plc._state.memory
         for key, value in fractions.items():
             memory = memory.set(key, value)
         first_skipped = plc._state.scan_id + 1
-        plc._state = plc._state.set(
-            memory=memory,
-            scan_id=plc._state.scan_id + jump_scans,
-            timestamp=plc._state.timestamp + jump_scans * dt,
+        _replace_tip_state(
+            plc,
+            plc._state.set(
+                tags=plc._state.tags.update(patches),
+                memory=memory,
+                scan_id=plc._state.scan_id + jump_scans,
+                timestamp=plc._state.timestamp + jump_scans * dt,
+            ),
+            patches,
         )
         # The jumped scans never ran: recorded cause() / effect() refuse them.
-        plc._record_fold_landing(first_skipped)
+        plc._record_fold_landing(first_skipped, exact=jump_exact)
         macro_folds += 1
         cycle_folds += 1
         cycle_folded_scans += jump_scans
