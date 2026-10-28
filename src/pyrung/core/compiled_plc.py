@@ -234,7 +234,10 @@ class CompiledPLC:
             rtc_now_getter=self._rtc_at_sim_time,
             rtc_setter=self._set_rtc_internal,
         )
-        self._input_overrides = InputOverrideManager(is_read_only=self._system_runtime.is_read_only)
+        self._input_overrides = InputOverrideManager(
+            is_read_only=self._system_runtime.is_read_only,
+            known_tag=lambda name: self._known_tags_by_name.get(name),
+        )
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
         self._randint_sites = randint_sites(self._compiled.referenced_tags)

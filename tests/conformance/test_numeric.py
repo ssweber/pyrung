@@ -17,9 +17,9 @@ A fault flag is read by a contact on the rung after the faulting one, on the
 same scan.  A flag that is on shows only that some instruction on that scan
 set it, so each flag is read by the first case to fault on its scan:
 ``int_calc_wraps`` is the group's first case and sets SC43; ``div_by_zero``
-is the first to set SC40 on the firing scan; ``real_div_by_zero`` counts its
-own scans (``scans.py``) and divides on its third, after the others have
-fired.  That holds in-process, where every case fires on the same scan; over
+is the first to set SC40 on the firing scan; ``real_div_by_zero`` and
+``real_overflow_stays_finite`` count their own scans (``scans.py``) and fault
+on their third, after the others have fired (one sets SC40, the other SC43).  That holds in-process, where every case fires on the same scan; over
 the wire the cases fire when their ``Cmd`` lands, and another group's fault
 on the same scan would also read as on.
 
@@ -49,11 +49,15 @@ could plausibly differ, these cases tell the models apart:
   A float intermediate reads 10000 too (1E+10 is exact even in a float32).
 - ``real_is_64_bit_in_pyrung``: 16777216 + 1 in a Real.  pyrung keeps a REAL
   as a Python float (64-bit) and reads 1 twice; a float32 Real (CLICK's)
-  reads 0 twice.  This one is expected to fail on a CLICK.
-- ``real_overflow_stays_finite``: 3.0E+38 * 10 in a Real, divided by 3.0E+38.
-  pyrung reads 10; a float32 that saturates at its maximum reads 1; one that
-  overflows to +Inf reads whatever its Inf -> Int conversion gives (0 with a
-  fault, if it treats Inf the way pyrung treats a non-finite result).
+  reads 0 twice.  This one is expected to fail on a CLICK: pyrung keeps
+  64-bit precision on purpose (a documented deviation).
+- ``real_overflow_stays_finite``: 3.0E+38 * 10 and * -10 in a Real.  pyrung
+  keeps every REAL inside CLICK's range: the result saturates at
+  +/-3.4028235E+38 with SC43 on, reading 1/1/1/1.  A Real past the range
+  (64-bit, unbounded) reads Result4 = 10 and Result1..3 = 0; one that
+  overflows to +/-Inf reads Result1/Result2 = 0, and Result4 is whatever its
+  Inf / 3.0E+38 -> Int gives; one that saturates without the flag reads
+  Result3 = 0.
 - ``div_by_zero``, ``real_div_by_zero``: division by zero writes 0 and sets
   the division-error flag (SC40).  A Math that skips the write reads the
   preset (99, or Result1..3 = 0 for the Real compares); an IEEE Real division
@@ -206,13 +210,32 @@ def prove_real_is_64_bit_in_pyrung(slot):
         copy(1, slot.Fired)
 
 
+#: ``real_overflow_stays_finite`` overflows on its own scan 3, after every
+#: other case has fired, so the out-of-range flag it reads is its own (in-process).
+REAL_OVERFLOW_WINDOW = 3
+
+
 def prove_real_overflow_stays_finite(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    # DF121 = 3.0E+38; on scan 3, 3.0E+38 * 10 goes into DF122 and * -10 into
+    # DF123, both preset to 1.0 so a skipped write does not read as saturated.
+    count_scans(slot, REAL_OVERFLOW_WINDOW)
+    on_scan = slot.Scratch == REAL_OVERFLOW_WINDOW
+    with Rung(slot.Cmd != 0, on_scan):
         copy(3.0e38, df[121])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(1.0, df[122])
+        copy(1.0, df[123])
+    with Rung(slot.Cmd != 0, on_scan):
         calc(df[121] * 10, df[122])
-        calc(df[122] / df[121], slot.Result1)
-        copy(1, slot.Fired)
+        calc(df[121] * -10, df[123])
+    with Rung(slot.Cmd != 0, on_scan, system.fault.out_of_range):
+        copy(1, slot.Result3)
+    with Rung(slot.Cmd != 0, on_scan, df[122] == 3.4028235e38):
+        copy(1, slot.Result1)
+    with Rung(slot.Cmd != 0, on_scan, df[123] == -3.4028235e38):
+        copy(1, slot.Result2)
+    with Rung(slot.Cmd != 0, on_scan):
+        calc(df[122] / df[121], slot.Result4)
+    done(slot, REAL_OVERFLOW_WINDOW)
 
 
 def prove_div_by_zero(slot):
@@ -290,7 +313,7 @@ def init_real_is_64_bit_in_pyrung(slot):
 
 
 def init_real_overflow_stays_finite(slot):
-    fill(0, df.select(121, 122))
+    fill(0, df.select(121, 123))
 
 
 def init_real_div_by_zero(slot):
@@ -382,11 +405,14 @@ group = Group(
             expect={"Result1": 1, "Result2": 1},
         ),
         case(
-            "pyrung's Real does not overflow at the 32-bit limit: 3.0E+38 * 10 is 3.0E+39, "
-            "10 times 3.0E+38 (Result1 = 10)",
+            "A Real that overflows stays finite: 3.0E+38 * 10 saturates at 3.4028235E+38 "
+            "(Result1 = 1), 3.0E+38 * -10 at -3.4028235E+38 (Result2 = 1), the "
+            "out-of-range flag SC43 is on (Result3 = 1), and the result reads 1 times "
+            "3.0E+38, not 10 (Result4 = 1)",
             ladder=prove_real_overflow_stays_finite,
             init=init_real_overflow_stays_finite,
-            expect={"Result1": 10},
+            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1},
+            scans=scans_for(REAL_OVERFLOW_WINDOW),
         ),
         case(
             "Integer division by zero writes 0 over the destination's 99 (Result1) and sets "

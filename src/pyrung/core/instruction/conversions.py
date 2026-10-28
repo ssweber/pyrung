@@ -7,7 +7,7 @@ import re
 import struct
 from typing import Any
 
-from pyrung.core.storage import StoreTransform, store_value
+from pyrung.core.storage import StoreTransform, real_in_range, store_value
 from pyrung.core.tag import Tag
 
 _DINT_MIN = -2147483648
@@ -224,7 +224,7 @@ def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
     - INT: 16-bit signed (-32768 to 32767)
     - DINT: 32-bit signed (-2147483648 to 2147483647)
     - WORD: 16-bit unsigned (0 to 65535)
-    - REAL: 32-bit float (no truncation, just cast)
+    - REAL: float, saturated at CLICK's range (+/-3.4028235E+38)
     - BOOL: truthiness
     - CHAR: no truncation
 
@@ -248,6 +248,9 @@ def _math_out_of_range_for_dest(value: Any, dest: Tag, mode: str) -> bool:
 
     if isinstance(value, float) and not math.isfinite(value):
         return False
+    if dest.type == TagType.REAL and mode != "hex":
+        # Past CLICK's REAL range: the store saturates, the flag says so.
+        return isinstance(value, (int, float)) and not real_in_range(value)
 
     try:
         int_value = int(value)

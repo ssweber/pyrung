@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from pyrung.core._source import _capture_source
 from pyrung.core.live_binding import get_active_runner
+from pyrung.core.storage import check_real_value
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
@@ -26,7 +27,7 @@ class TagType(Enum):
     BOOL = "bool"  # Boolean: True/False
     INT = "int"  # 16-bit signed: -32768 to 32767
     DINT = "dint"  # 32-bit signed (Double INT)
-    REAL = "real"  # 32-bit float
+    REAL = "real"  # float, within CLICK's REAL range (see Real)
     WORD = "word"  # 16-bit unsigned
     CHAR = "char"  # Single ASCII character
 
@@ -167,6 +168,8 @@ class Tag:
 
         if self.type == TagType.CHAR and self.default == "":
             object.__setattr__(self, "default", "\x00")
+        if self.type == TagType.REAL:
+            check_real_value(self.default, f"Tag {self.name!r}: default")
 
         # Mutual exclusivity checks
         if self.readonly and self.final:
@@ -850,9 +853,16 @@ class Dint(_TagTypeBase):
 
 
 class Real(_TagTypeBase):
-    """Create a REAL (32-bit IEEE 754 float) tag.
+    """Create a REAL (floating-point) tag.
 
     Retentive by default. Use for analog presets and process values.
+
+    pyrung keeps a REAL at Python's 64-bit precision, where a CLICK REAL is a
+    32-bit IEEE 754 float: ``16777216.0 + 1`` reads 16777217 in pyrung and
+    16777216 on a CLICK.  The range is CLICK's: a value never leaves
+    +/-3.4028235E+38.  A ``calc`` or ``copy`` result past it saturates there
+    (``calc`` also sets ``system.fault.out_of_range``); a default, literal,
+    patch or force past it is rejected.
 
     Example:
         ```python

@@ -20,7 +20,7 @@ from pyrung import Bool, Int, Real, Char
 
 Button  = Bool()             # 1 bit, resets on STOP→RUN
 Step    = Int()              # 16-bit signed, retentive
-Temp    = Real()             # 32-bit float, retentive
+Temp    = Real()             # float, retentive
 State   = Char()             # 8-bit ASCII, retentive
 ```
 
@@ -31,7 +31,7 @@ Tags don't hold values themselves — they're references. Values live in the sys
 | `Bool` | 1 bit | No |
 | `Int` | 16-bit signed | Yes |
 | `Dint` | 32-bit signed | Yes |
-| `Real` | 32-bit float | Yes |
+| `Real` | float, ±3.4028235E+38 (64-bit precision in pyrung) | Yes |
 | `Word` | 16-bit unsigned | Yes |
 | `Char` | 8-bit ASCII | Yes |
 

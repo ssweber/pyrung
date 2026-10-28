@@ -20,6 +20,12 @@ calc(DH[1] | DH[2], DH[3])              # WORD-only math infers hex mode
 | `50000 * 50000` | DINT (32-bit signed) | −1,794,967,296 (wraps) |
 | `40000` → `copy()` | INT | 32767 (clamped) |
 
+## REAL range and precision
+
+A `Real` never leaves CLICK's range, ±3.4028235E+38. A `calc()` result past it saturates at the limit and sets `system.fault.out_of_range`; `copy()` saturates the same way. A default, literal, `patch()` or `force()` past it raises `ValueError`.
+
+Inside the range pyrung keeps a `Real` at Python's 64-bit precision, where a CLICK REAL is a 32-bit float: `16777216.0 + 1` is 16777217 in pyrung and 16777216 on a CLICK. Compare a `Real` with a tolerance, not `==`, when the last digits matter.
+
 ## Division
 
 - Division by zero produces result = 0 and sets `system.fault.division_error`.
@@ -56,6 +62,7 @@ For CLICK portability, do not mix WORD and non-WORD math in the same `calc()` ex
 | `calc()` | Wraps (modular arithmetic) |
 | Timer accumulator | Clamps at 32,767 |
 | Counter accumulator | Clamps at DINT min/max |
+| REAL past ±3.4028235E+38 | Saturates; `calc()` sets `system.fault.out_of_range` |
 | Division by zero | Result = 0, `system.fault.division_error` set |
 | Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | Result = 0, `system.fault.math_operation_error` set, PLC to STOP |
 

@@ -86,6 +86,7 @@ from pyrung.core.instruction.send_receive import (
 )
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.rung import Rung as LogicRung
+from pyrung.core.storage import REAL_MAX
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation.walker import _condition_children
 
@@ -824,6 +825,8 @@ def _calc_range_condition(value_var: str, dest_type: str, mode: str) -> str | No
         return f"int({value_var}) < -2147483648 or int({value_var}) > 2147483647"
     if dest_type == "WORD":
         return f"int({value_var}) < 0 or int({value_var}) > 65535"
+    if dest_type == "REAL":
+        return f"{value_var} > {REAL_MAX!r} or {value_var} < {-REAL_MAX!r}"
     return None
 
 
@@ -865,7 +868,12 @@ def _compile_calc_instruction(
         "    _calc_value = 0",
     ]
     range_cond = _calc_range_condition("_calc_value", instr.dest.type.name, instr.mode)
-    if range_cond and out_of_range_body != ["pass"]:
+    if range_cond and instr.dest.type.name == "REAL":
+        # A REAL saturates at CLICK's range, with the out-of-range flag.
+        enabled_body.append(f"if {range_cond}:")
+        enabled_body.extend(f"    {line}" for line in out_of_range_body if line != "pass")
+        enabled_body.append(f"    _calc_value = {REAL_MAX!r} if _calc_value > 0 else {-REAL_MAX!r}")
+    elif range_cond and out_of_range_body != ["pass"]:
         enabled_body.append(f"if {range_cond}:")
         enabled_body.extend(f"    {line}" for line in out_of_range_body)
     enabled_body.append("try:")

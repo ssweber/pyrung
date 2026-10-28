@@ -1360,7 +1360,10 @@ class PLC:
             rtc_now_getter=self._rtc_at_sim_time,
             rtc_setter=self._set_rtc_and_record,
         )
-        self._input_overrides = InputOverrideManager(is_read_only=self._system_runtime.is_read_only)
+        self._input_overrides = InputOverrideManager(
+            is_read_only=self._system_runtime.is_read_only,
+            known_tag=lambda name: self._known_tags_by_name.get(name),
+        )
         # Preserve direct access used in tests/live-tag helpers.
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable

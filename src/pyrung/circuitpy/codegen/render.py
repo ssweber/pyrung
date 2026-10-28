@@ -48,6 +48,7 @@ from pyrung.circuitpy.codegen.render_modbus import (
     _render_modbus_server,
     _render_modbus_server_init,
 )
+from pyrung.core.storage import REAL_MAX
 
 
 def _tag_is_input_endpoint(ctx: CodegenContext, tag_name: str) -> bool:
@@ -870,7 +871,7 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
             '    if dest_type == "WORD":',
             "        return int(value) & 0xFFFF",
             '    if dest_type == "REAL":',
-            "        return float(value)",
+            "        return _store_real(value)",
             '    if dest_type == "BOOL":',
             "        return bool(value)",
             '    if dest_type == "CHAR":',
@@ -913,9 +914,19 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
         ],
         "_store_real": [
             "def _store_real(value):",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return 0.0",
-            "    return float(value)",
+            "    if type(value) is float:",
+            "        if not math.isfinite(value):",
+            "            return 0.0",
+            "    else:",
+            "        try:",
+            "            value = float(value)",
+            "        except OverflowError:",
+            f"            return {REAL_MAX!r} if value > 0 else {-REAL_MAX!r}",
+            f"    if value > {REAL_MAX!r}:",
+            f"        return {REAL_MAX!r}",
+            f"    if value < {-REAL_MAX!r}:",
+            f"        return {-REAL_MAX!r}",
+            "    return value",
             "",
         ],
         "_math_func": [
@@ -947,6 +958,8 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
         needed_helpers.update({"_as_single_ascii_char", "_ascii_char_from_code"})
     if "_render_text_from_numeric" in needed_helpers:
         needed_helpers.add("_format_int_text")
+    if "_store_copy_value_to_type" in needed_helpers:
+        needed_helpers.add("_store_real")
 
     if not helpers_in_runtime:
         for helper in _HELPER_ORDER:

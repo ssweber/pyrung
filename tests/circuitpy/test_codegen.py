@@ -24,6 +24,7 @@ from pyrung.core import (
     Bool,
     Char,
     Counter,
+    Dint,
     InputBlock,
     Int,
     OutputBlock,
@@ -1325,6 +1326,55 @@ class TestBoardPeripheralsAndRunStop:
         stub_base = StubBase()
         _run_single_scan_source(result.code, monkeypatch, stub_base, runtime_source=result.runtime)
         assert stub_base.discrete_writes[-1] == (2, 1)
+
+    def test_real_overflow_saturates_at_clicks_range(self, monkeypatch):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        big = Real("Big", default=3.0e38)
+        dest = Real("Dest")
+        low = Real("Low")
+        dint = Dint("Huge", default=2147483647)
+        copied = Real("Copied")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(big * 10, dest)
+                calc(big * -10, low)
+                copy(dint, copied)
+
+        result = generate_circuitpy(
+            prog,
+            hw,
+            target_scan_ms=10.0,
+            runstop=RunStopConfig(debounce_ms=0, run_when_high=False),
+        )
+
+        class StubBase:
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+            def writeDiscrete(self, value, slot):
+                return None
+
+            def readAnalog(self, slot, ch):
+                return 0
+
+            def writeAnalog(self, value, slot, ch):
+                return None
+
+            def readTemperature(self, slot, ch):
+                return 0.0
+
+        namespace = _run_single_scan_source(
+            result.code, monkeypatch, StubBase(), runtime_source=result.runtime
+        )
+        ctx = _context_for_program(prog, hw)
+        assert namespace[ctx.symbol_for_tag(dest)] == 3.4028235e38
+        assert namespace[ctx.symbol_for_tag(low)] == -3.4028235e38
+        assert namespace[ctx.symbol_for_tag(copied)] == 2147483647.0
+        assert namespace[ctx.symbol_for_tag(system.fault.out_of_range)] is True
 
     def test_math_domain_error_writes_zero_and_holds_stop(self, monkeypatch):
         hw = P1AM()

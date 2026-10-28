@@ -14,6 +14,7 @@ from pyrung.core.expression import (
     RandIntExpr,
 )
 from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
+from pyrung.core.storage import check_real_value
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 from .base import Instruction, OneShotMixin
@@ -115,6 +116,23 @@ def has_domain_limited_func(value: Any, seen: set[int] | None = None) -> bool:
     return False
 
 
+def check_float_literals(value: Any, seen: set[int] | None = None) -> None:
+    """Refuse a float constant in a calc expression outside CLICK's REAL range."""
+    if seen is None:
+        seen = set()
+    if id(value) in seen:
+        return
+    seen.add(id(value))
+    if isinstance(value, float):
+        check_real_value(value, "calc() constant")
+    elif isinstance(value, Expression):
+        for child in vars(value).values():
+            check_float_literals(child, seen)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            check_float_literals(item, seen)
+
+
 def infer_calc_mode(expression: Any, dest: Tag) -> CalcModeInference:
     """Infer calc arithmetic mode and whether the expression mixes mode families."""
     tag_types: set[TagType] = set()
@@ -180,6 +198,7 @@ class CalcInstruction(OneShotMixin, Instruction):
         oneshot: bool = False,
     ):
         OneShotMixin.__init__(self, oneshot)
+        check_float_literals(expression)
         self.expression = expression
         self.dest = dest
         self.mode_inference = infer_calc_mode(expression, dest)
