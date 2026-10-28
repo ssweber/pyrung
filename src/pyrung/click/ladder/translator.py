@@ -143,7 +143,7 @@ class _TranslatorMixin:
         CLICK reads digits typed into a hex context as hex and appends ``h``
         (``255`` becomes ``255h`` = 0x255); a pasted rung gets no such fix-up,
         so a bare decimal there is an error.  pyrung literals stay decimal, so
-        pyrung ``255`` exports as ``00FFh``.
+        pyrung ``255`` exports as ``FFh``.
         """
         previous = self._hex_constant_mode
         self._hex_constant_mode = mode
@@ -168,7 +168,7 @@ class _TranslatorMixin:
                         path=path,
                         message=(
                             f"Constant {value!r} is not an integer; CLICK hex constants "
-                            "are whole 16-bit values (0000h..FFFFh)."
+                            "are whole 16-bit values (0h..FFFFh)."
                         ),
                         source=source,
                     )
@@ -178,11 +178,13 @@ class _TranslatorMixin:
                     path=path,
                     message=(
                         f"Constant {value} is outside 0..65535; CLICK hex constants "
-                        "are 0000h..FFFFh, so this compare cannot be written in CLICK."
+                        "are 0h..FFFFh, so this compare cannot be written in CLICK."
                     ),
                     source=source,
                 )
-            return f"{value & 0xFFFF:04X}h"
+            # Unpadded, as CLICK's Math normalizes it (000Ah -> Ah); Copy and
+            # Compare keep either spelling.
+            return f"{value & 0xFFFF:X}h"
         if isinstance(value, float):
             text = click_real_literal(value)
             if text is None:
@@ -232,7 +234,7 @@ class _TranslatorMixin:
             )
         if isinstance(condition, IntTruthyCondition):
             left = self._resolve_tag(condition.tag, path=f"{path}.tag", source=condition)
-            zero = "0000h" if self._is_hex_bank_operand(left) else "0"
+            zero = "0h" if self._is_hex_bank_operand(left) else "0"
             return f"{left}!={zero}"
 
         if isinstance(condition, ExprCompare):

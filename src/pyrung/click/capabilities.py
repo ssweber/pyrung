@@ -230,7 +230,7 @@ COMPARE_CONSTANT_COMPATIBILITY: dict[str, frozenset[CompareConstantKind]] = {
     "TXT": _constant_kinds("text"),
 }
 
-# Banks whose constants CLICK writes in hex (``00FFh``): compares against them,
+# Banks whose constants CLICK writes in hex (``FFh``): compares against them,
 # and copy/fill/search constants that land in them.
 HEX_CONSTANT_BANKS: frozenset[str] = frozenset(
     bank for bank, kinds in COMPARE_CONSTANT_COMPATIBILITY.items() if kinds == {"hex"}

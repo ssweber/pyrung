@@ -3,7 +3,8 @@
 CLICK reads digits in a hex context (hex-mode Math, a DH/XD/YD value or
 compare) as hex and appends ``h`` when a rung is typed; a pasted rung gets no
 such fix-up.  pyrung literals stay decimal, so pyrung ``255`` exports as
-``00FFh``.  REAL constants are float32 in CLICK and are written the way CLICK
+``FFh`` (unpadded: CLICK's Math normalizes ``000Ah`` to ``Ah``, and Copy
+and Compare keep either spelling).  REAL constants are float32 in CLICK and are written the way CLICK
 writes them (``3.4028235E+38``).
 """
 
@@ -69,17 +70,17 @@ def test_hex_contexts_export_hex_constants():
         with Rung():
             search(dh.select(1, 3) == 10, result=ds[1], found=c[3])
     assert _tokens(logic) == [
-        "math(DH221 + 00FFh,DH222,mode=hex)",
-        "math(DH1 AND 00FFh,DH2,mode=hex)",
-        "math(LSH ( DH1 , 0004h ),DH3,mode=hex)",
-        "copy(000Ah,DH4)",
+        "math(DH221 + FFh,DH222,mode=hex)",
+        "math(DH1 AND FFh,DH2,mode=hex)",
+        "math(LSH ( DH1 , 4h ),DH3,mode=hex)",
+        "copy(Ah,DH4)",
         "copy(FFFFh,DH5)",
-        "fill(000Ah,DH7..DH9)",
+        "fill(Ah,DH7..DH9)",
         "DH1==ABCDh",
         "out(C1)",
-        "DH1!=0000h",
+        "DH1!=0h",
         "out(C2)",
-        "search(DH1..DH3 == 000Ah,result=DS1,found=C3)",
+        "search(DH1..DH3 == Ah,result=DS1,found=C3)",
     ]
 
 
@@ -116,17 +117,28 @@ def test_hex_constants_round_trip_with_pyrung_meaning():
     code, before, after = round_trip_logic(logic, TagMap())
     assert after == before, code
     body = strip_pyrung_boilerplate(code)
-    assert "calc(DH221 + 0x000A, DH222)" in body
+    assert "calc(DH221 + 0xA, DH222)" in body
     assert "copy(0xFFFF, DH3)" in body
 
 
-def test_native_hex_compare_is_stable():
-    """CLICK's own ``DH53==0000h`` (tumbler sm_IsCmdValid) re-exports unchanged."""
+def test_native_padded_hex_compare_reads_back():
+    """CLICK's own ``DH53==0000h`` (tumbler sm_IsCmdValid) imports and re-exports unpadded."""
     bundle = _bundle(("DH53==0000h", "out(C1051)"))
     ns: dict = {}
     exec_with_source(ladder_to_pyrung(bundle), ns)
     again = pyrung_to_ladder(ns["logic"], ns["mapping"])
-    assert again.main_rows[1][1] == "DH53==0000h"
+    assert again.main_rows[1][1] == "DH53==0h"
+
+
+@pytest.mark.parametrize("value", [0x0, 0xA, 0xC, 0xC1, 0xD1F, 0xDD01, 0xDF10, 0xCAFE, 0xFFFF])
+def test_unpadded_hex_that_looks_like_an_address_round_trips(value: int):
+    """``C1h`` / ``DD01h`` are constants, not the C1 or DD1 registers."""
+    with Program() as logic:
+        with Rung(dh[1] == value):
+            copy(value, dh[2])
+            calc(dh[1] + value, dh[3])
+    code, before, after = round_trip_logic(logic, TagMap())
+    assert after == before, code
 
 
 @pytest.mark.parametrize(

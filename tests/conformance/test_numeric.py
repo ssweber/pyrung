@@ -41,7 +41,7 @@ could plausibly differ, these cases tell the models apart:
   in hex mode, unsigned, and pyrung reads a constant in it as a decimal
   number.  Signed WORD reads Result1 = 0 (-1 / 2); 16-bit hex intermediates
   read Result2 = 0 (0x8000 * 2 wraps to 0).  CLICK reads digits in hex-mode
-  Math as hex, so the exporter writes pyrung's ``10`` as ``000Ah``; an export
+  Math as hex, so the exporter writes pyrung's ``10`` as ``Ah``; an export
   that wrote a bare ``10`` would read Result1 = 17 (10h + 1).
 - ``intermediate_fits_32_bits``: an Int-only Math whose product needs 17 bits.
   16-bit intermediates read 244.

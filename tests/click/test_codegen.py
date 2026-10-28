@@ -1863,10 +1863,10 @@ class TestRoundTrip:
             """,
             """
             with rung(X001):
-                calc(lsh(DH1, 0x0003), DH3)
+                calc(lsh(DH1, 0x3), DH3)
 
             with rung(X001):
-                calc(lsh(DH1, 0x0004), DH3)
+                calc(lsh(DH1, 0x4), DH3)
             """,
         )
 
