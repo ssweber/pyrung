@@ -204,16 +204,16 @@ def _render_system_point_scan_lines(ctx: CodegenContext, indent: int) -> list[st
         lines.append(f"{sp}{first_scan} = _sys_first")
     clocks = _system_clock_symbols(ctx)
     if clocks:
-        # Integer ms from monotonic_ns(): a float monotonic() loses ms
-        # resolution within hours on CircuitPython's 30-bit floats.
+        # Integer ms from the scan's monotonic_ns() reading: a float
+        # monotonic() loses ms resolution within hours on CircuitPython's
+        # 30-bit floats.
         lines.extend(
             [
-                f"{sp}_sys_now_ns = time.monotonic_ns()",
                 f"{sp}if _sys_first:",
-                f"{sp}    _sys_t0_ns = _sys_now_ns",
-                f"{sp}    _sys_prev_ns = _sys_now_ns",
+                f"{sp}    _sys_t0_ns = scan_start_ns",
+                f"{sp}    _sys_prev_ns = scan_start_ns",
                 f"{sp}_sys_ms = (_sys_prev_ns - _sys_t0_ns) // 1000000",
-                f"{sp}_sys_prev_ns = _sys_now_ns",
+                f"{sp}_sys_prev_ns = scan_start_ns",
             ]
         )
         for symbol, half_ms in clocks:
@@ -530,7 +530,9 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
         [
             "_mem = {}",
             "_prev = {}",
-            "_last_scan_ts = time.monotonic()",
+            # Scan time in integer ns: a float monotonic() loses ms resolution
+            # within hours on CircuitPython's 30-bit floats.
+            "_last_scan_ns = time.monotonic_ns()",
             "_scan_overrun_count = 0",
             "",
             "_sd_available = False",
@@ -547,8 +549,8 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "_sd_eject_cmd = False",
             "_sd_delete_all_cmd = False",
             "_ret_snapshot = {}",
-            "_ret_last_save_ts = 0.0",
-            "_RET_AUTO_SAVE_S = 30.0",
+            "_ret_last_save_ns = 0",
+            "_RET_AUTO_SAVE_NS = 30000000000",
             "",
         ]
     )
@@ -559,7 +561,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
                 "_runstop_initialized = False",
                 "_runstop_raw = False",
                 "_runstop_debounced = False",
-                "_runstop_last_change_ts = 0.0",
+                "_runstop_last_change_ns = 0",
             ]
         )
         if _math_stop_symbol(ctx) is not None:
@@ -588,7 +590,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
     ret_globals = sorted(
         {ctx.global_symbol_for_tag(tag) for _, tag in sorted(ctx.retentive_tags.items())}
     )
-    snapshot_globals = ["_ret_snapshot", "_ret_last_save_ts"]
+    snapshot_globals = ["_ret_snapshot", "_ret_last_save_ns"]
     load_globals = ", ".join(
         ret_globals + ["_sd_write_status", "_sd_error", "_sd_error_code"] + snapshot_globals
     )
@@ -683,7 +685,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "    _sd_error_code = 0",
             "    _sd_write_status = False",
             f"    _ret_snapshot = {snapshot_literal}",
-            "    _ret_last_save_ts = time.monotonic()",
+            "    _ret_last_save_ns = time.monotonic_ns()",
             "",
             "def save_memory():",
         ]
@@ -737,7 +739,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "    _sd_error_code = 0",
             "    _sd_write_status = False",
             f"    _ret_snapshot = {snapshot_literal}",
-            "    _ret_last_save_ts = time.monotonic()",
+            "    _ret_last_save_ns = time.monotonic_ns()",
             "",
             "_mount_sd()",
             "load_memory()",
@@ -1357,12 +1359,11 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
 
     lines = [
         "while True:",
-        "    scan_start = time.monotonic()",
+        "    scan_start_ns = time.monotonic_ns()",
         "    _sd_write_status = False",
-        "    dt = scan_start - _last_scan_ts",
-        "    if dt < 0:",
-        "        dt = 0.0",
-        "    _last_scan_ts = scan_start",
+        # dt in seconds, as core's timers take it, from the exact ns difference.
+        "    dt = (scan_start_ns - _last_scan_ns) / 1000000000",
+        "    _last_scan_ns = scan_start_ns",
         '    _mem["_dt"] = dt',
         "",
     ]
@@ -1401,18 +1402,19 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
     if ctx.runstop is not None:
         if runstop_source_symbol is None:
             raise RuntimeError("RunStopConfig source tag was not referenced")
+        debounce_ns = ctx.runstop.debounce_ms * 1000000
         lines.extend(
             [
                 f"    _runstop_sample = bool({runstop_source_symbol})",
                 "    if not _runstop_initialized:",
                 "        _runstop_raw = _runstop_sample",
                 "        _runstop_debounced = _runstop_sample",
-                "        _runstop_last_change_ts = scan_start",
+                "        _runstop_last_change_ns = scan_start_ns",
                 "        _runstop_initialized = True",
                 "    elif _runstop_sample != _runstop_raw:",
                 "        _runstop_raw = _runstop_sample",
-                "        _runstop_last_change_ts = scan_start",
-                f"    elif ((scan_start - _runstop_last_change_ts) * 1000.0) >= {ctx.runstop.debounce_ms}:",
+                "        _runstop_last_change_ns = scan_start_ns",
+                f"    elif (scan_start_ns - _runstop_last_change_ns) >= {debounce_ns}:",
                 "        _runstop_debounced = _runstop_raw",
                 "",
             ]
@@ -1455,6 +1457,9 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
                 "    if _desired_run != _mode_run:",
                 "        if _desired_run:",
                 "            _reset_for_run_transition()",
+                # The first RUN scan times the loop pass it runs in, as core's
+                # first scan after start() advances by a full dt.
+                '            _mem["_dt"] = dt',
                 '            print("Mode: RUN")',
                 "        else:",
                 "            save_memory()",
@@ -1542,11 +1547,11 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
         dirty_check = " or ".join(dirty_parts)
         lines.extend(
             [
-                "    if (scan_start - _ret_last_save_ts) >= _RET_AUTO_SAVE_S:",
+                "    if (scan_start_ns - _ret_last_save_ns) >= _RET_AUTO_SAVE_NS:",
                 f"        if {dirty_check}:",
                 "            save_memory()",
                 "        else:",
-                "            _ret_last_save_ts = scan_start",
+                "            _ret_last_save_ns = scan_start_ns",
                 "",
             ]
         )
@@ -1560,7 +1565,7 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
         lines.append("")
     lines.extend(
         [
-            "    elapsed_ms = (time.monotonic() - scan_start) * 1000.0",
+            "    elapsed_ms = (time.monotonic_ns() - scan_start_ns) / 1000000",
             "    sleep_ms = TARGET_SCAN_MS - elapsed_ms",
             "    if sleep_ms > 0:",
             "        time.sleep(sleep_ms / 1000.0)",

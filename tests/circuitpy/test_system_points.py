@@ -174,21 +174,22 @@ OnScans = Int("OnScans", retentive=False)
 def test_clock_bits_follow_wall_clock_with_named_full_period(
     monkeypatch, clock, step_ms, scans, on_scans
 ):
-    calls = {"n": 0}
+    # The board clock moves only while the loop sleeps out a scan.
+    board = {"ns": 5_000_000_000, "sleeps": 0}
 
-    def fake_monotonic_ns():
-        value = 5_000_000_000 + calls["n"] * step_ms * 1_000_000
-        calls["n"] += 1
-        return value
+    def fake_sleep(_seconds):
+        board["ns"] += step_ms * 1_000_000
+        board["sleeps"] += 1
 
-    monkeypatch.setattr(time, "monotonic_ns", fake_monotonic_ns)
+    monkeypatch.setattr(time, "monotonic_ns", lambda: board["ns"])
+    monkeypatch.setattr(time, "sleep", fake_sleep)
     with Program(strict=False) as prog:
         with Rung(clock):
             calc(OnScans + 1, OnScans)
 
     _code, read = _run(prog, monkeypatch, scans=scans)
 
-    assert calls["n"] == scans
+    assert board["sleeps"] == scans
     assert read(OnScans) == on_scans
 
 
@@ -277,7 +278,7 @@ def test_unreferenced_system_points_emit_nothing(monkeypatch):
 
     code, _read = _run(prog, monkeypatch, scans=1)
 
-    for marker in ("monotonic_ns", "localtime", "_sys_scan_n", "_sys_first"):
+    for marker in ("_sys_t0_ns", "localtime", "_sys_scan_n", "_sys_first"):
         assert marker not in code
 
 

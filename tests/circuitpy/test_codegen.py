@@ -1015,7 +1015,7 @@ class TestPersistenceWatchdogAndDiagnostics:
         assert "_sd_available = False" in source_code
         assert (
             "while True:\n"
-            "    scan_start = time.monotonic()\n"
+            "    scan_start_ns = time.monotonic_ns()\n"
             "    _sd_write_status = False\n" in source_code
         )
         helper_section = source_code.split("def _service_sd_commands():", 1)[1].split("\ndef _", 1)[
@@ -1059,8 +1059,8 @@ class TestPersistenceWatchdogAndDiagnostics:
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert "_ret_snapshot = {}" in source_code
-        assert "_ret_last_save_ts = 0.0" in source_code
-        assert "_RET_AUTO_SAVE_S = 30.0" in source_code
+        assert "_ret_last_save_ns = 0" in source_code
+        assert "_RET_AUTO_SAVE_NS = 30000000000" in source_code
 
     def test_auto_save_dirty_check_in_scan_loop(self):
         hw = P1AM()
@@ -1072,7 +1072,7 @@ class TestPersistenceWatchdogAndDiagnostics:
                 copy(1, count)
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
-        assert "(scan_start - _ret_last_save_ts) >= _RET_AUTO_SAVE_S" in source_code
+        assert "(scan_start_ns - _ret_last_save_ns) >= _RET_AUTO_SAVE_NS" in source_code
         assert '_ret_snapshot.get("Count")' in source_code
         assert "save_memory()" in source_code
 
@@ -1088,7 +1088,7 @@ class TestPersistenceWatchdogAndDiagnostics:
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         save_section = source_code.split("def save_memory():", 1)[1].split("\ndef ", 1)[0]
         assert "_ret_snapshot" in save_section
-        assert "_ret_last_save_ts = time.monotonic()" in save_section
+        assert "_ret_last_save_ns = time.monotonic_ns()" in save_section
 
     def test_runstop_save_on_stop_transition(self):
         hw = P1AM()
