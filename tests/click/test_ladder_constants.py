@@ -198,12 +198,14 @@ def test_real_constants_export_click_style():
 
 
 @pytest.mark.parametrize("value", [math.inf, math.nan, 1e39])
-def test_unrepresentable_real_rejected_at_export(value: float):
-    with Program() as logic:
+def test_unrepresentable_real_rejected(value: float):
+    # The DSL refuses a REAL literal past CLICK's range; the exporter's
+    # spelling has no form for one either, as a backstop.
+    with Program():
         with Rung():
-            copy(value, df[1])
-    with pytest.raises(LadderExportError, match="not representable in CLICK"):
-        pyrung_to_ladder(logic, TagMap())
+            with pytest.raises(ValueError, match="outside the REAL range"):
+                copy(value, df[1])
+    assert click_real_literal(value) is None
 
 
 def test_real_exponent_round_trips():
