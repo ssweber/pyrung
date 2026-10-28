@@ -234,9 +234,9 @@ The generated server serves only what the TagMap maps and what rungs use, so eve
 
 What this target cannot see is what only the board does: REAL math in single precision, the CircuitPython language subset, scan timing and memory. The whole suite also makes a 2 MB `code.py`, far too big for the board, so loading it on a real P1AM will take one build per group.
 
-Known failures on this target, each a gap in the generated runtime (fix it in the codegen, then delete its line):
+Known issues on this target:
 
-- A math error stops the code without raising SC50 (every `stop_*` group).
+- `out/flasher_restarts_with_on_phase` fails about 1 run in 7 under machine load: a scan gap of 50 ms or more inside its 50 ms Result2 window (TD305 in 750..800) misses the on phase. The case could restart its window on a long scan (SD10), as the clock case does.
 
 ## Running against the real PLC
 

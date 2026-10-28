@@ -11,7 +11,8 @@ import time
 import pytest
 
 from pyrung.circuitpy import P1AM, RunStopConfig, generate_circuitpy
-from pyrung.core import Block, Bool, Int, Program, Rung, TagType, calc, copy, out
+from pyrung.core import Block, Bool, Int, Program, Real, Rung, TagType, calc, copy, out
+from pyrung.core.expression import sqrt
 from pyrung.core.system_points import system
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
 
@@ -278,3 +279,103 @@ def test_unreferenced_system_points_emit_nothing(monkeypatch):
 
     for marker in ("monotonic_ns", "localtime", "_sys_scan_n", "_sys_first"):
         assert marker not in code
+
+
+# A math error (SC46) stops the code, as core does: the faulting scan runs to
+# its end, then the PLC is in STOP with SC50 on and SC11 off, and runs no rung
+# until STOP->RUN resets SC46 and SC50 (core/system_points.py, on_scan_end).
+Operand = Real("Operand", retentive=False)
+Root = Real("Root", retentive=False)
+SawMathError = Int("SawMathError", retentive=False)
+Faulted = Int("Faulted", retentive=True)
+RunScans = Int("RunScans", retentive=True)
+
+
+def _math_stop_program() -> Program:
+    with Program(strict=False) as prog:
+        with Rung():
+            calc(RunScans + 1, RunScans)
+        with Rung(Faulted == 0):
+            copy(1, Faulted)
+            copy(-4.0, Operand)
+            copy(99.0, Root)
+            calc(sqrt(Operand), Root)
+        with Rung(system.fault.math_operation_error):
+            copy(1, SawMathError)
+        # Reference SC50 and SC11, so the generated code carries them.
+        with Rung(system.sys.cmd_mode_stop, system.sys.mode_run):
+            copy(0, Sink)
+    return prog
+
+
+@pytest.mark.parametrize(
+    "runstop",
+    [None, RunStopConfig(debounce_ms=0, run_when_high=False)],
+    ids=["no-runstop", "switch-in-run"],
+)
+def test_math_error_stops_at_scan_end_with_sc50_on(monkeypatch, runstop):
+    # The test board's switch reads low: RUN for run_when_high=False, and it
+    # stays there, so STOP holds until a restart.
+    _code, read = _run(_math_stop_program(), monkeypatch, scans=5, runstop=runstop)
+
+    assert read(Root) == 0.0
+    assert read(SawMathError) == 1
+    assert read(RunScans) == 1
+    assert read(system.fault.math_operation_error) is True
+    assert read(system.sys.cmd_mode_stop) is True
+    assert read(system.sys.mode_run) is False
+    assert read(Faulted) == 1
+
+
+def _run_with_switch(prog: Program, monkeypatch, *, scans: int, stop_scans: range):
+    """Run with the switch at STOP (high, run_when_high=False) for *stop_scans*."""
+    hw = _hw()
+    result = generate_circuitpy(
+        prog, hw, target_scan_ms=1.0, runstop=RunStopConfig(debounce_ms=0, run_when_high=False)
+    )
+    sample = "_t_board_switch = bool(_board_switch_io.value)"
+    assert sample in result.code
+    code = result.code.replace(sample, "_t_board_switch = __scan_once in _STOP_SCANS", 1)
+    code = code.replace("while True:", f"_STOP_SCANS = {stop_scans!r}\nwhile True:", 1)
+    namespace = _run_single_scan_source(code, monkeypatch, _StubBase(), scans=scans)
+    ctx = _context_for_program(prog, hw)
+    return namespace, (lambda tag: namespace[ctx.symbol_for_tag(tag)])
+
+
+@pytest.mark.parametrize(
+    ("scans", "mode_run"),
+    [
+        # Scan 0 faults.  The switch reads STOP on scans 3..5 (debounced one
+        # scan later), so scans 4..6 are STOP by the switch: SC46 and SC50 still on.
+        (6, False),
+        # Back at RUN from scan 6, debounced on scan 7: STOP->RUN clears SC46
+        # and SC50, and scans 7..9 run (Faulted is retentive: no new fault).
+        (10, True),
+    ],
+    ids=["switch-at-stop", "switch-back-to-run"],
+)
+def test_math_error_stop_clears_at_stop_to_run(monkeypatch, scans, mode_run):
+    namespace, read = _run_with_switch(
+        _math_stop_program(), monkeypatch, scans=scans, stop_scans=range(3, 6)
+    )
+
+    assert namespace["_mode_run"] is mode_run
+    assert read(system.sys.mode_run) is mode_run
+    assert read(system.fault.math_operation_error) is not mode_run
+    assert read(system.sys.cmd_mode_stop) is not mode_run
+    assert read(RunScans) == (4 if mode_run else 1)
+
+
+@pytest.mark.parametrize("runstop", [None, RunStopConfig()], ids=["no-runstop", "runstop"])
+def test_math_stop_emits_nothing_without_a_math_function(monkeypatch, runstop):
+    with Program(strict=False) as prog:
+        with Rung():
+            calc(Zero + 1, Sink)
+
+    hw = _hw()
+    code = generate_circuitpy(prog, hw, target_scan_ms=1.0, runstop=runstop).code
+
+    assert "_math_stop_hold" not in code
+    if runstop is None:
+        assert "_mode_run" not in code
+        assert "_force_outputs_off" not in code
