@@ -5,9 +5,7 @@ from __future__ import annotations
 import math as _math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
-from pyrung.circuitpy.codegen._constants import _TYPE_DEFAULTS
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.circuitpy.codegen.render import _render_code
 from pyrung.circuitpy.codegen.render_runtime import _render_runtime
@@ -16,12 +14,9 @@ from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig, board
 from pyrung.circuitpy.validation import validate_circuitpy_program
 from pyrung.click.tag_map import TagMap
-from pyrung.core.memory_block import Block
 from pyrung.core.program import Program
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME, system
 from pyrung.core.tag import Tag
-
-MappedTagScope = Literal["referenced_only", "all_mapped"]
 
 _DEFAULT_RUNSTOP = RunStopConfig()
 
@@ -40,12 +35,6 @@ class CircuitPyOutput:
     runtime: str
 
 
-def _needs_modbus_backing(tag: Tag, mode: MappedTagScope) -> bool:
-    if mode == "all_mapped":
-        return True
-    return tag.default != _TYPE_DEFAULTS[tag.type]
-
-
 def generate_circuitpy(
     program: Program,
     hw: P1AM,
@@ -56,7 +45,6 @@ def generate_circuitpy(
     modbus_server: ModbusServerConfig | None = None,
     modbus_client: ModbusClientConfig | None = None,
     tag_map: TagMap | None = None,
-    mapped_tag_scope: MappedTagScope = "referenced_only",
     force_runtime: bool = False,
 ) -> CircuitPyOutput:
     if not isinstance(program, Program):
@@ -86,8 +74,6 @@ def generate_circuitpy(
         )
     if tag_map is not None and not isinstance(tag_map, TagMap):
         raise TypeError(f"tag_map must be TagMap or None, got {type(tag_map).__name__}")
-    if mapped_tag_scope not in {"referenced_only", "all_mapped"}:
-        raise ValueError("mapped_tag_scope must be 'referenced_only' or 'all_mapped'")
     if (modbus_server is not None or modbus_client is not None) and tag_map is None:
         raise ValueError("tag_map is required when modbus_server or modbus_client is enabled")
 
@@ -108,26 +94,24 @@ def generate_circuitpy(
         if runstop.expose_mode_tags:
             ctx.ensure_tag_referenced(system.sys.mode_run)
             ctx.ensure_tag_referenced(system.sys.cmd_mode_stop)
-    if tag_map is not None:
+    if modbus_server is not None:
+        # The server serves every TagMap register, used by a rung or not, and
+        # every raw CLICK register a rung uses (``_modbus_backed_slots``).
+        assert tag_map is not None
         for entry in tag_map.entries:
-            logical = getattr(entry, "logical", None)
+            logical = entry.logical
             if isinstance(logical, Tag):
-                if _needs_modbus_backing(logical, mapped_tag_scope):
-                    ctx.ensure_tag_referenced(logical)
+                ctx.ensure_tag_referenced(logical)
                 continue
-            if isinstance(logical, Block):
-                ctx._ensure_block_binding(logical)
-                for addr in getattr(entry, "logical_addresses", ()):
-                    tag = logical[addr]
-                    if _needs_modbus_backing(tag, mapped_tag_scope):
-                        ctx.ensure_tag_referenced(tag)
-        if mapped_tag_scope == "all_mapped":
-            for slot in tag_map.mapped_slots():
-                if slot.source != "system":
-                    continue
-                system_tag = SYSTEM_TAGS_BY_NAME.get(slot.logical_name)
-                if system_tag is not None:
-                    ctx.ensure_tag_referenced(system_tag)
+            ctx._ensure_block_binding(logical)
+            for addr in getattr(entry, "logical_addresses", ()):
+                ctx.ensure_tag_referenced(logical[addr])
+        for slot in tag_map.mapped_slots():
+            if slot.source != "system":
+                continue
+            system_tag = SYSTEM_TAGS_BY_NAME.get(slot.logical_name)
+            if system_tag is not None:
+                ctx.ensure_tag_referenced(system_tag)
 
     if not hw._slots and not ctx.board_tag_names:
         raise ValueError(
@@ -184,7 +168,6 @@ def write_circuitpy(
     modbus_server: ModbusServerConfig | None = None,
     modbus_client: ModbusClientConfig | None = None,
     tag_map: TagMap | None = None,
-    mapped_tag_scope: MappedTagScope = "referenced_only",
     force_runtime: bool = False,
 ) -> Path:
     """Generate and write ``code.py`` (and ``pyrung_rt.py`` when needed) to *output_dir*.
@@ -201,7 +184,6 @@ def write_circuitpy(
         modbus_server=modbus_server,
         modbus_client=modbus_client,
         tag_map=tag_map,
-        mapped_tag_scope=mapped_tag_scope,
         force_runtime=force_runtime,
     )
     out = Path(output_dir)

@@ -179,18 +179,16 @@ RTU (serial) targets are not yet supported for CircuitPython code generation.
 
 Unlike the CLICK dialect's threaded `send`/`receive`, the CircuitPython versions generate a non-blocking state machine. Each transaction advances one step per scan (connect → send request → wait for response → apply result). The scan loop is never blocked. Status tags (`sending`/`receiving`, `success`, `error`, `exception_response`) update as the transaction progresses. When the rung condition goes false, status tags reset to defaults.
 
-## TagMap and mapped_tag_scope
+## Which registers the server serves
 
-`tag_map` is required when `modbus_server` or `modbus_client` is set. It determines which tags are visible over Modbus — the TagMap maps semantic tags to CLICK hardware addresses, and the codegen uses those addresses as Modbus register addresses.
+`tag_map` is required when `modbus_server` or `modbus_client` is set. The TagMap maps semantic tags to CLICK hardware addresses, and the codegen uses those addresses as Modbus register addresses.
 
-`mapped_tag_scope` controls how many TagMap entries get backing variables in the generated code:
+The generated server serves:
 
-| Value | Behavior |
-|-------|----------|
-| `"referenced_only"` (default) | Tags used in logic and tags with non-default initial values |
-| `"all_mapped"` | Every entry in the TagMap gets a backing variable |
+- every register the TagMap maps, whether a rung uses it or not, so an HMI or SCADA system can write a value no ladder rung touches;
+- every raw CLICK register a rung uses directly (`ds[3901]`, `c[1801]`), at its own address.
 
-The default avoids allocating RAM for tags that no rung references and start with type-default values. Use `"all_mapped"` when an HMI or SCADA system needs to write values via Modbus even though no ladder rung touches them.
+Any other address answers with Modbus exception 2 (illegal data address). A CLICK serves its whole address space; to serve a range on the P1AM, map it in the TagMap.
 
 ## Scan cycle with Modbus
 

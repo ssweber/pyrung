@@ -8,7 +8,7 @@ from pathlib import Path
 
 from pyclickplc.modbus import plc_to_modbus
 
-from pyrung import Block, Bool, Char, Dint, Int, Program, Real, Rung, TagType, Word
+from pyrung import Block, Bool, Char, Dint, Int, Program, Real, Rung, TagType, Word, calc
 from pyrung.circuitpy import (
     P1AM,
     CircuitPyOutput,
@@ -141,6 +141,31 @@ def test_read_and_write_backed_coil_and_register(monkeypatch):
     assert namespace[reg_symbol] == 42
 
 
+def test_calc_program_with_runtime_imports_and_scans(monkeypatch):
+    """A calc marks a math-import flag, not a runtime name; code.py must still import."""
+    src = Int("Src", default=6)
+    dest = Int("Dest")
+    mapping = TagMap({src: ds[1], dest: ds[2]})
+    with Program(strict=False) as prog:
+        with Rung():
+            calc(src * 7, dest)
+
+    result = _ctx_and_source(prog, mapping)
+    assert result.runtime
+
+    class StubBase:
+        def rollCall(self, modules):
+            return None
+
+        def readDiscrete(self, slot):
+            return 0
+
+    namespace = _run_single_scan_source(
+        result.code, monkeypatch, StubBase(), runtime_source=result.runtime
+    )
+    assert namespace["_t_Dest"] == 42
+
+
 def test_unmapped_and_invalid_register_addresses_return_error(monkeypatch):
     mapped = Int("Mapped", default=5)
     mapping = TagMap({mapped: ds[1]})
@@ -194,7 +219,6 @@ def test_read_only_system_writes_acknowledge_without_exception(monkeypatch):
         runstop=None,
         modbus_server=ModbusServerConfig(ip="192.168.1.200"),
         tag_map=TagMap(),
-        mapped_tag_scope="all_mapped",
     )
     source = result.code
 
@@ -884,7 +908,6 @@ def test_codegen_server_first_and_last_of_every_bank(monkeypatch):
         runstop=None,
         modbus_server=ModbusServerConfig(ip="192.168.1.200"),
         tag_map=mapping,
-        mapped_tag_scope="all_mapped",
     )
     source = result.code
 

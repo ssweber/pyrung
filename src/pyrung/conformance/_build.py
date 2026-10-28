@@ -212,6 +212,13 @@ def build_program(
         first_slot = slot_register(layout.base, 1)
         mappings.append(hash_tag.map_to(ds[layout.base]))
         mappings.extend(slot.map_to(ds.select(first_slot, layout.last_register)))
+        # Each slot's spare register is part of the group's reserved block: the
+        # harness reads and zeroes slots in runs, so a target must serve it.  A
+        # tag named after its own address exports with no nickname, so the
+        # slot's named array still owns every nickname in its block.
+        for i in range(1, layout.slots + 1):
+            spare = slot_register(layout.base, i) + len(SLOT_FIELDS)
+            mappings.append(Int(f"DS{spare}").map_to(ds[spare]))
         staged.append((g, layout, cases, slot, hash_tag))
     tag_map = TagMap(mappings)
 

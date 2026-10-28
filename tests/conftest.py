@@ -173,6 +173,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "(env: PYRUNG_CONFORMANCE_GROUP); default is every group."
         ),
     )
+    group.addoption(
+        "--conformance-target",
+        action="store",
+        default=None,
+        choices=("pyrung", "circuitpy"),
+        help=(
+            "Local target when no --conformance-plc is given: pyrung's soft PLC "
+            "(default) or the program's generated P1AM-200 code run on this "
+            "machine (env: PYRUNG_CONFORMANCE_TARGET)."
+        ),
+    )
     group = parser.getgroup("pyrung-prove", "pyrung prove debug tools")
     group.addoption(
         "--prove-debug",

@@ -434,9 +434,11 @@ def _compile_copy_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    if instr.convert is not None:
-        return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent)
     target_type = _value_type_name(instr.target)
+    # A text literal into a CHAR fans out, one character per register.
+    fanout = isinstance(instr.source, str) and len(instr.source) > 1 and target_type == "CHAR"
+    if instr.convert is not None or fanout:
+        return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent)
     source_expr = _compile_value(instr.source, ctx)
     value_expr = _store_coerce_expr(source_expr, target_type, ctx)
     enabled_body = _compile_assignment_lines(instr.target, value_expr, ctx, indent=0)
@@ -450,13 +452,13 @@ def _compile_copy_converter_instruction(
     indent: int,
 ) -> list[str]:
     converter = instr.convert
-    if not isinstance(converter, CopyConverter):
+    if converter is not None and not isinstance(converter, CopyConverter):
         raise TypeError("copy converter compiler requires CopyConverter")
 
     stem = ctx.next_name("copymod")
     address_fault_body = _compile_set_address_error_fault_body(ctx)
     fault_body = _compile_set_out_of_range_fault_body(ctx)
-    mode = converter.mode
+    mode = "fanout" if converter is None else converter.mode
     source_expr = _compile_value(instr.source, ctx)
 
     setup, target_kind, target_symbol, target_start_var, target_type = _copy_converter_target_info(
@@ -477,10 +479,25 @@ def _compile_copy_converter_instruction(
         fault_body=fault_body,
         target_name=target_name,
         sequential_reloads=sequential_reloads,
+        kernel=ctx.kernel_runtime,
     )
 
     enabled_body: list[str] = [*setup]
-    if mode in {"value", "ascii"}:
+    if mode == "fanout":
+        enabled_body.extend(
+            [
+                "try:",
+                f"    {values_var} = [{_store_coerce_expr('_ch', target_type, ctx)} for _ch in {source_expr}]",
+                *_indent_body(write_lines, 4),
+                "except IndexError:",
+                *_indent_body(address_fault_body, 4),
+                "except (TypeError, ValueError, OverflowError):",
+                *_indent_body(fault_body, 4),
+            ]
+        )
+    elif converter is None:
+        raise RuntimeError(f"unhandled copy mode {mode!r}")
+    elif mode in {"value", "ascii"}:
         ctx.mark_helper("_text_from_source_value")
         ctx.mark_helper("_store_numeric_text_digit")
         enabled_body.extend(

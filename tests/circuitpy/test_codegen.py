@@ -322,8 +322,6 @@ class TestGenerateCircuitPyAPI:
             generate_circuitpy(prog, hw, target_scan_ms=10.0, modbus_server="nope")
         with pytest.raises(TypeError, match="tag_map"):
             generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map="nope")
-        with pytest.raises(ValueError, match="mapped_tag_scope"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, mapped_tag_scope="nope")
 
     def test_modbus_requires_tag_map(self):
         hw = P1AM()
@@ -348,7 +346,7 @@ class TestGenerateCircuitPyAPI:
         source = generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map=mapping).code
         assert "def _run_main_rungs():" in source
 
-    def test_mapped_tag_scope_defaults_to_referenced_only(self):
+    def test_server_serves_mapped_tags_no_rung_uses(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         prog = Program(strict=False)
@@ -361,25 +359,27 @@ class TestGenerateCircuitPyAPI:
             target_scan_ms=10.0,
             modbus_server=ModbusServerConfig(ip="192.168.1.200"),
             tag_map=mapping,
-        ).code
-        assert 'if bank == "C" and index == 1:' not in source
-
-    def test_mapped_tag_scope_all_mapped_emits_all_mapped_slots(self):
-        hw = P1AM()
-        hw.slot(1, "P1-08SIM")
-        prog = Program(strict=False)
-        c = ClickBlocks().c
-        mapping = TagMap({Bool("Mapped"): c[1]}, include_system=False)
-
-        source = generate_circuitpy(
-            prog,
-            hw,
-            target_scan_ms=10.0,
-            modbus_server=ModbusServerConfig(ip="192.168.1.200"),
-            tag_map=mapping,
-            mapped_tag_scope="all_mapped",
         ).code
         assert 'if bank == "C" and index == 1:' in source
+
+    def test_server_serves_raw_registers_a_rung_uses(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        blocks = ClickBlocks()
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(5, blocks.ds[3901])
+        mapping = TagMap({Bool("Mapped"): blocks.c[1]}, include_system=False)
+
+        source = generate_circuitpy(
+            prog,
+            hw,
+            target_scan_ms=10.0,
+            modbus_server=ModbusServerConfig(ip="192.168.1.200"),
+            tag_map=mapping,
+        ).code
+        assert 'if bank == "DS" and index == 3901:' in source
+        assert 'if bank == "DS" and index == 3902:' not in source
 
     def test_rejects_empty_and_non_contiguous_slots(self):
         empty_hw = P1AM()
@@ -1391,6 +1391,39 @@ class TestBoardPeripheralsAndRunStop:
         assert namespace[ctx.symbol_for_tag(low)] == -3.4028235e38
         assert namespace[ctx.symbol_for_tag(copied)] == 2147483647.0
         assert namespace[ctx.symbol_for_tag(system.fault.out_of_range)] is True
+
+    def test_text_literal_copy_fans_out_one_char_per_register(self, monkeypatch):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        txt = ClickBlocks().txt
+        with Program(strict=False) as prog:
+            with Rung():
+                copy("ZZ", txt[1])
+                copy("ABC", txt[1])
+                copy(txt[2], txt[8])
+                copy(txt[3], txt[9])
+            with Rung():
+                copy("XY", txt[10])
+
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop=None)
+
+        class StubBase:
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+        namespace = _run_single_scan_source(result.code, monkeypatch, StubBase())
+        ctx = _context_for_program(prog, hw)
+
+        def char(n: int) -> object:
+            symbol = ctx.symbol_for_tag(txt[n])
+            name, _, index = symbol.partition("[")
+            value = namespace[name]
+            return value[int(index.rstrip("]"))] if index else value  # type: ignore[index]
+
+        assert [char(n) for n in (1, 2, 3, 8, 9, 10)] == ["A", "B", "C", "B", "C", "X"]
 
     def test_math_domain_error_writes_zero_and_holds_stop(self, monkeypatch):
         hw = P1AM()

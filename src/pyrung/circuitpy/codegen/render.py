@@ -107,6 +107,8 @@ def _section(label: str) -> str:
 def _runtime_import_names(ctx: CodegenContext) -> set[str]:
     """Return the set of names to ``from pyrung_rt import ...``."""
     needed = set(ctx.used_helpers)
+    # A flag that code.py needs ``import math``, not a runtime name.
+    needed.discard("_calc_math_isfinite")
     if "_store_numeric_text_digit" in needed:
         needed.add("_as_single_ascii_char")
     if "_termination_char" in needed:

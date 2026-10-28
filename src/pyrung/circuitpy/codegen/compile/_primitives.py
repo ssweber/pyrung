@@ -415,6 +415,7 @@ def _copy_converter_write_lines(
     fault_body: list[str],
     target_name: str | None = None,
     sequential_reloads: list[tuple[int, str]] | None = None,
+    kernel: bool = False,
 ) -> list[str]:
     if target_kind == "scalar":
         seq = _parse_sequential_tag_name(target_name) if target_name else None
@@ -423,9 +424,14 @@ def _copy_converter_write_lines(
             lines = [
                 f"if len({values_var}) >= 1:",
                 f"    {target_symbol} = {values_var}[0]",
-                f"    for _seq_i in range(1, len({values_var})):",
-                f'        tags[f"{prefix}{{{base} + _seq_i:0{width}d}}"] = {values_var}[_seq_i]',
             ]
+            if kernel:
+                # The kernel keeps every tag in ``tags``; generated board code has
+                # no such dict and stores only the registers it references (below).
+                lines += [
+                    f"    for _seq_i in range(1, len({values_var})):",
+                    f'        tags[f"{prefix}{{{base} + _seq_i:0{width}d}}"] = {values_var}[_seq_i]',
+                ]
             if sequential_reloads:
                 for offset, symbol in sequential_reloads:
                     lines.append(f"    if len({values_var}) > {offset}:")

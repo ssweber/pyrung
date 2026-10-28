@@ -121,12 +121,14 @@ def test_math_error_stops_the_plc(group):
 
 @pytest.mark.conformance
 @pytest.mark.parametrize("name", [g.name for g in groups])
-def test_math_error_stops_the_local_sim(name, conformance_endpoint, conformance_groups):
-    """Each group on a fresh local sim.  A real CLICK runs them only by ``GROUP=``."""
+def test_math_error_stops_the_local_sim(
+    name, conformance_endpoint, conformance_groups, conformance_sim
+):
+    """Each group on a fresh local target.  A real CLICK runs them only by ``GROUP=``."""
     if conformance_endpoint is not None or conformance_groups is not None:
         pytest.skip("STOP groups run on a real PLC one at a time, with GROUP=")
     from tests.conformance import suite  # suite imports this module
 
-    results = run_modbus(suite.build(), groups=[name])
+    results = run_modbus(suite.build(), groups=[name], sim=conformance_sim)
     assert len(results) == 1
     assert_all_passed(results)

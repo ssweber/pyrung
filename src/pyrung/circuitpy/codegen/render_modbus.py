@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pyclickplc.addresses import format_address_display
+from pyclickplc.addresses import format_address_display, parse_address
 from pyclickplc.banks import BANKS, DataType
 from pyclickplc.modbus import MODBUS_MAPPINGS, plc_to_modbus
 
@@ -17,6 +17,9 @@ from pyrung.core.system_points import system
 _SYSTEM_SLOT_BY_HARDWARE = {slot.hardware.name: slot for slot in SYSTEM_CLICK_SLOTS}
 _WORD_BANKS = {"DS", "DD", "DH", "DF", "TD", "CTD", "TXT", "XD", "YD", "SD"}
 _COIL_BANKS = {"X", "Y", "C", "T", "CT", "SC"}
+#: Banks a rung can use raw (``ds[3901]``), served as used.  System points and
+#: the XD/YD word images have their own paths.
+_RAW_BANKS = frozenset(MODBUS_MAPPINGS) - {"SC", "SD", "XD", "YD"}
 
 _BANK_DESCRIPTIONS: dict[str, str] = {
     "X": "digital inputs",
@@ -67,14 +70,17 @@ def _ip_tuple_literal(value: str) -> str:
 
 
 def _modbus_backed_slots(ctx: CodegenContext) -> tuple[_ModbusBackedSlot, ...]:
+    """Every TagMap register, then every raw CLICK register a rung uses (``ds[3901]``)."""
     if ctx.tag_map is None:
         return ()
     slots: list[_ModbusBackedSlot] = []
+    served: set[tuple[str, int]] = set()
     for slot in ctx.tag_map.mapped_slots():
         tag = ctx.referenced_tags.get(slot.logical_name)
         if tag is None:
             continue
         symbol = ctx.symbol_for_tag(tag)
+        served.add((slot.memory_type, slot.address))
         slots.append(
             _ModbusBackedSlot(
                 bank=slot.memory_type,
@@ -84,6 +90,27 @@ def _modbus_backed_slots(ctx: CodegenContext) -> tuple[_ModbusBackedSlot, ...]:
                 data_type=BANKS[slot.memory_type].data_type,
                 read_only=slot.read_only,
                 source=slot.source,
+                default=tag.default,
+            )
+        )
+    for name, tag in ctx.referenced_tags.items():
+        block = getattr(tag, "_pyrung_block", None)
+        if block is None or block.name not in _RAW_BANKS:
+            continue
+        addr: int = getattr(tag, "_pyrung_block_addr")  # noqa: B009
+        bank, index = parse_address(block._format_tag_name(addr))
+        if (bank, index) in served:
+            continue
+        served.add((bank, index))
+        slots.append(
+            _ModbusBackedSlot(
+                bank=bank,
+                index=index,
+                logical_name=name,
+                symbol=ctx.symbol_for_tag(tag),
+                data_type=BANKS[bank].data_type,
+                read_only=False,
+                source="user",
                 default=tag.default,
             )
         )

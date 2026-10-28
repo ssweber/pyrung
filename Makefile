@@ -35,7 +35,7 @@ test-tumbler:
 # Point at a real CLICK running the exported program with PLC=host[:port];
 # run some groups only with GROUP=name[,name...].
 test-conformance:
-	uv run pytest -m conformance tests/conformance/ -q -rP $(if $(PLC),--conformance-plc=$(PLC)) $(if $(GROUP),--conformance-group=$(GROUP))
+	uv run pytest -m conformance tests/conformance/ -q -rP $(if $(PLC),--conformance-plc=$(PLC)) $(if $(GROUP),--conformance-group=$(GROUP)) $(if $(TARGET),--conformance-target=$(TARGET))
 
 # Write the whole conformance CLICK project (main, one subroutine per group, nicknames).
 conformance-export:

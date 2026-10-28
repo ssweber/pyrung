@@ -2,7 +2,7 @@
 
 Plain-English cases for PLC semantics. Same case, same ladder, same check -- run in-process, over Modbus against pyrung's soft PLC, or over Modbus against a real CLICK.
 
-A conformance suite in the Modbus sense: the harness observes the implementation **only through registers**. The ladder computes its own answer and writes it into its slot; the harness writes `Cmd`, waits, and reads the slot back. Everything else -- the reset between runs, the handshake that says the reset is done, the documentation -- lives in the ladder too, so any target that runs the ladder and serves its DS registers over Modbus runs the suite unchanged: pyrung's soft PLC, a real CLICK, or (later) a P1AM-200 running the CircuitPython codegen output.
+A conformance suite in the Modbus sense: the harness observes the implementation **only through registers**. The ladder computes its own answer and writes it into its slot; the harness writes `Cmd`, waits, and reads the slot back. Everything else -- the reset between runs, the handshake that says the reset is done, the documentation -- lives in the ladder too, so any target that runs the ladder and serves its DS registers over Modbus runs the suite unchanged: pyrung's soft PLC, a real CLICK, or the program's generated P1AM-200 code (run on this machine today; on the board later).
 
 The whole suite is **one CLICK program**: a main program that calls one subroutine per group (`Conf_Rungs`, later `Conf_Math`, `Conf_Drum`, ...). Load the full project once; after that, editing a group means pasting its changed rungs (through the ClickNick workspace, see "Running against the real PLC") and rerunning that group.
 
@@ -11,8 +11,9 @@ The whole suite is **one CLICK program**: a main program that calls one subrouti
 | In-process | `make test` (unmarked) | `run(group)` on a fixed-step `PLC` | exact scan counts |
 | Modbus, local sim | `make test-conformance` (marker `conformance`) | `run_modbus(suite.build())` | wall clock |
 | Modbus, real CLICK | `make test-conformance PLC=host[:port]` (or `--conformance-plc`, or env `PYRUNG_CONFORMANCE_PLC`) | `run_modbus(suite.build(), "host:port")` | wall clock |
+| Modbus, P1AM-200 code | `make test-conformance TARGET=circuitpy` (or `--conformance-target`, or env `PYRUNG_CONFORMANCE_TARGET`) | `run_modbus(suite.build(), sim=CircuitPySim)` | wall clock |
 
-Add `GROUP=name[,name...]` (or `--conformance-group`, or env `PYRUNG_CONFORMANCE_GROUP`) to run some groups only. The two Modbus runs share every line of client code; only the endpoint differs. `-rP` prints the report: one line per case (`PASS`/`FAIL`/`SKIP`/`STALE`, `[confirmed]`/`[unconfirmed]`) and totals.
+Add `GROUP=name[,name...]` (or `--conformance-group`, or env `PYRUNG_CONFORMANCE_GROUP`) to run some groups only. The Modbus runs share every line of client code; only the endpoint differs. `-rP` prints the report: one line per case (`PASS`/`FAIL`/`SKIP`/`STALE`, `[confirmed]`/`[unconfirmed]`) and totals.
 
 ## What a test is
 
@@ -127,7 +128,7 @@ Conf_Rungs:     copy(<group hash>, DS101)        every scan, first rung
 | `DS2`..`DS10` | Spare program header. |
 | `DS<base>` | Group hash (1..32767): SHA-256 of the CLICK export of the group's case rungs, folded into a register. Changes whenever that subroutine's exported ladder would. |
 | `DS<base+1>`..`DS<base+9>` | Spare group header. |
-| `DS<base+10N>`..`DS<base+10N+8>` | Slot N of the group; the last register of each 10 is spare. |
+| `DS<base+10N>`..`DS<base+10N+8>` | Slot N of the group; the last register of each 10 is spare. Each spare is mapped as a tag named after its address (`DS120`), which exports with no nickname, so a target that serves only mapped registers (the P1AM code) serves the whole slot while the CLICK project stays as it was. |
 
 Each slot is a `named_array` instance with 9 Int fields:
 
@@ -224,6 +225,21 @@ Over Modbus nothing counts scans, so waits are wall clock: "Fired, then settle, 
 The local sim (`SimServer`) is `ClickDataProvider` behind `pyclickplc.server.ClickServer` on a free localhost port, serving a `PLC(realtime=True)` that free-runs on its own thread at one scan per 10 ms of wall clock (late scans are not burst to catch up). Timers therefore see wall-clock time, as on a CLICK. Modbus reads and writes take the same lock as the scan, and each write becomes a `patch()` applied at the start of the next scan. A scan exception stops the sim and fails the run.
 
 The default 10 s timeout is far above what the sim needs (a debounce coil's 1 s off side is the longest reset, and no case runs past 1 s); it is sized for a real CLICK on a busy network.
+
+## The P1AM-200 target
+
+`CircuitPySim` (`src/pyrung/conformance/_circuitpy.py`) stands where `SimServer` does, but serves the program's generated P1AM-200 code instead of pyrung's engine: `generate(build)` runs `generate_circuitpy()` on the suite with a Modbus server, and `src/pyrung/circuitpy/host.py` runs the resulting `code.py` unchanged in a child Python (`python -I host.py DIR --port N`), with stand-ins for the board: `board`, `digitalio`, `busio`, `P1AM` (every module reads 0), no SD card (retentive memory starts fresh), the RUN/STOP switch in RUN, and the WIZnet socket pool played by ordinary TCP sockets. The generated scan loop, wall-clock timers and Modbus server all run as they would on the board; the harness talks to it exactly as to a CLICK. A child that dies (an exception in a scan) fails the run with its output.
+
+The generated server serves only what the TagMap maps and what rungs use, so every register the harness reads or zeroes must be mapped; that is why slot spares are. Each `run_modbus()` without an endpoint starts a fresh child, so the STOP groups get one each, as on the sim.
+
+What this target cannot see is what only the board does: REAL math in single precision, the CircuitPython language subset, scan timing and memory. The whole suite also makes a 2 MB `code.py`, far too big for the board, so loading it on a real P1AM will take one build per group.
+
+Known failures on this target, each a gap in the generated runtime (fix it in the codegen, then delete its line):
+
+- SC40 and SC43 are not cleared at the start of each scan, and an out-of-range pointer copy does not set SC44 (`system/*_flag_clears_each_scan`).
+- SD9 (scan counter), SC3, SC5 and SC6 (clocks), SC10 (mode switch) and SD26 (RTC seconds) do not move (`system/scan_counter_steps_by_one`, `system/scan_clock_follows_counter`, `system/clock_bits_toggle_at_their_rate`, `system/mode_bits_on_in_run`, `system/rtc_seconds_advance`).
+- ASCII code of an empty TXT does not write 0 (`text/null_ascii` reads 77).
+- A math error stops the code without raising SC50 (every `stop_*` group).
 
 ## Running against the real PLC
 

@@ -1,7 +1,9 @@
 """Every conformance group over Modbus TCP, plus the wire harness's own checks.
 
 Runs against pyrung's soft PLC on localhost unless ``--conformance-plc`` (or
-``PYRUNG_CONFORMANCE_PLC``) names a CLICK running the exported program.
+``PYRUNG_CONFORMANCE_PLC``) names a CLICK running the exported program, or
+``--conformance-target=circuitpy`` (``PYRUNG_CONFORMANCE_TARGET``) runs the
+program's generated P1AM-200 code on this machine instead.
 ``--conformance-group`` (or ``PYRUNG_CONFORMANCE_GROUP``) picks groups.
 """
 
@@ -15,6 +17,7 @@ import pytest
 from pyrung.click import ClickBlocks
 from pyrung.conformance import (
     BuildMismatchError,
+    CircuitPySim,
     ConformanceError,
     ConformanceProgram,
     Endpoint,
@@ -36,12 +39,14 @@ pytestmark = pytest.mark.conformance
 
 
 def test_all_groups_over_modbus(
-    conformance_endpoint: Endpoint | None, conformance_groups: list[str] | None
+    conformance_endpoint: Endpoint | None,
+    conformance_groups: list[str] | None,
+    conformance_sim: type[SimServer] | type[CircuitPySim],
 ) -> None:
     build = suite.build()
     # Without GROUP=, every group but the ones that stop the PLC.
     groups = conformance_groups or [g.name for g in suite.ALL_GROUPS]
-    results = run_modbus(build, conformance_endpoint, groups=groups)
+    results = run_modbus(build, conformance_endpoint, groups=groups, sim=conformance_sim)
     print(format_report(results))
     if conformance_groups is None:
         assert len(results) == sum(len(g.cases) for g in suite.ALL_GROUPS)
@@ -49,12 +54,16 @@ def test_all_groups_over_modbus(
 
 
 @contextmanager
-def _one_plc(build: ConformanceProgram, endpoint: Endpoint | None) -> Generator[Endpoint]:
-    """*endpoint*, or one local sim kept running for the whole block."""
+def _one_plc(
+    build: ConformanceProgram,
+    endpoint: Endpoint | None,
+    local: type[SimServer] | type[CircuitPySim] = SimServer,
+) -> Generator[Endpoint]:
+    """*endpoint*, or one *local* target kept running for the whole block."""
     if endpoint is not None:
         yield endpoint
         return
-    with SimServer(build) as sim:
+    with local(build) as sim:
         assert sim.endpoint is not None
         yield sim.endpoint
         sim.raise_if_failed()
@@ -68,7 +77,9 @@ def _passes(results, label: str) -> None:
 
 
 def test_suite_repeats_without_restarting(
-    conformance_endpoint: Endpoint | None, conformance_groups: list[str] | None
+    conformance_endpoint: Endpoint | None,
+    conformance_groups: list[str] | None,
+    conformance_sim: type[SimServer] | type[CircuitPySim],
 ) -> None:
     """The suite twice on one PLC, then each group alone, A -> B -> ... -> B -> A.
 
@@ -80,7 +91,7 @@ def test_suite_repeats_without_restarting(
     names = [n for n in conformance_groups or [g.name for g in build.groups] if n not in stopping]
     if not names:
         pytest.skip("a group that stops the PLC runs once per RUN")
-    with _one_plc(build, conformance_endpoint) as endpoint:
+    with _one_plc(build, conformance_endpoint, conformance_sim) as endpoint:
         for n in (1, 2):
             _passes(run_modbus(build, endpoint, groups=names), f"suite run {n} of 2")
         for step, name in enumerate(names + names[-2::-1], start=1):
@@ -162,6 +173,18 @@ def test_one_group_runs_alone() -> None:
         assert _slot_value(sim, build, "alpha", "Cmd") == 0
         assert _slot_value(sim, build, "alpha", "Fired") == 0
         assert _slot_value(sim, build, "beta", "Fired") == 1
+
+
+def test_circuitpy_target_runs_the_generated_code() -> None:
+    """The P1AM-200 code for the program, on this machine, answering through its own server."""
+    build = build_program([_alpha(), _beta()], _TWO_GROUPS)
+    results = run_modbus(build, sim=CircuitPySim)
+    assert [(r.group, r.case.id) for r in results] == [
+        ("alpha", "one"),
+        ("alpha", "two"),
+        ("beta", "one"),
+    ]
+    assert_all_passed(results)
 
 
 def test_stale_group_is_reported_and_the_rest_run() -> None:

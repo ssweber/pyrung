@@ -257,6 +257,7 @@ def run_modbus(
     *,
     groups: Iterable[str] | None = None,
     timeout: float = 10.0,
+    sim: Callable[[ConformanceProgram], Any] | None = None,
 ) -> list[CaseResult]:
     """Run cases over Modbus TCP and return one result per case, in group order.
 
@@ -264,10 +265,14 @@ def run_modbus(
         program: A program built with :func:`build_program`, or groups to build
             one from (packed layout, fine for the local sim).
         endpoint: ``host[:port]`` of a CLICK running the exported program.
-            ``None`` starts pyrung's soft PLC on a free localhost port.
+            ``None`` starts a local target on a free localhost port: *sim*.
         groups: Names of the groups to run; ``None`` runs every group.  The
             other groups' registers are never touched.
         timeout: Seconds to wait for each phase (header, zeroing, ``Fired``).
+        sim: The local target to start when *endpoint* is ``None``, called
+            with the build: :class:`SimServer` (pyrung's soft PLC, the
+            default) or :class:`~pyrung.conformance.CircuitPySim` (the
+            program's generated P1AM-200 code).
 
     A selected group whose subroutine hash does not match is stale: its cases
     come back with ``stale=True`` without running, and the other groups still run.
@@ -287,12 +292,12 @@ def run_modbus(
     by_group: dict[str, list[CaseResult]] = {}
     if wire:
         if endpoint is None:
-            with SimServer(build) as sim:
-                assert sim.endpoint is not None
+            with (sim or SimServer)(build) as local:
+                assert local.endpoint is not None
                 try:
-                    by_group = asyncio.run(_drive(build, wire, sim.endpoint, timeout))
+                    by_group = asyncio.run(_drive(build, wire, local.endpoint, timeout))
                 finally:
-                    sim.raise_if_failed()
+                    local.raise_if_failed()
         else:
             by_group = asyncio.run(_drive(build, wire, endpoint, timeout))
 
