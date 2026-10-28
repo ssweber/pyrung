@@ -238,7 +238,6 @@ Known failures on this target, each a gap in the generated runtime (fix it in th
 
 - SC40 and SC43 are not cleared at the start of each scan, and an out-of-range pointer copy does not set SC44 (`system/*_flag_clears_each_scan`).
 - SD9 (scan counter), SC3, SC5 and SC6 (clocks), SC10 (mode switch) and SD26 (RTC seconds) do not move (`system/scan_counter_steps_by_one`, `system/scan_clock_follows_counter`, `system/clock_bits_toggle_at_their_rate`, `system/mode_bits_on_in_run`, `system/rtc_seconds_advance`).
-- ASCII code of an empty TXT does not write 0 (`text/null_ascii` reads 77).
 - A math error stops the code without raising SC50 (every `stop_*` group).
 
 ## Running against the real PLC

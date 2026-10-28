@@ -16,7 +16,8 @@ _TYPE_DEFAULTS: dict[TagType, Any] = {
     TagType.DINT: 0,
     TagType.REAL: 0.0,
     TagType.WORD: 0,
-    TagType.CHAR: "",
+    # An unwritten TXT holds NUL, as in the core engine's Tag default.
+    TagType.CHAR: "\x00",
 }
 
 

@@ -1609,6 +1609,54 @@ class TestCopyConverterCodegen:
         assert ds_values[2] == 9
         assert namespace[fault_seen_symbol] is True
 
+    def test_ascii_code_of_unwritten_char_writes_zero(self, monkeypatch):
+        # A TXT nothing wrote holds NUL, as in the core engine: its ASCII code
+        # is 0 and overwrites the destination instead of leaving it alone.
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        ch = Block("CH", TagType.CHAR, 1, 12)
+        ds = Block("DS", TagType.INT, 1, 12)
+        enable = Bool("Enable", default=True)
+
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                copy(77, ds[1])
+                copy(ch[11], ds[1], convert=to_ascii)
+                fill(55, ds.select(2, 3))
+                blockcopy(ch.select(8, 9), ds.select(2, 3), convert=to_ascii)
+
+        ctx = _context_for_program(prog, hw)
+        ch_symbol = ctx.symbol_for_block(ch)
+        ds_symbol = ctx.symbol_for_block(ds)
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
+
+        class StubBase:
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+            def writeDiscrete(self, value, slot):
+                return None
+
+            def readAnalog(self, slot, ch_num):
+                return 0
+
+            def writeAnalog(self, value, slot, ch_num):
+                return None
+
+            def readTemperature(self, slot, ch_num):
+                return 0.0
+
+        namespace = _run_single_scan_source(
+            result.code, monkeypatch, StubBase(), runtime_source=result.runtime
+        )
+        ds_values = _namespace_list(namespace, ds_symbol)
+        ch_values = _namespace_list(namespace, ch_symbol)
+        assert ds_values[0:3] == [0, 0, 0]
+        assert ch_values[10] == "\x00"
+
     def test_scalar_multi_char_copy_converter_faults_and_skips_write(self, monkeypatch):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")

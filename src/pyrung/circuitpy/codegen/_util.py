@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from pyrung.circuitpy.codegen._constants import _IDENT_RE, _STORE_TYPE_HELPERS, _TYPE_DEFAULTS
+from pyrung.circuitpy.codegen._constants import _IDENT_RE, _STORE_TYPE_HELPERS
+from pyrung.core.instruction.coils import reset_value_for_type
 from pyrung.core.memory_block import (
     BlockRange,
     IndirectBlockRange,
@@ -99,10 +100,12 @@ def _coil_reset_value(
 ) -> str:
     if isinstance(target, ImmediateRef):
         return _coil_reset_value(target.value, ctx)
+    # RESET writes the core engine's OFF/zero value, which for CHAR is "",
+    # not the NUL an unwritten TXT holds.
     if isinstance(target, Tag):
-        return repr(_TYPE_DEFAULTS[target.type])
+        return repr(reset_value_for_type(target.type))
     binding = ctx.block_bindings[id(target.block)]
-    return repr(_TYPE_DEFAULTS[binding.tag_type])
+    return repr(reset_value_for_type(binding.tag_type))
 
 
 def _global_line(symbols: list[str], indent: int) -> str | None:
