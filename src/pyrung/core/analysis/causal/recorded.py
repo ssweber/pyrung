@@ -616,12 +616,40 @@ def _indexed_value_transition_scans(
         cursor = scan - 1
 
 
+# ``(tag, rung_index, subroutine)`` writers already explained on the current path.
+_Lineage = frozenset[tuple[str, int, str | None]]
+_WalkFrame = Iterator[tuple[Transition, tuple[str, ...], _Lineage]]
+
+
 def _walk_backward(
     context: _RecordedCauseContext,
     transition: Transition,
     trail: tuple[str, ...] = (),
 ) -> None:
-    """Recursive backward walk from a single transition.
+    """Depth-first backward walk from a single transition, on an explicit stack.
+
+    A walk frame yields each predecessor transition it would recurse into; the
+    driver runs that frame to completion before resuming the parent, so steps
+    and roots land in exactly the order plain recursion would produce.  Chain
+    depth grows with history (an accumulator ``calc(T + 3, T)`` hops once per
+    scan), so the walk must not consume one interpreter frame per hop.
+    """
+    stack: list[_WalkFrame] = [_walk_frame(context, transition, trail, frozenset())]
+    while stack:
+        child = next(stack[-1], None)
+        if child is None:
+            stack.pop()
+        else:
+            stack.append(_walk_frame(context, *child))
+
+
+def _walk_frame(
+    context: _RecordedCauseContext,
+    transition: Transition,
+    trail: tuple[str, ...],
+    lineage: _Lineage,
+) -> _WalkFrame:
+    """Backward walk from a single transition; yields transitions to walk next.
 
     Beyond trigger recursion, the walk may recursively explain a fired rung's
     steady enablers. An enabler that transitioned earlier is followed to that
@@ -631,6 +659,12 @@ def _walk_backward(
 
     Terminals are classified into ``deep.roots`` (external / never-written /
     system / unattributed).
+
+    A writer already on the current path (*lineage*) for the same tag is a
+    recurrence, not a new cause: ``calc(T + 3, T)`` reads its own previous
+    result, and two calcs feeding each other hand the value back and forth.
+    The step above already names the value read; walking on would repeat the
+    same explanation once per scan, so the walk stops there.
     """
     logic = context.logic
     history = context.history
@@ -713,8 +747,10 @@ def _walk_backward(
         )
 
     def _chase_supports(
-        supports: tuple[EnablingCondition, ...], base_trail: tuple[str, ...]
-    ) -> None:
+        supports: tuple[EnablingCondition, ...],
+        base_trail: tuple[str, ...],
+        base_lineage: _Lineage,
+    ) -> _WalkFrame:
         """Recursively explain enablers on the actual fired path."""
         if deep is None or pdg is None:
             return
@@ -734,11 +770,13 @@ def _walk_backward(
                     initial_tags=initial_tags,
                 )
                 if t is not None:
-                    _walk_backward(context, t, trail=base_trail)
+                    yield t, base_trail, base_lineage
                     continue
-            _absence_hop(name, ec.value, base_trail)
+            yield from _absence_hop(name, ec.value, base_trail, base_lineage)
 
-    def _absence_hop(name: str, value: Any, base_trail: tuple[str, ...]) -> None:
+    def _absence_hop(
+        name: str, value: Any, base_trail: tuple[str, ...], base_lineage: _Lineage
+    ) -> _WalkFrame:
         """Expand a held enabler through its observed value writer.
 
         A steady contact only enters here because an actual fired rung made it
@@ -818,11 +856,7 @@ def _walk_backward(
             _add_root(name, value, "unattributed", None, hop_trail)
             return
 
-        _walk_backward(
-            context,
-            Transition(name, writer_scan, value, value),
-            trail=hop_trail,
-        )
+        yield Transition(name, writer_scan, value, value), hop_trail, base_lineage
 
     # Resolved writers: (rung_index, rung, subroutine).  The node-level
     # firing timeline names the precise subroutine writer rung; the
@@ -899,7 +933,13 @@ def _walk_backward(
         _mirror_root(transition)
         return
 
+    walked = False
     for rung_idx, rung, sub_name in resolved_writers:
+        writer_key = (tag_name, rung_idx, sub_name)
+        if writer_key in lineage:
+            continue  # recurrence: this writer is already explained on the path
+        walked = True
+        writer_lineage = lineage | {writer_key}
         sp_tree = rung.sp_tree()
 
         # At-fire-time view: for a subroutine writer, the rung's contacts
@@ -954,8 +994,8 @@ def _walk_backward(
             )
             steps.append(wrapped)
             for p in triggers:
-                _walk_backward(context, p, trail=trail)
-            _chase_supports(wrapped.enablers, trail)
+                yield p, trail, writer_lineage
+            yield from _chase_supports(wrapped.enablers, trail, writer_lineage)
             continue
 
         if sp_tree is None:
@@ -1000,8 +1040,8 @@ def _walk_backward(
                 )
                 steps.append(wrapped)
                 for p in triggers:
-                    _walk_backward(context, p, trail=trail)
-                _chase_supports(wrapped.enablers, trail)
+                    yield p, trail, writer_lineage
+                yield from _chase_supports(wrapped.enablers, trail, writer_lineage)
                 continue
             step = ChainStep(
                 transition=transition,
@@ -1023,7 +1063,7 @@ def _walk_backward(
             steps.append(wrapped)
             conjunctive_roots.append(transition)
             _mirror_root(transition)
-            _chase_supports(wrapped.enablers, trail)
+            yield from _chase_supports(wrapped.enablers, trail, writer_lineage)
             continue
 
         # Attribute from the exact entry-time view when replay captured one.
@@ -1157,7 +1197,7 @@ def _walk_backward(
                     crossing_exact=crossed.crossing_exact,
                 )
                 for p in dr_triggers:
-                    _walk_backward(context, p, trail=trail)
+                    yield p, trail, writer_lineage
             # If a rung was explained only by held enablers, do not
             # invent the written tag as its own root; callers can fall
             # through to the enabler set as the remaining choices.
@@ -1167,10 +1207,57 @@ def _walk_backward(
         if proximate:
             # Recurse on each proximate cause
             for p in proximate:
-                _walk_backward(context, p, trail=trail)
+                yield p, trail, writer_lineage
         # Deep walk: explain this fired rung's enablers through their
         # establishing transitions or observed value writers.
-        _chase_supports(steps[step_idx].enablers, trail)
+        yield from _chase_supports(steps[step_idx].enablers, trail, writer_lineage)
+
+    if resolved_writers and not walked:
+        # Cut on this path only; another path may still need to explain it.
+        visited.discard(visit_key)
+        seed = _recurrence_seed(context, tag_name, scan_id, lineage)
+        if seed is not None:
+            yield seed, trail, lineage
+
+
+def _recurrence_seed(
+    context: _RecordedCauseContext,
+    tag_name: str,
+    scan_id: int,
+    lineage: _Lineage,
+) -> Transition | None:
+    """The transition that seeded a recurrence: the last write by any other writer.
+
+    ``copy(Setpoint, T)`` then ``calc(T + 3, T)`` every scan: the recurrence
+    explains nothing new, but where it started from does.  Main-scope writers
+    only (the firing timelines index them by rung); no other writer, or no write
+    by one in the retained history, means the recurrence ran from the initial
+    value and the cut is the end of the walk.
+    """
+    pdg = context.pdg
+    timelines = context.timelines
+    if pdg is None or timelines is None:
+        return None
+    looped = {rung_idx for tag, rung_idx, sub in lineage if tag == tag_name and sub is None}
+    others = frozenset(
+        node.rung_index
+        for node in (pdg.rung_nodes[idx] for idx in pdg.writers_of.get(tag_name, ()))
+        if node.subroutine is None and node.rung_index not in looped
+    )
+    if not others:
+        return None
+    last_write = timelines.last_tag_write_before(others, tag_name, scan_id)
+    if last_write is None or last_write[0] < context.history.oldest_scan_id:
+        return None
+    return _find_transition_at_scan(
+        context.history,
+        tag_name,
+        last_write[0],
+        timelines=timelines,
+        pdg=pdg,
+        scan_log=context.scan_log,
+        initial_tags=context.initial_tags,
+    )
 
 
 def _replayed_writers_from_pdg(

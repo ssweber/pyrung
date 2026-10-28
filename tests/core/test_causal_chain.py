@@ -1397,3 +1397,83 @@ class TestIndirectCopyWriter:
         }
         assert "Param" in all_tags
         assert "Trigger" in all_tags
+
+
+# ---------------------------------------------------------------------------
+# Long recorded chains
+# ---------------------------------------------------------------------------
+
+
+class TestLongRecordedChains:
+    """A writer that feeds on its own output is explained once, not once per scan."""
+
+    def test_self_accumulator_is_one_step(self):
+        import sys
+
+        from pyrung.core import calc
+
+        En = Bool("En")
+        T = Int("T")
+        with Program() as prog:
+            with Rung(En):
+                calc(T + 3, T)
+
+        plc = PLC(prog)
+        plc.patch({"En": True})
+        scans = sys.getrecursionlimit()
+        plc.run(cycles=scans)
+
+        chain = plc.cause("T")
+        assert chain is not None
+        assert chain.effect.to_value == 3 * scans
+        (step,) = chain.steps
+        assert {e.tag_name: e.value for e in step.enablers} == {"En": True, "T": 3 * (scans - 1)}
+        assert [r.tag_name for r in chain.roots] == ["En"]
+
+    def test_mutual_accumulators_are_one_round(self):
+        import sys
+
+        from pyrung.core import calc
+
+        En = Bool("En")
+        A = Int("A")
+        B = Int("B")
+        with Program() as prog:
+            with Rung(En):
+                calc(B + 1, A)
+            with Rung(En):
+                calc(A + 1, B)
+
+        plc = PLC(prog)
+        plc.patch({"En": True})
+        plc.run(cycles=sys.getrecursionlimit())
+
+        chain = plc.cause("A")
+        assert chain is not None
+        assert [s.transition.tag_name for s in chain.steps] == ["A", "B"]
+        assert [r.tag_name for r in chain.roots] == ["En"]
+
+    def test_accumulator_walks_to_its_seed(self):
+        from pyrung.core import calc
+
+        Reset = Bool("Reset")
+        Setpoint = Int("Setpoint")
+        T = Int("T")
+        with Program() as prog:
+            with Rung(rise(Reset)):
+                copy(Setpoint, T)
+            with Rung(~Reset):
+                calc(T + 3, T)
+
+        plc = PLC(prog)
+        plc.patch({"Setpoint": 100})
+        plc.step()
+        plc.patch({"Reset": True})
+        plc.step()
+        plc.patch({"Reset": False})
+        plc.run(cycles=20)
+
+        chain = plc.cause("T")
+        assert chain is not None
+        assert [(s.rung_index, s.transition.to_value) for s in chain.steps] == [(1, 160), (0, 100)]
+        assert {r.tag_name for r in chain.roots} == {"Reset", "Setpoint"}

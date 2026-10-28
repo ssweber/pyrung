@@ -46,6 +46,7 @@
 
 ### Fixes
 
+- `cause()` explains a writer that feeds on its own output once instead of once per scan: an accumulator `calc(T + 3, T)` shows the rung that added and the rung that seeded `T` (a `copy(Setpoint, T)` on reset) instead of thousands of lines, or a `RecursionError` after about 500 scans, and two calcs feeding each other show one round.
 - CLICK import reads Send and Receive remote addresses written in MODBUS hex (`50Eh` with its register type), which it refused, and reads MODBUS 984 coil addresses (`1`..`65536`) as coils instead of holding registers. CLICK export keeps a remote address in the form it was written: `ModbusAddress("50Eh")` exports as hex instead of turning into `401295`, so a hex program imported and exported again keeps its addressing.
 - `send()` and `receive()` status bits (`sending`/`receiving`, `success`, `error`, `exception_response`) are optional, as in CLICK: one left off runs on a hidden tag and CLICK export leaves it off, so CLICK programs that turn a status bit off import instead of failing.
 - CLICK import of a program with `raw(...)` instructions (Email, Home and other unsupported ones) imports `raw` in the generated code, which failed with a NameError.
