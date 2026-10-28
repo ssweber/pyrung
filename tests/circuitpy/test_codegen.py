@@ -672,6 +672,22 @@ class TestInstructionCoverage:
         assert "_ready" in result.code
         assert "_frac:" in result.code
 
+    def test_off_delay_codegen_keeps_timing_at_done_false_acc_zero(self):
+        """The TOF rests at Done False, Acc 0 unless its own scan left it there
+        while timing (``_tof_timing:<Acc>``), as in the interpreter."""
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        with Program(strict=False) as prog:
+            with Rung(Bool("Enable")):
+                off_delay(Timer2, preset=0)
+
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
+
+        compile(result.code, "code.py", "exec")
+        assert '_mem.get("_tof_timing:Timer2_Acc", False)' in result.code
+        assert "if _tof_timing or " in result.code
+        assert '_mem["_tof_timing:Timer2_Acc"] = _tof_stalled' in result.code
+
     def test_out_coil_variants_codegen_compiles(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")

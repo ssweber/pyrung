@@ -2000,9 +2000,26 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
         ctx.system_points.seed(pilot.tags)
     _step_compiled_kernel(ctx.compiled, pilot, dt=ctx.dt, system=ctx.system_points)
     excluded_prefixes = ("_dt", "_frac:", PROVE_EFFECTIVE_PRESET_PREFIX)
-    ctx.memory_key_names = tuple(
-        sorted(k for k in pilot.memory if not any(k.startswith(p) for p in excluded_prefixes))
-    )
+    discovered = {k for k in pilot.memory if not any(k.startswith(p) for p in excluded_prefixes)}
+    ctx.memory_key_names = tuple(sorted(discovered | _tof_timing_keys(ctx.program)))
+
+
+def _tof_timing_keys(program: Program) -> set[str]:
+    """Each off-delay timer's ``tof_timing_key``, which the pilot scan rarely sets.
+
+    The marker decides whether ``Done False, Acc 0`` rests or keeps timing
+    (preset reached under a sub-unit scan), so two states that differ only
+    in it differ in what follows: it belongs in the state key.  It is absent
+    (``None``) in every state of a timer that never stalls at zero.
+    """
+    from pyrung.core.instruction.timers import OffDelayInstruction, tof_timing_key
+    from pyrung.core.validation._common import walk_instructions
+
+    return {
+        tof_timing_key(instr.accumulator.name)
+        for instr in walk_instructions(program)
+        if isinstance(instr, OffDelayInstruction)
+    }
 
 
 def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
