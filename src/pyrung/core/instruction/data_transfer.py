@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.copy_converters import CopyConverter
+from pyrung.core.storage import check_real_literal
 from pyrung.core.tag import Tag
 
 from .base import Instruction, OneShotMixin
@@ -71,6 +72,7 @@ class CopyInstruction(OneShotMixin, Instruction):
         oneshot: bool = False,
     ):
         OneShotMixin.__init__(self, oneshot)
+        check_real_literal(source, dest, "copy() source")
         self.source = source
         self.dest = dest
         self.convert = convert
@@ -378,6 +380,7 @@ class FillInstruction(OneShotMixin, Instruction):
 
     def __init__(self, value: Any, dest: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
+        check_real_literal(value, dest, "fill() value")
         self.value = value
         self.dest = dest
 

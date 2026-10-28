@@ -178,6 +178,12 @@ def _set_fault_division_error(ctx: ScanContext) -> None:
     ctx._set_tag_internal(system.fault.division_error.name, True)
 
 
+def _set_fault_math_operation_error(ctx: ScanContext) -> None:
+    from pyrung.core.system_points import system
+
+    ctx._set_tag_internal(system.fault.math_operation_error.name, True)
+
+
 def _set_fault_address_error(ctx: ScanContext) -> None:
     from pyrung.core.system_points import system
 

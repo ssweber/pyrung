@@ -17,10 +17,11 @@ in ``acc_clamps_at_dint_range``, which compares against the limits in a contact.
 The expectations are pyrung's answers, unconfirmed on a CLICK.  What each case
 tells apart, and what the other model would read:
 
-- ``level_vs_edge``: pyrung counts every scan the rung is true.  A counter that
-  counts OFF->ON transitions of its input, as many PLCs' count-up instructions
-  do, reads ``Result1 = 2`` instead of 5; both read ``Result2 = 2`` for the
-  ``rise()`` counter.
+- ``level_vs_edge``: pyrung counts every scan the rung is true, as a CLICK does
+  (confirmed on one, though CLICK's help describes counting on the rung's
+  OFF->ON transition).  The case still tells the two apart: a counter that
+  counts OFF->ON transitions of its input reads ``Result1 = 2`` instead of 5;
+  both read ``Result2 = 2`` for the ``rise()`` counter.
 - ``survives_rung_false``: a counter that auto-resets when its rung goes false,
   as TON does, reads 0, 0, 2 instead of 3, 1, 5.
 - ``preset_raised_resumes``: ``Done`` is ``Acc >= preset`` with the preset read

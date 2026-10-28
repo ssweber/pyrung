@@ -26,7 +26,10 @@ def pyrung_to_ladder(
         index: When True, number rung markers sequentially (R1, R2, ...)
             instead of bare ``R``.  Counter restarts per program scope.
         validate: When True (default), run pre-export checks and round-trip
-            verification.  Set to False to skip validation for speed.
+            verification: the rows must analyze back to the program's outputs,
+            and importing them (``ladder_to_pyrung``) must keep each output's
+            condition, pins and condition snapshot.  Set to False to skip
+            validation for speed.
 
     Returns:
         A LadderBundle containing main and subroutine row matrices.

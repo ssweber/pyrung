@@ -6,10 +6,9 @@ registers it owns: C1901..C2000 and TD401..TD500 (``memory.OWNED``), ten C
 bits per case.  The current step is a slot field (DS), ``Result1`` in every
 case; a jump target is a slot field too (CLICK takes it from a DS).  Each
 drum's reset input is ``Cmd == 0``, so the reset puts it back on step 1 with
-its time cleared.  A case that also resets mid-run drives a C bit from
-``Cmd == 0`` or its own reset scan and ties the reset input to that bit: an
-``Or`` on the reset input itself, with a jump or jog after it, exports a ladder
-pyrung's own importer rejects.
+its time cleared.  A case that also resets mid-run puts an ``Or`` of
+``Cmd == 0`` and its own reset scan on the reset input, with the jump and jog
+pins after it (its second branch row sits between the pin rows).
 
 The event-drum cases count their own scans (``scans.py``): a C bit driven by a
 rung keyed on the scan number is the event, the jog or the jump, and rungs
@@ -262,13 +261,11 @@ def prove_reset_no_stale_outputs(slot):
 
 
 def prove_reset_jump_jog_order(slot):
-    # Jog alone on scan 2; reset (C1964, also on while Cmd == 0) and jump to
-    # step 3 on scan 3; reset and jog on scan 5; jump and jog on scan 7.
+    # Jog alone on scan 2; reset (also on while Cmd == 0) and jump to step 3
+    # on scan 3; reset and jog on scan 5; jump and jog on scan 7.
     count_scans(slot)
     with Rung(slot.Cmd != 0):
         copy(3, slot.Result4)
-    with Rung(Or(slot.Cmd == 0, slot.Scratch == 3, slot.Scratch == 5)):
-        out(c[1964])
     with Rung(slot.Cmd != 0, Or(slot.Scratch == 3, slot.Scratch == 7)):
         out(c[1965])
     with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 5, slot.Scratch == 7)):
@@ -280,7 +277,9 @@ def prove_reset_jump_jog_order(slot):
             pattern=[[1], [0], [1], [0]],
             current_step=slot.Result1,
             completion_flag=c[1963],
-        ).reset(c[1964]).jump(c[1965], step=slot.Result4).jog(c[1966])
+        ).reset(Or(slot.Cmd == 0, slot.Scratch == 3, slot.Scratch == 5)).jump(
+            c[1965], step=slot.Result4
+        ).jog(c[1966])
     at_scan(slot, 3, slot.Result1, slot.Result2)
     at_scan(slot, 5, slot.Result1, slot.Result3)
     done(slot)
@@ -288,15 +287,13 @@ def prove_reset_jump_jog_order(slot):
 
 def prove_pause_holds_and_drops_jog(slot):
     # Jog on scan 2 takes the drum to step 2.  Its rung is false (C1975) on
-    # scans 3..5; jog (C1976) is on again for scans 4..6 and reset (C1977,
-    # also on while Cmd == 0) on scan 5.
+    # scans 3..5; jog (C1976) is on again for scans 4..6 and reset (also on
+    # while Cmd == 0) on scan 5.
     count_scans(slot)
     with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
         out(c[1975])
     with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch >= 4), slot.Scratch <= 6):
         out(c[1976])
-    with Rung(Or(slot.Cmd == 0, slot.Scratch == 5)):
-        out(c[1977])
     with Rung(slot.Cmd != 0, ~c[1975]):
         event_drum(
             outputs=[c[1971], c[1972]],
@@ -304,7 +301,7 @@ def prove_pause_holds_and_drops_jog(slot):
             pattern=[[1, 0], [0, 1], [0, 0]],
             current_step=slot.Result1,
             completion_flag=c[1974],
-        ).reset(c[1977]).jog(c[1976])
+        ).reset(Or(slot.Cmd == 0, slot.Scratch == 5)).jog(c[1976])
     at_scan(slot, 4, slot.Result1, slot.Result2)
     last_on(slot, c[1972], slot.Result3)
     first_on_from(slot, c[1971], 3, slot.Result4)
@@ -338,7 +335,7 @@ def prove_invalid_step_corrects_to_1(slot):
 def prove_time_acc_clears_on_every_transition(slot):
     # Each step times 100 ms before the next control: a jog (C1993) from step
     # 1, a jump (C1994) from step 2 to step 3, then step 3 advances on its own
-    # 205 ms, and a reset (C1995, latched; the reset input C1998 is it or
+    # 205 ms, and a reset (C1995, latched; the reset input is it or
     # Cmd == 0) from step 4.  Below the drum, each transition's scan records
     # TD491.
     with Rung(slot.Cmd != 0):
@@ -349,8 +346,6 @@ def prove_time_acc_clears_on_every_transition(slot):
         out(c[1994])
     with Rung(slot.Cmd != 0, slot.Result1 == 4, td[491] >= 100):
         latch(c[1995])
-    with Rung(Or(slot.Cmd == 0, c[1995])):
-        out(c[1998])
     with Rung(slot.Cmd != 0):
         time_drum(
             outputs=[c[1991]],
@@ -360,7 +355,7 @@ def prove_time_acc_clears_on_every_transition(slot):
             current_step=slot.Result1,
             accumulator=td[491],
             completion_flag=c[1992],
-        ).reset(c[1998]).jump(c[1994], step=slot.Scratch).jog(c[1993])
+        ).reset(Or(slot.Cmd == 0, c[1995])).jump(c[1994], step=slot.Scratch).jog(c[1993])
     with Rung(slot.Cmd != 0, c[1993], slot.Result1 == 2):
         copy(td[491], slot.Result2)
     with Rung(slot.Cmd != 0, c[1994], slot.Result1 == 3):

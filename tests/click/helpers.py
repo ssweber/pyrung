@@ -423,6 +423,52 @@ def exec_with_source(
     return namespace
 
 
+def rows_logic(rows) -> list[tuple]:
+    """Per-output (AF, full condition, pins) of ladder rows, NOPs included.
+
+    Compares logic, not shape: continued rows and branches that read the same
+    contacts give the same entries.
+    """
+    from pyrung.click._topology import Series, make_compound
+    from pyrung.click.codegen.analyzer import _analyze_rungs
+    from pyrung.click.codegen.parser import _parse_rows
+    from pyrung.click.codegen.shaping import _tree_key
+
+    outputs = []
+    for rung in _analyze_rungs(_parse_rows(rows)):
+        for instr in rung.instructions:
+            parts = [p for p in (rung.condition_tree, instr.branch_tree) if p is not None]
+            tree = make_compound(parts, Series) if parts else None
+            outputs.append(
+                (
+                    instr.af_token,
+                    _tree_key(tree),
+                    tuple((p.name, p.arg, _tree_key(p.condition_tree)) for p in instr.pins),
+                )
+            )
+    return outputs
+
+
+def bundle_logic(bundle) -> dict[str, list[tuple]]:
+    """:func:`rows_logic` for the main scope and every subroutine."""
+    scopes = {"main": rows_logic(bundle.main_rows)}
+    for name, rows in bundle.subroutine_rows:
+        scopes[name] = rows_logic(rows)
+    return scopes
+
+
+def round_trip_logic(program: Program, tag_map: TagMap) -> tuple[str, dict, dict]:
+    """Export, import, exec and re-export; return (code, logic before, logic after)."""
+    from pyrung.click import ladder_to_pyrung, pyrung_to_ladder
+
+    original = pyrung_to_ladder(program, tag_map)
+    code = ladder_to_pyrung(original)
+    ns: dict[str, object] = {}
+    exec_with_source(code, ns)
+    reproduced = pyrung_to_ladder(ns["logic"], ns["mapping"])
+    return code, bundle_logic(original), bundle_logic(reproduced)
+
+
 # ---------------------------------------------------------------------------
 # 2. normalize_csv
 # ---------------------------------------------------------------------------

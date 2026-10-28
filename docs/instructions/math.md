@@ -20,10 +20,28 @@ calc(DH[1] | DH[2], DH[3])              # WORD-only math infers hex mode
 | `50000 * 50000` | DINT (32-bit signed) | −1,794,967,296 (wraps) |
 | `40000` → `copy()` | INT | 32767 (clamped) |
 
+## REAL range and precision
+
+A `Real` never leaves CLICK's range, ±3.4028235E+38. A `calc()` result past it saturates at the limit and sets `system.fault.out_of_range`; `copy()` saturates the same way. A default, literal, `patch()` or `force()` past it raises `ValueError`.
+
+Inside the range pyrung keeps a `Real` at Python's 64-bit precision, where a CLICK REAL is a 32-bit float: `16777216.0 + 1` is 16777217 in pyrung and 16777216 on a CLICK. Compare a `Real` with a tolerance, not `==`, when the last digits matter.
+
 ## Division
 
 - Division by zero produces result = 0 and sets `system.fault.division_error`.
 - Integer division truncates toward zero: `−7 / 2 = −3`.
+
+## Math errors stop the PLC
+
+```python
+calc(sqrt(Level), Root)     # Level = -4.0
+```
+
+A math function given an operand outside its domain — `sqrt` of a negative, `log`/`log10` of 0 or a negative, `asin`/`acos` outside −1..1 — stores 0 in the destination and sets `system.fault.math_operation_error` (CLICK's SC46). The rest of the scan runs, so a later rung can see the flag. At the end of that scan the PLC goes to STOP with `system.sys.cmd_mode_stop` (SC50) on, as a CLICK does ("SC50 is turned to ON, the PLC is put in Stop Mode"). Both stay on until the PLC returns to RUN (`plc.start()`, or the next `plc.step()`), which clears them.
+
+An operand that is already infinite (from a division by zero earlier in the expression) is not a domain error: the result is not finite, so it is 0 with `division_error`.
+
+On a P1AM with a run/stop switch (`RunStopConfig`), the math error holds STOP while the switch reads RUN; moving the switch to STOP clears it. Without a switch there is no STOP mode: the flag stays on and the scan loop keeps running.
 
 ## Mode inference
 
@@ -44,7 +62,9 @@ For CLICK portability, do not mix WORD and non-WORD math in the same `calc()` ex
 | `calc()` | Wraps (modular arithmetic) |
 | Timer accumulator | Clamps at 32,767 |
 | Counter accumulator | Clamps at DINT min/max |
+| REAL past ±3.4028235E+38 | Saturates; `calc()` sets `system.fault.out_of_range` |
 | Division by zero | Result = 0, `system.fault.division_error` set |
+| Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | Result = 0, `system.fault.math_operation_error` set, PLC to STOP |
 
 ## Range aggregates
 

@@ -13,6 +13,7 @@ from pyrung.click.codegen.parser import (
     _parse_rows,
     _parse_subroutines,
 )
+from pyrung.click.codegen.shaping import emitted_logic_mismatch
 from pyrung.core.structure import resolve_default
 
 WorkspaceKind = Literal["temporary", "persistent"]
@@ -78,6 +79,27 @@ def _verify_codegen_identity(
         raise CodegenIdentityError(
             "codegen identity check failed (validate=True):\n  " + "\n  ".join(mismatches)
         )
+
+
+def _verify_emitted_logic(
+    analyzed: list[_AnalyzedRung],
+    subroutines: list[_SubroutineInfo],
+) -> None:
+    """Fail when the generated code would change the logic the rows wire.
+
+    Compares every output's AF token, full condition, pins and snapshot group
+    in the source rows against the ``with rung`` / ``with branch`` blocks the
+    emitter renders.  Shape changes pass; a lost or added contact does not.
+    """
+    scopes = [("Main program", analyzed)]
+    scopes.extend((f'Subroutine "{sub.name}"', sub.analyzed) for sub in subroutines)
+    for scope_name, rungs in scopes:
+        mismatch = emitted_logic_mismatch(rungs)
+        if mismatch is not None:
+            raise ValueError(
+                f"{scope_name}: generated code would change the rung logic: {mismatch}. "
+                "This is a codegen bug; please report it with the source CSV."
+            )
 
 
 def _prepare_codegen(
@@ -188,9 +210,12 @@ def ladder_to_pyrung(
         validate: When *True* (default), run codegen self-checks: a decl-level
             identity check that the generated structure defaults reconstruct
             every source per-slot value (raises :class:`CodegenIdentityError`),
-            and a rung-analysis check that no source contact is silently dropped
-            for lack of wiring into an output (raises ``ValueError``). When
-            *False*, a dropped contact only warns instead of raising.
+            a rung-analysis check that no source contact is silently dropped
+            for lack of wiring into an output, and a logic check that every
+            output in the generated code keeps the condition, pins and
+            condition snapshot the source rows give it (both raise
+            ``ValueError``). When *False*, a dropped contact only warns and the
+            logic check is skipped.
 
     Returns:
         The generated Python source code as a string.
@@ -199,7 +224,8 @@ def ladder_to_pyrung(
         ValueError: If both ``nickname_csv`` and ``nicknames`` are provided,
             if required subroutine CSV files are missing, if the CSV format is
             invalid, or if ``validate`` is *True* and a rung drops a source
-            contact that reaches no output.
+            contact (one that reaches no output, or one the generated code
+            would leave out).
         TypeError: If ``source`` is not a supported type.
         CodegenIdentityError: If ``validate`` is *True* and the generated code
             would not reconstruct the source project's per-slot values.
@@ -213,6 +239,7 @@ def ladder_to_pyrung(
     )
 
     if validate:
+        _verify_emitted_logic(analyzed, subroutines)
         _verify_codegen_identity(collection, structured_map)
 
     code = _generate_code(
@@ -289,8 +316,9 @@ def ladder_to_pyrung_project(
             temporary CLICK project folder or a configured persistent workspace.
         validate: When *True* (default), run codegen self-checks (see
             :func:`ladder_to_pyrung`): a structure-default identity check
-            (raises :class:`CodegenIdentityError`) and a dropped-contact check
-            (raises ``ValueError``). When *False*, dropped contacts only warn.
+            (raises :class:`CodegenIdentityError`), a dropped-contact check and
+            a generated-logic check (raise ``ValueError``). When *False*,
+            dropped contacts only warn.
 
     Returns:
         A dict mapping relative file paths to their content, e.g.
@@ -310,6 +338,7 @@ def ladder_to_pyrung_project(
     )
 
     if validate:
+        _verify_emitted_logic(analyzed, subroutines)
         _verify_codegen_identity(collection, structured_map)
 
     files = _generate_project(

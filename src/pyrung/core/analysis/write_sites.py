@@ -95,7 +95,7 @@ def instruction_fault_writes(instr: Any) -> tuple[str, ...]:
     read-only system tags the program cannot address, so write-target
     consumers (read-only and ownership lints) must not see them.
     """
-    return tuple(getattr(type(instr), "_fault_writes", ()))
+    return tuple(getattr(instr, "_fault_writes", ()))
 
 
 def static_write_target_names(target: Any) -> frozenset[str]:

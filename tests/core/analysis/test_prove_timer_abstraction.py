@@ -238,6 +238,21 @@ class TestTimerUnitsCoarserThanTheScan:
                 out(hit)
         _assert_hit_replays(logic, always(logic, ~hit), hit.name)
 
+    def test_off_delay_at_preset_zero_keeps_timing(self):
+        """Preset 0: the first off scan leaves Done False, Acc 0 (the resting
+        pair) on its carry alone, and the timer keeps timing from there.  Only
+        its ``_tof_timing`` marker tells that state from the initial one, so
+        the state key must carry it or the two merge and Acc >= 1 is missed."""
+        enable = Bool("CoarseTof0En", external=True)
+        timer = Timer.clone("CoarseTof0")
+        hit = Bool("CoarseTof0Hit")
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                off_delay(timer, preset=0, unit="Ts")
+            with Rung(timer.Acc >= 1):
+                out(hit)
+        _assert_hit_replays(logic, always(logic, ~hit), hit.name)
+
     @pytest.mark.parametrize(("unit", "preset"), _COARSE_UNITS)
     def test_accumulator_threshold_is_crossed(self, unit, preset):
         tag = f"CoarseAcc{unit}"

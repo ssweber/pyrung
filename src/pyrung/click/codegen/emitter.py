@@ -4,7 +4,7 @@ import ast
 import re
 from typing import TYPE_CHECKING
 
-from pyrung.click._topology import Leaf, Parallel, Series, SPNode, factor_outputs, make_compound
+from pyrung.click._topology import Leaf, Parallel, Series, SPNode
 
 # Type name → default retentive (mirrors _TYPE_DEFAULT_RETENTIVE in core).
 _TYPE_NAME_DEFAULT_RETENTIVE: dict[str, bool] = {
@@ -39,12 +39,14 @@ from pyrung.click.codegen.models import (
     _SubroutineInfo,
     _TagMetadata,
 )
+from pyrung.click.codegen.shaping import _BlockItem, _BranchBlock, rung_blocks
 from pyrung.click.codegen.utils import (
     _CLICK_FUNC_RE,
     _CLICK_FUNC_TO_PYTHON,
     _CLICK_HEX_RE,
     _CLICK_PI_RE,
     _EXPR_FUNC_IMPORT_NAMES,
+    _hex_math_bare_numbers,
     _parse_af_args,
     _parse_operand_prefix,
     _sub_operand,
@@ -879,11 +881,16 @@ def _emit_forloop(
                 bare=bare,
             )
             continue
-        if body_rung.condition_tree is None and not body_rung.comment:
-            for instr in body_rung.instructions:
-                _emit_instruction(
-                    lines, instr, collection, nicknames, indent + 2, structured_map, call_func_map
-                )
+        body_condition, body_items = rung_blocks(body_rung)
+        if (
+            body_condition is None
+            and not body_rung.comment
+            and body_items
+            and not any(isinstance(item, _BranchBlock) for item in body_items)
+        ):
+            _emit_blocks(
+                lines, body_items, collection, nicknames, indent + 2, structured_map, call_func_map
+            )
         else:
             _emit_rung(
                 lines,
@@ -930,112 +937,43 @@ def _emit_rung(
     call_func_map: dict[str, str] | None = None,
     rung_number: int | None = None,
 ) -> None:
-    """Emit a single rung."""
+    """Emit a single rung from the blocks :func:`rung_blocks` shapes it into."""
     pad = "    " * indent
+    condition, items = rung_blocks(rung)
+    conditions_str = _render_condition_tree(condition, collection, nicknames, structured_map)
 
-    # Filter out bare NOP tokens — they become empty rungs (pass).
-    real_instructions = [i for i in rung.instructions if i.af_token != "NOP"]
-
-    if not real_instructions:
+    if not items:
         # Empty or NOP-only rung — preserve with pass (comment-only rungs survive).
         if not rung.instructions and not rung.comment:
             return  # truly empty, no comment — skip
-        conditions_str = _build_conditions_str(rung, collection, nicknames, structured_map)
         _emit_rung_header(lines, rung, conditions_str, indent, rung_number=rung_number)
         lines.append(f"{pad}    pass")
         return
 
-    conditions_str = _build_conditions_str(rung, collection, nicknames, structured_map)
     _emit_rung_header(lines, rung, conditions_str, indent, rung_number=rung_number)
-
-    if len(real_instructions) == 1:
-        _emit_instruction(
-            lines,
-            real_instructions[0],
-            collection,
-            nicknames,
-            indent + 1,
-            structured_map,
-            call_func_map,
-        )
-        return
-
-    _emit_grouped_instructions(
-        lines,
-        [(instr.branch_tree, instr) for instr in real_instructions],
-        collection,
-        nicknames,
-        indent + 1,
-        structured_map,
-        call_func_map,
-    )
+    _emit_blocks(lines, items, collection, nicknames, indent + 1, structured_map, call_func_map)
 
 
-def _emit_grouped_instructions(
+def _emit_blocks(
     lines: list[str],
-    outputs: list[tuple[SPNode | None, _InstructionInfo]],
+    items: list[_BlockItem],
     collection: _OperandCollection,
     nicknames: dict[str, str] | None,
     indent: int,
     structured_map: TagMap | None = None,
     call_func_map: dict[str, str] | None = None,
 ) -> None:
-    """Emit instructions with recursive shared-prefix factoring for nested branches."""
+    """Render instructions and nested ``with branch(...)`` blocks."""
     pad = "    " * indent
-    index = 0
-
-    while index < len(outputs):
-        tree, instr = outputs[index]
-        if tree is None:
-            _emit_instruction(
-                lines,
-                instr,
-                collection,
-                nicknames,
-                indent,
-                structured_map,
-                call_func_map,
+    for item in items:
+        if isinstance(item, _BranchBlock):
+            branch_cond = _render_sp_node(item.tree, collection, nicknames, structured_map)
+            lines.append(f"{pad}with branch({branch_cond}):")
+            _emit_blocks(
+                lines, item.items, collection, nicknames, indent + 1, structured_map, call_func_map
             )
-            index += 1
             continue
-
-        stop = index + 1
-        while stop < len(outputs):
-            candidate_tree, _candidate_instr = outputs[stop]
-            if candidate_tree is None:
-                break
-            shared = factor_outputs(
-                [candidate for candidate, _item in outputs[index : stop + 1]]
-            ).shared
-            if not shared:
-                break
-            stop += 1
-
-        group = outputs[index:stop]
-        result = factor_outputs([candidate for candidate, _item in group])
-        branch_tree = make_compound(result.shared, Series)
-        branch_cond = _render_sp_node(branch_tree, collection, nicknames, structured_map)
-        lines.append(f"{pad}with branch({branch_cond}):")
-
-        remaining_outputs = [
-            (
-                make_compound(result.branches[group_index], Series)
-                if result.branches[group_index]
-                else None,
-                group_instr,
-            )
-            for group_index, (_group_tree, group_instr) in enumerate(group)
-        ]
-        _emit_grouped_instructions(
-            lines,
-            remaining_outputs,
-            collection,
-            nicknames,
-            indent + 1,
-            structured_map,
-            call_func_map,
-        )
-        index = stop
+        _emit_instruction(lines, item, collection, nicknames, indent, structured_map, call_func_map)
 
 
 def _render_sp_node(
@@ -1075,9 +1013,19 @@ def _build_conditions_str(
     structured_map: TagMap | None = None,
 ) -> str:
     """Build the condition string for a Rung() constructor."""
-    if rung.condition_tree is None:
+    return _render_condition_tree(rung.condition_tree, collection, nicknames, structured_map)
+
+
+def _render_condition_tree(
+    tree: SPNode | None,
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    structured_map: TagMap | None = None,
+) -> str:
+    """Render a rung condition tree (``""`` when unconditional)."""
+    if tree is None:
         return ""
-    return _render_sp_node(rung.condition_tree, collection, nicknames, structured_map)
+    return _render_sp_node(tree, collection, nicknames, structured_map)
 
 
 _NO_CHOICE_LITERAL = object()
@@ -1407,6 +1355,9 @@ def _render_af_token(
         return f"{py_func}()"
 
     args, kwargs = _parse_af_args(args_str)
+
+    if func_name == "math" and args and ("mode", "hex") in kwargs:
+        args = [_hex_math_bare_numbers(args[0]), *args[1:]]
 
     # search("cond",value=V,search_range=R,...) → search(R <op> V, ...)
     if func_name == "search":

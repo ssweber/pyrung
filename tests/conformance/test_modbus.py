@@ -39,7 +39,9 @@ def test_all_groups_over_modbus(
     conformance_endpoint: Endpoint | None, conformance_groups: list[str] | None
 ) -> None:
     build = suite.build()
-    results = run_modbus(build, conformance_endpoint, groups=conformance_groups)
+    # Without GROUP=, every group but the ones that stop the PLC.
+    groups = conformance_groups or [g.name for g in suite.ALL_GROUPS]
+    results = run_modbus(build, conformance_endpoint, groups=groups)
     print(format_report(results))
     if conformance_groups is None:
         assert len(results) == sum(len(g.cases) for g in suite.ALL_GROUPS)
@@ -74,7 +76,10 @@ def test_suite_repeats_without_restarting(
     on what ran before it on the same PLC.
     """
     build = suite.build()
-    names = conformance_groups or [g.name for g in build.groups]
+    stopping = {g.name for g in suite.STOP_GROUPS}
+    names = [n for n in conformance_groups or [g.name for g in build.groups] if n not in stopping]
+    if not names:
+        pytest.skip("a group that stops the PLC runs once per RUN")
     with _one_plc(build, conformance_endpoint) as endpoint:
         for n in (1, 2):
             _passes(run_modbus(build, endpoint, groups=names), f"suite run {n} of 2")
@@ -143,7 +148,7 @@ def test_mismatched_layout_bails_before_writing() -> None:
             run_modbus(other, sim.endpoint, timeout=2.0)
         # Nothing was written: the loaded program's slots never fired.
         assert sim.endpoint is not None
-        results = run_modbus(loaded, sim.endpoint)
+        results = run_modbus(loaded, sim.endpoint, groups=[g.name for g in suite.ALL_GROUPS])
     assert_all_passed(results)
 
 

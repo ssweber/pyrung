@@ -23,6 +23,7 @@ from tests.conformance import (
     test_drum,
     test_loop,
     test_math,
+    test_math_stop,
     test_numeric,
     test_out,
     test_rung_semantics,
@@ -57,9 +58,14 @@ ALL_GROUPS = [
     test_timers.group,
 ]
 
+#: Groups whose case puts the PLC in STOP (a math error).  Their subroutines are
+#: in the exported project, but a run takes them only when ``GROUP=`` names
+#: them, one per run: see ``test_math_stop.py``.
+STOP_GROUPS = list(test_math_stop.groups)
+
 
 def build() -> ConformanceProgram:
-    return build_program(ALL_GROUPS, load_manifest(MANIFEST_PATH))
+    return build_program([*ALL_GROUPS, *STOP_GROUPS], load_manifest(MANIFEST_PATH))
 
 
 def _print_layout(program: ConformanceProgram) -> None:

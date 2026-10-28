@@ -31,6 +31,7 @@ from pyrung.core.instruction import (
     OutInstruction,
     ResetInstruction,
 )
+from pyrung.core.instruction.timers import tof_timing_key
 from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.tag import Tag
 
@@ -255,6 +256,7 @@ def _compile_off_delay_instruction(
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     frac_key = f"_frac:{instr.accumulator.name}"
+    timing_key = tof_timing_key(instr.accumulator.name)
     preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
     unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
@@ -263,15 +265,21 @@ def _compile_off_delay_instruction(
     sp = " " * indent
     sp4 = " " * (indent + 4)
     sp8 = " " * (indent + 8)
+    sp12 = " " * (indent + 12)
+    # Done False, Acc 0 rests (never enabled) unless the timer's own last scan
+    # left it there while timing (see tof_timing_key).
     lines = [
         f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
+        f'{sp}_tof_timing = _mem.get("{timing_key}", False)',
         f"{sp}if {enabled_expr}:",
+        f"{sp4}if _tof_timing:",
+        f'{sp8}_mem["{timing_key}"] = False',
         f'{sp4}_mem["{frac_key}"] = 0.0',
         f"{sp4}{done_write} = True",
         f"{sp4}{acc_write} = 0",
         f"{sp}else:",
         f"{sp4}_acc = int({acc_read})",
-        f"{sp4}if {done_read} or _acc != 0:",
+        f"{sp4}if _tof_timing or {done_read} or _acc != 0:",
         f'{sp8}_dt = float(_mem.get("_dt", 0.0))',
         f"{sp8}_dt_units = {unit_expr}",
         f"{sp8}_int_units = int(_dt_units)",
@@ -279,11 +287,15 @@ def _compile_off_delay_instruction(
         f"{sp8}_acc = min(_acc + _int_units, {_INT_MAX})",
         f"{sp8}_preset = int({preset})",
         f'{sp8}_mem["{frac_key}"] = _new_frac',
-        f"{sp8}{done_write} = (_acc < _preset)",
+        f"{sp8}_tof_done = _acc < _preset",
+        f"{sp8}{done_write} = _tof_done",
         f"{sp8}{acc_write} = _acc",
+        f"{sp8}_tof_stalled = not _tof_done and _acc == 0",
+        f"{sp8}if _tof_stalled != _tof_timing:",
+        f'{sp12}_mem["{timing_key}"] = _tof_stalled',
     ]
     if ctx.proof_metadata:
-        lines.insert(-3, f'{sp8}_mem["{preset_key}"] = _preset')
+        lines.insert(-7, f'{sp8}_mem["{preset_key}"] = _preset')
     # TOF status bits: EN = enabled, TT = not enabled and done (timing while off)
     tt_expr = f"not bool({enabled_expr}) and bool({done_read})"
     lines.extend(

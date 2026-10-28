@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pyrung.conformance._slot import SLOT_FIELDS
@@ -18,6 +18,7 @@ Expectation = int | range
 RESULT_FIELDS = tuple(f for f in SLOT_FIELDS if f not in ("Cmd", "Ready"))
 
 _CASE_ID = re.compile(r"[A-Za-z0-9_]+")
+_SC_ADDRESS = re.compile(r"SC[1-9][0-9]*")
 _GROUP_NAME = re.compile(r"[a-z][a-z0-9]*(_[a-z0-9]+)*")
 
 
@@ -38,6 +39,13 @@ class Case:
     ready: Callable[[Any], Any] | None = None
     #: Tags the reset leaves alone on purpose; the leak check skips them.
     keep: tuple[Tag, ...] = ()
+    #: System bits (``"SC46"``) the harness reads itself once the case has run.
+    expect_system: dict[str, Expectation] = field(default_factory=dict)
+
+    @property
+    def checks(self) -> dict[str, Expectation]:
+        """Everything the harness compares: slot fields, then system bits."""
+        return {**self.expect, **self.expect_system}
 
 
 @dataclass(frozen=True)
@@ -106,6 +114,7 @@ def case(
     init: Callable[[Any], None] | None = None,
     ready: Callable[[Any], Any] | None = None,
     keep: Sequence[Tag] = (),
+    expect_system: Mapping[str, Expectation] | None = None,
 ) -> Case:
     """Define a conformance case.
 
@@ -133,11 +142,22 @@ def case(
             running while the case is idle, or a value the experiment carries
             across the reset.  The in-process leak check skips them; the case
             must still pass on every repeat.
+        expect_system: CLICK system bit (``"SC11"``) -> expected value (0/1 or
+            a ``range``), read by the harness after the case has run, not by
+            the ladder: what a case that puts the PLC in STOP leaves behind
+            (``SC11`` is off in STOP, and a stopped PLC runs no ladder).
     """
     bad = set(expect) - set(RESULT_FIELDS)
     if bad:
         raise ValueError(f"Unknown slot fields in expect: {bad}")
-    for field_name, value in expect.items():
+    system_expect = dict(expect_system or {})
+    for address in system_expect:
+        if not _SC_ADDRESS.fullmatch(address) or address not in _system_bits():
+            raise ValueError(
+                f"expect_system key {address!r} must be a CLICK system bit pyrung serves "
+                "(SC1, SC46, ...)"
+            )
+    for field_name, value in [*expect.items(), *system_expect.items()]:
         if isinstance(value, bool) or not isinstance(value, (int, range)):
             raise TypeError(f"expect[{field_name!r}] must be an int or a range, got {value!r}")
     if scans < 1:
@@ -159,7 +179,19 @@ def case(
         init=init,
         ready=ready,
         keep=tuple(keep),
+        expect_system=system_expect,
     )
+
+
+def system_tag_name(address: str) -> str:
+    """The pyrung system tag served at CLICK system bit *address* (``"SC46"``)."""
+    return _system_bits()[address]
+
+
+def _system_bits() -> Mapping[str, str]:
+    from pyrung.click.system_mappings import SYSTEM_TAG_NAMES_BY_HARDWARE
+
+    return SYSTEM_TAG_NAMES_BY_HARDWARE
 
 
 def _default_id(ladder: Callable[[Any], None]) -> str:

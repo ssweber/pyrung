@@ -40,6 +40,8 @@ from typing import TYPE_CHECKING, Any
 
 from pyrsistent import PMap
 
+from pyrung.core.storage import real_in_range
+
 _PMAP: Any = PMap  # its bucket accessors are private API
 
 if TYPE_CHECKING:
@@ -1063,7 +1065,8 @@ def _expr_range(expr: Any, ranges: dict[str, _Span]) -> _Span | None:
 def _fits_dest(span: _Span, dest: Any) -> bool:
     type_name = getattr(getattr(dest, "type", None), "name", None)
     if type_name == "REAL":
-        return math.isfinite(span[0]) and math.isfinite(span[1])
+        # Past +/-REAL_MAX the store saturates and sets the out-of-range flag.
+        return real_in_range(span[0]) and real_in_range(span[1])
     if type_name not in ("INT", "DINT", "WORD"):
         return False
     lo, hi = _TYPE_RANGES[type_name]

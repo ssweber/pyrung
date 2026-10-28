@@ -13,7 +13,7 @@ slots = 19
 
 [groups.rungs.cases]
 memory_is_immediate = 1
-source_order = 2
+source_order = 2 # retired: no model read it differently; branch_sees_rung_entry asks it
 global_mutation = 3
 branch_sees_rung_entry = 4
 nested_branches_see_rung_entry = 5
@@ -195,6 +195,7 @@ data_is_the_rung_at_the_edge = 3
 bit_leaves_the_end = 4
 reset_beats_clock = 5
 reset_swallows_the_edge = 6
+reversed_range_shifts_down = 7
 
 [groups.search]
 base = 2501 # Conf_Search: DS2501..DS2700
@@ -227,3 +228,52 @@ scan_clock_follows_counter = 5
 clock_bits_toggle_at_their_rate = 6
 mode_bits_on_in_run = 7
 rtc_seconds_advance = 8
+
+[groups.stop_sqrt]
+base = 2901 # Conf_StopSqrt: DS2901..DS2920; stops the PLC, outside suite.ALL_GROUPS
+slots = 1
+
+[groups.stop_sqrt.cases]
+sqrt_negative = 1
+
+[groups.stop_ln0]
+base = 2921 # Conf_StopLn0: DS2921..DS2940; stops the PLC, outside suite.ALL_GROUPS
+slots = 1
+
+[groups.stop_ln0.cases]
+ln_zero = 1
+
+[groups.stop_ln_neg]
+base = 2941 # Conf_StopLnNeg: DS2941..DS2960; stops the PLC, outside suite.ALL_GROUPS
+slots = 1
+
+[groups.stop_ln_neg.cases]
+ln_negative = 1
+
+[groups.stop_log0]
+base = 2961 # Conf_StopLog0: DS2961..DS2980; stops the PLC, outside suite.ALL_GROUPS
+slots = 1
+
+[groups.stop_log0.cases]
+log_zero = 1
+
+[groups.stop_log_neg]
+base = 2981 # Conf_StopLogNeg: DS2981..DS3000; stops the PLC, outside suite.ALL_GROUPS
+slots = 1
+
+[groups.stop_log_neg.cases]
+log_negative = 1
+
+[groups.stop_asin]
+base = 3001 # Conf_StopAsin: DS3001..DS3020; stops the PLC, outside suite.ALL_GROUPS
+slots = 1
+
+[groups.stop_asin.cases]
+asin_above_1 = 1
+
+[groups.stop_acos]
+base = 3021 # Conf_StopAcos: DS3021..DS3040; stops the PLC, outside suite.ALL_GROUPS
+slots = 1
+
+[groups.stop_acos.cases]
+acos_above_1 = 1

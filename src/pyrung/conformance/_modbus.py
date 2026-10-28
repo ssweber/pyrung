@@ -40,6 +40,8 @@ POLL_S = 0.02
 CONFIRM_GAP_S = 0.1
 #: Seconds the sim's scan and server threads get to start or stop.
 _THREAD_TIMEOUT_S = 5.0
+#: CLICK's ``_PLC_Mode`` bit: ON in RUN.
+_MODE_RUN_BIT = 11
 
 
 class ConformanceError(RuntimeError):
@@ -103,7 +105,9 @@ class SimServer:
     The PLC free-runs in ``realtime`` mode on its own thread, one scan every
     *scan_period* seconds of wall clock, so timers see wall-clock time as on a
     CLICK.  Modbus writes become patches applied at the start of the next
-    scan.  Use as a context manager; :attr:`endpoint` is where to connect.
+    scan.  A PLC in STOP (a math error stopped it) does not scan: the sim keeps
+    serving Modbus and stays in STOP, as a CLICK does.  Use as a context
+    manager; :attr:`endpoint` is where to connect.
     """
 
     def __init__(
@@ -202,7 +206,10 @@ class SimServer:
         while not self._stop.is_set():
             try:
                 with self._lock:
-                    self._plc.step()
+                    # step() would put a stopped PLC back in RUN; a CLICK in
+                    # STOP stays there until someone switches it.
+                    if self._plc.mode != "stop":
+                        self._plc.step()
             except BaseException as exc:  # surfaced through raise_if_failed()
                 self.error = exc
                 return
@@ -340,6 +347,13 @@ async def _drive(
             f"DS{PROGRAM_HASH_REGISTER} stayed 0 on {endpoint}: "
             "the conformance program is not running",
         )
+        # A PLC in STOP still serves its registers, but runs no ladder: no
+        # reset would ever complete.  A case that stops the PLC leaves it so.
+        if not await client.sc[_MODE_RUN_BIT]:
+            raise ConformanceError(
+                f"{endpoint} is in STOP mode (SC{_MODE_RUN_BIT} reads 0): put the PLC in "
+                "RUN, then run again"
+            )
         if found != build.program_hash:
             raise BuildMismatchError(
                 f"{endpoint} runs program layout {found}; these groups are layout "
@@ -406,20 +420,25 @@ async def _drive(
         settle = max(c.scans for g in live for _, c in g.cases) * NOMINAL_SCAN_S
         await asyncio.sleep(settle)
 
-        # 6. Read every slot twice; both reads must meet the expectation.
+        # 6. Read every slot (and every system bit a case expects) twice; both
+        # reads must meet the expectation.
         first = _by_register(live, await _read_spans(client, live))
+        first_bits = await _read_system_bits(client, live)
         await asyncio.sleep(max(CONFIRM_GAP_S, settle))
         second = _by_register(live, await _read_spans(client, live))
+        second_bits = await _read_system_bits(client, live)
 
     # 7. Compare.
     for g in live:
         group_results: list[CaseResult] = []
         for i, c in g.cases:
             actual_first = {f: first[g.register(i, f)] for f in c.expect}
+            actual_first.update({a: first_bits[a] for a in c.expect_system})
             actual = {f: second[g.register(i, f)] for f in c.expect}
+            actual.update({a: second_bits[a] for a in c.expect_system})
             fired = second[g.register(i, "Fired")] != 0
-            met_first = expectation_met(c.expect, actual_first)
-            met_second = expectation_met(c.expect, actual)
+            met_first = expectation_met(c.checks, actual_first)
+            met_second = expectation_met(c.checks, actual)
             note = ""
             if (g.name, i) in unready:
                 state = {f: reset_regs[g.register(i, f)] for f in ("Cmd", "Fired", "Ready")}
@@ -448,6 +467,12 @@ def _reset_done(g: GroupBuild, index: int, regs: dict[int, int]) -> bool:
         and regs[g.register(index, "Cmd")] == 0
         and regs[g.register(index, "Fired")] == 0
     )
+
+
+async def _read_system_bits(client: Any, groups: Sequence[GroupBuild]) -> dict[str, int]:
+    """Every system bit (``"SC46"``) a case of *groups* expects, as 0/1."""
+    addresses = sorted({a for g in groups for _, c in g.cases for a in c.expect_system})
+    return {a: int(bool(await client.sc[int(a[2:])])) for a in addresses}
 
 
 async def _read_spans(client: Any, groups: Sequence[GroupBuild]) -> list[int]:

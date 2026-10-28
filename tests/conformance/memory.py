@@ -9,8 +9,14 @@ ranges, that the ranges are disjoint and inside CLICK's banks, and that no
 manifest block reaches :data:`STAGING_DS`.
 
 Banks are keyed by CLICK's prefix.  ``T`` is the timer number (``T<n>`` and
-``TD<n>``), ``CT`` the counter number (``CT<n>`` and ``CTD<n>``).  SC and SD are
-nobody's: any case may read them.
+``TD<n>``), ``CT`` the counter number (``CT<n>`` and ``CTD<n>``).
+
+System points (SC/SD) are not raw memory: read them through pyrung's
+``system`` namespace (``system.fault.out_of_range`` is SC43,
+``system.sys.mode_run`` SC11), which the runtime drives and the exporter maps
+to the CLICK address.  A raw ``sc[43]`` would be a plain tag nothing writes
+(it reads 0 in-process and on the sim), so this module does not export one
+and ``outside_owned`` reports a case that uses one.
 """
 
 from __future__ import annotations
@@ -27,7 +33,6 @@ from pyrung.core import Tag
 _blocks = ClickBlocks()
 c, t, td, ct, ctd = _blocks.c, _blocks.t, _blocks.td, _blocks.ct, _blocks.ctd
 ds, dd, df, dh, txt = _blocks.ds, _blocks.dd, _blocks.df, _blocks.dh, _blocks.txt
-sc, sd = _blocks.sc, _blocks.sd
 
 #: Size of each bank a group can own (addresses 1..N).
 BANKS: Mapping[str, int] = {
@@ -84,10 +89,16 @@ OWNED: Mapping[str, Mapping[str, range]] = {
         "TXT": range(201, 301),
     },
     "system": {"C": range(901, 1001), "T": range(101, 151), "DD": range(901, 1001)},
+    # Math errors that stop the PLC (tests/conformance/test_math_stop.py).
+    "stop_sqrt": {"DF": range(401, 411)},
+    "stop_ln0": {"DF": range(411, 421)},
+    "stop_ln_neg": {"DF": range(421, 431)},
+    "stop_log0": {"DF": range(431, 441)},
+    "stop_log_neg": {"DF": range(441, 451)},
+    "stop_asin": {"DF": range(451, 461)},
+    "stop_acos": {"DF": range(461, 471)},
 }
 
-#: Prefixes any case may read without owning them.
-_READ_ONLY = frozenset({"SC", "SD"})
 #: Tag-name prefix -> bank key.
 _PREFIX_BANK = {"TD": "T", "CTD": "CT"}
 _ADDRESS = re.compile(r"([A-Z]+)(\d+)")
@@ -137,15 +148,13 @@ def outside_owned(groups: Iterable[Group]) -> list[str]:
     for g in groups:
         owned = OWNED.get(g.name, {})
         for case in g.cases:
-            everything, writes = footprint(case)
+            everything, _writes = footprint(case)
             for name in sorted(everything):
                 address = _address(name)
                 if address is None:
                     problems.append(f"{g.name}/{case.id}: {name} is not a raw CLICK address")
                     continue
                 bank, n = address
-                if bank in _READ_ONLY and name not in writes:
-                    continue
                 if n not in owned.get(bank, ()):
                     ranges = ", ".join(f"{b}{r.start}..{b}{r.stop - 1}" for b, r in owned.items())
                     problems.append(

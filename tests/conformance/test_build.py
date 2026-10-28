@@ -21,6 +21,7 @@ from pyrung.conformance import (
 from pyrung.conformance._ladder import case_comment
 from pyrung.conformance._slot import DS_LAST, slot_register
 from pyrung.core import PLC, Rung, calc, copy
+from pyrung.core.system_points import system
 from tests.conformance import memory, suite
 
 ds = ClickBlocks().ds
@@ -51,12 +52,12 @@ def _layout(**groups: dict) -> Manifest:
 
 def test_checked_in_manifest_covers_the_suite() -> None:
     manifest = load_manifest(suite.MANIFEST_PATH)
-    for group in suite.ALL_GROUPS:
+    for group in [*suite.ALL_GROUPS, *suite.STOP_GROUPS]:
         manifest.layout_for(group)
 
 
 def test_cases_stay_in_their_groups_raw_memory() -> None:
-    problems = memory.outside_owned(suite.ALL_GROUPS)
+    problems = memory.outside_owned([*suite.ALL_GROUPS, *suite.STOP_GROUPS])
     assert not problems, "\n".join(problems)
 
 
@@ -357,6 +358,18 @@ def test_state_left_after_the_reset_fails_the_case() -> None:
     (result,) = run([kept])
     assert not result.passed
     assert "state left" not in result.note
+
+
+def test_edge_history_of_a_system_clock_is_not_a_leak() -> None:
+    # rise() on a clock leaves _prev:sys.clock_* memory that moves with time,
+    # not with any case; a user tag's edge history still counts.
+    from pyrung.conformance._runner import _diff
+    from pyrung.core.state import SystemState
+
+    clock = f"_prev:{system.sys.clock_100ms.name}"
+    fresh = SystemState().set(memory=SystemState().memory.set(clock, False))
+    now = fresh.set(memory=fresh.memory.set(clock, True).set("_prev:C1", True))
+    assert _diff(fresh, now, kept=()) == {"_prev:C1": (True, None)}
 
 
 def test_a_reset_that_never_completes_fails_only_its_case() -> None:

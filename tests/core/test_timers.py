@@ -516,6 +516,108 @@ class TestOffDelayTOF:
         assert runner.current_state.tags["Timer_Done"] is True
 
 
+class TestOffDelayPresetReachedUnderOneUnit:
+    """A TOF whose preset is already reached keeps timing at Done False, Acc 0.
+
+    With preset 0 the first off scan drops Done; when that scan is shorter
+    than one unit, Acc is still 0, the never-enabled resting pair.  The timer
+    must keep timing from there (memory key ``_tof_timing:<Acc>``), while a
+    TOF that was never enabled, or is zeroed from outside, still rests.
+    """
+
+    @staticmethod
+    def _tof(preset=0, unit="Tms"):
+        Enable = Bool("Enable")
+        with Program() as logic:
+            with Rung(Enable):
+                off_delay(Timer[1], preset=preset, unit=unit)
+        return logic
+
+    @staticmethod
+    def _enable_then_drop(runner, off_scans):
+        runner.patch({"Enable": True})
+        runner.step()
+        runner.patch({"Enable": False})
+        for _ in range(off_scans):
+            runner.step()
+
+    def test_preset_zero_times_on_half_ms_scans(self, runner_factory):
+        runner = runner_factory(self._tof(), dt=0.0005)
+        self._enable_then_drop(runner, 1)
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 0)
+        assert runner.current_state.memory["_tof_timing:Timer_Acc"] is True
+        for _ in range(9):
+            runner.step()
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 5)
+        assert runner.current_state.memory["_tof_timing:Timer_Acc"] is False
+
+    def test_preset_zero_in_seconds_times_on_ten_ms_scans(self, runner_factory):
+        runner = runner_factory(self._tof(unit="Ts"), dt=0.010)
+        self._enable_then_drop(runner, 250)
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 2)
+
+    def test_never_enabled_preset_zero_rests(self, runner_factory):
+        runner = runner_factory(self._tof(), dt=0.0005)
+        runner.patch({"Enable": False})
+        runner.run(cycles=20)
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 0)
+        assert "_tof_timing:Timer_Acc" not in runner.current_state.memory
+
+    def test_zeroing_a_timed_out_tof_still_rests(self, runner_factory):
+        """Only the timer's own stalled scan keeps it timing at (False, 0)."""
+        runner = runner_factory(self._tof(), dt=0.0005)
+        self._enable_then_drop(runner, 8)
+        assert runner.current_state.tags["Timer_Acc"] == 4
+        runner.patch({"Timer_Acc": 0})
+        runner.run(cycles=10)
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 0)
+
+        runner = runner_factory(self._tof(preset=3), dt=0.0005)
+        self._enable_then_drop(runner, 8)
+        assert runner.current_state.tags["Timer_Done"] is False
+        runner.patch({"Timer_Acc": 0})
+        runner.run(cycles=10)
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 0)
+
+    def test_re_enable_clears_the_marker(self, runner_factory):
+        runner = runner_factory(self._tof(), dt=0.0005)
+        self._enable_then_drop(runner, 1)
+        assert runner.current_state.memory["_tof_timing:Timer_Acc"] is True
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.memory["_tof_timing:Timer_Acc"] is False
+        assert runner.current_state.tags["Timer_Done"] is True
+
+    def test_stop_to_run_rests(self, runner_factory):
+        runner = runner_factory(self._tof(), dt=0.0005)
+        self._enable_then_drop(runner, 1)
+        runner.stop()
+        runner.start()
+        runner.run(cycles=10)
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 0)
+
+    def test_fork_and_replay_keep_timing(self):
+        from pyrung.core import PLC
+
+        plc = PLC(self._tof(), dt=0.0005)
+        self._enable_then_drop(plc, 1)
+        stalled = plc.current_state.scan_id
+        plc.run(cycles=9)
+        child = plc.fork(stalled)
+        child.run(cycles=9)
+        assert child.current_state.tags["Timer_Acc"] == plc.current_state.tags["Timer_Acc"] == 5
+        replay = plc.replay_to(plc.current_state.scan_id)
+        assert replay.current_state.tags["Timer_Acc"] == 5
+        assert dict(replay.current_state.memory) == dict(plc.current_state.memory)
+
+
 class TestTimerIntegration:
     """Integration tests for timer instructions."""
 
