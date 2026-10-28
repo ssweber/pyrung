@@ -148,7 +148,7 @@ def test_mismatched_layout_bails_before_writing() -> None:
             run_modbus(other, sim.endpoint, timeout=2.0)
         # Nothing was written: the loaded program's slots never fired.
         assert sim.endpoint is not None
-        results = run_modbus(loaded, sim.endpoint)
+        results = run_modbus(loaded, sim.endpoint, groups=[g.name for g in suite.ALL_GROUPS])
     assert_all_passed(results)
 
 
