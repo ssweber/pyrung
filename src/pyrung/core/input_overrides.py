@@ -19,8 +19,14 @@ if TYPE_CHECKING:
 class InputOverrideManager:
     """Encapsulates one-shot patches and persistent force overrides."""
 
-    def __init__(self, *, is_read_only: Callable[[str], bool]) -> None:
+    def __init__(
+        self,
+        *,
+        is_read_only: Callable[[str], bool],
+        known_tag: Callable[[str], Tag | None] | None = None,
+    ) -> None:
         self._is_read_only = is_read_only
+        self._known_tag = known_tag
         self._pending_patches: dict[str, bool | int | float | str] = {}
         self._forces: dict[str, bool | int | float | str] = {}
 
@@ -60,8 +66,23 @@ class InputOverrideManager:
             name = self._normalize_tag_name(key, method=method)
             if self._is_read_only(name):
                 raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+            self._check_range(key, name, value, method=method)
             normalized[name] = self._normalize_char_value(value)
         return normalized
+
+    def _check_range(
+        self, key: str | Tag, name: str, value: bool | int | float | str, *, method: str
+    ) -> None:
+        """A REAL never holds a value outside CLICK's range: refuse one."""
+        from pyrung.core.storage import check_real_value
+        from pyrung.core.tag import Tag as TagClass
+        from pyrung.core.tag import TagType
+
+        tag = key if isinstance(key, TagClass) else None
+        if tag is None and self._known_tag is not None:
+            tag = self._known_tag(name)
+        if tag is not None and tag.type is TagType.REAL:
+            check_real_value(value, f"{method}() of {name}")
 
     def patch(
         self,
@@ -75,6 +96,7 @@ class InputOverrideManager:
         name = self._normalize_tag_name(tag, method="add_force")
         if self._is_read_only(name):
             raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+        self._check_range(tag, name, value, method="force")
         self._forces[name] = self._normalize_char_value(value)
 
     def remove_force(self, tag: str | Tag) -> None:

@@ -28,8 +28,6 @@ what that model would read instead:
   instead of live memory -> Result1 = 0.  This is also the check of source
   order within a rung (the copy that reads Scratch runs after the one that
   writes it).
-- ``source_order``: none.  It writes constants to separate registers, so every
-  model reads 10 and 20.  Its sentence is covered by ``branch_sees_rung_entry``.
 - ``global_mutation``: writes are committed at the end of the scan -> Result1 = 0.
 - ``branch_sees_rung_entry``: a branch reads its contacts live when execution
   reaches it -> Result1 = 0, Result2 = 1; every output's whole path (parent
@@ -70,14 +68,6 @@ def prove_memory_is_immediate(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(42, slot.Scratch)
         copy(slot.Scratch, slot.Result1)
-        copy(1, slot.Fired)
-
-
-def prove_source_order(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
-        copy(10, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
-        copy(20, slot.Result2)
         copy(1, slot.Fired)
 
 
@@ -241,11 +231,6 @@ group = Group(
             "Memory writes are visible to the next instruction on the same scan",
             ladder=prove_memory_is_immediate,
             expect={"Result1": 42},
-        ),
-        case(
-            "Rungs evaluate all conditions first, then execute instructions in source order",
-            ladder=prove_source_order,
-            expect={"Result1": 10, "Result2": 20},
         ),
         case(
             "Instructions mutate global memory",

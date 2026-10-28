@@ -52,12 +52,12 @@ def _layout(**groups: dict) -> Manifest:
 
 def test_checked_in_manifest_covers_the_suite() -> None:
     manifest = load_manifest(suite.MANIFEST_PATH)
-    for group in suite.ALL_GROUPS:
+    for group in [*suite.ALL_GROUPS, *suite.STOP_GROUPS]:
         manifest.layout_for(group)
 
 
 def test_cases_stay_in_their_groups_raw_memory() -> None:
-    problems = memory.outside_owned(suite.ALL_GROUPS)
+    problems = memory.outside_owned([*suite.ALL_GROUPS, *suite.STOP_GROUPS])
     assert not problems, "\n".join(problems)
 
 

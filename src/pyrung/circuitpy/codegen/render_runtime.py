@@ -21,6 +21,7 @@ from pyrung.circuitpy.codegen._constants import (
     _STORE_TYPE_HELPERS,
 )
 from pyrung.circuitpy.codegen.context import CodegenContext
+from pyrung.core.storage import REAL_MAX
 
 
 def _render_runtime(ctx: CodegenContext) -> str:  # noqa: ARG001
@@ -74,6 +75,10 @@ def _needed_helpers(ctx: CodegenContext) -> set[str]:
         needed.update({"_as_single_ascii_char", "_ascii_char_from_code"})
     if "_render_text_from_numeric" in needed:
         needed.add("_format_int_text")
+    if "_store_copy_value_to_type" in needed:
+        needed.add("_store_real")
+    if "_math_func" in needed:
+        needed.add("_MathDomainError")
     if ctx.modbus_client is not None and ctx.modbus_client_specs:
         for spec in ctx.modbus_client_specs:
             for item in spec.items:
@@ -264,7 +269,7 @@ def _render_helper_defs(needed: set[str]) -> list[str]:
             '    if dest_type == "WORD":',
             "        return int(value) & 0xFFFF",
             '    if dest_type == "REAL":',
-            "        return float(value)",
+            "        return _store_real(value)",
             '    if dest_type == "BOOL":',
             "        return bool(value)",
             '    if dest_type == "CHAR":',
@@ -307,9 +312,33 @@ def _render_helper_defs(needed: set[str]) -> list[str]:
         ],
         "_store_real": [
             "def _store_real(value):",
+            "    if type(value) is float:",
+            "        if not math.isfinite(value):",
+            "            return 0.0",
+            "    else:",
+            "        try:",
+            "            value = float(value)",
+            "        except OverflowError:",
+            f"            return {REAL_MAX!r} if value > 0 else {-REAL_MAX!r}",
+            f"    if value > {REAL_MAX!r}:",
+            f"        return {REAL_MAX!r}",
+            f"    if value < {-REAL_MAX!r}:",
+            f"        return {-REAL_MAX!r}",
+            "    return value",
+            "",
+        ],
+        "_math_func": [
+            "class _MathDomainError(ValueError):",
+            "    pass",
+            "",
+            "",
+            "def _math_func(func, value):",
             "    if type(value) is float and not math.isfinite(value):",
-            "        return 0.0",
-            "    return float(value)",
+            "        return value",
+            "    try:",
+            "        return func(value)",
+            "    except ValueError:",
+            "        raise _MathDomainError()",
             "",
         ],
         "_store_bool": [

@@ -16,6 +16,7 @@ from pyrung.core.context import ScanContext
 from pyrung.core.rung import Rung
 from pyrung.core.runner import ScanStep
 from pyrung.core.state import SystemState
+from pyrung.core.storage import REAL_MAX
 from pyrung.dap import execution_flow
 from pyrung.dap.args import parse_args
 from pyrung.dap.breakpoints import BreakpointManager, SourceBreakpoint
@@ -770,7 +771,7 @@ class DAPAdapter:
     _TYPE_RANGE_DEFAULTS: ClassVar[dict[str, tuple[int | float, int | float]]] = {
         "int": (-32768, 32767),
         "dint": (-2147483648, 2147483647),
-        "real": (-3.4e38, 3.4e38),
+        "real": (-REAL_MAX, REAL_MAX),
         "word": (0, 65535),
     }
 

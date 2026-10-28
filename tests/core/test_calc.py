@@ -77,10 +77,11 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(Source**2, Result)
+                # 3.0E+38 ** 10 overflows a float: OverflowError, not a value.
+                calc(Source**10, Result)
 
         runner = runner_cls(logic)
-        runner.patch({"Enable": True, "Source": 1.0e200, "Result": 123.0})
+        runner.patch({"Enable": True, "Source": 3.0e38, "Result": 123.0})
         runner.step()
 
         assert runner.current_state.tags["Result"] == 0.0

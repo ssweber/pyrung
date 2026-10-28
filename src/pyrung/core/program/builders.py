@@ -824,8 +824,8 @@ class CountDownBuilder(_BuilderBase):
     ) -> Tag:
         """Add reset condition (required).
 
-        When reset condition is true, loads preset into accumulator
-        and clears done bit.
+        When reset condition is true, sets the accumulator to 0 and clears
+        the done bit.
 
         Args:
             *conditions: Condition(s) for resetting the counter.

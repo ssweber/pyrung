@@ -11,6 +11,7 @@ from pyrung.circuitpy.codegen._constants import (
     _BOARD_SWITCH_TAG,
     _DINT_MAX,
     _DINT_MIN,
+    _FAULT_MATH_OPERATION_ERROR_TAG,
     _HELPER_ORDER,
     _INT_MAX,
     _INT_MIN,
@@ -47,6 +48,7 @@ from pyrung.circuitpy.codegen.render_modbus import (
     _render_modbus_server,
     _render_modbus_server_init,
 )
+from pyrung.core.storage import REAL_MAX
 
 
 def _tag_is_input_endpoint(ctx: CodegenContext, tag_name: str) -> bool:
@@ -111,6 +113,8 @@ def _runtime_import_names(ctx: CodegenContext) -> set[str]:
         needed.update({"_as_single_ascii_char", "_ascii_char_from_code"})
     if "_render_text_from_numeric" in needed:
         needed.add("_format_int_text")
+    if "_math_func" in needed:
+        needed.add("_MathDomainError")
     # Client pack/unpack helpers and constants used by per-job code in code.py
     if ctx.modbus_client is not None:
         specs = list(ctx.modbus_client_specs)
@@ -867,7 +871,7 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
             '    if dest_type == "WORD":',
             "        return int(value) & 0xFFFF",
             '    if dest_type == "REAL":',
-            "        return float(value)",
+            "        return _store_real(value)",
             '    if dest_type == "BOOL":',
             "        return bool(value)",
             '    if dest_type == "CHAR":',
@@ -910,9 +914,33 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
         ],
         "_store_real": [
             "def _store_real(value):",
+            "    if type(value) is float:",
+            "        if not math.isfinite(value):",
+            "            return 0.0",
+            "    else:",
+            "        try:",
+            "            value = float(value)",
+            "        except OverflowError:",
+            f"            return {REAL_MAX!r} if value > 0 else {-REAL_MAX!r}",
+            f"    if value > {REAL_MAX!r}:",
+            f"        return {REAL_MAX!r}",
+            f"    if value < {-REAL_MAX!r}:",
+            f"        return {-REAL_MAX!r}",
+            "    return value",
+            "",
+        ],
+        "_math_func": [
+            "class _MathDomainError(ValueError):",
+            "    pass",
+            "",
+            "",
+            "def _math_func(func, value):",
             "    if type(value) is float and not math.isfinite(value):",
-            "        return 0.0",
-            "    return float(value)",
+            "        return value",
+            "    try:",
+            "        return func(value)",
+            "    except ValueError:",
+            "        raise _MathDomainError()",
             "",
         ],
         "_store_bool": [
@@ -930,6 +958,8 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
         needed_helpers.update({"_as_single_ascii_char", "_ascii_char_from_code"})
     if "_render_text_from_numeric" in needed_helpers:
         needed_helpers.add("_format_int_text")
+    if "_store_copy_value_to_type" in needed_helpers:
+        needed_helpers.add("_store_real")
 
     if not helpers_in_runtime:
         for helper in _HELPER_ORDER:
@@ -1106,6 +1136,7 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
     )
     mode_run_symbol = ctx.symbol_if_referenced(_SYS_MODE_RUN_TAG)
     cmd_mode_stop_symbol = ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG)
+    math_error_symbol = ctx.symbol_if_referenced(_FAULT_MATH_OPERATION_ERROR_TAG)
 
     lines = [
         "while True:",
@@ -1173,6 +1204,18 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             lines.append("    _desired_run = bool(_runstop_debounced)")
         else:
             lines.append("    _desired_run = (not bool(_runstop_debounced))")
+        if math_error_symbol is not None:
+            # A math error (SC46) holds STOP while the switch says RUN; the
+            # switch going to STOP clears it, so the next RUN restarts.
+            lines.extend(
+                [
+                    f"    if bool({math_error_symbol}):",
+                    "        if _desired_run:",
+                    "            _desired_run = False",
+                    "        else:",
+                    f"            {math_error_symbol} = False",
+                ]
+            )
         if ctx.runstop.expose_mode_tags and cmd_mode_stop_symbol is not None:
             lines.extend(
                 [

@@ -96,7 +96,7 @@ The `Bin[1].Sensor` mapping is the [Lesson 9](structured-tags.md) UDT in action 
 
 - Inline math in conditions (`SizeReading + Offset > Threshold`) -- must be a separate `calc` rung
 - Complex nested `Or`/`And` beyond CLICK's branch depth
-- `Real` precision differences -- CLICK uses 32-bit float; Python uses 64-bit
+- `Real` precision differences -- CLICK uses 32-bit float; pyrung keeps 64-bit precision inside CLICK's range (±3.4028235E+38)
 - Timer/counter presets that exceed CLICK's range limits
 - `named_array` structures that don't fit CLICK's flat memory model without manual address assignment
 
