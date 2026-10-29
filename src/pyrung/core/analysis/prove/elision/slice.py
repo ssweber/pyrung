@@ -238,14 +238,16 @@ def _upstream_closure(graph: ProgramGraph, seed_tags: frozenset[str]) -> frozens
     return frozenset(result)
 
 
+def _iter_loop_instructions(loop: ForLoopInstruction) -> Any:
+    """Yield every instruction in a forloop's body, nested loops included."""
+    for child in loop.instructions:
+        yield child
+        if isinstance(child, ForLoopInstruction):
+            yield from _iter_loop_instructions(child)
+
+
 def _iter_program_instructions(program: Program) -> Any:
     """Yield every instruction in the program (main + subroutines + loops)."""
-
-    def walk_forloop(loop: ForLoopInstruction) -> Any:
-        for child in loop.instructions:
-            yield child
-            if isinstance(child, ForLoopInstruction):
-                yield from walk_forloop(child)
 
     def walk_rung(rung: Rung) -> Any:
         for item in rung._execution_items:
@@ -254,7 +256,7 @@ def _iter_program_instructions(program: Program) -> Any:
             else:
                 yield item
                 if isinstance(item, ForLoopInstruction):
-                    yield from walk_forloop(item)
+                    yield from _iter_loop_instructions(item)
 
     for rung in program.rungs:
         yield from walk_rung(rung)
@@ -284,13 +286,18 @@ def _collect_hidden_memory_info(
     Returns ``(drum_shift_writes, oneshot_key_writes)`` where *drum_shift_writes*
     is the set of tags written by drum, shift and Out coil variant instructions (whose hidden memory
     slice elision does not model) and *oneshot_key_writes* pairs each
-    oneshot instruction's ``_oneshot`` memory key with the tags it writes.
+    oneshot instruction's ``_oneshot`` memory key with the tags it writes.  A
+    oneshot forloop runs its whole body only on its rung's rising edge, so its
+    key pairs with every tag written in the body, not just the loop index.
     """
     drum_shift_writes: set[str] = set()
     oneshot_key_writes: list[tuple[str, frozenset[str]]] = []
 
     for instr in _iter_program_instructions(program):
         targets = _instruction_write_targets(instr, tag_refs)
+        if isinstance(instr, ForLoopInstruction) and instr._oneshot:
+            for child in _iter_loop_instructions(instr):
+                targets |= _instruction_write_targets(child, tag_refs)
         if isinstance(
             instr,
             (
