@@ -13,8 +13,10 @@ Static facts, no case: ``blockcopy`` takes only the ``to_value`` and
 is built), and a source and destination of different length raise when the
 instruction runs, not at build time.
 
-The expectations are pyrung's answers, unconfirmed on a CLICK.  The cases
-that tell pyrung from a different CLICK model:
+The expectations are pyrung's answers; part A's round-1 run on a CLICK
+(2026-10-29) raised no finding here, but left no record per case, so they
+stay unconfirmed until round 2.  The cases that tell pyrung from a different
+CLICK model:
 
 - ``blockcopy_range``: element ``i`` of the source goes to element ``i`` of
   the destination, and nothing past the destination is written.  A reversed

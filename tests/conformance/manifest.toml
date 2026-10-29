@@ -22,6 +22,7 @@ last_rung_wins_shared_coil = 7
 continued_shares_snapshot = 8
 continued_chain_breaks = 9
 nop_rung_takes_snapshot = 10 # retired: CLICK deletes a NOP row that shares its rung, so the shape cannot be built
+box_leg_reads_rows_above = 11
 
 [groups.math]
 base = 301 # Conf_Math: DS301..DS500
@@ -35,6 +36,7 @@ avg_dint_no_overflow = 4
 mdn_even_count = 5
 max_min_word_unsigned = 6
 rand_range = 7
+mdn_real_range = 8
 
 [groups.drum]
 base = 501 # Conf_Drum: DS501..DS700
@@ -48,9 +50,13 @@ jump_jog_edge_triggered = 4
 jump_jog_keep_completion = 5
 reset_no_stale_outputs = 6
 reset_jump_jog_order = 7
-pause_holds_and_drops_jog = 8
+pause_holds_and_drops_jog = 8 # retired: a CLICK drum takes a jog while paused; paused_drum_jogs_and_resets asks it
 invalid_step_corrects_to_1 = 9
 time_acc_clears_on_every_transition = 10
+paused_drum_jogs_and_resets = 11
+completion_turns_outputs_off = 12
+paused_drum_jumps = 13
+reset_swallows_held_jog = 14
 
 [groups.out]
 base = 701 # Conf_Out: DS701..DS900
@@ -115,6 +121,10 @@ reset_zero_preset = 6
 count_down_negative = 7
 up_down_same_scan = 8
 acc_clamps_at_dint_range = 9
+held_input_not_recounted = 10
+count_down_done_at_preset = 11
+edge_on_reset_scan = 12
+first_scan_input_already_on = 13
 
 [groups.coils]
 base = 1501 # Conf_Coils: DS1501..DS1700
@@ -128,6 +138,9 @@ rise_fall_fire_one_scan = 4
 edge_sees_previous_scan_end = 5
 edge_before_its_writer = 6
 latch_reset_sticky = 7
+edge_behind_open_contact = 8
+edge_in_false_rung_branch = 9
+edge_on_first_scan = 10
 
 [groups.numeric]
 base = 1701 # Conf_Numeric: DS1701..DS1900
@@ -145,10 +158,11 @@ word_math_unsigned = 8
 hex_literal_is_decimal = 9
 intermediate_fits_32_bits = 10
 intermediate_exceeds_32_bits = 11
-real_is_64_bit_in_pyrung = 12
+real_is_64_bit_in_pyrung = 12 # in-process only since round 1: a documented deviation, not wired
 real_overflow_stays_finite = 13
 div_by_zero = 14
 real_div_by_zero = 15
+dint_quotient_into_int = 16
 
 [groups.text]
 base = 1901 # Conf_Text: DS1901..DS2100
@@ -169,6 +183,7 @@ pack_text_int = 11
 pack_text_dint = 12
 pack_text_whitespace = 13
 fill_blank_ascii = 14
+pack_text_int_fraction = 15
 
 [groups.block]
 base = 2101 # Conf_Block: DS2101..DS2300
@@ -216,6 +231,7 @@ plain_search_ignores_result = 9
 continuous_cursor_is_address = 10
 dint_real_tables = 11
 text_windows = 12
+continuous_cursor_outside_range = 13
 
 [groups.system]
 base = 2701 # Conf_System: DS2701..DS2900
@@ -230,52 +246,72 @@ scan_clock_follows_counter = 5
 clock_bits_toggle_at_their_rate = 6
 mode_bits_on_in_run = 7
 rtc_seconds_advance = 8
+first_scan_counter_and_clock = 9
+scan_counter_wraps_to_zero = 10
+
+# Retired groups: each stopped the PLC on one math error.  A CLICK keeps running
+# (hardware round 1), so the seven errors are one case of math_error.  The
+# blocks stay reserved, never reused.
 
 [groups.stop_sqrt]
-base = 2901 # Conf_StopSqrt: DS2901..DS2920; stops the PLC, outside suite.ALL_GROUPS
+base = 2901 # Conf_StopSqrt: DS2901..DS2920; retired
 slots = 1
 
 [groups.stop_sqrt.cases]
-sqrt_negative = 1
+sqrt_negative = 1 # retired: one case of math_error/math_errors_do_not_stop
 
 [groups.stop_ln0]
-base = 2921 # Conf_StopLn0: DS2921..DS2940; stops the PLC, outside suite.ALL_GROUPS
+base = 2921 # Conf_StopLn0: DS2921..DS2940; retired
 slots = 1
 
 [groups.stop_ln0.cases]
-ln_zero = 1
+ln_zero = 1 # retired: one case of math_error/math_errors_do_not_stop
 
 [groups.stop_ln_neg]
-base = 2941 # Conf_StopLnNeg: DS2941..DS2960; stops the PLC, outside suite.ALL_GROUPS
+base = 2941 # Conf_StopLnNeg: DS2941..DS2960; retired
 slots = 1
 
 [groups.stop_ln_neg.cases]
-ln_negative = 1
+ln_negative = 1 # retired: one case of math_error/math_errors_do_not_stop
 
 [groups.stop_log0]
-base = 2961 # Conf_StopLog0: DS2961..DS2980; stops the PLC, outside suite.ALL_GROUPS
+base = 2961 # Conf_StopLog0: DS2961..DS2980; retired
 slots = 1
 
 [groups.stop_log0.cases]
-log_zero = 1
+log_zero = 1 # retired: one case of math_error/math_errors_do_not_stop
 
 [groups.stop_log_neg]
-base = 2981 # Conf_StopLogNeg: DS2981..DS3000; stops the PLC, outside suite.ALL_GROUPS
+base = 2981 # Conf_StopLogNeg: DS2981..DS3000; retired
 slots = 1
 
 [groups.stop_log_neg.cases]
-log_negative = 1
+log_negative = 1 # retired: one case of math_error/math_errors_do_not_stop
 
 [groups.stop_asin]
-base = 3001 # Conf_StopAsin: DS3001..DS3020; stops the PLC, outside suite.ALL_GROUPS
+base = 3001 # Conf_StopAsin: DS3001..DS3020; retired
 slots = 1
 
 [groups.stop_asin.cases]
-asin_above_1 = 1
+asin_above_1 = 1 # retired: one case of math_error/math_errors_do_not_stop
 
 [groups.stop_acos]
-base = 3021 # Conf_StopAcos: DS3021..DS3040; stops the PLC, outside suite.ALL_GROUPS
+base = 3021 # Conf_StopAcos: DS3021..DS3040; retired
 slots = 1
 
 [groups.stop_acos.cases]
-acos_above_1 = 1
+acos_above_1 = 1 # retired: one case of math_error/math_errors_do_not_stop
+
+[groups.math_error]
+base = 3041 # Conf_MathError: DS3041..DS3090; stops pyrung's PLC (pending NOSTOP), in suite.STOP_GROUPS
+slots = 4
+
+[groups.math_error.cases]
+math_errors_do_not_stop = 1
+
+[groups.call_twice]
+base = 3091 # Conf_CallTwice: DS3091..DS3140; main calls it twice a scan
+slots = 4
+
+[groups.call_twice.cases]
+rise_once_per_scan = 1

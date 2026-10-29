@@ -10,7 +10,12 @@ the range (1, 2, ...) reads differently from the register number.  Every table
 has several matches, so first-match reads differently from last-match.
 pyrung returns the register number of the first match (``DS4204``, not 2).
 
-The expectations are pyrung's answers, unconfirmed on a CLICK.  Where a case
+The expectations are what a CLICK does (hardware round 1, 2026-10-29, part B:
+every case but one passed as written).  A continuous search on a CLICK
+restarts at the first address when its result is 0, resumes after an old
+result that lies inside the range, and misses (-1) from anything else;
+pyrung resumes from the first address when the old result lies below the
+range, so the cases where that shows are ``pending="TEXT"``.  Where a case
 detects an alternative model:
 
 - ``hit_returns_address``: result = position in the range (2), a 0-based
@@ -35,9 +40,15 @@ detects an alternative model:
   the register's old value (reads 4366) instead of at the top of the range.
 - ``continuous_cursor_is_address``: the resume point is a register number,
   strictly after the old result (4386, not 4385), also when the old result is
-  not itself a match (4384 -> 4385), -1 past the last register, and the first
-  match when the old result lies below the range (5 -> 4383; a probe, CLICK may
-  treat a result outside the range differently).
+  not itself a match (4384 -> 4385), -1 past the last register, and -1 when
+  the old result lies below the range (5; pyrung restarts there, 4383).
+- ``continuous_cursor_outside_range`` (probe): the edges of that rule, over
+  DD411..DD416 = {7, 1, 7, 7, 2, 7}: an old result one below the range (410),
+  one above it (417) and negative (-5) each miss, -1 (adopted); a search that
+  restarts from below the range reads 411 for 410 (and for -5); the first
+  register (411, a match) resumes after it, 413.  (A reversed range is not
+  probed: the exporter writes it as an address list, which a CLICK Search
+  does not take.)
 - ``dint_real_tables``: DD and DF ranges compare at full width (100000 does not
   fit an Int) and still return the register number.
 - ``text_windows``: text search matches a window of characters, the result is
@@ -246,6 +257,29 @@ def prove_continuous_cursor_is_address(slot):
 # --- other tables -------------------------------------------------------------
 
 
+def prove_continuous_cursor_outside_range(slot):
+    # DD411..DD416 = {7, 1, 7, 7, 2, 7}; each result preset, then searched once.
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        for i, v in enumerate([7, 1, 7, 7, 2, 7]):
+            copy(v, dd[411 + i])
+        copy(410, slot.Result1)
+        copy(417, slot.Result2)
+        copy(-5, slot.Result3)
+        copy(411, slot.Result4)
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        search(dd.select(411, 416) == 7, result=slot.Result1, found=c[878], continuous=True)
+        search(dd.select(411, 416) == 7, result=slot.Result2, found=c[879], continuous=True)
+        search(dd.select(411, 416) == 7, result=slot.Result3, found=c[880], continuous=True)
+        search(dd.select(411, 416) == 7, result=slot.Result4, found=c[881], continuous=True)
+        copy(1, slot.Fired)
+
+
+def init_continuous_cursor_outside_range(slot):
+    fill(0, dd.select(411, 416))
+    for n in (878, 879, 880, 881):
+        reset(c[n])
+
+
 def prove_dint_real_tables(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(10, dd[401])
@@ -300,6 +334,7 @@ group = Group(
             "A search of DS4203..DS4207 = {5, 20, 7, 20, 9} for == 20 writes the register number "
             "of the first match, 4204 (Result1), and turns found on (Result2 = 1)",
             ladder=prove_hit_returns_address,
+            confirmed=True,
             init=_init(4203, 4207, 851),
             expect={"Result1": 4204, "Result2": 1},
         ),
@@ -307,6 +342,7 @@ group = Group(
             "A search that finds nothing writes -1 over the old result and turns found off: "
             "result 77 and found on become -1 (Result1) and off (Result2 = 1 when found is off)",
             ladder=prove_miss_writes_minus_one,
+            confirmed=True,
             init=_init(4223, 4225, 852),
             expect={"Result1": -1, "Result2": 1},
         ),
@@ -316,6 +352,7 @@ group = Group(
             "(Result2), <= 3 finds 4243 (Result3), >= 9 finds 4246 (Result4), != 3 finds "
             "4244 (Scratch)",
             ladder=prove_operators_signed,
+            confirmed=True,
             init=_init(4243, 4247, 853, 854, 855, 856, 857),
             expect={
                 "Result1": 4245,
@@ -331,6 +368,7 @@ group = Group(
             "(Result2); the same == 9 over DS4263..DS4265 (Result3) and == 7 over "
             "DS4264..DS4266 (Result4) find nothing, -1",
             ladder=prove_range_ends_inclusive,
+            confirmed=True,
             init=_init(4263, 4266, 858, 859, 860, 861),
             expect={"Result1": 4263, "Result2": 4266, "Result3": -1, "Result4": -1},
         ),
@@ -339,6 +377,7 @@ group = Group(
             "hit on scan 2 (4284, found on) and a miss on scan 3 (-1, found off) are the same "
             "on scan 8, though from scan 4 the table would now give a miss and a hit",
             ladder=prove_false_rung_preserves,
+            confirmed=True,
             init=_init(4283, 4292, 862, 863),
             expect={"Result1": 4284, "Result2": 1, "Result3": -1, "Result4": 1},
             scans=SCANS,
@@ -348,6 +387,7 @@ group = Group(
             "over DS4303..DS4308 = {7, 1, 7, 7, 2, 7} for == 7 the results on scans 1..4 are "
             "4303, 4305, 4306, 4308 (Result1..4)",
             ladder=prove_continuous_walks,
+            confirmed=True,
             init=_init(4303, 4311, 864),
             expect={"Result1": 4303, "Result2": 4305, "Result3": 4306, "Result4": 4308},
             scans=SCANS,
@@ -359,6 +399,7 @@ group = Group(
             "scan 4 (Result2, Result4 = 1 when found is off), then 4323 on scan 5 (Result3) "
             "after the ladder wrote 0",
             ladder=prove_continuous_exhausted,
+            confirmed=True,
             init=_init(4323, 4331, 865),
             expect={"Result1": -1, "Result2": -1, "Result3": 4323, "Result4": 1},
             scans=SCANS,
@@ -369,6 +410,7 @@ group = Group(
             "results on scans 1..4 are 4343, 4345, 4343, 4345 when the ladder writes 0 on "
             "scan 3",
             ladder=prove_continuous_zero_restarts,
+            confirmed=True,
             init=_init(4343, 4351, 866),
             expect={"Result1": 4343, "Result2": 4345, "Result3": 4343, "Result4": 4345},
             scans=SCANS,
@@ -378,25 +420,29 @@ group = Group(
             "address every scan: over DS4363..DS4367 = {7, 1, 7, 7, 2} with the result preset "
             "to 4365 it still finds 4363 on scans 1..3 (Result1..3), found on (Result4 = 1)",
             ladder=prove_plain_search_ignores_result,
+            confirmed=True,
             init=_init(4363, 4371, 867),
             expect={"Result1": 4363, "Result2": 4363, "Result3": 4363, "Result4": 1},
             scans=SCANS,
         ),
         case(
-            "A continuous search resumes at the first register after the old result, whatever "
-            "that value is: over DS4383..DS4388 = {7, 1, 7, 7, 2, 7} for == 7, an old result "
-            "of 4385 (a match) gives 4386 (Result1), 4384 (not a match) gives 4385 (Result2), "
-            "4388 (the last register) gives -1 (Result3), and 5 (below the range) gives the "
-            "first match, 4383 (Result4)",
+            "A continuous search resumes at the first register after an old result inside "
+            "its range, and misses from one outside it: over DS4383..DS4388 = {7, 1, 7, 7, 2, "
+            "7} for == 7, an old result of 4385 (a match) gives 4386 (Result1), 4384 (not a "
+            "match) gives 4385 (Result2), 4388 (the last register) gives -1 (Result3), and 5 "
+            "(below the range) gives -1 (Result4)",
             ladder=prove_continuous_cursor_is_address,
             init=_init(4383, 4394, 868, 869, 870, 871),
-            expect={"Result1": 4386, "Result2": 4385, "Result3": -1, "Result4": 4383},
+            expect={"Result1": 4386, "Result2": 4385, "Result3": -1, "Result4": -1},
+            confirmed=True,
+            pending="TEXT",
         ),
         case(
             "Search over DD and DF ranges compares at full width and returns register "
             "numbers: DD401..DD404 = {10, 100000, 5, 100000} for >= 100000 finds 402 "
             "(Result1), DF301..DF303 = {1.5, 2.5, 3.5} for > 2.0 finds 302 (Result2)",
             ladder=prove_dint_real_tables,
+            confirmed=True,
             init=init_dint_real_tables,
             expect={"Result1": 402, "Result2": 302},
         ),
@@ -406,8 +452,20 @@ group = Group(
             '"ZA" at the very end finds 207 (Result2), "AZ" finds nothing, -1 (Result3), and '
             'a continuous "AB" search with the result at 202 finds 205 (Result4)',
             ladder=prove_text_windows,
+            confirmed=True,
             init=init_text_windows,
             expect={"Result1": 202, "Result2": 207, "Result3": -1, "Result4": 205},
+        ),
+        case(
+            "A continuous search misses from any old result outside its range: over "
+            "DD411..DD416 = {7, 1, 7, 7, 2, 7} for == 7, an old result of 410 (just below), "
+            "417 (just above) and -5 each give -1 (Result1..3), and 411 (the first register, "
+            "a match) gives 413 (Result4)",
+            ladder=prove_continuous_cursor_outside_range,
+            init=init_continuous_cursor_outside_range,
+            expect={"Result1": -1, "Result2": -1, "Result3": -1, "Result4": 413},
+            pending="TEXT",
+            probe="continuous search cursor at the range edges (410, 417, -5)",
         ),
     ],
 )

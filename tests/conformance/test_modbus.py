@@ -45,8 +45,9 @@ def test_all_groups_over_modbus(
     conformance_sim: type[SimServer] | type[CircuitPySim],
 ) -> None:
     build = suite.build_for(conformance_endpoint)
-    # Without GROUP=, every loaded group but the ones that stop the PLC.
-    normal = [g for g in suite.ALL_GROUPS if g.name in build.names]
+    # Without GROUP=, every loaded group (on pyrung's own targets, but the ones
+    # that stop pyrung's PLC: test_math_error.py runs those alone).
+    normal = suite.wire_groups(build, conformance_endpoint)
     groups = conformance_groups or [g.name for g in normal]
     results = run_modbus(build, conformance_endpoint, groups=groups, sim=conformance_sim)
     print(format_report(results))
@@ -89,15 +90,18 @@ def test_suite_repeats_without_restarting(
     on what ran before it on the same PLC.
     """
     build = suite.build_for(conformance_endpoint)
-    stopping = {g.name for g in suite.STOP_GROUPS}
-    names = [n for n in conformance_groups or [g.name for g in build.groups] if n not in stopping]
+    local = conformance_endpoint is None
+    allowed = {g.name for g in suite.wire_groups(build, conformance_endpoint)}
+    names = [n for n in conformance_groups or [g.name for g in build.groups] if n in allowed]
     if not names:
-        pytest.skip("a group that stops the PLC runs once per RUN")
+        pytest.skip("a group that stops pyrung's PLC runs once per target")
     with _one_plc(build, conformance_endpoint, conformance_sim) as endpoint:
         for n in (1, 2):
-            _passes(run_modbus(build, endpoint, groups=names), f"suite run {n} of 2")
+            results = run_modbus(build, endpoint, groups=names, pending=local)
+            _passes(results, f"suite run {n} of 2")
         for step, name in enumerate(names + names[-2::-1], start=1):
-            _passes(run_modbus(build, endpoint, groups=[name]), f"step {step}: {name} alone")
+            results = run_modbus(build, endpoint, groups=[name], pending=local)
+            _passes(results, f"step {step}: {name} alone")
 
 
 # --- harness self-checks (always on the local sim) ---------------------------
@@ -161,7 +165,9 @@ def test_mismatched_layout_bails_before_writing() -> None:
             run_modbus(other, sim.endpoint, timeout=2.0)
         # Nothing was written: the loaded program's slots never fired.
         assert sim.endpoint is not None
-        results = run_modbus(loaded, sim.endpoint, groups=[g.name for g in suite.ALL_GROUPS])
+        results = run_modbus(
+            loaded, sim.endpoint, groups=[g.name for g in suite.ALL_GROUPS], pending=True
+        )
     assert_all_passed(results)
 
 
@@ -246,6 +252,20 @@ def test_case_that_never_fires_fails() -> None:
     assert result.actual == {"Result1": 5}
     with pytest.raises(AssertionError, match="did not fire"):
         assert_all_passed(results)
+
+
+def test_pending_case_is_an_xfail_on_a_local_target_and_judged_on_a_plc() -> None:
+    # pyrung reads 7; CLICK (says the case) reads 8.
+    pending = case("CLICK reads 8", ladder=_prove_constant, expect={"Result1": 8}, pending="S2")
+    build = build_program(Group("p", [pending]))
+    (local,) = run_modbus(build)
+    assert local.passed and local.xfail
+    with SimServer(build) as sim:
+        # A served endpoint is judged as a CLICK unless told it is pyrung's own.
+        (as_plc,) = run_modbus(build, sim.endpoint)
+        (as_local,) = run_modbus(build, sim.endpoint, pending=True)
+    assert not as_plc.passed and not as_plc.xfail
+    assert as_local.passed and as_local.xfail
 
 
 def test_in_process_only_case_is_reported_skipped() -> None:

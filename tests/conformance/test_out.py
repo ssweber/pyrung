@@ -12,8 +12,23 @@ cases are ``ready`` once the coil is off, and ``keep`` the off side's timer:
 its TD keeps counting while the input stays off, from power-up on, so it never
 matches a fresh PLC's.
 
-The expectations are pyrung's answers, unconfirmed on a CLICK: the open probes
-O1-O6 in ``scratchpad/click-v4/RESEARCH.md``.
+The cases are the probes O1-O6 of ``scratchpad/click-v4/RESEARCH.md``.  Hardware
+round 1 (2026-10-29) confirmed O1, O2, O3 and O5 and answered O6: an Out coil
+never sets its Timer's done bit T<n>; the coil's phases come from the TDs
+alone, so a contact on that T<n> is always off.  pyrung sets it
+(``pending="OUT"``).  O4 is still open:
+
+- ``flasher_restarts_with_on_phase`` (probe): 300 ms phases, the rung false
+  from 450 to 550 ms, 150 ms into the off phase.  Round 1 read "not both TDs
+  0" and the coil on somewhere in 600-800 ms.  The case reads, while the rung
+  is false, the on-side TD (Result1: 1 = cleared, 2 = held at or past its
+  preset) and the off-side TD (Result3: 1 = cleared, 2 = kept mid-phase), and
+  whether the off-side TD stands still (ErrorCode: 1 = frozen or cleared,
+  2 = still counting); after the restart, the coil at 600-650 ms (Result2)
+  and at 750-800 ms (Result4).  Adopted, the flasher freezes and resumes:
+  2, 2, 1, then off (0) and on (1), the off phase's last 150 ms then a new on
+  phase.  pyrung clears both TDs and restarts with an on phase: 1, 1, 1, 1, 1.
+  A fresh off phase reads Result2 = 0, Result4 = 0.
 """
 
 from __future__ import annotations
@@ -66,22 +81,39 @@ def prove_debounce_bounce_restarts_on_side(slot):
 
 
 def prove_flasher_restarts_with_on_phase(slot):
-    # O4: 300 ms phases; the rung drops at 450-550 ms (mid off phase).  Both TDs
-    # clear, and the restart at 550 ms begins with a full on phase (on to 850
-    # ms; a restart on the off phase is off to 850 ms).  Each check's window
-    # keeps clear of the phase edges and is wide enough that one long
-    # wall-clock scan doesn't step over it.
+    # O4: 300 ms phases; the rung drops at 450-550 ms, 150 ms into the off
+    # phase.  Each check's window keeps clear of the phase edges and is wide
+    # enough that one long wall-clock scan doesn't step over it.
     with Rung(slot.Cmd != 0):
         on_delay(ClickTimer(305), 2000)
     with Rung(slot.Cmd != 0, td[305] >= 450, td[305] < 550):
         out(c[1832])
     with Rung(slot.Cmd != 0, ~c[1832]):
         flasher(c[1831], on=(ClickTimer(306), 300), off=(ClickTimer(307), 300))
-    with Rung(slot.Cmd != 0, td[305] >= 460, td[305] < 540, td[306] == 0, td[307] == 0):
+    # While the rung is false: 1 = TD cleared, 2 = TD kept.
+    with Rung(slot.Cmd != 0, td[305] >= 480, td[305] < 520, td[306] == 0):
         copy(1, slot.Result1, oneshot=True)
-    with Rung(slot.Cmd != 0, td[305] >= 600, td[305] < 800, c[1831]):
+    with Rung(slot.Cmd != 0, td[305] >= 480, td[305] < 520, td[306] >= 300):
+        copy(2, slot.Result1, oneshot=True)
+    with Rung(slot.Cmd != 0, td[305] >= 480, td[305] < 520, td[307] == 0):
+        copy(1, slot.Result3, oneshot=True)
+    with Rung(slot.Cmd != 0, td[305] >= 480, td[305] < 520, td[307] >= 100, td[307] < 300):
+        copy(2, slot.Result3, oneshot=True)
+    # Does the off-side TD stand still while the rung is false?
+    with Rung(slot.Cmd != 0, td[305] >= 460, td[305] < 480):
+        copy(td[307], slot.Scratch, oneshot=True)
+    with Rung(slot.Cmd != 0, td[305] >= 520, td[305] < 540, td[307] == slot.Scratch):
+        copy(1, slot.ErrorCode, oneshot=True)
+    with Rung(slot.Cmd != 0, td[305] >= 520, td[305] < 540, td[307] != slot.Scratch):
+        copy(2, slot.ErrorCode, oneshot=True)
+    # After the restart at 550: a fresh on phase is on at 600-650 and 750-800;
+    # resuming the off phase is off at 600-650, on at 750-800; a fresh off
+    # phase is off at both.
+    with Rung(slot.Cmd != 0, td[305] >= 600, td[305] < 650, c[1831]):
         copy(1, slot.Result2, oneshot=True)
-    with Rung(slot.Cmd != 0):
+    with Rung(slot.Cmd != 0, td[305] >= 750, td[305] < 800, c[1831]):
+        copy(1, slot.Result4, oneshot=True)
+    with Rung(slot.Cmd != 0, td[305] >= 850):
         copy(1, slot.Fired, oneshot=True)
 
 
@@ -100,11 +132,13 @@ def prove_timed_needs_fresh_edge(slot):
 
 
 def prove_out_coil_sets_timer_done(slot):
-    # O6: does the coil write its T<n>?  pyrung sets it when the phase is done.
+    # O6: does the coil write its T<n>?  Result2 shows the on phase finished.
     with Rung(slot.Cmd != 0):
         debounce(c[1851], on=(ClickTimer(310), 200), off=(ClickTimer(312), 1000))
     with Rung(slot.Cmd != 0, t[310]):
         copy(1, slot.Result1)
+    with Rung(slot.Cmd != 0, c[1851], td[310] >= 300):
+        copy(1, slot.Result2, oneshot=True)
     with Rung(slot.Cmd != 0):
         copy(1, slot.Fired, oneshot=True)
 
@@ -123,6 +157,7 @@ group = Group(
             init=init_toggle_flips_once_per_edge,
             expect={"Result1": 1},
             scans=20,
+            confirmed=True,
         ),
         case(
             "A debounce coil's on-side TD keeps counting past its preset while the input "
@@ -133,6 +168,7 @@ group = Group(
             keep=[t[311], td[311]],
             expect={"Result1": 1, "Result2": 1},
             scans=50,
+            confirmed=True,
         ),
         case(
             "A bounce restarts a debounce coil's on-side timing: on for 200 ms, off for "
@@ -143,13 +179,18 @@ group = Group(
             keep=[t[304], td[304]],
             expect={"Result1": 1, "Result2": 0},
             scans=80,
+            confirmed=True,
         ),
         case(
-            "A flasher's rung going false clears both TDs (Result1 = 1), and the restart "
-            "begins with a full on phase (Result2 = 1)",
+            "A flasher whose rung goes false freezes and resumes: 150 ms into its off phase, "
+            "its on-side TD is kept (Result1 = 2) and its off-side TD kept (Result3 = 2) "
+            "and standing still (ErrorCode = 1); back on, it finishes the off phase (off "
+            "at 600-650 ms, Result2 = 0) and then turns on (750-800 ms, Result4 = 1)",
             ladder=prove_flasher_restarts_with_on_phase,
-            expect={"Result1": 1, "Result2": 1},
-            scans=90,
+            expect={"Result1": 2, "Result2": 0, "Result3": 2, "Result4": 1, "ErrorCode": 1},
+            scans=100,
+            pending="OUT",
+            probe="flasher with its rung false: TDs cleared, kept or frozen; restart phase",
         ),
         case(
             "A timed coil (not maintained) pulses once with its rung held: on (Result1 = "
@@ -157,15 +198,18 @@ group = Group(
             ladder=prove_timed_needs_fresh_edge,
             expect={"Result1": 1, "Result2": 0},
             scans=50,
+            confirmed=True,
         ),
         case(
-            "An Out coil sets its Timer's done bit T<n> when its phase is done (Result1 = "
-            "1); pyrung's answer, the open probe O6",
+            "An Out coil never sets its Timer's done bit T<n>: a debounce coil whose on "
+            "phase is done (Result2 = 1) leaves T<n> off (Result1 = 0)",
             ladder=prove_out_coil_sets_timer_done,
             ready=lambda slot: ~c[1851],
             keep=[t[312], td[312]],
-            expect={"Result1": 1},
+            expect={"Result1": 0, "Result2": 1},
             scans=40,
+            confirmed=True,
+            pending="OUT",
         ),
     ],
 )

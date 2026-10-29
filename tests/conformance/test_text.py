@@ -1,24 +1,32 @@
 """Text and copy converters: the ``text`` group (subroutine ``Conf_Text``).
 
-TXT cannot be read over Modbus, so every case stages its text in raw TXT it
-owns (``memory.OWNED``: TXT1..TXT200, staged DS3901..DS3999, DD301..DD400,
-DH301..DH400) and reads characters back as codes: ``copy(txt[n], Result,
-convert=to_ascii)``.  A TXT slot a converter should leave alone is seeded with
+The harness reads only slot registers, so every case stages its text in raw TXT
+it owns (``memory.OWNED``: TXT1..TXT200 and TXT301..TXT400, staged
+DS3901..DS3999, DD301..DD400, DH301..DH400) and reads characters back as codes
+into its slot: ``copy(txt[n], Result, convert=to_ascii)``.  (A CLICK does serve
+TXT over Modbus; a slot keeps every target's answer in one place.)  A TXT slot a converter should leave alone is seeded with
 ``Z`` first (code 90), so "untouched" reads 90 and "written" reads anything
 else.  A destination a failing instruction should leave alone is seeded with a
 nonzero value, so a write of 0 would show.  ``init`` puts the TXT, the staged
 registers and the seeds back to their power-up value (TXT NUL, numbers 0).
 
-The expectations are pyrung's answers, unconfirmed on a CLICK; what each case
+The expectations are what a CLICK does (hardware round 1, 2026-10-29): TXT
+is 8-bit (Copy Binary of 200 stores 200), Pack Copy into an INT or DINT clamps
+a value past its range and stops at a decimal point ("12.5" is 12), and
+Character Value of NUL writes 0.  pyrung refuses each, so those cases are
+``pending="TEXT"``.  A fault flag is read on the rung right after the
+instruction it asks about: a CLICK flag may follow the last instruction (see
+``test_system.py``), so anything between would confound it.  What each case
 tells apart:
 
 - ``value_vs_ascii``: Copy Character Value reads '5' as 5, Copy ASCII Code
   Value as 53.  A model with one text->number converter reads 5 or 53 in both.
 - ``null_ascii``: an unwritten TXT holds NUL, and ASCII Code Value of NUL writes
   0 over the destination's 77.  A model that skips empty text leaves 77.
-- ``to_value_rejects``: Character Value of a letter or NUL is a fault (SC43) and
-  leaves the destination alone (77, 66).  A model that stores 0 (or the code
-  minus 48) reads 0 (or 17).
+- ``to_value_rejects``: Character Value of a letter is a fault (SC43) and
+  leaves the destination alone (77); of NUL it writes 0 over 66 (Result3) and,
+  adopted, raises no fault (Result4 = 0).  pyrung refuses NUL too (66, 1).  A
+  model that stores the code minus 48 reads 17 for the letter.
 - ``to_text_suppress``: 123 converts to the three characters "123", the rest
   of the TXT range is untouched (90).  A model that pads to the Int's five
   digits reads "00123": 48 where this reads 49, and 50, 51 in the slots this
@@ -33,19 +41,27 @@ tells apart:
   character per slot, and stops at its length.
 - ``to_binary``: Copy Binary of an Int writes one character, the low byte; a
   model that writes both bytes of the word also changes the next TXT (1 where
-  this reads 90).  A byte above 127 is not ASCII, so it is refused (SC43) and
-  the TXT keeps its seed.
+  this reads 90).  A byte above 127 is stored as is (200, Result3) and,
+  adopted, raises no fault (Result4 = 0); pyrung refuses it (90, 1).
 - ``pack_text_word_hex``: Pack Copy text into a WORD parses hex: "00FF" is 255
   and "0010" is 16, where a decimal parse refuses the first and reads 10 for
   the second; text that is not hex leaves the destination alone.
 - ``pack_text_int``: into an INT parses signed decimal ("0042" is 42, not
-  hex 66), and a value outside the INT range or with a decimal point is
-  refused with the destination left alone.
-- ``pack_text_dint``: into a DINT parses signed decimal over 32 bits, and one
-  past the DINT range is refused.
+  hex 66), clamps 123456 to 32767 (Result3), and reads "12.5" as 12 (Result4).
+  Adopted, the clamp raises no fault (ErrorCode = 0).  pyrung refuses both
+  and leaves 5 and 9.
+- ``pack_text_dint``: into a DINT parses signed decimal over 32 bits, and
+  clamps 2147483648 to 2147483647 (Result3 = 1); adopted, without a fault
+  (Result4 = 0).  pyrung refuses it (Result3 = 0, Result4 = 1).
+- ``pack_text_int_fraction`` (probe): "12.9" reads 12 if the parse stops at
+  the point (adopted), 13 if it rounds, 99 (the preset) if refused (Result1);
+  "12x" reads 12 if the parse stops at the first non-digit (adopted), 99 if
+  refused (Result2).  Result3 and Result4 are SC43 after each (adopted 0, 0).
 - ``pack_text_whitespace``: leading or trailing whitespace faults and leaves
   the destination alone unless ``allow_whitespace``, which trims it.  A model
-  that always trims reads 12 in Result1.
+  that always trims reads 12 in Result1.  Round 1 read Result2 = 0 with an
+  in-range copy between the pack and the flag rung; read right after the pack,
+  a refusal that faults reads 1 (adopted), one that does not reads 0.
 - ``fill_blank_ascii``: Fill with empty text blanks a TXT to NUL, the one blank
   a TXT byte has, so ASCII Code Value of it writes 0 over the destination's 77
   and 66.  A model where Fill of empty text writes nothing reads the seed's 90;
@@ -137,6 +153,7 @@ def prove_to_value_rejects(slot):
     with _go(slot):
         copy(66, slot.Result3)
         copy(txt[22], slot.Result3, convert=to_value)
+    _fault_flag(slot, slot.Result4)
     _fired(slot)
 
 
@@ -211,8 +228,9 @@ def prove_to_binary(slot):
         copy(200, ds[3906])
         _seed(95, "Z")
         copy(ds[3906], txt[95], convert=to_binary)
-        _code(95, slot.Result3)
     _fault_flag(slot, slot.Result4)
+    with _go(slot):
+        _code(95, slot.Result3)
     _fired(slot)
 
 
@@ -246,6 +264,8 @@ def prove_pack_text_int(slot):
         copy(5, ds[3913])
         _seed(131, "123456")
         pack_text(txt.select(131, 136), ds[3913])
+    _fault_flag(slot, slot.ErrorCode)
+    with _go(slot):
         copy(ds[3913], slot.Result3)
         copy(9, ds[3914])
         _seed(141, "12.5")
@@ -263,11 +283,12 @@ def prove_pack_text_dint(slot):
         copy(5, dd[303])
         _seed(171, "2147483648")
         pack_text(txt.select(171, 180), dd[303])
+    _fault_flag(slot, slot.Result4)
     with Rung(slot.Cmd != 0, slot.Fired == 0, dd[301] == -70000):
         copy(1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0, dd[302] == 2147483647):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, dd[303] == 5):
+    with Rung(slot.Cmd != 0, slot.Fired == 0, dd[303] == 2147483647):
         copy(1, slot.Result3)
     _fired(slot)
 
@@ -277,15 +298,32 @@ def prove_pack_text_whitespace(slot):
         copy(99, ds[3921])
         _seed(181, " 12")
         pack_text(txt.select(181, 183), ds[3921])
-        copy(ds[3921], slot.Result1)
     _fault_flag(slot, slot.Result2)
     with _go(slot):
+        copy(ds[3921], slot.Result1)
         _seed(184, " 12")
         pack_text(txt.select(184, 186), ds[3922], allow_whitespace=True)
         copy(ds[3922], slot.Result3)
         _seed(187, "12 ")
         pack_text(txt.select(187, 189), ds[3923], allow_whitespace=True)
         copy(ds[3923], slot.Result4)
+    _fired(slot)
+
+
+def prove_pack_text_int_fraction(slot):
+    with _go(slot):
+        copy(99, ds[3931])
+        _seed(301, "12.9")
+        pack_text(txt.select(301, 304), ds[3931])
+    _fault_flag(slot, slot.Result3)
+    with _go(slot):
+        copy(99, ds[3932])
+        _seed(311, "12x")
+        pack_text(txt.select(311, 313), ds[3932])
+    _fault_flag(slot, slot.Result4)
+    with _go(slot):
+        copy(ds[3931], slot.Result1)
+        copy(ds[3932], slot.Result2)
     _fired(slot)
 
 
@@ -372,6 +410,12 @@ def init_pack_text_whitespace(slot):
     fill(0, ds.select(3921, 3923))
 
 
+def init_pack_text_int_fraction(slot):
+    _clear(301, 304)
+    _clear(311, 313)
+    fill(0, ds.select(3931, 3932))
+
+
 def init_fill_blank_ascii(slot):
     _clear(191, 192)
 
@@ -387,6 +431,7 @@ group = Group(
             "Copy Character Value reads '5' as 5 and Copy ASCII Code Value reads the same '5' as 53, "
             "and ASCII Code Value of 'A' is 65",
             ladder=prove_value_vs_ascii,
+            confirmed=True,
             init=init_value_vs_ascii,
             expect={"Result1": 5, "Result2": 53, "Result3": 65, "Result4": 65},
         ),
@@ -394,20 +439,25 @@ group = Group(
             "ASCII Code Value of a TXT nothing wrote (NUL) writes 0 over the destination, "
             "and of a space writes 32",
             ladder=prove_null_ascii,
+            confirmed=True,
             init=init_null_ascii,
             expect={"Result1": 0, "Result2": 0, "Result3": 32},
         ),
         case(
-            "Character Value of a letter or of NUL is refused: the out-of-range fault comes up "
-            "and the destination keeps its value",
+            "Character Value of a letter is refused: the out-of-range fault comes up "
+            "(Result2 = 1) and the destination keeps its 77 (Result1); of NUL it writes 0 "
+            "(Result3), with no fault (Result4 = 0)",
             ladder=prove_to_value_rejects,
             init=init_to_value_rejects,
-            expect={"Result1": 77, "Result2": 1, "Result3": 66},
+            expect={"Result1": 77, "Result2": 1, "Result3": 0, "Result4": 0},
+            pending="TEXT",
+            probe="does Character Value of NUL set SC43",
         ),
         case(
             "Copy to text with suppress zero writes 123 as the characters 1, 2, 3 and leaves "
             "the next TXT alone",
             ladder=prove_to_text_suppress,
+            confirmed=True,
             init=init_to_text_suppress,
             expect={"Result1": 49, "Result2": 51, "Result3": 90, "Result4": 90},
         ),
@@ -415,6 +465,7 @@ group = Group(
             "Copy to text without suppress zero writes an Int 42 as five digits 00042 and "
             "leaves the next TXT alone",
             ladder=prove_to_text_fixed,
+            confirmed=True,
             init=init_to_text_fixed,
             expect={"Result1": 48, "Result2": 52, "Result3": 50, "Result4": 90},
         ),
@@ -422,6 +473,7 @@ group = Group(
             "Copy to text without suppress zero writes an Int -42 as a minus sign and five "
             "digits: -00042, six characters",
             ladder=prove_to_text_fixed_negative,
+            confirmed=True,
             init=init_to_text_fixed_negative,
             expect={"Result1": 45, "Result2": 48, "Result3": 52, "Result4": 90},
         ),
@@ -429,6 +481,7 @@ group = Group(
             "A termination code adds one character after the digits, and code 0 is written "
             "as NUL, not skipped",
             ladder=prove_to_text_termination,
+            confirmed=True,
             init=init_to_text_termination,
             expect={"Result1": 51, "Result2": 13, "Result3": 90, "Result4": 0},
         ),
@@ -436,48 +489,67 @@ group = Group(
             "Copying the literal HELLO to a TXT fills five consecutive TXT, one character "
             "each, and not the sixth",
             ladder=prove_literal_fanout,
+            confirmed=True,
             init=init_literal_fanout,
             expect={"Result1": 72, "Result2": 76, "Result3": 79, "Result4": 90},
         ),
         case(
-            "Copy Binary writes only the low byte of an Int as one character, and refuses a "
-            "byte above 127 (fault, TXT unchanged)",
+            "Copy Binary writes only the low byte of an Int as one character (Result1 = "
+            "65, the next TXT untouched: Result2 = 90), and a TXT is 8-bit: a byte of 200 "
+            "is stored as 200 (Result3) with no fault (Result4 = 0)",
             ladder=prove_to_binary,
             init=init_to_binary,
-            expect={"Result1": 65, "Result2": 90, "Result3": 90, "Result4": 1},
+            expect={"Result1": 65, "Result2": 90, "Result3": 200, "Result4": 0},
+            pending="TEXT",
+            probe="does Copy Binary of 200 set SC43",
         ),
         case(
             "Pack text into a WORD parses hex: 00FF is 255, 0010 is 16, ABCD is 0xABCD, and "
             "12G4 is refused and leaves the WORD alone",
             ladder=prove_pack_text_word_hex,
+            confirmed=True,
             init=init_pack_text_word_hex,
             expect={"Result1": 255, "Result2": 16, "Result3": 1, "Result4": 7},
         ),
         case(
-            "Pack text into an Int parses signed decimal: -123 is -123, 0042 is 42, and 123456 "
-            "or 12.5 is refused and leaves the Int alone",
+            "Pack text into an Int parses signed decimal: -123 is -123 (Result1), 0042 is 42 "
+            "(Result2), 123456 clamps to 32767 (Result3) with no fault (ErrorCode = 0), and "
+            "12.5 stops at the point, 12 (Result4)",
             ladder=prove_pack_text_int,
             init=init_pack_text_int,
-            expect={"Result1": -123, "Result2": 42, "Result3": 5, "Result4": 9},
+            expect={
+                "Result1": -123,
+                "Result2": 42,
+                "Result3": 32767,
+                "Result4": 12,
+                "ErrorCode": 0,
+            },
+            pending="TEXT",
+            probe="does a clamping pack_text set SC43",
         ),
         case(
-            "Pack text into a Dint parses signed decimal over 32 bits, and 2147483648 is "
-            "refused and leaves the Dint alone",
+            "Pack text into a Dint parses signed decimal over 32 bits (Result1 = 1, Result2 = "
+            "1), and 2147483648 clamps to 2147483647 (Result3 = 1) with no fault (Result4 = 0)",
             ladder=prove_pack_text_dint,
             init=init_pack_text_dint,
-            expect={"Result1": 1, "Result2": 1, "Result3": 1},
+            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 0},
+            pending="TEXT",
+            probe="does a clamping pack_text set SC43",
         ),
         case(
-            "Pack text with a leading space is refused (fault, destination unchanged) unless "
-            "whitespace is allowed, which trims leading and trailing spaces",
+            "Pack text with a leading space is refused unless whitespace is allowed: the "
+            "destination keeps its 99 (Result1) and the fault comes up (Result2 = 1); "
+            "allowed, leading and trailing spaces are trimmed (Result3 = Result4 = 12)",
             ladder=prove_pack_text_whitespace,
             init=init_pack_text_whitespace,
             expect={"Result1": 99, "Result2": 1, "Result3": 12, "Result4": 12},
+            probe="does a refused pack_text set SC43",
         ),
         case(
             "Fill with empty text blanks a TXT to NUL, so ASCII Code Value of it writes 0 over "
             "the destination, as for a TXT nothing wrote",
             ladder=prove_fill_blank_ascii,
+            confirmed=True,
             init=init_fill_blank_ascii,
             expect={"Result1": 0, "Result2": 0},
         ),
@@ -488,6 +560,16 @@ group = Group(
             init=init_reset_blank_ascii,
             expect={"Result1": 0},
             in_process_only="CLICK's Reset coil takes bit memory only (X, Y, C, T, CT, SC), not TXT",
+        ),
+        case(
+            "Pack text into an Int stops at the first character that is not a digit: 12.9 "
+            "is 12 (Result1), not rounded, and 12x is 12 (Result2), neither with a fault "
+            "(Result3 = 0, Result4 = 0)",
+            ladder=prove_pack_text_int_fraction,
+            init=init_pack_text_int_fraction,
+            expect={"Result1": 12, "Result2": 12, "Result3": 0, "Result4": 0},
+            pending="TEXT",
+            probe='pack_text "12.9" -> 12 or 13; "12x" -> 12 or refused',
         ),
     ],
 )

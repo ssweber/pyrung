@@ -23,14 +23,24 @@ on their third, after the others have fired (one sets SC40, the other SC43).  Th
 the wire the cases fire when their ``Cmd`` lands, and another group's fault
 on the same scan would also read as on.
 
-The expectations are pyrung's answers, unconfirmed on a CLICK.  Where a CLICK
+The expectations are what a CLICK does where hardware round 1 (2026-10-29)
+answered, and the adopted answer of an open probe otherwise.  Where a CLICK
 could plausibly differ, these cases tell the models apart:
 
 - ``int_calc_wraps``, ``dint_calc_wraps``, ``word_calc_wraps``: Math wraps at
   each width.  Saturating Math reads Result1/Result2 = 32767/32766 (Int),
-  32767/0 (Dint), and something other than 16 (0xFFFF copied into an Int)/0
+  0/0 (Dint), and something other than 16 (0xFFFF copied into an Int)/0
   (Word); Math that skips an overflowing write reads 0/-1 (Int).  Math that
-  wraps without the out-of-range flag reads Result3 = 0 (Int).
+  wraps without the out-of-range flag reads Result3 = 0 (Int).  The Dint
+  results are read back by compares, not by a quotient (see below).
+- ``dint_quotient_into_int`` (probe): round 1 read 0 for -2147483648 / 65536
+  into an Int, where pyrung reads -32768.  Preset to 99, the same quotient
+  with the constant 65536 (Result1), with 65536 staged in a DD (Result2), and
+  -2147418112 / 65536 (Result3, -32767).  Exact quotients (adopted): -32768,
+  -32768, -32767.  A constant cut to 16 bits (65536 -> 0, a division by zero
+  that writes 0): 0, -32768, 0.  A quotient of -32768 refused by the Int: 99
+  (or a clamp, -32767), the same for Result2, and -32767.  (SC40 is not read:
+  other cases divide by zero on the same scan.)
 - ``copy_clamps_calc_wraps``: Copy clamps where Math wraps.  A Copy that
   wraps (or keeps the low word) reads -25536 and 25536 for Result1/Result3.
 - ``real_to_int_truncates``: Real to Int truncates toward zero.  Rounding
@@ -48,17 +58,18 @@ could plausibly differ, these cases tell the models apart:
 - ``intermediate_exceeds_32_bits``: 100000 * 100000 / 1000000 into an Int.
   pyrung's Python integers read 10000; 32-bit wrapping intermediates read 1410.
   A float intermediate reads 10000 too (1E+10 is exact even in a float32).
-- ``real_is_64_bit_in_pyrung``: 16777216 + 1 in a Real.  pyrung keeps a REAL
-  as a Python float (64-bit) and reads 1 twice; a float32 Real (CLICK's)
-  reads 0 twice.  This one is expected to fail on a CLICK: pyrung keeps
-  64-bit precision on purpose (a documented deviation).
-- ``real_overflow_stays_finite``: 3.0E+38 * 10 and * -10 in a Real.  pyrung
-  keeps every REAL inside CLICK's range: the result saturates at
-  +/-3.4028235E+38 with SC43 on, reading 1/1/1/1.  A Real past the range
-  (64-bit, unbounded) reads Result4 = 10 and Result1..3 = 0; one that
-  overflows to +/-Inf reads Result1/Result2 = 0, and Result4 is whatever its
-  Inf / 3.0E+38 -> Int gives; one that saturates without the flag reads
-  Result3 = 0.
+- ``real_is_64_bit_in_pyrung`` (in-process only): 16777216 + 1 in a Real.
+  pyrung keeps a REAL as a Python float (64-bit) and reads 1 twice; a float32
+  Real (CLICK's) reads 0 twice.  pyrung keeps 64-bit precision on purpose (a
+  documented deviation), so the case runs in-process only.  16777216 is
+  staged through a DD: the exporter spells a REAL constant in 7 digits, and
+  16777216.0 would export as 16777220.0.
+- ``real_overflow_stays_finite``: 3.0E+38 * 10 and * -10 in a Real.  A CLICK
+  stores +Inf and -Inf with SC43 on (round 1), so half of each is still past
+  3.0E+38 (Result1 = 1, Result2 = 1) and SC43 is on (Result3 = 1).  pyrung
+  saturates at +/-3.4028235E+38, whose halves are 1.7E+38 (Result1 = 0,
+  Result2 = 0), so the case is ``pending="INF"``.  A Real that overflows
+  without the flag reads Result3 = 0.
 - ``div_by_zero``, ``real_div_by_zero``: division by zero writes 0 and sets
   the division-error flag (SC40).  A Math that skips the write reads the
   preset (99, or Result1..3 = 0 for the Real compares); an IEEE Real division
@@ -94,10 +105,26 @@ def prove_dint_calc_wraps(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         calc(dd[101] + 1, dd[102])
         calc(dd[103] - 1, dd[104])
-        calc(dd[102] / 65536, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Fired == 0, dd[102] == -2147483648):
+        copy(1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0, dd[104] == 2147483647):
         copy(1, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(1, slot.Fired)
+
+
+def prove_dint_quotient_into_int(slot):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(-2147483648, dd[161])
+        copy(65536, dd[162])
+        copy(-2147418112, dd[163])
+        copy(99, slot.Result1)
+        copy(99, slot.Result2)
+        copy(99, slot.Result3)
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        calc(dd[161] / 65536, slot.Result1)
+        calc(dd[161] / dd[162], slot.Result2)
+        calc(dd[163] / 65536, slot.Result3)
         copy(1, slot.Fired)
 
 
@@ -201,8 +228,10 @@ def prove_intermediate_exceeds_32_bits(slot):
 
 def prove_real_is_64_bit_in_pyrung(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        copy(16777216.0, df[111])
+        copy(16777216, dd[122])
         copy(16777217, dd[121])
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(dd[122], df[111])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         calc(df[111] + 1, df[112])
         copy(dd[121], df[113])
@@ -218,7 +247,9 @@ REAL_OVERFLOW_WINDOW = 3
 
 def prove_real_overflow_stays_finite(slot):
     # DF121 = 3.0E+38; on scan 3, 3.0E+38 * 10 goes into DF122 and * -10 into
-    # DF123, both preset to 1.0 so a skipped write does not read as saturated.
+    # DF123, both preset to 1.0 so a skipped write does not read as an
+    # overflow.  Half of each goes into DF124 and DF125: half of +/-Inf is
+    # still +/-Inf, half of a saturated +/-3.4028235E+38 is +/-1.7E+38.
     count_scans(slot, REAL_OVERFLOW_WINDOW)
     on_scan = slot.Scratch == REAL_OVERFLOW_WINDOW
     with Rung(slot.Cmd != 0, on_scan):
@@ -230,14 +261,13 @@ def prove_real_overflow_stays_finite(slot):
         calc(df[121] * -10, df[123])
     with Rung(slot.Cmd != 0, on_scan, system.fault.out_of_range):
         copy(1, slot.Result3)
-    # CLICK keeps 7 significant digits of a constant, so the REAL maximum
-    # itself can't be written; only a saturated value reaches past 3.402823E+38.
-    with Rung(slot.Cmd != 0, on_scan, df[122] >= 3.402823e38):
-        copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, on_scan, df[123] <= -3.402823e38):
-        copy(1, slot.Result2)
     with Rung(slot.Cmd != 0, on_scan):
-        calc(df[122] / df[121], slot.Result4)
+        calc(df[122] / 2, df[124])
+        calc(df[123] / 2, df[125])
+    with Rung(slot.Cmd != 0, on_scan, df[124] >= 3.0e38):
+        copy(1, slot.Result1)
+    with Rung(slot.Cmd != 0, on_scan, df[125] <= -3.0e38):
+        copy(1, slot.Result2)
     done(slot, REAL_OVERFLOW_WINDOW)
 
 
@@ -286,6 +316,10 @@ def init_dint_calc_wraps(slot):
     fill(0, dd.select(101, 104))
 
 
+def init_dint_quotient_into_int(slot):
+    fill(0, dd.select(161, 163))
+
+
 def init_word_calc_wraps(slot):
     fill(0, dh.select(201, 206))
 
@@ -312,11 +346,11 @@ def init_intermediate_exceeds_32_bits(slot):
 
 def init_real_is_64_bit_in_pyrung(slot):
     fill(0, df.select(111, 113))
-    copy(0, dd[121])
+    fill(0, dd.select(121, 122))
 
 
 def init_real_overflow_stays_finite(slot):
-    fill(0, df.select(121, 123))
+    fill(0, df.select(121, 125))
 
 
 def init_real_div_by_zero(slot):
@@ -333,11 +367,11 @@ group = Group(
             expect={"Result1": -32768, "Result2": 32767, "Result3": 1},
         ),
         case(
-            "Math into a Dint wraps at 2^31: 2147483647 + 1 is -2147483648 (read back / 65536 "
-            "as Result1 = -32768) and -2147483648 - 1 is 2147483647 (Result2 = 1)",
+            "Math into a Dint wraps at 2^31: 2147483647 + 1 is -2147483648 (Result1 = 1) "
+            "and -2147483648 - 1 is 2147483647 (Result2 = 1)",
             ladder=prove_dint_calc_wraps,
             init=init_dint_calc_wraps,
-            expect={"Result1": -32768, "Result2": 1},
+            expect={"Result1": 1, "Result2": 1},
         ),
         case(
             "Math on WORDs wraps at 65535: 0xFFF0 + 0x0020 is 0x0010 (Result1 = 16) and "
@@ -406,16 +440,18 @@ group = Group(
             ladder=prove_real_is_64_bit_in_pyrung,
             init=init_real_is_64_bit_in_pyrung,
             expect={"Result1": 1, "Result2": 1},
+            in_process_only="pyrung keeps a REAL at 64 bits on purpose; a CLICK's REAL is "
+            "32-bit (a documented deviation)",
         ),
         case(
-            "A Real that overflows stays finite: 3.0E+38 * 10 saturates at 3.4028235E+38 "
-            "(Result1 = 1), 3.0E+38 * -10 at -3.4028235E+38 (Result2 = 1), the "
-            "out-of-range flag SC43 is on (Result3 = 1), and the result reads 1 times "
-            "3.0E+38, not 10 (Result4 = 1)",
+            "A Real that overflows stores +/-Inf: 3.0E+38 * 10 is +Inf, so half of it is "
+            "still past 3.0E+38 (Result1 = 1), 3.0E+38 * -10 is -Inf (Result2 = 1), and "
+            "the out-of-range flag SC43 is on (Result3 = 1)",
             ladder=prove_real_overflow_stays_finite,
             init=init_real_overflow_stays_finite,
-            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1},
+            expect={"Result1": 1, "Result2": 1, "Result3": 1},
             scans=scans_for(REAL_OVERFLOW_WINDOW),
+            pending="INF",
         ),
         case(
             "Integer division by zero writes 0 over the destination's 99 (Result1) and sets "
@@ -430,6 +466,15 @@ group = Group(
             init=init_real_div_by_zero,
             expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1},
             scans=scans_for(REAL_DIV_WINDOW),
+        ),
+        case(
+            "A Dint quotient into an Int is exact: -2147483648 / 65536 is -32768 with the "
+            "constant (Result1) and with 65536 in a DD (Result2), -2147418112 / 65536 is "
+            "-32767 (Result3)",
+            ladder=prove_dint_quotient_into_int,
+            init=init_dint_quotient_into_int,
+            expect={"Result1": -32768, "Result2": -32768, "Result3": -32767},
+            probe="dint quotient into an Int: constant cut to 16 bits, or -32768 refused",
         ),
     ],
 )

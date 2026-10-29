@@ -35,12 +35,13 @@ from pyrung.conformance import (
 )
 from tests.conformance import (
     test_block,
+    test_call_twice,
     test_coils,
     test_counters,
     test_drum,
     test_loop,
     test_math,
-    test_math_stop,
+    test_math_error,
     test_numeric,
     test_out,
     test_rung_semantics,
@@ -73,12 +74,15 @@ ALL_GROUPS = [
     test_counters.group,
     test_numeric.group,
     test_timers.group,
+    test_call_twice.group,
 ]
 
-#: Groups whose case puts the PLC in STOP (a math error).  Their subroutines are
-#: in the exported project, but a run takes them only when ``GROUP=`` names
-#: them, one per run: see ``test_math_stop.py``.
-STOP_GROUPS = list(test_math_stop.groups)
+#: Groups whose case stops pyrung's PLC (a math error), though a CLICK keeps
+#: running (pending NOSTOP, see ``test_math_error.py``).  A run against a CLICK
+#: takes them with every other group; a run on one of pyrung's own targets
+#: gives each a fresh target of its own, since nothing could reset after it.
+#: Once pyrung keeps running they join ``ALL_GROUPS`` and this list goes away.
+STOP_GROUPS = [test_math_error.group]
 
 #: Group names per CLICK project, split by subroutine name (A: ``Conf_Block``..
 #: ``Conf_Numeric``, B: ``Conf_Out``..``Conf_Timers``) to keep each part under
@@ -86,18 +90,29 @@ STOP_GROUPS = list(test_math_stop.groups)
 #: the manifest's either way, so a group's subroutine is the same in its part
 #: as in the whole project.
 PARTS: dict[str, tuple[str, ...]] = {
-    "A": ("block", "coils", "counters", "drum", "loop", "math", "numeric"),
-    "B": (
-        "out",
-        "rungs",
-        "search",
-        "shift",
+    "A": (
+        "block",
+        "call_twice",
+        "coils",
+        "counters",
+        "drum",
+        "loop",
+        "math",
         *(g.name for g in STOP_GROUPS),
-        "system",
-        "text",
-        "timers",
+        "numeric",
     ),
+    "B": ("out", "rungs", "search", "shift", "system", "text", "timers"),
 }
+
+
+def wire_groups(build: ConformanceProgram, endpoint: Endpoint | None) -> list[Group]:
+    """The groups of *build* a run without ``GROUP=`` takes at *endpoint*.
+
+    Every loaded group against a real PLC; on one of pyrung's own targets
+    (``None``) every group but ``STOP_GROUPS``, which run alone.
+    """
+    every = ALL_GROUPS if endpoint is None else [*ALL_GROUPS, *STOP_GROUPS]
+    return [g for g in every if g.name in build.names]
 
 
 def groups(part: str | None = None) -> list[Group]:

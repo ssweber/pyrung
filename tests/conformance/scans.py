@@ -6,7 +6,8 @@ over the wire nothing counts scans.  So the case counts them itself.
 ``window + 1``, so ``Scratch`` is the number of the scan in progress (1 on the
 first).  The rungs under test key on it (``slot.Scratch >= 3, slot.Scratch <=
 5``), :func:`trace` and :func:`edges` record what happened over scans
-1..``window``, and :func:`done` raises ``Fired`` on scan ``window + 1``, once
+1..``window`` (:func:`firings` lists the scans an edge passed power as
+digits), and :func:`done` raises ``Fired`` on scan ``window + 1``, once
 the record is final.  Nothing moves after the harness sees ``Fired``, so every
 expectation is an exact int, the same in-process and on the wire.
 
@@ -58,6 +59,17 @@ def edges(edge: Any, slot: Any, count: Any, at: Any = None, window: int = WINDOW
         calc(count + 1, count)
         if at is not None:
             copy(slot.Scratch, at)
+
+
+def firings(edge: Any, slot: Any, dest: Any, *more: Any, window: int = WINDOW) -> None:
+    """*dest* = the scans *edge* passed power, as decimal digits: scans 3 and 4 read 34.
+
+    The edge contact comes first on its rung, as in :func:`edges`; *more*
+    contacts follow it.  A window of 9 scans or fewer keeps every scan one
+    digit; an Int holds at most four of them (32767).
+    """
+    with Rung(edge, slot.Cmd != 0, slot.Scratch <= window, *more):
+        calc(dest * 10 + slot.Scratch, dest)
 
 
 def done(slot: Any, window: int = WINDOW) -> None:
