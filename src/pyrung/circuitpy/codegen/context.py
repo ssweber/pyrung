@@ -157,7 +157,6 @@ class CodegenContext:
             kernel_runtime=True,
             proof_metadata=proof_metadata,
         )
-        ctx._runtime_state_keys = True
         ctx.collect_program_references()
         ctx.resolve_block_aliases()
         ctx.assign_symbols()
@@ -197,9 +196,6 @@ class CodegenContext:
     # counter names.
     _for_loop_depth: int = 0
     _name_counters: dict[str, int] = field(default_factory=dict)
-    _state_key_counter: int = 0
-    _state_keys_by_obj: dict[int, str] = field(default_factory=dict)
-    _runtime_state_keys: bool = False
     has_io_gaps: bool = False
     modbus_client_specs: list[ModbusClientJobSpec] = field(default_factory=list)
     modbus_client_specs_by_instruction: dict[int, ModbusClientJobSpec] = field(default_factory=dict)
@@ -632,19 +628,19 @@ class CodegenContext:
         self._name_counters.clear()
 
     def state_key_for(self, obj: Any) -> str:
+        """The site key ``bind_sites`` gave *obj*; raises for an unbound object.
+
+        Generated code keys instruction memory by site, so a key handed out
+        here (a counter or ``id()``) could collide with the program's own
+        ``i{N}`` keys or differ from the interpreter's.
+        """
         assigned = getattr(obj, "_state_key", None)
-        if assigned is not None:
-            return assigned
-        obj_id = id(obj)
-        if self._runtime_state_keys:
-            return str(obj_id)
-        existing = self._state_keys_by_obj.get(obj_id)
-        if existing is not None:
-            return existing
-        self._state_key_counter += 1
-        key = f"i{self._state_key_counter}"
-        self._state_keys_by_obj[obj_id] = key
-        return key
+        if assigned is None:
+            raise RuntimeError(
+                f"{type(obj).__name__} has no site key: it was never bound into a program "
+                "(pyrung.core.site_memory.bind_sites)."
+            )
+        return assigned
 
     def index_helper_name(self, block_id: int) -> str:
         symbol = self.block_symbols.get(block_id)

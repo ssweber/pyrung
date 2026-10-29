@@ -52,6 +52,8 @@
 
 ### Fixes
 
+- `always()` and `never()` could report `Proven` for a violation reachable only through a one-shot (or a drum's jump, jog or event memory, a shift clock, a `toggle`) that the first scan does not reach, such as one in a subroutine not called on scan 0; that memory is now part of every explored state.
+- Debugger hot reload carries one-shot, toggle, shift and drum memory to the matching instruction of the reloaded program, so inserting or deleting a rung no longer hands one rung's memory to another, and it resets and lists in the reload summary the values with no unambiguous match.
 - CLICK ladder export refuses an empty rung with conditions (`with Rung(C1): pass`) and an empty rung that shares a CLICK rung with a `.continued()` rung, instead of writing a NOP that CLICK rejects (a contact in front of NOP) or deletes (a NOP row beside another row); CLICK import refuses a CSV with a NOP row beside another row.
 - CLICK ladder export writes a NUL text constant (the blank a TXT holds) in a `copy()`, `fill()`, compare or `search()` as CLICK's blank `""`; it wrote a raw NUL inside the quotes, which ends a CLICK text constant early. A longer text constant with a NUL in it is refused. Validation (and so ladder export) refuses `out()`, `latch()` and `reset()` on anything but bit memory (`reset(DS1)`, `reset(TXT1)`) as `CLK_BANK_WRONG_ROLE`: CLICK's Out, Set and Reset coils take X, Y, C, T, CT and SC only.
 - CLICK ladder export writes a one-register `fill`, `blockcopy`, `pack_*` or other range operand as `TXT12..TXT12`; it wrote a bare `TXT12`, which ClickNick's Guided Paste refused.

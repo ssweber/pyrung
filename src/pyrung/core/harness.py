@@ -591,6 +591,7 @@ class Harness:
         installed on the same overlay.
         """
         from pyrung.core.condition import BitCondition, CompareEq, CompareNe
+        from pyrung.core.site_memory import PLANT_NAMESPACE, bind_sites
         from pyrung.core.synthesis import (
             Synthesis,
             analog_approach_rung,
@@ -692,6 +693,8 @@ class Harness:
 
         if self._plc._synthesis is None:
             self._plc._synthesis = Synthesis()
+        # Plant rungs keep their memory under their own ``plant:`` site keys.
+        bind_sites(plant, namespace=PLANT_NAMESPACE)
         self._plc._synthesis.plant = plant
         # The overlay changed, so caches that snapshot it are stale: the fold
         # context (acc sources) and the soft-exec replay kernel + its bracketed

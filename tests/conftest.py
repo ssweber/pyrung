@@ -116,6 +116,8 @@ from pyrung.core.context import ScanContext
 from pyrung.core.instruction import Instruction
 from pyrung.core.program import Program as ProgramLogic
 from pyrung.core.rung import Rung
+from pyrung.core.site_memory import bind_logic_list, bind_sites
+from pyrung.core.synthesis import _rung_holding
 
 _EXPENSIVE_MARKERS = frozenset(
     {
@@ -403,6 +405,9 @@ def execute(instr: Instruction, state: SystemState, *, dt: float = 0.0) -> Syste
     Returns:
         New SystemState with the instruction's effects applied.
     """
+    if instr._state_key is None:
+        # A lone instruction is the only site of its one-instruction program.
+        bind_sites([_rung_holding(None, instr)])
     ctx = ScanContext(state)
     ctx.set_memory("_dt", dt)  # For timer instructions
     instr.execute(ctx, True)
@@ -423,6 +428,7 @@ def evaluate_rung(rung: Rung, state: SystemState, *, dt: float = 0.0) -> SystemS
     Returns:
         New SystemState with the rung's effects applied.
     """
+    bind_logic_list([rung])
     ctx = ScanContext(state)
     ctx.set_memory("_dt", dt)  # For timer instructions
     rung.evaluate(ctx)

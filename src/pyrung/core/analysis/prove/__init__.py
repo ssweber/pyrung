@@ -60,6 +60,8 @@ class _ExploreContext:
     threshold_event_specs: tuple[_ThresholdEventSpec, ...]
     dt: float
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
+    # Parallel to ``memory_key_names``: the value an unwritten key reads as.
+    memory_key_defaults: tuple[Any, ...] = ()
     demoted_edge_names: tuple[str, ...] = ()
     synthetic_preset_tags: tuple[str, ...] = ()
     nondeterministic_names: tuple[str, ...] = ()

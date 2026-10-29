@@ -100,7 +100,7 @@ def _modbus_client_spec_for_instruction(
 
         state_key = ctx.state_key_for(instr)
         spec = ModbusClientJobSpec(
-            var_name=f"_mb_client_{state_key}",
+            var_name=f"_mb_client_{state_key.replace(':', '_')}",
             kind="send" if isinstance(instr, ModbusSendInstruction) else "receive",
             target_name=instr.target_name,
             bank=None,
@@ -156,7 +156,7 @@ def _modbus_client_spec_for_instruction(
 
     state_key = ctx.state_key_for(instr)
     spec = ModbusClientJobSpec(
-        var_name=f"_mb_client_{state_key}",
+        var_name=f"_mb_client_{state_key.replace(':', '_')}",
         kind="send" if isinstance(instr, ModbusSendInstruction) else "receive",
         target_name=instr.target_name,
         bank=instr.bank,

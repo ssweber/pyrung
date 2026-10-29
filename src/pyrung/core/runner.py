@@ -1224,6 +1224,7 @@ class PLC:
             self._logic = logic
         else:
             self._logic = [logic]
+        self._site_table = self._bind_logic_sites()
 
         self._state = initial_state if initial_state is not None else SystemState()
         # Mutable read mirror for ordinary interpreted scans.  The committed
@@ -2568,6 +2569,19 @@ class PLC:
                     break
                 _, (_, evicted_est) = self._recent_state_cache.popitem(last=False)
                 self._recent_state_cache_bytes -= evicted_est
+
+    def _bind_logic_sites(self) -> Any:
+        """The site table of the logic this runner scans (binding it if never bound)."""
+        from pyrung.core.site_memory import bind_logic_list
+
+        program = self._program
+        if program is not None:
+            table = getattr(program, "_site_table", None)
+            if table is None:
+                program._assign_state_keys()
+                table = program._site_table
+            return table
+        return bind_logic_list(self._logic)
 
     def _soft_exec_program(self) -> Any:
         """The compilation unit for soft-exec replay: the user program bracketed

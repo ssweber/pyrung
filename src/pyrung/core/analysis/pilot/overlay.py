@@ -569,10 +569,13 @@ def _union_conditions(terms: Iterable[Any]) -> Any:
 
 def _set_synth_holds(plc: PLC, rungs: list[Any]) -> None:
     """Replace the plc's synthesis holds overlay and invalidate the derived caches."""
+    from pyrung.core.site_memory import PILOT_NAMESPACE, bind_sites
     from pyrung.core.synthesis import Synthesis
 
     if plc._synthesis is None:
         plc._synthesis = Synthesis()
+    # Hold rungs keep their memory under their own ``pilot:`` site keys.
+    bind_sites(rungs, namespace=PILOT_NAMESPACE)
     plc._synthesis.holds = rungs
     plc._fold_context_cache = None
     plc._compiled_replay_kernel = None

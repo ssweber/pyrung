@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.analysis.simplified import TerminalForm
     from pyrung.core.context import ScanContext
+    from pyrung.core.site_memory import SiteTable
     from pyrung.core.validation.report import ValidationReport
 
     from ..validation import DialectValidator
@@ -48,6 +49,7 @@ class Program:
         self._current_subroutine: str | None = None  # Track if we're in a subroutine
         self._pending_comment: str | None = None
         self._cached_graph: ProgramGraph | None = None
+        self._site_table: SiteTable | None = None
 
     def __enter__(self) -> Program:
         if self._strict:
@@ -71,29 +73,11 @@ class Program:
         self._cached_graph = None
 
     def _assign_state_keys(self) -> None:
-        from pyrung.core.instruction.base import Instruction
-        from pyrung.core.instruction.control import ForLoopInstruction
+        """Bind every memory-keeping site (see :mod:`pyrung.core.site_memory`)."""
+        from pyrung.core.site_memory import bind_sites
 
-        counter = 0
-
-        def _walk_instructions(instructions: list[Instruction]) -> None:
-            nonlocal counter
-            for instr in instructions:
-                counter += 1
-                instr._state_key = f"i{counter}"
-                if isinstance(instr, ForLoopInstruction):
-                    _walk_instructions(instr.instructions)
-
-        def _walk_rung(rung: RungLogic) -> None:
-            _walk_instructions(rung._instructions)
-            for branch_rung in rung._branches:
-                _walk_rung(branch_rung)
-
-        for rung in self.rungs:
-            _walk_rung(rung)
-        for subroutine_rungs in self.subroutines.values():
-            for rung in subroutine_rungs:
-                _walk_rung(rung)
+        self._site_table = bind_sites(self.rungs, self.subroutines, program_owned=True)
+        self._invalidate_graph_cache()
 
     def _add_rung(self, rung: RungLogic) -> None:
         """Add a rung to the program or current subroutine."""
