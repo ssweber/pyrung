@@ -1843,6 +1843,31 @@ def test_summary_return_not_counted_when_explicit():
     assert s.added_return == 0
 
 
+def test_conditional_return_at_end_still_gets_tail():
+    """A subroutine ending in a conditional return() still needs CLICK's unconditional RET."""
+    Enable = Bool("Enable")
+    Light = Bool("Light")
+
+    with Program() as logic:
+        with Rung(Enable):
+            call("MySub")
+        with subroutine("MySub"):
+            with Rung(Enable):
+                out(Light)
+            with Rung(Enable):
+                return_early()
+
+    mapping = TagMap({Enable: x[1], Light: y[1]}, include_system=False)
+    bundle = pyrung_to_ladder(logic, mapping)
+    assert bundle.export_summary.added_return == 1
+    assert normalize_csv(dict(bundle.subroutine_rows)["MySub"])[-2:] == _literal_csv_rows(
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,return()
+        R,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,return()
+        """
+    )
+
+
 def test_summary_end_always_present():
     """Summary always reports end() on main."""
     Enable = Bool("Enable")

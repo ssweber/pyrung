@@ -401,15 +401,12 @@ class _LadderExporter(
         *,
         subroutine_name: str,
     ) -> list[tuple[str, ...]]:
-        last_token: str | None = None
-        for row in reversed(rows[1:]):  # Skip header.
-            token = row[-1]
-            if token != "":
-                last_token = token
-                break
-
-        if last_token == "return()":
-            return rows
+        # CLICK needs the last rung to be an unconditional RET; a conditional
+        # return() ending the subroutine still gets a tail.
+        last = rows[-1]
+        if len(rows) > 1 and last[0].startswith("R") and last[-1] == "return()":
+            if all(cell == "-" for cell in last[1:-1]):
+                return rows
 
         self._added_return_count += 1
         return_rows = self._single_output_rows(

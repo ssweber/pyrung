@@ -52,6 +52,7 @@
 
 ### Fixes
 
+- A CLICK subroutine whose last rung is a conditional `return_early()` now exports with the unconditional `return()` CLICK requires after it; it used to export without one, and CLICK refused the subroutine.
 - `always()` and `never()` could report `Proven` for a violation reachable only through a one-shot (or a drum's jump, jog or event memory, a shift clock, a `toggle`) that the first scan does not reach, such as one in a subroutine not called on scan 0; that memory is now part of every explored state.
 - Debugger hot reload carries one-shot, toggle, shift and drum memory to the matching instruction of the reloaded program, so inserting or deleting a rung no longer hands one rung's memory to another, and it resets and lists in the reload summary the values with no unambiguous match.
 - CLICK ladder export refuses an empty rung with conditions (`with Rung(C1): pass`) and an empty rung that shares a CLICK rung with a `.continued()` rung, instead of writing a NOP that CLICK rejects (a contact in front of NOP) or deletes (a NOP row beside another row); CLICK import refuses a CSV with a NOP row beside another row.
