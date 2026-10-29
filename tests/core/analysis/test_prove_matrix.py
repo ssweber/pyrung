@@ -1306,19 +1306,19 @@ class TestReceiveDomainCompleteness:
 
 
 # ===================================================================
-# OTE inside ForLoop with dynamic count
+# OTE inside ForLoop
 #
-# When an out() is nested inside a ForLoop whose count tag resolves to 0,
-# the loop still executes once. That keeps OTE behavior aligned with a
-# positive-count loop instead of creating a zero-iteration retention case.
+# As on CLICK, a false loop rung skips the body, so an out() there holds
+# its value, and a count tag that resolves to 0 runs no iteration (the
+# coil holds then too).  Such a coil is stateful, not combinational.
 # ===================================================================
 
 
 class TestOteInForLoopClassification:
-    """Test 10: OTE inside dynamic-count ForLoop uses minimum-one execution."""
+    """Test 10: an OTE inside a ForLoop holds while the loop does not run."""
 
-    def test_ote_in_dynamic_forloop_remains_combinational(self):
-        """An out() inside ForLoop(count_tag) still executes when count is 0."""
+    def test_ote_in_dynamic_forloop_is_stateful(self):
+        """An out() inside ForLoop(count_tag) holds when the count is 0."""
         from pyrung.core import ForLoop
 
         enable = Bool("Enable", external=True)
@@ -1337,14 +1337,13 @@ class TestOteInForLoopClassification:
         if isinstance(result, Intractable):
             pytest.skip(f"intractable: {result.reason}")
 
-        stateful, nondeterministic, _comb, *_ = result
-        assert "Light" not in stateful and "Light" not in nondeterministic, (
-            "Light should be combinational because dynamic forloop counts execute "
-            "at least once when the rung is enabled"
+        stateful, _nondeterministic, _comb, *_ = result
+        assert "Light" in stateful, (
+            "Light holds across scans: a false loop rung or a count of 0 skips its out()"
         )
 
     def test_ote_in_dynamic_forloop_prove_finds_counterexample(self):
-        """always() must find that Alarm is reachable when Count=0 still executes."""
+        """always() must find that Alarm is reachable once a count of 1 or 2 sets Light."""
         from pyrung.core import ForLoop
 
         enable = Bool("Enable", external=True)
@@ -1362,13 +1361,36 @@ class TestOteInForLoopClassification:
 
         result = always(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Counterexample), (
-            f"Alarm should be reachable: Enable=True + Count=0 still sets Light, "
+            f"Alarm should be reachable: Enable=True + Count>0 sets Light, "
             f"Active=False fires Alarm. Got {type(result).__name__}"
         )
         _assert_trace_replays(logic, result, "Alarm")
 
+    def test_ote_held_after_the_loop_stops_is_found(self):
+        """Light set by the loop stays on once the loop stops; always() must see it."""
+        from pyrung.core import ForLoop
+
+        enable = Bool("Enable", external=True)
+        count_tag = Int("Count", external=True, min=0, max=2)
+        light = Bool("Light")
+        stale = Bool("Stale")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                with ForLoop(count_tag):
+                    out(light)
+            with Rung(light, ~enable):
+                out(stale)
+
+        result = always(logic, ~stale, depth_budget=10)
+        assert isinstance(result, Counterexample), (
+            f"Stale should be reachable: the loop sets Light, then Enable=False "
+            f"skips the body and Light holds. Got {type(result).__name__}"
+        )
+        _assert_trace_replays(logic, result, "Stale")
+
     def test_ote_in_dynamic_forloop_concrete_agrees(self):
-        """Concrete PLC confirms: count 0 executes one iteration."""
+        """Concrete PLC confirms: count 0 runs no iteration, a false rung skips the body."""
         from pyrung.core import ForLoop
 
         enable = Bool("Enable", external=True)
@@ -1381,35 +1403,39 @@ class TestOteInForLoopClassification:
                     out(light)
 
         plc = PLC(logic, dt=0.010)
-        plc.patch({"Enable": False, "Count": 0})
+        plc.patch({"Enable": True, "Count": 0})
         plc.step()
         assert plc.current_state.tags["Light"] is False
 
-        plc.patch({"Enable": True, "Count": 0})
+        plc.patch({"Count": 1})
         plc.step()
         assert plc.current_state.tags["Light"] is True
 
-    def test_ote_in_static_forloop_remains_combinational(self):
-        """A ForLoop with a positive literal count always executes,
-        so the OTE is still combinational."""
+        plc.patch({"Enable": False})
+        plc.step()
+        assert plc.current_state.tags["Light"] is True
+
+    def test_ote_in_static_forloop_is_stateful_behind_a_condition(self):
+        """A ForLoop(3) behind a contact skips its out() when the contact opens."""
         from pyrung.core import ForLoop
 
         enable = Bool("Enable", external=True)
         light = Bool("Light")
+        alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
             with Rung(enable):
                 with ForLoop(3):
                     out(light)
+            with Rung(light):
+                out(alarm)
 
         result = _classify_dimensions(logic)
         if isinstance(result, Intractable):
             pytest.skip(f"intractable: {result.reason}")
 
-        stateful, nondeterministic, _comb, *_ = result
-        assert "Light" not in stateful and "Light" not in nondeterministic, (
-            "Light should be combinational — ForLoop(3) always executes"
-        )
+        stateful, _nondeterministic, _comb, *_ = result
+        assert "Light" in stateful, "Light holds while Enable is false"
 
 
 # ===================================================================

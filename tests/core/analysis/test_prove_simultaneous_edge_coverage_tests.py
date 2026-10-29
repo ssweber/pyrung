@@ -350,8 +350,10 @@ class TestAdversarialAbstractElisionRetainedSummary:
             "the Target counterexample instead of merging the distinct Mode=True states"
         )
 
-    def test_forloop_minimum_one_count_executes_body(self):
-        """A forloop count that resolves false/zero still executes one body iteration."""
+    def test_forloop_zero_count_keeps_its_count_tag_in_the_key(self):
+        """A forloop count that resolves to 0 runs no iteration (CLICK reads it as
+        unsigned 16-bit), so C, the count, lags Mode by a scan and must stay a
+        dimension: Target turns on two scans after Start."""
         start = Bool("Start", external=True)
         mode = Bool("Mode")
         c = Bool("C")
@@ -369,11 +371,21 @@ class TestAdversarialAbstractElisionRetainedSummary:
         plc = PLC(logic, dt=0.010)
         plc.patch({"Start": False})
         plc.step()
+        assert plc.current_state.tags["Target"] is False
+        plc.patch({"Start": True})
+        plc.step()
+        plc.step()
+        assert plc.current_state.tags["Target"] is False
+        plc.step()
         assert plc.current_state.tags["Target"] is True
 
         states = reachable_states(logic, project=["Target"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("Target", True)}) in states
+        assert frozenset({("Target", False)}) in states
+
+        result = always(logic, ~target, depth_budget=5)
+        assert isinstance(result, Counterexample)
 
 
 class TestAdversarialDepthTruncation:
