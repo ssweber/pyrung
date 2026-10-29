@@ -93,6 +93,7 @@ false_for_rung_skips_body = 15
 zero_count = 16
 body_oneshot_holds_while_for_false = 17
 edge_memory_across_iterations = 18
+skipped_body_holds_timer_and_counter = 19
 
 [groups.timers]
 base = 1101 # Conf_Timers: DS1101..DS1300

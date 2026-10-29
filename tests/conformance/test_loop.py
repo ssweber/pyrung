@@ -29,14 +29,16 @@ tells which model apart, and what the other model reads:
   iterations (Result2 = -1, the Int wraps); "at least once" reads 1.  Round 1
   read -1.  In-process only: on a CLICK it makes a scan of about 1.1 s that
   every wall-clock case beside it would see.
-- ``edge_contact_inside_loop`` (F6): C1721 latches on iteration 1 of 3 and
-  stays on.  An edge judged against the previous scan (pyrung today) rises on
-  all three (Result1 = 3); one with memory in the contact rises once (1, what
-  CLICK's per-contact edge memory predicts, FINDINGS item 2).
-- ``counter_inside_loop`` (F8): the count input is on in iterations 1, 2 and 4
-  of 4.  A counter that counts every enabled execution (pyrung today) reads 3;
-  one that counts edges remembered by the instruction reads 2 (CLICK's edge
-  counters, FINDINGS item 1); an edge judged once per scan reads 1.
+- ``edge_contact_inside_loop`` (F6, probe, pending S3): C1721 latches on
+  iteration 1 of 3 and stays on.  An edge with memory in the contact rises
+  once (Result1 = 1, what CLICK's per-contact edge memory predicts, FINDINGS
+  item 2); one judged against the previous scan (pyrung today) rises on all
+  three (3).
+- ``counter_inside_loop`` (F8, probe, pending S2): the count input is on in
+  iterations 1, 2 and 4 of 4.  A counter that counts edges remembered by the
+  instruction reads 2 (CLICK's edge counters, FINDINGS item 1); one that
+  counts every enabled execution (pyrung today) reads 3; an edge judged once
+  per scan reads 1.
 - ``oneshot_inside_loop`` (F14): the one-shot's rung is true in iterations
   1, 2 and 4 of 4.  Memory per instruction, re-armed by iteration 3, fires
   twice (Result1 = 2); once per scan reads 1; a one-shot ignored inside loops
@@ -45,26 +47,37 @@ tells which model apart, and what the other model reads:
   2 of 4.  Skipped, the one-shot stays fired and Result1 = 1; a body run with
   power off re-arms it and it fires again on scan 3 (2).
 
-- ``edge_memory_across_iterations`` (F18): is an edge contact in a For body
-  one place in the program, its memory carried from iteration to iteration
-  like a contact in a subroutine called N times?  C1741 is latched on scan 1
-  and, on scan 2, off/on/on/off over iterations 1..4; Result1 records the
-  iterations ``rise(C1741)`` passed power on, as digits.  Memory per
-  iteration (the model pyrung would adopt with per-contact edge memory) reads
-  Result1 = 2, Result2 = 1; compared with the previous scan's end (pyrung
-  today) the bit was already on, so 0, 0; an edge that passes power whenever
-  the bit is on reads 23, 2.  Result3 = 4 shows the loop ran.
+- ``edge_memory_across_iterations`` (F18, probe, pending S3): is an edge
+  contact in a For body one place in the program, its memory carried from
+  iteration to iteration like a contact in a subroutine called N times?
+  C1741 is latched on scan 1 and, on scan 2, off/on/on/off over iterations
+  1..4; Result1 records the iterations ``rise(C1741)`` passed power on, as
+  digits.  Memory per iteration (the model pyrung would adopt with
+  per-contact edge memory) reads Result1 = 2, Result2 = 1; compared with the
+  previous scan's end (pyrung today) the bit was already on, so 0, 0; an edge
+  that passes power whenever the bit is on reads 23, 2.  Result3 = 4 shows
+  the loop ran.
+- ``skipped_body_holds_timer_and_counter`` (F19, probe): a TON (T211) and a
+  counter (CT211) in a For body; the timer times on scans 1..3, the counter
+  counts once on scan 1, then the For rung is false on scans 4..6 while the
+  counter's reset input is on.  Read on scan 6: Result1 = 1 if the timer's
+  Acc still holds its scan-3 value, 2 if it went to 0 (a body run with power
+  off resets a TON, pyrung before), 3 if it kept timing; Result2 = 1 if the
+  counter still holds 1 (its reset was not scanned), 2 if the reset took it
+  to 0 (pyrung before), 3 otherwise.  Skipping, which pyrung implements,
+  reads 1, 1.  The For rung is true while ``Cmd = 0``, so the case's own
+  reset is scanned whatever the answer.
 
-F6, F8 and F18 expect pyrung's answers until the per-contact edge memory (S3)
-and edge-counting (S2) changes land; a CLICK is predicted to fail them as
-noted.  Once the conformance ``pending=`` marker exists they should expect
-CLICK's predicted readings with ``pending="S3"`` (F6, F18) and ``"S2"`` (F8).
+F6, F8 and F18 expect what a CLICK is predicted to read and are pending the
+per-contact edge memory (S3) and edge-counting (S2) steps; on pyrung's own
+targets they run as strict xfails.
 """
 
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
+    Or,
     Rung,
     break_loop,
     calc,
@@ -316,6 +329,34 @@ def prove_edge_memory_across_iterations(slot):
     done(slot, window=2)
 
 
+def prove_skipped_body_holds_timer_and_counter(slot):
+    # F19: For rung false on scans 4..6 of the run (true while Cmd = 0, so the
+    # case's reset is scanned); the counter's reset input is on from scan 4.
+    timer, counter = ClickTimer(211), ClickCounter(211)
+    count_scans(slot, window=7)
+    with Rung(Or(slot.Cmd == 0, slot.Scratch <= 3, slot.Scratch >= 7)):
+        with forloop(1):
+            with Rung(slot.Cmd != 0, slot.Scratch <= 3):
+                on_delay(timer, 30000)
+            with Rung(slot.Cmd != 0, slot.Scratch == 3):
+                copy(timer.Acc, slot.Result3)
+            with Rung(slot.Cmd != 0, slot.Scratch == 1):
+                count_up(counter, 100).reset(Or(slot.Cmd == 0, slot.Scratch >= 4))
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, timer.Acc == slot.Result3, timer.Acc > 0):
+        copy(1, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, timer.Acc == 0):
+        copy(2, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, slot.Result1 == 0):
+        copy(3, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, counter.Acc == 1):
+        copy(1, slot.Result2)
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, counter.Acc == 0):
+        copy(2, slot.Result2)
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, slot.Result2 == 0):
+        copy(3, slot.Result2)
+    done(slot, window=7)
+
+
 def init_false_for_rung_skips_body(slot):
     reset(c[1701])
 
@@ -358,11 +399,13 @@ group = Group(
             confirmed=True,
         ),
         case(
-            "An edge contact inside a loop compares with the previous scan: a bit "
-            "latched on iteration 1 of 3 rises on all three (Result1 = 3), not once (1)",
+            "An edge contact inside a loop keeps its own memory: a bit latched on "
+            "iteration 1 of 3 rises once (Result1 = 1), not on all three (3)",
             ladder=prove_edge_contact_inside_loop,
             init=init_edge_contact_inside_loop,
-            expect={"Result1": 3},
+            expect={"Result1": 1},
+            pending="S3",
+            probe="edge contact memory inside a For body",
         ),
         case(
             "A timer inside For 10 accumulates on every iteration: it runs more than "
@@ -373,10 +416,13 @@ group = Group(
             confirmed=True,
         ),
         case(
-            "A counter inside For 4 counts every iteration its input is on: on in "
-            "iterations 1, 2 and 4 counts 3 (Result1 = 3), not 2 by edges",
+            "A counter inside For 4 counts the edges of its input across iterations: "
+            "on in iterations 1, 2 and 4 counts 2 (Result1 = 2), not 3 (every "
+            "iteration) or 1 (once a scan)",
             ladder=prove_counter_inside_loop,
-            expect={"Result1": 3},
+            expect={"Result1": 2},
+            pending="S2",
+            probe="counter edge memory across For iterations",
         ),
         case(
             "Break leaves only the innermost loop: the inner loop breaks on its second "
@@ -432,6 +478,7 @@ group = Group(
             "(1, 1) or 65536 (Result2 = 1)",
             ladder=prove_zero_count,
             expect={"Result1": 0, "Result2": 0},
+            probe="For count 0: no iteration or 65536",
         ),
         case(
             "A loop count of -1 is read as unsigned 16-bit: 65535 iterations wrap an "
@@ -453,13 +500,24 @@ group = Group(
             scans=scans_for(4),
         ),
         case(
-            "An edge contact inside a loop compares with the previous scan's end: a "
-            "bit on at scan start, then off, on, on, off over four iterations, never "
-            "rises (Result1 = 0, Result2 = 0), not on iteration 2 (2, 1) nor on 2 "
-            "and 3 (23, 2)",
+            "An edge contact inside a loop keeps its memory from one iteration to "
+            "the next: a bit on at scan start, then off, on, on, off over four "
+            "iterations, rises on iteration 2 only (Result1 = 2, Result2 = 1), not "
+            "never (0, 0) nor on 2 and 3 (23, 2)",
             ladder=prove_edge_memory_across_iterations,
-            expect={"Result1": 0, "Result2": 0, "Result3": 4},
+            expect={"Result1": 2, "Result2": 1, "Result3": 4},
             scans=scans_for(2),
+            pending="S3",
+            probe="edge memory carried across For iterations",
+        ),
+        case(
+            "A timer and a counter in a skipped For body hold: the timer keeps its "
+            "Acc (Result1 = 1) and the counter ignores its reset (Result2 = 1), not "
+            "reset (2, 2) or kept timing (Result1 = 3)",
+            ladder=prove_skipped_body_holds_timer_and_counter,
+            expect={"Result1": 1, "Result2": 1},
+            scans=scans_for(7),
+            probe="timers and counters in a skipped For body",
         ),
     ],
 )
