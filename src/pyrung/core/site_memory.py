@@ -169,7 +169,20 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
 def _contacts_text(conditions: Iterable[Any]) -> tuple[str, ...]:
     from pyrung.core.validation.render import render_condition
 
-    return tuple(render_condition(c) for c in conditions)
+    def _text(cond: Any) -> str:
+        try:
+            return render_condition(cond)
+        except Exception:  # noqa: BLE001 - a fingerprint must never fail
+            return type(cond).__name__
+
+    return tuple(_text(c) for c in conditions)
+
+
+def _owns_memory(obj: Any) -> bool:
+    """Whether memory is stored under *obj*'s site key (an instruction with memory)."""
+    from pyrung.core.instruction.base import Instruction
+
+    return isinstance(obj, Instruction) and bool(instruction_memory(obj))
 
 
 def _operand_text(value: Any) -> str:
@@ -621,8 +634,11 @@ def bind_logic_list(rungs: Sequence[Rung]) -> SiteTable:
     keeps one holder per key and names the rest, and every unbound object,
     under :data:`LOGIC_NAMESPACE` with keys no object of the list carries, so
     the keys are unique within this list.  The holder that keeps a key is the
-    one a ``Program`` owns, else the first in the list.  Two objects that hold
-    the same ``Program``-owned key cannot both keep it; that raises.
+    one a ``Program`` owns (one that keeps memory under it first), else the
+    first in the list.  Two ``Program``-owned objects that both keep memory
+    under the same key cannot both keep it; that raises.  Any other clash
+    renames the later holders, ``Program``-owned or not: no memory is stored
+    under their keys (edge keys hold none yet).
     """
     from pyrung.core.rung import Rung as RungLogic
 
@@ -634,13 +650,16 @@ def bind_logic_list(rungs: Sequence[Rung]) -> SiteTable:
     keepers: dict[str, Any] = {}
     for key, objs in holders.items():
         owned = [obj for obj in objs if getattr(obj, "_site_program_owned", False)]
-        if len(owned) > 1:
+        # Renaming a Program's key is harmless unless memory is stored under it.
+        owned_memory = [obj for obj in owned if _owns_memory(obj)]
+        if len(owned_memory) > 1:
             raise ValueError(
-                f"Site key {key!r} is held by {len(owned)} objects of different programs "
-                "in one rung list; their memory would collide. Build the rungs into one "
-                "Program instead of combining rungs of separately built programs."
+                f"Site key {key!r} is held by {len(owned_memory)} objects of different "
+                "programs that keep memory under it, in one rung list; their memory would "
+                "collide. Build the rungs into one Program instead of combining rungs of "
+                "separately built programs."
             )
-        keepers[key] = owned[0] if owned else objs[0]
+        keepers[key] = (owned_memory or owned or objs)[0]
     return bind_sites(
         rungs,
         namespace=LOGIC_NAMESPACE,

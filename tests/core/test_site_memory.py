@@ -240,7 +240,7 @@ class TestBareListKeysAreUnique:
         assert plc.current_state.tags["L"] is True
         assert plc.current_state.tags["M"] is True
 
-    def test_two_programs_with_the_same_key_raise(self):
+    def test_two_programs_keeping_memory_under_one_key_raise(self):
         A = Bool("A")
         with Program(strict=False) as first:
             with Rung(A):
@@ -250,6 +250,41 @@ class TestBareListKeysAreUnique:
                 out(Bool("S"), oneshot=True)
         with pytest.raises(ValueError, match="'i1' is held by 2 objects"):
             PLC([*first.rungs, *second.rungs])
+
+    def test_two_programs_without_memory_combine(self):
+        """Regression: rungs of two Programs with no memory raised on the i1/e1 clash."""
+        X = Bool("X")
+        Y = Bool("Y")
+        Q = Bool("Q")
+        with Program(strict=False) as pa:
+            with Rung(rise(X)):
+                out(Y)
+        with Program(strict=False) as pb:
+            with Rung(rise(Y)):
+                out(Q)
+        plc = PLC([*pa.rungs, *pb.rungs])
+        keys = _list_keys(plc)
+        assert len(keys) == len(set(keys))
+        plc.patch({"X": True})
+        plc.step()
+        assert plc.current_state.tags["Y"] is True
+        assert plc.current_state.tags["Q"] is True
+
+    def test_memory_holder_keeps_the_key_over_a_plain_one(self):
+        A = Bool("A")
+        with Program(strict=False) as plain:
+            with Rung(A):
+                out(Bool("Plain"))
+        with Program(strict=False) as kept:
+            with Rung(A):
+                out(Bool("Kept"), oneshot=True)
+        plc = PLC([*plain.rungs, *kept.rungs])
+        assert kept.rungs[0]._instructions[0].state_key == "i1"
+        assert plain.rungs[0]._instructions[0].state_key == f"{LOGIC_NAMESPACE}:i1"
+        plc.patch({"A": True})
+        plc.step()
+        assert plc.current_state.tags["Plain"] is True
+        assert plc.current_state.tags["Kept"] is True
 
 
 def _counter_program(*, insert_rung: bool) -> Program:
