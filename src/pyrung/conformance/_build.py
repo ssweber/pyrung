@@ -233,14 +233,27 @@ def build_program(
         group_hash = _fold(repr(bundle.subroutine_rows))
         built.append(GroupBuild(g, layout, cases, slot, hash_tag, group_hash))
 
-    program_hash = _fold(repr((LAYOUT_VERSION, [(g.subroutine, g.base) for g in built])))
+    program_hash = _fold(
+        repr(
+            (
+                LAYOUT_VERSION,
+                [
+                    (g.subroutine, g.base)
+                    if g.group.calls == 1
+                    else (g.subroutine, g.base, g.group.calls)
+                    for g in built
+                ],
+            )
+        )
+    )
 
     with Program(strict=False) as program:
         with Rung():
             copy(program_hash, program_hash_tag)
         for gb in built:
-            with Rung():
-                call(gb.subroutine)
+            for _ in range(gb.group.calls):
+                with Rung():
+                    call(gb.subroutine)
         for gb in built:
             with subroutine(gb.subroutine):
                 with Rung():

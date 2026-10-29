@@ -9,8 +9,8 @@ bit at the lowest address weighs 1).  The cases own C1001..C1200
 Each case counts its own scans (``scans.py``): clock bits are driven from the
 scan number, and the data bit is the rung's own condition on the scan number.
 
-The expectations are pyrung's answers, unconfirmed on a CLICK.  Where a CLICK
-could differ, and what it would read:
+Every case passed on a CLICK as written (hardware round 1, 2026-10-29, part
+B).  Where a CLICK could differ, and what it would read:
 
 ``forward_range_shifts_up`` and ``reversed_range_shifts_down``: data enters at
 the first address of the range and leaves at the last.  Clocked on scans 3, 5, 7
@@ -151,6 +151,7 @@ group = Group(
             "scans 3, 5 and 7 with data on, off, on, a forward range 1..8 holds "
             "bits 1 and 3 (Result1 = 5)",
             ladder=prove_forward_range_shifts_up,
+            confirmed=True,
             id="forward_range_shifts_up",
             expect={"Result1": 5},
             scans=SCANS,
@@ -159,6 +160,7 @@ group = Group(
             "A reversed range shifts the other way: the same clocks and data on a "
             "range 8..1 hold bits 8 and 6 (Result1 = 160)",
             ladder=prove_reversed_range_shifts_down,
+            confirmed=True,
             id="reversed_range_shifts_down",
             expect={"Result1": 160},
             scans=SCANS,
@@ -168,6 +170,7 @@ group = Group(
             "per scan the clock is on: a clock high for scans 3..5 and 7..8 with "
             "data always on shifts twice (Result1 = 3)",
             ladder=prove_clock_is_a_rising_edge,
+            confirmed=True,
             id="clock_is_a_rising_edge",
             expect={"Result1": 3},
             scans=SCANS,
@@ -178,6 +181,7 @@ group = Group(
             "4, and off at 6 but on at 5 and 7, the register holds only bit 2 "
             "(Result1 = 2)",
             ladder=prove_data_is_the_rung_at_the_edge,
+            confirmed=True,
             id="data_is_the_rung_at_the_edge",
             expect={"Result1": 2},
             scans=SCANS,
@@ -187,6 +191,7 @@ group = Group(
             "back: one data bit in a three-bit register is at the last bit after "
             "three shifts (Result2 = 4) and gone after the fourth (Result1 = 0)",
             ladder=prove_bit_leaves_the_end,
+            confirmed=True,
             id="bit_leaves_the_end",
             expect={"Result1": 0, "Result2": 4},
             scans=SCANS,
@@ -195,6 +200,7 @@ group = Group(
             "Reset takes precedence over the clock: a clock edge on a scan whose "
             "reset is true leaves the register clear (Result1 = 0)",
             ladder=prove_reset_beats_clock,
+            confirmed=True,
             id="reset_beats_clock",
             expect={"Result1": 0},
             scans=SCANS,
@@ -204,6 +210,7 @@ group = Group(
             "rose with the reset and is still high when the reset ends does not "
             "shift then (Result1 = 0)",
             ladder=prove_reset_swallows_the_edge,
+            confirmed=True,
             id="reset_swallows_the_edge",
             expect={"Result1": 0},
             scans=SCANS,

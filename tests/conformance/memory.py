@@ -50,25 +50,26 @@ BANKS: Mapping[str, int] = {
 #: No manifest block may reach it.
 STAGING_DS = range(3901, 4501)
 
-#: Raw memory each group owns, by bank.  A group listed before it has cases is
+#: Raw memory each group owns, by bank: a range, or a tuple of ranges for a
+#: group that outgrew its first one.  A group listed before it has cases is
 #: reserved for the group that will have them.
-OWNED: Mapping[str, Mapping[str, range]] = {
-    "rungs": {"C": range(1601, 1701)},
+OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
+    "rungs": {"C": range(1601, 1701), "CT": range(151, 161)},
     "math": {
         "DS": range(4401, 4501),
         "DD": range(1, 101),
         "DF": range(1, 101),
         "DH": range(1, 101),
     },
-    "drum": {"C": range(1901, 2001), "T": range(401, 501)},
+    "drum": {"C": (range(1901, 2001), range(801, 851)), "T": range(401, 501)},
     "out": {"C": range(1801, 1901), "T": range(301, 401)},
     "loop": {"C": range(1701, 1801), "T": range(201, 301), "CT": range(201, 251)},
     "timers": {"C": range(1401, 1501), "T": range(1, 101)},
-    "counters": {"C": range(1301, 1401), "CT": range(1, 101)},
+    "counters": {"C": range(1301, 1401), "CT": range(1, 151)},
     "coils": {"C": range(1501, 1601)},
     "numeric": {"DD": range(101, 201), "DF": range(101, 201), "DH": range(201, 301)},
     "text": {
-        "TXT": range(1, 201),
+        "TXT": (range(1, 201), range(301, 401)),
         "DS": range(3901, 4001),
         "DD": range(301, 401),
         "DH": range(301, 401),
@@ -89,15 +90,17 @@ OWNED: Mapping[str, Mapping[str, range]] = {
         "TXT": range(201, 301),
     },
     "system": {"C": range(901, 1001), "T": range(101, 151), "DD": range(901, 1001)},
-    # Math errors that stop the PLC (tests/conformance/test_math_stop.py).
-    "stop_sqrt": {"DF": range(401, 411)},
-    "stop_ln0": {"DF": range(411, 421)},
-    "stop_ln_neg": {"DF": range(421, 431)},
-    "stop_log0": {"DF": range(431, 441)},
-    "stop_log_neg": {"DF": range(441, 451)},
-    "stop_asin": {"DF": range(451, 461)},
-    "stop_acos": {"DF": range(461, 471)},
+    # Math errors (tests/conformance/test_math_error.py).
+    "math_error": {"DF": range(401, 411)},
+    # A subroutine called twice a scan (tests/conformance/test_call_twice.py).
+    "call_twice": {"C": range(701, 751)},
 }
+
+
+def ranges(owned: range | tuple[range, ...]) -> tuple[range, ...]:
+    """An :data:`OWNED` entry as a tuple of ranges."""
+    return owned if isinstance(owned, tuple) else (owned,)
+
 
 #: Tag-name prefix -> bank key.
 _PREFIX_BANK = {"TD": "T", "CTD": "CT"}
@@ -155,10 +158,14 @@ def outside_owned(groups: Iterable[Group]) -> list[str]:
                     problems.append(f"{g.name}/{case.id}: {name} is not a raw CLICK address")
                     continue
                 bank, n = address
-                if n not in owned.get(bank, ()):
-                    ranges = ", ".join(f"{b}{r.start}..{b}{r.stop - 1}" for b, r in owned.items())
+                if not any(n in r for r in ranges(owned.get(bank, ()))):
+                    listed = ", ".join(
+                        f"{b}{r.start}..{b}{r.stop - 1}"
+                        for b, o in owned.items()
+                        for r in ranges(o)
+                    )
                     problems.append(
                         f"{g.name}/{case.id}: {name} is outside the group's memory "
-                        f"({ranges or 'none'}; see tests/conformance/memory.py)"
+                        f"({listed or 'none'}; see tests/conformance/memory.py)"
                     )
     return problems

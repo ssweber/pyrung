@@ -52,12 +52,12 @@ def _layout(**groups: dict) -> Manifest:
 
 def test_checked_in_manifest_covers_the_suite() -> None:
     manifest = load_manifest(suite.MANIFEST_PATH)
-    for group in [*suite.ALL_GROUPS, *suite.STOP_GROUPS]:
+    for group in suite.groups():
         manifest.layout_for(group)
 
 
 def test_cases_stay_in_their_groups_raw_memory() -> None:
-    problems = memory.outside_owned([*suite.ALL_GROUPS, *suite.STOP_GROUPS])
+    problems = memory.outside_owned(suite.groups())
     assert not problems, "\n".join(problems)
 
 
@@ -65,19 +65,19 @@ def test_owned_memory_is_disjoint_and_inside_clicks_banks() -> None:
     claims: dict[tuple[str, int], str] = {}
     for group, banks in memory.OWNED.items():
         assert len(group) <= 12, group
-        for bank, owned in banks.items():
+        for bank, entry in banks.items():
             assert bank in memory.BANKS, (group, bank)
-            assert 1 <= owned.start and owned.stop - 1 <= memory.BANKS[bank], (group, bank)
-            for n in owned:
-                other = claims.setdefault((bank, n), group)
-                assert other == group, f"{group} and {other} both own {bank}{n}"
+            for owned in memory.ranges(entry):
+                assert 1 <= owned.start and owned.stop - 1 <= memory.BANKS[bank], (group, bank)
+                for n in owned:
+                    other = claims.setdefault((bank, n), group)
+                    assert other == group, f"{group} and {other} both own {bank}{n}"
 
 
 def test_owned_ds_is_staging_and_no_group_block_reaches_it() -> None:
     staging = memory.STAGING_DS
     for group, banks in memory.OWNED.items():
-        owned = banks.get("DS")
-        if owned is not None:
+        for owned in memory.ranges(banks.get("DS", ())):
             assert staging.start <= owned.start and owned.stop <= staging.stop, group
     for layout in load_manifest(suite.MANIFEST_PATH).groups.values():
         assert layout.last_register < staging.start, layout
@@ -285,6 +285,60 @@ def test_report_marks_unconfirmed_cases() -> None:
     assert "PASS  g/seven [unconfirmed] not yet" in report
     assert report.endswith("1 unconfirmed on hardware")
     assert report.isascii()
+
+
+def test_pending_case_is_a_strict_xfail_on_pyrung() -> None:
+    # pyrung reads 7.  A pending case expecting 8 (CLICK's answer) passes as XFAIL
+    # in-process; once pyrung reads what it expects, it fails until the marker goes.
+    missing = case("CLICK reads 8", ladder=_prove_constant, expect={"Result1": 8}, pending="S2")
+    (result,) = run(Group("g", [missing]))
+    assert result.passed and result.xfail
+    assert "pending S2" in result.note
+    assert_all_passed([result])
+    report = format_report([result])
+    assert "XFAIL g/constant [unconfirmed; pending S2] CLICK reads 8" in report
+    assert "1 pending (pyrung differs from CLICK)" in report
+    assert report.isascii()
+
+    met = case("pyrung caught up", ladder=_prove_constant, expect={"Result1": 7}, pending="S2")
+    (result,) = run(Group("g", [met]))
+    assert not result.passed and not result.xfail
+    with pytest.raises(AssertionError, match="remove pending="):
+        assert_all_passed([result])
+
+
+def test_pending_case_still_fails_a_leak() -> None:
+    leaky = case("Counts its runs", ladder=_prove_counts_runs, expect={"Result1": 5}, pending="S2")
+    (result,) = run(Group("g", [leaky]))
+    assert not result.passed
+    assert "state left after the reset" in result.note
+
+
+def test_pending_and_probe_are_checked_and_reported() -> None:
+    with pytest.raises(ValueError, match="pending='S9' must name a fix step"):
+        case("x", ladder=_prove_constant, expect={"Result1": 7}, pending="S9")
+    probe = case("x", ladder=_prove_constant, expect={"Result1": 7}, probe="what CLICK does")
+    report = format_report(run(Group("g", [probe])))
+    assert "PASS  g/constant [unconfirmed; probe: what CLICK does] x" in report
+
+
+def _prove_calls(slot):
+    # Result1 counts the calls while Cmd is up; in-process the case runs 10 scans.
+    with Rung(slot.Cmd != 0):
+        calc(slot.Result1 + 1, slot.Result1)
+        copy(1, slot.Fired)
+
+
+def test_a_group_can_be_called_twice_a_scan() -> None:
+    def calls(n: int) -> Group:
+        counted = case("calls", ladder=_prove_calls, expect={"Result1": 10 * n}, scans=10)
+        return Group("g", [counted], calls=n)
+
+    assert_all_passed(run(calls(1)))
+    assert_all_passed(run(calls(2)))
+    assert build_program(calls(2)).program_hash != build_program(calls(1)).program_hash
+    with pytest.raises(ValueError, match="calls must be >= 1"):
+        Group("g", [], calls=0)
 
 
 def test_range_expectation_in_process() -> None:

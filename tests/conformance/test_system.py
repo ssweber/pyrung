@@ -10,29 +10,37 @@ sim, and the real flag only on a CLICK.
 The cases use C901.., timers T101.. and DD901.. of the group's memory
 (``memory.OWNED``), ten per case.
 
-Fault flags.  Each fault case counts its own scans (``scans.py``), raises its
-fault on scans 3, 4 and 6, and records over scans 2..8 when the flag reads
-on at three points of the scan: at the case's first rung (Result1), right after
-the faulting instruction (Result2), and after a later instruction of the same
-kind that succeeds (Result3).  A record lists the scans as digits, in order:
-346 means scans 3, 4 and 6, 0 means never.  pyrung clears SC40, SC43 and SC44
-at the start of every scan and sets one when an instruction raises its fault,
-so the flag is on from the faulting instruction to the end of that scan:
-Result1 = 0, Result2 = Result3 = 346.  Scan 4 raises the fault again on the
-scan after scan 3, so the flag reads off at the top of scan 4 and on again
-after the fault: a retriggered flag is not "still on".  Other models read:
-
-- latched until STOP or a reset: Result1 = 45678, Result2 = 345678 (both wrap
-  an Int, and fail either way);
-- set at the end of the scan, visible on the next: Result1 = Result2 = 457;
-- the status of the last instruction of that kind: Result3 = 0.
+Fault flags.  Each fault case counts its own scans (``scans.py``) and raises
+its fault on scans 3, 4 and 6.  After the fault, three instructions run on
+every scan of the window, each followed by a probe coil that copies the flag
+the instant after it; only once every probe has run do later rungs record, as
+digits over scans 2..8, the scans each probe was on (346 means scans 3, 4 and
+6, 0 means never): Result1 after a plain copy, Result2 after a Math of
+another kind (one that cannot raise the flag), Result3 after a successful
+instruction of the faulting kind.  Hardware round 1 read 346 right after the
+fault and 0 after a later successful one, so a CLICK flag does not hold to the
+end of the scan.  The adopted model: a flag follows the last instruction, any
+instruction (Result1..3 = 0, 0, 0).  The others: any Math clears it (346, 0,
+0); only an instruction of its own kind (346, 346, 0); pyrung's flag on from
+the fault to the end of the scan (346, 346, 346).  pyrung's is the last, so
+the three cases are ``pending="SYS"``.
 
 Scan clock and counter.  ``scan_counter_steps_by_one`` shows SD9 counts every
 scan (7 steps of one over scans 1..8), and ``scan_clock_follows_counter`` that
 SC3 toggles every scan (8 edges over 8 scans) and is on exactly when SD9 is
-odd.  pyrung's SD9 is 0 on the first scan, so that phase means SC3 starts off;
-scan 0 itself is out of reach (see below).  A CLICK whose SD9 starts at 1, or
-whose SC3 starts on, reads Result2 = 0.
+even, as round 1 read on a CLICK (``pending="SYS"``: pyrung's SC3 is on when
+SD9 is odd, and reads Result2 = 0).  ``first_scan_counter_and_clock`` pins
+which of the two is offset from pyrung's: rungs outside the ``Cmd`` gate copy
+SD9 and SC3 on the first scan (SC2) into DD981..DD983, which the reset leaves
+alone.  Adopted: SD9 starts at 1 with SC3 off (Result1 = 1, Result3 = 0);
+SD9 starting at 0 with SC3 on reads Result1 = 0, Result3 = 1; pyrung reads 0,
+0.  Result2 = 1 shows the capture ran.  ``scan_counter_wraps_to_zero`` keeps
+the least SD9 seen since the first scan in DD991: SD9 wrapping from 32767 to
+0 (adopted) reads Result1 = 0, one counting on into negative values (an
+unsigned 16-bit counter read as an Int) reads 1.  It only tells once the PLC
+has run 32768 scans since it went to RUN (5.5 minutes at 10 ms a scan); before
+that both read 0.  The first-scan cases read the loaded program's first scan,
+whatever run reads them.
 
 Clocks.  ``clock_bits_toggle_at_their_rate`` counts rising edges of SC5 and
 SC6 over a 2 s timer: 20 and 4 when the named time is the full period (on
@@ -51,29 +59,20 @@ half-period SC7 also reads 1 or 2, so it would tell nothing SC6 doesn't.
 only runs in RUN, so it can't see either mode bit off, and an RTC whose seconds
 stand still reads 0.
 
-Not here: ``first_scan`` and everything about STOP->RUN.  The suite runs long
-after scan 0 and nothing switches modes.  One form would reach SC2 without a
-mode harness: a rung outside the ``Cmd`` gate that adds 1 to a register on
-every scan SC2 is on, which the reset leaves alone (``keep``), and a case that
-reports it.  It reads 1 if SC2 was on for one scan since the PLC last went to
-RUN, but it says nothing about which scan, and it only means something on a
-CLICK that went to RUN after its program was loaded.
+Not here: everything else about STOP->RUN (SD9 and SC2 back at their start,
+retentive memory kept), which needs a harness that switches modes.
 
 The fault cases share their flags with every other group on the wire.  This
-group's subroutine is called first (``suite.ALL_GROUPS``), so at its first rung
-no instruction has run yet this scan and, under pyrung's semantics, Result1
-reads 0 whatever the other groups do; Result2 and Result3 are read before any
-other group runs.  Called later, a group that faulted on one of its recorded
-scans would show up in Result1.  The other groups' flag reads expect a flag on,
-so this group's faults can only make one of those pass, never fail.
+group's subroutine is called first (``suite.ALL_GROUPS``), so its probes read
+each flag before any other group runs that scan.
 """
 
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, calc, copy, fall, fill, on_delay, rise
+from pyrung.core import Or, Rung, calc, copy, fall, fill, on_delay, out, rise
 from pyrung.core.system_points import system
-from tests.conformance.memory import ClickTimer, dd
+from tests.conformance.memory import ClickTimer, c, dd
 from tests.conformance.scans import WINDOW, count_scans, done, edges, scans_for
 
 SCANS = scans_for()
@@ -103,47 +102,69 @@ def _in_window(slot):
     return (slot.Cmd != 0, slot.Scratch <= WINDOW)
 
 
+def _fault_case(slot, flag, base, fault, other_kind, same_kind):
+    """A fault on scans 3, 4 and 6, then three instructions each probed by a coil.
+
+    The probes are C<base>..C<base+2>; DD<base+9> takes the plain copy.
+    Nothing records until every probe has run.
+    """
+    probes = [c[base + i] for i in range(3)]
+    steps = (lambda: copy(slot.Scratch, dd[base + 9]), other_kind, same_kind)
+    count_scans(slot)
+    with Rung(*_on_fault_scans(slot)):
+        fault()
+    for step, probe in zip(steps, probes, strict=True):
+        with Rung(*_in_window(slot)):
+            step()
+        with Rung(*_in_window(slot), flag):
+            out(probe)
+    for field, probe in zip((slot.Result1, slot.Result2, slot.Result3), probes, strict=True):
+        _record(slot, field, probe)
+    done(slot)
+
+
 def prove_division_flag_clears_each_scan(slot):
     # Result4 is the divisor: the reset zeroes it and nothing writes it.
-    flag = system.fault.division_error
-    count_scans(slot)
-    _record(slot, slot.Result1, flag)
-    with Rung(*_on_fault_scans(slot)):
-        calc(slot.Scratch / slot.Result4, dd[901])
-    _record(slot, slot.Result2, flag)
-    with Rung(*_in_window(slot)):
-        calc(100 / slot.Scratch, dd[902])
-    _record(slot, slot.Result3, flag)
-    done(slot)
+    _fault_case(
+        slot,
+        system.fault.division_error,
+        901,
+        fault=lambda: calc(slot.Scratch / slot.Result4, dd[901]),
+        other_kind=lambda: calc(slot.Scratch + 1, dd[902]),
+        same_kind=lambda: calc(100 / slot.Scratch, dd[903]),
+    )
 
 
 def prove_out_of_range_flag_clears_each_scan(slot):
-    flag = system.fault.out_of_range
-    count_scans(slot)
-    _record(slot, slot.Result1, flag)
-    with Rung(*_on_fault_scans(slot)):
-        calc(slot.Scratch + 32767, slot.Result4)
-    _record(slot, slot.Result2, flag)
-    with Rung(*_in_window(slot)):
-        calc(slot.Scratch + 1, slot.Result4)
-    _record(slot, slot.Result3, flag)
-    done(slot)
+    # A division cannot overflow an Int here: it is the Math of another kind.
+    _fault_case(
+        slot,
+        system.fault.out_of_range,
+        911,
+        fault=lambda: calc(slot.Scratch + 32767, slot.Result4),
+        other_kind=lambda: calc(100 / slot.Scratch, dd[912]),
+        same_kind=lambda: calc(slot.Scratch + 1, slot.Result4),
+    )
 
 
 def prove_address_flag_clears_each_scan(slot):
     # Result4 is the pointer: 0 (no DD0) on the faulting copy, DD922 on the good one.
-    flag = system.fault.address_error
-    count_scans(slot)
-    _record(slot, slot.Result1, flag)
-    with Rung(*_on_fault_scans(slot)):
+    def fault():
         copy(0, slot.Result4)
         copy(dd[slot.Result4], dd[921])
-    _record(slot, slot.Result2, flag)
-    with Rung(*_in_window(slot)):
+
+    def same_kind():
         copy(922, slot.Result4)
         copy(dd[slot.Result4], dd[921])
-    _record(slot, slot.Result3, flag)
-    done(slot)
+
+    _fault_case(
+        slot,
+        system.fault.address_error,
+        921,
+        fault=fault,
+        other_kind=lambda: calc(slot.Scratch + 1, dd[923]),
+        same_kind=same_kind,
+    )
 
 
 def prove_scan_counter_steps_by_one(slot):
@@ -168,9 +189,9 @@ def prove_scan_clock_follows_counter(slot):
     edges(fall(clock), slot, slot.Result1)
     with Rung(*_in_window(slot)):
         calc(system.sys.scan_counter % 2, slot.Result3)
-    with Rung(*_in_window(slot), clock, slot.Result3 == 1):
+    with Rung(*_in_window(slot), clock, slot.Result3 == 0):
         calc(slot.Result2 + 1, slot.Result2)
-    with Rung(*_in_window(slot), ~clock, slot.Result3 == 0):
+    with Rung(*_in_window(slot), ~clock, slot.Result3 == 1):
         calc(slot.Result2 + 1, slot.Result2)
     done(slot)
 
@@ -218,47 +239,85 @@ def prove_rtc_seconds_advance(slot):
         copy(1, slot.Fired)
 
 
-def init_division_flag_clears_each_scan(slot):
-    fill(0, dd.select(901, 902))
+def prove_first_scan_counter_and_clock(slot):
+    # Outside the Cmd gate, on the first scan only: DD981 = SD9, DD982 = 1,
+    # DD983 = SC3.  The reset leaves them alone.
+    first = system.sys.first_scan
+    with Rung(first):
+        copy(system.sys.scan_counter, dd[981])
+        copy(1, dd[982])
+        copy(0, dd[983])
+    with Rung(first, system.sys.scan_clock_toggle):
+        copy(1, dd[983])
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(dd[981], slot.Result1)
+        copy(dd[982], slot.Result2)
+        copy(dd[983], slot.Result3)
+        copy(1, slot.Fired)
 
 
-_FAULT_EXPECT = {"Result1": 0, "Result2": 346, "Result3": 346}
+def prove_scan_counter_wraps_to_zero(slot):
+    # Outside the Cmd gate: DD991 is the least SD9 since the first scan.
+    counter = system.sys.scan_counter
+    with Rung(system.sys.first_scan):
+        copy(counter, dd[991])
+    with Rung(counter < dd[991]):
+        copy(counter, dd[991])
+    with Rung(slot.Cmd != 0, slot.Fired == 0, dd[991] < 0):
+        copy(1, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(1, slot.Fired)
+
+
+def _fault_init(base):
+    def init(slot):
+        fill(0, dd.select(base, base + 9))
+
+    return init
+
+
+#: The adopted model: a flag follows the last instruction, so every probe reads it off.
+_FAULT_EXPECT = {"Result1": 0, "Result2": 0, "Result3": 0}
+_FAULT_PROBE = "fault flags: which instruction clears them"
 
 group = Group(
     "system",
     [
         case(
-            "The division-by-zero flag SC40 is off at the start of every scan and on "
-            "from a division by zero to the end of that scan. Dividing by zero on scans "
-            "3, 4 and 6, and listing the scans of 2..8 it reads on as digits: never at "
-            "the case's first rung (Result1 = 0), on scans 3, 4 and 6 right after the "
-            "division (Result2 = 346) and after a later division that succeeds "
-            "(Result3 = 346)",
+            "The division-by-zero flag SC40 shows the last instruction: dividing by zero "
+            "on scans 3, 4 and 6, it reads off right after a plain copy (Result1 = 0), a "
+            "Math that does not divide (Result2 = 0) and a division that succeeds "
+            "(Result3 = 0), each run after the fault on the same scan",
             ladder=prove_division_flag_clears_each_scan,
-            init=init_division_flag_clears_each_scan,
+            init=_fault_init(901),
             expect=_FAULT_EXPECT,
             scans=SCANS,
+            pending="SYS",
+            probe=_FAULT_PROBE,
         ),
         case(
-            "The out-of-range flag SC43 is off at the start of every scan and on from "
-            "an overflowing calc to the end of that scan. Overflowing an Int on scans "
-            "3, 4 and 6, and listing the scans of 2..8 it reads on as digits: never at "
-            "the case's first rung (Result1 = 0), on scans 3, 4 and 6 right after the "
-            "calc (Result2 = 346) and after a later calc that fits (Result3 = 346)",
+            "The out-of-range flag SC43 shows the last instruction: overflowing an Int on "
+            "scans 3, 4 and 6, it reads off right after a plain copy (Result1 = 0), a "
+            "Math that cannot overflow (Result2 = 0) and a calc that fits (Result3 = 0), "
+            "each run after the fault on the same scan",
             ladder=prove_out_of_range_flag_clears_each_scan,
+            init=_fault_init(911),
             expect=_FAULT_EXPECT,
             scans=SCANS,
+            pending="SYS",
+            probe=_FAULT_PROBE,
         ),
         case(
-            "The address-error flag SC44 is off at the start of every scan and on from "
-            "a copy through an out-of-range pointer to the end of that scan. Copying "
-            "through pointer 0 on scans 3, 4 and 6, and listing the scans of 2..8 it "
-            "reads on as digits: never at the case's first rung (Result1 = 0), on scans "
-            "3, 4 and 6 right after the copy (Result2 = 346) and after a later pointer "
-            "copy in range (Result3 = 346)",
+            "The address-error flag SC44 shows the last instruction: copying through "
+            "pointer 0 on scans 3, 4 and 6, it reads off right after a plain copy "
+            "(Result1 = 0), a Math (Result2 = 0) and a pointer copy in range (Result3 = "
+            "0), each run after the fault on the same scan",
             ladder=prove_address_flag_clears_each_scan,
+            init=_fault_init(921),
             expect=_FAULT_EXPECT,
             scans=SCANS,
+            pending="SYS",
+            probe=_FAULT_PROBE,
         ),
         case(
             "The scan counter SD9 goes up by one every scan: over scans 1..8 it steps "
@@ -266,15 +325,17 @@ group = Group(
             ladder=prove_scan_counter_steps_by_one,
             expect={"Result1": 7},
             scans=SCANS,
+            confirmed=True,
         ),
         case(
             "The scan clock SC3 toggles every scan and is on exactly when the scan "
-            "counter SD9 is odd, so it was off on the first scan: over 8 scans it "
-            "rises or falls 8 times (Result1 = 8) and matches SD9's parity on all 8 "
-            "(Result2 = 8)",
+            "counter SD9 is even: over 8 scans it rises or falls 8 times (Result1 = 8) "
+            "and matches SD9's parity on all 8 (Result2 = 8)",
             ladder=prove_scan_clock_follows_counter,
             expect={"Result1": 8, "Result2": 8},
             scans=SCANS,
+            confirmed=True,
+            pending="SYS",
         ),
         case(
             "The 100 ms and 500 ms clocks SC5 and SC6 have the named time as their "
@@ -283,12 +344,14 @@ group = Group(
             ladder=prove_clock_bits_toggle_at_their_rate,
             expect={"Result1": range(19, 22), "Result2": range(3, 6)},
             scans=CLOCK_WINDOW_MS // 10 + 5,
+            confirmed=True,
         ),
         case(
             "The ladder reads the PLC mode bit SC11 and the mode switch bit SC10 on "
             "in RUN (Result1 = 1, Result2 = 1; 2 would mean off)",
             ladder=prove_mode_bits_on_in_run,
             expect={"Result1": 1, "Result2": 1},
+            confirmed=True,
         ),
         case(
             "The real-time clock runs while the ladder does: its seconds SD26 move "
@@ -296,6 +359,24 @@ group = Group(
             ladder=prove_rtc_seconds_advance,
             expect={"Result1": range(1, 3)},
             scans=RTC_WINDOW_MS // 10 + 5,
+            confirmed=True,
+        ),
+        case(
+            "On the first scan after STOP->RUN the scan counter SD9 reads 1 (Result1) and "
+            "the scan clock SC3 is off (Result3 = 0); Result2 = 1 shows the first-scan "
+            "rung ran",
+            ladder=prove_first_scan_counter_and_clock,
+            expect={"Result1": 1, "Result2": 1, "Result3": 0},
+            pending="SYS",
+            probe="first scan: SD9 starts at 1, or SC3 starts on",
+        ),
+        case(
+            "The scan counter SD9 wraps from 32767 to 0, never negative: the least value "
+            "it reads since the first scan is not below 0 (Result1 = 0); run once the "
+            "PLC has been in RUN for 32768 scans",
+            ladder=prove_scan_counter_wraps_to_zero,
+            expect={"Result1": 0},
+            probe="SD9 wrap value",
         ),
     ],
 )
