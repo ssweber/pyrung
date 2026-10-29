@@ -309,7 +309,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] a wire does not see a later continued wire's write (`solve_order/continued_reads_later_wire`)
 - [x] box legs read at the box's row (probes, pending S4): RTON reset, counter down, shift clock and reset, drum reset, jump and jog (`solve_order/rton_reset_leg`, `count_down_leg`, `shift_clock_leg`, `shift_reset_leg`, `drum_reset_leg`, `drum_jump_leg`, `drum_jog_leg`); a leg does not see a continued wire below the box (probe; `solve_order/box_leg_reads_row_below`)
 - [x] For body: a box leg below a latch row in one body rung (probe, pending S4; `solve_order/for_body_box_leg_reads_row_above`); a body rung sees the body rung above it in the same pass (`solve_order/for_body_rung_reads_body_rung_above`)
-- [ ] solve order around a `call()` between the rows of one rung (needs the subroutine home called from main); a branch row in a For body rung (pyrung refuses `branch()` inside `forloop()`); a branch row below a box (the exporter's CSV round trip refuses it)
+- [ ] solve order around a `call()` between the rows of one rung (needs the subroutine home called from main); a branch row in a For body rung (pyrung refuses `branch()` inside `forloop()`)
 - [ ] empty rung (NOP): nothing to observe. CLICK refuses a contact before NOP and deletes a NOP row that shares its rung (so `rungs/nop_rung_takes_snapshot` is retired); the exporter refuses both, and a bare NOP round-trips (`tests/click/test_codegen.py`)
 - [x] subroutines: same rules (every case runs inside its group's subroutine)
 - [x] a subroutine called twice a scan: an edge contact fires once per edge (probe; `call_twice/rise_once_per_scan`, pending S3)

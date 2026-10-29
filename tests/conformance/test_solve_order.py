@@ -91,9 +91,8 @@ The cases own C501..C700, timer T151..T160 and counters CT161..CT170
   leg is P, on scan 4.  L {3, 2}; S {2, 2}.
 - ``box_leg_reads_row_below`` (-, probe): a counter counts on scan 2, with
   reset leg ``Or(Cmd == 0, P)``; a continued wire below it latches P on scan
-  4.  L = S {1}; R and F {0}.  The exporter refuses a branch row below a box
-  (its CSV round trip loses the box's pin), so the row below is a continued
-  wire.
+  4.  L = S {1}; R and F {0}.  A box's legs take the rows under it, so what
+  sits below a box in one CLICK rung is a continued wire.
 - ``for_body_box_leg_reads_row_above`` (+, probe): inside a body rung of a
   one-pass For, row 1 latches P and a counter below it counts once, with
   reset leg ``Or(Cmd == 0, P)``.  R1 = its count, R2 = P was latched.  L
@@ -486,8 +485,8 @@ def prove_drum_jog_leg(slot):
 
 
 def prove_box_leg_reads_row_below(slot):
-    # P = C661, latched on scan 4 by a continued wire below the counter (the
-    # exporter refuses a branch row below a box).  The counter counts on scan 2.
+    # P = C661, latched on scan 4 by a continued wire below the counter (what
+    # sits below a box in one rung is a continued wire).  The counter counts on scan 2.
     counter = ClickCounter(162)
     count_scans(slot)
     with Rung(slot.Cmd != 0, slot.Scratch == 2):
