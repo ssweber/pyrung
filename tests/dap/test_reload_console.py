@@ -177,6 +177,57 @@ class TestReload:
         assert "Extra" in adapter._runner._known_tags_by_name
 
 
+ONESHOT_SCRIPT = (
+    "from pyrung.core import Bool, PLC, Program, Rung, out\n"
+    "\n"
+    "button = Bool('Button')\n"
+    "pulse = Bool('Pulse')\n"
+    "extra = Bool('Extra')\n"
+    "\n"
+    "with Program(strict=False) as prog:\n"
+    "{extra}"
+    "    with Rung(button):\n"
+    "        out(pulse, oneshot=True)\n"
+    "\n"
+    "runner = PLC(prog, dt=0.010)\n"
+)
+EXTRA_RUNG = "    with Rung(button):\n        out(extra, oneshot=True)\n"
+
+
+class TestReloadSiteMemory:
+    def test_oneshot_memory_follows_its_site(self, tmp_path: Path):
+        adapter, out, script_path = _setup(tmp_path, ONESHOT_SCRIPT.format(extra=""))
+        _repl(adapter, out, "force Button true", seq=10)
+        _repl(adapter, out, "step 2", seq=11)
+        assert adapter._runner.current_state.memory["_oneshot:i1"] is True
+        assert adapter._runner.current_state.tags["Pulse"] is False
+
+        script_path.write_text(ONESHOT_SCRIPT.format(extra=EXTRA_RUNG), encoding="utf-8")
+        resp, _ = _repl(adapter, out, "reload", seq=12)
+        assert resp["success"] is True
+        memory = adapter._runner.current_state.memory
+        # Pulse's one-shot moved from i1 to i2; the new rung's is unwritten.
+        assert memory["_oneshot:i2"] is True
+        assert "_oneshot:i1" not in memory
+
+        _repl(adapter, out, "step 1", seq=13)
+        tags = adapter._runner.current_state.tags
+        assert tags["Pulse"] is False  # already fired before the reload
+        assert tags["Extra"] is True
+
+    def test_unmatched_site_memory_is_dropped(self, tmp_path: Path):
+        adapter, out, script_path = _setup(tmp_path, ONESHOT_SCRIPT.format(extra=""))
+        _repl(adapter, out, "force Button true", seq=10)
+        _repl(adapter, out, "step 1", seq=11)
+        script_path.write_text(
+            ONESHOT_SCRIPT.format(extra="").replace("out(pulse", "out(extra"), encoding="utf-8"
+        )
+        resp, _ = _repl(adapter, out, "reload", seq=12)
+        assert resp["success"] is True
+        assert "no matching site" in resp["body"]["result"]
+        assert "_oneshot:i1" not in adapter._runner.current_state.memory
+
+
 class TestReloadTagTypeChange:
     def test_type_change_drops_value(self, tmp_path: Path):
         adapter, out, script_path = _setup(tmp_path)

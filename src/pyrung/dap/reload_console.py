@@ -18,6 +18,7 @@ from typing import Any
 from pyrsistent import pmap
 
 from pyrung.core import PLC
+from pyrung.core.site_memory import remap_site_memory
 from pyrung.core.state import SystemState
 from pyrung.dap.console import ConsoleResult, register
 
@@ -98,11 +99,22 @@ def _reload_locked(
             tags_to_drop.add(name)
 
     patched_tags = {k: v for k, v in old_state.tags.items() if k not in tags_to_drop}
+    # Instruction memory (one-shots, drum and shift edges) is keyed by site, and
+    # site keys are ordinal: carry each site's memory to the site of the new
+    # program with the same fingerprint, drop what no longer matches.
+    patched_memory, dropped_memory = remap_site_memory(
+        old_state.memory, old_runner._site_table, new_runner._site_table
+    )
+    if dropped_memory:
+        warnings.append(
+            f"  {len(dropped_memory)} instruction memory value(s) had no matching site "
+            "in the new program, reset: " + ", ".join(sorted(dropped_memory))
+        )
     patched_state = SystemState(
         scan_id=old_state.scan_id,
         timestamp=old_state.timestamp,
         tags=pmap(patched_tags),
-        memory=old_state.memory,
+        memory=pmap(patched_memory),
     )
 
     new_logic = new_runner._program if new_runner._program is not None else list(new_runner._logic)
