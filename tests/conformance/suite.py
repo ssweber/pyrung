@@ -47,6 +47,7 @@ from tests.conformance import (
     test_rung_semantics,
     test_search,
     test_shift,
+    test_solve_order,
     test_system,
     test_text,
     test_timers,
@@ -70,6 +71,7 @@ ALL_GROUPS = [
     test_text.group,
     test_block.group,
     test_shift.group,
+    test_solve_order.group,
     test_search.group,
     test_counters.group,
     test_numeric.group,
@@ -101,7 +103,7 @@ PARTS: dict[str, tuple[str, ...]] = {
         *(g.name for g in STOP_GROUPS),
         "numeric",
     ),
-    "B": ("out", "rungs", "search", "shift", "system", "text", "timers"),
+    "B": ("out", "rungs", "search", "shift", "solve_order", "system", "text", "timers"),
 }
 
 

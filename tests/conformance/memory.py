@@ -94,6 +94,8 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "math_error": {"DF": range(401, 411)},
     # A subroutine called twice a scan (tests/conformance/test_call_twice.py).
     "call_twice": {"C": range(701, 751)},
+    # Solve order within a rung (tests/conformance/test_solve_order.py).
+    "solve_order": {"C": range(501, 701), "T": range(151, 161), "CT": range(161, 171)},
 }
 
 

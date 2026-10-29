@@ -315,3 +315,28 @@ slots = 4
 
 [groups.call_twice.cases]
 rise_once_per_scan = 1
+
+[groups.solve_order]
+base = 3141 # Conf_SolveOrder: DS3141..DS3440
+slots = 29
+
+[groups.solve_order.cases]
+row_series_reads_rows_above = 1
+row_reads_row_below = 2
+sibling_branch_reads_sibling_above = 3
+outer_row_reads_inner_branch_write = 4
+input_or_legs_read_before_outputs = 5
+branch_or_reads_row_above = 6
+bus_operand_sees_coil = 7
+bus_coils_last_write_wins = 8
+continued_reads_later_wire = 9
+rton_reset_leg = 10
+count_down_leg = 11
+shift_clock_leg = 12
+shift_reset_leg = 13
+drum_reset_leg = 14
+drum_jump_leg = 15
+drum_jog_leg = 16
+box_leg_reads_row_below = 17
+for_body_box_leg_reads_row_above = 18
+for_body_rung_reads_body_rung_above = 19
