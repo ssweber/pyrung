@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ._exporter import LadderBundle, LadderExportError, build_ladder_bundle
+from .steps import CLICK_STEP_LIMIT, StepEstimate, estimate_steps
 
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
@@ -37,4 +38,12 @@ def pyrung_to_ladder(
     return build_ladder_bundle(tag_map, program, index=index, validate=validate)
 
 
-__all__ = ["LadderBundle", "LadderExportError", "build_ladder_bundle", "pyrung_to_ladder"]
+__all__ = [
+    "CLICK_STEP_LIMIT",
+    "LadderBundle",
+    "LadderExportError",
+    "StepEstimate",
+    "build_ladder_bundle",
+    "estimate_steps",
+    "pyrung_to_ladder",
+]

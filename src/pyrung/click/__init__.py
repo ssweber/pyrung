@@ -226,7 +226,14 @@ from pyrung.click.codegen import (
     ladder_to_pyrung_project,
 )
 from pyrung.click.data_provider import ClickDataProvider
-from pyrung.click.ladder import LadderBundle, LadderExportError, pyrung_to_ladder
+from pyrung.click.ladder import (
+    CLICK_STEP_LIMIT,
+    LadderBundle,
+    LadderExportError,
+    StepEstimate,
+    estimate_steps,
+    pyrung_to_ladder,
+)
 from pyrung.click.nop import NopInstruction, nop
 from pyrung.click.raw import RawInstruction, raw
 from pyrung.click.tag_map import SystemNicknameRepair, SystemNicknameRepairRequired, TagMap
@@ -274,6 +281,9 @@ __all__ = [
     "SystemNicknameRepairRequired",
     "LadderBundle",
     "LadderExportError",
+    "CLICK_STEP_LIMIT",
+    "StepEstimate",
+    "estimate_steps",
     "ClickDataProvider",
     "ModbusAddress",
     "ModbusReceiveInstruction",

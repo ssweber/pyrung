@@ -46,6 +46,7 @@ from .findings import (
     CLK_PTR_EXPR_NOT_ALLOWED,
     CLK_PTR_POINTER_MUST_BE_DS,
     CLK_STATUS_BIT_NOT_PORTABLE,
+    CLK_STEP_LIMIT,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     CLK_TIMER_PAIR_MISMATCH,
     CLK_TIMER_PRESET_OVERFLOW,
@@ -150,6 +151,46 @@ def _iter_instruction_sites(program: Program) -> list[tuple[Any, ProgramLocation
     return sites
 
 
+#: Above this share of CLICK's limit, an estimate within its error may not fit.
+_STEP_LIMIT_NEAR = 0.95
+
+
+def _evaluate_step_limit(
+    program: Program, tag_map: TagMap, mode: ValidationMode
+) -> list[ClickFinding]:
+    """CLK_STEP_LIMIT: the estimated program steps exceed, or come near, CLICK's 8000."""
+    from pyrung.click.ladder import LadderExportError, pyrung_to_ladder
+    from pyrung.click.ladder.steps import CLICK_STEP_LIMIT, estimate_steps
+
+    try:
+        bundle = pyrung_to_ladder(program, tag_map, validate=False)
+    except LadderExportError:
+        return []  # Not exportable: other findings say why.
+    estimate = estimate_steps(bundle)
+    if estimate.total <= CLICK_STEP_LIMIT * _STEP_LIMIT_NEAR:
+        return []
+    over = estimate.total > CLICK_STEP_LIMIT
+    largest = sorted(estimate.subroutines.items(), key=lambda kv: -kv[1])[:3]
+    parts = [f"main {estimate.main}", *(f"{name} {steps}" for name, steps in largest)]
+    verb = "exceeds" if over else "is near"
+    severity: FindingSeverity = "error" if mode == "strict" else ("warning" if over else "hint")
+    return [
+        ClickFinding(
+            code=CLK_STEP_LIMIT,
+            severity=severity,
+            message=(
+                f"Estimated {estimate.total} program steps {verb} CLICK's {CLICK_STEP_LIMIT} "
+                f"({', '.join(parts)})."
+            ),
+            location="program",
+            suggestion=(
+                "Split the program into separate CLICK projects, or trim rungs; "
+                "the estimate is within about 1% of CLICK's count."
+            ),
+        )
+    ]
+
+
 def validate_click_program(
     program: Program,
     tag_map: TagMap,
@@ -172,6 +213,7 @@ def validate_click_program(
     )
     findings.extend(_evaluate_status_bit_usage(program, mode))
     findings.extend(_evaluate_forloop_structure(program, mode))
+    findings.extend(_evaluate_step_limit(program, tag_map, mode))
 
     for instruction, base_location in instruction_sites:
         findings.extend(_evaluate_instruction_portability(instruction, base_location, mode))
@@ -276,6 +318,7 @@ __all__ = [
     "CLK_TIMER_PAIR_MISMATCH",
     "CLK_FORLOOP_INNER_ONESHOT",
     "CLK_FORLOOP_NESTING_DEPTH",
+    "CLK_STEP_LIMIT",
     "CLK_FORLOOP_RETURN_INSIDE",
     "CLK_STATUS_BIT_NOT_PORTABLE",
     "ClickFinding",

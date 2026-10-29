@@ -69,6 +69,7 @@ nav:
   - Dialects:
       - CLICK PLC: dialects/click.md
       - CLICK Python Codegen: dialects/click-codegen.md
+      - CLICK Internals: dialects/click-internals.md
       - CircuitPython: dialects/circuitpy.md
       - CircuitPython Modbus TCP: dialects/circuitpy-modbus.md
   - API Reference:
