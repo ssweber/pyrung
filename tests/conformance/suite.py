@@ -4,6 +4,15 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
+The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as two
+projects, one part each (``PARTS``)::
+
+    make conformance-export PART=A OUT=path/to/a
+    make conformance-export PART=B OUT=path/to/b
+
+Each part's main program writes its own layout hash to ``DS1``, and a run
+against a real PLC reads it to pick that part's groups (``build_for``).
+
 Regenerate the ClickNick workspace's ``src/plc/`` (for Preview Changes) with::
 
     make conformance-workspace
@@ -15,7 +24,15 @@ import argparse
 import sys
 from pathlib import Path
 
-from pyrung.conformance import ConformanceProgram, build_program, load_manifest
+from pyrung.conformance import (
+    BuildMismatchError,
+    ConformanceProgram,
+    Endpoint,
+    Group,
+    build_program,
+    load_manifest,
+    read_program_hash,
+)
 from tests.conformance import (
     test_block,
     test_coils,
@@ -63,9 +80,61 @@ ALL_GROUPS = [
 #: them, one per run: see ``test_math_stop.py``.
 STOP_GROUPS = list(test_math_stop.groups)
 
+#: Group names per CLICK project, split by subroutine name (A: ``Conf_Block``..
+#: ``Conf_Numeric``, B: ``Conf_Out``..``Conf_Timers``) to keep each part under
+#: CLICK's 8000 steps.  Every group is in exactly one part.  The registers are
+#: the manifest's either way, so a group's subroutine is the same in its part
+#: as in the whole project.
+PARTS: dict[str, tuple[str, ...]] = {
+    "A": ("block", "coils", "counters", "drum", "loop", "math", "numeric"),
+    "B": (
+        "out",
+        "rungs",
+        "search",
+        "shift",
+        *(g.name for g in STOP_GROUPS),
+        "system",
+        "text",
+        "timers",
+    ),
+}
 
-def build() -> ConformanceProgram:
-    return build_program([*ALL_GROUPS, *STOP_GROUPS], load_manifest(MANIFEST_PATH))
+
+def groups(part: str | None = None) -> list[Group]:
+    """Every group of *part* (``None``: the whole suite), in ``ALL_GROUPS`` order."""
+    every = [*ALL_GROUPS, *STOP_GROUPS]
+    if part is None:
+        return every
+    if part not in PARTS:
+        raise ValueError(f"Unknown part {part!r}; choose one of {', '.join(PARTS)}")
+    return [g for g in every if g.name in PARTS[part]]
+
+
+def build(part: str | None = None) -> ConformanceProgram:
+    """The program for *part* (``None``: the whole suite) on the checked-in manifest."""
+    return build_program(groups(part), load_manifest(MANIFEST_PATH))
+
+
+def build_for(endpoint: Endpoint | None) -> ConformanceProgram:
+    """The build loaded at *endpoint*: the part, or the whole suite, whose layout
+    hash is in its ``DS1``.  A local target (``None``) runs the whole suite.
+
+    Raises:
+        BuildMismatchError: ``DS1`` holds no build of the suite's layout hash.
+    """
+    if endpoint is None:
+        return build()
+    found = read_program_hash(endpoint)
+    known: list[str] = []
+    for part in [*PARTS, None]:
+        candidate = build(part)
+        if candidate.program_hash == found:
+            return candidate
+        known.append(f"{part or 'whole'} {candidate.program_hash}")
+    raise BuildMismatchError(
+        f"{endpoint} runs program layout {found}; the suite is layout {', '.join(known)}. "
+        "Export the part again (make conformance-export PART=A or PART=B) and load it."
+    )
 
 
 def _print_layout(program: ConformanceProgram) -> None:
@@ -91,18 +160,24 @@ def main(argv: list[str]) -> int:
         metavar="DIR",
         help=f"replace DIR/src/plc (default {WORKSPACE_PATH})",
     )
+    parser.add_argument(
+        "--part",
+        choices=sorted(PARTS),
+        help="only that part's groups, as its own CLICK project (default: the whole suite)",
+    )
     args = parser.parse_args(argv)
-    program = build()
+    program = build(args.part)
+    label = f"part {args.part}, layout" if args.part else "layout"
 
     if args.workspace is None:
         out = program.export(args.out_dir)
-        print(f"Wrote {out} (layout {program.program_hash} in DS1)")
+        print(f"Wrote {out} ({label} {program.program_hash} in DS1)")
         _print_layout(program)
         return 0
 
     workspace = Path(args.workspace)
     source = program.export_workspace(workspace)
-    print(f"Wrote {source} (layout {program.program_hash} in DS1)")
+    print(f"Wrote {source} ({label} {program.program_hash} in DS1)")
     _print_layout(program)
     if not (workspace / "csv").is_dir():
         print(

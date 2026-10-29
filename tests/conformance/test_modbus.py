@@ -4,7 +4,8 @@ Runs against pyrung's soft PLC on localhost unless ``--conformance-plc`` (or
 ``PYRUNG_CONFORMANCE_PLC``) names a CLICK running the exported program, or
 ``--conformance-target=circuitpy`` (``PYRUNG_CONFORMANCE_TARGET``) runs the
 program's generated P1AM-200 code on this machine instead.
-``--conformance-group`` (or ``PYRUNG_CONFORMANCE_GROUP``) picks groups.
+``--conformance-group`` (or ``PYRUNG_CONFORMANCE_GROUP``) picks groups.  A
+real PLC may run one part of the suite (``suite.PARTS``); its ``DS1`` says which.
 """
 
 from __future__ import annotations
@@ -43,13 +44,14 @@ def test_all_groups_over_modbus(
     conformance_groups: list[str] | None,
     conformance_sim: type[SimServer] | type[CircuitPySim],
 ) -> None:
-    build = suite.build()
-    # Without GROUP=, every group but the ones that stop the PLC.
-    groups = conformance_groups or [g.name for g in suite.ALL_GROUPS]
+    build = suite.build_for(conformance_endpoint)
+    # Without GROUP=, every loaded group but the ones that stop the PLC.
+    normal = [g for g in suite.ALL_GROUPS if g.name in build.names]
+    groups = conformance_groups or [g.name for g in normal]
     results = run_modbus(build, conformance_endpoint, groups=groups, sim=conformance_sim)
     print(format_report(results))
     if conformance_groups is None:
-        assert len(results) == sum(len(g.cases) for g in suite.ALL_GROUPS)
+        assert len(results) == sum(len(g.cases) for g in normal)
     assert_all_passed(results)
 
 
@@ -86,7 +88,7 @@ def test_suite_repeats_without_restarting(
     Every case resets its own state while ``Cmd == 0``, so a run never depends
     on what ran before it on the same PLC.
     """
-    build = suite.build()
+    build = suite.build_for(conformance_endpoint)
     stopping = {g.name for g in suite.STOP_GROUPS}
     names = [n for n in conformance_groups or [g.name for g in build.groups] if n not in stopping]
     if not names:
@@ -155,12 +157,25 @@ def test_mismatched_layout_bails_before_writing() -> None:
         "other", [case("A different program", ladder=_prove_constant, expect={"Result1": 7})]
     )
     with SimServer(loaded) as sim:
-        with pytest.raises(BuildMismatchError, match="Export the whole project again"):
+        with pytest.raises(BuildMismatchError, match="Export the project again"):
             run_modbus(other, sim.endpoint, timeout=2.0)
         # Nothing was written: the loaded program's slots never fired.
         assert sim.endpoint is not None
         results = run_modbus(loaded, sim.endpoint, groups=[g.name for g in suite.ALL_GROUPS])
     assert_all_passed(results)
+
+
+def test_the_loaded_part_is_read_from_ds1() -> None:
+    assert suite.build_for(None).program_hash == suite.build().program_hash
+    part_a = suite.build("A")
+    with SimServer(part_a) as sim:
+        assert sim.endpoint is not None
+        assert suite.build_for(sim.endpoint).program_hash == part_a.program_hash
+    other = build_program([_alpha(), _beta()], _TWO_GROUPS)
+    with SimServer(other) as sim:
+        assert sim.endpoint is not None
+        with pytest.raises(BuildMismatchError, match="PART=A or PART=B"):
+            suite.build_for(sim.endpoint)
 
 
 def test_one_group_runs_alone() -> None:

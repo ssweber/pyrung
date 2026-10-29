@@ -333,6 +333,41 @@ def _select(build: ConformanceProgram, groups: Iterable[str] | None) -> set[str]
     return wanted
 
 
+def read_program_hash(endpoint: Endpoint | str, *, timeout: float = 10.0) -> int:
+    """The layout hash in ``DS1`` of the conformance program running at *endpoint*.
+
+    Programs built from different groups have different hashes, so this tells
+    which build is loaded (a suite too big for one CLICK project loads in
+    parts) before choosing one to run.
+
+    Raises:
+        ConformanceError: The endpoint is unreachable or ``DS1`` stays 0.
+    """
+    from pyclickplc.client import ClickClient
+
+    if isinstance(endpoint, str):
+        endpoint = parse_endpoint(endpoint)
+
+    async def read(endpoint: Endpoint) -> int:
+        client = ClickClient(endpoint.host, endpoint.port, timeout=max(1, int(timeout)))
+        async with client:
+            if not client._client.connected:
+                raise ConformanceError(f"Cannot connect to Modbus endpoint {endpoint}")
+            return await _await_program_hash(client, endpoint, timeout)
+
+    return asyncio.run(read(endpoint))
+
+
+async def _await_program_hash(client: Any, endpoint: Endpoint, timeout: float) -> int:
+    (found,) = await _poll(
+        lambda: _read_ds(client, PROGRAM_HASH_REGISTER, 1),
+        lambda regs: regs[0] != 0,
+        timeout,
+        f"DS{PROGRAM_HASH_REGISTER} stayed 0 on {endpoint}: the conformance program is not running",
+    )
+    return found
+
+
 async def _drive(
     build: ConformanceProgram, wire: list[GroupBuild], endpoint: Endpoint, timeout: float
 ) -> dict[str, list[CaseResult]]:
@@ -345,13 +380,7 @@ async def _drive(
             raise ConformanceError(f"Cannot connect to Modbus endpoint {endpoint}")
 
         # 0. Header: is a program with this group layout running?
-        (found,) = await _poll(
-            lambda: _read_ds(client, PROGRAM_HASH_REGISTER, 1),
-            lambda regs: regs[0] != 0,
-            timeout,
-            f"DS{PROGRAM_HASH_REGISTER} stayed 0 on {endpoint}: "
-            "the conformance program is not running",
-        )
+        found = await _await_program_hash(client, endpoint, timeout)
         # A PLC in STOP still serves its registers, but runs no ladder: no
         # reset would ever complete.  A case that stops the PLC leaves it so.
         if not await client.sc[_MODE_RUN_BIT]:
@@ -363,7 +392,7 @@ async def _drive(
             raise BuildMismatchError(
                 f"{endpoint} runs program layout {found}; these groups are layout "
                 f"{build.program_hash} ({', '.join(g.subroutine for g in build.groups)}). "
-                "Export the whole project again and load it."
+                "Export the project again and load it."
             )
 
         # Each selected group's own hash: a mismatch marks the group stale.

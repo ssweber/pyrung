@@ -18,6 +18,7 @@ from pyrung.conformance._modbus import (
     Endpoint,
     SimServer,
     parse_endpoint,
+    read_program_hash,
     run_modbus,
 )
 from pyrung.conformance._runner import assert_all_passed, format_report, run
@@ -42,6 +43,7 @@ __all__ = [
     "format_report",
     "load_manifest",
     "parse_endpoint",
+    "read_program_hash",
     "run",
     "run_modbus",
 ]

@@ -37,13 +37,14 @@ test-tumbler:
 test-conformance:
 	uv run pytest -m conformance tests/conformance/ -q -rP $(if $(PLC),--conformance-plc=$(PLC)) $(if $(GROUP),--conformance-group=$(GROUP)) $(if $(TARGET),--conformance-target=$(TARGET))
 
-# Write the whole conformance CLICK project (main, one subroutine per group, nicknames).
+# Write the conformance CLICK project (main, one subroutine per group, nicknames).
+# PART=A or PART=B writes one part: the whole suite is over CLICK's 8000 steps.
 conformance-export:
-	uv run python -m tests.conformance.suite $(or $(OUT),build/conformance)
+	uv run python -m tests.conformance.suite $(if $(PART),--part $(PART)) $(or $(OUT),build/conformance$(if $(PART),-$(PART)))
 
 # Regenerate src/plc/ in the conformance ClickNick workspace, for Preview Changes.
 conformance-workspace:
-	uv run python -m tests.conformance.suite --workspace $(or $(WORKSPACE),tests/conformance/workspace)
+	uv run python -m tests.conformance.suite $(if $(PART),--part $(PART)) --workspace $(or $(WORKSPACE),tests/conformance/workspace)
 
 watch-pilot-burner:
 	uv run python devtools/watch_pilot_decisions.py --target y_BurnerLoop --no-avoid --max-scans 20000 --wall-budget 240 --stall-budget 30 --output-budget 30 --memory-budget-mb 4096

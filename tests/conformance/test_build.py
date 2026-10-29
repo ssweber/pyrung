@@ -83,6 +83,28 @@ def test_owned_ds_is_staging_and_no_group_block_reaches_it() -> None:
         assert layout.last_register < staging.start, layout
 
 
+def test_parts_split_the_suite_into_projects_with_their_own_layout() -> None:
+    every = [g.name for g in suite.groups()]
+    in_parts = [name for names in suite.PARTS.values() for name in names]
+    assert sorted(in_parts) == sorted(every)
+
+    whole = suite.build()
+    hashes = {whole.program_hash}
+    for part in suite.PARTS:
+        build = suite.build(part)
+        assert set(build.names) == set(suite.PARTS[part])
+        # One subroutine, one block, one hash, whichever project holds it.
+        for g in build.groups:
+            assert (g.base, g.group_hash) == (
+                whole.group(g.name).base,
+                whole.group(g.name).group_hash,
+            )
+        hashes.add(build.program_hash)
+    assert len(hashes) == 1 + len(suite.PARTS)
+    # The system group still runs first in its part (see test_system.py).
+    assert suite.groups("B")[0].name == "system"
+
+
 def test_groups_live_at_fixed_ds_registers() -> None:
     build = suite.build()
     m = build.tag_map
