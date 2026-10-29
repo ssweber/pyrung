@@ -1449,6 +1449,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
 
 
 def _writers_all_unconditional(
+    y_name: str,
     y_writers: frozenset[int],
     graph: Any,
     program: Any,
@@ -1459,7 +1460,9 @@ def _writers_all_unconditional(
     ``x_writers <= y_writers`` containment is vacuous, so this is what
     separates "Y is recomputed from the input every scan" (``calc(100 -
     analog, pv)``) from a gated ``copy(REF, y)`` where Y holds its old
-    value whenever the gate is off.
+    value whenever the gate is off.  A write the rung's power alone does not
+    decide (a oneshot, a forloop body: :func:`_writes_run_when_powered`) is
+    gated too.
     """
     if not y_writers:
         return False
@@ -1477,18 +1480,60 @@ def _writers_all_unconditional(
             return False
         if y_node.rung_index >= len(scope_rungs):
             return False
-        if scope_rungs[y_node.rung_index]._conditions:
+        rung = scope_rungs[y_node.rung_index]
+        if rung._conditions:
+            return False
+        if not _writes_run_when_powered(rung._instructions, y_name, graph.indirect_reach):
             return False
     return True
 
 
-def _has_loop_body_rungs(instructions: Iterable[Any]) -> bool:
+def _instructions_write(instructions: Iterable[Any], name: str, reach: Any) -> bool:
+    """Whether any of *instructions*, forloop bodies included, writes *name*."""
+    from pyrung.core.instruction.control import ForLoopInstruction
+
+    from .absorb import _all_write_targets
+
     for instr in instructions:
-        if getattr(instr, "body_rungs", ()):
+        if any(target == name for target, _itype in _all_write_targets(instr, reach)):
             return True
-        if _has_loop_body_rungs(getattr(instr, "instructions", None) or ()):
+        if isinstance(instr, ForLoopInstruction) and _instructions_write(
+            instr.instructions, name, reach
+        ):
             return True
     return False
+
+
+def _writes_run_when_powered(instructions: Iterable[Any], name: str, reach: Any) -> bool:
+    """Every write of *name* among *instructions* runs on each scan their rung is on.
+
+    A rung's contacts are not all that decide whether a write on it runs.  A
+    oneshot write runs only on the rung's rising edge.  A forloop body runs only
+    when its loop does: a oneshot For only on the rung's rising edge, and a For
+    whose count is not a literal of at least one iteration may run none (a tag
+    count of 0, :func:`for_loop_iterations`).  A body rung's contacts gate its
+    writes, and a ``break_loop()`` / ``continue_loop()`` in one gates the rest
+    of the body, so a loop with body rungs that writes *name* is refused whole.
+    *instructions* is one node's own list (``rung._instructions``); a branch is
+    a node of its own.
+    """
+    from pyrung.core.instruction.control import ForLoopInstruction, for_loop_iterations
+
+    for instr in instructions:
+        if isinstance(instr, ForLoopInstruction):
+            if not _instructions_write(instr.instructions, name, reach):
+                continue
+            count = instr.count
+            literal = isinstance(count, int) and not isinstance(count, bool)
+            if instr._oneshot or instr.body_rungs or not literal:
+                return False
+            if for_loop_iterations(count) == 0:
+                return False
+            if not _writes_run_when_powered(instr.instructions, name, reach):
+                return False
+        elif getattr(instr, "_oneshot", False) and _instructions_write((instr,), name, reach):
+            return False
+    return True
 
 
 def _is_sequential_unconditional_same_scope(
@@ -1502,10 +1547,11 @@ def _is_sequential_unconditional_same_scope(
     Returns True when:
     - X and Y are written in the same subroutine (or both main-line)
     - Y's writer follows X's last writer in node order within that scope
-    - Y's writer rung is unconditional (no conditions on the rung itself)
+    - Y's writer rung is unconditional (no conditions on the rung itself),
+      and Y is not written in one of its branches
     - No ``return_early()`` between X's last writer and Y's writer
-    - Y's writer rung holds no forloop body rung (its contacts, and any
-      ``break_loop()`` / ``continue_loop()``, gate the writes inside the loop)
+    - Every write of Y on that rung runs each scan: no oneshot, and no forloop
+      that may skip it (:func:`_writes_run_when_powered`)
     """
     from pyrung.core.analysis.pdg import _rung_has_return
 
@@ -1526,11 +1572,14 @@ def _is_sequential_unconditional_same_scope(
 
     for y_idx in y_writers:
         y_node = graph.rung_nodes[y_idx]
+        if y_node.branch_path:
+            return False
         if y_node.rung_index >= len(scope_rungs):
             return False
-        if scope_rungs[y_node.rung_index]._conditions:
+        rung = scope_rungs[y_node.rung_index]
+        if rung._conditions:
             return False
-        if _has_loop_body_rungs(scope_rungs[y_node.rung_index]._instructions):
+        if not _writes_run_when_powered(rung._instructions, y_name, graph.indirect_reach):
             return False
 
     x_in_scope = [
@@ -1561,6 +1610,7 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
     assert ctx.graph is not None and ctx.stateful_dims is not None
 
     from pyrung.core.analysis.affine import extract_forward_affine
+    from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.validation._common import walk_instructions
 
     from .absorb import _all_write_targets
@@ -1625,13 +1675,21 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
                 # ``copy(REF, y)`` masquerades as a dep (y holds its old
                 # value while the gate is off) and the chase hops onto
                 # the REF register that ``ref_constant_order`` defers.
-                if not _writers_all_unconditional(y_writers, ctx.graph, ctx.program):
+                if not _writers_all_unconditional(y_name, y_writers, ctx.graph, ctx.program):
                     continue
         if y_name in edge_sources:
             continue
         if walk_grade or y_name not in ctx.stateful_dims:
             advice_only.add(y_name)
-        if not x_writers <= y_writers:
+        # Containment: every rung that writes X writes Y too, and on each of
+        # them Y's write runs whenever the rung does (not a oneshot, not in a
+        # forloop that may skip it), so X never moves without Y following.
+        contained = x_writers <= y_writers and all(
+            (rung := resolve_rung(ctx.program, ctx.graph.rung_nodes[i])) is not None
+            and _writes_run_when_powered(rung._instructions, y_name, ctx.graph.indirect_reach)
+            for i in x_writers
+        )
+        if not contained:
             if not _is_sequential_unconditional_same_scope(x_name, y_name, ctx.graph, ctx.program):
                 if not ctx.domains_only:
                     continue

@@ -171,7 +171,8 @@ def test_body_rung_contact_driven_by_same_iteration_write(runner_factory):
     _assert_paths_agree(logic, {"Enable": True}, A=3, Trip=True)
 
 
-def test_loop_rung_false_turns_body_rung_outs_off(runner_factory):
+def test_loop_rung_false_leaves_body_rung_outs_alone(runner_factory):
+    # CLICK skips the body of a false For rung: the coil keeps its value.
     light = Bool("Light")
     gate = Bool("Gate")
 
@@ -185,7 +186,10 @@ def test_loop_rung_false_turns_body_rung_outs_off(runner_factory):
     runner.patch({"Enable": True, "Gate": True})
     runner.step()
     assert runner.current_state.tags["Light"] is True
-    runner.patch({"Enable": False})
+    runner.patch({"Enable": False, "Gate": False})
+    runner.step()
+    assert runner.current_state.tags["Light"] is True
+    runner.patch({"Enable": True})
     runner.step()
     assert runner.current_state.tags["Light"] is False
 

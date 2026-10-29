@@ -263,3 +263,55 @@ def test_prove_soundness_with_functional_dep() -> None:
 
     result = always(logic, y <= 10)
     assert isinstance(result, Proven)
+
+
+def _historian_with_loop(count: object, *, oneshot: bool = False) -> Program:
+    """The historian chain above, with Y's calc() inside a forloop."""
+    from pyrung.core import forloop
+
+    src = Int("Src", min=1, max=4)
+    x = Int("X", min=0, max=50)
+    y = Int("Y", min=0, max=55)
+    trigger = Bool("Trigger", external=True)
+    seen = Bool("Seen")
+
+    with Program(strict=False) as logic:
+        with Rung(y > 30):
+            out(seen)
+        with Rung(x > 20):
+            out(seen)
+        with Rung(trigger):
+            copy(2, src)
+        with Rung():
+            call("my_sub")
+        with subroutine("my_sub"):
+            with Rung():
+                calc(src * 10, x)
+            with Rung():
+                with forloop(count, oneshot=oneshot):
+                    calc(x + 5, y)
+    return logic
+
+
+def test_sequential_literal_count_loop_projected() -> None:
+    """forloop(2) on a contactless rung runs every scan: Y is still projected."""
+    ctx = _run_through_funcdep(_historian_with_loop(2))
+    assert ctx.stateful_dims is not None
+    assert "Y" not in ctx.stateful_dims
+    assert ctx._elided_tags is not None
+    assert ctx._elided_tags.get("Y") == "functional_dep"
+
+
+def test_sequential_tag_count_loop_kept() -> None:
+    """forloop(N) runs no iteration when N == 0, so Y can hold: kept."""
+    count = Int("N", external=True, min=0, max=2)
+    ctx = _run_through_funcdep(_historian_with_loop(count))
+    assert ctx.stateful_dims is not None
+    assert "Y" in ctx.stateful_dims
+
+
+def test_sequential_oneshot_loop_kept() -> None:
+    """forloop(2, oneshot=True) runs on the first scan only, so Y holds: kept."""
+    ctx = _run_through_funcdep(_historian_with_loop(2, oneshot=True))
+    assert ctx.stateful_dims is not None
+    assert "Y" in ctx.stateful_dims

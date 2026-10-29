@@ -1306,19 +1306,19 @@ class TestReceiveDomainCompleteness:
 
 
 # ===================================================================
-# OTE inside ForLoop with dynamic count
+# OTE inside ForLoop
 #
-# When an out() is nested inside a ForLoop whose count tag resolves to 0,
-# the loop still executes once. That keeps OTE behavior aligned with a
-# positive-count loop instead of creating a zero-iteration retention case.
+# As on CLICK, a false loop rung skips the body, so an out() there holds
+# its value, and a count tag that resolves to 0 runs no iteration (the
+# coil holds then too).  Such a coil is stateful, not combinational.
 # ===================================================================
 
 
 class TestOteInForLoopClassification:
-    """Test 10: OTE inside dynamic-count ForLoop uses minimum-one execution."""
+    """Test 10: an OTE inside a ForLoop holds while the loop does not run."""
 
-    def test_ote_in_dynamic_forloop_remains_combinational(self):
-        """An out() inside ForLoop(count_tag) still executes when count is 0."""
+    def test_ote_in_dynamic_forloop_is_stateful(self):
+        """An out() inside ForLoop(count_tag) holds when the count is 0."""
         from pyrung.core import ForLoop
 
         enable = Bool("Enable", external=True)
@@ -1337,14 +1337,13 @@ class TestOteInForLoopClassification:
         if isinstance(result, Intractable):
             pytest.skip(f"intractable: {result.reason}")
 
-        stateful, nondeterministic, _comb, *_ = result
-        assert "Light" not in stateful and "Light" not in nondeterministic, (
-            "Light should be combinational because dynamic forloop counts execute "
-            "at least once when the rung is enabled"
+        stateful, _nondeterministic, _comb, *_ = result
+        assert "Light" in stateful, (
+            "Light holds across scans: a false loop rung or a count of 0 skips its out()"
         )
 
     def test_ote_in_dynamic_forloop_prove_finds_counterexample(self):
-        """always() must find that Alarm is reachable when Count=0 still executes."""
+        """always() must find that Alarm is reachable once a count of 1 or 2 sets Light."""
         from pyrung.core import ForLoop
 
         enable = Bool("Enable", external=True)
@@ -1362,13 +1361,36 @@ class TestOteInForLoopClassification:
 
         result = always(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Counterexample), (
-            f"Alarm should be reachable: Enable=True + Count=0 still sets Light, "
+            f"Alarm should be reachable: Enable=True + Count>0 sets Light, "
             f"Active=False fires Alarm. Got {type(result).__name__}"
         )
         _assert_trace_replays(logic, result, "Alarm")
 
+    def test_ote_held_after_the_loop_stops_is_found(self):
+        """Light set by the loop stays on once the loop stops; always() must see it."""
+        from pyrung.core import ForLoop
+
+        enable = Bool("Enable", external=True)
+        count_tag = Int("Count", external=True, min=0, max=2)
+        light = Bool("Light")
+        stale = Bool("Stale")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                with ForLoop(count_tag):
+                    out(light)
+            with Rung(light, ~enable):
+                out(stale)
+
+        result = always(logic, ~stale, depth_budget=10)
+        assert isinstance(result, Counterexample), (
+            f"Stale should be reachable: the loop sets Light, then Enable=False "
+            f"skips the body and Light holds. Got {type(result).__name__}"
+        )
+        _assert_trace_replays(logic, result, "Stale")
+
     def test_ote_in_dynamic_forloop_concrete_agrees(self):
-        """Concrete PLC confirms: count 0 executes one iteration."""
+        """Concrete PLC confirms: count 0 runs no iteration, a false rung skips the body."""
         from pyrung.core import ForLoop
 
         enable = Bool("Enable", external=True)
@@ -1381,35 +1403,192 @@ class TestOteInForLoopClassification:
                     out(light)
 
         plc = PLC(logic, dt=0.010)
-        plc.patch({"Enable": False, "Count": 0})
+        plc.patch({"Enable": True, "Count": 0})
         plc.step()
         assert plc.current_state.tags["Light"] is False
 
-        plc.patch({"Enable": True, "Count": 0})
+        plc.patch({"Count": 1})
         plc.step()
         assert plc.current_state.tags["Light"] is True
 
-    def test_ote_in_static_forloop_remains_combinational(self):
-        """A ForLoop with a positive literal count always executes,
-        so the OTE is still combinational."""
+        plc.patch({"Enable": False})
+        plc.step()
+        assert plc.current_state.tags["Light"] is True
+
+    def test_ote_in_static_forloop_is_stateful_behind_a_condition(self):
+        """A ForLoop(3) behind a contact skips its out() when the contact opens."""
         from pyrung.core import ForLoop
 
         enable = Bool("Enable", external=True)
         light = Bool("Light")
+        alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
             with Rung(enable):
                 with ForLoop(3):
                     out(light)
+            with Rung(light):
+                out(alarm)
 
         result = _classify_dimensions(logic)
         if isinstance(result, Intractable):
             pytest.skip(f"intractable: {result.reason}")
 
-        stateful, nondeterministic, _comb, *_ = result
-        assert "Light" not in stateful and "Light" not in nondeterministic, (
-            "Light should be combinational — ForLoop(3) always executes"
-        )
+        stateful, _nondeterministic, _comb, *_ = result
+        assert "Light" in stateful, "Light holds while Enable is false"
+
+
+# ===================================================================
+# Writes an unconditional rung does not run every scan
+#
+# Functional-dependency projection (Y = X + k) and slice elision drop Y
+# from the state key when Y is recomputed whenever X moves.  A write on a
+# rung with no contacts still may not run: a ForLoop with a tag count of 0
+# runs no iteration, a oneshot ForLoop runs its body on the first scan
+# only, a oneshot calc() fires once, a branch has its own contacts.  Y
+# then holds a stale value the projection cannot represent.
+# ===================================================================
+
+
+def _stale_projection_program(writer: str, *, check_first: bool):
+    """X moves on Inc (to V); Y = X + 1 is written by *writer*.
+
+    Stale reads X == 1 with Y == 1, which needs Y left over from X == 0.
+    *check_first* puts the Stale rung above the writes, so it sees the
+    previous scan's values (the violation lands one scan after the merge).
+    """
+    from pyrung.core import ForLoop, branch
+
+    inc = Bool("Inc", external=True)
+    pick = Bool("Pick", external=True)
+    v = Int("V", external=True, min=0, max=1)
+    n = Int("N", external=True, min=0, max=1)
+    x = Int("X", min=0, max=1)
+    y = Int("Y", min=0, max=3)
+    stale = Bool("Stale")
+
+    with Program(strict=False) as logic:
+        if check_first:
+            with Rung(x == 1, y == 1):
+                out(stale)
+        if writer == "contained_tag_count":
+            with Rung(inc):
+                copy(v, x)
+                with ForLoop(n):
+                    calc(x + 1, y)
+        else:
+            with Rung(inc):
+                copy(v, x)
+            with Rung():
+                if writer == "tag_count":
+                    with ForLoop(n):
+                        calc(x + 1, y)
+                elif writer == "oneshot_loop":
+                    with ForLoop(1, oneshot=True):
+                        calc(x + 1, y)
+                elif writer == "oneshot_calc":
+                    calc(x + 1, y, oneshot=True)
+                elif writer == "branch":
+                    with branch(pick):
+                        calc(x + 1, y)
+                else:
+                    raise AssertionError(writer)
+        if not check_first:
+            with Rung(x == 1, y == 1):
+                out(stale)
+    return logic, stale
+
+
+class TestSkippableWriteProjection:
+    """Y = X + 1 written by a write the rung's power alone does not decide."""
+
+    def test_zero_tag_count_loop_holds_y(self):
+        """The reviewer's case: forloop(N) with N == 0 skips calc(), Y holds.
+
+        Before the fix the sequential-unconditional gate projected Y onto X
+        and always() returned Proven(states_explored=2).
+        """
+        from pyrung.core import ForLoop
+
+        inc = Bool("Inc", external=True)
+        x = Int("X", min=0, max=1)
+        y = Int("Y", min=0, max=3)
+        n = Int("N", external=True, min=0, max=1)
+        stale = Bool("Stale")
+
+        with Program(strict=False) as logic:
+            with Rung(inc):
+                copy(1, x)
+            with Rung():
+                with ForLoop(n):
+                    calc(x + 1, y)
+            with Rung(x == 1, y == 1):
+                out(stale)
+
+        result = always(logic, ~stale)
+        assert isinstance(result, Counterexample), type(result).__name__
+        assert result.caveats == ()
+        _assert_trace_replays(logic, result, "Stale")
+
+    @pytest.mark.parametrize(
+        "writer",
+        ["tag_count", "contained_tag_count", "oneshot_loop", "oneshot_calc", "branch"],
+    )
+    @pytest.mark.parametrize("check_first", [False, True])
+    def test_stale_y_is_found(self, writer, check_first):
+        logic, stale = _stale_projection_program(writer, check_first=check_first)
+        result = always(logic, ~stale)
+        assert isinstance(result, Counterexample), type(result).__name__
+        assert result.caveats == ()
+        _assert_trace_replays(logic, result, "Stale")
+
+    def test_oneshot_loop_write_is_not_slice_elided(self):
+        """A oneshot ForLoop writes Y on the first scan only; later reads see it held.
+
+        Slice elision paired the loop's one-shot key with its index alone, so
+        it took Y as written before read and merged In == 0 with In == 1.
+        """
+        from pyrung.core import ForLoop, latch
+
+        inc = Bool("Inc", external=True)
+        source = Int("In", external=True, min=0, max=1)
+        y = Int("Y", min=0, max=3)
+        arm = Bool("Arm")
+        stale = Bool("Stale")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                with ForLoop(1, oneshot=True):
+                    copy(source, y)
+            with Rung(arm, y == 1):
+                out(stale)
+            with Rung(inc):
+                latch(arm)
+
+        result = always(logic, ~stale)
+        assert isinstance(result, Counterexample), type(result).__name__
+        assert result.caveats == ()
+        _assert_trace_replays(logic, result, "Stale")
+
+    def test_literal_count_loop_still_proves(self):
+        """forloop(2) on a contactless rung runs every scan: Y == X + 1 holds."""
+        from pyrung.core import ForLoop
+
+        inc = Bool("Inc", external=True)
+        x = Int("X", min=0, max=1)
+        y = Int("Y", min=0, max=3)
+        stale = Bool("Stale")
+
+        with Program(strict=False) as logic:
+            with Rung(inc):
+                copy(1, x)
+            with Rung():
+                with ForLoop(2):
+                    calc(x + 1, y)
+            with Rung(x == 1, y == 1):
+                out(stale)
+
+        assert isinstance(always(logic, ~stale), Proven)
 
 
 # ===================================================================

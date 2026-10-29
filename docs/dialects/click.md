@@ -426,7 +426,7 @@ on_delay(MyTimer, preset=60, unit="sec")
 
 ### For/Next
 
-A `forloop` exports as its For rung, one rung per body item, and `next()`: a bare instruction is a wire-only rung, a `with rung(...)` inside the loop keeps its contacts, and a nested loop is a For rung of its own. `break_loop()` and `continue_loop()` export as `break()` and `continue()`. CLICK allows three levels of loops, counting the loops of a subroutine called inside a loop (`CLK_FORLOOP_NESTING_DEPTH`), a one-shot only on the outermost For (`CLK_FORLOOP_INNER_ONESHOT`), and no `return_early()` between For and Next (`CLK_FORLOOP_RETURN_INSIDE`). `loop.idx` has no CLICK address; count iterations with a `DS` pointer instead. What CLICK does with an edge contact, a timer or a one-shot inside a loop is not yet confirmed on hardware.
+A `forloop` exports as its For rung, one rung per body item, and `next()`: a bare instruction is a wire-only rung, a `with rung(...)` inside the loop keeps its contacts, and a nested loop is a For rung of its own. `break_loop()` and `continue_loop()` export as `break()` and `continue()`. CLICK allows three levels of loops, counting the loops of a subroutine called inside a loop (`CLK_FORLOOP_NESTING_DEPTH`), a one-shot only on the outermost For (`CLK_FORLOOP_INNER_ONESHOT`), and no `return_early()` between For and Next (`CLK_FORLOOP_RETURN_INSIDE`). `loop.idx` has no CLICK address; count iterations with a `DS` pointer instead. A false For rung skips its body and the count is read as unsigned 16-bit, both confirmed on a CLICK; what CLICK does with a count of 0 (no iteration or 65536), an edge contact or a one-shot inside a loop is not yet confirmed.
 
 Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hints as errors.
 

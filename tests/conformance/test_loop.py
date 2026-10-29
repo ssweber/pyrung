@@ -5,23 +5,79 @@ The cases own C1701..C1800, timers T201..T300 and counters CT201..CT250
 loop index, so a case counts iterations in a slot register it increments in the
 body.  Each loop rung is gated on ``Fired == 0`` so the loop runs on one scan.
 
-A reset must not depend on an open probe.  What a false For rung does to its
-body is F2, so the timer and counter cases keep their For rung true and gate a
-body rung instead: the timer's rung-false reset and the counter's ``Cmd == 0``
-reset input are scanned during the reset either way.  Bits a case latches, or
-drives from inside a loop, are reset in its ``init``.
+A false For rung skips its body (F2, measured on a CLICK 2026-10-29): body
+coils hold, and body one-shots, timers and counters are not scanned, so they
+do not see a reset either.  So the cases that reset through an instruction
+inside the loop (F6 edge, F7 timer, F8 counter, F14 one-shot) keep their For
+rung true and gate a body rung instead: their resets are scanned on every
+reset scan.  Bits a case latches, or drives from inside a loop, are reset in
+its ``init``.
 
-The expectations are pyrung's answers, unconfirmed on a CLICK: the probe
-matrix F1-F14 in ``scratchpad/click-v4/RESEARCH.md`` section 4.  F2 (does a
-false For rung drive its body coils off?), F6 (edges inside a loop), F7 (timers
-inside a loop) and F14 (one-shots inside a loop) are where pyrung's model is
-most likely to differ.
+The probe matrix is ``scratchpad/click-v4/RESEARCH.md`` section 4; round 1 on
+a CLICK is ``scratchpad/conformance_review/FINDINGS.md`` item 3.  Which case
+tells which model apart, and what the other model reads:
+
+- ``false_for_rung_skips_body`` (F2): skipped, C1701 keeps its latch
+  (Result1 = 1); a body run once with power off turns it off (2, pyrung before
+  CLICK's rule).  Result2 = 0: a body calc does not run either way.  Round 1
+  read Result1 = 1 on the same ladder without Result2.
+- ``zero_count`` (F3): no iteration reads Result2 = 0; 65536 iterations read
+  1; "at least once" (pyrung before) reads Result1 = 1, Result2 = 1.  Round 1
+  read Result1 = 0, which 0 and 65536 both give; but the count -1 loop in the
+  same scan alone accounts for its 1122 ms maximum scan (SD12), so 0 is likely.
+- ``negative_count_reads_unsigned`` (F3): unsigned 16-bit runs 65535
+  iterations (Result2 = -1, the Int wraps); "at least once" reads 1.  Round 1
+  read -1.  In-process only: on a CLICK it makes a scan of about 1.1 s that
+  every wall-clock case beside it would see.
+- ``edge_contact_inside_loop`` (F6, probe, pending S3): C1721 latches on
+  iteration 1 of 3 and stays on.  An edge with memory in the contact rises
+  once (Result1 = 1, what CLICK's per-contact edge memory predicts, FINDINGS
+  item 2); one judged against the previous scan (pyrung today) rises on all
+  three (3).
+- ``counter_inside_loop`` (F8, probe, pending S2): the count input is on in
+  iterations 1, 2 and 4 of 4.  A counter that counts edges remembered by the
+  instruction reads 2 (CLICK's edge counters, FINDINGS item 1); one that
+  counts every enabled execution (pyrung today) reads 3; an edge judged once
+  per scan reads 1.
+- ``oneshot_inside_loop`` (F14): the one-shot's rung is true in iterations
+  1, 2 and 4 of 4.  Memory per instruction, re-armed by iteration 3, fires
+  twice (Result1 = 2); once per scan reads 1; a one-shot ignored inside loops
+  reads 3.
+- ``body_oneshot_holds_while_for_false`` (F17): the For rung is false on scan
+  2 of 4.  Skipped, the one-shot stays fired and Result1 = 1; a body run with
+  power off re-arms it and it fires again on scan 3 (2).
+
+- ``edge_memory_across_iterations`` (F18, probe, pending S3): is an edge
+  contact in a For body one place in the program, its memory carried from
+  iteration to iteration like a contact in a subroutine called N times?
+  C1741 is latched on scan 1 and, on scan 2, off/on/on/off over iterations
+  1..4; Result1 records the iterations ``rise(C1741)`` passed power on, as
+  digits.  Memory per iteration (the model pyrung would adopt with
+  per-contact edge memory) reads Result1 = 2, Result2 = 1; compared with the
+  previous scan's end (pyrung today) the bit was already on, so 0, 0; an edge
+  that passes power whenever the bit is on reads 23, 2.  Result3 = 4 shows
+  the loop ran.
+- ``skipped_body_holds_timer_and_counter`` (F19, probe): a TON (T211) and a
+  counter (CT211) in a For body; the timer times on scans 1..3, the counter
+  counts once on scan 1, then the For rung is false on scans 4..6 while the
+  counter's reset input is on.  Read on scan 6: Result1 = 1 if the timer's
+  Acc still holds its scan-3 value, 2 if it went to 0 (a body run with power
+  off resets a TON, pyrung before), 3 if it kept timing; Result2 = 1 if the
+  counter still holds 1 (its reset was not scanned), 2 if the reset took it
+  to 0 (pyrung before), 3 otherwise.  Skipping, which pyrung implements,
+  reads 1, 1.  The For rung is true while ``Cmd = 0``, so the case's own
+  reset is scanned whatever the answer.
+
+F6, F8 and F18 expect what a CLICK is predicted to read and are pending the
+per-contact edge memory (S3) and edge-counting (S2) steps; on pyrung's own
+targets they run as strict xfails.
 """
 
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
+    Or,
     Rung,
     break_loop,
     calc,
@@ -36,6 +92,7 @@ from pyrung.core import (
     rise,
 )
 from tests.conformance.memory import ClickCounter, ClickTimer, c
+from tests.conformance.scans import count_scans, done, scans_for
 
 
 def _fire(slot) -> None:
@@ -51,13 +108,14 @@ def prove_loop_runs_n_times(slot):
     _fire(slot)
 
 
-def prove_false_for_rung_turns_body_outs_off(slot):
-    # F2: C1701 is on when the loop's rung is false; its body out() runs unpowered.
+def prove_false_for_rung_skips_body(slot):
+    # F2: the loop's rung is false (Scratch = 0); C1701 is latched just above.
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         latch(c[1701])
     with Rung(slot.Cmd != 0, slot.Scratch != 0):
         with forloop(2):
             out(c[1701])
+            calc(slot.Result2 + 1, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Fired == 0, c[1701]):
         copy(1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0, ~c[1701]):
@@ -65,13 +123,19 @@ def prove_false_for_rung_turns_body_outs_off(slot):
     _fire(slot)
 
 
-def prove_zero_or_negative_count_runs_once(slot):
-    # F3: a count register of 0 (Scratch) or -1 (Result3).
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
-        copy(-1, slot.Result3)
+def prove_zero_count(slot):
+    # F3: a count register of 0 (Scratch).
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(slot.Scratch):
             calc(slot.Result1 + 1, slot.Result1)
+            copy(1, slot.Result2)
+    _fire(slot)
+
+
+def prove_negative_count_reads_unsigned(slot):
+    # F3: a count register of -1 (Result3).
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(-1, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(slot.Result3):
             calc(slot.Result2 + 1, slot.Result2)
@@ -106,18 +170,13 @@ def prove_body_rung_contact_per_iteration(slot):
 
 
 def prove_edge_contact_inside_loop(slot):
-    # F6: C1721 goes on in iterations 1 and 3 of 4, off in 2 and 4.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
-        with forloop(4):
-            calc(slot.Scratch + 1, slot.Scratch)
+    # F6: C1721 latches on iteration 1 of 3 and stays on.
+    with Rung():
+        with forloop(3):
+            with Rung(slot.Cmd != 0, slot.Fired == 0):
+                calc(slot.Scratch + 1, slot.Scratch)
             with Rung(slot.Scratch == 1):
                 latch(c[1721])
-            with Rung(slot.Scratch == 2):
-                reset(c[1721])
-            with Rung(slot.Scratch == 3):
-                latch(c[1721])
-            with Rung(slot.Scratch == 4):
-                reset(c[1721])
             with Rung(rise(c[1721])):
                 calc(slot.Result1 + 1, slot.Result1)
     _fire(slot)
@@ -144,11 +203,13 @@ def prove_timer_inside_loop(slot):
 
 
 def prove_counter_inside_loop(slot):
-    # F8
+    # F8: the count input is on in iterations 1, 2 and 4 of 4.
     counter = ClickCounter(201)
     with Rung():
-        with forloop(5):
+        with forloop(4):
             with Rung(slot.Cmd != 0, slot.Fired == 0):
+                calc(slot.Scratch + 1, slot.Scratch)
+            with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
                 count_up(counter, 100).reset(slot.Cmd == 0)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(counter.Acc, slot.Result1)
@@ -221,15 +282,82 @@ def prove_break_on_same_iteration_write(slot):
 
 
 def prove_oneshot_inside_loop(slot):
-    # F14
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
-        with forloop(3):
-            calc(slot.Result1 + 1, slot.Result1, oneshot=True)
-            calc(slot.Result2 + 1, slot.Result2)
+    # F14: the one-shot's rung is true in iterations 1, 2 and 4 of 4.
+    with Rung():
+        with forloop(4):
+            with Rung(slot.Cmd != 0, slot.Fired == 0):
+                calc(slot.Scratch + 1, slot.Scratch)
+            with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
+                calc(slot.Result1 + 1, slot.Result1, oneshot=True)
+                calc(slot.Result2 + 1, slot.Result2)
     _fire(slot)
 
 
-def init_false_for_rung_turns_body_outs_off(slot):
+def prove_body_oneshot_holds_while_for_false(slot):
+    # F17: the For rung is false on scan 2 of 4; the one-shot's own rung is
+    # true on scans 1 to 3 and false on scan 4, which re-arms it.
+    count_scans(slot, window=4)
+    with Rung(slot.Cmd != 0, slot.Scratch != 2, slot.Scratch <= 4):
+        with forloop(1):
+            with Rung(slot.Scratch != 4):
+                calc(slot.Result1 + 1, slot.Result1, oneshot=True)
+            calc(slot.Result2 + 1, slot.Result2)
+    done(slot, window=4)
+
+
+def prove_edge_memory_across_iterations(slot):
+    # F18: C1741 is latched on scan 1; on scan 2 it is off, on, on, off over
+    # iterations 1..4 (Result3), and Result1 records rise() as digits.  It
+    # ends scan 2 off, so the reset needs no init.
+    bit = c[1741]
+    count_scans(slot, window=2)
+    with Rung(slot.Cmd != 0, slot.Scratch == 1):
+        latch(bit)
+    with Rung():
+        with forloop(4):
+            with Rung(slot.Cmd != 0, slot.Scratch == 2):
+                calc(slot.Result3 + 1, slot.Result3)
+            with Rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 1):
+                reset(bit)
+            with Rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 2):
+                latch(bit)
+            with Rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 4):
+                reset(bit)
+            with Rung(rise(bit), slot.Cmd != 0, slot.Scratch == 2):
+                calc(slot.Result1 * 10 + slot.Result3, slot.Result1)
+                calc(slot.Result2 + 1, slot.Result2)
+    done(slot, window=2)
+
+
+def prove_skipped_body_holds_timer_and_counter(slot):
+    # F19: For rung false on scans 4..6 of the run (true while Cmd = 0, so the
+    # case's reset is scanned); the counter's reset input is on from scan 4.
+    timer, counter = ClickTimer(211), ClickCounter(211)
+    count_scans(slot, window=7)
+    with Rung(Or(slot.Cmd == 0, slot.Scratch <= 3, slot.Scratch >= 7)):
+        with forloop(1):
+            with Rung(slot.Cmd != 0, slot.Scratch <= 3):
+                on_delay(timer, 30000)
+            with Rung(slot.Cmd != 0, slot.Scratch == 3):
+                copy(timer.Acc, slot.Result3)
+            with Rung(slot.Cmd != 0, slot.Scratch == 1):
+                count_up(counter, 100).reset(Or(slot.Cmd == 0, slot.Scratch >= 4))
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, timer.Acc == slot.Result3, timer.Acc > 0):
+        copy(1, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, timer.Acc == 0):
+        copy(2, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, slot.Result1 == 0):
+        copy(3, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, counter.Acc == 1):
+        copy(1, slot.Result2)
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, counter.Acc == 0):
+        copy(2, slot.Result2)
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, slot.Result2 == 0):
+        copy(3, slot.Result2)
+    done(slot, window=7)
+
+
+def init_false_for_rung_skips_body(slot):
     reset(c[1701])
 
 
@@ -252,24 +380,14 @@ group = Group(
             "For 5 runs its body five times on one scan (Result1 = 5)",
             ladder=prove_loop_runs_n_times,
             expect={"Result1": 5},
-        ),
-        case(
-            "A For rung that is false runs its body unpowered: an out() in the body "
-            "turns off (Result1 = 2), not left as it was (1)",
-            ladder=prove_false_for_rung_turns_body_outs_off,
-            init=init_false_for_rung_turns_body_outs_off,
-            expect={"Result1": 2},
-        ),
-        case(
-            "A loop count of 0 or -1 runs the body once (Result1 = 1, Result2 = 1)",
-            ladder=prove_zero_or_negative_count_runs_once,
-            expect={"Result1": 1, "Result2": 1},
+            confirmed=True,
         ),
         case(
             "The count register is read once at For: lowering it in the body still "
             "runs 5 iterations (Result1 = 5)",
             ladder=prove_count_read_once,
             expect={"Result1": 5},
+            confirmed=True,
         ),
         case(
             "A body rung evaluates its contact on every iteration: true on iteration 2 "
@@ -278,13 +396,16 @@ group = Group(
             ladder=prove_body_rung_contact_per_iteration,
             init=init_body_rung_contact_per_iteration,
             expect={"Result1": 2, "Result2": 2},
+            confirmed=True,
         ),
         case(
-            "An edge contact inside a loop compares with the previous scan: a bit that "
-            "comes on in iterations 1 and 3 counts two rises (Result1 = 2)",
+            "An edge contact inside a loop keeps its own memory: a bit latched on "
+            "iteration 1 of 3 rises once (Result1 = 1), not on all three (3)",
             ladder=prove_edge_contact_inside_loop,
             init=init_edge_contact_inside_loop,
-            expect={"Result1": 2},
+            expect={"Result1": 1},
+            pending="S3",
+            probe="edge contact memory inside a For body",
         ),
         case(
             "A timer inside For 10 accumulates on every iteration: it runs more than "
@@ -292,34 +413,43 @@ group = Group(
             ladder=prove_timer_inside_loop,
             expect={"Result1": 1},
             scans=30,
+            confirmed=True,
         ),
         case(
-            "A counter inside For 5 counts every iteration it is enabled (Result1 = 5)",
+            "A counter inside For 4 counts the edges of its input across iterations: "
+            "on in iterations 1, 2 and 4 counts 2 (Result1 = 2), not 3 (every "
+            "iteration) or 1 (once a scan)",
             ladder=prove_counter_inside_loop,
-            expect={"Result1": 5},
+            expect={"Result1": 2},
+            pending="S2",
+            probe="counter edge memory across For iterations",
         ),
         case(
             "Break leaves only the innermost loop: the inner loop breaks on its second "
             "iteration each time (Result1 = 6) and the outer loop runs on (Result2 = 3)",
             ladder=prove_break_leaves_innermost_loop,
             expect={"Result1": 6, "Result2": 3},
+            confirmed=True,
         ),
         case(
             "Rungs before Break run on the breaking iteration, rungs after do not "
             "(Result1 = 3, Result2 = 2)",
             ladder=prove_break_runs_earlier_body_rungs,
             expect={"Result1": 3, "Result2": 2},
+            confirmed=True,
         ),
         case(
             "Continue on iteration 2 skips only the rest of that iteration "
             "(Result1 = 5, Result2 = 4)",
             ladder=prove_continue_skips_rest_of_iteration,
             expect={"Result1": 5, "Result2": 4},
+            confirmed=True,
         ),
         case(
             "Continue on the last iteration ends the loop (Result1 = 5, Result2 = 4)",
             ladder=prove_continue_on_last_iteration,
             expect={"Result1": 5, "Result2": 4},
+            confirmed=True,
         ),
         case(
             "A Break contact written by an earlier body rung in the same iteration "
@@ -327,12 +457,67 @@ group = Group(
             ladder=prove_break_on_same_iteration_write,
             init=init_break_on_same_iteration_write,
             expect={"Result1": 2, "Result2": 3},
+            confirmed=True,
         ),
         case(
-            "A one-shot inside a loop fires on the first iteration of the scan only "
-            "(Result1 = 1, Result2 = 3)",
+            "A one-shot inside a loop re-arms on an iteration its rung is false: true "
+            "in iterations 1, 2 and 4 of 4, it fires twice (Result1 = 2, Result2 = 3)",
             ladder=prove_oneshot_inside_loop,
+            expect={"Result1": 2, "Result2": 3},
+        ),
+        case(
+            "A For rung that is false skips its body: an out() in the body leaves its "
+            "coil on (Result1 = 1), not off (2), and a body calc does not run "
+            "(Result2 = 0)",
+            ladder=prove_false_for_rung_skips_body,
+            init=init_false_for_rung_skips_body,
+            expect={"Result1": 1, "Result2": 0},
+        ),
+        case(
+            "A loop count of 0 runs no iteration (Result1 = 0, Result2 = 0), not one "
+            "(1, 1) or 65536 (Result2 = 1)",
+            ladder=prove_zero_count,
+            expect={"Result1": 0, "Result2": 0},
+            probe="For count 0: no iteration or 65536",
+        ),
+        case(
+            "A loop count of -1 is read as unsigned 16-bit: 65535 iterations wrap an "
+            "Int to -1 (Result2 = -1), not one iteration (1)",
+            ladder=prove_negative_count_reads_unsigned,
+            expect={"Result2": -1},
+            in_process_only=(
+                "65535 iterations make a scan of about 1.1 s on a CLICK, which every "
+                "wall-clock case run beside it would see"
+            ),
+            confirmed=True,
+        ),
+        case(
+            "A one-shot in a loop holds while the For rung is false: skipped on scan 2, "
+            "it does not re-arm and fires once over scans 1 and 3 (Result1 = 1, "
+            "Result2 = 3), not twice (2)",
+            ladder=prove_body_oneshot_holds_while_for_false,
             expect={"Result1": 1, "Result2": 3},
+            scans=scans_for(4),
+        ),
+        case(
+            "An edge contact inside a loop keeps its memory from one iteration to "
+            "the next: a bit on at scan start, then off, on, on, off over four "
+            "iterations, rises on iteration 2 only (Result1 = 2, Result2 = 1), not "
+            "never (0, 0) nor on 2 and 3 (23, 2)",
+            ladder=prove_edge_memory_across_iterations,
+            expect={"Result1": 2, "Result2": 1, "Result3": 4},
+            scans=scans_for(2),
+            pending="S3",
+            probe="edge memory carried across For iterations",
+        ),
+        case(
+            "A timer and a counter in a skipped For body hold: the timer keeps its "
+            "Acc (Result1 = 1) and the counter ignores its reset (Result2 = 1), not "
+            "reset (2, 2) or kept timing (Result1 = 3)",
+            ladder=prove_skipped_body_holds_timer_and_counter,
+            expect={"Result1": 1, "Result2": 1},
+            scans=scans_for(7),
+            probe="timers and counters in a skipped For body",
         ),
     ],
 )

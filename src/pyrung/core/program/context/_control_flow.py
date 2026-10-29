@@ -255,6 +255,10 @@ def forloop(count: Tag | int, oneshot: bool = False) -> ForLoop:
     contacts are evaluated on every iteration.  Loops nest up to three deep,
     each with its own ``loop.idx``.
 
+    As on CLICK, a false loop rung skips the body (its coils hold, its
+    one-shots do not re-arm), and a tag count is read once, as unsigned
+    16-bit: -1 runs 65535 iterations, 0 runs none.
+
     Example:
         with Rung(Enable):
             with forloop(10) as loop:
