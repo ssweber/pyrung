@@ -25,7 +25,7 @@ from typing import Any
 from pyclickplc.server import PlcValue
 
 from pyrung.conformance._build import ConformanceProgram, GroupBuild, build_program
-from pyrung.conformance._case import CaseResult, Group, expectation_met
+from pyrung.conformance._case import CaseResult, Group, expectation_met, judge
 from pyrung.conformance._slot import PROGRAM_HASH_REGISTER
 
 #: Default Modbus TCP port of a CLICK.
@@ -258,6 +258,7 @@ def run_modbus(
     groups: Iterable[str] | None = None,
     timeout: float = 10.0,
     sim: Callable[[ConformanceProgram], Any] | None = None,
+    pending: bool | None = None,
 ) -> list[CaseResult]:
     """Run cases over Modbus TCP and return one result per case, in group order.
 
@@ -273,6 +274,11 @@ def run_modbus(
             with the build: :class:`SimServer` (pyrung's soft PLC, the
             default) or :class:`~pyrung.conformance.CircuitPySim` (the
             program's generated P1AM-200 code).
+        pending: Judge ``pending`` cases as strict xfails, as for pyrung's
+            own targets.  ``None`` (the default) does so when *endpoint* is
+            ``None``; pass ``True`` for a local target served on an endpoint
+            of its own, ``False`` for a real CLICK (which is the default for
+            any *endpoint*).
 
     A selected group whose subroutine hash does not match is stale: its cases
     come back with ``stale=True`` without running, and the other groups still run.
@@ -288,6 +294,8 @@ def run_modbus(
     wire = [g for g in build.groups if g.name in selected]
     if isinstance(endpoint, str):
         endpoint = parse_endpoint(endpoint)
+    if pending is None:
+        pending = endpoint is None
 
     by_group: dict[str, list[CaseResult]] = {}
     if wire:
@@ -295,11 +303,11 @@ def run_modbus(
             with (sim or SimServer)(build) as local:
                 assert local.endpoint is not None
                 try:
-                    by_group = asyncio.run(_drive(build, wire, local.endpoint, timeout))
+                    by_group = asyncio.run(_drive(build, wire, local.endpoint, timeout, pending))
                 finally:
                     local.raise_if_failed()
         else:
-            by_group = asyncio.run(_drive(build, wire, endpoint, timeout))
+            by_group = asyncio.run(_drive(build, wire, endpoint, timeout, pending))
 
     results: list[CaseResult] = []
     for name in build.names:
@@ -369,7 +377,11 @@ async def _await_program_hash(client: Any, endpoint: Endpoint, timeout: float) -
 
 
 async def _drive(
-    build: ConformanceProgram, wire: list[GroupBuild], endpoint: Endpoint, timeout: float
+    build: ConformanceProgram,
+    wire: list[GroupBuild],
+    endpoint: Endpoint,
+    timeout: float,
+    pending: bool,
 ) -> dict[str, list[CaseResult]]:
     from pyclickplc.client import ClickClient
 
@@ -471,23 +483,29 @@ async def _drive(
             actual = {f: second[g.register(i, f)] for f in c.expect}
             actual.update({a: second_bits[a] for a in c.expect_system})
             fired = second[g.register(i, "Fired")] != 0
-            met_first = expectation_met(c.checks, actual_first)
-            met_second = expectation_met(c.checks, actual)
-            note = ""
+            met_first = fired and expectation_met(c.checks, actual_first)
+            met_second = fired and expectation_met(c.checks, actual)
+            notes: list[str] = []
             if (g.name, i) in unready:
                 state = {f: reset_regs[g.register(i, f)] for f in ("Cmd", "Fired", "Ready")}
-                note = f"reset did not complete within {timeout:g} s: {state}"
+                notes.append(f"reset did not complete within {timeout:g} s: {state}")
             elif met_first != met_second:
-                note = f"unstable: first read {actual_first}, second read {actual}"
+                notes.append(f"unstable: first read {actual_first}, second read {actual}")
+            passed, xfail, pending_note = judge(
+                c, [met_first, met_second], (g.name, i) not in unready, actual, pending=pending
+            )
+            if pending_note:
+                notes.insert(0, pending_note)
             group_results.append(
                 CaseResult(
                     case=c,
-                    passed=fired and met_first and met_second and (g.name, i) not in unready,
+                    passed=passed,
                     actual=actual,
                     slot_index=i,
                     fired=fired,
-                    note=note,
+                    note="; ".join(notes),
                     group=g.name,
+                    xfail=xfail,
                 )
             )
         results[g.name] = group_results

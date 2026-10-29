@@ -21,6 +21,21 @@ _CASE_ID = re.compile(r"[A-Za-z0-9_]+")
 _SC_ADDRESS = re.compile(r"SC[1-9][0-9]*")
 _GROUP_NAME = re.compile(r"[a-z][a-z0-9]*(_[a-z0-9]+)*")
 
+#: The fix steps a ``pending`` case can wait on, each a change that brings
+#: pyrung to what a CLICK does.  The tag names the step whose landing closes
+#: the gap, so its fixer finds every case it must flip.
+PENDING_STEPS: Mapping[str, str] = {
+    "S2": "counters count edges of their inputs",
+    "S3": "edge contacts keep per-contact memory",
+    "S4": "rungs solve row by row, live",
+    "DRUM": "drum ordering (jump/jog/reset/pause/completion)",
+    "OUT": "Out coils never set T<n>; flasher phases",
+    "NOSTOP": "a Math error does not stop the PLC",
+    "INF": "REAL overflow stores +/-Inf",
+    "TEXT": "text, pack, NUL, search cursor and MDN fixes",
+    "SYS": "SC3/SD9 phase and the fault-flag model",
+}
+
 
 @dataclass(frozen=True)
 class Case:
@@ -41,6 +56,10 @@ class Case:
     keep: tuple[Tag, ...] = ()
     #: System bits (``"SC46"``) the harness reads itself once the case has run.
     expect_system: dict[str, Expectation] = field(default_factory=dict)
+    #: Fix step (a key of :data:`PENDING_STEPS`) pyrung waits on to meet ``expect``.
+    pending: str | None = None
+    #: The open hardware question the case asks; ``expect`` is the hypothesis.
+    probe: str | None = None
 
     @property
     def checks(self) -> dict[str, Expectation]:
@@ -54,18 +73,23 @@ class Group:
 
     The subroutine is ``Conf_<Name>`` (``math`` -> ``Conf_Math``,
     ``rung_order`` -> ``Conf_RungOrder``), and slot nicknames start with
-    ``<Name>``.  Case ids must be unique within the group.
+    ``<Name>``.  Case ids must be unique within the group.  The main program
+    calls the subroutine *calls* times a scan (one call rung each), so a group
+    can ask what a subroutine called more than once in a scan does.
     """
 
     name: str
     cases: tuple[Case, ...]
+    calls: int
 
-    def __init__(self, name: str, cases: Iterable[Case]) -> None:
+    def __init__(self, name: str, cases: Iterable[Case], *, calls: int = 1) -> None:
         if not _GROUP_NAME.fullmatch(name):
             raise ValueError(
                 f"Group name {name!r} must be snake_case: lowercase letters and digits, "
                 "words joined by '_', starting with a letter."
             )
+        if calls < 1:
+            raise ValueError(f"Group {name!r}: calls must be >= 1, got {calls}")
         cases = tuple(cases)
         seen: set[str] = set()
         for c in cases:
@@ -74,6 +98,7 @@ class Group:
             seen.add(c.id)
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "cases", cases)
+        object.__setattr__(self, "calls", calls)
 
     @property
     def title(self) -> str:
@@ -100,6 +125,8 @@ class CaseResult:
     group: str = ""
     #: The group's subroutine on the PLC does not match this build; the case did not run.
     stale: bool = False
+    #: The case is ``pending`` and failed its expectation, as it must until its fix lands.
+    xfail: bool = False
 
 
 def case(
@@ -115,6 +142,8 @@ def case(
     ready: Callable[[Any], Any] | None = None,
     keep: Sequence[Tag] = (),
     expect_system: Mapping[str, Expectation] | None = None,
+    pending: str | None = None,
+    probe: str | None = None,
 ) -> Case:
     """Define a conformance case.
 
@@ -146,6 +175,17 @@ def case(
             a ``range``), read by the harness after the case has run, not by
             the ladder: what a case that puts the PLC in STOP leaves behind
             (``SC11`` is off in STOP, and a stopped PLC runs no ladder).
+        pending: The fix step (a key of :data:`PENDING_STEPS`) that brings
+            pyrung to *expect*, which is what a CLICK does.  Until it lands,
+            a run on pyrung's own targets (in-process, the local sim, the
+            generated P1AM code) passes the case only if it does NOT meet
+            *expect*: a strict xfail, so the case fails once pyrung starts
+            matching and the fixer removes the marker.  A run against a real
+            CLICK judges *expect* as usual.
+        probe: The open hardware question the case asks, in a few words.
+            *expect* is the answer pyrung would adopt; the case's module
+            docstring says which reading means which answer, so a failure on
+            a CLICK is an answer, not a bug.
     """
     bad = set(expect) - set(RESULT_FIELDS)
     if bad:
@@ -162,6 +202,8 @@ def case(
             raise TypeError(f"expect[{field_name!r}] must be an int or a range, got {value!r}")
     if scans < 1:
         raise ValueError(f"scans must be >= 1, got {scans}")
+    if pending is not None and pending not in PENDING_STEPS:
+        raise ValueError(f"pending={pending!r} must name a fix step: {', '.join(PENDING_STEPS)}")
     case_id = id if id is not None else _default_id(ladder)
     if not _CASE_ID.fullmatch(case_id):
         raise ValueError(
@@ -180,6 +222,8 @@ def case(
         ready=ready,
         keep=tuple(keep),
         expect_system=system_expect,
+        pending=pending,
+        probe=probe,
     )
 
 
@@ -212,6 +256,27 @@ def expectation_met(expect: Mapping[str, Expectation], actual: Mapping[str, int]
         elif got != wanted:
             return False
     return True
+
+
+def judge(
+    c: Case, met: Sequence[bool], clean: bool, actual: Mapping[str, int], *, pending: bool
+) -> tuple[bool, bool, str]:
+    """``(passed, xfail, note)`` for case *c*.
+
+    *met* says, per run, whether the case fired and met its expectation;
+    *clean* whether every reset completed and left nothing behind.  With
+    *pending* on (a run on one of pyrung's own targets) a case marked
+    ``pending`` passes only if no run met its expectation: one that does
+    fails, so its marker comes off when its fix lands.
+    """
+    if not pending or c.pending is None:
+        return all(met) and clean, False, ""
+    step = f"pending {c.pending} ({PENDING_STEPS[c.pending]})"
+    if all(met):
+        return False, False, f"{step}, but pyrung now meets CLICK's expectation: remove pending="
+    if any(met):
+        return False, False, f"{step}, but some runs meet CLICK's expectation and some do not"
+    return clean, clean, f"{step}: pyrung reads {dict(actual)}"
 
 
 def format_expect(expect: Mapping[str, Expectation]) -> str:

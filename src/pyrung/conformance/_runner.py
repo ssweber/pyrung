@@ -11,6 +11,7 @@ from pyrung.conformance._case import (
     Group,
     expectation_met,
     format_expect,
+    judge,
     system_tag_name,
 )
 from pyrung.conformance._ladder import case_label, check_disjoint, emit_case
@@ -64,8 +65,9 @@ def run(cases: Sequence[Case] | Group) -> list[CaseResult]:
             for i, c in enumerate(case_list, start=1):
                 emit_case(group_name, c, slot, i)
         else:
-            with Rung():
-                call(group.subroutine)
+            for _ in range(group.calls):
+                with Rung():
+                    call(group.subroutine)
             with subroutine(group.subroutine):
                 for i, c in enumerate(case_list, start=1):
                     emit_case(group_name, c, slot, i)
@@ -100,25 +102,32 @@ def run(cases: Sequence[Case] | Group) -> list[CaseResult]:
         outcomes = [r.get(i, ({}, False)) for r in runs]
         actual, fired = outcomes[-1]
         met = [f and expectation_met(c.checks, a) for a, f in outcomes]
+        expected_miss = c.pending is not None
         notes: list[str] = []
         if i in unready:
             notes.append(
                 f"reset did not complete: Ready stayed 0 for {RESET_TIMEOUT_S:g} s of scans"
             )
         for n, (a, f) in enumerate(outcomes[:-1], start=1):
-            if (a, f) != (actual, fired) or not met[n - 1]:
+            if (a, f) != (actual, fired) or (not met[n - 1] and not expected_miss):
                 notes.append(f"run {n} of {PASSES}: actual {a}" + ("" if f else ", did not fire"))
         if i in leaks:
             notes.append("state left after the reset: " + ", ".join(leaks[i]))
+        passed, xfail, pending_note = judge(
+            c, met, i not in unready and i not in leaks, actual, pending=True
+        )
+        if pending_note:
+            notes.insert(0, pending_note)
         results.append(
             CaseResult(
                 case=c,
-                passed=all(met) and i not in unready and i not in leaks,
+                passed=passed,
                 actual=actual,
                 slot_index=i,
                 fired=fired,
                 note="; ".join(notes),
                 group=group_name,
+                xfail=xfail,
             )
         )
     return results
@@ -224,23 +233,43 @@ def assert_all_passed(results: list[CaseResult]) -> None:
 
 
 def format_report(results: Sequence[CaseResult]) -> str:
-    """One ASCII line per case (PASS/FAIL/SKIP/STALE, hardware confirmation), then totals."""
+    """One ASCII line per case, then totals.
+
+    Each line has the status (PASS, XFAIL for a ``pending`` case that misses
+    CLICK's expectation as it must, FAIL, SKIP, STALE), the hardware
+    confirmation, the pending step and the probe question; a FAIL or XFAIL
+    line is followed by what the case read.
+    """
     lines: list[str] = []
-    counts = {"PASS": 0, "FAIL": 0, "SKIP": 0, "STALE": 0}
+    counts = {"PASS": 0, "XFAIL": 0, "FAIL": 0, "SKIP": 0, "STALE": 0}
     unconfirmed = 0
     for r in results:
         if r.stale:
             status = "STALE"
         elif r.skipped is not None:
             status = "SKIP"
+        elif r.xfail:
+            status = "XFAIL"
         else:
             status = "PASS" if r.passed else "FAIL"
         counts[status] += 1
         if not r.case.confirmed:
             unconfirmed += 1
-        mark = "confirmed" if r.case.confirmed else "unconfirmed"
-        lines.append(f"{status:<5} {_label(r)} [{mark}] {r.case.sentence}")
-    words = {"PASS": "passed", "FAIL": "failed", "SKIP": "skipped", "STALE": "stale"}
+        marks = ["confirmed" if r.case.confirmed else "unconfirmed"]
+        if r.case.pending is not None:
+            marks.append(f"pending {r.case.pending}")
+        if r.case.probe is not None:
+            marks.append(f"probe: {r.case.probe}")
+        lines.append(f"{status:<5} {_label(r)} [{'; '.join(marks)}] {r.case.sentence}")
+        if status in ("FAIL", "XFAIL"):
+            lines.append(f"      actual {r.actual}")
+    words = {
+        "PASS": "passed",
+        "XFAIL": "pending (pyrung differs from CLICK)",
+        "FAIL": "failed",
+        "SKIP": "skipped",
+        "STALE": "stale",
+    }
     totals = ", ".join(f"{n} {words[k]}" for k, n in counts.items())
     lines.append(f"{totals}; {unconfirmed} unconfirmed on hardware")
     return "\n".join(lines)
