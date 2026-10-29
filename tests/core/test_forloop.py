@@ -7,15 +7,19 @@ from pyrung.core import (
     Block,
     Bool,
     CompiledPLC,
+    Counter,
     Dint,
     Int,
     Program,
     Rung,
     SystemState,
     TagType,
+    Timer,
     branch,
     copy,
+    count_up,
     forloop,
+    on_delay,
     out,
 )
 from pyrung.core.instruction import control
@@ -194,6 +198,37 @@ def test_forloop_own_oneshot_rearms_when_rung_false(runner_factory):
     runner.patch({"Enable": True})
     runner.step()
     assert runner.current_state.tags["Counter"] == 4
+
+
+def test_forloop_rung_false_holds_body_timer_and_counter(runner_factory):
+    # The assumption conformance probe F19 checks on a CLICK: a false For rung
+    # skips its body, so a TON there keeps its Acc (no unpowered scan resets
+    # it) and a counter keeps its Acc with its reset input on (not scanned).
+    enable = Bool("Enable")
+    rst = Bool("Rst")
+    timer = Timer.clone("T")
+    counter = Counter.clone("C")
+
+    with Program() as logic:
+        with Rung(enable):
+            with forloop(1):
+                on_delay(timer, 30000)
+                count_up(counter, 100).reset(rst)
+
+    runner = runner_factory(logic)
+    runner.patch({"Enable": True, "Rst": False})
+    for _ in range(3):
+        runner.step()
+    timer_acc = runner.current_state.tags[timer.Acc.name]
+    counter_acc = runner.current_state.tags[counter.Acc.name]
+    assert timer_acc > 0
+    assert counter_acc > 0
+
+    runner.patch({"Enable": False, "Rst": True})
+    for _ in range(3):
+        runner.step()
+    assert runner.current_state.tags[timer.Acc.name] == timer_acc
+    assert runner.current_state.tags[counter.Acc.name] == counter_acc
 
 
 def test_oneshot_forloop_state_is_memory_backed_for_parity():

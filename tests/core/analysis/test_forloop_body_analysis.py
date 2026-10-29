@@ -167,6 +167,23 @@ def test_stuck_bits_accepts_a_loop_coil_on_an_unconditional_loop():
     assert not [f for f in validate_stuck_bits(logic).findings if f.target_name == "Y"]
 
 
+@pytest.mark.parametrize("body_rung", [False, True])
+def test_stuck_bits_reports_a_loop_coil_on_an_unconditional_oneshot_loop(body_rung: bool):
+    # A oneshot loop runs its body on the rung's rising edge only: on a
+    # contactless rung, the first scan.  Y is evaluated then, and holds after.
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(2, oneshot=True):
+                if body_rung:
+                    with Rung(Gate):
+                        out(Y)
+                else:
+                    out(Y)
+
+    findings = [f for f in validate_stuck_bits(logic).findings if f.target_name == "Y"]
+    assert [f.kind for f in findings] == ["high"]
+
+
 def test_return_inside_body_rung_guards_later_rungs():
     with Program() as logic:
         with subroutine("work"):

@@ -19,7 +19,8 @@ if it had been written ``latch(...)``.
 
 An ``out`` in the main program answers no by itself, unless it sits in a forloop
 body: a false For rung skips its body, so that ``out`` runs only while its loop
-does (and a count read from a tag may run no iteration).  So does a set of ``out``
+does (a count read from a tag may run no iteration, and a oneshot loop runs only
+on its rung's rising edge).  So does a set of ``out``
 sites whose subroutines *cover* the state space between them — the state-machine
 idiom where every state's subroutine drives the coil, so one of them writes it
 every scan.  Coverage is proved via :func:`_chains_cover_domain`, and needs the
@@ -225,7 +226,8 @@ def _loop_run_conditions(program: Program) -> dict[int, tuple[Condition, ...] | 
 
     A false For rung skips its body, so an ``out()`` there runs only when the
     innermost loop around it is enabled.  A loop whose count is read from a tag
-    may run no iteration at all (a count of 0); its body maps to ``None``.
+    may run no iteration at all (a count of 0), and a oneshot loop runs its body
+    only on its rung's rising edge; their bodies map to ``None``.
     """
     from pyrung.core.instruction.control import ForLoopInstruction, for_loop_iterations
 
@@ -246,7 +248,7 @@ def _loop_run_conditions(program: Program) -> dict[int, tuple[Condition, ...] | 
         loop = site.instruction
         count = loop.count
         literal = isinstance(count, int) and not isinstance(count, bool)
-        runs = literal and for_loop_iterations(count) > 0
+        runs = literal and for_loop_iterations(count) > 0 and not loop._oneshot
         for instr in _flat(loop):
             outer = run.get(id(loop), ())
             run[id(instr)] = None if outer is None or not runs else site.conditions
