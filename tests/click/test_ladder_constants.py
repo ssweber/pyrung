@@ -211,6 +211,57 @@ def test_unrepresentable_real_rejected(value: float):
     assert click_real_literal(value) is None
 
 
+def test_negative_operands_export_click_style():
+    """What CLICK v4 takes, typed: ``DS1 + ( -5 )`` but not ``DS1 + -5``; a leading
+    ``- DS1`` (its spelling of ``-DS1``) but not ``DS1 * ( - DS2 )``, so a negation
+    inside a formula is written ``( 0 - DS2 )``."""
+    with Program() as logic:
+        with Rung():
+            calc(ds[1] + -5, ds[2])
+        with Rung():
+            calc(df[1] * -2.5, df[2])
+        with Rung():
+            calc(ds[1] * -ds[2], ds[3])
+        with Rung():
+            calc(-5 + ds[1], ds[4])
+        with Rung():
+            calc(-ds[1], ds[5])
+        with Rung():
+            calc(-ds[1] * ds[2], ds[6])
+        with Rung():
+            calc(ds[1] - -(ds[2] + 1), ds[7])
+        with Rung():
+            calc(dh[1] + -dh[2], dh[3])
+    assert _tokens(logic) == [
+        "math(DS1 + ( -5 ),DS2,mode=decimal)",
+        "math(DF1 * ( -2.5 ),DF2,mode=decimal)",
+        "math(DS1 * ( 0 - DS2 ),DS3,mode=decimal)",
+        "math(-5 + DS1,DS4,mode=decimal)",
+        "math(- DS1,DS5,mode=decimal)",
+        "math(( 0 - DS1 ) * DS2,DS6,mode=decimal)",
+        "math(DS1 - ( 0 - ( DS2 + 1 ) ),DS7,mode=decimal)",
+        "math(DH1 + ( 0h - DH2 ),DH3,mode=hex)",
+    ]
+
+
+def test_negative_operands_round_trip():
+    with Program() as logic:
+        with Rung():
+            calc(ds[1] + -5, ds[2])
+        with Rung():
+            calc(df[1] * -2.5, df[2])
+        with Rung():
+            calc(ds[1] * -ds[2], ds[3])
+        with Rung():
+            calc(-ds[1], ds[5])
+        with Rung():
+            calc(-ds[1] * ds[2], ds[6])
+        with Rung():
+            calc(ds[1] - -(ds[2] + 1), ds[7])
+    code, before, after = round_trip_logic(logic, TagMap())
+    assert after == before, code
+
+
 def test_real_exponent_round_trips():
     with Program() as logic:
         with Rung():

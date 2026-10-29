@@ -7,7 +7,7 @@ import re
 import struct
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeGuard
 
 from pyclickplc.banks import BANKS
 
@@ -502,6 +502,19 @@ class _TranslatorMixin:
             )
         return f"to_{converter.mode}"
 
+    def _render_zero_minus(self, negation: UnaryExpr, *, path: str, source: Any) -> str:
+        """``-DS2`` inside a formula as ``( 0 - DS2 )``.
+
+        CLICK takes a leading ``- DS1`` but refuses a minus on an operand anywhere
+        later, even typed (``DS1 * ( - DS2 )``); ``DS1 * ( 0 - DS2 )`` passes.
+        """
+        operand = negation.operand
+        inner = self._render_expression(operand, path=f"{path}.operand", source=source)
+        if isinstance(operand, BinaryExpr):
+            inner = f"( {inner} )"
+        zero = self._render_number(0, path=path, source=source)
+        return f"( {zero} - {inner} )"
+
     def _render_expression(self, expression: Expression, *, path: str, source: Any) -> str:
         if isinstance(expression, TagExpr):
             return self._resolve_tag(expression.tag, path=path, source=source)
@@ -534,6 +547,9 @@ class _TranslatorMixin:
                 return _formula_call("ABS", inner)
             if isinstance(expression.operand, BinaryExpr):
                 return f"{expression.symbol} ( {inner} )"
+            if expression.symbol == "-":
+                # CLICK's editor redisplays -DS1 as - DS1.
+                return f"- {inner}"
             return f"{expression.symbol}{inner}"
         if isinstance(expression, BinaryExpr):
             # << and >> map to Click shift functions
@@ -545,9 +561,17 @@ class _TranslatorMixin:
             symbol = _BINARY_OP_CLICK[expression.symbol]
             left = self._render_expression(expression.left, path=f"{path}.left", source=source)
             right = self._render_expression(expression.right, path=f"{path}.right", source=source)
-            if isinstance(expression.left, BinaryExpr):
+            if _is_negation(expression.left):
+                left = self._render_zero_minus(expression.left, path=f"{path}.left", source=source)
+            elif isinstance(expression.left, BinaryExpr):
                 left = f"( {left} )"
-            if isinstance(expression.right, BinaryExpr):
+            if _is_negation(expression.right):
+                right = self._render_zero_minus(
+                    expression.right, path=f"{path}.right", source=source
+                )
+            elif isinstance(expression.right, BinaryExpr) or right.startswith("-"):
+                # CLICK refuses a sign straight after an operator (DS1 + -5),
+                # but takes it in parentheses (DS1 + ( -5 )).
                 right = f"( {right} )"
             return f"{left}{symbol}{right}"
         if isinstance(expression, SumExpr):
@@ -752,6 +776,11 @@ class _TranslatorMixin:
 
 
 # ---- String/render utilities ----
+def _is_negation(expression: Expression) -> TypeGuard[UnaryExpr]:
+    """A unary minus on an operand (``-DS1``, ``-(DS1 + 1)``); a negative literal is not one."""
+    return isinstance(expression, UnaryExpr) and expression.symbol == "-"
+
+
 #: Significant digits CLICK keeps of a REAL constant.
 _CLICK_REAL_DIGITS = 7
 

@@ -433,6 +433,24 @@ def _expr_contains_floor_div(expr: Any) -> bool:
 _CLICK_MAX_PAREN_DEPTH = 8
 
 
+def _is_negative_operand(expr: Any) -> bool:
+    """A right operand the translator parenthesizes for its sign.
+
+    ``DS1 + ( -5 )`` for a literal, ``DS1 * ( 0 - DS2 )`` for a negation.
+
+    Counts a negative literal even in hex mode, where it renders unsigned
+    (``FFFFh``) and gets no parens; that only overstates the depth.
+    """
+    if isinstance(expr, UnaryExpr):
+        return expr.symbol == "-"
+    return (
+        isinstance(expr, LiteralExpr)
+        and isinstance(expr.value, (int, float))
+        and not isinstance(expr.value, bool)
+        and expr.value < 0
+    )
+
+
 def _expr_paren_depth(expr: Any) -> int:
     """Return the max parenthesization depth the Click formula would have."""
     if not isinstance(expr, Expression):
@@ -475,10 +493,12 @@ def _expr_paren_depth(expr: Any) -> int:
         if expr.symbol in ("<<", ">>"):
             return max(_expr_paren_depth(expr.left), _expr_paren_depth(expr.right)) + 1
         left_depth = _expr_paren_depth(expr.left)
-        if isinstance(expr.left, BinaryExpr):
+        if isinstance(expr.left, BinaryExpr) or (
+            isinstance(expr.left, UnaryExpr) and expr.left.symbol == "-"
+        ):
             left_depth += 1
         right_depth = _expr_paren_depth(expr.right)
-        if isinstance(expr.right, BinaryExpr):
+        if isinstance(expr.right, BinaryExpr) or _is_negative_operand(expr.right):
             right_depth += 1
         return max(left_depth, right_depth)
 
