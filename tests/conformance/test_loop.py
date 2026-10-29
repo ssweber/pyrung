@@ -45,8 +45,20 @@ tells which model apart, and what the other model reads:
   2 of 4.  Skipped, the one-shot stays fired and Result1 = 1; a body run with
   power off re-arms it and it fires again on scan 3 (2).
 
-F6 and F8 expect pyrung's answers until the per-contact edge memory and
-edge-counting changes land; a CLICK is predicted to fail them as noted.
+- ``edge_memory_across_iterations`` (F18): is an edge contact in a For body
+  one place in the program, its memory carried from iteration to iteration
+  like a contact in a subroutine called N times?  C1741 is latched on scan 1
+  and, on scan 2, off/on/on/off over iterations 1..4; Result1 records the
+  iterations ``rise(C1741)`` passed power on, as digits.  Memory per
+  iteration (the model pyrung would adopt with per-contact edge memory) reads
+  Result1 = 2, Result2 = 1; compared with the previous scan's end (pyrung
+  today) the bit was already on, so 0, 0; an edge that passes power whenever
+  the bit is on reads 23, 2.  Result3 = 4 shows the loop ran.
+
+F6, F8 and F18 expect pyrung's answers until the per-contact edge memory (S3)
+and edge-counting (S2) changes land; a CLICK is predicted to fail them as
+noted.  Once the conformance ``pending=`` marker exists they should expect
+CLICK's predicted readings with ``pending="S3"`` (F6, F18) and ``"S2"`` (F8).
 """
 
 from __future__ import annotations
@@ -280,6 +292,30 @@ def prove_body_oneshot_holds_while_for_false(slot):
     done(slot, window=4)
 
 
+def prove_edge_memory_across_iterations(slot):
+    # F18: C1741 is latched on scan 1; on scan 2 it is off, on, on, off over
+    # iterations 1..4 (Result3), and Result1 records rise() as digits.  It
+    # ends scan 2 off, so the reset needs no init.
+    bit = c[1741]
+    count_scans(slot, window=2)
+    with Rung(slot.Cmd != 0, slot.Scratch == 1):
+        latch(bit)
+    with Rung():
+        with forloop(4):
+            with Rung(slot.Cmd != 0, slot.Scratch == 2):
+                calc(slot.Result3 + 1, slot.Result3)
+            with Rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 1):
+                reset(bit)
+            with Rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 2):
+                latch(bit)
+            with Rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 4):
+                reset(bit)
+            with Rung(rise(bit), slot.Cmd != 0, slot.Scratch == 2):
+                calc(slot.Result1 * 10 + slot.Result3, slot.Result1)
+                calc(slot.Result2 + 1, slot.Result2)
+    done(slot, window=2)
+
+
 def init_false_for_rung_skips_body(slot):
     reset(c[1701])
 
@@ -415,6 +451,15 @@ group = Group(
             ladder=prove_body_oneshot_holds_while_for_false,
             expect={"Result1": 1, "Result2": 3},
             scans=scans_for(4),
+        ),
+        case(
+            "An edge contact inside a loop compares with the previous scan's end: a "
+            "bit on at scan start, then off, on, on, off over four iterations, never "
+            "rises (Result1 = 0, Result2 = 0), not on iteration 2 (2, 1) nor on 2 "
+            "and 3 (23, 2)",
+            ladder=prove_edge_memory_across_iterations,
+            expect={"Result1": 0, "Result2": 0, "Result3": 4},
+            scans=scans_for(2),
         ),
     ],
 )
