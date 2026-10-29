@@ -18,6 +18,7 @@ from pyrung.core.kernel import (
     CompiledKernel,
     prove_effective_preset_key,
 )
+from pyrung.core.site_memory import program_memory_defaults
 from pyrung.core.structure import _DoneAccRuntime
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import Tag, TagType
@@ -282,6 +283,7 @@ class _PassContext:
     threshold_event_specs: tuple[_ThresholdEventSpec, ...] | None = None
     edge_tag_exprs: dict[str, list[Expr]] | None = None
     memory_key_names: tuple[str, ...] | None = None
+    memory_key_defaults: tuple[Any, ...] | None = None
     synthetic_preset_tags: tuple[str, ...] | None = None
     receive_dest_names: frozenset[str] = frozenset()
     drum_event_meta: dict[str, Any] | None = None
@@ -615,6 +617,7 @@ class _PassContext:
             stateful_names=self.stateful_names,
             edge_tag_names=self.edge_tag_names,
             memory_key_names=self.memory_key_names or (),
+            memory_key_defaults=self.memory_key_defaults or (),
             state_key_done_specs=self.state_key_done_specs or (),
             done_event_specs=self.done_event_specs or (),
             threshold_vector_specs=(
@@ -1992,7 +1995,22 @@ def _pass_collect_edge_exprs(ctx: _PassContext) -> None:
 
 
 def _pass_discover_memory_keys(ctx: _PassContext) -> None:
+    """Instruction memory that belongs in the state key, with each key's default.
+
+    The keys come from the program's site table: every one-shot, toggle, shift
+    clock and drum edge/event cell, whether or not it runs on the first scan
+    (a one-shot in a subroutine called later, or in a For body).  A trial scan
+    used to be the only source, so a site the first scan did not reach was
+    missing from the key and states that differ only in its memory merged.
+
+    Each key reads ``get(key, default)``: every reader in the kernel reads an
+    unwritten key as that default, so "never written" and "holds its default"
+    are one state.  The trial scan still runs as a floor: a key it writes that
+    the table does not name is kept, with no default (``None`` stays apart).
+    """
     assert ctx.compiled is not None and ctx.absorptions is not None
+    defaults: dict[str, Any] = dict(program_memory_defaults(ctx.program))
+    defaults.update(dict.fromkeys(_tof_timing_keys(ctx.program), False))
     pilot = ctx.compiled.create_kernel()
     for name in ctx.absorptions.preset_tags:
         pilot.tags[name] = 1
@@ -2000,8 +2018,12 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
         ctx.system_points.seed(pilot.tags)
     _step_compiled_kernel(ctx.compiled, pilot, dt=ctx.dt, system=ctx.system_points)
     excluded_prefixes = ("_dt", "_frac:", PROVE_EFFECTIVE_PRESET_PREFIX)
-    discovered = {k for k in pilot.memory if not any(k.startswith(p) for p in excluded_prefixes)}
-    ctx.memory_key_names = tuple(sorted(discovered | _tof_timing_keys(ctx.program)))
+    for k in pilot.memory:
+        if k not in defaults and not any(k.startswith(p) for p in excluded_prefixes):
+            defaults[k] = None
+    names = tuple(sorted(defaults))
+    ctx.memory_key_names = names
+    ctx.memory_key_defaults = tuple(defaults[k] for k in names)
 
 
 def _tof_timing_keys(program: Program) -> set[str]:
@@ -2270,7 +2292,7 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         "Discover kernel memory keys via pilot scan",
         _pass_discover_memory_keys,
         requires=frozenset({"compiled_names", "absorptions"}),
-        provides=frozenset({"memory_key_names"}),
+        provides=frozenset({"memory_key_names", "memory_key_defaults"}),
     ),
 )
 

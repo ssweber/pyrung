@@ -309,6 +309,7 @@ def _bfs_explore_gen(
             nondeterministic_names=context.nondeterministic_names,
             live_inputs=live,
             threshold_vector=threshold_vector,
+            memory_key_defaults=context.memory_key_defaults,
         )
 
     _demoted = context.demoted_edge_names

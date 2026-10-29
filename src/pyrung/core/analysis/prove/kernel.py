@@ -427,6 +427,7 @@ class _EdgeCompressor:
             nondeterministic_names=ctx.nondeterministic_names,
             live_inputs=live_inputs,
             threshold_vector=threshold_vector,
+            memory_key_defaults=ctx.memory_key_defaults,
         )
 
 
@@ -564,6 +565,7 @@ def _extract_state_key(
     nondeterministic_names: tuple[str, ...] = (),
     live_inputs: frozenset[str] | None = None,
     threshold_vector: tuple[Any, ...] | None = None,
+    memory_key_defaults: tuple[Any, ...] = (),
 ) -> tuple[Any, ...]:
     """Hash key for the visited set — stateful + input + edge prev values.
 
@@ -598,6 +600,12 @@ def _extract_state_key(
             parts.append(_EDGE_DEAD)
         else:
             parts.append(kernel.prev.get(n))
-    for mk in memory_key_names:
-        parts.append(kernel.memory.get(mk))
+    if memory_key_defaults:
+        memory = kernel.memory
+        parts.extend(
+            [memory.get(mk, d) for mk, d in zip(memory_key_names, memory_key_defaults, strict=True)]
+        )
+    else:
+        for mk in memory_key_names:
+            parts.append(kernel.memory.get(mk))
     return tuple(parts)
