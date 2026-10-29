@@ -24,9 +24,14 @@ program's: plant rungs are ``plant:i{N}`` / ``plant:e{N}``, PILOT holds are
 ``pilot:i{N}`` / ``pilot:e{N}``.  An instruction that was never bound has no
 key, and asking for one raises (there is no ``id()`` fallback).
 
-Every site records a fingerprint ``(scope, source line, kind, operands)`` so
-hot reload can carry memory to the matching site of the new program
+Every site records a fingerprint ``(scope, source line, kind, operands)`` and
+its contacts, so hot reload can carry memory to the matching site of the new
+program, and drop it where no site matches unambiguously
 (:func:`remap_site_memory`).
+
+Keys are stamped on the objects, so rungs reused in several bare rung lists
+share them; :func:`bind_logic_list` renames clashing holders so that keys stay
+unique within one runner's logic.
 """
 
 from __future__ import annotations
@@ -91,6 +96,10 @@ class Site:
     fingerprint: tuple[Any, ...]
     memory: tuple[tuple[str, Any], ...] = ()
     """``(memory key, default)`` for every memory cell the site owns."""
+    contacts: tuple[str, ...] = ()
+    """An instruction's contacts (rung, branch, body row) as source text; an
+    edge's leg.  Reload uses it, with the fingerprint less its line, to match a
+    site whose line moved."""
 
 
 @dataclass(frozen=True)
@@ -157,6 +166,12 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
     return tuple(slots)
 
 
+def _contacts_text(conditions: Iterable[Any]) -> tuple[str, ...]:
+    from pyrung.core.validation.render import render_condition
+
+    return tuple(render_condition(c) for c in conditions)
+
+
 def _operand_text(value: Any) -> str:
     from pyrung.core.validation.render import operand_name
 
@@ -220,9 +235,24 @@ def _iter_edges(cond: Any) -> Iterable[Any]:
 class _Binder:
     """One :func:`bind_sites` run."""
 
-    def __init__(self, namespace: str, *, only_unbound: bool) -> None:
+    def __init__(
+        self,
+        namespace: str,
+        *,
+        only_unbound: bool,
+        program_owned: bool = False,
+        keepers: Mapping[str, Any] | None = None,
+        reserved: frozenset[str] = frozenset(),
+    ) -> None:
         self.namespace = namespace
         self.only_unbound = only_unbound
+        self.program_owned = program_owned
+        # only_unbound: the one object allowed to keep each key it already
+        # carries, and every key some object of the list carries (a fresh key
+        # never takes one of those).
+        self.keepers: Mapping[str, Any] = keepers or {}
+        self.reserved = reserved
+        self.fresh_counts = {"i": 0, "e": 0}
         self.sites: list[Site] = []
         self.instruction_count = 0
         self.edge_count = 0
@@ -235,32 +265,64 @@ class _Binder:
         self.scope = "main"
         self.row = 0
 
+    def _fresh_key(self, letter: str, position: int) -> str:
+        if not self.only_unbound:
+            return namespaced(self.namespace, f"{letter}{position}")
+        while True:
+            self.fresh_counts[letter] += 1
+            key = namespaced(self.namespace, f"{letter}{self.fresh_counts[letter]}")
+            if key not in self.reserved:
+                return key
+
+    def _keeps(self, obj: Any, key: str | None) -> bool:
+        """only_unbound: *obj* keeps the key it carries (it is that key's keeper)."""
+        return self.only_unbound and key is not None and self.keepers.get(key) is obj
+
     # -- instruction keys ---------------------------------------------------
 
     def number_instructions(self, rungs: Sequence[Rung], scope: str) -> None:
         """Assign ``i{N}`` in the order ``Program`` always has (keys never renumber)."""
         from pyrung.core.instruction.control import ForLoopInstruction
+        from pyrung.core.rung import Rung as RungLogic
 
-        def _walk_instructions(instructions: Sequence[Instruction], row: int) -> None:
+        def _walk_instructions(
+            instructions: Sequence[Instruction],
+            row: int,
+            contacts: tuple[str, ...],
+            body_contacts: Mapping[int, tuple[str, ...]],
+        ) -> None:
             for instr in instructions:
                 self.instruction_count += 1
-                key = instr._state_key
-                if key is None or not self.only_unbound:
-                    key = namespaced(self.namespace, f"i{self.instruction_count}")
+                key: str | None = instr._state_key
+                if key is None or not self._keeps(instr, key):
+                    key = self._fresh_key("i", self.instruction_count)
                     instr._state_key = key
-                self._record_instruction(instr, key, scope, row)
+                    instr._site_program_owned = self.program_owned
+                own = (*contacts, *body_contacts.get(id(instr), ()))
+                self._record_instruction(instr, key, scope, row, own)
                 if isinstance(instr, ForLoopInstruction):
-                    _walk_instructions(instr.instructions, row)
+                    local: dict[int, tuple[str, ...]] = {}
+                    for item in instr.body:
+                        if isinstance(item, RungLogic):
+                            item_contacts = _contacts_text(
+                                item._conditions[item._branch_condition_start :]
+                            )
+                            for body_instr in item._instructions:
+                                local[id(body_instr)] = item_contacts
+                    _walk_instructions(instr.instructions, row, own, local)
 
-        def _walk_rung(rung: Rung, row: int) -> None:
-            _walk_instructions(rung._instructions, row)
+        def _walk_rung(rung: Rung, row: int, contacts: tuple[str, ...]) -> None:
+            own = (*contacts, *_contacts_text(rung._conditions[rung._branch_condition_start :]))
+            _walk_instructions(rung._instructions, row, own, {})
             for branch in rung._branches:
-                _walk_rung(branch, row)
+                _walk_rung(branch, row, own)
 
         for row, rung in enumerate(rungs):
-            _walk_rung(rung, row)
+            _walk_rung(rung, row, ())
 
-    def _record_instruction(self, instr: Instruction, key: str, scope: str, row: int) -> None:
+    def _record_instruction(
+        self, instr: Instruction, key: str, scope: str, row: int, contacts: tuple[str, ...]
+    ) -> None:
         kind = type(instr).__name__
         line = getattr(instr, "source_line", None)
         self.sites.append(
@@ -274,6 +336,7 @@ class _Binder:
                 leg="instruction",
                 source_line=line,
                 fingerprint=(scope, line, kind, _instruction_operands(instr)),
+                contacts=contacts,
                 memory=tuple(
                     (f"{prefix}:{key}", default) for prefix, default in instruction_memory(instr)
                 ),
@@ -293,18 +356,22 @@ class _Binder:
         if kind is not None:
             owner = getattr(cond, "_site_key", None)
             self.edge_count += 1
-            if self.only_unbound and owner is not None and id(cond) not in self.claimed:
+            if id(cond) not in self.claimed and self._keeps(cond, owner):
                 # Bound by the program this rung came from: keep its key.
+                assert owner is not None
                 key = owner
             else:
                 # A second site, or an edge another namespace (the user program)
                 # already owns, gets an object of its own.
                 if id(cond) in self.claimed or (
-                    owner is not None and _namespace_of(owner) != self.namespace
+                    not self.only_unbound
+                    and owner is not None
+                    and _namespace_of(owner) != self.namespace
                 ):
                     cond = copy.copy(cond)
-                key = namespaced(self.namespace, f"e{self.edge_count}")
+                key = self._fresh_key("e", self.edge_count)
                 cond._site_key = key
+                cond._site_program_owned = self.program_owned
             self.claimed.add(id(cond))
             line = cond.source_line if cond.source_line is not None else line_hint
             tag = cond._resolved_tag.name
@@ -319,6 +386,7 @@ class _Binder:
                     leg=leg,
                     source_line=line,
                     fingerprint=(self.scope, line, kind, (tag,)),
+                    contacts=(leg.split(".", 1)[-1],),
                 )
             )
             return cond
@@ -468,17 +536,25 @@ def bind_sites(
     subroutines: Mapping[str, Sequence[Rung]] | None = None,
     *,
     namespace: str = USER_NAMESPACE,
-    only_unbound: bool = False,
+    program_owned: bool = False,
+    _keepers: Mapping[str, Any] | None = None,
+    _reserved: frozenset[str] = frozenset(),
 ) -> SiteTable:
     """Name every memory-keeping site of a program; stamp the keys on its objects.
 
     Instructions get ``_state_key`` (``i{N}``), edge conditions ``_site_key``
     (``e{N}``), both prefixed ``namespace:`` outside the user program.  Main
     rungs come first, then subroutines in definition order.  Rebinding the same
-    rungs reproduces the same keys.  With *only_unbound*, objects that already
-    carry a key keep it (rungs taken from a program that was bound before).
+    rungs reproduces the same keys.  *program_owned* marks the keys as a
+    ``Program``'s, which a bare rung list never renames (:func:`bind_logic_list`).
     """
-    binder = _Binder(namespace, only_unbound=only_unbound)
+    binder = _Binder(
+        namespace,
+        only_unbound=_keepers is not None,
+        program_owned=program_owned,
+        keepers=_keepers,
+        reserved=_reserved,
+    )
     scopes: list[tuple[str, Sequence[Rung]]] = [
         (namespace or "main", rungs),
         *((name, body) for name, body in (subroutines or {}).items()),
@@ -492,31 +568,85 @@ def bind_sites(
     return SiteTable(namespace=namespace, sites=(*instruction_sites, *edge_sites))
 
 
+def _list_key_holders(rungs: Sequence[Rung]) -> dict[str, list[Any]]:
+    """Every key an object of *rungs* carries -> the distinct objects carrying it."""
+    from pyrung.core.instruction.control import ForLoopInstruction
+    from pyrung.core.rung import Rung as RungLogic
+
+    holders: dict[str, list[Any]] = {}
+    seen: set[int] = set()
+
+    def _hold(obj: Any, key: str | None) -> None:
+        if key is None or id(obj) in seen:
+            return
+        seen.add(id(obj))
+        holders.setdefault(key, []).append(obj)
+
+    def _conditions(cond: Any) -> None:
+        for edge in _iter_edges(cond):
+            _hold(edge, edge._site_key)
+
+    def _instruction(instr: Any) -> None:
+        _hold(instr, instr._state_key)
+        for name in type(instr)._conditions:
+            value = getattr(instr, name, None)
+            for item in value if isinstance(value, tuple) else (value,):
+                _conditions(item)
+        if isinstance(instr, ForLoopInstruction):
+            for item in instr.body:
+                if isinstance(item, RungLogic):
+                    _rung(item)
+                else:
+                    _instruction(item)
+
+    def _rung(rung: Any) -> None:
+        for cond in rung._conditions:
+            _conditions(cond)
+        for item in rung._execution_items:
+            if isinstance(item, RungLogic):
+                _rung(item)
+            else:
+                _instruction(item)
+
+    for rung in rungs:
+        _rung(rung)
+    return holders
+
+
 def bind_logic_list(rungs: Sequence[Rung]) -> SiteTable:
     """Bind rungs handed to ``PLC`` as a bare list.
 
     A list of fresh rungs binds like a program (``i{N}``).  A list that already
-    holds bound rungs (taken from a program) keeps their keys and names only the
-    unbound objects, under :data:`LOGIC_NAMESPACE`.
+    holds bound objects (rungs taken from a program, or from another bare list)
+    keeps one holder per key and names the rest, and every unbound object,
+    under :data:`LOGIC_NAMESPACE` with keys no object of the list carries, so
+    the keys are unique within this list.  The holder that keeps a key is the
+    one a ``Program`` owns, else the first in the list.  Two objects that hold
+    the same ``Program``-owned key cannot both keep it; that raises.
     """
-    from pyrung.core.instruction.control import ForLoopInstruction
     from pyrung.core.rung import Rung as RungLogic
 
     # A stand-in object scanned through ``evaluate()`` keeps no site memory.
     rungs = [rung for rung in rungs if isinstance(rung, RungLogic)]
-
-    def _instructions(rung: Rung) -> Iterable[Instruction]:
-        for instr in rung._instructions:
-            yield instr
-            if isinstance(instr, ForLoopInstruction):
-                yield from instr.instructions
-        for branch in rung._branches:
-            yield from _instructions(branch)
-
-    bound = any(instr._state_key is not None for rung in rungs for instr in _instructions(rung))
-    if not bound:
+    holders = _list_key_holders(rungs)
+    if not holders:
         return bind_sites(rungs)
-    return bind_sites(rungs, namespace=LOGIC_NAMESPACE, only_unbound=True)
+    keepers: dict[str, Any] = {}
+    for key, objs in holders.items():
+        owned = [obj for obj in objs if getattr(obj, "_site_program_owned", False)]
+        if len(owned) > 1:
+            raise ValueError(
+                f"Site key {key!r} is held by {len(owned)} objects of different programs "
+                "in one rung list; their memory would collide. Build the rungs into one "
+                "Program instead of combining rungs of separately built programs."
+            )
+        keepers[key] = owned[0] if owned else objs[0]
+    return bind_sites(
+        rungs,
+        namespace=LOGIC_NAMESPACE,
+        _keepers=keepers,
+        _reserved=frozenset(holders),
+    )
 
 
 def site_table_of(logic: Any) -> SiteTable | None:
@@ -526,48 +656,59 @@ def site_table_of(logic: Any) -> SiteTable | None:
 
 
 def _match_sites(old: Sequence[Site], new: Sequence[Site]) -> dict[str, str]:
-    """Old site key -> new site key, by fingerprint.
+    """Old site key -> new site key, for the sites reload may carry memory between.
 
-    Exact fingerprints match first (in order, when both sides hold the same
-    count).  The rest match on ``(scope, kind, operands)`` (source line
-    ignored) when that is unambiguous, so an edit that shifts lines keeps the
-    memory of the sites it did not touch.
+    1. Exact fingerprint ``(scope, line, kind, operands)`` plus the site's
+       contacts: groups of the same size pair in source order (one source line
+       that builds several rungs, such as a helper called in a loop).
+    2. The rest, with the line ignored: ``(scope, kind, operands, contacts)``
+       pairs only when exactly one old and one new site have it, so an edit
+       that shifts lines keeps the memory of the sites it did not touch.
+
+    Anything else is unmatched; its memory is dropped, not guessed.
     """
     matched: dict[str, str] = {}
 
-    def _pair(
-        old_sites: Sequence[Site], new_sites: Sequence[Site], key_fn: Any
-    ) -> tuple[list[Site], list[Site]]:
-        old_groups: dict[Any, list[Site]] = {}
-        new_groups: dict[Any, list[Site]] = {}
-        for s in old_sites:
-            old_groups.setdefault(key_fn(s), []).append(s)
-        for s in new_sites:
-            new_groups.setdefault(key_fn(s), []).append(s)
-        used_old: set[str] = set()
-        used_new: set[str] = set()
-        for fp, olds in old_groups.items():
-            news = new_groups.get(fp, [])
-            if len(olds) != len(news):
-                continue
-            for o, n in zip(olds, news, strict=True):
-                if o.site != n.site:
-                    continue
-                matched[o.key] = n.key
-                used_old.add(o.key)
-                used_new.add(n.key)
-        return (
-            [s for s in old_sites if s.key not in used_old],
-            [s for s in new_sites if s.key not in used_new],
-        )
+    def _groups(sites: Sequence[Site], key_fn: Any) -> dict[Any, list[Site]]:
+        groups: dict[Any, list[Site]] = {}
+        for site in sites:
+            groups.setdefault(key_fn(site), []).append(site)
+        return groups
 
-    rest_old, rest_new = _pair(old, new, lambda s: (s.site, s.fingerprint))
-    _pair(
-        rest_old,
-        rest_new,
-        lambda s: (s.site, s.fingerprint[0], s.fingerprint[2], s.fingerprint[3]),
-    )
+    def _exact(site: Site) -> Any:
+        return (site.site, site.fingerprint, site.contacts)
+
+    old_groups = _groups(old, _exact)
+    new_groups = _groups(new, _exact)
+    for key, olds in old_groups.items():
+        news = new_groups.get(key, [])
+        if len(olds) == len(news):
+            for o, n in zip(olds, news, strict=True):
+                matched[o.key] = n.key
+    used_new = set(matched.values())
+    rest_old = [site for site in old if site.key not in matched]
+    rest_new = [site for site in new if site.key not in used_new]
+
+    def _moved(site: Site) -> Any:
+        scope, _line, kind, operands = site.fingerprint
+        return (site.site, scope, kind, operands, site.contacts)
+
+    old_groups = _groups(rest_old, _moved)
+    new_groups = _groups(rest_new, _moved)
+    for key, olds in old_groups.items():
+        news = new_groups.get(key, [])
+        if len(olds) == 1 and len(news) == 1:
+            matched[olds[0].key] = news[0].key
     return matched
+
+
+_OVERLAY_NAMESPACES = frozenset({PLANT_NAMESPACE, PILOT_NAMESPACE})
+
+
+def _is_overlay_memory(name: str) -> bool:
+    """Memory of a plant/PILOT overlay site (``_oneshot:pilot:i3``)."""
+    parts = name.split(":")
+    return len(parts) >= 3 and parts[-2] in _OVERLAY_NAMESPACES
 
 
 def remap_site_memory(
@@ -577,27 +718,30 @@ def remap_site_memory(
 ) -> tuple[dict[str, Any], tuple[str, ...]]:
     """Carry site memory to the matching sites of a new program.
 
-    Memory that belongs to a site of *old* moves to the site of *new* with the
-    same fingerprint, or is dropped when no site matches.  Memory that is not
-    site memory (edge history by tag, timer fractions, system memory) is kept
-    as is.  Returns ``(memory, dropped keys)``.
+    Memory of a site of *old* moves to the site of *new* that
+    :func:`_match_sites` pairs it with, or is dropped.  Memory of overlay
+    sites (``plant:`` / ``pilot:``) is dropped too: the overlays are rebuilt
+    for the new program.  Other memory (edge history by tag, timer fractions,
+    system memory) is kept as is.  Returns ``(memory, dropped keys)``.
     """
-    if old is None:
-        return dict(memory), ()
     owned: dict[str, tuple[str, str]] = {}
-    for s in old.sites:
-        for name, _default in s.memory:
-            owned[name] = (s.key, name[: -(len(s.key) + 1)])
+    if old is not None:
+        for site in old.sites:
+            for name, _default in site.memory:
+                owned[name] = (site.key, name[: -(len(site.key) + 1)])
     new_names: set[str] = set()
     if new is not None:
-        new_names = {name for s in new.sites for name, _default in s.memory}
-    matched = _match_sites(old.sites, new.sites) if new is not None else {}
+        new_names = {name for site in new.sites for name, _default in site.memory}
+    matched = _match_sites(old.sites, new.sites) if old is not None and new is not None else {}
     out: dict[str, Any] = {}
     dropped: list[str] = []
     for name, value in memory.items():
         owner = owned.get(name)
         if owner is None:
-            out[name] = value
+            if _is_overlay_memory(name):
+                dropped.append(name)
+            else:
+                out[name] = value
             continue
         site_key, prefix = owner
         target = matched.get(site_key)

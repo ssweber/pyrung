@@ -47,6 +47,7 @@ class Condition(ABC):
     # Edge contacts: the site key ``bind_sites`` stamps (``e{N}``); see
     # :mod:`pyrung.core.site_memory`.
     _site_key: str | None = None
+    _site_program_owned: bool = False
 
     @abstractmethod
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:

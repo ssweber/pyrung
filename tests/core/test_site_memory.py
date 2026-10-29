@@ -174,9 +174,82 @@ class TestNamespacesAndUnbound:
         extra.add_instruction(OutInstruction(Bool("Z"), oneshot=True))
         plc = PLC([*logic.rungs, extra])
         assert logic.rungs[0]._instructions[0].state_key == "i1"
-        assert extra._instructions[0].state_key == f"{LOGIC_NAMESPACE}:i5"
+        assert extra._instructions[0].state_key == f"{LOGIC_NAMESPACE}:i1"
         assert plc._site_table is not None
         plc.step()
+
+
+def _oneshot_rung(trigger: Bool, target: Bool) -> RungLogic:
+    rung = RungLogic(trigger)
+    rung.add_instruction(OutInstruction(target, oneshot=True))
+    return rung
+
+
+def _list_keys(plc: PLC) -> list[str]:
+    table = plc._site_table
+    assert table is not None
+    return [s.key for s in table.sites]
+
+
+class TestBareListKeysAreUnique:
+    def test_rungs_bound_by_separate_lists(self):
+        """Regression: r1 and r2 both carried i1, so they shared one one-shot."""
+        A = Bool("A")
+        r1 = _oneshot_rung(A, Bool("P"))
+        r2 = _oneshot_rung(A, Bool("Q"))
+        PLC([r1])
+        PLC([r2])
+        plc = PLC([r1, r2])
+        keys = _list_keys(plc)
+        assert len(keys) == len(set(keys))
+        plc.patch({"A": True})
+        plc.step()
+        assert plc.current_state.tags["P"] is True
+        assert plc.current_state.tags["Q"] is True
+
+    def test_fresh_key_skips_a_logic_key_already_held(self):
+        logic, _shared = _program()
+        A = Bool("A")
+        x = _oneshot_rung(A, Bool("X"))
+        y = _oneshot_rung(A, Bool("Y"))
+        PLC([*logic.rungs, x])
+        assert x._instructions[0].state_key == f"{LOGIC_NAMESPACE}:i1"
+        plc = PLC([*logic.rungs, y, x])
+        keys = _list_keys(plc)
+        assert len(keys) == len(set(keys))
+        assert x._instructions[0].state_key == f"{LOGIC_NAMESPACE}:i1"
+        assert y._instructions[0].state_key != x._instructions[0].state_key
+        plc.patch({"A": True})
+        plc.step()
+        assert plc.current_state.tags["X"] is True
+        assert plc.current_state.tags["Y"] is True
+
+    def test_program_key_wins_over_a_list_key(self):
+        A = Bool("A")
+        loose = _oneshot_rung(A, Bool("L"))
+        PLC([loose])
+        assert loose._instructions[0].state_key == "i1"
+        with Program(strict=False) as logic:
+            with Rung(A):
+                out(Bool("M"), oneshot=True)
+        plc = PLC([loose, *logic.rungs])
+        assert logic.rungs[0]._instructions[0].state_key == "i1"
+        assert loose._instructions[0].state_key == f"{LOGIC_NAMESPACE}:i1"
+        plc.patch({"A": True})
+        plc.step()
+        assert plc.current_state.tags["L"] is True
+        assert plc.current_state.tags["M"] is True
+
+    def test_two_programs_with_the_same_key_raise(self):
+        A = Bool("A")
+        with Program(strict=False) as first:
+            with Rung(A):
+                out(Bool("F"), oneshot=True)
+        with Program(strict=False) as second:
+            with Rung(A):
+                out(Bool("S"), oneshot=True)
+        with pytest.raises(ValueError, match="'i1' is held by 2 objects"):
+            PLC([*first.rungs, *second.rungs])
 
 
 def _counter_program(*, insert_rung: bool) -> Program:
@@ -223,9 +296,76 @@ class TestRemap:
         assert remapped == {}
         assert sorted(dropped) == ["_oneshot:i1", "_oneshot:i2", "_oneshot:i3"]
 
-    def test_edge_sites_are_recorded_for_remap(self):
-        logic, _shared = _program()
-        table = site_table_of(logic)
-        assert table is not None
-        assert all(s.site == SITE_EDGE for s in table.edge_sites)
-        assert all(s.memory == () for s in table.edge_sites)
+    def test_same_target_under_other_contacts_is_not_carried(self):
+        """Regression: P's memory moved to a different rung that also drives P."""
+        X = Bool("X")
+        Y = Bool("Y")
+        Z = Bool("Z")
+        P = Bool("P")
+        Q = Bool("Q")
+        with Program(strict=False) as old:
+            with Rung(X):
+                out(P, oneshot=True)
+            with Rung(Z):
+                out(Q, oneshot=True)
+        with Program(strict=False) as new:
+            with Rung(Z):
+                out(Q, oneshot=True)
+            with Rung(Y):
+                out(P, oneshot=True)
+        memory = {"_oneshot:i1": True, "_oneshot:i2": True}
+        remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(new))
+        # Q's rung moved up (i2 -> i1) and keeps its memory; P's rung is gone.
+        assert remapped == {"_oneshot:i1": True}
+        assert dropped == ("_oneshot:i1",)
+
+    def test_ambiguous_moved_sites_are_dropped(self):
+        A = Bool("A")
+        P = Bool("P")
+        with Program(strict=False) as old:
+            with Rung(A):
+                out(P, oneshot=True)
+            with Rung(A):
+                out(P, oneshot=True)
+        with Program(strict=False) as new:
+            with Rung(A):
+                out(P, oneshot=True)
+            with Rung(A):
+                out(P, oneshot=True)
+        memory = {"_oneshot:i1": True, "_oneshot:i2": False}
+        remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(new))
+        assert remapped == {}
+        assert sorted(dropped) == ["_oneshot:i1", "_oneshot:i2"]
+
+    def test_overlay_memory_is_dropped(self):
+        old = _counter_program(insert_rung=False)
+        memory = {"_oneshot:pilot:i1": True, "_toggle:plant:i2": True, "_prev:A": True}
+        remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(old))
+        assert remapped == {"_prev:A": True}
+        assert sorted(dropped) == ["_oneshot:pilot:i1", "_toggle:plant:i2"]
+
+    def test_edge_sites_match_after_a_line_shift(self):
+        from pyrung.core.site_memory import _match_sites
+
+        A = Bool("A")
+        B = Bool("B")
+        P = Bool("P")
+        with Program(strict=False) as old:
+            with Rung(rise(A)):
+                out(P)
+        with Program(strict=False) as new:
+            with Rung(B):
+                out(Bool("Extra"))
+            with Rung(rise(A)):
+                out(P)
+        old_table = site_table_of(old)
+        new_table = site_table_of(new)
+        assert old_table is not None and new_table is not None
+        (old_edge,) = old_table.edge_sites
+        (new_edge,) = new_table.edge_sites
+        assert old_edge.site == new_edge.site == SITE_EDGE
+        assert (old_edge.kind, old_edge.tag, old_edge.memory) == ("rise", "A", ())
+        assert old_edge.source_line != new_edge.source_line
+        matched = _match_sites(old_table.sites, new_table.sites)
+        assert matched[old_edge.key] == new_edge.key == "e1"
+        assert matched["i1"] == "i2"

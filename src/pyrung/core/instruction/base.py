@@ -46,6 +46,7 @@ class Instruction(ABC):
     end_line: int | None = None
     debug_substeps: tuple[DebugInstructionSubStep, ...] | None = None
     _state_key: str | None = None
+    _site_program_owned: bool = False
     ALWAYS_EXECUTES: bool = False
     INERT_WHEN_DISABLED: bool = True
     _reads: tuple[str, ...] = ()
