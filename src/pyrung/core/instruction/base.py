@@ -107,9 +107,15 @@ class Instruction(ABC):
 
     @property
     def state_key(self) -> str:
-        if self._state_key is not None:
-            return self._state_key
-        return str(id(self))
+        """The site key ``bind_sites`` assigned (``i{N}``); see :mod:`pyrung.core.site_memory`."""
+        key = self._state_key
+        if key is None:
+            raise RuntimeError(
+                f"{type(self).__name__} has no site key: it was never bound into a program. "
+                "Build it inside `with Program():`, or bind overlay rungs with "
+                "pyrung.core.site_memory.bind_sites()."
+            )
+        return key
 
     def memory_key(self, prefix: str) -> str:
         return f"{prefix}:{self.state_key}"
