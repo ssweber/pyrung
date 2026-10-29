@@ -10,11 +10,14 @@ else.  A destination a failing instruction should leave alone is seeded with a
 nonzero value, so a write of 0 would show.  ``init`` puts the TXT, the staged
 registers and the seeds back to their power-up value (TXT NUL, numbers 0).
 
+The cases that raise SC43 (``to_value_rejects``, ``pack_text_word_hex``,
+``pack_text_whitespace``) come last in the group: every case fires on the same
+scan, so an earlier fault would still be on at a later case's flag probe.
+
 The expectations are what a CLICK does (hardware round 1, 2026-10-29): TXT
 is 8-bit (Copy Binary of 200 stores 200), Pack Copy into an INT or DINT clamps
 a value past its range and stops at a decimal point ("12.5" is 12), and
-Character Value of NUL writes 0.  pyrung refuses each, so those cases are
-``pending="TEXT"``.  A fault flag is read on the rung right after the
+Character Value of NUL writes 0.  A fault flag is read on the rung right after the
 instruction it asks about: a CLICK flag may follow the last instruction (see
 ``test_system.py``), so anything between would confound it.  What each case
 tells apart:
@@ -25,7 +28,9 @@ tells apart:
   0 over the destination's 77.  A model that skips empty text leaves 77.
 - ``to_value_rejects``: Character Value of a letter is a fault (SC43) and
   leaves the destination alone (77); of NUL it writes 0 over 66 (Result3) and,
-  adopted, raises no fault (Result4 = 0).  pyrung refuses NUL too (66, 1).  A
+  adopted, raises no fault (Result4 = 0).  pyrung writes 0 for NUL, but its
+  fault flag stays on from the letter earlier in the scan (Result4 = 1), so the
+  case stays ``pending="SYS"`` until a flag follows the last instruction.  A
   model that stores the code minus 48 reads 17 for the letter.
 - ``to_text_suppress``: 123 converts to the three characters "123", the rest
   of the TXT range is untouched (90).  A model that pads to the Int's five
@@ -42,7 +47,7 @@ tells apart:
 - ``to_binary``: Copy Binary of an Int writes one character, the low byte; a
   model that writes both bytes of the word also changes the next TXT (1 where
   this reads 90).  A byte above 127 is stored as is (200, Result3) and,
-  adopted, raises no fault (Result4 = 0); pyrung refuses it (90, 1).
+  adopted, raises no fault (Result4 = 0).
 - ``pack_text_word_hex``: Pack Copy text into a WORD parses hex: "00FF" is 255
   and "0010" is 16, where a decimal parse refuses the first and reads 10 for
   the second; text that is not hex leaves the destination alone.
@@ -444,16 +449,6 @@ group = Group(
             expect={"Result1": 0, "Result2": 0, "Result3": 32},
         ),
         case(
-            "Character Value of a letter is refused: the out-of-range fault comes up "
-            "(Result2 = 1) and the destination keeps its 77 (Result1); of NUL it writes 0 "
-            "(Result3), with no fault (Result4 = 0)",
-            ladder=prove_to_value_rejects,
-            init=init_to_value_rejects,
-            expect={"Result1": 77, "Result2": 1, "Result3": 0, "Result4": 0},
-            pending="TEXT",
-            probe="does Character Value of NUL set SC43",
-        ),
-        case(
             "Copy to text with suppress zero writes 123 as the characters 1, 2, 3 and leaves "
             "the next TXT alone",
             ladder=prove_to_text_suppress,
@@ -495,7 +490,6 @@ group = Group(
             ladder=prove_to_binary,
             init=init_to_binary,
             expect={"Result1": 65, "Result2": 90, "Result3": 200, "Result4": 0},
-            pending="TEXT",
             probe="does Copy Binary of 200 set SC43",
         ),
         case(
@@ -518,7 +512,6 @@ group = Group(
                 "Result4": 12,
                 "ErrorCode": 1,
             },
-            pending="TEXT",
             probe="does a clamping pack_text set SC43",
         ),
         case(
@@ -527,17 +520,7 @@ group = Group(
             ladder=prove_pack_text_dint,
             init=init_pack_text_dint,
             expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1},
-            pending="TEXT",
             probe="does a clamping pack_text set SC43",
-        ),
-        case(
-            "Pack text with a leading space is refused unless whitespace is allowed: the "
-            "destination keeps its 99 (Result1) and the fault comes up (Result2 = 1); "
-            "allowed, leading and trailing spaces are trimmed (Result3 = Result4 = 12)",
-            ladder=prove_pack_text_whitespace,
-            init=init_pack_text_whitespace,
-            expect={"Result1": 99, "Result2": 1, "Result3": 12, "Result4": 12},
-            probe="does a refused pack_text set SC43",
         ),
         case(
             "Fill with empty text blanks a TXT to NUL, so ASCII Code Value of it writes 0 over "
@@ -562,8 +545,29 @@ group = Group(
             ladder=prove_pack_text_int_fraction,
             init=init_pack_text_int_fraction,
             expect={"Result1": 12, "Result2": 99, "Result3": 0, "Result4": 1},
-            pending="TEXT",
             probe='pack_text "12.9" -> 12 or 13; "12x" -> 12 or refused',
+        ),
+        # The cases that raise SC43 come last: every case fires on the same scan, so a
+        # fault raised earlier in the subroutine would still be on at a later case's
+        # flag probe (a CLICK's flag follows the last instruction, so there it is not).
+        case(
+            "Character Value of a letter is refused: the out-of-range fault comes up "
+            "(Result2 = 1) and the destination keeps its 77 (Result1); of NUL it writes 0 "
+            "(Result3), with no fault (Result4 = 0)",
+            ladder=prove_to_value_rejects,
+            init=init_to_value_rejects,
+            expect={"Result1": 77, "Result2": 1, "Result3": 0, "Result4": 0},
+            pending="SYS",
+            probe="does Character Value of NUL set SC43",
+        ),
+        case(
+            "Pack text with a leading space is refused unless whitespace is allowed: the "
+            "destination keeps its 99 (Result1) and the fault comes up (Result2 = 1); "
+            "allowed, leading and trailing spaces are trimmed (Result3 = Result4 = 12)",
+            ladder=prove_pack_text_whitespace,
+            init=init_pack_text_whitespace,
+            expect={"Result1": 99, "Result2": 1, "Result3": 12, "Result4": 12},
+            probe="does a refused pack_text set SC43",
         ),
     ],
 )

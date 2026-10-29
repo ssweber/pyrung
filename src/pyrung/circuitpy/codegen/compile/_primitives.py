@@ -261,7 +261,10 @@ def _compile_range_aggregate(expr: RangeAggregateExpr, terms: list[str]) -> str:
         mid = count // 2
         if count % 2:
             return f"sorted({members})[{mid}]"
-        return f"((lambda _s: (_s[{mid - 1}] + _s[{mid}]) / 2)(sorted({members})))"
+        return (
+            f"((lambda _s: (lambda _t: (_t // 2 if _t >= 0 else -(-_t // 2)) "
+            f"if type(_t) is int else _t / 2)(_s[{mid - 1}] + _s[{mid}]))(sorted({members})))"
+        )
     raise TypeError(f"Unsupported range aggregate kind: {expr.kind!r}")
 
 

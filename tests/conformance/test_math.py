@@ -18,7 +18,7 @@ check only the range, never a value.
 
 MDN of an integer range is an integer on a CLICK (hardware round 1,
 2026-10-29: the MDN of {4, 1, 3, 10} read back as a whole number, where pyrung
-keeps 3.5), so ``mdn_even_count`` is ``pending="TEXT"``.  Round 1's data could not tell the
+keeps 3.5).  Round 1's data could not tell the
 truncated mean of the middle two from the middle value nearer zero, so the
 case now uses data that does:
 
@@ -211,7 +211,6 @@ group = Group(
             ladder=prove_mdn_even_count,
             init=init_mdn_even_count,
             expect={"Result1": 5, "Result2": 50, "Result3": 50, "Result4": -5},
-            pending="TEXT",
             probe="MDN of an even count: truncated mean or middle value nearer zero",
         ),
         case(

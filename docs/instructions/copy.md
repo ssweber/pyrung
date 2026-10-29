@@ -45,7 +45,7 @@ copy(ModeChar, DS[1], convert=to_value)    # CHAR '5' → numeric 5   (Copy Char
 copy(ModeChar, DS[1], convert=to_ascii)    # CHAR '5' → ASCII 53    (Copy ASCII Code Value)
 ```
 
-A CLICK TXT is one byte, so a blank TXT is NUL (`$00`): one nothing has written, one cleared with `fill("", ...)` or `reset()`, and one set to `""`. `to_ascii` of a blank TXT writes 0; `to_value` of it sets the out-of-range fault.
+A CLICK TXT is one byte, so a blank TXT is NUL (`$00`): one nothing has written, one cleared with `fill("", ...)` or `reset()`, and one set to `""`. A TXT holds a whole byte, 0-255 (not 7-bit ASCII): `to_ascii` reads a character above 127 as its code, and `to_binary` of 200 stores 200. `to_ascii` and `to_value` of a blank TXT write 0; `to_value` of a letter or other non-digit sets the out-of-range fault and leaves the destination alone.
 
 ### Numeric → Text
 
@@ -108,6 +108,6 @@ pack_text(Txt.select(1, 3), DS[1], allow_whitespace=True) # " 12" -> 12
 - `unpack_to_bits()` reverses that mapping. `REAL` sources are unpacked from their raw IEEE-754 bit pattern.
 - `pack_words()` packs exactly two `INT`/`WORD` tags into one `DINT` or `REAL`. The first source is the low word.
 - `unpack_to_words()` reverses that mapping. It requires exactly two `INT`/`WORD` destinations.
-- `pack_text()` parses a `TXT`/`CHAR` range into an `INT`, `WORD`, `DINT`, or `REAL`. `INT`/`DINT` parse signed decimal, `WORD` parses hex, and `REAL` parses float text including exponential notation. Leading or trailing whitespace sets the out-of-range fault unless you pass `allow_whitespace=True`, which trims before parsing.
+- `pack_text()` parses a `TXT`/`CHAR` range into an `INT`, `WORD`, `DINT`, or `REAL`. `INT`/`DINT` parse signed decimal up to the first character that is not a digit (`"12.5"` is 12, `"12x"` is 12) and clamp a value past the destination (`"123456"` into an `INT` is 32767), `WORD` parses hex, and `REAL` parses float text including exponential notation. Leading or trailing whitespace sets the out-of-range fault unless you pass `allow_whitespace=True`, which trims before parsing.
 - All pack/unpack instructions accept `oneshot=True`.
 - There is no `unpack_text()`. To write a text literal into `TXT`/`CHAR` memory, use plain `copy()` and it fans out across sequential tags: `copy("HELLO", Txt[1])`. For numeric → text, use `copy(..., convert=to_text())` or `copy(..., convert=to_binary)`.

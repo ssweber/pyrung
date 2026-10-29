@@ -8,7 +8,6 @@ from pyrung.circuitpy.codegen._constants import (
 )
 from pyrung.circuitpy.codegen._util import (
     _indent_body,
-    _range_reverse,
     _range_type_name,
     _static_range_length,
     _store_coerce_expr,
@@ -188,26 +187,16 @@ def _compile_search_instruction(
                 "else:",
             ]
         )
-        if _range_reverse(instr.search_range):
-            cursor_body.extend(
-                [
-                    "    _cursor_index = None",
-                    f"    for _idx, _addr in enumerate({range_addrs}):",
-                    "        if _addr < _current_result:",
-                    "            _cursor_index = _idx",
-                    "            break",
-                ]
-            )
-        else:
-            cursor_body.extend(
-                [
-                    "    _cursor_index = None",
-                    f"    for _idx, _addr in enumerate({range_addrs}):",
-                    "        if _addr > _current_result:",
-                    "            _cursor_index = _idx",
-                    "            break",
-                ]
-            )
+        cursor_body.extend(
+            [
+                "    _cursor_index = None",
+                f"    for _idx, _addr in enumerate({range_addrs}):",
+                "        if _addr == _current_result:",
+                f"            if _idx + 1 < len({range_addrs}):",
+                "                _cursor_index = _idx + 1",
+                "            break",
+            ]
+        )
     else:
         cursor_body.append("_cursor_index = 0")
 
