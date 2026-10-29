@@ -78,6 +78,7 @@ from pyrung.core.instruction import (
     ToggleInstruction,
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
+    control,
 )
 from pyrung.core.instruction.calc import has_domain_limited_func
 from pyrung.core.instruction.send_receive import (
@@ -971,46 +972,33 @@ def _compile_for_loop_instruction(
     index_var = f"_for_i{suffix}"
     ctx._for_loop_depth = depth + 1
     try:
-        disabled_children = _compile_loop_body(instr, "False", ctx)
-        enabled_children = _compile_loop_body(instr, "True", ctx)
+        children = _compile_loop_body(instr, ctx)
     finally:
         ctx._for_loop_depth = depth
+    # CLICK reads the count as unsigned 16-bit; a count of 0 runs
+    # FOR_ZERO_COUNT_ITERATIONS iterations (an open hardware question).
+    iterations_expr = f"int({count_expr}) & 0xFFFF"
+    if control.FOR_ZERO_COUNT_ITERATIONS:
+        iterations_expr = f"({iterations_expr}) or {int(control.FOR_ZERO_COUNT_ITERATIONS)}"
     body = [
-        f"{iterations_var} = max(1, int({count_expr}))",
+        f"{iterations_var} = {iterations_expr}",
         f"for {index_var} in range({iterations_var}):",
         *_indent_body(_compile_assignment_lines(instr.idx_tag, index_var, ctx, indent=0), 4),
-        *_indent_body(enabled_children, 4),
+        *_indent_body(children, 4),
     ]
-    return _compile_guarded_instruction(
-        instr,
-        enabled_expr,
-        ctx,
-        indent,
-        body,
-        disabled_body=disabled_children,
-    )
+    # A false For rung skips its body: only the For's own one-shot re-arms.
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, body)
 
 
 def _compile_loop_body(
     instr: ForLoopInstruction,
-    enabled_expr: str,
     ctx: CodegenContext,
 ) -> list[str]:
-    """Compile one pass over a loop body: bare instructions and body rungs."""
+    """Compile one iteration of a loop body: bare instructions and body rungs."""
     lines: list[str] = []
     for item in instr.body:
         if not isinstance(item, LogicRung):
-            lines.extend(compile_instruction(item, enabled_expr, ctx, 0))
-        elif enabled_expr == "False":
-            lines.extend(
-                _compile_rung_items(
-                    rung=item,
-                    enabled_expr="False",
-                    ctx=ctx,
-                    indent=0,
-                    scope_key=ctx.next_name("loop_rung"),
-                )
-            )
+            lines.extend(compile_instruction(item, "True", ctx, 0))
         else:
             # A body rung reads live tags: its contacts are evaluated afresh
             # on every iteration, as a rung of its own.

@@ -93,9 +93,9 @@ Reset with the instructions' own semantics, not by poking registers an instructi
 - **Counters, RTON, drums, shift registers**: tie the reset input to the reset, `count_up(ct, 100).reset(slot.Cmd == 0)`, `time_event_drum(...).reset(slot.Cmd == 0)`.
 - **Latched or toggled bits, and bits driven from inside a loop**: `reset(c[1801])` in `init`.
 - **Staged registers** (a case's raw DS/DD/DF/DH): `fill(0, ds.select(4401, 4402))` or `copy(0, df[1])` in `init`.
-- **Edge history and one-shots** need nothing: they rearm on the scans the rung is false.
+- **Edge history and one-shots** need nothing: they rearm on the scans the rung is false. Not inside a loop whose For rung is false: CLICK skips that body, so nothing in it rearms (`loop/body_oneshot_holds_while_for_false`).
 
-**A reset must not depend on an open probe.** If what CLICK does is the question a case asks (F2: does a false For rung scan its body?), the reset cannot rely on pyrung's answer. The `loop` timer and counter cases keep their For rung true and gate a body rung instead, so their reset inputs are scanned either way.
+**A reset must not depend on an open probe.** If what CLICK does is the question a case asks, the reset cannot rely on pyrung's answer. F2 (a false For rung skips its body, answered on a CLICK) is why the `loop` edge, timer, counter and one-shot cases keep their For rung true and gate a body rung instead, so their resets are scanned.
 
 **`keep=`** names tags the reset leaves alone on purpose. Two kinds:
 
@@ -296,8 +296,8 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] forloop runs N times in one scan (`loop/loop_runs_n_times`)
 - [x] forloop body sees its own prior-iteration writes (`loop/loop_runs_n_times`)
 - [ ] forloop loop.idx indirect addressing
-- [x] forloop dynamic count == 0: pyrung runs the body once (`loop/zero_or_negative_count_runs_once`)
-- [x] forloop (`loop` group, F1-F14): a false For rung drives body coils off (F2); count 0/-1 runs once (F3); count read once (F4); body-rung contacts per iteration (F5); edges compare with the previous scan (F6); timers accumulate per iteration (F7); counters count per iteration (F8); Break leaves the innermost loop (F9) after the earlier body rungs (F10); Continue skips the rest of one iteration (F11, F12); a Break contact sees same-iteration writes (F13); a one-shot fires once per scan (F14)
+- [x] forloop dynamic count == 0: no iteration, pending hardware (65536 is the other reading) (`loop/zero_count`); -1 runs 65535 (unsigned 16-bit) (`loop/negative_count_reads_unsigned`, in-process only)
+- [x] forloop (`loop` group, F1-F14, F17): a false For rung skips its body (F2); count read as unsigned 16-bit (F3); count read once (F4); body-rung contacts per iteration (F5); edges inside a loop (F6); timers accumulate per iteration (F7); counters per iteration (F8); Break leaves the innermost loop (F9) after the earlier body rungs (F10); Continue skips the rest of one iteration (F11, F12); a Break contact sees same-iteration writes (F13); a one-shot re-arms on an iteration its rung is false (F14); a body one-shot holds while its For rung is false (F17)
 - [ ] forloop inner one-shot: does CLICK reject it (C0111) or ignore it (F15); a loop in a called subroutine counts toward depth 3 (F16, needs the subroutine home)
 
 ### Memory

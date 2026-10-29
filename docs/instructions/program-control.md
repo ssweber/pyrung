@@ -58,8 +58,11 @@ with rung():
         copy(Counter + 1, Counter)
 ```
 
-The count can be a positive literal or a tag (resolved each scan). If a tag
-resolves to 0 or a negative value, the loop executes once.
+The count can be a positive literal or a tag, read once when the loop starts.
+As on CLICK, a tag count is read as an unsigned 16-bit number: -1 runs 65535
+iterations (a scan of a second or more on a CLICK), and 0 runs none. Whether
+CLICK runs 0 or 65536 iterations for a count of 0 is not yet confirmed on
+hardware; pyrung runs none (`pyrung.core.instruction.control.FOR_ZERO_COUNT_ITERATIONS`).
 
 ```python
 with rung():
@@ -97,8 +100,10 @@ with rung(Enable):
 `continue_loop()` skips the rest of the current iteration. `break_loop()` leaves
 the innermost loop; the scan carries on after its Next. Both need a body rung
 with at least one contact, as in CLICK. When the loop's own rung is false, the
-body runs once with power off: its `out()` coils turn off and its one-shots
-re-arm.
+body does not run at all, as on CLICK: its `out()` coils keep their values, its
+timers and counters neither time, count nor reset, and its one-shots do not
+re-arm (only the For's own `oneshot=True` does). To turn a body coil off when
+the loop stops, `reset()` it from a rung of its own.
 
 `branch()` is not allowed inside a loop, and a body rung cannot hold another
 `with rung()`.

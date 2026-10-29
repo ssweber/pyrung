@@ -18,6 +18,7 @@ from pyrung.core import (
     break_loop,
     calc,
     call,
+    copy,
     count_up,
     forloop,
     latch,
@@ -40,7 +41,7 @@ from pyrung.core.intrascan_counterfactual import (
     execute_counterfactual_program,
 )
 from pyrung.core.validation._common import _collect_write_sites
-from pyrung.core.validation.stuck_bits import _loop_exit_skippable
+from pyrung.core.validation.stuck_bits import _loop_exit_skippable, validate_stuck_bits
 
 Enable = Bool("Enable")
 Gate = Bool("Gate")
@@ -94,6 +95,76 @@ def test_loop_exit_makes_every_loop_instruction_unprovable_for_stuck_bits():
     skippable = _loop_exit_skippable(logic)
     loop = logic.rungs[0]._instructions[0]
     assert {id(i) for i in loop.instructions} <= skippable
+
+
+def test_bare_loop_out_is_not_a_level_follower():
+    # A false For rung skips its body (CLICK), so the coil holds its value.
+    with Program() as logic:
+        with Rung(Enable):
+            with forloop(2):
+                out(Y)
+
+    node = build_program_graph(logic).rung_nodes[0]
+    assert "Y" in node.writes
+    assert "Y" not in node.ote_writes
+
+
+def test_loop_count_tag_gates_the_body():
+    # A count of 0 runs no iteration, so the count joins the node's guard.
+    with Program() as logic:
+        with Rung():
+            with forloop(A):
+                out(Y)
+
+    graph = build_program_graph(logic)
+    assert "A" in graph.rung_nodes[0].condition_reads
+    assert not graph.unconditional_write_before_read("Y")
+
+
+def test_prover_sees_a_loop_coil_hold_while_the_loop_rung_is_false():
+    lamp = Bool("Lamp")
+    with Program(strict=False) as logic:
+        with Rung(Enable):
+            with forloop(2):
+                out(Y)
+        with Rung(~Enable, Y):
+            out(lamp)
+
+    assert isinstance(always(logic, ~lamp), Counterexample)
+
+
+def test_prover_sees_a_zero_count_skip_the_write():
+    count = Int("Count", external=True, min=0, max=1)
+    value = Bool("Value", external=True)
+    kept = Bool("Kept")
+    stale = Bool("Stale")
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(count):
+                copy(value, kept)
+        with Rung(kept, ~value):
+            out(stale)
+
+    assert isinstance(always(logic, ~stale), Counterexample)
+
+
+def test_stuck_bits_reports_a_loop_coil_whose_loop_rung_can_be_false():
+    with Program(strict=False) as logic:
+        with Rung(Enable):
+            with forloop(2):
+                out(Y)
+
+    findings = [f for f in validate_stuck_bits(logic).findings if f.target_name == "Y"]
+    assert [f.kind for f in findings] == ["high"]
+
+
+def test_stuck_bits_accepts_a_loop_coil_on_an_unconditional_loop():
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(2):
+                out(Y)
+
+    assert not [f for f in validate_stuck_bits(logic).findings if f.target_name == "Y"]
 
 
 def test_return_inside_body_rung_guards_later_rungs():

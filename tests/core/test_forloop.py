@@ -7,6 +7,7 @@ from pyrung.core import (
     Block,
     Bool,
     CompiledPLC,
+    Dint,
     Int,
     Program,
     Rung,
@@ -17,6 +18,8 @@ from pyrung.core import (
     forloop,
     out,
 )
+from pyrung.core.instruction import control
+from pyrung.core.instruction.control import for_loop_iterations
 from pyrung.core.validation.walker import walk_program
 from tests.conftest import evaluate_program
 
@@ -51,7 +54,7 @@ def test_forloop_count_from_tag_is_resolved_each_scan():
     assert state.tags["Counter"] == 5
 
 
-def test_forloop_tag_count_zero_executes_once():
+def test_forloop_tag_count_zero_runs_no_iteration():
     count = Int("Count")
     counter = Int("Counter")
 
@@ -62,7 +65,37 @@ def test_forloop_tag_count_zero_executes_once():
 
     state = SystemState().with_tags({"Count": 0, "Counter": 0})
     state = evaluate_program(prog, state)
-    assert state.tags["Counter"] == 1
+    assert state.tags["Counter"] == 0
+
+
+@pytest.mark.parametrize(
+    ("count", "iterations"),
+    [(-65535, 1), (-65534, 2), (65539, 3), (-65536, 0)],
+)
+def test_forloop_count_is_read_as_unsigned_16_bit(count, iterations, runner_factory):
+    # CLICK reads the count as unsigned 16-bit: -1 runs 65535 iterations.
+    loops = Dint("Loops")
+    counter = Int("Counter")
+
+    with Program() as prog:
+        with Rung():
+            with forloop(loops):
+                copy(counter + 1, counter)
+
+    runner = runner_factory(prog)
+    runner.patch({"Loops": count, "Counter": 0})
+    runner.step()
+    assert runner.current_state.tags["Counter"] == iterations
+
+
+def test_for_zero_count_switch(monkeypatch):
+    assert for_loop_iterations(0) == 0
+    assert for_loop_iterations(-1) == 65535
+    assert for_loop_iterations(7) == 7
+    monkeypatch.setattr(control, "FOR_ZERO_COUNT_ITERATIONS", 65536)
+    assert for_loop_iterations(0) == 65536
+    assert for_loop_iterations(65536) == 65536
+    assert for_loop_iterations(3) == 3
 
 
 def test_forloop_idx_supports_indirect_addressing():
@@ -106,7 +139,9 @@ def test_branch_inside_forloop_is_rejected():
                         pass
 
 
-def test_forloop_rung_false_resets_coils_and_child_oneshot(runner_factory):
+def test_forloop_rung_false_skips_body(runner_factory):
+    # CLICK: a false For rung skips its body.  Its coils keep their values and
+    # its one-shots do not re-arm.
     enable = Bool("Enable")
     light = Bool("Light")
     counter = Int("Counter")
@@ -130,13 +165,35 @@ def test_forloop_rung_false_resets_coils_and_child_oneshot(runner_factory):
 
     runner.patch({"Enable": False})
     runner.step()
-    assert runner.current_state.tags["Light"] is False
+    assert runner.current_state.tags["Light"] is True
     assert runner.current_state.tags["Counter"] == 1
 
     runner.patch({"Enable": True})
     runner.step()
     assert runner.current_state.tags["Light"] is True
+    assert runner.current_state.tags["Counter"] == 1
+
+
+def test_forloop_own_oneshot_rearms_when_rung_false(runner_factory):
+    enable = Bool("Enable")
+    counter = Int("Counter")
+
+    with Program() as logic:
+        with Rung(enable):
+            with forloop(2, oneshot=True):
+                copy(counter + 1, counter)
+
+    runner = runner_factory(logic)
+    runner.patch({"Enable": True, "Counter": 0})
+    runner.step()
+    runner.step()
     assert runner.current_state.tags["Counter"] == 2
+
+    runner.patch({"Enable": False})
+    runner.step()
+    runner.patch({"Enable": True})
+    runner.step()
+    assert runner.current_state.tags["Counter"] == 4
 
 
 def test_oneshot_forloop_state_is_memory_backed_for_parity():

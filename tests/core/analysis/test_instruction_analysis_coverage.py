@@ -945,7 +945,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         "forloop",
         "forloop",
         _forloop_case,
-        frozenset({"LoopEnable"}),
+        # A count of 0 runs no iteration, so the count gates the body too.
+        frozenset({"LoopEnable", "LoopCount"}),
         data_reads=frozenset({"LoopCount", "LoopSource"}),
         writes=frozenset({"_forloop_idx", "LoopDest"}),
         implicit_writes=_COPY_FAULTS,

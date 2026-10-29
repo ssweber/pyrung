@@ -17,7 +17,9 @@ execute?**  If so the coil holds its last value on that scan, the ``out``
 supplies only the latch side, and something else must ``reset`` it — exactly as
 if it had been written ``latch(...)``.
 
-An ``out`` in the main program answers no by itself.  So does a set of ``out``
+An ``out`` in the main program answers no by itself, unless it sits in a forloop
+body: a false For rung skips its body, so that ``out`` runs only while its loop
+does (and a count read from a tag may run no iteration).  So does a set of ``out``
 sites whose subroutines *cover* the state space between them — the state-machine
 idiom where every state's subroutine drives the coil, so one of them writes it
 every scan.  Coverage is proved via :func:`_chains_cover_domain`, and needs the
@@ -218,23 +220,65 @@ def _loop_exit_skippable(program: Program) -> frozenset[int]:
     return frozenset(skippable)
 
 
+def _loop_run_conditions(program: Program) -> dict[int, tuple[Condition, ...] | None]:
+    """Per forloop body instruction (by id), the conditions its loop runs under.
+
+    A false For rung skips its body, so an ``out()`` there runs only when the
+    innermost loop around it is enabled.  A loop whose count is read from a tag
+    may run no iteration at all (a count of 0); its body maps to ``None``.
+    """
+    from pyrung.core.instruction.control import ForLoopInstruction, for_loop_iterations
+
+    def _loop_only(instr: Any) -> list[tuple[str, str]]:
+        return [("", "ForLoop")] if isinstance(instr, ForLoopInstruction) else []
+
+    def _flat(loop: ForLoopInstruction) -> list[Any]:
+        out: list[Any] = []
+        for instr in loop.instructions:
+            out.append(instr)
+            if isinstance(instr, ForLoopInstruction):
+                out.extend(_flat(instr))
+        return out
+
+    run: dict[int, tuple[Condition, ...] | None] = {}
+    # Outer loops come first in walk order, so an inner loop's entry wins.
+    for site in _collect_write_sites(program, target_extractor=_loop_only):
+        loop = site.instruction
+        count = loop.count
+        literal = isinstance(count, int) and not isinstance(count, bool)
+        runs = literal and for_loop_iterations(count) > 0
+        for instr in _flat(loop):
+            outer = run.get(id(loop), ())
+            run[id(instr)] = None if outer is None or not runs else site.conditions
+    return run
+
+
 def _site_run_chains(
     site: WriteSite,
     reach_chains: dict[str, tuple[tuple[Condition, ...], ...]],
     return_rungs: dict[str, tuple[int, ...]],
+    loop_conditions: dict[int, tuple[Condition, ...] | None] | None = None,
 ) -> tuple[tuple[Condition, ...], ...]:
     """The condition chains under which the scan executes this site's instruction.
 
     An OR of AND-chains — empty tuple when nothing can be proved (an uncalled
     subroutine, or a ``return_early()`` above the site that may skip it), and
-    ``((),)`` — the always-true chain — for a site in the main program.
+    ``((),)`` — the always-true chain — for a site in the main program.  A site
+    in a forloop body also needs its loop enabled (*loop_conditions*).
     """
     if site.scope == "main":
-        return ((),)
-    assert site.subroutine is not None
-    if any(index < site.rung_index for index in return_rungs.get(site.subroutine, ())):
+        chains: tuple[tuple[Condition, ...], ...] = ((),)
+    else:
+        assert site.subroutine is not None
+        if any(index < site.rung_index for index in return_rungs.get(site.subroutine, ())):
+            return ()
+        chains = reach_chains.get(site.subroutine, ())
+    if loop_conditions is None or id(site.instruction) not in loop_conditions:
+        return chains
+    loop = loop_conditions[id(site.instruction)]
+    if loop is None:
         return ()
-    return reach_chains.get(site.subroutine, ())
+    return tuple(chain + loop for chain in chains)
 
 
 def _self_clearing_coils(
@@ -242,6 +286,7 @@ def _self_clearing_coils(
     reach_chains: dict[str, tuple[tuple[Condition, ...], ...]],
     return_rungs: dict[str, tuple[int, ...]],
     domains: DomainMap,
+    loop_conditions: dict[int, tuple[Condition, ...] | None] | None = None,
 ) -> set[str]:
     """Coils whose ``out`` instructions are proved to execute on *every* scan.
 
@@ -255,7 +300,7 @@ def _self_clearing_coils(
     for tag_name, sites in out_sites.items():
         chains: list[tuple[Condition, ...]] = []
         for site in sites:
-            chains.extend(_site_run_chains(site, reach_chains, return_rungs))
+            chains.extend(_site_run_chains(site, reach_chains, return_rungs, loop_conditions))
         if _chains_cover_domain(chains, domains):
             self_clearing.add(tag_name)
     return self_clearing
@@ -267,6 +312,7 @@ def _undeclared_domain_tags(
     return_rungs: dict[str, tuple[int, ...]],
     tag_map: dict[str, Tag],
     domains: DomainMap,
+    loop_conditions: dict[int, tuple[Condition, ...] | None] | None = None,
 ) -> list[str]:
     """Tags whose *missing* domain declaration is the only thing blocking coverage.
 
@@ -283,7 +329,7 @@ def _undeclared_domain_tags(
 
     chains: list[tuple[Condition, ...]] = []
     for site in sites:
-        chains.extend(_site_run_chains(site, reach_chains, return_rungs))
+        chains.extend(_site_run_chains(site, reach_chains, return_rungs, loop_conditions))
 
     # The literal values each undeclared tag is compared against across the guards.
     mentioned: dict[str, set[int | float]] = defaultdict(set)
@@ -552,7 +598,10 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
         tag: [s for s in tag_sites if id(s.instruction) not in skippable]
         for tag, tag_sites in out_sites.items()
     }
-    self_clearing = _self_clearing_coils(provable_out_sites, reach_chains, return_rungs, domains)
+    loop_conditions = _loop_run_conditions(program)
+    self_clearing = _self_clearing_coils(
+        provable_out_sites, reach_chains, return_rungs, domains, loop_conditions
+    )
 
     latch_sites: dict[str, list[WriteSite]] = defaultdict(list)
     reset_sites: dict[str, list[WriteSite]] = defaultdict(list)
@@ -600,7 +649,7 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
                     f"run; reset({tag_name}) when it stops running?"
                 )
                 undeclared = _undeclared_domain_tags(
-                    held, reach_chains, return_rungs, tag_map, domains
+                    held, reach_chains, return_rungs, tag_map, domains, loop_conditions
                 )
                 if undeclared:
                     names = ", ".join(undeclared)

@@ -1178,7 +1178,7 @@ def _extract_rung_node(
     for condition in rung._conditions:
         condition_reads.update(_extract_reads_from_condition(condition, tag_refs))
 
-    def walk_instruction(instr: Any, *, in_body_rung: bool = False) -> None:
+    def walk_instruction(instr: Any, *, in_loop: bool = False) -> None:
         if isinstance(instr, CallInstruction):
             calls.append(instr.subroutine_name)
 
@@ -1199,9 +1199,11 @@ def _extract_rung_node(
         writes.update(instruction_writes)
         implicit_writes.update(instr_implicit_writes)
         data_reads.update(target_reads)
-        # An out() in a forloop body rung follows that rung's contacts on its
-        # last iteration, not this node's guard: not a level follower here.
-        if isinstance(instr, OutInstruction) and not in_body_rung:
+        # An out() in a forloop body is not a level follower of this node's
+        # guard: a false For rung skips the body (the coil holds), a count of 0
+        # runs no iteration, and in a body rung it follows that rung's contacts
+        # on the last iteration.
+        if isinstance(instr, OutInstruction) and not in_loop:
             ote_writes.update(instruction_writes)
 
         for field_name in getattr(cls, "_exclusive_fields", ()):
@@ -1218,8 +1220,11 @@ def _extract_rung_node(
             # all join it (over-approximate, the safe direction).
             for body_rung in instr.body_rungs:
                 condition_reads.update(_rung_condition_reads(body_rung, tag_refs, local_only=True))
-            for child_instr, local in instr.iter_body():
-                walk_instruction(child_instr, in_body_rung=in_body_rung or bool(local))
+            # A count read from a tag gates the whole body too: one that
+            # resolves to 0 runs no iteration.
+            condition_reads.update(_extract_tag_names(instr.count, tag_refs))
+            for child_instr, _local in instr.iter_body():
+                walk_instruction(child_instr, in_loop=True)
 
     for instruction in rung._instructions:
         walk_instruction(instruction)

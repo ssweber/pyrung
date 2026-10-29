@@ -117,6 +117,24 @@ class EnabledFunctionCallInstruction(Instruction):
             ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(result[key], resolved))
 
 
+# What a For does with a count of 0.  CLICK reads the count as an unsigned
+# 16-bit number (-1 runs 65535 iterations, measured on hardware 2026-10-29);
+# whether 0 means no iteration or 65536 of them is still open.  The runtime,
+# the debugger and the generated P1AM-200 code all read this one switch, so
+# the next hardware round can flip it to 65536.
+FOR_ZERO_COUNT_ITERATIONS = 0
+
+
+def for_loop_iterations(count_value: Any) -> int:
+    """How many times a For runs its body for a resolved count, as on CLICK.
+
+    The count is read as unsigned 16-bit (``count & 0xFFFF``); a count of 0
+    runs :data:`FOR_ZERO_COUNT_ITERATIONS` iterations.
+    """
+    iterations = int(count_value) & 0xFFFF
+    return iterations if iterations else FOR_ZERO_COUNT_ITERATIONS
+
+
 class ForLoopInstruction(OneShotMixin, Instruction):
     """For-loop instruction.
 
@@ -125,6 +143,11 @@ class ForLoopInstruction(OneShotMixin, Instruction):
     evaluate their own contacts afresh on every iteration.  ``instructions``
     is the flat view: every body instruction in source order, body-rung
     instructions included, nested loops as single items.
+
+    When the loop's rung is false the body is skipped, as on CLICK: its
+    ``out()`` coils keep their values and its one-shots do not re-arm.  Only
+    the For's own one-shot re-arms.  The count is read once, when the loop
+    starts (:func:`for_loop_iterations`).
     """
 
     _reads = ("count",)
@@ -178,19 +201,13 @@ class ForLoopInstruction(OneShotMixin, Instruction):
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
-            for item in self.body:
-                if isinstance(item, Instruction):
-                    item.execute(ctx, False)
-                else:
-                    item._execute_in_loop(ctx, parent_enabled=False)
             self._reset_oneshot_state(ctx)
             return
 
         if not self._should_execute(ctx):
             return
 
-        count_value = resolve_tag_or_value_ctx(self.count, ctx)
-        iterations = max(1, int(count_value))
+        iterations = for_loop_iterations(resolve_tag_or_value_ctx(self.count, ctx))
 
         for i in range(iterations):
             # Keep loop index in tag space so indirect refs resolve via ctx.get_tag().
@@ -200,7 +217,7 @@ class ForLoopInstruction(OneShotMixin, Instruction):
                     if isinstance(item, Instruction):
                         item.execute(ctx, True)
                     else:
-                        item._execute_in_loop(ctx, parent_enabled=True)
+                        item._execute_in_loop(ctx)
             except LoopContinueSignal:
                 continue
             except LoopBreakSignal:
@@ -218,17 +235,10 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         return True
 
     def _reset_oneshot_state(self, ctx: ScanContext) -> None:
+        """Re-arm the For's own one-shot (the rung is false); children keep theirs."""
         self.reset_oneshot()
         if self._oneshot:
             ctx.set_memory(self.memory_key("_oneshot"), False)
-
-    def reset_oneshot(self) -> None:
-        """Reset own oneshot state and propagate reset to captured children."""
-        OneShotMixin.reset_oneshot(self)
-        for instruction in self.instructions:
-            reset_fn = getattr(instruction, "reset_oneshot", None)
-            if callable(reset_fn):
-                reset_fn()
 
 
 def iter_loop_body_rungs(instructions: Any) -> Iterator[Rung]:

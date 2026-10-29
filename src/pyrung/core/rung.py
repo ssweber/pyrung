@@ -209,22 +209,19 @@ class Rung:
                 return False
         return True
 
-    def _execute_in_loop(self, ctx: ScanContext, *, parent_enabled: bool) -> None:
-        """Execute this rung as a forloop body rung.
+    def _execute_in_loop(self, ctx: ScanContext) -> None:
+        """Execute this rung as a forloop body rung, on one iteration.
 
         A body rung is a rung of its own: on each iteration it takes a fresh
         condition snapshot and evaluates only its local contacts (the loop
         rung's contacts held at loop entry).  The loop's snapshot is restored
-        afterwards for the bare body instructions that follow.
+        afterwards for the bare body instructions that follow.  A loop whose
+        rung is false does not run its body at all.
         """
         outer_view = ctx._condition_snapshot
         try:
-            if parent_enabled:
-                condition_view = ctx._new_condition_view()
-                enabled = self._evaluate_local_conditions(condition_view)
-            else:
-                condition_view = outer_view
-                enabled = False
+            condition_view = ctx._new_condition_view()
+            enabled = self._evaluate_local_conditions(condition_view)
             self.execute(ctx, enabled, condition_view=condition_view)
         finally:
             ctx._condition_snapshot = outer_view
