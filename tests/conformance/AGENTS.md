@@ -234,10 +234,6 @@ The generated server serves only what the TagMap maps and what rungs use, so eve
 
 What this target cannot see is what only the board does: REAL math in single precision, the CircuitPython language subset, scan timing and memory. The whole suite also makes a 2 MB `code.py`, far too big for the board, so loading it on a real P1AM will take one build per group.
 
-Known issues on this target:
-
-- `out/flasher_restarts_with_on_phase` fails about 1 run in 7 under machine load: a scan gap of 50 ms or more inside its 50 ms Result2 window (TD305 in 750..800) misses the on phase. The case could restart its window on a long scan (SD10), as the clock case does.
-
 ## Running against the real PLC
 
 The harness does not push ladder. CLICK takes it two ways: a whole program through ClickNick's Guided Paste (first load), and changed rungs through ClickNick's Preview Changes (every update after). `tests/conformance/workspace/` is the ClickNick workspace for the conformance project: its committed `.clicknick.toml` links it to the CLICK PLC named `PYRUNG_CONFORMANCE`, and everything ClickNick generates or seeds in it is gitignored (see its `README.md`). pytest, ruff and ty skip the folder (`pyproject.toml`), since ClickNick seeds a smoke test and a `pyproject.toml` there.

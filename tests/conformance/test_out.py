@@ -67,16 +67,19 @@ def prove_debounce_bounce_restarts_on_side(slot):
 
 def prove_flasher_restarts_with_on_phase(slot):
     # O4: 300 ms phases; the rung drops at 450-550 ms (mid off phase).  Both TDs
-    # clear, and the restart at 550 ms begins with a full on phase.
+    # clear, and the restart at 550 ms begins with a full on phase (on to 850
+    # ms; a restart on the off phase is off to 850 ms).  Each check's window
+    # keeps clear of the phase edges and is wide enough that one long
+    # wall-clock scan doesn't step over it.
     with Rung(slot.Cmd != 0):
         on_delay(ClickTimer(305), 2000)
     with Rung(slot.Cmd != 0, td[305] >= 450, td[305] < 550):
         out(c[1832])
     with Rung(slot.Cmd != 0, ~c[1832]):
         flasher(c[1831], on=(ClickTimer(306), 300), off=(ClickTimer(307), 300))
-    with Rung(slot.Cmd != 0, td[305] >= 480, td[305] < 520, td[306] == 0, td[307] == 0):
+    with Rung(slot.Cmd != 0, td[305] >= 460, td[305] < 540, td[306] == 0, td[307] == 0):
         copy(1, slot.Result1, oneshot=True)
-    with Rung(slot.Cmd != 0, td[305] >= 750, td[305] < 800, c[1831]):
+    with Rung(slot.Cmd != 0, td[305] >= 600, td[305] < 800, c[1831]):
         copy(1, slot.Result2, oneshot=True)
     with Rung(slot.Cmd != 0):
         copy(1, slot.Fired, oneshot=True)
