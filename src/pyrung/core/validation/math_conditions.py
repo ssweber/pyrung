@@ -134,9 +134,7 @@ def _definitely_zero(
     )
 
 
-def _display(
-    loc: RungLoc, instr: CalcInstruction, denominator: Any, index: int
-) -> FindingDisplay:
+def _display(loc: RungLoc, instr: CalcInstruction, denominator: Any, index: int) -> FindingDisplay:
     dest = operand_name(instr.dest)
     code, _ = render_instruction(instr, dest)
     # The formula runs with Int Math constants cut to 16 bits; show the divisor as written.

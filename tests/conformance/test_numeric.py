@@ -57,6 +57,14 @@ could plausibly differ, these cases tell the models apart:
   kept whole (pyrung, adopted): 35000, which wraps to -30536 (Result1).  Bounds
   cut to 16 bits, signed, like the other constants: 70000 is 4464, so 2232.
   Clamped to 32767: 16383.  CLICK refusing the bounds at paste: never fires.
+- ``int_math_real_operand_constant`` (probe): the 16-bit cut when the other
+  operand is a REAL.  DF141 = 0.25 is multiplied by the constant 100000 into
+  an Int, preset 99 (Result1).  The constant cut to its low 16 bits, signed
+  (pyrung, adopted): 100000 is -31072, so -7768.  Kept whole: 25000.  Clamped
+  to the Int range, 32767: 8191.  Refused by the Math (write skipped): 99.
+  A REAL operand turning the Math into floating point and the constant kept
+  whole is the 25000 reading.  Paste refused: never fires.  (A whole-number
+  product would wrap to the same value either way, so 0.25 is the operand.)
 - ``copy_clamps_calc_wraps``: Copy clamps where Math wraps.  A Copy that
   wraps (or keeps the low word) reads -25536 and 25536 for Result1/Result3.
 - ``real_to_int_truncates``: Real to Int truncates toward zero.  Rounding
@@ -164,6 +172,15 @@ def prove_int_math_rand_wide_bounds(slot):
         copy(99, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         calc(randint(70000, 70000) / 2, slot.Result1)
+        copy(1, slot.Fired)
+
+
+def prove_int_math_real_operand_constant(slot):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(0.25, df[141])
+        copy(99, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        calc(df[141] * 100000, slot.Result1)
         copy(1, slot.Fired)
 
 
@@ -363,6 +380,10 @@ def init_int_math_wide_constant(slot):
     fill(0, dd.select(171, 172))
 
 
+def init_int_math_real_operand_constant(slot):
+    fill(0, df.select(141, 141))
+
+
 def init_word_calc_wraps(slot):
     fill(0, dh.select(201, 206))
 
@@ -533,6 +554,14 @@ group = Group(
             ladder=prove_int_math_rand_wide_bounds,
             expect={"Result1": -30536},
             probe="RAND bounds past 16 bits in an Int Math",
+        ),
+        case(
+            "A Math constant cut to 16 bits beside a REAL operand: DF * 100000 into an Int, "
+            "with DF = 0.25, is -7768 when 100000 is cut to -31072 (Result1)",
+            ladder=prove_int_math_real_operand_constant,
+            init=init_int_math_real_operand_constant,
+            expect={"Result1": -7768},
+            probe="Int Math constant past 16 bits beside a REAL operand",
         ),
     ],
 )
