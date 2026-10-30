@@ -661,7 +661,8 @@ def aggregate_values(kind: str, values: list[Any] | tuple[Any, ...]) -> Numeric:
     - ``mean``: left-to-right ``+`` then ``/ n`` (exact quotient; calc's
       destination conversion decides truncation).
     - ``median``: middle of the sorted values; for an even count, the mean of
-      the two middle values.
+      the two middle values (truncated toward zero when the range is
+      integer, as on a CLICK).
 
     An empty range yields 0.
     """
@@ -681,7 +682,12 @@ def aggregate_values(kind: str, values: list[Any] | tuple[Any, ...]) -> Numeric:
         mid = len(ordered) // 2
         if len(ordered) % 2:
             return ordered[mid]
-        return (ordered[mid - 1] + ordered[mid]) / 2
+        pair = ordered[mid - 1] + ordered[mid]
+        if type(pair) is int:
+            # CLICK: MDN of an integer range is an integer, the mean of the
+            # middle two truncated toward zero.
+            return pair // 2 if pair >= 0 else -(-pair // 2)
+        return pair / 2
     raise ValueError(f"Unknown range aggregate kind: {kind!r}")
 
 

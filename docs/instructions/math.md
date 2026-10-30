@@ -82,9 +82,9 @@ calc(DS.select(1, 10).max() + abs(Offset), Result)
 calc(DS.select(1, 10).sum() / 10, Result)
 ```
 
-`median()` of an even count is the mean of the two middle values. `mean()` and `median()` are computed exactly; the destination decides what is stored, so an `Int` destination truncates toward zero (`2.5` → `2`, `-4.5` → `-4`) and a `Real` keeps the fraction. On a WORD range (hex mode) values are unsigned 16-bit, so `max()` of `0x0001, 0xFFFF` is `0xFFFF`.
+`median()` of an even count is the mean of the two middle values; over integers, as on a CLICK, that mean is truncated toward zero (`{9, 2, 10, 1}` gives 5, not 5.5), and over a `Real` range it keeps the fraction. `mean()` and `median()` are computed exactly; the destination decides what is stored, so an `Int` destination truncates toward zero (`2.5` → `2`, `-4.5` → `-4`) and a `Real` keeps the fraction. On a WORD range (hex mode) values are unsigned 16-bit, so `max()` of `0x0001, 0xFFFF` is `0xFFFF`.
 
-These rules are pyrung's. CLICK's own rounding for `AVG`/`MDN`, its even-count `MDN` rule, and whether `MAX`/`MIN` treat DH as unsigned are **unconfirmed on hardware**.
+The integer `MDN` rule is CLICK's (hardware, 2026-10-29). CLICK's own rounding for `AVG`, `MDN` of a `Real` range, and whether `MAX`/`MIN` treat DH as unsigned are **unconfirmed on hardware**.
 
 Mode inference applies normally: WORD-only ranges infer hex mode, anything else infers decimal.
 

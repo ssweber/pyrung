@@ -13,10 +13,8 @@ pyrung returns the register number of the first match (``DS4204``, not 2).
 The expectations are what a CLICK does (hardware round 1, 2026-10-29, part B:
 every case but one passed as written).  A continuous search on a CLICK
 restarts at the first address when its result is 0, resumes after an old
-result that lies inside the range, and misses (-1) from anything else;
-pyrung resumes from the first address when the old result lies below the
-range, so the cases where that shows are ``pending="TEXT"``.  Where a case
-detects an alternative model:
+result that lies inside the range, and misses (-1) from anything else.
+Where a case detects an alternative model:
 
 - ``hit_returns_address``: result = position in the range (2), a 0-based
   position (1), or the last match (4206).
@@ -425,7 +423,6 @@ group = Group(
             ladder=prove_continuous_cursor_is_address,
             init=_init(4383, 4394, 868, 869, 870, 871),
             expect={"Result1": 4386, "Result2": 4385, "Result3": -1, "Result4": -1},
-            pending="TEXT",
         ),
         case(
             "Search over DD and DF ranges compares at full width and returns register "
@@ -452,7 +449,6 @@ group = Group(
             ladder=prove_continuous_cursor_outside_range,
             init=init_continuous_cursor_outside_range,
             expect={"Result1": -1, "Result2": -1, "Result3": -1, "Result4": 413},
-            pending="TEXT",
             probe="continuous search cursor at the range edges (410, 417, -5)",
         ),
     ],

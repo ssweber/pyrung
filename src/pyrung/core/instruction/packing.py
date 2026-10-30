@@ -175,7 +175,11 @@ class PackTextInstruction(OneShotMixin, Instruction):
             _set_fault_out_of_range(ctx)
             return
 
-        ctx.set_tag(dest_tag.name, _store_copy_value_to_tag_type(parsed, dest_tag))
+        stored = _store_copy_value_to_tag_type(parsed, dest_tag)
+        ctx.set_tag(dest_tag.name, stored)
+        if dest_tag.type in {TagType.INT, TagType.DINT} and stored != parsed:
+            # CLICK stores the clamped value and raises the out-of-range fault.
+            _set_fault_out_of_range(ctx)
 
 
 class UnpackToBitsInstruction(OneShotMixin, Instruction):

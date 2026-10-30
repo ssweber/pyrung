@@ -59,6 +59,8 @@ class SearchInstruction(OneShotMixin, Instruction):
     **Continuous mode** — when `continuous=True`, the search resumes from the
     address after the previous result rather than restarting each scan.
     Set ``result = 0`` to restart, or set ``result = -1`` to signal exhaustion.
+    As on a CLICK, a result that is not an address inside the range (below,
+    above, or any other value) is a miss, ``-1``.
 
     Args:
         comparison: A `RangeComparison` from a block-range comparison
@@ -174,15 +176,12 @@ class SearchInstruction(OneShotMixin, Instruction):
         if current_result == -1:
             return None
 
-        if reverse_order:
-            for idx, addr in enumerate(addresses):
-                if addr < current_result:
-                    return idx
-            return None
-
+        # CLICK: an old result inside the search range resumes after it; any other
+        # value (below, above, negative) is a miss.  A result on the last address
+        # has nothing after it, which is a miss too.
         for idx, addr in enumerate(addresses):
-            if addr > current_result:
-                return idx
+            if addr == current_result:
+                return idx + 1 if idx + 1 < len(addresses) else None
         return None
 
     def _is_text_path(self, tags: list[Tag]) -> bool:

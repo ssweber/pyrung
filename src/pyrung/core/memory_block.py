@@ -1199,7 +1199,8 @@ class BlockRange:
     def median(self) -> RangeAggregateExpr:
         """Return an expression for the median tag value in this range (CLICK ``MDN``).
 
-        An even count gives the mean of the two middle values.
+        An even count gives the mean of the two middle values; for an integer
+        range that mean is truncated toward zero, as on a CLICK.
         """
         from pyrung.core.expression import RangeAggregateExpr
 

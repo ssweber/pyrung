@@ -148,7 +148,11 @@ class TestCalcRangeAggregates:
         )
         assert result == expected
 
-    @pytest.mark.parametrize(("method", "expected"), [("median", 3.5), ("mean", 2.5)])
+    @pytest.mark.parametrize(
+        ("method", "expected"),
+        # An integer range's even-count MDN is already an integer (CLICK): 3.5 -> 3.
+        [("median", 3.0), ("mean", 2.5)],
+    )
     def test_real_dest_keeps_fraction(self, runner_factory, method, expected):
         result = self._run(
             runner_factory,

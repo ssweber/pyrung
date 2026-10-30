@@ -70,12 +70,6 @@ def _range_type_name(range_value: Any) -> str:
     raise TypeError(f"Expected BlockRange or IndirectBlockRange, got {type(range_value).__name__}")
 
 
-def _range_reverse(range_value: Any) -> bool:
-    if isinstance(range_value, (BlockRange, IndirectBlockRange)):
-        return bool(range_value.reverse_order)
-    return False
-
-
 def _static_range_length(range_value: Any) -> int | None:
     if isinstance(range_value, BlockRange):
         return len(range_value)

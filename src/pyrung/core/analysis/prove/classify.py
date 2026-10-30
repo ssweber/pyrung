@@ -1116,7 +1116,7 @@ def _domain_from_copy_convert(instr: Any) -> tuple[Any, ...] | None:
     if not isinstance(convert, CopyConverter):
         return None
     if convert.mode == "ascii":
-        return tuple(range(0, 128))
+        return tuple(range(0, 256))
     if convert.mode == "value":
         return tuple(range(0, 10))
     return None

@@ -83,19 +83,22 @@ def _float_to_int_bits(f: float) -> int:
 
 
 def _ascii_char_from_code(code: int) -> str:
-    if code < 0 or code > 127:
-        raise ValueError("ASCII code out of range")
+    if code < 0 or code > 255:
+        raise ValueError("character code out of range")
     return chr(code)
 
 
 def _as_single_ascii_char(value: Any) -> str:
-    """The CHAR *value* stores as: one ASCII character, a blank stored as NUL."""
+    """The CHAR *value* stores as: one 8-bit character, a blank stored as NUL.
+
+    A CLICK TXT is one byte: codes 128..255 are stored as they are.
+    """
     if not isinstance(value, str):
         raise ValueError("CHAR value must be a string")
     if value == "":
         return store_char(value)
-    if len(value) != 1 or ord(value) > 127:
-        raise ValueError("CHAR value must be blank or one ASCII character")
+    if len(value) != 1 or ord(value) > 255:
+        raise ValueError("CHAR value must be blank or one 8-bit character")
     return value
 
 
@@ -113,12 +116,15 @@ def _store_numeric_text_digits(text: str, targets: list[Tag], *, mode: str) -> d
 
     for char, target in zip(text, targets, strict=True):
         if mode == "value":
-            if char < "0" or char > "9":
+            if char == "\x00":
+                numeric = 0  # CLICK: Character Value of NUL writes 0, no fault
+            elif char < "0" or char > "9":
                 raise ValueError("Copy Character Value accepts only digits 0-9")
-            numeric = ord(char) - ord("0")
+            else:
+                numeric = ord(char) - ord("0")
         elif mode == "ascii":
-            if ord(char) > 127:
-                raise ValueError("Copy ASCII Code Value accepts ASCII only")
+            if ord(char) > 255:
+                raise ValueError("Copy ASCII Code Value accepts 8-bit characters only")
             numeric = ord(char)
         else:
             raise ValueError(f"Unsupported text->numeric mode: {mode}")
@@ -179,14 +185,13 @@ def _parse_pack_text_value(text: str, dest_tag: Tag) -> Any:
         raise ValueError("empty text cannot be parsed")
 
     if dest_tag.type in {TagType.INT, TagType.DINT}:
-        if not re.fullmatch(r"[+-]?\d+", text):
+        # CLICK: the parse stops at a decimal point ("12.5" is 12); any other
+        # character that is not a digit refuses the text.  A value past the
+        # destination clamps in the store, and the store raises the fault.
+        match = re.fullmatch(r"([+-]?\d+)(?:\.\d*)?", text)
+        if match is None:
             raise ValueError("integer parse failed")
-        parsed = int(text, 10)
-        if dest_tag.type == TagType.INT and (parsed < _INT_MIN or parsed > _INT_MAX):
-            raise ValueError("integer out of INT range")
-        if dest_tag.type == TagType.DINT and (parsed < _DINT_MIN or parsed > _DINT_MAX):
-            raise ValueError("integer out of DINT range")
-        return parsed
+        return int(match.group(1), 10)
 
     if dest_tag.type == TagType.WORD:
         if not re.fullmatch(r"[0-9A-Fa-f]+", text):
