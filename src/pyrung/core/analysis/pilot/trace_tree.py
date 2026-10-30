@@ -121,6 +121,34 @@ class TraceCrossingBranch:
         return self.fidelity.proposed
 
 
+@dataclass(frozen=True)
+class CounterEdge:
+    """The count a counter-input transition is for.
+
+    ``level`` is the counter's input read as a level, ``direction`` the sign
+    one count moves ``accumulator`` toward the target.  A step under the
+    transition loses that count when it raises the input without the
+    accumulator moving that way, or moves the accumulator back.
+    """
+
+    accumulator: str
+    direction: int
+    level: Any
+
+    def lost(self, before: typing.Mapping[str, Any], after: typing.Mapping[str, Any]) -> bool:
+        """Whether the step from *before* to *after* lost this count."""
+
+        old, new = before.get(self.accumulator), after.get(self.accumulator)
+        if type(old) is not int or type(new) is not int:
+            return False
+        moved = self.direction * (new - old)
+        rose = (
+            _eval_expr_from_state(self.level, dict(before)) is False
+            and _eval_expr_from_state(self.level, dict(after)) is True
+        )
+        return moved < 0 or (rose and moved == 0)
+
+
 @dataclass
 class TraceNode:
     """One node in the backward-trace tree.
@@ -200,6 +228,9 @@ class TraceNode:
     # Public conjunction: the children must hold at the retained landing, not
     # at each other's producer occurrence. This node is not a program register.
     goal_group: bool = False
+    # A counter-input transition (release or establish) carries the count it
+    # serves; verification rejects a step that loses it (see ``CounterEdge``).
+    counter_edge: CounterEdge | None = None
 
     def iter_nodes(
         self,

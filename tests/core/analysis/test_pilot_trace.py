@@ -1872,6 +1872,137 @@ def test_counter_reset_held_by_unsteerable_logic_declines_without_spinning():
     assert _timed_how(plc, C.Done).status.name != "REACHED"
 
 
+def _stops_promptly(plc, target):
+    """how(*target*) declines, and says so before spending its search budget."""
+    plan = _timed_how(plc, target)
+    assert plan.status.name != "REACHED"
+    assert "budget exhausted" not in plan.reason, plan.reason
+    return plan
+
+
+def _selector_counter(name, reset_pin):
+    """``Sel`` latches ``Run``, ``Stop`` resets it, ``Run`` counts to 3.
+
+    *reset_pin* builds the counter's reset from ``(Sel, M, Rc)``, where ``M``
+    is another external input and ``Rc`` a coil ``Sel`` and ``M`` energize.
+    """
+    Sel = Bool(f"{name}Sel", external=True)
+    Stop = Bool(f"{name}Stop", external=True)
+    M = Bool(f"{name}M", external=True)
+    Run = Bool(f"{name}Run")
+    Rc = Bool(f"{name}Rc")
+    C = Counter.clone(f"{name}C")
+    with Program(strict=False) as logic:
+        with rung(Sel):
+            latch(Run)
+        with rung(Stop):
+            reset(Run)
+        with rung(Sel, M):
+            out(Rc)
+        with rung(Run):
+            count_up(C, 3).reset(reset_pin(Sel, M, Rc))
+    plc = PLC(logic)
+    plc.patch({M.name: True})
+    plc.run(cycles=2)
+    return plc, M, C
+
+
+@pytest.mark.parametrize(
+    "reset_pin",
+    [
+        pytest.param(lambda Sel, M, Rc: And(Sel, M), id="and"),
+        pytest.param(lambda Sel, M, Rc: Rc, id="coil"),
+    ],
+)
+def test_counter_reset_the_latching_button_turns_on_is_cleared_through_another_leaf(reset_pin):
+    """Pressing ``Sel`` to latch the input also turns the reset on while ``M``
+    is held, so that count would be lost; ``M`` is cleared first, then the
+    latch is cycled with ``Stop`` and ``Sel``."""
+    plc, M, C = _selector_counter("SelClear", reset_pin)
+    plan = _reached_by_replay(plc, C.Done)
+    assert plan.ordered_steps[0][1].get(M.name) is False
+
+
+@pytest.mark.parametrize(
+    "reset_pin",
+    [
+        pytest.param(lambda Sel, M, Rc: Or(Sel, M), id="or"),
+        pytest.param(lambda Sel, M, Rc: Sel, id="same-button"),
+    ],
+)
+def test_counter_reset_every_latching_press_turns_on_stops_promptly(reset_pin):
+    """Every ``Sel`` press that latches the input also resets the counter:
+    no count can land, so the drive says so instead of cycling forever."""
+    plc, _M, C = _selector_counter("SelStuck", reset_pin)
+    _stops_promptly(plc, C.Done)
+
+
+def _held_coil_counter(name, build):
+    Btn = Bool(f"{name}Btn", external=True)
+    Y = Bool(f"{name}Y")
+    C = Counter.clone(f"{name}C")
+    with Program() as logic:
+        with rung(Btn):
+            out(Y)
+        with rung(Y):
+            build(C, Y)
+    plc = PLC(logic)
+    plc.patch({Btn.name: True})
+    plc.run(cycles=2)
+    return plc, C
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(lambda C, Y: count_up(C, 3).reset(Y), id="reset-is-input"),
+        pytest.param(lambda C, Y: count_up(C, 3).reset(~Y), id="reset-is-not-input"),
+        pytest.param(
+            lambda C, Y: count_up(C, 3).down(Y).reset(Bool("UpDownR", external=True)),
+            id="down-is-input",
+        ),
+    ],
+)
+def test_counter_whose_input_cycle_cannot_count_stops_promptly(build):
+    """A reset that is on in one phase of the input's cycle, or a down input
+    that rises with it, takes back every count: pulsing the input is futile."""
+    plc, C = _held_coil_counter("Futile", build)
+    _stops_promptly(plc, C.Done)
+
+
+@pytest.mark.parametrize(
+    "reset_pin",
+    [
+        pytest.param(lambda Sel, M, Rc: Or(Sel, M), id="or"),
+        pytest.param(lambda Sel, M, Rc: Sel, id="same-button"),
+    ],
+)
+def test_counter_input_step_that_loses_its_count_is_rejected(monkeypatch, reset_pin):
+    """The read's phase check is static; verification is the backstop.  With
+    the check blinded, the latching press that the reset swallows is rejected
+    as soon as it lands, not accepted and cycled until the budget runs out."""
+    import pyrung.core.analysis.pilot.trace as trace_module
+
+    monkeypatch.setattr(trace_module, "_counter_phase_blockers", lambda *args, **kwargs: [])
+    plc, _M, C = _selector_counter("SelBlind", reset_pin)
+    _stops_promptly(plc, C.Done)
+
+
+def test_counter_edge_loses_a_count_only_when_the_input_rises_without_it():
+    from pyrung.core.analysis.pilot.trace_tree import CounterEdge
+
+    up = CounterEdge("Acc", 1, Atom("Run", "xic"))
+    off, on = {"Run": False}, {"Run": True}
+    assert up.lost({**off, "Acc": 1}, {**on, "Acc": 1})
+    assert not up.lost({**off, "Acc": 1}, {**on, "Acc": 2})
+    assert up.lost({**on, "Acc": 1}, {**off, "Acc": 0})
+    assert not up.lost({**on, "Acc": 1}, {**off, "Acc": 1})
+    assert not up.lost({**off, "Acc": 1}, {**off, "Acc": 1})
+    down = CounterEdge("Acc", -1, Atom("Run", "xic"))
+    assert not down.lost({**off, "Acc": 0}, {**on, "Acc": -1})
+    assert down.lost({**off, "Acc": -1}, {**on, "Acc": -1})
+
+
 def test_counter_fed_by_a_held_coil_is_cycled_through_its_button():
     """``Btn -> Y -> count_up``: with ``Btn`` held the counter counted once and
     ``Y`` is on; each further count needs ``Btn`` off and on again."""

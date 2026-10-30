@@ -3,9 +3,11 @@
 ``verify_gates`` applies avoid and target checks, rejects spins and structural
 dead ends, delegates motion attribution and progress classification to
 ``outcome.py``, then decides whether that classified landing may revisit an
-executable world. It reports a suspicious excursion to the drive loop without
-performing runtime investigation; recovery converts any exact correction
-evidence into an inert Working Theory requirement.
+executable world. A trace-setup step under a counter-input transition that
+raises the input without a count, or clears one, is rejected as it lands. It
+reports a suspicious excursion to the drive loop without performing runtime
+investigation; recovery converts any exact correction evidence into an inert
+Working Theory requirement.
 
 Passing these gates makes a trial eligible for commit and progress monitoring;
 it does not guarantee that later assessment will retain the committed world.
@@ -1070,6 +1072,36 @@ def _verify_gates(
             policy.local_progress is LocalProgressKind.TRACE_SETUP
             and (channel_motion.departed or not expectation_boundaries_preserved)
         )
+        lost_counts = (
+            tuple(
+                edge.accumulator
+                for node in frame.tree.iter_nodes()
+                if (edge := node.counter_edge) is not None and edge.lost(frame.snap, trial.snap)
+            )
+            if policy.local_progress is LocalProgressKind.TRACE_SETUP
+            and getattr(frame, "tree", None) is not None
+            else ()
+        )
+        if lost_counts:
+            # The selected read cycles a counter's input for one count.  A
+            # step that raised the input without counting (a reset the read
+            # could not see held it) or cleared a count already made is no
+            # local progress: accepting it would cycle the input forever.
+            gate_events.append(
+                PilotGateEvent(
+                    "counter-count-lost",
+                    "the counter input moved but the count did not land",
+                    evidence={
+                        "accumulators": lost_counts,
+                        "before": tuple(frame.snap.get(tag) for tag in lost_counts),
+                        "after": tuple(trial.snap.get(tag) for tag in lost_counts),
+                    },
+                )
+            )
+            return _reject(
+                nogoods=(policy.regression_nogoods if not trace_setup_owned else ()),
+                proof_rejection=True,
+            )
         local_progress_reached = (
             (
                 (bool(changed) and assignments_reached)

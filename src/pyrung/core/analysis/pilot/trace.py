@@ -41,6 +41,7 @@ from pyrung.core.analysis.pilot.static_expressions import (
 )
 from pyrung.core.analysis.pilot.trace_tree import (
     _FORM_TO_OP,
+    CounterEdge,
     TraceAction,
     TraceCrossingBranch,
     TraceNode,
@@ -646,7 +647,7 @@ def _trace_demand(
     pulsed off and on again), and only the conjunct nearest the counter
     pulses (:func:`_mark_pulse_last_conjunct`).  An input carried by program
     state instead (a coil, a latch) is moved by
-    :func:`_counter_input_transition` in the caller.
+    :func:`_counter_input_cycle` in the caller.
     """
 
     if demand is None or demand.condition is None:
@@ -756,16 +757,146 @@ def _counter_reset_off(owner: Any, step: Any, counts_edges: bool) -> tuple[Condi
     return (ConditionDemand(reset, False),)
 
 
-def _counter_input_transition(
+def _counter_phase_support(env: _TraceEnv, nodes: list[TraceNode]) -> frozenset[str]:
+    """Tags one phase of a counter input's cycle sets or depends on.
+
+    Every tag the phase traces, and for a program-owned one (a coil, a latch)
+    everything upstream of it: a leaf there may be what holds it in place.
+    """
+
+    tags: set[str] = set()
+    for root in nodes:
+        for node in root.iter_nodes():
+            tags.add(node.tag)
+            if node.tag not in env.steerable:
+                tags.update(env.pdg.upstream_slice(node.tag))
+    return frozenset(tags)
+
+
+def _counter_phase_blockers(
     env: _TraceEnv,
-    constraint: Eq | Cmp | AffineCmp,
-    demand: Any,
-    pulse_nodes: list[TraceNode],
-    blockers: list[TraceNode],
+    owner: Any,
+    holds: tuple[ConditionDemand, ...],
+    phase: list[TraceNode],
     provenance: tuple[str, ...],
     depth: int,
-) -> TraceNode | None:
-    """The one-shot frontier that moves a counter's input, or ``None``.
+) -> list[TraceNode] | None:
+    """What keeps a counter's holds met through one phase of its input.
+
+    *phase* is the input's trace for that phase (on, or off).  The holds (its
+    level reset pin off, its subroutine's call gate on) are read on the
+    snapshot as it stands once *phase* lands, so an act that itself turns the
+    reset on (the same button latches the input and drives the reset) is seen
+    to break it.  A broken hold may only be met through leaves outside the
+    phase's support; the returned nodes are the unmet holds.  ``None`` when a
+    hold cannot be met that way: in this phase the counter never counts, or
+    its count is cleared.
+    """
+
+    support = _counter_phase_support(env, phase)
+
+    def _at(snapshot: dict[str, Any]) -> _TraceEnv:
+        return replace(
+            env,
+            snapshot=snapshot,
+            steerable=env.steerable - support,
+            guard_memo={},
+            writer_rank_memo={},
+            caller_locks=dict(env.caller_locks),
+        )
+
+    def _trace(phase_env: _TraceEnv, demand: ConditionDemand) -> list[TraceNode]:
+        return _trace_demand(
+            phase_env,
+            demand,
+            pulse=False,
+            provenance=provenance,
+            depth=depth + 1,
+            retain_satisfied=False,
+        )
+
+    snapshot = _route_judgment._route_overlay(phase, env.snapshot)
+    phase_env = _at(snapshot)
+    for demand in holds:
+        # The overlay sets only what the phase traces.  A reset carried by a
+        # coil the phase energizes (``Rung(Start, M): out(Rc)``) still reads
+        # off there; when everything that breaks the hold is already met, it
+        # breaks as the phase lands.
+        breaking = _trace(phase_env, ConditionDemand(demand.condition, not demand.value))
+        if any(not node.satisfied for node in breaking) and all(
+            leaf.satisfied for node in breaking for leaf in node.leaves()
+        ):
+            snapshot = _route_judgment._route_overlay(breaking, snapshot)
+            phase_env = _at(snapshot)
+
+    def _unmet(nodes: list[TraceNode]) -> list[TraceNode]:
+        # A node whose every leaf is met settles on its own as the phase
+        # lands (a coil whose rung the phase already turns off).
+        return [
+            node
+            for node in nodes
+            if not node.satisfied and any(not leaf.satisfied for leaf in node.leaves())
+        ]
+
+    blockers = _unmet(_owner_call_gate_nodes(phase_env, owner, provenance, depth))
+    for demand in holds:
+        blockers.extend(_unmet(_trace(phase_env, demand)))
+    if not all(_has_steerable(node) for node in blockers) or not (
+        _route_judgment.route_has_no_dead_end(blockers)
+    ):
+        return None
+    return blockers
+
+
+def _down_edge_cancels(
+    env: _TraceEnv,
+    owner: Any,
+    on_phase: list[TraceNode],
+    off_phase: list[TraceNode],
+    needs_off: bool,
+) -> bool:
+    """Whether an up counter's down input rises once per cycle of its up input.
+
+    An up and a down edge cancel, so a down input that follows the up input
+    (``count_up(C, 3).down(Y)`` on input ``Y``) takes back every count, and
+    one that mirrors it (``down(~Y)``) takes it back at each release.
+    """
+
+    down = getattr(owner.instruction, "down_condition", None)
+    if not isinstance(owner.instruction, CountUpInstruction) or down is None:
+        return False
+    level = _edges_as_levels(_condition_to_expr(down))
+    on = _eval_expr_from_state(level, _route_judgment._route_overlay(on_phase, env.snapshot))
+    off = _eval_expr_from_state(level, _route_judgment._route_overlay(off_phase, env.snapshot))
+    return (on is True and off is False) or (needs_off and on is False and off is True)
+
+
+@dataclass(frozen=True)
+class _CounterCycle:
+    """How the next count of a counter can come from this read.
+
+    ``transition`` is a one-shot act on a program-owned input; ``holds``
+    replaces the reset-pin holds of an ordinary pulse frontier; ``futile``
+    says why no cycle of the input can count.  All empty: the ordinary pulse
+    frontier, unchanged.
+    """
+
+    transition: TraceNode | None = None
+    holds: tuple[TraceNode, ...] | None = None
+    futile: str | None = None
+
+
+def _counter_input_cycle(
+    env: _TraceEnv,
+    owner: Any,
+    constraint: Eq | Cmp | AffineCmp,
+    demand: Any,
+    holds: tuple[ConditionDemand, ...],
+    pulse_nodes: list[TraceNode],
+    provenance: tuple[str, ...],
+    depth: int,
+) -> _CounterCycle:
+    """Read how a counter's input is cycled for its next count.
 
     A counter counts its input's rising edges, so holding its input never
     advances it: each count is one off-to-on transition of the input.  When
@@ -780,56 +911,117 @@ def _counter_input_transition(
 
     Neither transition owns a counter lifetime (no hold until Done).  After
     it lands, a fresh read traces the next transition, so a latched driver is
-    cycled off and on once per count.  ``None`` keeps the ordinary pulse
-    frontier: a steerable leaf to pulse, or no steerable route at all.
+    cycled off and on once per count.  Otherwise a steerable leaf of the input
+    is pulsed, as before.
 
-    *blockers* are the counter's other unmet needs (its subroutine's call
-    gate, its level reset pin off).  An input moved while they are unmet
-    counts nothing, and cycling it would repeat forever, so they ride the
-    same one-shot act.  That act is marked as establishing program state, as
-    a latch input already is: an establishing action is the sole bearing and
-    defers the others, which would leave the blockers behind for good.
+    Either way the counter's holds (its level reset pin off, its subroutine's
+    call gate on) must stay met through both phases of the cycle: through the
+    on phase or the count is lost, through the off phase or the reset clears
+    the count already made.  Each phase is checked on the snapshot it lands
+    (:func:`_counter_phase_blockers`).  An unmet hold rides the transition
+    act as a blocker, or is held while pulsing.  A transition with blockers is
+    marked as establishing program state, as a latch input already is: an
+    establishing action is the sole bearing and defers the others, which
+    would leave the blockers behind for good.  A hold that no leaf outside
+    the phase can meet makes the cycle futile, and the read says so instead
+    of offering an act that would repeat forever, as does an up counter's
+    down input that rises once per cycle (:func:`_down_edge_cancels`).  The
+    off phase is not needed when the input is off and one count is all that
+    remains.
+
+    The check is static: it sees what the phase traces and the coils that
+    phase energizes, not a reset that a timer or an edge sets later.  The
+    transition therefore carries its :class:`CounterEdge`, and verification
+    rejects a step under it that raises the input without counting.
     """
 
     if demand is None or demand.condition is None:
-        return None
+        return _CounterCycle()
     level = _edges_as_levels(_condition_to_expr(demand.condition))
     if not demand.value:
         level = _negate(level)
-    if _expr_satisfied(level, env.snapshot):
-        if any(_pulsable_leaves(node) for node in pulse_nodes):
-            return None
-        wanted = _negate(level)
-        note = "counter input already on: release it before the next rising edge"
-    elif any(node.data_flow == "enable" and not node.satisfied for node in pulse_nodes):
-        wanted = level
-        note = "counter input needs program state: establish it for one rising edge"
-    else:
-        return None
-    nodes = _trace_demand_expression(
-        env,
-        wanted,
-        pulse=False,
-        provenance=provenance,
-        depth=depth + 1,
-        retain_satisfied=False,
-    )
-    if not any(_has_steerable(node) for node in nodes) or not all(
-        _has_steerable(node) for node in blockers
+    input_on = _expr_satisfied(level, env.snapshot)
+    pulsable = any(_pulsable_leaves(node) for node in pulse_nodes)
+    if input_on and not pulsable:
+        mode = "release"
+    elif not input_on and any(
+        node.data_flow == "enable" and not node.satisfied for node in pulse_nodes
     ):
-        # No steerable way to move the input, or to clear a blocker: cycling
-        # the input alone would count nothing, forever.
-        return None
+        mode = "establish"
+    elif pulsable:
+        mode = "pulse"
+    else:
+        return _CounterCycle()
+
+    def _phase(expression: Any) -> list[TraceNode]:
+        return _trace_demand_expression(
+            env,
+            expression,
+            pulse=False,
+            provenance=provenance,
+            depth=depth + 1,
+            retain_satisfied=False,
+        )
+
+    on_phase = _phase(level)
+    off_phase = _phase(_negate(level))
+    remaining = (
+        owner.profile.linear.distance(constraint, env.snapshot)
+        if owner.profile.linear is not None
+        else None
+    )
+    needs_off = input_on or remaining is None or remaining > 1
+    on_blockers = _counter_phase_blockers(env, owner, holds, on_phase, provenance, depth)
+    off_blockers = (
+        _counter_phase_blockers(env, owner, holds, off_phase, provenance, depth)
+        if needs_off
+        else []
+    )
+    if on_blockers is None or off_blockers is None:
+        return _CounterCycle(
+            futile="counter input cannot cycle with its holds met: no count can land"
+        )
+    if _down_edge_cancels(env, owner, on_phase, off_phase, needs_off):
+        return _CounterCycle(
+            futile="counter's down input cycles with its up input: the counts cancel"
+        )
+    if mode == "pulse":
+        if not on_blockers and not off_blockers:
+            return _CounterCycle()
+        merged: dict[Any, TraceNode] = {}
+        for node in (*on_blockers, *off_blockers):
+            merged.setdefault(_visit_key(node.tag, node.value), node)
+        return _CounterCycle(holds=tuple(merged.values()))
+    if mode == "release":
+        nodes, blockers = off_phase, off_blockers
+        note = "counter input already on: release it before the next rising edge"
+    else:
+        nodes, blockers = on_phase, on_blockers
+        note = "counter input needs program state: establish it for one rising edge"
+    if not any(_has_steerable(node) for node in nodes):
+        # No steerable way to move the input: keep the ordinary frontier.
+        return _CounterCycle()
     target_atom = _trace_constraints._constraint_atom(constraint)
-    return TraceNode(
-        tag=constraint.tag,
-        value=(target_atom.operand if target_atom is not None else constraint),
-        provenance=provenance,
-        relational=isinstance(constraint, (Cmp, AffineCmp)),
-        predicate=target_atom,
-        children=[*blockers, *nodes],
-        data_flow="enable" if blockers else None,
-        note=note,
+    return _CounterCycle(
+        transition=TraceNode(
+            tag=constraint.tag,
+            value=(target_atom.operand if target_atom is not None else constraint),
+            provenance=provenance,
+            relational=isinstance(constraint, (Cmp, AffineCmp)),
+            predicate=target_atom,
+            children=[*blockers, *nodes],
+            data_flow="enable" if blockers else None,
+            note=note,
+            counter_edge=(
+                CounterEdge(
+                    owner.profile.accumulator.name,
+                    owner.profile.linear.direction,
+                    level,
+                )
+                if owner.profile.accumulator is not None and owner.profile.linear is not None
+                else None
+            ),
+        )
     )
 
 
@@ -1017,7 +1209,8 @@ def _advance_frontier(
     gate_nodes = _owner_call_gate_nodes(env, owner, provenance, depth)
     running_linear = owner.profile.linear is not None and step.progress is not None
     demand_nodes: list[TraceNode] = []
-    for demand in (*step.holds, *_counter_reset_off(owner, step, counts_edges)):
+    holds = (*step.holds, *_counter_reset_off(owner, step, counts_edges))
+    for demand in holds:
         if running_linear and demand_holds(demand, env.snapshot):
             continue
         demand_nodes.extend(
@@ -1041,17 +1234,30 @@ def _advance_frontier(
             counts_edges=counts_edges,
         )
         if counts_edges:
-            transition = _counter_input_transition(
+            cycle = _counter_input_cycle(
                 env,
+                owner,
                 constraint,
                 step.pulse,
+                holds,
                 pulse_nodes,
-                [node for node in (*gate_nodes, *demand_nodes) if not node.satisfied],
                 provenance,
                 depth,
             )
-            if transition is not None:
-                return transition
+            if cycle.transition is not None:
+                return cycle.transition
+            if cycle.futile is not None:
+                target_atom = _trace_constraints._constraint_atom(constraint)
+                return TraceNode(
+                    tag=constraint.tag,
+                    value=(target_atom.operand if target_atom is not None else None),
+                    provenance=provenance,
+                    note=cycle.futile,
+                )
+            if cycle.holds is not None:
+                # The holds as they must stand through the cycle, met through
+                # leaves the pulse does not move.
+                demand_nodes = list(cycle.holds)
         demand_nodes.extend(pulse_nodes)
     establish_nodes = [
         node
