@@ -289,6 +289,34 @@ def _has_out_oneshot_writer(program: Program, tag_name: str) -> bool:
     return False
 
 
+def _has_skippable_coil_writer(program: Program, tag_name: str, graph: ProgramGraph) -> bool:
+    """Whether an ``out()`` coil of *tag_name* sits where some scans skip it.
+
+    An ``out()`` writes False when its rung is off, but only on a scan that
+    runs it.  One behind a ``return_early()``, in a subroutine not called on
+    every scan, or in a forloop body (a false For rung skips the body) holds
+    its value on the scans that skip it, so the tag carries state even when
+    nothing in the program reads it.
+    """
+    from pyrung.core.instruction.coils import OutInstruction
+    from pyrung.core.instruction.control import ForLoopInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    writes_coil = False
+    for instr in walk_instructions(program):
+        if isinstance(instr, ForLoopInstruction):
+            for body_instr in instr.instructions:
+                if isinstance(body_instr, OutInstruction) and tag_name in {
+                    name for name, _itype in _all_write_targets(body_instr, graph.indirect_reach)
+                }:
+                    return True
+        elif isinstance(instr, OutInstruction) and tag_name in {
+            name for name, _itype in _all_write_targets(instr, graph.indirect_reach)
+        }:
+            writes_coil = True
+    return writes_coil and not _is_ote_unconditionally_reachable(tag_name, graph)
+
+
 def _collect_all_exprs(
     program: Program,
     graph: ProgramGraph,
@@ -348,13 +376,16 @@ def _collect_all_exprs(
                 for cond in caller_chain:
                     exprs.append(_condition_to_expr(cond))
 
+    # A return guard that can skip a write, or a call (whose callee's writes
+    # it skips too), decides which inputs are live.  ``include_current`` adds
+    # a return earlier in the node's own rung (a branch's).
     for node in graph.rung_nodes:
         node_writes = graph.node_writes(node)
-        if not node.guard_reads or not node_writes:
+        if not node.guard_reads or not (node_writes or node.calls):
             continue
-        if upstream is not None and not (node_writes & upstream):
+        if upstream is not None and not node.calls and not (node_writes & upstream):
             continue
-        exprs.extend(return_early_guard_exprs(program, node))
+        exprs.extend(return_early_guard_exprs(program, node, include_current=True))
 
     _collect_implicit_edge_condition_exprs(program, upstream, exprs)
     return exprs
@@ -2246,11 +2277,15 @@ def _is_ote_unconditionally_reachable(
 
     An OTE in the main program always executes.  An OTE inside a subroutine
     only executes when every call site for that subroutine is itself in an
-    unconditionally-reachable rung with no condition guard.
+    unconditionally-reachable rung with no condition guard, and no
+    ``return_early()`` ahead of it can skip it (``guard_reads``): a skipped
+    OTE holds its value.
     """
     writer_indices = graph.writers_of.get(tag_name, frozenset())
     for ni in writer_indices:
         node = graph.rung_nodes[ni]
+        if node.guard_reads:
+            return False
         if node.subroutine is not None:
             has_unconditional_call = False
             for _caller_ni, caller_node in enumerate(graph.rung_nodes):
@@ -2968,6 +3003,7 @@ def _classify_dimensions_from_graph(
                 and (
                     _has_inert_writer(program, tag_name, graph.indirect_reach)
                     or _has_out_oneshot_writer(program, tag_name)
+                    or _has_skippable_coil_writer(program, tag_name, graph)
                 )
             )
         ):
