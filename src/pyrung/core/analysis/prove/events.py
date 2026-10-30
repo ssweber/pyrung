@@ -925,12 +925,15 @@ def _fixup_unfired_drums(
                 kernel.tags[meta.step_name] = new_step
                 kernel.tags[spec.acc_name] = 0
                 kernel.memory[f"_frac:{spec.acc_name}"] = 0.0
+                kernel.memory[meta.done_memory_key] = False
                 for i, out_name in enumerate(meta.output_names):
                     kernel.tags[out_name] = meta.pattern[new_step - 1][i]
-                kernel.tags[done_name] = False
             else:
                 kernel.tags[spec.acc_name] = new_acc
                 kernel.tags[done_name] = True
+                kernel.memory[meta.done_memory_key] = True
+                for out_name in meta.output_names:
+                    kernel.tags[out_name] = False
         else:
             kernel.tags[spec.acc_name] = new_acc
 

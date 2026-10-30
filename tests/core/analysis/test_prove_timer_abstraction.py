@@ -21,6 +21,7 @@ from pyrung.core import (
     off_delay,
     on_delay,
     out,
+    rise,
 )
 from pyrung.core.analysis.prove import (
     PENDING,
@@ -1266,6 +1267,28 @@ class TestDrumCompletion:
         assert isinstance(result, Counterexample)
         tags = _replay_trace(logic, result.trace).current_state.tags
         assert (tags["Done"], tags["Step"], tags["Y3"]) == (True, 3, False)
+
+    def test_fast_forwarded_completion_turns_the_outputs_off(self) -> None:
+        """The hidden-event jump to the drum's last crossing writes what the
+        drum's own completing scan does: flag and ``_drum_done`` on, every
+        output off.  A jump that left the last step's output on would show a
+        completed drum still driving it."""
+        from pyrung.core import time_drum
+
+        En, Rst = Bool("En", external=True), Bool("Rst", external=True)
+        with Program(strict=False) as logic:
+            with Rung(En):
+                time_drum(
+                    outputs=[Bool("O1"), Bool("O2")],
+                    presets=[300, 300],
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=Int("Step", default=1),
+                    accumulator=Int("DAcc"),
+                    completion_flag=Bool("Flag"),
+                ).reset(Rst)
+            with Rung(rise(En)):
+                latch(Bool("Seen"))
+        assert isinstance(never(logic, Bool("Flag"), Bool("O2")), Proven)
 
     def test_event_drum_jump_leaves_a_completed_drum_off(self) -> None:
         from pyrung.core import event_drum
