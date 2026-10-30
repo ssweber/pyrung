@@ -57,6 +57,7 @@
 
 ### Fixes
 
+- The verifier no longer reports `Proven` for a property that an input changing on the very scan a timer finishes (or the scan before) can break through an edge-sensitive site: a one-shot (`copy(1, F, oneshot=True)` under `Rung(Btn)`) or `rise(X)` of a coil `X` an input drives, read beside `rise(T.Done)`; it jumped over the timer's run and tried input changes only before and after the scan it finished on.
 - A CLICK subroutine whose last rung is a conditional `return_early()` now exports with the unconditional `return()` CLICK requires after it; it used to export without one, and CLICK refused the subroutine.
 - `always()` and `never()` could report `Proven` for a violation reachable only through a one-shot (or a drum's jump, jog or event memory, a shift clock, a `toggle`) that the first scan does not reach, such as one in a subroutine not called on scan 0; that memory is now part of every explored state.
 - `always()` and `never()` could report `Proven` for a state a `time_drum` reaches by timing a step while its completion flag is on: after a jump back (the flag stays on through it), from a flag that starts on (`default=True`), or after another rung writes its step register or flag. Such a program is now Intractable for every query, like one with a `time_event_drum`, and the hint names the drum's accumulator and the reason, until the prover models that drum's time exactly.

@@ -616,6 +616,12 @@ class _PassContext:
             nondeterministic_dims=self.nondeterministic_dims,
             stateful_names=self.stateful_names,
             edge_tag_names=self.edge_tag_names,
+            # A site that reads an edge (a counter's count input, a one-shot,
+            # a drum/shift/toggle edge cell, ``rise()``/``fall()``): an input
+            # changing on a hidden crossing scan reads differently there, so
+            # jumps keep the plateaus just before each crossing (events.py).
+            edge_sensitive=bool(self.compiled.edge_tags)
+            or bool(program_memory_defaults(self.program)),
             memory_key_names=self.memory_key_names or (),
             memory_key_defaults=self.memory_key_defaults or (),
             state_key_done_specs=self.state_key_done_specs or (),

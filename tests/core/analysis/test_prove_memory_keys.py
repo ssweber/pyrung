@@ -8,18 +8,25 @@ written" and "holds the default" are one state.
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung.core import (
     PLC,
     Bool,
+    Int,
     Program,
     Rung,
+    Timer,
     call,
+    copy,
     latch,
+    on_delay,
     out,
     reset,
+    rise,
     subroutine,
 )
-from pyrung.core.analysis.prove import Counterexample, TraceStep, always
+from pyrung.core.analysis.prove import Counterexample, TraceStep, always, never
 from pyrung.core.analysis.prove.kernel import _extract_state_key
 
 
@@ -118,3 +125,45 @@ class TestMemoryDefaults:
         # The drum's event latch defaults on: an off value is a different state.
         assert key({}) != key({"_drum_event_ready:i1": False})
         assert key({}) != key({"_oneshot:i2": True})
+
+
+# --- an edge on the scan a hidden timer crossing lands on ---------------------
+
+
+def _edge_on_crossing(site: str) -> tuple[Program, Bool]:
+    """``Bad`` needs ``Btn`` to rise on the very scan ``T`` finishes.
+
+    A hidden-event jump skips the timer's run and tries input changes only
+    before it and after the crossing scan; each edge-sensitive site here reads
+    ``Btn`` rising on the crossing scan differently from one scan later.
+    """
+    Btn = Bool("Btn", external=True)
+    Run = Bool("Run", external=True)
+    Bad = Bool("Bad")
+    T = Timer.clone("EdgeT")
+    with Program(strict=False) as logic:
+        with Rung(Run):
+            on_delay(T, 50)
+        if site == "oneshot":
+            Flag = Int("Flag")
+            with Rung(Btn):
+                copy(1, Flag, oneshot=True)
+            with Rung(rise(T.Done), Flag == 1):
+                latch(Bad)
+            with Rung():
+                copy(0, Flag)
+        else:
+            X = Bool("X")
+            with Rung(Btn, Run):
+                out(X)
+            with Rung(rise(T.Done), rise(X)):
+                latch(Bad)
+    return logic, Bad
+
+
+@pytest.mark.parametrize("site", ["oneshot", "rise_of_coil"])
+def test_edge_on_a_hidden_crossing_scan_is_explored(site: str) -> None:
+    logic, bad = _edge_on_crossing(site)
+    result = never(logic, bad)
+    assert isinstance(result, Counterexample)
+    _assert_trace_replays(logic, result, bad.name)

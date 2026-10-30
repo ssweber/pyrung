@@ -103,6 +103,10 @@ class _ExploreContext:
     # Hidden counters whose progress is dead at a key where a guard tag
     # holds a given value (see deadness.py).
     dead_guards: dict[str, DeadGuard] = field(default_factory=dict)
+    # The program has an edge-sensitive site (counter, one-shot, drum/shift/
+    # toggle edge cell, rise()/fall()): hidden-event jumps keep the plateaus
+    # just before each crossing (see events._stop_point_outcome).
+    edge_sensitive: bool = False
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec

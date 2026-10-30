@@ -14,7 +14,9 @@ same PENDING state repeatedly.  The event scheduler accelerates this:
 4. ``_maybe_jump_hidden_event`` — when BFS revisits a known PENDING
    state, jump directly to the crossed successor.
 5. ``_stop_point_outcome`` — the plateau partway to that crossing where an
-   input that starts another timer would race a running one to a tie.
+   input that starts another timer would race a running one to a tie, and
+   the two plateaus just before it when an edge-sensitive site could see an
+   input change on the crossing scan.
 
 Stop points (races between timers started at different times):
 A jump skips every plateau between the node and the crossing, so an input
@@ -30,6 +32,15 @@ crosses in ``s_i`` scans and an idle one ``j`` that needs ``m_j`` scans once
 started.  The BFS gets a plateau node on each side of every such tie (and on
 it), for a start that takes up to ``_STOP_START_DELAY`` scans to reach the
 idle accumulator, and tries every input flip there as at any node.
+
+Stop points (edges on the crossing scan): a jump tries input flips only at
+the node and after the crossing, so an input that changes on the crossing
+scan itself, or on the scan before it, is never seen by an edge-sensitive
+site.  A counter or a one-shot whose input rises on the scan a timer
+finishes, or ``rise(X)`` of a coil ``X`` an input drives, reads differently
+there than one scan later.  When the program has such sites
+(``_ExploreContext.edge_sensitive``) the BFS also gets the plateaus one and
+two scans before each crossing, where every input combination is tried.
 
 Abstract thresholds (dynamic presets):
 ``_materialize_abstract_threshold_outcome`` creates a representative
@@ -1285,6 +1296,9 @@ def _settle_pending(
 # rung that runs it, may sit a scan or two behind the input).
 _STOP_START_DELAY = 2
 _IDLE_COUNTER_KINDS = frozenset((_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN))
+# Plateaus kept just before each crossing when the program has edge-sensitive
+# sites: the crossing scan and the one before it see every input combination.
+_EDGE_STOP_OFFSETS = (2, 1)
 
 
 def _idle_scans_to_cross(
@@ -1359,13 +1373,15 @@ def _stop_point_outcome(
     new_key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
 ) -> _HiddenEventOutcome | None:
-    """The nearest plateau before the next crossing where a started timer could tie.
+    """The nearest plateau before the next crossing where a flip could tell apart.
 
-    *kernel* is one held scan past the node in *snap*, back at its key.  The
-    outcome is the plateau that many held scans further on (0: *kernel*
-    itself, whose own revisit would be covered), still at that key, with every
-    running accumulator advanced; None when no tie falls before the crossing.
-    See the module docstring.
+    A started timer could tie a running one there, or (in a program with
+    edge-sensitive sites) it is one of the two plateaus just before the
+    crossing.  *kernel* is one held scan past the node in *snap*, back at its
+    key.  The outcome is the plateau that many held scans further on (0:
+    *kernel* itself, whose own revisit would be covered), still at that key,
+    with every running accumulator advanced; None when no stop falls before
+    the crossing.  See the module docstring.
     """
     if not context.done_event_specs and not context.threshold_event_specs:
         return None
@@ -1389,6 +1405,15 @@ def _stop_point_outcome(
                     candidate = s_i - m_j + offset
                     if 0 <= candidate < nearest and (found is None or candidate < found):
                         found = candidate
+        if context.edge_sensitive:
+            # The crossing scan is the ``nearest``-th from *kernel*: stop on
+            # the plateaus before it and before the scan ahead of it, where
+            # an input rising (into a counter, a one-shot, ``rise()`` of a
+            # coil it drives) lands on the crossing scan or just ahead.
+            for back in _EDGE_STOP_OFFSETS:
+                candidate = nearest - back
+                if 0 <= candidate < nearest and (found is None or candidate < found):
+                    found = candidate
         if found is None:
             return None
         stop = found
