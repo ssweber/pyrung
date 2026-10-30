@@ -17,7 +17,7 @@ Two models of a rung:
   ``snapshot`` is pyrung's in-process reading, measured, not derived.
 
 ``order_dependent`` is ``snapshot != expect``, declared on each case through
-``solve_case()`` and checked by ``test_annotation_matches_readings``.  The five
+``solve_case()`` and checked by ``test_annotation_matches_readings``.  The four
 live-read cases of the ``rungs`` group join the same map (``RUNGS_SNAPSHOT``),
 so ``ORDER_DEPENDENT`` covers every case the suite has on solve order.  If
 round 2 reads S for some topology, its ``expect`` becomes S's reading and its
@@ -72,41 +72,19 @@ The cases own C501..C700, timer T151..T160 and counters CT161..CT170
   {0, 0}.
 - ``continued_reads_later_wire`` (-): a wire needs on a bit its continued
   wire latches; the next rung reads it.  L = S {0, 1}; F {1, 1}.
-- ``rton_reset_leg`` (+, probe): an RTON (0 ms preset, rung true) below a row
-  that latches P on scan 4, with reset leg ``Or(Cmd == 0, P)``.  R1..R3 =
-  trace of Done off.  L clears it on scan 4: {1, 4, 4}; S {0, 0, 0}.
-- ``count_down_leg`` (+, probe): a counter counts up on scans 2 and 6; its
-  down leg reads P, latched above it on scan 4.  L {1}; S {2}.
-- ``shift_clock_leg`` (+, probe): a shift register whose clock leg is
-  ``Or(scan 2, P)``, P latched above it on scan 4, data always on.  L shifts
-  twice {3}; S once {1}.
-- ``shift_reset_leg`` (+, probe): clocked on scans 2 and 6, reset leg
-  ``Or(Cmd == 0, P)``, P on scan 4.  L {1}; S {3}.
-- ``drum_reset_leg`` (+, probe): an event drum advances to step 2 on scan 2;
-  its reset leg ``Or(Cmd == 0, P)`` sees P on scan 4.  R1 = the step at the
-  end, R2 = on scan 3.  L {1, 2}; S {2, 2}.
-- ``drum_jump_leg`` (+, probe): jogged to step 2 on scan 2; its jump leg (to
-  step 3) is P, on scan 4.  L {3, 2}; S {2, 2}.
-- ``drum_jog_leg`` (+, probe): an event on scan 2 takes it to step 2; its jog
-  leg is P, on scan 4.  L {3, 2}; S {2, 2}.
 - ``box_leg_reads_row_below`` (-, probe): a counter counts on scan 2, with
   reset leg ``Or(Cmd == 0, P)``; a continued wire below it latches P on scan
   4.  L = S {1}; R and F {0}.  A box's legs take the rows under it, so what
   sits below a box in one CLICK rung is a continued wire.
-- ``for_body_box_leg_reads_row_above`` (+, probe): inside a body rung of a
-  one-pass For, row 1 latches P and a counter below it counts once, with
-  reset leg ``Or(Cmd == 0, P)``.  R1 = its count, R2 = P was latched.  L
-  {0, 1}; S {1, 1}.  pyrung refuses ``branch()`` inside ``forloop()``, so a
-  box leg is the only later row a body rung can have.
 - ``for_body_rung_reads_body_rung_above`` (-, measured): body rung 1 latches
   A, body rungs 2 and 3 need it on and off.  pyrung takes a fresh snapshot
   per body rung, so it reads L {1, 0}; V {0, 1}.
 
-Box legs are probes, as ``rungs/box_leg_reads_rows_above`` is: a box below
-(or above) other outputs in one rung may be refused by Guided Paste.  If it is,
-the case never fires; that is the answer, and the case retires after round 2
-(a rung CLICK cannot draw needs no warning).  The ``rungs`` counter's reset
-leg is that case; it is not repeated here.
+CLICK does not allow a box below another output on one wire: all inputs
+(pins) of a box must start from the same branch (error C000A), so a box's input wire is its own, from the rail.  No leg can read a
+row above it in the same wire; the cases that asked (a box below a latch row)
+are retired.  What sits below a box in one CLICK rung is a continued wire
+(``box_leg_reads_row_below``).
 
 Each For rung is unconditional, and its body rungs are gated instead, so no
 case depends on what a false For rung does (F2, step S1).  Each loop runs
@@ -131,18 +109,15 @@ from pyrung.core import (
     branch,
     copy,
     count_up,
-    event_drum,
     forloop,
     latch,
-    on_delay,
     out,
     pack_bits,
     reset,
-    shift,
 )
 from tests.conformance import test_rung_semantics
-from tests.conformance.memory import ClickCounter, ClickTimer, c
-from tests.conformance.scans import WINDOW, count_scans, done, scans_for, trace
+from tests.conformance.memory import ClickCounter, c
+from tests.conformance.scans import count_scans, done, scans_for
 
 GROUP = "solve_order"
 SCANS = scans_for()
@@ -159,7 +134,6 @@ RUNGS_SNAPSHOT: Mapping[str, Mapping[str, int]] = {
     "nested_branches_see_rung_entry": {"Result1": 1, "Result2": 1},
     "continued_shares_snapshot": {"Result1": 1, "Result2": 1},
     "continued_chain_breaks": {"Result1": 1, "Result2": 1, "Result3": 1},
-    "box_leg_reads_rows_above": {"Result1": 1},
 }
 
 for _id, _snapshot in RUNGS_SNAPSHOT.items():
@@ -181,22 +155,6 @@ def solve_case(
 def _fire(slot: Any) -> None:
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
-
-
-def _clear_pulse(slot: Any, bit: Any) -> None:
-    """The rung after the one under test: *bit* is on only between its writer and here."""
-    with Rung(slot.Cmd != 0):
-        reset(bit)
-
-
-def _box_rung(slot: Any) -> Rung:
-    """The scan-paced rung a box case's latch row and box row share."""
-    return Rung(slot.Cmd != 0, slot.Scratch <= WINDOW)
-
-
-def _at_scan(slot: Any, scan: int, value: Any, into: Any) -> None:
-    with Rung(slot.Cmd != 0, slot.Scratch == scan):
-        copy(value, into)
 
 
 # -- Rows of one rung ------------------------------------------------------
@@ -352,136 +310,7 @@ def init_continued_reads_later_wire(slot):
     reset(c[581])
 
 
-# -- Box legs --------------------------------------------------------------
-
-
-def prove_rton_reset_leg(slot):
-    # P = C591, on scan 4 between the latch row and the next rung.  The RTON
-    # has a 0 ms preset and its row is true through the window.
-    rton = ClickTimer(151)
-    count_scans(slot)
-    with _box_rung(slot):
-        with branch(slot.Scratch == 4):
-            latch(c[591])
-        with branch(slot.Scratch >= 1):
-            on_delay(rton, 0).reset(Or(slot.Cmd == 0, c[591]))
-    _clear_pulse(slot, c[591])
-    trace(slot, ~rton.Done)
-    done(slot)
-
-
-def prove_count_down_leg(slot):
-    # P = C601, on scan 4.  The counter counts up on scans 2 and 6.
-    counter = ClickCounter(161)
-    count_scans(slot)
-    with _box_rung(slot):
-        with branch(slot.Scratch == 4):
-            latch(c[601])
-        with branch(Or(slot.Scratch == 2, slot.Scratch == 6)):
-            count_up(counter, 100).down(c[601]).reset(slot.Cmd == 0)
-    with Rung(slot.Cmd != 0):
-        reset(c[601])
-        copy(counter.Acc, slot.Result1)
-    done(slot)
-
-
-def prove_shift_clock_leg(slot):
-    # P = C611, on scan 4; the register is C612..C615, data always on.
-    count_scans(slot)
-    with _box_rung(slot):
-        with branch(slot.Scratch == 4):
-            latch(c[611])
-        with branch(slot.Scratch >= 1):
-            shift(c.select(612, 615)).clock(Or(slot.Scratch == 2, c[611])).reset(slot.Cmd == 0)
-    _clear_pulse(slot, c[611])
-    with Rung(slot.Cmd != 0, slot.Scratch > WINDOW):
-        pack_bits(c.select(612, 615), slot.Result1)
-    done(slot)
-
-
-def prove_shift_reset_leg(slot):
-    # P = C621, on scan 4; the register is C622..C625, clocked on scans 2 and
-    # 6, data always on.
-    count_scans(slot)
-    with _box_rung(slot):
-        with branch(slot.Scratch == 4):
-            latch(c[621])
-        with branch(slot.Scratch >= 1):
-            shift(c.select(622, 625)).clock(Or(slot.Scratch == 2, slot.Scratch == 6)).reset(
-                Or(slot.Cmd == 0, c[621])
-            )
-    _clear_pulse(slot, c[621])
-    with Rung(slot.Cmd != 0, slot.Scratch > WINDOW):
-        pack_bits(c.select(622, 625), slot.Result1)
-    done(slot)
-
-
-def prove_drum_reset_leg(slot):
-    # P = C631, on scan 4.  Step 1's event (C632) is on for scan 2; step 2's
-    # (C633) never.  Output C634, completion flag C635.
-    count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
-        out(c[632])
-    with _box_rung(slot):
-        with branch(slot.Scratch == 4):
-            latch(c[631])
-        with branch(slot.Scratch >= 1):
-            event_drum(
-                outputs=[c[634]],
-                events=[c[632], c[633], c[633]],
-                pattern=[[1], [0], [1]],
-                current_step=slot.Result1,
-                completion_flag=c[635],
-            ).reset(Or(slot.Cmd == 0, c[631]))
-    _clear_pulse(slot, c[631])
-    _at_scan(slot, 3, slot.Result1, slot.Result2)
-    done(slot)
-
-
-def prove_drum_jump_leg(slot):
-    # P = C641, on scan 4: jump to step 3 (Result4).  A jog (C642) on scan 2.
-    # The event (C643) never comes.  Output C644, completion flag C645.
-    count_scans(slot)
-    with Rung(slot.Cmd != 0):
-        copy(3, slot.Result4)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
-        out(c[642])
-    with _box_rung(slot):
-        with branch(slot.Scratch == 4):
-            latch(c[641])
-        with branch(slot.Scratch >= 1):
-            event_drum(
-                outputs=[c[644]],
-                events=[c[643], c[643], c[643]],
-                pattern=[[1], [0], [1]],
-                current_step=slot.Result1,
-                completion_flag=c[645],
-            ).reset(slot.Cmd == 0).jump(c[641], step=slot.Result4).jog(c[642])
-    _clear_pulse(slot, c[641])
-    _at_scan(slot, 3, slot.Result1, slot.Result2)
-    done(slot)
-
-
-def prove_drum_jog_leg(slot):
-    # P = C651, on scan 4: jog.  Step 1's event (C652) is on for scan 2; the
-    # other steps' (C653) never.  Output C654, completion flag C655.
-    count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
-        out(c[652])
-    with _box_rung(slot):
-        with branch(slot.Scratch == 4):
-            latch(c[651])
-        with branch(slot.Scratch >= 1):
-            event_drum(
-                outputs=[c[654]],
-                events=[c[652], c[653], c[653]],
-                pattern=[[1], [0], [1]],
-                current_step=slot.Result1,
-                completion_flag=c[655],
-            ).reset(slot.Cmd == 0).jog(c[651])
-    _clear_pulse(slot, c[651])
-    _at_scan(slot, 3, slot.Result1, slot.Result2)
-    done(slot)
+# -- A box and a continued wire below it ------------------------------------
 
 
 def prove_box_leg_reads_row_below(slot):
@@ -502,24 +331,6 @@ def prove_box_leg_reads_row_below(slot):
 # -- For bodies ------------------------------------------------------------
 
 
-def prove_for_body_box_leg_reads_row_above(slot):
-    # P = C671, latched by the body rung's first row.  The counter below it
-    # counts on the same pass, and its reset leg reads P.  The rung after the
-    # loop clears P; the one before it records that P was latched.
-    counter = ClickCounter(163)
-    with Rung():
-        with forloop(1):
-            with Rung(slot.Cmd != 0, slot.Fired == 0):
-                latch(c[671])
-                count_up(counter, 100).reset(Or(slot.Cmd == 0, c[671]))
-    with Rung(slot.Cmd != 0, slot.Fired == 0, c[671]):
-        copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0):
-        reset(c[671])
-        copy(counter.Acc, slot.Result1)
-    _fire(slot)
-
-
 def prove_for_body_rung_reads_body_rung_above(slot):
     # A = C681, latched by the first body rung.
     with Rung():
@@ -537,7 +348,7 @@ def init_for_body_rung_reads_body_rung_above(slot):
     reset(c[681])
 
 
-BOX_PROBE = "box legs solved at the box's row; a box beside other outputs"
+BOX_PROBE = "a box leg vs a continued wire below the box"
 
 group = Group(
     GROUP,
@@ -633,88 +444,6 @@ group = Group(
             snapshot={"Result1": 0, "Result2": 1},
         ),
         solve_case(
-            "An RTON's reset leg is read at its row: below a row that latches a bit on "
-            "scan 4, a 0 ms RTON resetting on that bit is off for 1 scan (Result1 = 1), "
-            "scan 4 (Result2 = 4, Result3 = 4)",
-            ladder=prove_rton_reset_leg,
-            expect={"Result1": 1, "Result2": 4, "Result3": 4},
-            scans=SCANS,
-            pending="S4",
-            probe=BOX_PROBE,
-            order_dependent=True,
-            snapshot={"Result1": 0, "Result2": 0, "Result3": 0},
-        ),
-        solve_case(
-            "A counter's down leg is read at its row: counting up on scans 2 and 6, "
-            "with its down leg on a bit latched above it on scan 4, it ends at 1 "
-            "(Result1 = 1)",
-            ladder=prove_count_down_leg,
-            expect={"Result1": 1},
-            scans=SCANS,
-            pending="S4",
-            probe=BOX_PROBE,
-            order_dependent=True,
-            snapshot={"Result1": 2},
-        ),
-        solve_case(
-            "A shift register's clock leg is read at its row: clocked on scan 2 and by "
-            "a bit latched above it on scan 4, data on, it holds bits 1 and 2 "
-            "(Result1 = 3)",
-            ladder=prove_shift_clock_leg,
-            expect={"Result1": 3},
-            scans=SCANS,
-            pending="S4",
-            probe=BOX_PROBE,
-            order_dependent=True,
-            snapshot={"Result1": 1},
-        ),
-        solve_case(
-            "A shift register's reset leg is read at its row: clocked on scans 2 and 6, "
-            "data on, reset by a bit latched above it on scan 4, it holds bit 1 "
-            "(Result1 = 1)",
-            ladder=prove_shift_reset_leg,
-            expect={"Result1": 1},
-            scans=SCANS,
-            pending="S4",
-            probe=BOX_PROBE,
-            order_dependent=True,
-            snapshot={"Result1": 3},
-        ),
-        solve_case(
-            "A drum's reset leg is read at its row: on step 2 from scan 2 (Result2 = 2), "
-            "reset by a bit latched above it on scan 4, it ends on step 1 (Result1 = 1)",
-            ladder=prove_drum_reset_leg,
-            expect={"Result1": 1, "Result2": 2},
-            scans=SCANS,
-            pending="S4",
-            probe=BOX_PROBE,
-            order_dependent=True,
-            snapshot={"Result1": 2, "Result2": 2},
-        ),
-        solve_case(
-            "A drum's jump leg is read at its row: jogged to step 2 on scan 2 "
-            "(Result2 = 2), with a jump to step 3 on a bit latched above it on scan 4, "
-            "it ends on step 3 (Result1 = 3)",
-            ladder=prove_drum_jump_leg,
-            expect={"Result1": 3, "Result2": 2},
-            scans=SCANS,
-            pending="S4",
-            probe=BOX_PROBE,
-            order_dependent=True,
-            snapshot={"Result1": 2, "Result2": 2},
-        ),
-        solve_case(
-            "A drum's jog leg is read at its row: on step 2 from scan 2 (Result2 = 2), "
-            "jogged by a bit latched above it on scan 4, it ends on step 3 (Result1 = 3)",
-            ladder=prove_drum_jog_leg,
-            expect={"Result1": 3, "Result2": 2},
-            scans=SCANS,
-            pending="S4",
-            probe=BOX_PROBE,
-            order_dependent=True,
-            snapshot={"Result1": 2, "Result2": 2},
-        ),
-        solve_case(
             "A box's legs do not see a row below the box: a counter that counted on "
             "scan 2, whose reset leg reads a bit a continued wire below it latches on "
             "scan 4, still reads 1 (Result1 = 1)",
@@ -724,17 +453,6 @@ group = Group(
             probe=BOX_PROBE,
             order_dependent=False,
             snapshot={"Result1": 1},
-        ),
-        solve_case(
-            "A For body rung's box leg is read at its row: a counter below a row that "
-            "latches a bit, resetting on that bit, is cleared on the pass it counts "
-            "(Result1 = 0); the bit was latched (Result2 = 1)",
-            ladder=prove_for_body_box_leg_reads_row_above,
-            expect={"Result1": 0, "Result2": 1},
-            pending="S4",
-            probe=BOX_PROBE,
-            order_dependent=True,
-            snapshot={"Result1": 1, "Result2": 1},
         ),
         solve_case(
             "A For body rung sees the writes of the body rung above it in the same "

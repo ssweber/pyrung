@@ -17,7 +17,8 @@ pyrung freezes a snapshot of memory on rung entry and reads every contact of
 the rung, branches and continued wires included, against it.  The cases where
 that shows are ``pending="S4"`` until the live row solve lands.
 
-The bits are C bits; the cases own C1601..C1700 and counters CT151..CT160
+The bits are C bits; the cases own C1601..C1700 and counters CT151..CT160 (unused since
+``box_leg_reads_rows_above`` retired)
 (``memory.OWNED``), ten bits per case.  Latched bits are reset in ``init``.
 
 A continued wire starts with a contact no other wire of its CLICK rung starts
@@ -47,19 +48,13 @@ B = a branch snapshots where it leaves its parent):
   wire sharing the snapshot {1, 0}.
 - ``continued_chain_breaks``: L {0, 0, 1}; S {1, 1, 1}; a chain that keeps its
   first snapshot through a normal rung reads Result3 = 0.
-- ``box_leg_reads_rows_above`` (probe, round 2): a counter box sits below a
-  latch row in one rung, and its reset leg reads the bit that row sets.  A leg
-  read when the solve reaches the box's row (adopted, L) resets the counter
-  on scan 4: Result1 = 0.  A leg read at rung entry (S) never sees the bit:
-  Result1 = 1.  It also asks whether CLICK takes a box below another output
-  in one rung at all: if the paste refuses the rung, that is the answer.
 """
 
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, branch, calc, copy, count_up, latch, out, reset
-from tests.conformance.memory import ClickCounter, c
+from pyrung.core import Rung, branch, calc, copy, latch, out, reset
+from tests.conformance.memory import c
 from tests.conformance.scans import count_scans, done, scans_for
 
 
@@ -186,24 +181,6 @@ def prove_continued_chain_breaks(slot):
         copy(1, slot.Fired)
 
 
-def prove_box_leg_reads_rows_above(slot):
-    # One rung, two branch rows: the upper latches C1661 on scan 4, the lower
-    # holds a counter that counts once (its input is on for scan 2 only) and
-    # whose reset leg reads C1661.  The next rung clears C1661 every scan, so
-    # it is on only between the latch row and that rung, on scan 4.
-    counter = ClickCounter(151)
-    count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch <= 8):
-        with branch(slot.Scratch == 4):
-            latch(c[1661])
-        with branch(slot.Scratch == 2):
-            count_up(counter, 100).reset(Or(slot.Cmd == 0, c[1661]))
-    with Rung(slot.Cmd != 0):
-        reset(c[1661])
-        copy(counter.Acc, slot.Result1)
-    done(slot)
-
-
 def init_branch_sees_rung_entry(slot):
     reset(c[1601])
     reset(c[1602])
@@ -300,16 +277,6 @@ group = Group(
             expect={"Result1": 0, "Result2": 0, "Result3": 1},
             confirmed=True,
             pending="S4",
-        ),
-        case(
-            "A box's legs are solved at the box's row: a counter below a row that "
-            "latches a bit on scan 4, in the same rung, sees that bit on its reset leg "
-            "the same scan, so its count from scan 2 is cleared (Result1 = 0)",
-            ladder=prove_box_leg_reads_rows_above,
-            expect={"Result1": 0},
-            scans=scans_for(),
-            pending="S4",
-            probe="box legs solved at the box's row; a box below other outputs",
         ),
     ],
 )
