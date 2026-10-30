@@ -460,7 +460,7 @@ class _Replay:
 
     program: Program
     context: _ExploreContext
-    predicate: Callable[[dict[str, Any]], bool]
+    predicate: Callable[[Any], bool]
     compared: tuple[str, ...]
     defaults: dict[str, Any]
     # System tags the property or the search reads: the PLC resolves them.
@@ -471,17 +471,10 @@ class _Replay:
     plc: Any = None
     steps: list[TraceStep] = field(default_factory=list)
 
-    def _view_of(self, plc: Any, state: Any) -> dict[str, Any]:
-        view = dict(self.defaults)
-        view.update(state.tags)
-        resolve = plc._system_runtime.resolve
-        for name in self.system_names:
-            resolved, value = resolve(name, state)
-            if resolved:
-                view[name] = value
-        return view
+    def _view_of(self, plc: Any, state: Any) -> Mapping[str, Any]:
+        return _StateView(state, self.defaults, frozenset(self.system_names), plc)
 
-    def view(self, plc: Any) -> dict[str, Any]:
+    def view(self, plc: Any) -> Mapping[str, Any]:
         return self._view_of(plc, plc.current_state)
 
     def key_of(self, tags: Mapping[str, Any]) -> tuple[Any, ...]:
@@ -529,6 +522,44 @@ class _Replay:
         plc.run_until(stop, max_cycles=bound)
         scans = plc.current_state.scan_id - start_scan
         return scans, reached(self.key(plc)) or self.violated(plc)
+
+
+class _StateView(Mapping[str, Any]):
+    """A PLC state as the property reads it, tag by tag.
+
+    Lazy, so a wait reads only what the property reads and fold can still
+    skip the scans in between.  Unwritten tags read as their defaults and
+    system tags as the PLC resolves them.
+    """
+
+    __slots__ = ("_state", "_defaults", "_system", "_plc")
+
+    def __init__(
+        self, state: Any, defaults: Mapping[str, Any], system: frozenset[str], plc: Any
+    ) -> None:
+        self._state = state
+        self._defaults = defaults
+        self._system = system
+        self._plc = plc
+
+    def __getitem__(self, name: str) -> Any:
+        if name in self._system:
+            resolved, value = self._plc._system_runtime.resolve(name, self._state)
+            if resolved:
+                return value
+        tags = self._state.tags
+        if name in tags:
+            return tags[name]
+        return self._defaults[name]
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._state.tags or name in self._defaults or name in self._system
+
+    def __iter__(self) -> Iterator[str]:
+        return iter({*self._defaults, *self._state.tags})
+
+    def __len__(self) -> int:
+        return len({*self._defaults, *self._state.tags})
 
 
 def _value_class(value: Any, reps: tuple[int, ...] | None) -> Any:
