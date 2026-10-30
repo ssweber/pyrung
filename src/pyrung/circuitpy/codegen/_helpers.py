@@ -162,7 +162,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         '        _m = re.match(r"[+-]?\\d+", text)',
         "        if _m is None:",
         '            raise ValueError("integer parse failed")',
-        "        return int(_m.group(), 10)",
+        "        return int(_m.group(1), 10)",
         '    if dest_type == "WORD":',
         '        if not re.fullmatch(r"[0-9A-Fa-f]+", text):',
         '            raise ValueError("hex parse failed")',

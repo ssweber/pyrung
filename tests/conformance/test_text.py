@@ -493,36 +493,6 @@ group = Group(
             probe="does Copy Binary of 200 set SC43",
         ),
         case(
-            "Pack text into a WORD parses hex: 00FF is 255, 0010 is 16, ABCD is 0xABCD, and "
-            "12G4 is refused and leaves the WORD alone",
-            ladder=prove_pack_text_word_hex,
-            init=init_pack_text_word_hex,
-            expect={"Result1": 255, "Result2": 16, "Result3": 1, "Result4": 7},
-        ),
-        case(
-            "Pack text into an Int parses signed decimal: -123 is -123 (Result1), 0042 is 42 "
-            "(Result2), 123456 clamps to 32767 (Result3) with the fault (ErrorCode = 1), and "
-            "12.5 stops at the point, 12 (Result4)",
-            ladder=prove_pack_text_int,
-            init=init_pack_text_int,
-            expect={
-                "Result1": -123,
-                "Result2": 42,
-                "Result3": 32767,
-                "Result4": 12,
-                "ErrorCode": 1,
-            },
-            probe="does a clamping pack_text set SC43",
-        ),
-        case(
-            "Pack text into a Dint parses signed decimal over 32 bits (Result1 = 1, Result2 = "
-            "1), and 2147483648 clamps to 2147483647 (Result3 = 1) with the fault (Result4 = 1)",
-            ladder=prove_pack_text_dint,
-            init=init_pack_text_dint,
-            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1},
-            probe="does a clamping pack_text set SC43",
-        ),
-        case(
             "Fill with empty text blanks a TXT to NUL, so ASCII Code Value of it writes 0 over "
             "the destination, as for a TXT nothing wrote",
             ladder=prove_fill_blank_ascii,
@@ -561,6 +531,13 @@ group = Group(
             probe="does Character Value of NUL set SC43",
         ),
         case(
+            "Pack text into a WORD parses hex: 00FF is 255, 0010 is 16, ABCD is 0xABCD, and "
+            "12G4 is refused and leaves the WORD alone",
+            ladder=prove_pack_text_word_hex,
+            init=init_pack_text_word_hex,
+            expect={"Result1": 255, "Result2": 16, "Result3": 1, "Result4": 7},
+        ),
+        case(
             "Pack text with a leading space is refused unless whitespace is allowed: the "
             "destination keeps its 99 (Result1) and the fault comes up (Result2 = 1); "
             "allowed, leading and trailing spaces are trimmed (Result3 = Result4 = 12)",
@@ -568,6 +545,29 @@ group = Group(
             init=init_pack_text_whitespace,
             expect={"Result1": 99, "Result2": 1, "Result3": 12, "Result4": 12},
             probe="does a refused pack_text set SC43",
+        ),
+        case(
+            "Pack text into an Int parses signed decimal: -123 is -123 (Result1), 0042 is 42 "
+            "(Result2), 123456 clamps to 32767 (Result3) with the fault (ErrorCode = 1), and "
+            "12.5 stops at the point, 12 (Result4)",
+            ladder=prove_pack_text_int,
+            init=init_pack_text_int,
+            expect={
+                "Result1": -123,
+                "Result2": 42,
+                "Result3": 32767,
+                "Result4": 12,
+                "ErrorCode": 1,
+            },
+            probe="does a clamping pack_text set SC43",
+        ),
+        case(
+            "Pack text into a Dint parses signed decimal over 32 bits (Result1 = 1, Result2 = "
+            "1), and 2147483648 clamps to 2147483647 (Result3 = 1) with the fault (Result4 = 1)",
+            ladder=prove_pack_text_dint,
+            init=init_pack_text_dint,
+            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1},
+            probe="does a clamping pack_text set SC43",
         ),
     ],
 )

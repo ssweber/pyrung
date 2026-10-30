@@ -185,13 +185,13 @@ def _parse_pack_text_value(text: str, dest_tag: Tag) -> Any:
         raise ValueError("empty text cannot be parsed")
 
     if dest_tag.type in {TagType.INT, TagType.DINT}:
-        # CLICK: the parse stops at the first character that is not a digit
-        # ("12.5" is 12), and a value past the destination clamps (the store
-        # does that); only text with no leading number is refused.
-        match = re.match(r"[+-]?\d+", text)
+        # CLICK: the parse stops at a decimal point ("12.5" is 12); any other
+        # character that is not a digit refuses the text.  A value past the
+        # destination clamps in the store, and the store raises the fault.
+        match = re.fullmatch(r"([+-]?\d+)(?:\.\d*)?", text)
         if match is None:
             raise ValueError("integer parse failed")
-        return int(match.group(), 10)
+        return int(match.group(1), 10)
 
     if dest_tag.type == TagType.WORD:
         if not re.fullmatch(r"[0-9A-Fa-f]+", text):
