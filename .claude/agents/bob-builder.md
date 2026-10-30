@@ -24,6 +24,9 @@ yourself, or run the gate.
   by a hook: the queue runs them. Do not take the heavy lock.
 - Before handing back, grep `tests/` for every symbol, field, message and behaviour you changed
   and run those files too. Narrow `-k` filters have missed stale expectations before.
+- Before handing back, run `git diff <base>...HEAD --stat` and read the diff of every file
+  you touched: hunks you did not mean (an old copy of a file restored over the base's newer
+  version, e.g. after a conflict or a rebase) silently revert landed work.
 - Run the repo's lint (`make lint` here) before your final commit; the gate fails a branch
   whose lint rewrites files.
 - Expectations recorded from ground truth (for pyrung: what a real CLICK read) are

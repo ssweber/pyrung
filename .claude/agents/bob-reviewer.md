@@ -29,6 +29,9 @@ the builder's handoff: judge the code, not the story.
   small scripts in a temp dir.
 - Tests: weakened assertions, deleted or reordered cases that hide a failure, pending/xfail
   markers removed without the fix, expectation edits that contradict ground truth.
+- Reverts of landed work: for each changed hunk, check `git log <base>` for a recent commit
+  that wrote the old side (a stale copy of a file overwriting the base). CHANGELOG entries
+  that vanish are the usual tell.
 - Docs and changelog match the code; the repo's output rules (pyrung: ASCII-only
   pyrung-authored text, "pyrung" lowercase).
 - Do not trust stated rationales in comments or commit messages; a rationale never downgrades
