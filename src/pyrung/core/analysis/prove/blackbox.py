@@ -105,6 +105,9 @@ class TimedSite:
     verb: str
     unit: TimeUnit
     literal_presets: tuple[int, ...] = ()
+    # A drum's completion flag: once on, its last step's tick is no timer
+    # still running (``_concretely_settled``).
+    completion: str | None = None
 
 
 def timed_sites(program: Program) -> dict[str, TimedSite]:
@@ -120,7 +123,14 @@ def timed_sites(program: Program) -> dict[str, TimedSite]:
 
     sites: dict[str, TimedSite] = {}
 
-    def add(acc: Any, owner: Any, verb: str, unit: Any, presets: tuple[Any, ...]) -> None:
+    def add(
+        acc: Any,
+        owner: Any,
+        verb: str,
+        unit: Any,
+        presets: tuple[Any, ...],
+        completion: str | None = None,
+    ) -> None:
         literal = tuple(int(p) for p in presets if isinstance(p, int) and not isinstance(p, bool))
         name = acc.name
         prior = sites.get(name)
@@ -128,7 +138,9 @@ def timed_sites(program: Program) -> dict[str, TimedSite]:
             literal = tuple(sorted({*prior.literal_presets, *literal}))
             sites[name] = replace(prior, literal_presets=literal)
             return
-        sites[name] = TimedSite(name, owner.name, verb, unit, tuple(sorted(set(literal))))
+        sites[name] = TimedSite(
+            name, owner.name, verb, unit, tuple(sorted(set(literal))), completion
+        )
 
     for instr in walk_instructions(program):
         if isinstance(instr, OnDelayInstruction):
@@ -138,7 +150,14 @@ def timed_sites(program: Program) -> dict[str, TimedSite]:
         elif isinstance(instr, (TimeDrumInstruction, TimeEventDrumInstruction)):
             verb = "time_event_drum" if isinstance(instr, TimeEventDrumInstruction) else "time_drum"
             presets = tuple(p for p in instr.presets if p is not None)
-            add(instr.accumulator, instr.current_step, verb, instr.unit, presets)
+            add(
+                instr.accumulator,
+                instr.current_step,
+                verb,
+                instr.unit,
+                presets,
+                instr.completion_flag.name,
+            )
         elif isinstance(instr, DebounceInstruction):
             add(instr.on_acc, instr.target, "debounce", instr.unit, (instr.on_preset,))
             add(instr.off_acc, instr.target, "debounce", instr.unit, (instr.off_preset,))
@@ -242,8 +261,8 @@ def accumulator_reads(
     is an opaque atom there, and a timer whose accumulator only such a
     comparison reads would otherwise get no in-between values.  The program
     graph's readers are the backstop: a read none of the walks below explains
-    is swept.  *domains* are the search's values of the other tags a
-    comparison names (stateful and nondeterministic dimensions).
+    is swept.  *domains* are the complete value sets of the other tags a
+    comparison may name (never a sizing domain); one without a set sweeps.
     """
     from pyrung.core.analysis.pdg import _extract_tag_names
     from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Or
@@ -936,6 +955,11 @@ def _concretely_settled(context: _ExploreContext, plc: Any) -> bool:
     for name in model.branch:
         site = model.sites[name]
         if progress(state, name) <= progress(before, name):
+            continue
+        if site.completion is not None and state.tags.get(
+            site.completion, defaults.get(site.completion, False)
+        ):
+            # A completed drum: its last step's accumulator keeps counting.
             continue
         done = bool(state.tags.get(site.owner, defaults.get(site.owner, False)))
         if site.verb == "on_delay" and done:

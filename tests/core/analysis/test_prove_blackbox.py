@@ -21,6 +21,7 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
+    calc,
     copy,
     count_down,
     count_up,
@@ -31,6 +32,7 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    time_drum,
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -571,6 +573,95 @@ class TestReviewRound1:
             assert isinstance(result, Intractable), result
             assert result.kind == "property"
             assert "BbR1PC" in result.tags
+
+
+class TestReviewRound2:
+    """The second review's findings, each against stepping."""
+
+    @staticmethod
+    def _stepped_window():
+        # Lo 0 -> 20 -> 40 and Hi 10 -> 30 -> 50 by calc: Bad needs the
+        # accumulator strictly between 40 and 50, where no comparison in the
+        # program splits.  Classify's partitions of Lo and Hi are sizing
+        # domains, not their values.
+        pulse, en = Bool("BbR2HP", external=True), Bool("BbR2HEn", external=True)
+        lo, hi = Int("BbR2HLo"), Int("BbR2HHi", default=10)
+        timer = Timer.clone("BbR2HT")
+        y, z, bad = Bool("BbR2HY"), Bool("BbR2HZ"), Bool("BbR2HBad")
+        with Program(strict=False) as logic:
+            with Rung(rise(pulse), lo < 30):
+                calc(lo + 20, lo)
+            with Rung(rise(pulse), hi < 35):
+                calc(hi + 20, hi)
+            with Rung(lo > 25):
+                out(y)
+            with Rung(hi > 25):
+                out(z)
+            with Rung(en):
+                on_delay(timer, 100)
+            with Rung(timer.Acc > lo, timer.Acc < hi, y, z):
+                latch(bad)
+        return logic, bad
+
+    @pytest.mark.parametrize("config", [BLACKBOX, ALL_OFF_BLACKBOX], ids=["default", "all_off"])
+    def test_tag_computed_by_calc_does_not_lend_its_partition(self, config):
+        # R1: a compared tag's stateful domain gave the accumulator its only
+        # values, none in (40, 50): a false Proven.  It is swept now.
+        logic, bad = self._stepped_window()
+        plc = PLC(logic, dt=0.001)
+        hit = None
+        for n, inputs in enumerate(
+            [{"BbR2HP": True}, {"BbR2HP": False}, {"BbR2HP": True}] + [{"BbR2HEn": True}] * 60
+        ):
+            plc.patch(inputs)
+            plc.step()
+            if plc.current_state.tags.get(bad.name):
+                hit = n + 1
+                break
+        assert hit == 44
+        result = never(logic, bad, _opt_config=config, depth_budget=60, _debug=True)
+        assert not isinstance(result, Proven)
+        assert "BbR2HT_Acc" in result._debug_context.timer_model.exact
+
+    def test_literal_and_unwritten_tags_still_give_values(self):
+        # The values stay where they are every value the tag takes.
+        en = Bool("BbR2LEn", external=True)
+        fixed, preset_tag = Int("BbR2LFix", final=True), Int("BbR2LRo", readonly=True, default=7)
+        timer, bad = Timer.clone("BbR2LT"), Bool("BbR2LBad")
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, fixed)
+            with Rung(en):
+                on_delay(timer, 1000)
+            with Rung(timer.Acc > fixed, timer.Acc > preset_tag):
+                latch(bad)
+        result = never(logic, bad, _opt_config=BLACKBOX, _debug=True)
+        _assert_replays(logic, result, bad.name)
+        model = result._debug_context.timer_model
+        assert "BbR2LT_Acc" not in model.exact
+        assert {500, 501, 7, 8} <= set(model.reps["BbR2LT_Acc"])
+
+    def test_settled_on_a_completed_time_drum_replays(self):
+        # A completed drum's last-step accumulator keeps counting: settled.
+        en, rst = Bool("BbR2MEn", external=True), Bool("BbR2MRst", external=True)
+        done, step = Bool("BbR2MDone"), Int("BbR2MStep")
+        with Program(strict=False) as logic:
+            with Rung(en):
+                time_drum(
+                    outputs=[Bool("BbR2MO1"), Bool("BbR2MO2")],
+                    presets=[50, 50],
+                    unit="ms",
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=step,
+                    accumulator=Int("BbR2MAcc"),
+                    completion_flag=done,
+                ).reset(rst)
+        assert isinstance(
+            never(logic, done, settled=True, _opt_config=_OptConfig(abstract_timers=False)),
+            Counterexample,
+        )
+        result = never(logic, done, settled=True, _opt_config=BLACKBOX)
+        _assert_replays(logic, result, done.name)
 
 
 class TestKnownHoles:
