@@ -4,6 +4,16 @@
 # in-process-only case confirmed some other way.
 
 [cases]
+"block/blockcopy_overlap" = { hash = "b3cb760c5d7f", on = "2026-10-30" }
+"block/blockcopy_range" = { hash = "802b3e8c6c10", on = "2026-10-30" }
+"block/blockcopy_types" = { hash = "102f7f112849", on = "2026-10-30" }
+"block/every_scan" = { hash = "3cb7add71ac7", on = "2026-10-30" }
+"block/fill_constant" = { hash = "e0971be280a7", on = "2026-10-30" }
+"block/pack_bits_int" = { hash = "f6c96620d19a", on = "2026-10-30" }
+"block/pack_bits_real" = { hash = "c6291555030c", on = "2026-10-30" }
+"block/pack_words" = { hash = "c8177e7d1de5", on = "2026-10-30" }
+"block/unpack_bits" = { hash = "e9dbec59c820", on = "2026-10-30" }
+"block/unpack_words" = { hash = "ced59412ced2", on = "2026-10-30" }
 "call_twice/rise_once_per_scan" = { hash = "907601404de8", on = "2026-10-30" }
 "coils/edge_before_its_writer" = { hash = "8ad43fc30860", on = "2026-10-30" }
 "coils/edge_behind_open_contact" = { hash = "c950cf050de3", on = "2026-10-30" }
@@ -15,6 +25,31 @@
 "coils/out_oneshot_fires_one_scan" = { hash = "b09709de46a5", on = "2026-10-30" }
 "coils/out_oneshot_refires" = { hash = "93c702b8a8d8", on = "2026-10-30" }
 "coils/rise_fall_fire_one_scan" = { hash = "6e56cb179136", on = "2026-10-30" }
+"counters/acc_clamps_at_dint_range" = { hash = "e487893b4be8", on = "2026-10-30" }
+"counters/count_down_done_at_preset" = { hash = "d14d8f1a0e2b", on = "2026-10-30" }
+"counters/count_down_negative" = { hash = "921e38ff577a", on = "2026-10-30" }
+"counters/edge_on_reset_scan" = { hash = "0bcf1ebe3c3a", on = "2026-10-30" }
+"counters/first_scan_input_already_on" = { hash = "cff6a3f260f8", on = "2026-10-30" }
+"counters/held_input_not_recounted" = { hash = "c1893078a04d", on = "2026-10-30" }
+"counters/level_vs_edge" = { hash = "080bea52d757", on = "2026-10-30" }
+"counters/preset_lowered_while_idle" = { hash = "d8c766da22e3", on = "2026-10-30" }
+"counters/preset_raised_resumes" = { hash = "b0bc7aefde02", on = "2026-10-30" }
+"counters/reset_wins_over_count" = { hash = "4265f7639009", on = "2026-10-30" }
+"counters/reset_zero_preset" = { hash = "922a21c0deaa", on = "2026-10-30" }
+"counters/survives_rung_false" = { hash = "a51735615a61", on = "2026-10-30" }
+"counters/up_down_same_scan" = { hash = "6c04b9e3dea6", on = "2026-10-30" }
+"drum/events_are_edges" = { hash = "65ea26ca6cad", on = "2026-10-30" }
+"drum/invalid_step_corrects_to_1" = { hash = "453b9ec24c46", on = "2026-10-30" }
+"drum/jump_jog_edge_triggered" = { hash = "2646e32ab105", on = "2026-10-30" }
+"drum/jump_jog_keep_completion" = { hash = "88531f366a12", on = "2026-10-30" }
+"drum/paused_drum_jogs_and_resets" = { hash = "3b25527d3a62", on = "2026-10-30" }
+"drum/paused_drum_jumps" = { hash = "e10263da8c08", on = "2026-10-30" }
+"drum/reset_jump_jog_order" = { hash = "5926602393b2", on = "2026-10-30" }
+"drum/reset_no_stale_outputs" = { hash = "62a32bebb29a", on = "2026-10-30" }
+"drum/reset_swallows_held_jog" = { hash = "b9663770180f", on = "2026-10-30" }
+"drum/te_acc_counts_while_waiting" = { hash = "2cd464dd3c25", on = "2026-10-30" }
+"drum/te_level_event_already_on" = { hash = "dfdefd51c1b7", on = "2026-10-30" }
+"drum/time_acc_clears_on_every_transition" = { hash = "9eee3c4ea4fd", on = "2026-10-30" }
 "loop/body_oneshot_holds_while_for_false" = { hash = "c320f1d7a513", on = "2026-10-30" }
 "loop/body_rung_contact_per_iteration" = { hash = "6cab715db8c3", on = "2026-10-30" }
 "loop/break_leaves_innermost_loop" = { hash = "3689bec29bc5", on = "2026-10-30" }
@@ -33,11 +68,34 @@
 "loop/skipped_body_holds_timer_and_counter" = { hash = "45a9b3e94b4a", on = "2026-10-30" }
 "loop/timer_inside_loop" = { hash = "75660e4584e4", on = "2026-10-30" }
 "loop/zero_count" = { hash = "bcb261d3e9aa", on = "2026-10-30" }
-"out/debounce_bounce_restarts_on_side" = { hash = "b2f6e2f12137", on = "before 2026-10-30" }
-"out/debounce_td_keeps_counting" = { hash = "82a3a4f29bb6", on = "before 2026-10-30" }
-"out/out_coil_sets_timer_done" = { hash = "038097cbf765", on = "before 2026-10-30" }
-"out/timed_needs_fresh_edge" = { hash = "7773a25a244e", on = "before 2026-10-30" }
-"out/toggle_flips_once_per_edge" = { hash = "867adbc3450f", on = "before 2026-10-30" }
+"math/avg_dint_no_overflow" = { hash = "ce0a2ce715ff", on = "2026-10-30" }
+"math/avg_mdn_negative" = { hash = "5160284a4be8", on = "2026-10-30" }
+"math/avg_mdn_positive" = { hash = "1c1ae7b3feea", on = "2026-10-30" }
+"math/avg_odd_count" = { hash = "d97dd0f14504", on = "2026-10-30" }
+"math/max_min_word_unsigned" = { hash = "f15de5498b78", on = "2026-10-30" }
+"math/mdn_even_count" = { hash = "2d88fd85d7c3", on = "2026-10-30" }
+"math/mdn_real_range" = { hash = "e5f06334dc4d", on = "2026-10-30" }
+"math/rand_range" = { hash = "5f4828ca8b0a", on = "2026-10-30" }
+"math_error/math_errors_do_not_stop" = { hash = "f43b6f177460", on = "2026-10-30" }
+"numeric/copy_clamps_calc_wraps" = { hash = "b58406ac7737", on = "2026-10-30" }
+"numeric/copy_source_to_dest" = { hash = "3a43843761cb", on = "2026-10-30" }
+"numeric/dint_calc_wraps" = { hash = "e280219d1273", on = "2026-10-30" }
+"numeric/div_by_zero" = { hash = "038935904fff", on = "2026-10-30" }
+"numeric/hex_literal_is_decimal" = { hash = "276c8ddb2768", on = "2026-10-30" }
+"numeric/int_calc_wraps" = { hash = "730a97d1e411", on = "2026-10-30" }
+"numeric/int_division_truncates" = { hash = "07d355d4c21d", on = "2026-10-30" }
+"numeric/intermediate_exceeds_32_bits" = { hash = "86e753303ebb", on = "2026-10-30" }
+"numeric/intermediate_fits_32_bits" = { hash = "77c7a08897f0", on = "2026-10-30" }
+"numeric/real_div_by_zero" = { hash = "29ce7c086a30", on = "2026-10-30" }
+"numeric/real_overflow_stays_finite" = { hash = "ac1bc3676ee0", on = "2026-10-30" }
+"numeric/real_to_int_truncates" = { hash = "b7ac17737df8", on = "2026-10-30" }
+"numeric/word_calc_wraps" = { hash = "a5e7c442f5e1", on = "2026-10-30" }
+"numeric/word_math_unsigned" = { hash = "6624fc45aeaa", on = "2026-10-30" }
+"out/debounce_bounce_restarts_on_side" = { hash = "b2f6e2f12137", on = "2026-10-30" }
+"out/debounce_td_keeps_counting" = { hash = "82a3a4f29bb6", on = "2026-10-30" }
+"out/out_coil_sets_timer_done" = { hash = "038097cbf765", on = "2026-10-30" }
+"out/timed_needs_fresh_edge" = { hash = "7773a25a244e", on = "2026-10-30" }
+"out/toggle_flips_once_per_edge" = { hash = "867adbc3450f", on = "2026-10-30" }
 "rungs/branch_and_with_parent" = { hash = "0a91f7b8bb1c", on = "2026-10-30" }
 "rungs/branch_sees_rung_entry" = { hash = "af0402ff4ba8", on = "2026-10-30" }
 "rungs/continued_chain_breaks" = { hash = "de111148a272", on = "2026-10-30" }
@@ -46,25 +104,26 @@
 "rungs/last_rung_wins_shared_coil" = { hash = "60b8698d678e", on = "2026-10-30" }
 "rungs/memory_is_immediate" = { hash = "621f235387b2", on = "2026-10-30" }
 "rungs/nested_branches_see_rung_entry" = { hash = "1bea59bf40e4", on = "2026-10-30" }
-"search/continuous_cursor_is_address" = { hash = "122971143f65", on = "before 2026-10-30" }
-"search/continuous_exhausted" = { hash = "457e70613fcb", on = "before 2026-10-30" }
-"search/continuous_walks" = { hash = "78877d9e796f", on = "before 2026-10-30" }
-"search/continuous_zero_restarts" = { hash = "1b85d667ea97", on = "before 2026-10-30" }
-"search/dint_real_tables" = { hash = "4d801a8651f1", on = "before 2026-10-30" }
-"search/false_rung_preserves" = { hash = "310b8673754c", on = "before 2026-10-30" }
-"search/hit_returns_address" = { hash = "ba3f4b5a0c32", on = "before 2026-10-30" }
-"search/miss_writes_minus_one" = { hash = "3f82abfa8c2d", on = "before 2026-10-30" }
-"search/operators_signed" = { hash = "61b49d349473", on = "before 2026-10-30" }
-"search/plain_search_ignores_result" = { hash = "d00b332a0555", on = "before 2026-10-30" }
-"search/range_ends_inclusive" = { hash = "94e7ce07efab", on = "before 2026-10-30" }
-"search/text_windows" = { hash = "e4be90f5dd2e", on = "before 2026-10-30" }
-"shift/bit_leaves_the_end" = { hash = "c3460b7dfd97", on = "before 2026-10-30" }
-"shift/clock_is_a_rising_edge" = { hash = "f5586892395d", on = "before 2026-10-30" }
-"shift/data_is_the_rung_at_the_edge" = { hash = "de4f41037038", on = "before 2026-10-30" }
-"shift/forward_range_shifts_up" = { hash = "c7ebaa24141b", on = "before 2026-10-30" }
-"shift/reset_beats_clock" = { hash = "661e0ce49892", on = "before 2026-10-30" }
-"shift/reset_swallows_the_edge" = { hash = "6908a6c6e5a2", on = "before 2026-10-30" }
-"shift/reversed_range_shifts_down" = { hash = "57c5f5b2315d", on = "before 2026-10-30" }
+"search/continuous_cursor_is_address" = { hash = "122971143f65", on = "2026-10-30" }
+"search/continuous_cursor_outside_range" = { hash = "fd7eb74252a0", on = "2026-10-30" }
+"search/continuous_exhausted" = { hash = "457e70613fcb", on = "2026-10-30" }
+"search/continuous_walks" = { hash = "78877d9e796f", on = "2026-10-30" }
+"search/continuous_zero_restarts" = { hash = "1b85d667ea97", on = "2026-10-30" }
+"search/dint_real_tables" = { hash = "4d801a8651f1", on = "2026-10-30" }
+"search/false_rung_preserves" = { hash = "310b8673754c", on = "2026-10-30" }
+"search/hit_returns_address" = { hash = "ba3f4b5a0c32", on = "2026-10-30" }
+"search/miss_writes_minus_one" = { hash = "3f82abfa8c2d", on = "2026-10-30" }
+"search/operators_signed" = { hash = "61b49d349473", on = "2026-10-30" }
+"search/plain_search_ignores_result" = { hash = "d00b332a0555", on = "2026-10-30" }
+"search/range_ends_inclusive" = { hash = "94e7ce07efab", on = "2026-10-30" }
+"search/text_windows" = { hash = "e4be90f5dd2e", on = "2026-10-30" }
+"shift/bit_leaves_the_end" = { hash = "c3460b7dfd97", on = "2026-10-30" }
+"shift/clock_is_a_rising_edge" = { hash = "f5586892395d", on = "2026-10-30" }
+"shift/data_is_the_rung_at_the_edge" = { hash = "de4f41037038", on = "2026-10-30" }
+"shift/forward_range_shifts_up" = { hash = "c7ebaa24141b", on = "2026-10-30" }
+"shift/reset_beats_clock" = { hash = "661e0ce49892", on = "2026-10-30" }
+"shift/reset_swallows_the_edge" = { hash = "6908a6c6e5a2", on = "2026-10-30" }
+"shift/reversed_range_shifts_down" = { hash = "57c5f5b2315d", on = "2026-10-30" }
 "solve_order/box_leg_reads_row_below" = { hash = "8586b802fbf7", on = "2026-10-30" }
 "solve_order/branch_or_reads_row_above" = { hash = "c7b644b4aaf6", on = "2026-10-30" }
 "solve_order/bus_coils_last_write_wins" = { hash = "3decec083c47", on = "2026-10-30" }
@@ -76,28 +135,34 @@
 "solve_order/row_reads_row_below" = { hash = "e6a7c07513d1", on = "2026-10-30" }
 "solve_order/row_series_reads_rows_above" = { hash = "5cd8f08b78a1", on = "2026-10-30" }
 "solve_order/sibling_branch_reads_sibling_above" = { hash = "4c490b7fd70a", on = "2026-10-30" }
-"system/clock_bits_toggle_at_their_rate" = { hash = "357ef615d3b3", on = "before 2026-10-30" }
-"system/mode_bits_on_in_run" = { hash = "4a658f991de6", on = "before 2026-10-30" }
-"system/rtc_seconds_advance" = { hash = "be3cbc8d1dd2", on = "before 2026-10-30" }
-"system/scan_clock_follows_counter" = { hash = "b9e17b5dcd8f", on = "before 2026-10-30" }
-"system/scan_counter_steps_by_one" = { hash = "1af8fddb503d", on = "before 2026-10-30" }
-"text/fill_blank_ascii" = { hash = "e8ce876f344c", on = "before 2026-10-30" }
-"text/literal_fanout" = { hash = "a05724be3780", on = "before 2026-10-30" }
-"text/null_ascii" = { hash = "f59e22a3283a", on = "before 2026-10-30" }
-"text/pack_text_word_hex" = { hash = "31374483e39b", on = "before 2026-10-30" }
-"text/to_text_fixed" = { hash = "7a86152e50fd", on = "before 2026-10-30" }
-"text/to_text_fixed_negative" = { hash = "736d2f18f1d0", on = "before 2026-10-30" }
-"text/to_text_suppress" = { hash = "508030e5f819", on = "before 2026-10-30" }
-"text/to_text_termination" = { hash = "37d88e1c0894", on = "before 2026-10-30" }
-"text/value_vs_ascii" = { hash = "2e13abc1e650", on = "before 2026-10-30" }
-"timers/acc_clamps_at_32767" = { hash = "107a4da4d02f", on = "before 2026-10-30" }
-"timers/fractional_accumulation" = { hash = "0b6389bec438", on = "before 2026-10-30" }
-"timers/preset_lowered_fires_at_once" = { hash = "672bd87ca214", on = "before 2026-10-30" }
-"timers/preset_raised_resumes" = { hash = "22fc0585f673", on = "before 2026-10-30" }
-"timers/rton_holds_across_rung_false" = { hash = "662361cd17d8", on = "before 2026-10-30" }
-"timers/rton_reset_gap" = { hash = "242c2c230132", on = "before 2026-10-30" }
-"timers/tof_enable_atomic" = { hash = "f669affebdfc", on = "before 2026-10-30" }
-"timers/tof_never_enabled" = { hash = "5da1f7a07013", on = "before 2026-10-30" }
-"timers/tof_times_only_when_false" = { hash = "455ab06cdb61", on = "before 2026-10-30" }
-"timers/ton_auto_reset" = { hash = "36008261d96e", on = "before 2026-10-30" }
-"timers/ton_done_on_enabling_scan" = { hash = "be32e270b67a", on = "before 2026-10-30" }
+"system/address_flag_clears_each_scan" = { hash = "5ae9367172a1", on = "2026-10-30" }
+"system/clock_bits_toggle_at_their_rate" = { hash = "357ef615d3b3", on = "2026-10-30" }
+"system/mode_bits_on_in_run" = { hash = "4a658f991de6", on = "2026-10-30" }
+"system/out_of_range_flag_clears_each_scan" = { hash = "39bca33c438f", on = "2026-10-30" }
+"system/rtc_seconds_advance" = { hash = "be3cbc8d1dd2", on = "2026-10-30" }
+"system/scan_clock_follows_counter" = { hash = "b9e17b5dcd8f", on = "2026-10-30" }
+"system/scan_counter_steps_by_one" = { hash = "1af8fddb503d", on = "2026-10-30" }
+"system/scan_counter_wraps_to_zero" = { hash = "a363e7a67eab", on = "2026-10-30" }
+"text/fill_blank_ascii" = { hash = "e8ce876f344c", on = "2026-10-30" }
+"text/literal_fanout" = { hash = "a05724be3780", on = "2026-10-30" }
+"text/null_ascii" = { hash = "f59e22a3283a", on = "2026-10-30" }
+"text/pack_text_whitespace" = { hash = "07a8b1fcf95f", on = "2026-10-30" }
+"text/pack_text_word_hex" = { hash = "31374483e39b", on = "2026-10-30" }
+"text/to_binary" = { hash = "5685848cf204", on = "2026-10-30" }
+"text/to_text_fixed" = { hash = "7a86152e50fd", on = "2026-10-30" }
+"text/to_text_fixed_negative" = { hash = "736d2f18f1d0", on = "2026-10-30" }
+"text/to_text_suppress" = { hash = "508030e5f819", on = "2026-10-30" }
+"text/to_text_termination" = { hash = "37d88e1c0894", on = "2026-10-30" }
+"text/to_value_rejects" = { hash = "6a5a1692c011", on = "2026-10-30" }
+"text/value_vs_ascii" = { hash = "2e13abc1e650", on = "2026-10-30" }
+"timers/acc_clamps_at_32767" = { hash = "107a4da4d02f", on = "2026-10-30" }
+"timers/fractional_accumulation" = { hash = "0b6389bec438", on = "2026-10-30" }
+"timers/preset_lowered_fires_at_once" = { hash = "672bd87ca214", on = "2026-10-30" }
+"timers/preset_raised_resumes" = { hash = "22fc0585f673", on = "2026-10-30" }
+"timers/rton_holds_across_rung_false" = { hash = "662361cd17d8", on = "2026-10-30" }
+"timers/rton_reset_gap" = { hash = "242c2c230132", on = "2026-10-30" }
+"timers/tof_enable_atomic" = { hash = "f669affebdfc", on = "2026-10-30" }
+"timers/tof_never_enabled" = { hash = "5da1f7a07013", on = "2026-10-30" }
+"timers/tof_times_only_when_false" = { hash = "455ab06cdb61", on = "2026-10-30" }
+"timers/ton_auto_reset" = { hash = "36008261d96e", on = "2026-10-30" }
+"timers/ton_done_on_enabling_scan" = { hash = "be32e270b67a", on = "2026-10-30" }
