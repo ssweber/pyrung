@@ -18,7 +18,7 @@ never sets its Timer's done bit T<n>; the coil's phases come from the TDs
 alone, so a contact on that T<n> is always off (pyrung matches).  Round 2
 (2026-10-30) read O4:
 
-- ``flasher_restarts_with_on_phase`` (probe): 300 ms phases, the rung false
+- ``flasher_restarts_with_on_phase``: 300 ms phases, the rung false
   from 450 to 550 ms, 150 ms into the off phase.  Round 1 read "not both TDs
   0" and the coil on somewhere in 600-800 ms.  The case reads, while the rung
   is false, the on-side TD (Result1: 1 = cleared, 2 = held at or past its
@@ -188,7 +188,6 @@ group = Group(
             expect={"Result1": 2, "Result2": 1, "Result3": 2, "Result4": 1, "ErrorCode": 1},
             keep=[t[306], td[306], t[307], td[307]],
             scans=100,
-            probe="flasher with its rung false: TDs cleared, kept or frozen; restart phase",
         ),
         case(
             "A timed coil (not maintained) pulses once with its rung held: on (Result1 = "

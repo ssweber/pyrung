@@ -610,7 +610,7 @@ def _evaluate_range_aggregates(
     from pyrung.click.ladder.translator import _RANGE_AGGREGATE_CLICK_NAME
 
     aggregates: list[tuple[str, BlockRange]] = []
-    _collect_range_aggregates(instruction.expression, aggregates, set())
+    _collect_range_aggregates(instruction.source_expression, aggregates, set())
     if not aggregates:
         return []
 
@@ -775,7 +775,7 @@ def _evaluate_instruction_portability(
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
     if instruction_type == "CalcInstruction":
-        mode_info = infer_calc_mode(instruction.expression, instruction.dest)
+        mode_info = infer_calc_mode(instruction.source_expression, instruction.dest)
         if mode_info.mixed_families:
             location = _instruction_location(base_location, "instruction.expression")
             location_text = _format_location(location)
@@ -794,7 +794,7 @@ def _evaluate_instruction_portability(
                     ),
                 )
             )
-        if _expr_contains_floor_div(instruction.expression):
+        if _expr_contains_floor_div(instruction.source_expression):
             location = _instruction_location(base_location, "instruction.expression")
             location_text = _format_location(location)
             findings.append(
@@ -814,7 +814,7 @@ def _evaluate_instruction_portability(
                 )
             )
         if not mode_info.mixed_families:
-            violations = _collect_mode_violations(instruction.expression, mode_info.mode)
+            violations = _collect_mode_violations(instruction.source_expression, mode_info.mode)
             if violations:
                 location = _instruction_location(base_location, "instruction.expression")
                 location_text = _format_location(location)
@@ -839,7 +839,7 @@ def _evaluate_instruction_portability(
                         ),
                     )
                 )
-        depth = _expr_paren_depth(instruction.expression)
+        depth = _expr_paren_depth(instruction.source_expression)
         if depth > _CLICK_MAX_PAREN_DEPTH:
             location = _instruction_location(base_location, "instruction.expression")
             location_text = _format_location(location)

@@ -42,7 +42,7 @@ def test_rungs():
 
 ## Pending and probes
 
-**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `S4` live row-by-row rung solve, `DRUM` drum ordering, `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` SC3/SD9 phase and the fault-flag model, `CONST16` a Math constant into an Int is cut to 16 bits.
+**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `S4` live row-by-row rung solve, `DRUM` drum ordering, `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` the fault-flag model (SC40 follows the last Math, SC43/SC44 the last instruction).
 
 - On pyrung's own targets (in-process `run()`, the local sim, `TARGET=circuitpy`) a pending case is a **strict xfail**: it passes, reported `XFAIL` with what pyrung read, only if no run meets its expectation and its reset is clean (a leak still fails it). Once pyrung starts meeting the expectation, the case fails with "remove pending=": the fixer of that step deletes the marker in the same commit, so `grep 'pending="S2"'` lists exactly what a step must flip.
 - Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `pending=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
@@ -272,12 +272,12 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [ ] patch values consumed after one scan
 - [ ] patch applied before logic, on the same scan
 - [ ] forces persist across scans
-- [x] fault flags (SC40/SC43/SC44): which later instruction clears them (probes, pending SYS; `system/division_flag_clears_each_scan`, `system/out_of_range_flag_clears_each_scan`, `system/address_flag_clears_each_scan`)
-- [x] first scan after STOP->RUN: SD9 and SC3 (probe; `system/first_scan_counter_and_clock`); SD9's wrap (probe; `system/scan_counter_wraps_to_zero`)
+- [x] fault flags (SC40/SC43/SC44): which later instruction clears them (answered on hardware round 2: SC40 the next Math, SC43/SC44 the next instruction; pending SYS; `system/division_flag_clears_each_scan`, `system/out_of_range_flag_clears_each_scan`, `system/address_flag_clears_each_scan`)
+- [x] first scan after STOP->RUN: SD9 = 0 with SC3 on (`system/first_scan_counter_and_clock`, answered on hardware round 2); SD9's wrap (probe; `system/scan_counter_wraps_to_zero`)
 - [x] edge and counter memory at STOP->RUN (probes; `coils/edge_on_first_scan`, `counters/first_scan_input_already_on`)
 - [ ] first_scan true once, on scan 0
 - [ ] first_scan re-triggers on STOP->RUN
-- [x] scan clock on when SD9 is even (`system/scan_clock_follows_counter`, pending SYS)
+- [x] scan clock on when SD9 is even (`system/scan_clock_follows_counter`)
 - [x] scan_counter steps by one every scan (`system/scan_counter_steps_by_one`)
 - [ ] scan_counter resets on STOP->RUN
 - [x] clock toggles fire at their nominal rate (`system/clock_bits_toggle_at_their_rate`)
@@ -333,7 +333,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] Word wrap at 65535 (`numeric/word_calc_wraps`)
 - [x] Real precision: pyrung keeps 64 bits, CLICK 32 (`numeric/real_is_64_bit_in_pyrung`, expected to fail on a CLICK: a documented deviation)
 - [x] Real range: an overflow stores +/-Inf with SC43 (`numeric/real_overflow_stays_finite`, pending INF)
-- [x] a Dint quotient into an Int: a Math constant into an Int is cut to 16 bits (`numeric/dint_quotient_into_int`, pending CONST16)
+- [x] a Dint quotient into an Int: a Math constant into an Int is cut to 16 bits (`numeric/dint_quotient_into_int`)
 - [x] division by zero -> 0 + fault (`numeric/div_by_zero`)
 - [x] non-finite float (NaN, +/-Inf) -> 0 + fault (`numeric/real_div_by_zero`)
 - [x] math domain error (sqrt, ln/log, asin/acos) -> 0 + SC46 for the rest of the scan, and the PLC stays in RUN (`math_error/math_errors_do_not_stop`)
@@ -354,7 +354,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] latch / reset stickiness (`coils/latch_reset_sticky`)
 - [x] toggle flips once per OFF->ON and holds (O1) (`out/toggle_flips_once_per_edge`)
 - [x] debounce TD keeps counting past its preset while steady (O2); a bounce restarts the timing side (O3) (`out/debounce_td_keeps_counting`, `out/debounce_bounce_restarts_on_side`)
-- [x] flasher with its rung false: TDs cleared, kept or frozen, and the restart's phase (O4, probe; `out/flasher_restarts_with_on_phase`)
+- [x] flasher with its rung false: TDs kept and frozen, and the restart is a fresh on phase (O4, answered on hardware round 2; `out/flasher_restarts_with_on_phase`)
 - [x] timed (not maintained) needs a fresh edge after timing out (O5) (`out/timed_needs_fresh_edge`)
 - [x] Out coil variants never set the phase timer's T bit (O6) (`out/out_coil_sets_timer_done`)
 - [x] TON auto-reset, drops Acc and Done together when rung goes false (`timers/ton_auto_reset`)
@@ -396,7 +396,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] pack_words first source is the low word (`block/pack_words`)
 - [x] pack_text into WORD parses hex; into INT/DINT parses signed decimal (`text/pack_text_word_hex`, `text/pack_text_int`, `text/pack_text_dint`)
 - [x] pack_text on numeric with leading whitespace faults unless allow_whitespace (`text/pack_text_whitespace`)
-- [x] pack_text into INT/DINT clamps and stops at a point or a non-digit (`text/pack_text_int`, `text/pack_text_dint`, probe `text/pack_text_int_fraction`, pending TEXT); TXT is 8-bit (`text/to_binary`)
+- [x] pack_text into INT/DINT clamps with the out-of-range fault, stops at a point and refuses any other non-digit with the fault (`text/pack_text_int`, `text/pack_text_dint`, `text/pack_text_int_fraction`, answered on hardware round 2); TXT is 8-bit (`text/to_binary`)
 - [x] copy/fill executes every scan while rung true (not edge-triggered) (`block/every_scan`)
 - [x] shift register direction by range order (`shift/forward_range_shifts_up`; `shift/reversed_range_shifts_down` in-process only)
 - [x] shift register: reset takes precedence over clock if both true same scan (`shift/reset_beats_clock`, `shift/reset_swallows_the_edge`)

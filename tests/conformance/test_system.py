@@ -30,13 +30,13 @@ Copy leaves it as it is.
 Scan clock and counter.  ``scan_counter_steps_by_one`` shows SD9 counts every
 scan (7 steps of one over scans 1..8), and ``scan_clock_follows_counter`` that
 SC3 toggles every scan (8 edges over 8 scans) and is on exactly when SD9 is
-even, as round 1 read on a CLICK (``pending="SYS"``: pyrung's SC3 is on when
-SD9 is odd, and reads Result2 = 0).  ``first_scan_counter_and_clock`` pins
+even, as round 1 read on a CLICK (pyrung's SC3 was on when SD9 is odd, and
+read Result2 = 0, until hardware round 2).  ``first_scan_counter_and_clock`` pins
 which of the two is offset from pyrung's: rungs outside the ``Cmd`` gate copy
 SD9 and SC3 on the first scan (SC2) into DD981..DD983, which the reset leaves
 alone.  SD9 starts at 0 with SC3 on (Result1 = 0, Result3 = 1; hardware round 2, 2026-10-30,
-where SD9 starting at 1 with SC3 off was adopted); pyrung reads 0, 0, so its
-SD9 is right and its SC3 is a scan out of phase.  Result2 = 1 shows the capture ran.  ``scan_counter_wraps_to_zero`` keeps
+where SD9 starting at 1 with SC3 off was adopted); pyrung read 0, 0 before
+round 2: its SD9 was right and its SC3 a scan out of phase.  Result2 = 1 shows the capture ran.  ``scan_counter_wraps_to_zero`` keeps
 the least SD9 seen since the first scan in DD991: SD9 wrapping from 32767 to
 0 (adopted) reads Result1 = 0, one counting on into negative values (an
 unsigned 16-bit counter read as an Int) reads 1.  It only tells once the PLC
@@ -279,9 +279,8 @@ def _fault_init(base):
     return init
 
 
-#: The adopted model: a flag follows the last instruction, so every probe reads it off.
+#: SC43 and SC44 follow the last instruction (hardware round 2), so every probe reads them off.
 _FAULT_EXPECT = {"Result1": 0, "Result2": 0, "Result3": 0}
-_FAULT_PROBE = "fault flags: which instruction clears them"
 
 group = Group(
     "system",
@@ -296,7 +295,6 @@ group = Group(
             expect={"Result1": 346, "Result2": 0, "Result3": 0},
             scans=SCANS,
             pending="SYS",
-            probe=_FAULT_PROBE,
         ),
         case(
             "The out-of-range flag SC43 shows the last instruction: overflowing an Int on "
@@ -308,7 +306,6 @@ group = Group(
             expect=_FAULT_EXPECT,
             scans=SCANS,
             pending="SYS",
-            probe=_FAULT_PROBE,
         ),
         case(
             "The address-error flag SC44 shows the last instruction: copying through "
@@ -320,7 +317,6 @@ group = Group(
             expect=_FAULT_EXPECT,
             scans=SCANS,
             pending="SYS",
-            probe=_FAULT_PROBE,
         ),
         case(
             "The scan counter SD9 goes up by one every scan: over scans 1..8 it steps "
@@ -336,7 +332,6 @@ group = Group(
             ladder=prove_scan_clock_follows_counter,
             expect={"Result1": 8, "Result2": 8},
             scans=SCANS,
-            pending="SYS",
         ),
         case(
             "The 100 ms and 500 ms clocks SC5 and SC6 have the named time as their "
@@ -365,8 +360,6 @@ group = Group(
             "rung ran",
             ladder=prove_first_scan_counter_and_clock,
             expect={"Result1": 0, "Result2": 1, "Result3": 1},
-            pending="SYS",
-            probe="first scan: SD9 starts at 1, or SC3 starts on",
         ),
         case(
             "The scan counter SD9 wraps from 32767 to 0, never negative: the least value "

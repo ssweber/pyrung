@@ -267,7 +267,7 @@ plc.unforce("Button")
 
 The PLC exposes built-in status and control through the `system` namespace. Import it with `from pyrung import system`.
 
-**`system.sys`** — scan-level status: `always_on`, `first_scan`, clock toggles (`clock_10ms` through `clock_1h`), `mode_run`, `scan_counter`. Use `first_scan` for one-time initialization:
+**`system.sys`** — scan-level status: `always_on`, `first_scan`, clock toggles (`clock_10ms` through `clock_1h`), `mode_run`, `scan_counter`, and `scan_clock_toggle`, which is on when `scan_counter` is even (the first scan included), as a CLICK's SC3 is. Use `first_scan` for one-time initialization:
 
 ```python
 with rung(system.sys.first_scan):

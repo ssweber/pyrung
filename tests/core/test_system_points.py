@@ -97,14 +97,15 @@ def test_derived_points_always_on_first_scan_scan_clock_and_fixed_mode(runner_fa
 
     runner = runner_factory(program)
 
+    # SC3 is on when SD9 is even, the first scan's 0 included (measured on a CLICK).
     runner.step()
     assert runner.current_state.tags["FirstScanLatched"] is True
-    assert runner.current_state.tags["ScanClockValue"] is False
+    assert runner.current_state.tags["ScanClockValue"] is True
     assert runner.current_state.tags["FixedModeValue"] is True
 
     runner.step()
     assert runner.current_state.tags["FirstScanLatched"] is False
-    assert runner.current_state.tags["ScanClockValue"] is True
+    assert runner.current_state.tags["ScanClockValue"] is False
 
 
 def test_clock_rise_fall_edge_detect_not_level():
@@ -231,8 +232,12 @@ def test_scan_clock_toggle_derived_edge_rise(runner_factory):
 
     runner = runner_factory(program)
 
+    runner.step()  # scan 0: toggle=True, rises from the off edge memory starts with
+    assert runner.current_state.tags["Flag"] is True
+    runner.patch({"Flag": False})
+
     runner.step()  # scan 1: toggle=False, no rise
-    assert runner.current_state.tags.get("Flag") is not True
+    assert runner.current_state.tags["Flag"] is False
 
     runner.step()  # scan 2: toggle=True, rise
     assert runner.current_state.tags["Flag"] is True
@@ -247,11 +252,15 @@ def test_scan_clock_toggle_derived_edge_fall(runner_factory):
 
     runner = runner_factory(program)
 
-    runner.step()  # scan 1: toggle=False, no fall
+    runner.step()  # scan 0: toggle=True, no fall
     assert runner.current_state.tags.get("Flag") is not True
 
+    runner.step()  # scan 1: toggle=False, fall
+    assert runner.current_state.tags["Flag"] is True
+    runner.patch({"Flag": False})
+
     runner.step()  # scan 2: toggle=True, no fall
-    assert runner.current_state.tags.get("Flag") is not True
+    assert runner.current_state.tags["Flag"] is False
 
     runner.step()  # scan 3: toggle=False, fall
     assert runner.current_state.tags["Flag"] is True
@@ -272,8 +281,9 @@ def test_scan_clock_toggle_derived_edge_alternates(runner_factory):
     for _ in range(10):
         runner.step()
 
+    # Scans 0..9: on at 0, 2, 4, 6, 8 (each a rise, scan 0's too), off at 1, 3, 5, 7, 9.
     assert runner.current_state.tags["RiseCount"] == 5
-    assert runner.current_state.tags["FallCount"] == 4
+    assert runner.current_state.tags["FallCount"] == 5
 
 
 def test_rtc_fields_derive_from_set_rtc_anchor():

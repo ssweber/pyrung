@@ -54,11 +54,12 @@ tells apart:
 - ``pack_text_int``: into an INT parses signed decimal ("0042" is 42, not
   hex 66), clamps 123456 to 32767 (Result3), and reads "12.5" as 12 (Result4).
   The clamp raises the fault (ErrorCode = 1; hardware round 2, 2026-10-30, where no fault
-  was adopted).  pyrung refuses both and leaves 5 and 9.
+  was adopted).  pyrung before step TEXT refused both and left 5 and 9.
 - ``pack_text_dint``: into a DINT parses signed decimal over 32 bits, and
   clamps 2147483648 to 2147483647 (Result3 = 1) with the fault (Result4 = 1;
-  hardware round 2, 2026-10-30).  pyrung refuses it (Result3 = 0, Result4 = 1).
-- ``pack_text_int_fraction`` (probe): "12.9" reads 12 if the parse stops at
+  hardware round 2, 2026-10-30).  pyrung before step TEXT refused it (Result3 = 0,
+  Result4 = 1).
+- ``pack_text_int_fraction``: "12.9" reads 12 if the parse stops at
   the point (adopted), 13 if it rounds, 99 (the preset) if refused (Result1);
   "12x" reads 12 if the parse stops at the first non-digit, 99 if refused
   (Result2).  Result3 and Result4 are SC43 after each.  A CLICK reads 12, 99,
@@ -523,7 +524,6 @@ group = Group(
             ladder=prove_pack_text_int_fraction,
             init=init_pack_text_int_fraction,
             expect={"Result1": 12, "Result2": 99, "Result3": 0, "Result4": 1},
-            probe='pack_text "12.9" -> 12 or 13; "12x" -> 12 or refused',
         ),
         # The cases that raise SC43 come last: every case fires on the same scan, so a
         # fault raised earlier in the subroutine would still be on at a later case's
@@ -567,7 +567,6 @@ group = Group(
                 "Result4": 12,
                 "ErrorCode": 1,
             },
-            probe="does a clamping pack_text set SC43",
         ),
         case(
             "Pack text into a Dint parses signed decimal over 32 bits (Result1 = 1, Result2 = "
@@ -575,7 +574,6 @@ group = Group(
             ladder=prove_pack_text_dint,
             init=init_pack_text_dint,
             expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1},
-            probe="does a clamping pack_text set SC43",
         ),
     ],
 )

@@ -193,7 +193,7 @@ def _render_system_point_scan_lines(ctx: CodegenContext, indent: int) -> list[st
     """Derived system points for the scan about to run, as core resolves them.
 
     The fault flags clear; then the scan counter (SD9, ``scan_id % 32768``),
-    the scan clock (SC3, on when SD9 is odd), the first-scan bit, the
+    the scan clock (SC3, on when SD9 is even), the first-scan bit, the
     free-running clocks over the time of the RUN scans before this one (0 on
     the first scan, so every clock starts off), the scan time (SD10) and the
     RTC.
@@ -212,7 +212,7 @@ def _render_system_point_scan_lines(ctx: CodegenContext, indent: int) -> list[st
         lines.append(f"{sp}{counter} = _sys_scan_n")
     scan_clock = ctx.symbol_if_referenced(system.sys.scan_clock_toggle.name)
     if scan_clock is not None:
-        lines.append(f"{sp}{scan_clock} = (_sys_scan_n & 1) == 1")
+        lines.append(f"{sp}{scan_clock} = (_sys_scan_n & 1) == 0")
     first_scan = ctx.symbol_if_referenced(system.sys.first_scan.name)
     if first_scan is not None:
         lines.append(f"{sp}{first_scan} = _sys_first")

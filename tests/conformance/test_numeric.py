@@ -33,12 +33,14 @@ could plausibly differ, these cases tell the models apart:
   (Word); Math that skips an overflowing write reads 0/-1 (Int).  Math that
   wraps without the out-of-range flag reads Result3 = 0 (Int).  The Dint
   results are read back by compares, not by a quotient (see below).
-- ``dint_quotient_into_int`` (probe): round 1 read 0 for -2147483648 / 65536
-  into an Int, where pyrung reads -32768.  Preset to 99, the same quotient
+- ``dint_quotient_into_int``: round 1 read 0 for -2147483648 / 65536
+  into an Int, where pyrung read -32768.  Preset to 99, the same quotient
   with the constant 65536 (Result1), with 65536 staged in a DD (Result2), and
   -2147418112 / 65536 (Result3, -32767).  Exact quotients: -32768, -32768,
-  -32767 (pyrung).  A constant cut to 16 bits (65536 -> 0, a division by zero
-  that writes 0): 0, -32768, 0, which a CLICK reads (hardware round 2, 2026-10-30).  A quotient of -32768 refused by the Int: 99
+  -32767 (pyrung before round 2).  A constant cut to 16 bits (65536 -> 0, a
+  division by zero that writes 0): 0, -32768, 0, which a CLICK reads (hardware
+  round 2, 2026-10-30), and pyrung since: a calc into an Int cuts its integer
+  constants to 16 bits.  A quotient of -32768 refused by the Int: 99
   (or a clamp, -32767), the same for Result2, and -32767.  (SC40 is not read:
   other cases divide by zero on the same scan.)
 - ``copy_clamps_calc_wraps``: Copy clamps where Math wraps.  A Copy that
@@ -474,8 +476,6 @@ group = Group(
             ladder=prove_dint_quotient_into_int,
             init=init_dint_quotient_into_int,
             expect={"Result1": 0, "Result2": -32768, "Result3": 0},
-            pending="CONST16",
-            probe="dint quotient into an Int: constant cut to 16 bits, or -32768 refused",
         ),
     ],
 )
