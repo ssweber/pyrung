@@ -60,7 +60,8 @@ could plausibly differ, these cases tell the models apart:
 - ``int_math_real_operand_constant`` (probe): the 16-bit cut when the other
   operand is a REAL.  DF141 = 0.25 is multiplied by the constant 100000 into
   an Int, preset 99 (Result1).  The constant cut to its low 16 bits, signed
-  (pyrung, adopted): 100000 is -31072, so -7768.  Kept whole: 25000.  Clamped
+  (pyrung, adopted): 100000 is -31072, so -7768.  Cut to unsigned 16 bits:
+  100000 is 34464, so 8616.  Kept whole: 25000.  Clamped
   to the Int range, 32767: 8191.  Refused by the Math (write skipped): 99.
   A REAL operand turning the Math into floating point and the constant kept
   whole is the 25000 reading.  Paste refused: never fires.  (A whole-number

@@ -81,7 +81,7 @@
 "numeric/copy_clamps_calc_wraps" = { hash = "b58406ac7737", on = "2026-10-30" }
 "numeric/copy_source_to_dest" = { hash = "3a43843761cb", on = "2026-10-30" }
 "numeric/dint_calc_wraps" = { hash = "e280219d1273", on = "2026-10-30" }
-"numeric/dint_quotient_into_int" = { hash = "19bfe244ed5e", on = "2026-10-30" }
+"numeric/dint_quotient_into_int" = { hash = "e90f421451fa", on = "2026-10-30" }
 "numeric/div_by_zero" = { hash = "038935904fff", on = "2026-10-30" }
 "numeric/hex_literal_is_decimal" = { hash = "276c8ddb2768", on = "2026-10-30" }
 "numeric/int_calc_wraps" = { hash = "730a97d1e411", on = "2026-10-30" }
@@ -144,7 +144,7 @@
 "system/rtc_seconds_advance" = { hash = "be3cbc8d1dd2", on = "2026-10-30" }
 "system/scan_clock_follows_counter" = { hash = "b9e17b5dcd8f", on = "2026-10-30" }
 "system/scan_counter_steps_by_one" = { hash = "1af8fddb503d", on = "2026-10-30" }
-"system/scan_counter_wraps_to_zero" = { hash = "a363e7a67eab", on = "2026-10-30" }
+"system/scan_counter_wraps_to_zero" = { hash = "7be993d01b1f", on = "2026-10-30" }
 "text/fill_blank_ascii" = { hash = "e8ce876f344c", on = "2026-10-30" }
 "text/literal_fanout" = { hash = "a05724be3780", on = "2026-10-30" }
 "text/null_ascii" = { hash = "f59e22a3283a", on = "2026-10-30" }
