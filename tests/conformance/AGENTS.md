@@ -42,7 +42,7 @@ def test_rungs():
 
 ## Pending and probes
 
-**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `S4` live row-by-row rung solve, `DRUM` drum ordering, `OUT` Out coils never set T<n> (and flasher phases), `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` SC3/SD9 phase and the fault-flag model, `CONST16` a Math constant into an Int is cut to 16 bits.
+**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `S4` live row-by-row rung solve, `DRUM` drum ordering, `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` SC3/SD9 phase and the fault-flag model, `CONST16` a Math constant into an Int is cut to 16 bits.
 
 - On pyrung's own targets (in-process `run()`, the local sim, `TARGET=circuitpy`) a pending case is a **strict xfail**: it passes, reported `XFAIL` with what pyrung read, only if no run meets its expectation and its reset is clean (a leak still fails it). Once pyrung starts meeting the expectation, the case fails with "remove pending=": the fixer of that step deletes the marker in the same commit, so `grep 'pending="S2"'` lists exactly what a step must flip.
 - Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `pending=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
@@ -354,9 +354,9 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] latch / reset stickiness (`coils/latch_reset_sticky`)
 - [x] toggle flips once per OFF->ON and holds (O1) (`out/toggle_flips_once_per_edge`)
 - [x] debounce TD keeps counting past its preset while steady (O2); a bounce restarts the timing side (O3) (`out/debounce_td_keeps_counting`, `out/debounce_bounce_restarts_on_side`)
-- [x] flasher with its rung false: TDs cleared, kept or frozen, and the restart's phase (O4, probe, pending OUT; `out/flasher_restarts_with_on_phase`)
+- [x] flasher with its rung false: TDs cleared, kept or frozen, and the restart's phase (O4, probe; `out/flasher_restarts_with_on_phase`)
 - [x] timed (not maintained) needs a fresh edge after timing out (O5) (`out/timed_needs_fresh_edge`)
-- [x] Out coil variants never set the phase timer's T bit (O6) (`out/out_coil_sets_timer_done`, pending OUT)
+- [x] Out coil variants never set the phase timer's T bit (O6) (`out/out_coil_sets_timer_done`)
 - [x] TON auto-reset, drops Acc and Done together when rung goes false (`timers/ton_auto_reset`)
 - [x] TON enable: the enabling scan's dt counts and Done is judged on that scan, so a 0 ms preset is done on the scan its rung goes true (hardware-verified per `tests/core/test_timers.py`; `timers/ton_done_on_enabling_scan`)
 - [x] RTON holds Acc and Done across rung-false (`timers/rton_holds_across_rung_false`)

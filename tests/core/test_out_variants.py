@@ -1,7 +1,10 @@
 """Tests for the CLICK v4 Out coil variants: toggle, debounce, flasher, timed.
 
-The probes O1-O5 (scratchpad/click-v4/RESEARCH.md) are not yet run on a CLICK;
-these tests pin pyrung's answers.
+Hardware round 1 (2026-10-29) confirmed O1, O2, O3 and O5 and answered O6: an
+Out coil never sets its Timer's done bit T<n>, its phases come from the TDs
+alone (``tests/conformance/test_out.py``).  Round 2 (2026-10-30) read O4: a
+flasher with its rung false keeps both TDs frozen, then restarts with an on
+phase.
 """
 
 import pytest
@@ -106,15 +109,18 @@ class TestDebounce:
                 debounce(Valve, on=(T[1], 30), off=(T[2], 20))
 
         runner = runner_factory(logic, dt=0.010)
-        rows = _trace(runner, [1, 1, 1, 1, 0, 0, 1], "Valve", "OT1_Acc", "OT1_Done", "OT2_Acc")
+        rows = _trace(
+            runner, [1, 1, 1, 1, 0, 0, 1], "Valve", "OT1_Acc", "OT1_Done", "OT2_Acc", "OT2_Done"
+        )
+        # O6: neither Timer's Done ever turns on.
         assert rows == [
-            (False, 10, False, 0),
-            (False, 20, False, 0),
-            (True, 30, True, 0),
-            (True, 40, True, 0),  # O2: the TD keeps counting, as on_delay's does
-            (True, 0, False, 10),
-            (False, 0, False, 20),
-            (False, 10, False, 0),
+            (False, 10, False, 0, False),
+            (False, 20, False, 0, False),
+            (True, 30, False, 0, False),
+            (True, 40, False, 0, False),  # O2: the TD keeps counting, as on_delay's does
+            (True, 0, False, 10, False),
+            (False, 0, False, 20, False),
+            (False, 10, False, 0, False),
         ]
 
     def test_zero_presets_follow_the_rung(self, runner_factory):
@@ -175,7 +181,7 @@ class TestDebounce:
 
 
 class TestFlasher:
-    def test_alternates_starting_on_and_clears_when_the_rung_drops(self, runner_factory):
+    def test_alternates_starting_on_and_freezes_when_the_rung_drops(self, runner_factory):
         Beacon = Bool("Beacon")
         with Program() as logic:
             with Rung(In):
@@ -191,21 +197,22 @@ class TestFlasher:
             "OT4_Done",
             "OT4_Acc",
         )
+        # The phase is read from the TDs; neither Timer's Done turns on (O6).
         assert rows == [
             # The first on phase counts the rung's first scan, as on_delay does.
             (True, False, 10, False, 0),
             (True, False, 20, False, 0),
-            (False, True, 30, False, 0),
-            (False, True, 30, False, 10),
-            (True, False, 0, True, 20),
-            (True, False, 10, True, 20),
-            (True, False, 20, True, 20),
-            (False, True, 30, False, 0),
-            (False, True, 30, False, 10),
-            (True, False, 0, True, 20),
-            (True, False, 10, True, 20),
-            (False, False, 0, False, 0),  # O4: both timers clear
-            (True, False, 10, False, 0),  # a full on phase again
+            (False, False, 30, False, 0),
+            (False, False, 30, False, 10),
+            (True, False, 0, False, 20),
+            (True, False, 10, False, 20),
+            (True, False, 20, False, 20),
+            (False, False, 30, False, 0),
+            (False, False, 30, False, 10),
+            (True, False, 0, False, 20),
+            (True, False, 10, False, 20),
+            (False, False, 10, False, 20),  # O4: both TDs freeze
+            (True, False, 10, False, 20),  # a full on phase again, from 0
         ]
 
     def test_needs_both_phases(self):
@@ -247,13 +254,13 @@ class TestShortPhases:
                 timed(Horn, T[5], 10, maintained=maintained)
 
         runner = runner_factory(logic, dt=0.010)
-        rows = _trace(runner, [1, 0, 0, 1, 1], "Horn", "OT5_Done")
+        rows = _trace(runner, [1, 0, 0, 1, 1], "Horn", "OT5_Acc", "OT5_Done")
         assert rows == [
-            (True, True),
-            (False, False),
-            (False, False),
-            (True, True),
-            (maintained, True),
+            (True, 10, False),
+            (False, 0, False),
+            (False, 0, False),
+            (True, 10, False),
+            (maintained, 10, False),
         ]
 
 
@@ -270,7 +277,7 @@ class TestTimed:
             (True, False, 10),
             (True, False, 20),
             (True, False, 30),  # O5: an edge during the on time does not restart it
-            (False, True, 40),
+            (False, False, 40),  # O6: timed out, and the Done stays off
             (False, False, 0),
             (False, False, 0),
             (False, False, 0),
@@ -283,14 +290,16 @@ class TestTimed:
                 timed(Horn, T[5], 20)
 
         runner = runner_factory(logic, dt=0.010)
-        rows = _trace(runner, [1, 1, 1, 1, 0, 1], "Horn", "OT5_Done")
+        rows = _trace(runner, [1, 1, 1, 1, 0, 1], "Horn", "OT5_Acc", "OT5_Done")
+        # The TD holds at the preset while the rung stays true: that is the
+        # timed-out state, not the Done bit.
         assert rows == [
-            (True, False),
-            (False, True),
-            (False, True),
-            (False, True),
-            (False, False),
-            (True, False),
+            (True, 10, False),
+            (False, 20, False),
+            (False, 20, False),
+            (False, 20, False),
+            (False, 0, False),
+            (True, 10, False),
         ]
 
     def test_maintained_follows_the_rung_after_the_on_time(self, runner_factory):

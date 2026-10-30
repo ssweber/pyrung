@@ -826,9 +826,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         writes=frozenset(
             {
                 "DebValve",
-                "AnalysisDebOn_Done",
                 "AnalysisDebOn_Acc",
-                "AnalysisDebOff_Done",
                 "AnalysisDebOff_Acc",
             }
         ),
@@ -842,9 +840,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         writes=frozenset(
             {
                 "FlashBeacon",
-                "AnalysisFlashOn_Done",
                 "AnalysisFlashOn_Acc",
-                "AnalysisFlashOff_Done",
                 "AnalysisFlashOff_Acc",
             }
         ),
@@ -855,7 +851,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _timed_case,
         frozenset({"TimedEnable"}),
         data_reads=frozenset({"TimedPreset"}),
-        writes=frozenset({"TimedHorn", "AnalysisTimed_Done", "AnalysisTimed_Acc"}),
+        writes=frozenset({"TimedHorn", "AnalysisTimed_Acc"}),
     ),
     GraphCase(
         "time_event_drum",

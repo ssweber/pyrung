@@ -21,6 +21,7 @@
 - Generated CLICK projects put pyrung's guidance in `AGENTS.pyrung.md` and `README.pyrung.md`, rewritten on every generation, while `AGENTS.md` and `README.md` become the user's files with a `<!-- pyrung:guidance -->` line pointing at them; `refresh_workspace_lifecycle_guidance()` and the lifecycle markers are removed.
 - A `Real` holds only CLICK's range, -3.4028235E+38..3.4028235E+38: a literal, default, `copy`/`fill` source, `calc` constant, patch or force past it raises `ValueError`, and a `calc` or copy result past it saturates at the limit and sets `fault.out_of_range` (SC43), on both backends and in CircuitPython. pyrung still computes a `Real` at 64-bit precision, where CLICK uses 32.
 - `generate_circuitpy()` and `write_circuitpy()` lose `mapped_tag_scope`: the generated Modbus server serves every register the TagMap maps, whether a rung uses it or not (what `"all_mapped"` did), and every raw CLICK register a rung uses (`ds[3901]`), which it used to refuse with an illegal-address exception. Drop the argument.
+- Out coils follow CLICK on hardware: `debounce`, `flasher` and `timed` never set their Timers' `Done` (CLICK's `T<n>`), so a contact on it is always off, and read their phases from the `Acc` values (TD) alone; a `flasher` whose rung goes false keeps both `Acc` values frozen instead of clearing them, then restarts with a full on phase from 0.
 
 ### Features
 

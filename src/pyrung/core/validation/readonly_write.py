@@ -78,7 +78,7 @@ def _any_write_targets(instr: Any) -> list[tuple[str, str]]:
     )
 
     if isinstance(instr, (DebounceInstruction, FlasherInstruction, TimedInstruction)):
-        # The coil bit plus the Done/Acc of each Timer it owns.
+        # The coil bit plus the Acc of each Timer it owns (never the Done).
         from pyrung.core.analysis.write_sites import (
             instruction_write_targets,
             static_write_target_names,
