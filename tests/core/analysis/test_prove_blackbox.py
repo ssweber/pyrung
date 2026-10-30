@@ -665,14 +665,6 @@ class TestReviewRound2:
 
 
 class TestKnownHoles:
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "classify: an OTE coil read by a rung above its writer is classified "
-            "combinational, so a delay line Y1 -> Y2 -> Y3 leaves the key; the "
-            "exact-timing layer hid it on the timer variant"
-        ),
-    )
     def test_delay_line_of_coils_is_state(self):
         btn = Bool("BbDlBtn", external=True)
         c = Bool("BbDlC", external=True)
@@ -690,14 +682,6 @@ class TestKnownHoles:
         assert _first_hit(logic, seq, bad.name) is not None
         assert not isinstance(never(logic, bad, _opt_config=BLACKBOX), Proven)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "classify: the same delay-line hole (bob/classify-entry-read, 6e6f006); "
-            "with it the black-box replay slides the timer's wait before the button "
-            "and confirms the counterexample"
-        ),
-    )
     def test_delay_line_into_a_timer_edge_is_not_proven(self):
         btn, run = Bool("BbDtBtn", external=True), Bool("BbDtRun", external=True)
         y1, y2, y3, z = Bool("BbDtY1"), Bool("BbDtY2"), Bool("BbDtY3"), Bool("BbDtZ")
@@ -718,3 +702,4 @@ class TestKnownHoles:
         result = never(logic, z, _opt_config=BLACKBOX)
         assert not isinstance(result, Proven)
         _assert_replays(logic, result, z.name)
+
