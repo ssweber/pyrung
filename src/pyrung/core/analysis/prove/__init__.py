@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from pyrung.core.program import Program
     from pyrung.core.tag import Tag
 
+    from .blackbox import _TimerModel
     from .deadness import DeadGuard
     from .inputs import _ExclusiveInputGroup
 
@@ -107,6 +108,13 @@ class _ExploreContext:
     # toggle edge cell, rise()/fall()): hidden-event jumps keep the plateaus
     # just before each crossing (see events._stop_point_outcome).
     edge_sensitive: bool = False
+    # Black-box timers (blackbox.py): the compiled kernel ticks by choice,
+    # and every counterexample is confirmed by concrete replay.
+    abstract_timers: bool = False
+    timer_model: _TimerModel | None = None
+    # ``(stateful index, counts up, preset)``: a counter accumulator keyed
+    # no further than its preset (``blackbox.count_clamps``).
+    count_clamps: tuple[tuple[int, bool, int], ...] = ()
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec
@@ -179,6 +187,8 @@ def _resolve_opt_config(opt_config: _OptConfig | None, skip_optimizations: bool)
 def _validate_split_at(
     program: Program,
     split_at: list[str],
+    *,
+    abstract_timers: bool = False,
 ) -> dict[str, tuple[Any, ...]]:
     from pyrung.core.analysis.pdg import TagRole, build_program_graph
     from pyrung.core.tag import TagType
@@ -214,7 +224,7 @@ def _validate_split_at(
         if tag.type is TagType.BOOL:
             domain: tuple[Any, ...] = (False, True)
         elif tag_name in done_info.pairs:
-            domain = (False, PENDING, True)
+            domain = (False, True) if abstract_timers else (False, PENDING, True)
         elif tag.choices is not None:
             domain = tuple(sorted(tag.choices.keys()))
         else:
@@ -252,7 +262,15 @@ def _build_explore_context(
     observed_tags: tuple[Tag, ...] = (),
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for always()/reachable_states()."""
-    split_at_tags = _validate_split_at(program, split_at) if split_at else None
+    split_at_tags = (
+        _validate_split_at(
+            program,
+            split_at,
+            abstract_timers=_opt_config.abstract_timers and not _opt_config.domains_only,
+        )
+        if split_at
+        else None
+    )
     ctx = _PassContext(
         program=program,
         scope=scope,
@@ -274,6 +292,7 @@ def _build_explore_context(
         opaque_reads=opaque_reads,
         opaque_reads_all=opaque_reads_all,
         observed_tags=observed_tags,
+        abstract_timers=_opt_config.abstract_timers and not _opt_config.domains_only,
     )
     return _run_pre_bfs_pipeline(
         ctx, _passes_for_opt_config(_opt_config), allow_partial=allow_partial
@@ -673,6 +692,7 @@ def _always_compiled(
                 bfs_config=opt.bfs_config,
                 settled=settled,
             )
+        result = _confirm_results(program, context, [predicate], [result])[0]
         if split_at and isinstance(result, Counterexample):
             names = ", ".join(sorted(split_at))
             result = replace(
@@ -747,6 +767,7 @@ def _always_compiled(
                 bfs_config=opt.bfs_config,
                 settled=settled,
             )
+        group_results = _confirm_results(program, context, group_predicates, group_results)
         for i, r in zip(indices, group_results, strict=True):
             if split_at and isinstance(r, Counterexample):
                 names = ", ".join(sorted(split_at))
@@ -761,6 +782,39 @@ def _always_compiled(
             results[i] = replace(r, _debug_context=context) if _debug else r
 
     return [r if r is not None else Proven(states_explored=0) for r in results]
+
+
+def _confirm_results(
+    program: Program,
+    context: _ExploreContext,
+    predicates: list[Callable[[dict[str, Any]], bool]],
+    results: list[Proven | Counterexample | Intractable],
+) -> list[Proven | Counterexample | Intractable]:
+    """Under black-box timers, replay every counterexample on the concrete PLC.
+
+    A trace the PLC follows to a violation stays a ``Counterexample`` (with
+    the concrete trace); one it cannot is an ``Intractable`` of kind
+    ``"timing"`` (blackbox.confirm).  A paced ``Proven``'s aggressive
+    counterexample is kept only if it replays.
+    """
+    if not context.abstract_timers:
+        return results
+    from .blackbox import confirm
+
+    confirmed: list[Proven | Counterexample | Intractable] = []
+    for predicate, result in zip(predicates, results, strict=True):
+        if isinstance(result, Counterexample):
+            result = confirm(program, context, predicate, result)
+        elif isinstance(result, Proven) and result.aggressive_counterexample is not None:
+            aggressive = confirm(program, context, predicate, result.aggressive_counterexample)
+            result = replace(
+                result,
+                aggressive_counterexample=aggressive
+                if isinstance(aggressive, Counterexample)
+                else None,
+            )
+        confirmed.append(result)
+    return confirmed
 
 
 def never(

@@ -31,8 +31,20 @@ def _use_memory(ctx: CodegenContext) -> None:
         ctx.mark_function_global(ctx._current_function, "_mem")
 
 
-def _tick_lines(acc: Tag, unit: TimeUnit, ctx: CodegenContext, sp: str) -> list[str]:
-    """Advance *acc* by this scan's dt into ``_acc``; leave the remainder in ``_rem``."""
+def _tick_lines(
+    acc: Tag, preset: Tag | int, unit: TimeUnit, ctx: CodegenContext, sp: str
+) -> list[str]:
+    """Advance *acc* by this scan's dt into ``_acc``; leave the remainder in ``_rem``.
+
+    The prover's abstract kernel lets its oracle choose the advance toward
+    *preset* instead (``render_kernel.compile_kernel``), with no remainder.
+    """
+    if ctx.abstract_timers:
+        return [
+            f"{sp}_rem = 0.0",
+            f"{sp}_acc = _bb_tick(_mem, {acc.name!r}, int({_compile_value(acc, ctx)}),"
+            f" int({_compile_value(preset, ctx)}))",
+        ]
     frac_key = f"_frac:{acc.name}"
     return [
         f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
@@ -87,7 +99,7 @@ def _compile_debounce_side(
     acc_write = _compile_lvalue(acc, ctx)
     return [
         f"{sp}if {timing}:",
-        *_tick_lines(acc, unit, ctx, sp4),
+        *_tick_lines(acc, preset, unit, ctx, sp4),
         f"{sp4}{ready} = _acc >= int({_compile_value(preset, ctx)})",
         f'{sp4}_mem["{frac_key}"] = _rem',
         f"{sp4}{acc_write} = _acc",
@@ -143,7 +155,7 @@ def _compile_flasher_phase(
     off_frac = f"_frac:{instr.off_acc.name}"
     started_acc = instr.off_acc if ends_on_phase else instr.on_acc
     return [
-        *_tick_lines(acc, instr.unit, ctx, sp),
+        *_tick_lines(acc, preset, instr.unit, ctx, sp),
         f"{sp}{_compile_lvalue(acc, ctx)} = _acc",
         f"{sp}if _acc >= int({_compile_value(preset, ctx)}):",
         f"{sp4}_off_phase = {ends_on_phase}",
@@ -229,7 +241,7 @@ def _compile_timed_instruction(
         f"{sp4}{target_write} = {instr.maintained}",
         f"{sp}elif not _was_done and (_en or bool({_compile_value(instr.target, ctx)})):",
         f"{sp4}_starting = not bool({_compile_value(instr.target, ctx)})",
-        *_tick_lines(instr.timer_acc, instr.unit, ctx, sp4),
+        *_tick_lines(instr.timer_acc, instr.on_preset, instr.unit, ctx, sp4),
         f"{sp4}_done = _acc >= int({_compile_value(instr.on_preset, ctx)})",
         f'{sp4}_mem["{frac_key}"] = _rem',
         f"{sp4}{target_write} = {timed_out_target}",

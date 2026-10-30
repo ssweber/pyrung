@@ -105,9 +105,16 @@ def compile_kernel(
     force_rung_enable: bool = False,
     blockless: bool = False,
     proof_metadata: bool = False,
+    abstract_timers: bool = False,
     split_after: int | None = None,
 ) -> CompiledKernel:
     """Compile a Program into a fast in-process replay kernel.
+
+    ``abstract_timers`` (the prover's kernel only) replaces every timed tick
+    with a call to ``_bb_tick``: the accumulator moves to a value the caller's
+    oracle (``memory["_bb"]``) chooses instead of by the scan's dt, so one
+    compiled scan stands for a scan of any length.  Enable, reset and preset
+    logic stay the runtime's.  Without an oracle a tick never advances.
 
     ``split_after`` (a rung count) emits a second ``pre_step_fn`` covering the
     leading rungs — the synthesis ``plant`` pass — so the caller can drain inputs
@@ -119,6 +126,7 @@ def compile_kernel(
         force_rung_enable=force_rung_enable,
         blockless=blockless,
         proof_metadata=proof_metadata,
+        abstract_timers=abstract_timers,
     )
     source = _render_kernel_source(ctx, split_after=split_after)
 
@@ -184,6 +192,18 @@ def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:
     return specs
 
 
+# The abstract-timer tick (see ``compile_kernel``).  Kernel only: CircuitPython
+# output never calls it.
+_BB_TICK_HELPER = [
+    "def _bb_tick(_mem, key, acc, limit):",
+    "    oracle = _mem.get('_bb')",
+    "    if oracle is None:",
+    "        return acc",
+    "    return oracle(key, acc, limit)",
+    "",
+]
+
+
 def _render_kernel_source(ctx: CodegenContext, *, split_after: int | None = None) -> str:
     sub_fn_lines = _compile_subroutines(ctx)
     rungs = ctx.program.rungs
@@ -203,6 +223,8 @@ def _render_kernel_source(ctx: CodegenContext, *, split_after: int | None = None
     lines: list[str] = []
     lines.extend(_render_imports(ctx))
     lines.extend(_render_helper_defs(_with_helper_deps(ctx.used_helpers)))
+    if ctx.abstract_timers:
+        lines.extend(_BB_TICK_HELPER)
     lines.extend(_render_indirect_helpers(ctx))
     lines.extend(_render_embedded_functions(ctx))
     lines.extend(_render_declarations(ctx))

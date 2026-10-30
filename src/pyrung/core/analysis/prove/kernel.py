@@ -428,6 +428,7 @@ class _EdgeCompressor:
             live_inputs=live_inputs,
             threshold_vector=threshold_vector,
             memory_key_defaults=ctx.memory_key_defaults,
+            count_clamps=ctx.count_clamps,
         )
 
 
@@ -566,6 +567,7 @@ def _extract_state_key(
     live_inputs: frozenset[str] | None = None,
     threshold_vector: tuple[Any, ...] | None = None,
     memory_key_defaults: tuple[Any, ...] = (),
+    count_clamps: tuple[tuple[int, bool, int], ...] = (),
 ) -> tuple[Any, ...]:
     """Hash key for the visited set — stateful + input + edge prev values.
 
@@ -579,8 +581,15 @@ def _extract_state_key(
 
     When *live_edges* is provided, edge tags not in the set use a sentinel
     value, collapsing states that differ only in irrelevant prev values.
+
+    *count_clamps* ``(index, up, preset)`` keys a counter accumulator past
+    its preset as the preset (black-box timers, ``blackbox.count_clamps``).
     """
     parts = list(map(kernel.tags.get, stateful_names))
+    for index, up, preset in count_clamps:
+        value = parts[index]
+        if type(value) is int:
+            parts[index] = min(value, preset) if up else max(value, preset)
     for spec in done_specs:
         acc = kernel.tags.get(spec.acc_name)
         if not acc and spec.frac_key is not None:

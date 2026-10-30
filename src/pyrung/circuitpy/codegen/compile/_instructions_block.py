@@ -658,13 +658,26 @@ def _compile_time_drum_instruction(
 
     lines.append(f"_reset_active = bool({reset_expr})")
     lines.append(f"_done = bool(_mem.get({done_key!r}, False))")
-    enabled_body = [
-        "_dt = float(_mem.get('_dt', 0.0))",
-        f"_dt_units = {unit_expr}",
-        "_int_units = int(_dt_units)",
-        "_frac = _dt_units - _int_units",
-        f"_acc = min(_acc + _int_units, {max_acc})",
-    ]
+    if ctx.abstract_timers:
+        # The step's preset is the tick's limit; an event-only step has none.
+        enabled_body = [
+            "_limit = None",
+            *_compile_step_selector_lines(
+                step_var="_step",
+                target_var="_limit",
+                value_exprs=[expr if expr is not None else "None" for expr in preset_exprs],
+            ),
+            f"_acc = _bb_tick(_mem, {instr.accumulator.name!r}, _acc, _limit)",
+            "_frac = 0.0",
+        ]
+    else:
+        enabled_body = [
+            "_dt = float(_mem.get('_dt', 0.0))",
+            f"_dt_units = {unit_expr}",
+            "_int_units = int(_dt_units)",
+            "_frac = _dt_units - _int_units",
+            f"_acc = min(_acc + _int_units, {max_acc})",
+        ]
     if timed_event:
         assert isinstance(instr, TimeEventDrumInstruction)
         enabled_body.extend(

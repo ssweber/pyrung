@@ -13,6 +13,7 @@ from pyrung.core.kernel import ReplayKernel
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
 from . import _ExploreContext
+from .blackbox import ORACLE_KEY, ChoiceOverflow, _TimerOracle, choice_runs
 from .classify import _build_dimension_hints
 from .cycles import _CycleTracker
 from .events import (
@@ -114,7 +115,15 @@ def _build_trace(
     links.reverse()
     trace: list[TraceStep] = []
     for link in links:
-        trace.append(TraceStep(inputs=link.inputs, scans=link.scans, prev=link.prev))
+        trace.append(
+            TraceStep(
+                inputs=link.inputs,
+                scans=link.scans,
+                prev=link.prev,
+                timers=link.timers,
+                _choices=link.choices,
+            )
+        )
         trace.extend(link.repeat)
     caveats = _merge_caveats(*(link.caveats for link in links))
     return trace, caveats
@@ -213,6 +222,25 @@ def _bfs_explore(
             state_filter=state_filter,
             frontier_collector=frontier_collector,
         )
+    except ChoiceOverflow as exc:
+        names = ", ".join(exc.keys) or "several timers"
+        overflow = Intractable(
+            reason=(
+                f"timers [{names}] can each finish on one scan in more ways than the"
+                f" verifier enumerates"
+            ),
+            dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+            estimated_space=0,
+            tags=list(exc.keys),
+            hints=[
+                "  every running timer may finish on any scan; a property whose scope"
+                " reaches fewer of them at once stays under the cap"
+            ],
+            journal=context.journal,
+        )
+        if predicates is None:
+            return overflow
+        return [overflow for _ in predicates]
     except UnmodeledRead as exc:
         assert predicates is not None
         if isinstance(exc, UnmodeledSystemRead):
@@ -288,6 +316,19 @@ def _bfs_explore_gen(
                 kernel.tags[tag_name] = value
             if tag_name in kernel.prev:
                 kernel.prev[tag_name] = value
+    # Black-box timers: the kernel's ticks ask this oracle (blackbox.py).
+    # ``_choice`` is (choices, moved ticks, a Done choice still open) of the
+    # successor being processed.
+    oracle = (
+        _TimerOracle(context.timer_model)
+        if context.abstract_timers and context.timer_model is not None
+        else None
+    )
+    if oracle is not None:
+        kernel.memory[ORACLE_KEY] = oracle
+    branching = oracle is not None and bool(context.timer_model and context.timer_model.branch)
+    _no_choice: tuple[tuple[int, ...], tuple[tuple[str, int], ...], bool] = ((), (), False)
+    _choice: list[tuple[tuple[int, ...], tuple[tuple[str, int], ...], bool]] = [_no_choice]
     edge_comp = _EdgeCompressor(context)
     hidden_event_cache = _HiddenEventCache(context)
     live_cache = _LiveInputCache(context)
@@ -310,6 +351,7 @@ def _bfs_explore_gen(
             live_inputs=live,
             threshold_vector=threshold_vector,
             memory_key_defaults=context.memory_key_defaults,
+            count_clamps=context.count_clamps,
         )
 
     _demoted = context.demoted_edge_names
@@ -373,7 +415,16 @@ def _bfs_explore_gen(
                 )
                 continue
             trace, trace_caveats = _build_trace(parent_map, p_key)
-            trace.append(TraceStep(inputs=input_dict, scans=edge_scans, prev=bprev_dict or {}))
+            choices, moved, _open = _choice[0]
+            trace.append(
+                TraceStep(
+                    inputs=input_dict,
+                    scans=edge_scans,
+                    prev=bprev_dict or {},
+                    timers=moved,
+                    _choices=choices,
+                )
+            )
             trace.extend(extra_steps)
             results[i] = Counterexample(
                 trace=trace,
@@ -807,6 +858,9 @@ def _bfs_explore_gen(
             # exact joint enumeration until both paths share one successor
             # pipeline.
             and not has_hidden_events
+            # Composition merges one run per group; tick choices would need
+            # every group's runs crossed with them.
+            and not branching
         )
         _factored_names: frozenset[str] = frozenset()
         _group_combos: list[list[tuple[tuple[str, Any], ...]]] | None = None
@@ -1040,6 +1094,8 @@ def _bfs_explore_gen(
                     edge_scans,
                     edge_caveats,
                     prev=bprev_dict,
+                    timers=_choice[0][1],
+                    choices=_choice[0][0],
                 )
             queue.append(
                 (
@@ -1193,7 +1249,39 @@ def _bfs_explore_gen(
                 return ready
             return None
 
-        for input_assignment in assignments:
+        def _stepped(
+            assignments: Any,
+            base: _KernelSnapshot = snap,
+            base_bprev: tuple[Any, ...] = cur_bprev,
+        ) -> Generator[tuple[tuple[str, Any], ...], None, None]:
+            # One scan per input assignment, and under branching black-box
+            # timers one per sequence of tick choices; each yield leaves the
+            # kernel in the successor, with ``_choice`` describing it.
+            def _prepare(input_assignment: tuple[tuple[str, Any], ...]) -> None:
+                _restore_kernel(kernel, base)
+                if _has_demoted:
+                    for name, value in zip(_demoted, base_bprev, strict=True):
+                        kernel.prev[name] = value
+                for name, value in input_assignment:
+                    kernel.tags[name] = value
+
+            for input_assignment in assignments:
+                if oracle is None:
+                    _prepare(input_assignment)
+                    _step_kernel(context, kernel)
+                    yield input_assignment
+                    continue
+
+                def _run(assignment: tuple[tuple[str, Any], ...] = input_assignment) -> None:
+                    _prepare(assignment)
+                    _step_kernel(context, kernel)
+
+                for _ in choice_runs(oracle, _run):
+                    _choice[0] = oracle.outcome()
+                    yield input_assignment
+                _choice[0] = _no_choice
+
+        for input_assignment in _stepped(assignments):
             if _progress_step is not None:
                 _progress_step()
             if progress is not None:
@@ -1203,14 +1291,6 @@ def _bfs_explore_gen(
                     progress(len(visited), len(queue), dt)
                     _progress_last_time = now
                     _progress_next_time = now + 5.0
-            _restore_kernel(kernel, snap)
-            if _has_demoted:
-                for name, value in zip(_demoted, cur_bprev, strict=True):
-                    kernel.prev[name] = value
-            for name, value in input_assignment:
-                kernel.tags[name] = value
-
-            _step_kernel(context, kernel)
             _eval_count += 1
             tv = _threshold_vector_key(kernel, context.threshold_vector_specs)
             post_step_live = (
@@ -1297,12 +1377,14 @@ def _bfs_explore_gen(
                     yield ready
             else:
                 # Fast path: single base outcome — no snapshot/restore overhead.
-                # The kernel is already in the post-step state.
+                # The kernel is already in the post-step state.  Under
+                # black-box timers ``settled`` skips a state where a timer
+                # could still finish (a Done choice is open).
                 intractable = _process_current_successor(
                     key=new_key,
                     input_dict=input_dict,
                     child_flipped=child_flipped,
-                    record_failures=True,
+                    record_failures=not (settled and _choice[0][2]),
                     skip_project_duplicate=True,
                     parent_key=parent_key,
                     bprev_dict=_bprev_dict,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 logger = logging.getLogger(__name__)
@@ -304,6 +305,10 @@ class _PassContext:
     _pending_infeasible_tags: list[str] = field(default_factory=list)
     _pending_infeasible_hints: list[str] = field(default_factory=list)
     system_points: SystemPointModel | None = None
+    # Black-box timers (blackbox.py): the search kernel ticks by choice.
+    abstract_timers: bool = False
+    timer_model: Any = None
+    count_clamps: tuple[tuple[int, bool, int], ...] = ()
 
     def extract_cache(self) -> _PipelineCache | None:
         if self.stateful_dims is None or self.nondeterministic_dims is None:
@@ -686,6 +691,9 @@ class _PassContext:
             free_system_inputs=frozenset()
             if self.domains_only
             else free_system_tags(self.nondeterministic_dims, self.graph.writers_of),
+            abstract_timers=self.abstract_timers and not domains_only,
+            timer_model=self.timer_model,
+            count_clamps=self.count_clamps,
         )
 
 
@@ -771,6 +779,22 @@ _REDUCTION_OPTIMIZATIONS: frozenset[str] = frozenset(
 )
 
 
+# The timer model a config defaults to (see ``_OptConfig.abstract_timers``).
+# ``PYRUNG_PROVE_ABSTRACT_TIMERS=1`` selects black-box timers process-wide, to
+# run a suite under both models side by side.
+_ABSTRACT_TIMERS_DEFAULT: bool = os.environ.get("PYRUNG_PROVE_ABSTRACT_TIMERS", "") not in (
+    "",
+    "0",
+)
+
+# What black-box timers turn off: the exact-timing layer (absorption,
+# hidden-event jumps, settlement).  None of it applies to a timer whose Done
+# is a choice.
+_EXACT_TIMING_OPTIMIZATIONS: frozenset[str] = frozenset(
+    {"accumulator_absorption", "hidden_event_jumping", "pending_settlement"}
+)
+
+
 @dataclass(frozen=True)
 class _OptConfig:
     """Per-optimization enable flags spanning pre-BFS passes and BFS-interleaved opts.
@@ -781,6 +805,14 @@ class _OptConfig:
     optimizations on — that is the maximally-reduced config still usable as a
     ground truth. ``_OptConfig.all_off()`` disables everything; it is a valid
     config to *test* but is NOT a sound baseline (see _REDUCTION_OPTIMIZATIONS).
+
+    ``abstract_timers`` selects the timer model, not an optimization: the
+    black-box timers of ``blackbox.py`` (every timed tick a search choice,
+    counterexamples confirmed by concrete replay) instead of the exact-timing
+    layer.  It forces that layer's flags off (``_EXACT_TIMING_OPTIMIZATIONS``)
+    and leaves nothing reach-extending, so under it ``all_off()`` is a sound
+    baseline, and ``sound_baseline()`` is ``all_off()`` with the declared-bounds
+    check kept.  ``domains_only`` (the ``how()`` prior) ignores it.
 
     Each field is one independently-toggleable optimization. This lets the
     soundness fuzzer test arbitrary *subsets* against the baseline —
@@ -804,6 +836,13 @@ class _OptConfig:
     free_input_factoring: bool = True
     # representation-level (does not change the explored state set)
     scope_snapshot: bool = True
+    # the timer model (see the class docstring); not a toggle
+    abstract_timers: bool = _ABSTRACT_TIMERS_DEFAULT
+
+    def __post_init__(self) -> None:
+        if self.abstract_timers:
+            for name in _EXACT_TIMING_OPTIMIZATIONS:
+                object.__setattr__(self, name, False)
 
     @classmethod
     def all_off(cls) -> _OptConfig:
@@ -841,7 +880,9 @@ class _OptConfig:
         return tuple(f for f in _OPT_TOGGLE_FIELDS if getattr(self, f))
 
 
-_OPT_TOGGLE_FIELDS = tuple(f for f in _OptConfig.__dataclass_fields__ if f != "domains_only")
+_OPT_TOGGLE_FIELDS = tuple(
+    f for f in _OptConfig.__dataclass_fields__ if f not in ("domains_only", "abstract_timers")
+)
 _DEFAULT_OPT_CONFIG = _OptConfig()
 
 
@@ -1819,6 +1860,61 @@ def _pass_compile_kernel(ctx: _PassContext) -> None:
     ctx.edge_tag_names = tuple(n for n in sorted(ctx.compiled.edge_tags) if n not in demoted)
 
 
+def _pass_compile_abstract_kernel(ctx: _PassContext) -> None:
+    """``compile_kernel`` for black-box timers: the search's kernel ticks by choice.
+
+    Earlier passes (declared bounds, elision) may have compiled the exact
+    kernel for their own probes; the search always gets the abstract one.
+    """
+    from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
+
+    ctx.abstract_timers = True
+    ctx.compiled = _compile_kernel(
+        ctx.program, blockless=True, proof_metadata=True, abstract_timers=True
+    )
+    _pass_compile_kernel(ctx)
+
+
+def _pass_build_timer_model(ctx: _PassContext) -> None:
+    """``build_event_specs`` for black-box timers: no events, a choice model instead."""
+    from .blackbox import build_timer_model, count_clamps, timed_sites
+
+    assert ctx.graph is not None and ctx.all_exprs is not None
+    assert ctx.stateful_dims is not None
+    ctx.state_key_done_specs = ()
+    ctx.done_event_specs = ()
+    ctx.threshold_event_specs = ()
+    ctx.timer_quanta = {}
+    ctx.drum_event_meta = {}
+    atoms = _build_atom_index(ctx.all_exprs)
+    observed = {*(ctx.project or ()), *ctx.opaque_reads}
+    sites = timed_sites(ctx.program)
+    exact = frozenset(
+        name
+        for name in sites
+        if ctx.opaque_reads_all
+        or name in observed
+        or _has_forbidden_data_read(ctx.program, ctx.graph, name)
+    )
+    consumed = exact | frozenset(name for name in sites if atoms.get(name))
+    ctx.timer_model = build_timer_model(
+        ctx.program,
+        stateful_dims=ctx.stateful_dims,
+        combinational=ctx._combinational_tags or frozenset(),
+        consumed=consumed,
+        exact=exact,
+    )
+    assert ctx.stateful_names is not None
+    ctx.count_clamps = count_clamps(
+        ctx.program,
+        ctx.graph,
+        ctx.stateful_names,
+        observed=frozenset(observed),
+        observe_all=ctx.opaque_reads_all,
+        atoms=atoms,
+    )
+
+
 def _pass_collect_done_acc_pairs(ctx: _PassContext) -> None:
     ctx.done_acc_info = _collect_done_acc_pairs(ctx.program)
     if ctx.journal_builder is not None:
@@ -2139,6 +2235,7 @@ def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
         stepping_tags_out=stepping,
         model_system_points=not ctx.domains_only,
         observe_everything=ctx.opaque_reads_all,
+        abstract_timers=ctx.abstract_timers,
     )
     ctx._stepping_tags = frozenset(stepping)
     if isinstance(result, Intractable):
@@ -2246,6 +2343,9 @@ def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
         # stays None.
         enable_overrides["collect_edge_exprs"] = False
         enable_overrides["discover_memory_keys"] = False
+    if opt.abstract_timers and not opt.domains_only:
+        overrides["compile_kernel"] = _pass_compile_abstract_kernel
+        overrides["build_event_specs"] = _pass_build_timer_model
     if not overrides and not enable_overrides:
         return _DEFAULT_PRE_BFS_PASSES
     return tuple(

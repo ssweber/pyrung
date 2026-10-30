@@ -124,6 +124,11 @@ class TraceStep:
     inputs: dict[str, Any]
     scans: int = 1
     prev: dict[str, Any] = field(default_factory=dict)
+    # Black-box timers (blackbox.py): the ticks this step moved, as
+    # ``(accumulator, value)``.  Empty in a trace that replays as recorded.
+    timers: tuple[tuple[str, Any], ...] = ()
+    # The search's tick choices for this step, to re-run it exactly.
+    _choices: tuple[int, ...] = field(default=(), repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -136,11 +141,24 @@ class _ParentLink:
     # Steps replayed after this one: the repeated traversals of a pumped cycle
     # (see cycles.py).
     repeat: tuple[TraceStep, ...] = ()
+    # Black-box timer choices of this link (see TraceStep).
+    timers: tuple[tuple[str, Any], ...] = ()
+    choices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
 class Intractable:
-    """Verification cannot complete within resource bounds."""
+    """Verification cannot complete within resource bounds.
+
+    ``kind`` says which: ``"search"`` (the state space is too big or
+    unbounded: narrow it with ``choices=``/``min=``/``max=``) or ``"timing"``
+    (unconfirmed: the search found a violation, but replaying it on the
+    concrete PLC diverged because it needs a timer to finish on a scan the
+    PLC's timing does not give; check the timing with a ``run_for()`` test).
+    A timing result carries the search's ``trace`` (each step's ``timers``
+    names the ticks it moved) and ``diverged_at``, the index of the step
+    where replay left it.
+    """
 
     reason: str
     dimensions: int
@@ -149,6 +167,9 @@ class Intractable:
     hints: list[str] = field(default_factory=list)
     journal: Journal | None = None
     _debug_context: Any = None
+    kind: str = "search"
+    trace: list[TraceStep] | None = None
+    diverged_at: int | None = None
 
 
 @dataclass(frozen=True)
