@@ -49,7 +49,8 @@ def _heartbeat_spec(draw: st.DrawFn) -> dict:
     if src == "timer":
         preset = draw(st.integers(min_value=2_000, max_value=20_000))  # ms
     else:
-        preset = draw(st.integers(min_value=200, max_value=2_000))  # counts
+        # Counts of the 100 ms clock (a counter counts rising edges).
+        preset = draw(st.integers(min_value=20, max_value=200))
     return {
         "src": src,
         "preset": preset,
@@ -92,7 +93,8 @@ def _build(spec: dict):
                 on_delay(src, spec["preset"], "ms")
         else:
             src = Counter.clone("Ctr")
-            with Rung(Enable):
+            # A counter counts rising edges: the 100 ms clock ramps it.
+            with Rung(Enable, system.sys.clock_100ms):
                 count_up(src, spec["preset"]).reset(Reset)
         with Rung(rise(clock_tag), _cmp(src.Acc, spec["form"], spec["threshold"])):
             if spec["body"] == "calc":
@@ -131,15 +133,16 @@ def test_saturated_heartbeat_fold_is_bit_equal() -> None:
             "b": 4,
         }
     )
-    # Boundary-straddle regression: Done (1676 counts) lands at t=16.75 s, exactly
-    # a clock_500ms rise edge.  Accumulated scan time drifts to 16.74999999999982
-    # (clock low) while the fold's big-step timestamp lands on 16.75 (clock high) —
-    # the OTE coil disagreed (Beat True vs False) until clock phase was grid-snapped
-    # (system_points.clock_phase).
+    # Boundary-straddle regression: Done (16 750 ms; first found as a per-scan
+    # counter's 1676 counts) lands at t=16.75 s, exactly a clock_500ms rise
+    # edge.  Accumulated scan time drifts to 16.74999999999982 (clock low)
+    # while the fold's big-step timestamp lands on 16.75 (clock high) — the
+    # OTE coil disagreed (Beat True vs False) until clock phase was
+    # grid-snapped (system_points.clock_phase).
     @example(
         spec={
-            "src": "counter",
-            "preset": 1676,
+            "src": "timer",
+            "preset": 16_750,
             "threshold": 1,
             "form": "gt",
             "clock": "clock_500ms",
@@ -191,7 +194,8 @@ def _frozen_write_spec(draw: st.DrawFn) -> dict:
     if src == "timer":
         preset = draw(st.integers(min_value=2_000, max_value=20_000))
     else:
-        preset = draw(st.integers(min_value=200, max_value=2_000))
+        # Counts of the 100 ms clock (a counter counts rising edges).
+        preset = draw(st.integers(min_value=20, max_value=200))
     n_frozen = draw(st.sampled_from(_N_FROZEN))
     return {
         "src": src,
@@ -225,7 +229,8 @@ def _build_frozen(spec: dict):
         else:
             src = Counter.clone("Ctr")
             Reset = Bool("Reset", external=True)
-            with Rung(Enable):
+            # A counter counts rising edges: the 100 ms clock ramps it.
+            with Rung(Enable, system.sys.clock_100ms):
                 count_up(src, spec["preset"]).reset(Reset)
 
         # Non-frozen rung: reads accumulator → makes clock hard

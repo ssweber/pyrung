@@ -737,22 +737,33 @@ def _compass_route_actions(
     return tuple(direct)
 
 
-def _oscillating_rungs(tag: str, ctx: Any, scope: Any, plc: Any) -> tuple[PilotRung, ...]:
+def _oscillating_rungs(
+    tag: str, ctx: Any, scope: Any, plc: Any, value: Any = True
+) -> tuple[PilotRung, ...]:
     """A two-rule toggle for an edge-gated accumulator driver.
 
     Drives *tag* to each polarity while it sits at the other, so it alternates
     every scan — the rising/falling edge train the counter's pulse contract
     explicitly requests. This is option lowering of an owner-declared pulse,
-    not a corrective behavior-category hypothesis.
+    not a corrective behavior-category hypothesis.  A non-Boolean driver
+    (``Sel == 3``) alternates between *value* and a value other than it.
     """
-    from pyrung.core.condition import AllCondition, CompareNe
+    from pyrung.core.condition import AllCondition, CompareEq, CompareNe
 
-    resting = bool(ctx.resting.get(tag, False))
-    other = not resting
     source = plc._known_tags_by_name[tag]
+    if isinstance(value, bool):
+        resting = bool(ctx.resting.get(tag, False))
+        other = not resting
+        return (
+            PilotRung(tag, other, AllCondition(scope, CompareNe(source, other))),
+            PilotRung(tag, resting, AllCondition(scope, CompareNe(source, resting))),
+        )
+    away = ctx.resting.get(tag, source.default)
+    if _values_match(away, value):
+        away = 0 if not _values_match(value, 0) else 1
     return (
-        PilotRung(tag, other, AllCondition(scope, CompareNe(source, other))),
-        PilotRung(tag, resting, AllCondition(scope, CompareNe(source, resting))),
+        PilotRung(tag, value, AllCondition(scope, CompareNe(source, value))),
+        PilotRung(tag, away, AllCondition(scope, CompareEq(source, value))),
     )
 
 

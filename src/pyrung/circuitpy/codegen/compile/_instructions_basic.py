@@ -31,6 +31,7 @@ from pyrung.core.instruction import (
     OutInstruction,
     ResetInstruction,
 )
+from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY
 from pyrung.core.instruction.timers import tof_timing_key
 from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.tag import Tag
@@ -306,6 +307,22 @@ def _compile_off_delay_instruction(
     return lines
 
 
+def _count_edge_lines(name: str, key: str, input_expr: str, indent: int) -> list[str]:
+    """Bind *name* to a counter input's rising edge and update its memory.
+
+    The memory is the input as the counter last scanned it, written on every
+    scan the counter runs (reset scans included); it starts off, so an input
+    already on at the first scan counts (see ``counters.count_edge``).
+    """
+    sp = " " * indent
+    now = f"{name}_now"
+    return [
+        f"{sp}{now} = bool({input_expr})",
+        f"{sp}{name} = {now} and not _mem.get({key!r}, False)",
+        f"{sp}_mem[{key!r}] = {now}",
+    ]
+
+
 def _compile_count_up_instruction(
     instr: CountUpInstruction,
     enabled_expr: str,
@@ -317,10 +334,20 @@ def _compile_count_up_instruction(
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
-    if ctx.proof_metadata and ctx._current_function is not None:
+    if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
+    site = ctx.state_key_for(instr)
+    up_key = f"{COUNT_UP_MEMORY}:{site}"
     sp = " " * indent
-    lines: list[str] = []
+    lines: list[str] = _count_edge_lines("_cu_edge", up_key, enabled_expr, indent)
+    down_expr: str | None = None
+    if instr.down_condition is not None:
+        down_expr = _get_condition_snapshot(instr, "down_condition", ctx) or compile_condition(
+            instr.down_condition, ctx
+        )
+        lines.extend(
+            _count_edge_lines("_cd_edge", f"{COUNT_DOWN_MEMORY}:{site}", down_expr, indent)
+        )
     if instr.reset_condition is not None:
         reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
             instr.reset_condition, ctx
@@ -341,17 +368,14 @@ def _compile_count_up_instruction(
         [
             f"{' ' * inner}_acc = int({acc_read})",
             f"{' ' * inner}_delta = 0",
-            f"{isp}if {enabled_expr}:",
+            f"{isp}if _cu_edge:",
             f"{' ' * (inner + 4)}_delta += 1",
         ]
     )
-    if instr.down_condition is not None:
-        down_expr = _get_condition_snapshot(instr, "down_condition", ctx) or compile_condition(
-            instr.down_condition, ctx
-        )
+    if down_expr is not None:
         lines.extend(
             [
-                f"{isp}if {down_expr}:",
+                f"{isp}if _cd_edge:",
                 f"{' ' * (inner + 4)}_delta -= 1",
             ]
         )
@@ -386,10 +410,11 @@ def _compile_count_down_instruction(
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
-    if ctx.proof_metadata and ctx._current_function is not None:
+    if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
+    down_key = f"{COUNT_DOWN_MEMORY}:{ctx.state_key_for(instr)}"
     sp = " " * indent
-    lines: list[str] = []
+    lines: list[str] = _count_edge_lines("_cd_edge", down_key, enabled_expr, indent)
     if instr.reset_condition is not None:
         reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
             instr.reset_condition, ctx
@@ -409,11 +434,11 @@ def _compile_count_down_instruction(
     lines.extend(
         [
             f"{' ' * inner}_acc = int({acc_read})",
-            f"{isp}if {enabled_expr}:",
+            f"{isp}if _cd_edge:",
             f"{' ' * (inner + 4)}_acc -= 1",
             f"{' ' * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc))",
             f"{' ' * inner}_preset = int({preset})",
-            f"{' ' * inner}{done_write} = (_acc <= -_preset)",
+            f"{' ' * inner}{done_write} = (_acc <= _preset)",
             f"{' ' * inner}{acc_write} = _acc",
         ]
     )

@@ -13,12 +13,14 @@ import pytest
 from pyrung.core import (
     PLC,
     Bool,
+    Counter,
     Int,
     Program,
     Rung,
     Timer,
     call,
     copy,
+    count_up,
     latch,
     on_delay,
     out,
@@ -26,7 +28,7 @@ from pyrung.core import (
     rise,
     subroutine,
 )
-from pyrung.core.analysis.prove import Counterexample, TraceStep, always, never
+from pyrung.core.analysis.prove import Counterexample, Proven, TraceStep, always, never
 from pyrung.core.analysis.prove.kernel import _extract_state_key
 
 
@@ -152,18 +154,52 @@ def _edge_on_crossing(site: str) -> tuple[Program, Bool]:
                 latch(Bad)
             with Rung():
                 copy(0, Flag)
-        else:
+        elif site == "rise_of_coil":
             X = Bool("X")
             with Rung(Btn, Run):
                 out(X)
             with Rung(rise(T.Done), rise(X)):
                 latch(Bad)
+        else:
+            C = Counter.clone("EdgeC")
+            with Rung(Btn):
+                count_up(C, 1).reset(~Run)
+            with Rung(rise(T.Done), rise(C.Done)):
+                latch(Bad)
     return logic, Bad
 
 
-@pytest.mark.parametrize("site", ["oneshot", "rise_of_coil"])
+@pytest.mark.parametrize("site", ["oneshot", "rise_of_coil", "counter"])
 def test_edge_on_a_hidden_crossing_scan_is_explored(site: str) -> None:
     logic, bad = _edge_on_crossing(site)
     result = never(logic, bad)
     assert isinstance(result, Counterexample)
     _assert_trace_replays(logic, result, bad.name)
+
+
+def test_held_level_counter_counts_once() -> None:
+    """A counter counts rising edges: holding its input never reaches 2."""
+    Btn = Bool("Btn", external=True)
+    C = Counter.clone("HeldC")
+    with Program() as logic:
+        with Rung(Btn):
+            count_up(C, 2).reset(Bool("HeldRst", external=True))
+    result = always(logic, ~C.Done)
+    assert isinstance(result, Counterexample)
+    # Two rising edges: on, off, on.
+    assert sum(step.scans for step in result.trace) >= 3
+    _assert_trace_replays(logic, result, C.Done.name)
+
+
+def test_bare_loop_counter_counts_once_ever() -> None:
+    """A bare body counter's input is always on and a false loop rung skips
+    the body, so it never sees its input fall: it counts once."""
+    from pyrung.core import forloop
+
+    En = Bool("LoopEn", external=True)
+    C = Counter.clone("LoopC")
+    with Program() as logic:
+        with Rung(En):
+            with forloop(3):
+                count_up(C, 2).reset(Bool("LoopRst", external=True))
+    assert isinstance(always(logic, ~C.Done), Proven)

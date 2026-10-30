@@ -1,7 +1,9 @@
 """Tests for Counter instructions (CTU, CTD).
 
-Counters are edge-triggered instructions that must be the last in a rung (terminal).
-They manipulate both a done bit and an accumulator.
+Counters are terminal instructions that count the rising edges of their count
+inputs, as a CLICK does: each counter keeps its own memory of each input,
+updated on every scan it runs (reset scans included).  They manipulate both a
+done bit and an accumulator.
 """
 
 import pytest
@@ -24,13 +26,23 @@ from pyrung.core import (
 )
 
 
+def _pulse(runner, name: str, times: int = 1) -> None:
+    """Turn *name* on for one scan and off for one, *times* times."""
+    for _ in range(times):
+        runner.patch({name: True})
+        runner.step()
+        runner.patch({name: False})
+        runner.step()
+
+
 class TestCountUpInstruction:
     """Test Count Up (CTU) instruction."""
 
-    def test_count_up_increments_every_scan(self, runner_factory):
-        """CTU increments accumulator EVERY SCAN when rung is true.
+    def test_count_up_counts_rising_edges(self, runner_factory):
+        """CTU counts the rising edges of its rung, not the scans it is true.
 
-        Click behavior: NOT edge-triggered. Increments continuously while enabled.
+        Click behavior: a held input counts once; it must go false and true
+        again to count again.
         """
         PartSensor = Bool("PartSensor")
         ResetBtn = Bool("ResetBtn")
@@ -43,21 +55,23 @@ class TestCountUpInstruction:
         runner.patch({"PartSensor": False, "ResetBtn": False})
         runner.step()
 
-        # Enable sensor and run 3 scans - should increment each scan
+        # The rising edge counts once
         runner.patch({"PartSensor": True})
         runner.step()
         assert runner.current_state.tags["Counter_Acc"] == 1
 
-        runner.step()  # Still true - should increment again
-        assert runner.current_state.tags["Counter_Acc"] == 2
+        runner.step()  # Still true - no new edge
+        assert runner.current_state.tags["Counter_Acc"] == 1
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == 1
 
-        runner.step()  # Still true - should increment again
-        assert runner.current_state.tags["Counter_Acc"] == 3
-
-        # Disable sensor - should stop incrementing
+        # False, then true again - a second edge
         runner.patch({"PartSensor": False})
         runner.step()
-        assert runner.current_state.tags["Counter_Acc"] == 3
+        assert runner.current_state.tags["Counter_Acc"] == 1
+        runner.patch({"PartSensor": True})
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == 2
 
     def test_count_up_sets_done_bit_at_preset(self, runner_factory):
         """CTU done bit turns ON when accumulator >= preset."""
@@ -72,17 +86,15 @@ class TestCountUpInstruction:
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
-        # Count up to preset - 3 scans with trigger enabled
-        runner.patch({"Trigger": True})
-        for _ in range(3):
-            runner.step()
+        # Count up to preset - 3 pulses
+        _pulse(runner, "Trigger", 3)
 
         # Should be at preset now
         assert runner.current_state.tags["Counter_Acc"] == 3
         assert runner.current_state.tags["Counter_Done"] is True  # Done bit ON
 
         # Continue counting - done bit stays ON
-        runner.step()
+        _pulse(runner, "Trigger")
         assert runner.current_state.tags["Counter_Acc"] == 4
         assert runner.current_state.tags["Counter_Done"] is True
 
@@ -99,10 +111,8 @@ class TestCountUpInstruction:
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
-        # Count up some - 2 scans with trigger enabled
-        runner.patch({"Trigger": True})
-        runner.step()
-        runner.step()
+        # Count up some - 2 pulses
+        _pulse(runner, "Trigger", 2)
 
         assert runner.current_state.tags["Counter_Acc"] == 2
 
@@ -112,6 +122,73 @@ class TestCountUpInstruction:
 
         assert runner.current_state.tags["Counter_Acc"] == 0
         assert runner.current_state.tags["Counter_Done"] is False
+
+    def test_held_input_not_recounted_after_reset(self, runner_factory):
+        """The edge memory updates on reset scans: a held input counts once."""
+        Trigger = Bool("Trigger")
+        ResetBtn = Bool("ResetBtn")
+
+        with Program() as logic:
+            with Rung(Trigger):
+                count_up(Counter[1], preset=5).reset(ResetBtn)
+
+        runner = runner_factory(logic)
+        runner.patch({"Trigger": True, "ResetBtn": False})
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == 1
+
+        # Reset with the input still on, then release the reset
+        runner.patch({"ResetBtn": True})
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == 0
+        runner.patch({"ResetBtn": False})
+        runner.step()
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == 0
+
+        # An edge that arrives during the reset is swallowed too
+        runner.patch({"Trigger": False})
+        runner.step()
+        runner.patch({"Trigger": True, "ResetBtn": True})
+        runner.step()
+        runner.patch({"ResetBtn": False})
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == 0
+
+    def test_input_on_at_first_scan_counts(self, runner_factory):
+        """The edge memory starts off: an input on from the first scan counts."""
+        Trigger = Bool("Trigger")
+        ResetBtn = Bool("ResetBtn")
+
+        with Program() as logic:
+            with Rung(Trigger):
+                count_up(Counter[1], preset=1).reset(ResetBtn)
+
+        runner = runner_factory(logic)
+        runner.patch({"Trigger": True, "ResetBtn": False})
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == 1
+        assert runner.current_state.tags["Counter_Done"] is True
+
+    def test_edge_memory_is_site_memory(self, runner_factory):
+        """The counter's input memory lives under its site key in state memory."""
+        Trigger = Bool("Trigger")
+        Down = Bool("Down")
+        ResetBtn = Bool("ResetBtn")
+
+        with Program() as logic:
+            with Rung(Trigger):
+                count_up(Counter[1], preset=5).down(Down).reset(ResetBtn)
+
+        runner = runner_factory(logic)
+        runner.patch({"Trigger": True, "Down": False, "ResetBtn": False})
+        runner.step()
+        memory = runner.current_state.memory
+        cu = [k for k in memory if k.startswith("_cu:")]
+        cd = [k for k in memory if k.startswith("_cd:")]
+        assert len(cu) == 1 and len(cd) == 1
+        assert memory[cu[0]] is True
+        assert memory[cd[0]] is False
 
     def test_count_up_with_down_bidirectional(self, runner_factory):
         """CTU with .down() creates bidirectional counter."""
@@ -194,11 +271,10 @@ class TestCountUpInstruction:
 class TestCountDownInstruction:
     """Test Count Down (CTD) instruction."""
 
-    def test_count_down_decrements_every_scan(self, runner_factory):
-        """CTD decrements accumulator EVERY SCAN when rung is true.
+    def test_count_down_counts_rising_edges(self, runner_factory):
+        """CTD counts the rising edges of its rung down, not the scans it is true.
 
-        Click behavior: NOT edge-triggered. Decrements continuously while enabled.
-        Starts at 0, counts down to negative values.
+        Click behavior: starts at 0, counts down to negative values.
         """
         Dispense = Bool("Dispense")
         Reload = Bool("Reload")
@@ -219,26 +295,25 @@ class TestCountDownInstruction:
         runner.patch({"Reload": False})
         runner.step()
 
-        # Enable dispense and run 3 scans - should decrement each scan
+        # The rising edge counts once; holding it counts nothing more
         runner.patch({"Dispense": True})
         runner.step()
         assert runner.current_state.tags["Counter_Acc"] == -1
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == -1
 
-        runner.step()  # Still true - should decrement again
-        assert runner.current_state.tags["Counter_Acc"] == -2
-
-        runner.step()  # Still true - should decrement again
-        assert runner.current_state.tags["Counter_Acc"] == -3
-
-        # Disable dispense - should stop decrementing
+        # Two more edges
         runner.patch({"Dispense": False})
         runner.step()
+        _pulse(runner, "Dispense", 2)
         assert runner.current_state.tags["Counter_Acc"] == -3
 
-    def test_count_down_sets_done_bit_at_negative_preset(self, runner_factory):
-        """CTD done bit turns ON when accumulator <= -preset.
+    def test_count_down_done_at_preset(self, runner_factory):
+        """CTD done bit is ON while accumulator <= preset.
 
-        Click behavior: Done bit activates when reaching negative preset value.
+        Click behavior: a down counter starts at 0, so with a positive preset
+        it is done from its first scan; staged above the preset, it is done
+        once it counts down to it.
         """
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
@@ -250,32 +325,33 @@ class TestCountDownInstruction:
         runner = runner_factory(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
+        # 0 <= 3: done from the first scan
+        assert runner.current_state.tags["Counter_Acc"] == 0
+        assert runner.current_state.tags["Counter_Done"] is True
 
-        # Initialize - should clear to 0
+        # Reset clears Done for its scan
         runner.patch({"ResetBtn": True})
         runner.step()
         assert runner.current_state.tags["Counter_Acc"] == 0
         assert runner.current_state.tags["Counter_Done"] is False
-
         runner.patch({"ResetBtn": False})
         runner.step()
+        assert runner.current_state.tags["Counter_Done"] is True
 
-        # Count down: 0 → -1 → -2 (not done yet)
-        runner.patch({"Trigger": True})
-        for _ in range(2):
-            runner.step()
-
-        assert runner.current_state.tags["Counter_Acc"] == -2
-        assert runner.current_state.tags["Counter_Done"] is False  # Not done yet
-
-        # Count one more time to reach -3 (done!)
+        # Staged at 5, two edges take it to 3 (done)
+        runner.patch({"Counter_Acc": 5})
         runner.step()
-        assert runner.current_state.tags["Counter_Acc"] == -3
+        assert runner.current_state.tags["Counter_Done"] is False  # 5 > 3
+        _pulse(runner, "Trigger")
+        assert runner.current_state.tags["Counter_Acc"] == 4
+        assert runner.current_state.tags["Counter_Done"] is False
+        _pulse(runner, "Trigger")
+        assert runner.current_state.tags["Counter_Acc"] == 3
         assert runner.current_state.tags["Counter_Done"] is True  # Done bit ON
 
         # Continue counting - done bit stays ON
-        runner.step()
-        assert runner.current_state.tags["Counter_Acc"] == -4
+        _pulse(runner, "Trigger")
+        assert runner.current_state.tags["Counter_Acc"] == 2
         assert runner.current_state.tags["Counter_Done"] is True
 
     def test_count_down_reset_clears_to_zero(self, runner_factory):
@@ -294,12 +370,11 @@ class TestCountDownInstruction:
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
-        # Count down some: 0 → -1 → -2
+        # Count down some: 0 -> -1 -> -2
         runner.patch({"ResetBtn": True})
         runner.step()
-        runner.patch({"ResetBtn": False, "Trigger": True})
-        runner.step()
-        runner.step()
+        runner.patch({"ResetBtn": False})
+        _pulse(runner, "Trigger", 2)
 
         assert runner.current_state.tags["Counter_Acc"] == -2
 
@@ -334,7 +409,9 @@ class TestCounterAccumulatorClamp:
         assert runner.current_state.tags["Counter_Done"] is True
 
         # Further increments stay clamped
+        runner.patch({"Trigger": False})
         runner.step()
+        _pulse(runner, "Trigger")
         assert runner.current_state.tags["Counter_Acc"] == 2147483647
         assert runner.current_state.tags["Counter_Done"] is True
 
@@ -358,12 +435,14 @@ class TestCounterAccumulatorClamp:
         assert runner.current_state.tags["Counter_Done"] is True
 
         # Further decrements stay clamped
+        runner.patch({"Trigger": False})
         runner.step()
+        _pulse(runner, "Trigger")
         assert runner.current_state.tags["Counter_Acc"] == -2147483648
         assert runner.current_state.tags["Counter_Done"] is True
 
     def test_ctu_bidirectional_clamp_applies_after_net_delta(self, runner_factory):
-        """Bidirectional CTU clamps after applying net (+1/-1) scan delta."""
+        """Bidirectional CTU clamps after applying the net (+1/-1) scan delta."""
         Enable = Bool("Enable")
         Down = Bool("Down")
         ResetBtn = Bool("ResetBtn")
@@ -376,15 +455,45 @@ class TestCounterAccumulatorClamp:
         runner.patch({"Enable": False, "Down": False, "ResetBtn": False})
         runner.step()
 
-        # With both UP and DOWN true at max, net delta is zero (stays at max)
+        # Up and down edges on the same scan cancel (stays at max)
         runner.patch({"Enable": True, "Down": True, "Counter_Acc": 2147483647})
         runner.step()
         assert runner.current_state.tags["Counter_Acc"] == 2147483647
 
-        # DOWN-only scan still decrements from the clamped value
-        runner.patch({"Enable": False, "Down": True})
+        # A down edge alone still decrements from the clamped value
+        runner.patch({"Enable": False, "Down": False})
+        runner.step()
+        runner.patch({"Down": True})
         runner.step()
         assert runner.current_state.tags["Counter_Acc"] == 2147483646
+
+    def test_up_and_down_edges_same_scan_cancel(self, runner_factory):
+        """An up and a down edge on one scan leave the count where it was."""
+        Up = Bool("Up")
+        Down = Bool("Down")
+        ResetBtn = Bool("ResetBtn")
+
+        with Program() as logic:
+            with Rung(Up):
+                count_up(Counter[1], preset=2).down(Down).reset(ResetBtn)
+
+        runner = runner_factory(logic)
+        runner.patch({"Up": False, "Down": False, "ResetBtn": False})
+        runner.step()
+        _pulse(runner, "Up", 2)
+        assert runner.current_state.tags["Counter_Acc"] == 2
+        runner.patch({"Up": True, "Down": True})
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == 2
+        # Held, neither counts
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == 2
+        # Down falls and rises with Up held: only the down edge counts
+        runner.patch({"Down": False})
+        runner.step()
+        runner.patch({"Down": True})
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == 1
 
 
 class TestCounterIntegration:
@@ -462,13 +571,9 @@ class TestCounterIntegration:
         )
 
     def test_counter_fires_mid_scan_current_implementation(self, runner_factory):
-        """Verify our current implementation: does counter 'fire' mid-scan?
+        """A counter's count is visible to later rungs in the same scan.
 
-        This test explicitly checks if our implementation allows later rungs
-        to see counter updates within the same scan. This is the expected behavior
-        based on physical CLICK PLC testing.
-
-        After running this test, user will verify against physical CLICK PLC.
+        Based on physical CLICK PLC testing.
         """
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
@@ -476,7 +581,7 @@ class TestCounterIntegration:
         SawCounterAt2 = Bool("SawCounterAt2")
 
         with Program() as logic:
-            # Rung 1: Count up every scan when Trigger is true
+            # Rung 1: Count up on each rising edge of Trigger
             with Rung(Trigger):
                 count_up(Counter[1], preset=5).reset(ResetBtn)
 
@@ -504,12 +609,15 @@ class TestCounterIntegration:
             "Should have seen counter == 1 mid-scan (Rung 2 executed same scan as increment)"
         )
 
-        # Scan 2: Trigger still true - counter should increment to 2
+        # Trigger off, then on again: the counter should increment to 2
+        runner.patch({"Trigger": False})
+        runner.step()
+        runner.patch({"Trigger": True})
         runner.step()
 
         # Check: Did we see the counter at 2 in the SAME scan?
         assert runner.current_state.tags["Counter_Acc"] == 2, (
-            "Counter should be at 2 after second scan"
+            "Counter should be at 2 after the second edge"
         )
         assert runner.current_state.tags["SawCounterAt2"] is True, (
             "Should have seen counter == 2 mid-scan (Rung 3 executed same scan as increment)"
@@ -585,24 +693,22 @@ class TestCounterIntegration:
         runner.patch({"Step": 0, "AutoMode": False, "ResetBtn": False})
         runner.step()
 
-        # Case 1: Parent true, branch false - should NOT increment
-        runner.patch({"AutoMode": True})  # Rising edge on AutoMode
+        # Case 1: Parent true, branch rises - increments
+        runner.patch({"AutoMode": True})
         runner.step()
-        assert runner.current_state.tags["Counter_Acc"] == 1  # Increments
+        assert runner.current_state.tags["Counter_Acc"] == 1
 
         runner.patch({"AutoMode": False})
         runner.step()
 
         # Case 2: Parent false, branch true - should NOT increment
-        runner.patch({"Step": 1, "AutoMode": True})  # Parent false, branch has rising edge
+        runner.patch({"Step": 1, "AutoMode": True})
         runner.step()
         assert runner.current_state.tags["Counter_Acc"] == 1  # Should stay at 1
 
-        # Case 3: Parent true, branch true - SHOULD increment
-        # Need to clear AutoMode first, then make both conditions true together
-        runner.patch({"AutoMode": False})  # Clear branch condition first
-        runner.step()
-        runner.patch({"Step": 0, "AutoMode": True})  # Now both true (rising edge on combined)
+        # Case 3: Parent goes true with the branch true - the combined power
+        # rises, so it SHOULD increment
+        runner.patch({"Step": 0})
         runner.step()
         assert runner.current_state.tags["Counter_Acc"] == 2
 
@@ -665,26 +771,23 @@ class TestDynamicpresets:
         runner.step()
 
         # Count up to 4 - not done yet with preset=5
-        runner.patch({"Trigger": True})
-        for _ in range(4):
-            runner.step()
+        _pulse(runner, "Trigger", 4)
         assert runner.current_state.tags["Counter_Acc"] == 4
         assert runner.current_state.tags["Counter_Done"] is False
 
         # Count one more - done at preset=5
-        runner.step()
+        _pulse(runner, "Trigger")
         assert runner.current_state.tags["Counter_Acc"] == 5
         assert runner.current_state.tags["Counter_Done"] is True
 
-        # Change preset to 10 - done should go back to False
+        # Change preset to 10 - done goes back to False with no count
         runner.patch({"preset": 10})
         runner.step()
-        assert runner.current_state.tags["Counter_Acc"] == 6
+        assert runner.current_state.tags["Counter_Acc"] == 5
         assert runner.current_state.tags["Counter_Done"] is False  # Not done anymore
 
         # Continue to new preset
-        for _ in range(4):
-            runner.step()
+        _pulse(runner, "Trigger", 5)
         assert runner.current_state.tags["Counter_Acc"] == 10
         assert runner.current_state.tags["Counter_Done"] is True  # Done again
 
@@ -699,7 +802,7 @@ class TestDynamicpresets:
                 count_down(Counter[1], preset=preset).reset(ResetBtn)
 
         runner = runner_factory(logic)
-        runner.patch({"Trigger": False, "ResetBtn": False, "preset": 3})
+        runner.patch({"Trigger": False, "ResetBtn": False, "preset": -3})
         runner.step()
 
         # Reset to start at 0
@@ -708,31 +811,29 @@ class TestDynamicpresets:
         runner.patch({"ResetBtn": False})
         runner.step()
 
-        # Count down: 0 → -1 → -2 (not done yet with preset=3)
-        runner.patch({"Trigger": True})
-        for _ in range(2):
-            runner.step()
+        # Count down: 0 -> -1 -> -2 (not done yet with preset=-3)
+        _pulse(runner, "Trigger", 2)
         assert runner.current_state.tags["Counter_Acc"] == -2
         assert runner.current_state.tags["Counter_Done"] is False
 
-        # Count one more - done at -3 (meets -preset)
-        runner.step()
+        # Count one more - done at -3 (acc <= preset)
+        _pulse(runner, "Trigger")
         assert runner.current_state.tags["Counter_Acc"] == -3
         assert runner.current_state.tags["Counter_Done"] is True
 
-        # Change preset to 5 - done should go back to False
-        runner.patch({"preset": 5})
+        # Change preset to -5 - done goes back to False with no count
+        runner.patch({"preset": -5})
         runner.step()
-        assert runner.current_state.tags["Counter_Acc"] == -4
+        assert runner.current_state.tags["Counter_Acc"] == -3
         assert runner.current_state.tags["Counter_Done"] is False  # Not done anymore
 
-        # Count one more to -5 - done again
-        runner.step()
+        # Two more edges to -5 - done again
+        _pulse(runner, "Trigger", 2)
         assert runner.current_state.tags["Counter_Acc"] == -5
         assert runner.current_state.tags["Counter_Done"] is True  # Done again
 
     def test_preset_decrease_affects_done_immediately(self, runner_factory):
-        """When preset decreases below acc, done bit changes immediately."""
+        """When preset decreases below acc, done bit changes on the next scan it runs."""
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
         preset = Int("preset")
@@ -746,16 +847,14 @@ class TestDynamicpresets:
         runner.step()
 
         # Count up to 10 - not done (preset=100)
-        runner.patch({"Trigger": True})
-        for _ in range(10):
-            runner.step()
+        _pulse(runner, "Trigger", 10)
         assert runner.current_state.tags["Counter_Acc"] == 10
         assert runner.current_state.tags["Counter_Done"] is False
 
-        # Decrease preset to 5 - done should become True immediately
+        # Decrease preset to 5 - done becomes True with no count
         runner.patch({"preset": 5})
-        runner.step()  # Acc goes to 11, but preset is now 5
-        assert runner.current_state.tags["Counter_Acc"] == 11
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == 10
         assert runner.current_state.tags["Counter_Done"] is True  # Now done!
 
 
@@ -929,7 +1028,7 @@ class TestCounterStatusBits:
 
         runner = runner_factory(logic)
 
-        # Both active
+        # Both active: the up and down edges cancel
         runner.patch({"Up": True, "Down": True})
         runner.step()
         assert runner.current_state.tags["Counter_CU"] is True

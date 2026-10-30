@@ -147,12 +147,17 @@ def _bool_flip_program(preset_ms: int = 200) -> tuple[Program, Bool]:
     return prog, Done
 
 
-def _perscan_counter_program(preset: int = 100) -> tuple[Program, Counter]:
+def _clock_counter_program(preset: int = 100) -> tuple[Program, Counter]:
+    """A counter counting the rises of ``sys.clock_100ms`` while Enable is on.
+
+    A counter counts rising edges, so under a held Enable it is the clock that
+    advances it: one count per 100 ms.
+    """
     Enable = Bool("Enable", external=True)
     Ctr = Counter.clone("Ctr")
     Reset = Bool("Reset", external=True)
-    with Program() as prog:
-        with Rung(Enable):
+    with Program(strict=False) as prog:
+        with Rung(Enable, system.sys.clock_100ms):
             count_up(Ctr, preset).reset(Reset)
     return prog, Ctr
 
@@ -169,15 +174,15 @@ class TestFirstBumpParity:
         _assert_landing_parity(folded, stepped)
 
     def test_counter_accumulator_ge_threshold(self) -> None:
-        # (b) per-scan counter accumulator with `Acc >= N`.
-        prog, ctr = _perscan_counter_program(100)
+        # (b) a counter counting clock edges, with `Acc >= N`.
+        prog, ctr = _clock_counter_program(100)
         folded, stepped = _fold_nofold(prog, ctr.Acc >= 30, patch={"Enable": True})
         assert folded.state.tags["Ctr_Acc"] == 30
         _assert_landing_parity(folded, stepped)
 
     def test_counter_accumulator_eq_exact_landing(self) -> None:
-        # (c) `Acc == N` on a per-scan (integer) counter — exact landing.
-        prog, ctr = _perscan_counter_program(100)
+        # (c) `Acc == N` on a counter counting clock edges — exact landing.
+        prog, ctr = _clock_counter_program(100)
         folded, stepped = _fold_nofold(prog, ctr.Acc == 50, patch={"Enable": True})
         assert folded.state.tags["Ctr_Acc"] == 50
         _assert_landing_parity(folded, stepped)

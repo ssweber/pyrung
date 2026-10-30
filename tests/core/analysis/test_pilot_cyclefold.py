@@ -10,13 +10,12 @@ import pytest
 
 from pyrung import (
     Bool,
-    Counter,
+    Dint,
     Int,
     Program,
     Rung,
     Timer,
     calc,
-    count_up,
     on_delay,
     out,
     time_drum,
@@ -237,11 +236,14 @@ class TestCycleFoldBitEqual:
         )
 
     def test_clock_lcm_fallback_forwards_exact_visible_patches(self) -> None:
-        Soak = Counter.clone("FallbackReceipt")
-        NeverReset = Bool("FallbackReceiptNeverReset", external=True)
+        # A per-scan soak: a self-calc (a counter counts edges, not scans).
+        Soak = Dint("FallbackReceipt")
+        SoakDone = Bool("FallbackReceiptDone")
         with Program() as program:
             with Rung():
-                count_up(Soak, 100).reset(NeverReset)
+                calc(Soak + 1, Soak)
+            with Rung(Soak >= 100):
+                out(SoakDone)
 
         plc = PLC(program)
         base_fold_ctx = plc._ensure_fold_context()
@@ -254,14 +256,14 @@ class TestCycleFoldBitEqual:
 
         reached = cycle_fold_until(
             plc,
-            lambda state: state.tags.get(Soak.Done.name) is True,
+            lambda state: state.tags.get(SoakDone.name) is True,
             budget=5000,
             fold_ctx=fold_ctx,
             advances=advances,
         )
 
         assert reached is True
-        assert advances == [(Soak.Acc.name, 98)]
+        assert advances == [(Soak.name, 98)]
 
     def test_off_grid_clock_fallback_exposes_runner_stats(self) -> None:
         plc = PLC(_active_hold_soak())
@@ -344,23 +346,26 @@ class TestCycleFoldBitEqual:
         assert stats["residual_scans"] == stats["kernel_scans"]
 
     def test_layered_ordinary_fold_forwards_exact_visible_patches(self) -> None:
-        Soak = Counter.clone("LayeredReceipt")
-        NeverReset = Bool("LayeredReceiptNeverReset", external=True)
+        # A per-scan soak: a self-calc (a counter counts edges, not scans).
+        Soak = Dint("LayeredReceipt")
+        SoakDone = Bool("LayeredReceiptDone")
         with Program() as program:
             with Rung():
-                count_up(Soak, 100).reset(NeverReset)
+                calc(Soak + 1, Soak)
+            with Rung(Soak >= 100):
+                out(SoakDone)
 
         plc = PLC(program)
         advances: list[tuple[str, object]] = []
         reached = cycle_fold_until(
             plc,
-            lambda state: state.tags.get(Soak.Done.name) is True,
+            lambda state: state.tags.get(SoakDone.name) is True,
             budget=5000,
             advances=advances,
         )
 
         assert reached is True
-        assert advances == [(Soak.Acc.name, 98)]
+        assert advances == [(Soak.name, 98)]
 
     def test_landing_is_bit_equal_to_scan_by_scan(self) -> None:
         # Reference: pure scan-by-scan (fold=False), oscillation running.
@@ -541,7 +546,7 @@ class TestCycleFoldBitEqual:
 def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
     """An active-hold soak whose period is forced wide by a read system clock.
 
-    The soak is a count-up counter (``+1``/scan) so it can reach long dwells
+    The soak is a self-calc (``+1``/scan) so it can reach long dwells
     without the 32 767 timer-accumulator clamp.  ``Blink`` follows ``clock_1s``
     (full period 1 s = 100 scans at the default dt), so folding must align the
     period to the clock (LCM with the period-2 oscillation = 100): the observed
@@ -549,20 +554,19 @@ def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
     runtime form of the soft-clock partition.
     """
     Osc = Bool("Osc", external=True)
-    Ctr = Counter.clone("Ctr")
-    NeverReset = Bool("NeverReset", external=True)
+    Ctr = Dint("Ctr")
     WD = Timer.clone("WD")
     Done = Bool("Done")
     Blink = Bool("Blink")
 
     with Program() as prog:
         with Rung():
-            count_up(Ctr, soak_counts).reset(NeverReset)
+            calc(Ctr + 1, Ctr)
         with Rung():
             on_delay(WD, 200, "ms").reset(Osc)
         with Rung(system.sys.clock_1s):
             out(Blink)
-        with Rung(Ctr.Done):
+        with Rung(Ctr >= soak_counts):
             out(Done)
     return prog
 

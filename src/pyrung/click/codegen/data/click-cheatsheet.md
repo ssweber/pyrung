@@ -207,7 +207,7 @@ timed(Lamp, T6, 3, "sec", maintained=True)             # at least 3 s, then foll
 
 ## Counters
 
-Built-in `Counter` type: `.Done` (Bool) + `.Acc` (Dint). Counts every scan while True — use `rise()` for edge-triggered.
+Built-in `Counter` type: `.Done` (Bool) + `.Acc` (Dint). Counts rising edges of its rung (and `.down()` input), as a CLICK does: a held condition counts once. A down counter starts at 0 and is done at `Acc <= preset`.
 
 ```python
 PartCounter = Counter.clone("PartCounter")
@@ -215,8 +215,8 @@ PartCounter = Counter.clone("PartCounter")
 count_up(PartCounter, 100).reset(ResetBtn)
 count_down(Dispense, 100).reset(ResetBtn)
 
-# Edge-triggered counting
-with rung(rise(Sensor)):
+# One count per rising edge of Sensor
+with rung(Sensor):
     count_up(PartCounter, 9999).reset(CountReset)
 
 # Bidirectional

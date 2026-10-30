@@ -566,6 +566,25 @@ def _mark_pulse(nodes: list[TraceNode]) -> None:
         _mark_pulse(node.children)
 
 
+def _has_steerable(node: TraceNode) -> bool:
+    return node.is_steerable or any(_has_steerable(child) for child in node.children)
+
+
+def _mark_pulse_last_conjunct(nodes: list[TraceNode]) -> None:
+    """Pulse one conjunct of a demand; the others are holds.
+
+    A counter counts the rising edges of its whole input: pulsing every
+    conjunct in phase can defeat it (a ``forloop`` guard pulsed off skips the
+    body, so the counter never sees its input fall).  The last conjunct with
+    a steerable leaf is the one nearest the instruction; the conjuncts before
+    it hold their value.
+    """
+    for node in reversed(nodes):
+        if _has_steerable(node):
+            _mark_pulse([node])
+            return
+
+
 def _needs_prior_program_stage(node: TraceNode, env: _TraceEnv) -> bool:
     """Whether this demand first needs persistent program state to move."""
 
@@ -632,7 +651,7 @@ def _trace_demand(
             # is not itself a level hold for the later timer/counter coast.
             node.data_flow = "enable"
     if pulse:
-        _mark_pulse(nodes)
+        _mark_pulse_last_conjunct(nodes)
     return nodes
 
 

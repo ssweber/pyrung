@@ -146,10 +146,22 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
     key holding its default are the same state.
     """
     from pyrung.core.instruction.advanced import ShiftInstruction
+    from pyrung.core.instruction.counters import (
+        COUNT_DOWN_MEMORY,
+        COUNT_UP_MEMORY,
+        CountDownInstruction,
+        CountUpInstruction,
+    )
     from pyrung.core.instruction.drums import EventDrumInstruction, _DrumBaseInstruction
     from pyrung.core.instruction.out_variants import FlasherInstruction, ToggleInstruction
 
     slots: list[tuple[str, Any]] = []
+    if isinstance(instr, CountUpInstruction):
+        slots.append((COUNT_UP_MEMORY, False))
+        if instr.down_condition is not None:
+            slots.append((COUNT_DOWN_MEMORY, False))
+    if isinstance(instr, CountDownInstruction):
+        slots.append((COUNT_DOWN_MEMORY, False))
     if getattr(instr, "_oneshot", False):
         slots.append(("_oneshot", False))
     if isinstance(instr, ToggleInstruction):

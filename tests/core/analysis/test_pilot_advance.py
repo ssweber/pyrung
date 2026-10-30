@@ -255,8 +255,11 @@ class TestDoneBoundaryHypotheses:
                 out(Out)
 
         plc = PLC(prog, dt=0.010)
-        plc.patch({"pulse": True, "rst": False})
-        for _ in range(5):
+        plc.patch({"rst": False})
+        for _ in range(3):  # a counter counts rising edges
+            plc.patch({"pulse": False})
+            plc.step()
+            plc.patch({"pulse": True})
             plc.step()
         assert plc.state.tags["Counter_Done"] is True
 

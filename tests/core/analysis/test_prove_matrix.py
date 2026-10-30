@@ -287,8 +287,8 @@ class TestThresholdAbsorptionConditionalResets:
                 latch(alarm)
 
         plc = PLC(logic, dt=0.010)
-        plc.force("Enable", True)
-        for _ in range(10):
+        for scan in range(12):  # a counter counts rising edges: pulse Enable
+            plc.force("Enable", scan % 2 == 0)
             plc.step()
         assert plc.current_state.tags["Alarm"] is True
 
@@ -317,8 +317,8 @@ class TestThresholdAbsorptionConditionalResets:
                 latch(below_after_above)
 
         plc = PLC(logic, dt=0.010)
-        plc.force("Enable", True)
-        for _ in range(10):
+        for scan in range(12):  # a counter counts rising edges: pulse Enable
+            plc.force("Enable", scan % 2 == 0)
             plc.step()
         assert plc.current_state.tags["BelowAfterAbove"] is True
 

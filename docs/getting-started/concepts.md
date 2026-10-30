@@ -114,12 +114,12 @@ with rung(State == "g"):
 
 The accumulator tracks progress in the unit you specify (milliseconds by default). If the rung goes false before the preset, the accumulator resets (that's `on_delay` — use `off_delay` for the inverse behavior).
 
-Counters increment once per scan while enabled. Use `rise()` on the rung condition if you want one increment per leading edge:
+Counters count rising edges: one increment each time the rung goes True, however long it stays True:
 
 ```python
 PartCounter = Counter.clone("PartCounter")
 
-with rung(rise(Sensor)):
+with rung(Sensor):
     count_up(PartCounter, preset=9999).reset(CountReset)
 ```
 
@@ -150,7 +150,7 @@ The rung condition powers the instruction (top wire). Other pins are wired with 
 Each pin gets its own line with `\` continuation:
 
 ```python
-with rung(rise(Sensor)):
+with rung(Sensor):
     count_up(PartCounter, preset=100) \
         .down(Reverse) \
         .reset(Home, Auto)

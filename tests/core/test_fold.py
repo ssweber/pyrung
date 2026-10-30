@@ -32,7 +32,7 @@ def _timer_program(preset_ms: int = 500) -> tuple[Program, Timer]:
 
 
 def _counter_program(preset: int = 100) -> tuple[Program, Counter]:
-    """Count-up counter incrementing every scan while Enable is True."""
+    """Count-up counter counting the rising edges of Enable."""
     Enable = Bool("Enable", external=True)
     Ctr = Counter.clone("Ctr")
     ResetCmd = Bool("ResetCmd", external=True)
@@ -134,9 +134,10 @@ class TestTimerFold:
 
 
 class TestCounterFold:
-    """run_until with fold=True skips counter plateaus."""
+    """A counter counts rising edges: a held rung counts once, so there is no
+    counter plateau to fold, and a run that counts lands where stepping does."""
 
-    def test_fold_run_until_reports_exact_visible_patches(self) -> None:
+    def test_held_rung_counts_once_and_patches_nothing(self) -> None:
         prog, ctr = _counter_program(100)
         plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True})
@@ -149,40 +150,39 @@ class TestCounterFold:
         fold_run_until(
             plc,
             lambda state: state.tags.get(ctr.Done.name) is True,
-            max_cycles=5000,
+            max_cycles=500,
             fold_ctx=fold_ctx,
             advances=advances,
         )
 
-        assert advances == [("Ctr_Acc", 98)]
+        assert advances == []
+        assert plc.state.tags["Ctr_Acc"] == 1
+        assert plc.state.tags["Ctr_Done"] is False
 
-    def test_counter_fold_reaches_done(self) -> None:
-        prog, ctr = _counter_program(100)
-        from pyrung.core.runner import PLC
-
+    def test_pulsed_counter_reaches_done(self) -> None:
+        prog, ctr = _counter_program(3)
         plc = PLC(prog, dt=0.010)
-        plc.patch({"Enable": True})
+        for _ in range(3):
+            plc.patch({"Enable": True})
+            plc.step()
+            plc.patch({"Enable": False})
+            plc.step()
 
-        result = plc.run_until(ctr.Done, max_cycles=5000)
-
-        assert result.tags["Done"] is True
+        assert plc.state.tags["Done"] is True
 
     def test_counter_fold_bit_equal_to_unfold(self) -> None:
         prog, ctr = _counter_program(50)
-        from pyrung.core.runner import PLC
-
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True})
-        plc_fold.run_until(ctr.Done, max_cycles=5000, fold=True)
+        plc_fold.run_until(ctr.Done, max_cycles=500, fold=True)
 
         prog2, ctr2 = _counter_program(50)
         plc_nofold = PLC(prog2, dt=0.010)
         plc_nofold.patch({"Enable": True})
-        plc_nofold.run_until(ctr2.Done, max_cycles=5000, fold=False)
+        plc_nofold.run_until(ctr2.Done, max_cycles=500, fold=False)
 
-        assert plc_fold.state.tags["Done"] == plc_nofold.state.tags["Done"]
-        assert plc_fold.state.tags["Ctr_Acc"] == plc_nofold.state.tags["Ctr_Acc"]
-        assert plc_fold.state.tags["Ctr_Done"] == plc_nofold.state.tags["Ctr_Done"]
+        assert plc_fold.state.scan_id == plc_nofold.state.scan_id
+        assert plc_fold.state.tags == plc_nofold.state.tags
 
 
 # ---------------------------------------------------------------------------
@@ -1478,19 +1478,19 @@ def _first_scan_init_program() -> tuple[Program, Bool]:
 
 
 def _not_first_scan_counter_program() -> tuple[Program, Bool]:
-    """``~first_scan`` turns a counter on from scan 1; a timer gives the fold
-    a crossing to aim for."""
+    """``~first_scan`` turns a per-scan count on from scan 1; a timer gives
+    the fold a crossing to aim for."""
     Z = Bool("Z")
     Hit = Bool("Hit")
     Tmr = Timer.clone("Tmr")
-    Ctr = Counter.clone("Ctr")
+    N = Int("N")
     with Program(strict=False) as prog:
         with Rung():
             on_delay(Tmr, 1000)
         with Rung(~system.sys.first_scan):
             out(Z)
         with Rung(Z):
-            count_up(Ctr, 10_000).reset(Hit)
+            calc(N + 1, N)
         with Rung(Tmr.Done):
             out(Hit)
     return prog, Hit
@@ -1557,7 +1557,7 @@ class TestFirstScanWindowConstant:
         seed = PLC(prog, dt=0.010)
         seed.step()
         tags = dict(seed.state.tags)
-        tags.update({"Z": False, "Ctr_Acc": 0, "Ctr_CU": False, "Tmr_Acc": 0})
+        tags.update({"Z": False, "N": 0, "Tmr_Acc": 0})
 
         def run(fold: bool) -> PLC:
             prog, hit = _not_first_scan_counter_program()
@@ -1566,7 +1566,7 @@ class TestFirstScanWindowConstant:
             return plc
 
         folded, stepped = run(True), run(False)
-        assert stepped.state.tags["Ctr_Acc"] == 99
+        assert stepped.state.tags["N"] == 99
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
 
@@ -3135,11 +3135,10 @@ class TestReadAboveTheSource:
 
     @staticmethod
     def _shape(kind: str, above: bool) -> Callable[[], Program]:
-        T, C, S, M = Timer.clone("T"), Counter.clone("C"), Int("S"), Int("M")
+        T, S, M = Timer.clone("T"), Int("S"), Int("M")
         sources = {
             "timer": (lambda: on_delay(T, 2_000), lambda: T.Acc >= 500),
             "timer_gt": (lambda: on_delay(T, 2_000), lambda: T.Acc > 500),
-            "counter": (lambda: count_up(C, 2_000).reset(Bool("CR")), lambda: C.Acc >= 50),
             "selfcalc": (lambda: calc(S + 1, S), lambda: S >= 50),
             "modwrap": (lambda: calc((M + 1) % 1_000, M), lambda: M >= 50),
         }
@@ -3151,7 +3150,8 @@ class TestReadAboveTheSource:
 
         return lambda: _scan_stamp_program(source, reader, above)
 
-    @pytest.mark.parametrize("kind", ["timer", "timer_gt", "counter", "selfcalc", "modwrap"])
+    # A counter counts edges, so it is no per-scan source to read above.
+    @pytest.mark.parametrize("kind", ["timer", "timer_gt", "selfcalc", "modwrap"])
     @pytest.mark.parametrize("above", [True, False])
     def test_flip_scan_matches_stepping(self, kind: str, above: bool) -> None:
         folded = _assert_fold_is_exact(self._shape(kind, above), _scans(300))
@@ -3193,8 +3193,10 @@ class TestResetPulseInProbe:
 
         def build() -> Program:
             pulse = rise(system.sys.clock_1s)
+            # A counter counts edges: the 100 ms clock gives it some.
+            gate = () if kind == "rto" else (system.sys.clock_100ms,)
             with Program(strict=False) as prog:
-                with Rung():
+                with Rung(*gate):
                     if kind == "up":
                         count_up(Counter.clone("C"), 5_000).reset(pulse)
                     elif kind == "down":

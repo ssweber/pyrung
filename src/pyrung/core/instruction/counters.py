@@ -23,20 +23,44 @@ if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
 
 
+#: Memory prefixes for a counter's count inputs as it last scanned them (see
+#: :func:`count_edge`), keyed per instruction site: ``_cu:i{N}`` / ``_cd:i{N}``.
+COUNT_UP_MEMORY = "_cu"
+COUNT_DOWN_MEMORY = "_cd"
+
+
+def count_edge(ctx: ScanContext, key: str, now: bool) -> bool:
+    """Whether a count input rose since this counter last ran; remember it.
+
+    A CLICK counter counts the rising edges of its count inputs, with a memory
+    of its own for each: the input as this instruction saw it the last time it
+    was scanned.  The memory is written on every scan the instruction runs,
+    reset scans included, so an input held on through a reset does not count
+    again.  It starts off (absent), so an input already on at the first scan
+    counts.
+    """
+    before = bool(ctx.get_memory(key, False))
+    ctx.set_memory(key, now)
+    return now and not before
+
+
 class CountUpInstruction(Instruction):
     """Count-Up (CTU) — and optionally bidirectional — counter.
 
-    Increments the accumulator every scan the rung is True.  Optionally
-    decrements when a separate down condition is True (bidirectional counter).
+    Counts the rising edges of its rung: the accumulator goes up by one on
+    each scan the rung is True after a scan it was False (or on the first
+    scan).  Optionally counts down on the rising edges of a separate down
+    condition (bidirectional counter); an up and a down edge on the same scan
+    cancel.
 
-    .. warning::
-        Not edge-triggered. The accumulator advances by one per scan while
-        the enable condition is True.  Wrap `rise()` around the rung condition
-        to count leading edges instead.
+    The counter keeps its own memory of each count input (``_cu:i{N}``,
+    ``_cd:i{N}``), updated on every scan it runs, reset scans included: an
+    input held on through a reset does not count again.
 
     - Accumulator type: DINT (32-bit signed, clamps at ±2 147 483 647).
-    - Done bit: True when acc ≥ preset.
-    - Reset condition: clears acc to 0 and done to False (level-sensitive).
+    - Done bit: True when acc ≥ preset, recomputed every scan it runs.
+    - Reset condition: clears acc to 0 and done to False (level-sensitive,
+      wins over a count on the same scan).
 
     Args:
         done_bit: BOOL tag set when acc ≥ preset.
@@ -96,6 +120,10 @@ class CountUpInstruction(Instruction):
         down_active = self.down_condition is not None and self.down_condition.evaluate(
             condition_view
         )
+        up_edge = count_edge(ctx, self.memory_key(COUNT_UP_MEMORY), bool(enabled))
+        down_edge = self.down_condition is not None and count_edge(
+            ctx, self.memory_key(COUNT_DOWN_MEMORY), bool(down_active)
+        )
         acc_value = ctx.get_tag(self.accumulator.name, 0)
         sp = resolve_preset_ctx(self.preset, ctx)
 
@@ -108,7 +136,7 @@ class CountUpInstruction(Instruction):
                 }
             )
         else:
-            delta = (1 if enabled else 0) - (1 if down_active else 0)
+            delta = (1 if up_edge else 0) - (1 if down_edge else 0)
             acc_value = _clamp_dint(acc_value + delta)
             ctx.set_tags(
                 {
@@ -129,11 +157,11 @@ class CountUpInstruction(Instruction):
             progress=None,
             preset=self.preset,
             direction=1,
-            rate_per_scan=lambda _dt: 1.0,
+            # One count per rising edge: an on scan, then an off scan.
+            rate_per_scan=lambda _dt: 0.5,
             advance=ConditionDemand(self.up_condition),
-            advance_is_pulse=isinstance(
-                self.up_condition, (RisingEdgeCondition, FallingEdgeCondition)
-            ),
+            # The counter counts edges, so its rung must be pulsed, not held.
+            advance_is_pulse=True,
             restore=(
                 ConditionDemand(self.reset_condition) if self.reset_condition is not None else None
             ),
@@ -146,21 +174,20 @@ class CountUpInstruction(Instruction):
 class CountDownInstruction(Instruction):
     """Count-Down (CTD) counter.
 
-    Decrements the accumulator every scan the rung is True.  The accumulator
-    starts at 0 and counts negative; done = True when acc ≤ −preset.
-
-    .. warning::
-        Not edge-triggered. The accumulator decrements by one per scan while
-        the enable condition is True.  Wrap `rise()` around the rung condition
-        to count leading edges instead.
+    Counts the rising edges of its rung, down by one each.  The accumulator
+    starts at 0 and counts negative; done = True when acc ≤ preset, so a down
+    counter with a positive preset is done from its first scan, as on a
+    CLICK.  Its memory of the rung (``_cd:i{N}``) is updated on every scan it
+    runs, reset scans included.
 
     - Accumulator type: DINT (32-bit signed, clamps at ±2 147 483 647).
+    - Done bit: recomputed every scan it runs.
     - Reset condition: resets acc to 0 and done to False (level-sensitive).
 
     Args:
-        done_bit: BOOL tag set when acc ≤ −preset.
+        done_bit: BOOL tag set when acc ≤ preset.
         accumulator: DINT tag storing the current (negative) count.
-        preset: Target magnitude (positive constant or DINT tag).
+        preset: Done threshold (constant or DINT tag): done while acc ≤ preset.
         down_condition: Rung power condition (injected automatically by DSL).
         reset_condition: Tag or condition that resets acc and done.
     """
@@ -209,6 +236,7 @@ class CountDownInstruction(Instruction):
         reset_active = self.reset_condition is not None and self.reset_condition.evaluate(
             condition_view
         )
+        down_edge = count_edge(ctx, self.memory_key(COUNT_DOWN_MEMORY), bool(enabled))
         acc_value = ctx.get_tag(self.accumulator.name, 0)
         sp = resolve_preset_ctx(self.preset, ctx)
 
@@ -221,12 +249,12 @@ class CountDownInstruction(Instruction):
                 }
             )
         else:
-            if enabled:
+            if down_edge:
                 acc_value -= 1
             acc_value = _clamp_dint(acc_value)
             ctx.set_tags(
                 {
-                    self.done_bit.name: acc_value <= -sp,
+                    self.done_bit.name: acc_value <= sp,
                     self.accumulator.name: acc_value,
                     **self._status_tags(False, enabled),
                 }
@@ -243,11 +271,11 @@ class CountDownInstruction(Instruction):
             progress=None,
             preset=self.preset,
             direction=-1,
-            rate_per_scan=lambda _dt: 1.0,
+            rate_per_scan=lambda _dt: 0.5,
             advance=ConditionDemand(self.down_condition),
-            advance_is_pulse=isinstance(
-                self.down_condition, (RisingEdgeCondition, FallingEdgeCondition)
-            ),
+            advance_is_pulse=True,
+            # Done is ``acc <= preset``, not ``acc <= -preset``.
+            mirror_preset=False,
             restore=(
                 ConditionDemand(self.reset_condition) if self.reset_condition is not None else None
             ),

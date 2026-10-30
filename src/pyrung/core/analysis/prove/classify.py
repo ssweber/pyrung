@@ -2090,7 +2090,7 @@ def _with_done_boundary(
         return domain
     kind = done_acc_info.kinds.get(done_name)
     if kind == _DONE_KIND_COUNT_DOWN:
-        boundary = -preset
+        boundary = preset  # done at Acc <= preset
     elif kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
         boundary = preset
     else:
@@ -2111,12 +2111,16 @@ def _done_acc_concrete_domain(
     preset = done_acc_info.presets.get(done_name)
     if preset is None:
         return None
-    if preset < 0 or preset > 1000:
-        return None
     kind = done_acc_info.kinds.get(done_name)
     if kind == _DONE_KIND_COUNT_DOWN:
-        values = range(-preset, 1)
+        # Counts down from 0 and is done at Acc <= preset (from the start for
+        # a preset >= 0).
+        if preset < -1000:
+            return None
+        values = range(min(preset, 0), 1)
     elif kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+        if preset < 0 or preset > 1000:
+            return None
         values = range(0, preset + 1)
     else:
         return None
@@ -2173,7 +2177,7 @@ def _compressed_acc_boundary_domain(
     if preset is not None:
         done_kind = done_acc_info.kinds.get(done_name)
         if done_kind == _DONE_KIND_COUNT_DOWN:
-            boundaries.add(-preset)
+            boundaries.add(preset)  # done at Acc <= preset
         elif done_kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
             boundaries.add(preset)
 

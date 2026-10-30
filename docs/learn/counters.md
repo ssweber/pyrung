@@ -14,10 +14,10 @@ for item in items:
 
 There's no `for` loop. There's no "list of items." There's a sensor at the end of each bin chute that goes True every time a box drops in — and a counter that counts it.
 
-But here's the catch: **a counter increments every scan while its rung is True**, not every edge. A sensor held True for 100 scans racks up 100 counts from a single box. Wrap the sensor with `rise()` — the edge detection from [Lesson 4](assignment.md) — to count edges instead. One increment per False→True transition. You'll do this almost every time you use a counter on a sensor input.
+A counter counts **edges**, not scans: one increment each time its rung goes from False to True. A sensor held True for 100 scans while a box sits in the chute still counts that box once. The counter has the edge detection from [Lesson 4](assignment.md) built in — it remembers what its input was the last time it ran — so you don't wrap the sensor in `rise()`.
 
 ```python
-from pyrung import Bool, Counter, Program, rung, PLC, count_up, rise
+from pyrung import Bool, Counter, Program, rung, PLC, count_up
 
 BinASensor  = Bool()
 BinBSensor  = Bool()
@@ -26,20 +26,20 @@ BinBCounter = Counter.clone("BinBCounter")
 CountReset  = Bool()
 
 with Program() as logic:
-    with rung(rise(BinASensor)):
+    with rung(BinASensor):
         count_up(BinACounter, preset=10) \
             .reset(CountReset)
-    with rung(rise(BinBSensor)):
+    with rung(BinBSensor):
         count_up(BinBCounter, preset=10) \
             .reset(CountReset)
 ```
 
-`rise(BinASensor)` fires for exactly one scan when the sensor goes from False to True. Without it, the counter would increment every scan while the sensor is active, racking up hundreds of counts per box.
+Holding `BinASensor` True does nothing more after the first scan; the next count comes when it goes False and then True again. The memory is the counter's own and is updated every scan it runs, even while `CountReset` holds it at 0, so a sensor still True when the reset releases does not count again.
 
 `Counter` is a built-in structured type — the mirror of `Timer`. Its `.Acc` is a Dint (32-bit) because a 16-bit integer rolls over at 32,767 — on a fast line, that's a few hours of production. Production counters in real PLCs are almost always 32-bit for the same reason.
 
 ```
-  rise(BinASensor)? --yes--> .Acc += 1 --> .Acc >= Preset? --yes--> .Done = True
+  BinASensor rose? --yes--> .Acc += 1 --> .Acc >= Preset? --yes--> .Done = True
           |                                     |
           no                                    no
           v                                     v
@@ -105,4 +105,4 @@ We have sensors, timers, counters, and a diverter. But nothing coordinates the s
 
 !!! info "Also known as..."
 
-    Counters are `CTU`/`CTD`/`CTUD`. Done bits and accumulators follow the same naming as timers. Reset is its own input pin. Edge-counting is always "one-shot feeding the counter" — never the counter itself.
+    Counters are `CTU`/`CTD`/`CTUD`. Done bits and accumulators follow the same naming as timers. Reset is its own input pin. CLICK counters count rising edges of their inputs, as pyrung's do; on other platforms check whether the counter itself is edge-triggered before dropping the one-shot.

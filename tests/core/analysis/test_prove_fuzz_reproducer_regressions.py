@@ -237,10 +237,13 @@ def test_fuzz_entry_dependent_exit_value_is_not_concrete_elided():
 def test_fuzz_counter_reset_from_oneshot_does_not_poison_hidden_event_cache():
     """count_up with combinational reset (oneshot B0) must still reach Done."""
     B0 = Bool("B0")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
     C0 = Counter.clone("C0")
 
     with Program(strict=False) as logic:
-        with Rung():
+        with Rung(Tick):
             count_up(C0, 3).reset(B0)
         with Rung():
             with forloop(Int("N0", min=-27, max=6)):
@@ -298,7 +301,8 @@ def test_fuzz_latched_rise_count_down_initial_state_reachable():
         with Rung():
             latch(b2)
         with Rung(rise(b2)):
-            count_down(c1, 4).reset(b0)
+            # Done at Acc <= preset: a negative preset is not done at once.
+            count_down(c1, -4).reset(b0)
 
     states = reachable_states(
         logic, project=["B0", "B2", "C1_Done"], max_states=10_000, depth_budget=20
@@ -658,11 +662,14 @@ def test_fuzz_oneshot_out_elision_with_bidirectional_counter():
     """Oneshot out(B0) feeding count_up .down/.reset — B0 elision hides
     the Done=True state."""
     B0 = Bool("B0")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
     B1 = Bool("B1")
     C0 = Counter.clone("C0")
 
     with Program(strict=False) as logic:
-        with Rung():
+        with Rung(Tick):
             count_up(C0, 10).down(B0).reset(B1)
         with Rung():
             out(B0, oneshot=True)
@@ -813,12 +820,15 @@ def test_fuzz_counter_acc_count_up_not_elided():
     In0 = Bool("In0", external=True)
     ExtN0 = Int("ExtN0", external=True, choices={1: "A", 2: "B"})
     B0 = Bool("B0")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
     N0 = Int("N0", min=-6, max=41)
     C0 = Counter.clone("C0")
     DS = Block("DS", TagType.INT, 1, 6)
 
     with Program(strict=False) as logic:
-        with Rung():
+        with Rung(Tick):
             count_up(C0, 10).reset(B0)
         with Rung(C0.Acc >= 5):
             out(B0)
@@ -967,12 +977,15 @@ def test_fuzz_counter_acc_elided_when_done_projected():
     Reproducer: reachability_20260516_194933_000.
     """
     B0 = Bool("B0")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
     C0 = Counter.clone("C0")
 
     with Program(strict=False) as logic:
         with Rung():
             out(B0, oneshot=True)
-        with Rung():
+        with Rung(Tick):
             count_down(C0, 5).reset(B0)
         with Rung(C0.Acc <= -3):
             out(B0)
@@ -1355,11 +1368,15 @@ def test_fuzz_self_resetting_count_down_traced_elision_drops_cycle():
     Reproducer: reachability_20260518_175626_009.
     """
     B0 = Bool("B0")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
     C0 = Counter.clone("C0")
 
     with Program(strict=False) as logic:
-        with Rung():
-            count_down(C0, 5).reset(B0)
+        with Rung(Tick):
+            # Done at Acc <= preset: -5 stays undone through the -3 reset.
+            count_down(C0, -5).reset(B0)
         with Rung(C0.Acc <= -3):
             out(B0)
 
@@ -1570,10 +1587,13 @@ def test_fuzz_consumed_acc_with_atoms_not_combinational():
     from the state key, BFS explored one state, and returned Proven — unsound.
     """
     B1 = Bool("B1")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
     C1 = Counter.clone("C1")
 
     with Program(strict=False) as logic:
-        with Rung():
+        with Rung(Tick):
             count_up(C1, 10).reset(B1)
 
     baseline = always(

@@ -18,6 +18,13 @@ same PENDING state repeatedly.  The event scheduler accelerates this:
    the two plateaus just before it when an edge-sensitive site could see an
    input change on the crossing scan.
 
+Counters are not event sources.  A counter counts the rising edges of its
+inputs (CLICK semantics, with a memory of its own per input in the state
+key), so on a held-input plateau it does not move: there is no per-scan
+delta to extrapolate.  Its progress comes from input flips, which BFS tries
+at every node, and its hidden progress across revisits is the cycle
+tracker's (``cycles.py``, which still reads counter Done specs).
+
 Stop points (races between timers started at different times):
 A jump skips every plateau between the node and the crossing, so an input
 flip is only ever tried at the node and at the crossing.  When the flip
@@ -93,6 +100,8 @@ if TYPE_CHECKING:
 # membership tests on the hot hidden-event path don't rebuild set literals.
 _TIMER_DELAY_KINDS = frozenset((_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM))
 _REAL_PROGRESS_KINDS = frozenset((_PROGRESS_KIND_REAL_UP, _PROGRESS_KIND_REAL_DOWN))
+# Counters count rising edges: never a hidden-event source (module docstring).
+_COUNTER_KINDS = frozenset((_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN))
 
 
 @dataclass(frozen=True)
@@ -170,7 +179,7 @@ class _EventAdvanceState:
 
     pre_event_snapshot: _KernelSnapshot
     before_snap: _KernelSnapshot
-    pre_advance_counter_acc: dict[str, int]
+    pre_advance_drum_acc: dict[str, int]
     pending_sources: set[_SourceKey]
     next_event_scans: int
     firing_group: _SimultaneityGroup | None = None
@@ -188,13 +197,8 @@ _EVENT_INPUT_VARIANT_CAVEAT = (
 
 _COFIRE_CAVEAT = (
     "Counterexample reached via a co-firing hidden-event witness; "
-    "two pending timers/counters were aligned to cross on the same scan, "
+    "two pending timers were aligned to cross on the same scan, "
     "which TraceStep.inputs alone may not reproduce.",
-)
-
-_HIDDEN_EVENT_CAVEAT = (
-    "Transition fast-forwarded over hidden accumulator scans; "
-    "concrete replay requires cycling inputs, not a single fixed-input run.",
 )
 
 
@@ -453,31 +457,26 @@ def _scans_until_done_event(
     kernel: ReplayKernel,
     quantum: float | None = None,
 ) -> int | None:
-    """Estimate scans until this pending timer/counter reaches its next Done event."""
+    """Estimate scans until this pending timer reaches its next Done event.
+
+    ``None`` for a counter: it counts input edges, not held scans.
+    """
+    if kind not in _TIMER_DELAY_KINDS:
+        return None
     resolved_preset = _resolve_done_preset(preset, preset_memory_key, kernel)
     if resolved_preset is None:
         return None
-    if kind in _TIMER_DELAY_KINDS:
-        move = _exact_timer_move(acc_name, quantum, before, kernel)
-        if move is not None:
-            acc, frac, q = move
-            exact = _timer_scans_to_reach(acc, frac, q, resolved_preset)
-            if exact is not None or resolved_preset > _TIMER_ACC_MAX:
-                return exact
+    move = _exact_timer_move(acc_name, quantum, before, kernel)
+    if move is not None:
+        acc, frac, q = move
+        exact = _timer_scans_to_reach(acc, frac, q, resolved_preset)
+        if exact is not None or resolved_preset > _TIMER_ACC_MAX:
+            return exact
     acc_before = int(before.tags.get(acc_name, 0) or 0)
-    acc_after = int(kernel.tags.get(acc_name, 0) or 0)
-
-    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM}:
-        before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
-        after_total = _timer_total(kernel, acc_name)
-        delta = after_total - before_total
-        remaining = resolved_preset - after_total
-    elif kind == _DONE_KIND_COUNT_UP:
-        delta = acc_after - acc_before
-        remaining = resolved_preset - acc_after
-    else:
-        delta = acc_before - acc_after
-        remaining = resolved_preset + acc_after
+    before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
+    after_total = _timer_total(kernel, acc_name)
+    delta = after_total - before_total
+    remaining = resolved_preset - after_total
 
     if delta <= 0:
         return None
@@ -494,10 +493,11 @@ def _progress_delta_and_current(
 ) -> tuple[float, float] | None:
     """Return per-scan progress in the same normalized space as threshold vectors.
 
-    ``count_down`` is the easy case to get wrong: raw ``Acc`` becomes more
+    A descending kind is the easy case to get wrong: raw ``Acc`` becomes more
     negative as progress advances, but threshold vectors and event scheduling
     both reason in monotone progress coordinates, so this function reports
     ``current = -Acc`` and compares against ``-threshold`` downstream.
+    Counters are no event sources (module docstring): ``None``.
     """
     if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM}:
         acc_before = int(before.tags.get(acc_name, 0) or 0)
@@ -505,12 +505,12 @@ def _progress_delta_and_current(
         after_total = _timer_total(kernel, acc_name)
         return after_total - before_total, after_total
 
-    if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP}:
+    if kind == _PROGRESS_KIND_INT_UP:
         acc_before = int(before.tags.get(acc_name, 0) or 0)
         acc_after = int(kernel.tags.get(acc_name, 0) or 0)
         return float(acc_after - acc_before), float(acc_after)
 
-    if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN}:
+    if kind == _PROGRESS_KIND_INT_DOWN:
         acc_before = int(before.tags.get(acc_name, 0) or 0)
         acc_after = int(kernel.tags.get(acc_name, 0) or 0)
         delta = float(acc_before - acc_after)
@@ -557,7 +557,7 @@ def _scans_until_threshold_event(
         return None
 
     threshold = float(threshold_value)
-    if spec.kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_REAL_DOWN}:
+    if spec.kind == _PROGRESS_KIND_REAL_DOWN:
         threshold = -threshold
 
     if spec.form == _THRESHOLD_FORM_GE:
@@ -578,7 +578,7 @@ def _advance_hidden_progress(
     kernel: ReplayKernel,
     quantum: float | None = None,
 ) -> None:
-    """Advance a hidden timer/counter through skipped scans before the event scan."""
+    """Advance a hidden timer or progress tag through skipped scans before the event scan."""
     if skipped_scans <= 0:
         return
 
@@ -601,7 +601,7 @@ def _advance_hidden_progress(
         kernel.memory[f"_frac:{acc_name}"] = target_total - target_acc
         return
 
-    if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP}:
+    if kind == _PROGRESS_KIND_INT_UP:
         acc_before = int(before.tags.get(acc_name, 0) or 0)
         acc_after = int(kernel.tags.get(acc_name, 0) or 0)
         delta = acc_after - acc_before
@@ -629,14 +629,20 @@ def _advance_hidden_progress(
 
 
 def _has_pending_done(context: _ExploreContext, key: tuple[Any, ...]) -> bool:
-    """True if any timer/counter Done bit in *key* is PENDING."""
-    return any(key[spec.state_index] == PENDING for spec in context.done_event_specs)
+    """True if any timer Done bit in *key* is PENDING (counters are no event source)."""
+    return any(
+        key[spec.state_index] == PENDING
+        for spec in context.done_event_specs
+        if spec.kind not in _COUNTER_KINDS
+    )
 
 
 def _has_uncrossed_threshold_event(context: _ExploreContext, key: tuple[Any, ...]) -> bool:
-    """True if any threshold vector bit is currently false."""
+    """True if any threshold vector bit of an event source is currently false."""
     offset = len(context.stateful_names)
     for spec in context.threshold_event_specs:
+        if spec.kind in _COUNTER_KINDS:
+            continue
         vector = key[offset + spec.vector_index]
         if not vector[spec.atom_index]:
             return True
@@ -666,7 +672,7 @@ def _collect_all_pending_sources(
     sources: dict[_SourceKey, _PendingSource] = {}
 
     for i, spec in enumerate(context.done_event_specs):
-        if key[spec.state_index] != PENDING:
+        if spec.kind in _COUNTER_KINDS or key[spec.state_index] != PENDING:
             continue
         scans = _scans_until_done_event(
             spec.kind,
@@ -691,7 +697,7 @@ def _collect_all_pending_sources(
 
     vector_offset = len(context.stateful_names)
     for j, spec in enumerate(context.threshold_event_specs):
-        if spec.mode != _THRESHOLD_MODE_EXACT:
+        if spec.mode != _THRESHOLD_MODE_EXACT or spec.kind in _COUNTER_KINDS:
             continue
         vector = key[vector_offset + spec.vector_index]
         if vector[spec.atom_index]:
@@ -782,15 +788,15 @@ def _advance_group_to_threshold(
     next_event_scans = firing_group.scans
     skipped_scans = max(next_event_scans - 1, 0)
 
-    pre_advance_counter_acc: dict[str, int] = {}
+    pre_advance_drum_acc: dict[str, int] = {}
     advanced: set[tuple[str, str]] = set()
     for src in all_sources.values():
         acc_key = (src.kind, src.acc_name)
         if acc_key in advanced:
             continue
         advanced.add(acc_key)
-        if src.kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN, _DONE_KIND_TIME_DRUM}:
-            pre_advance_counter_acc[src.acc_name] = int(kernel.tags.get(src.acc_name, 0) or 0)
+        if src.kind == _DONE_KIND_TIME_DRUM:
+            pre_advance_drum_acc[src.acc_name] = int(kernel.tags.get(src.acc_name, 0) or 0)
         _advance_hidden_progress(
             src.kind,
             src.acc_name,
@@ -805,7 +811,7 @@ def _advance_group_to_threshold(
             kernel, context.mutable_tag_names, context.base_tag_keys
         ),
         before_snap=before_snap,
-        pre_advance_counter_acc=pre_advance_counter_acc,
+        pre_advance_drum_acc=pre_advance_drum_acc,
         pending_sources=set(all_sources),
         next_event_scans=next_event_scans,
         firing_group=firing_group,
@@ -838,10 +844,10 @@ def _advance_all_to_cofire(
     if len(by_acc) < 2:
         return None
 
-    pre_advance_counter_acc: dict[str, int] = {}
+    pre_advance_drum_acc: dict[str, int] = {}
     for (kind, acc_name), src in by_acc.items():
-        if kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN, _DONE_KIND_TIME_DRUM}:
-            pre_advance_counter_acc[acc_name] = int(kernel.tags.get(acc_name, 0) or 0)
+        if kind == _DONE_KIND_TIME_DRUM:
+            pre_advance_drum_acc[acc_name] = int(kernel.tags.get(acc_name, 0) or 0)
         _advance_hidden_progress(
             kind,
             acc_name,
@@ -857,72 +863,11 @@ def _advance_all_to_cofire(
             kernel, context.mutable_tag_names, context.base_tag_keys
         ),
         before_snap=before_snap,
-        pre_advance_counter_acc=pre_advance_counter_acc,
+        pre_advance_drum_acc=pre_advance_drum_acc,
         pending_sources=set(all_sources),
         next_event_scans=max(src.scans for src in by_acc.values()),
         firing_group=cofire_group,
     )
-
-
-def _fixup_unfired_counters(
-    context: _ExploreContext,
-    before_snap: _KernelSnapshot,
-    pre_advance_acc: dict[str, int],
-    pre_event_snapshot: _KernelSnapshot,
-    kernel: ReplayKernel,
-) -> bool:
-    """Apply missing delta for counter sources that didn't fire during the event step.
-
-    Counter instructions have ``ALWAYS_EXECUTES = True`` — they recompute
-    Done from current Acc every scan.  But Acc only changes when the rung
-    fires.  For edge-triggered counters (e.g. ``rise(pulse)``), the event
-    step may not satisfy the edge condition, leaving Acc and Done unchanged.
-
-    Detect this by comparing Acc before and after the step.  When the
-    counter didn't fire, manually apply one per-scan delta and set Done
-    to the correct value.
-
-    Returns True if any counter was fixed up (i.e. the event step alone
-    did not reproduce the accumulation).
-    """
-    applied = False
-    if not pre_advance_acc:
-        return applied
-    for spec in context.done_event_specs:
-        if spec.kind not in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN}:
-            continue
-        if spec.acc_name not in pre_advance_acc:
-            continue
-        pre_acc = int(pre_event_snapshot.tags.get(spec.acc_name, 0) or 0)
-        post_acc = int(kernel.tags.get(spec.acc_name, 0) or 0)
-        if pre_acc != post_acc:
-            continue
-
-        original_after = pre_advance_acc[spec.acc_name]
-        original_before = int(before_snap.tags.get(spec.acc_name, 0) or 0)
-        if spec.kind == _DONE_KIND_COUNT_UP:
-            per_scan = original_after - original_before
-        else:
-            per_scan = original_before - original_after
-        if per_scan <= 0:
-            continue
-
-        if spec.kind == _DONE_KIND_COUNT_UP:
-            new_acc = post_acc + per_scan
-        else:
-            new_acc = post_acc - per_scan
-        kernel.tags[spec.acc_name] = new_acc
-        applied = True
-
-        preset = _resolve_done_preset(spec.preset, spec.preset_memory_key, kernel)
-        if preset is None:
-            continue
-        done_name = context.stateful_names[spec.state_index]
-        if spec.kind == _DONE_KIND_COUNT_UP:
-            kernel.tags[done_name] = new_acc >= preset
-        else:
-            kernel.tags[done_name] = new_acc <= -preset
-    return applied
 
 
 def _fixup_unfired_drums(
@@ -934,13 +879,14 @@ def _fixup_unfired_drums(
 ) -> None:
     """Apply missing delta for drum sources that didn't fire during the event step.
 
-    Same principle as ``_fixup_unfired_counters`` but handles the drum's
-    multi-step crossing, as the drum's own enabled scan does: when the
-    accumulator crosses the current step's preset, advance the step, reset
-    the accumulator, end a completion (``_drum_done``) and apply the new
-    step's output pattern, leaving the completion flag as it is (only a reset
-    clears it); on the last step, set the flag and ``_drum_done`` and turn
-    every output off.
+    The event step may not satisfy the drum's enable, leaving its
+    accumulator where the advance put it: apply the per-scan delta the held
+    scan showed, with the drum's multi-step crossing, as the drum's own
+    enabled scan does: when the accumulator crosses the current step's preset,
+    advance the step, reset the accumulator, end a completion (``_drum_done``)
+    and apply the new step's output pattern, leaving the completion flag as it
+    is (only a reset clears it); on the last step, set the flag and
+    ``_drum_done`` and turn every output off.
     """
     if not pre_advance_acc:
         return
@@ -979,15 +925,12 @@ def _fixup_unfired_drums(
                 kernel.tags[meta.step_name] = new_step
                 kernel.tags[spec.acc_name] = 0
                 kernel.memory[f"_frac:{spec.acc_name}"] = 0.0
-                kernel.memory[meta.done_memory_key] = False
                 for i, out_name in enumerate(meta.output_names):
                     kernel.tags[out_name] = meta.pattern[new_step - 1][i]
+                kernel.tags[done_name] = False
             else:
                 kernel.tags[spec.acc_name] = new_acc
                 kernel.tags[done_name] = True
-                kernel.memory[meta.done_memory_key] = True
-                for out_name in meta.output_names:
-                    kernel.tags[out_name] = False
         else:
             kernel.tags[spec.acc_name] = new_acc
 
@@ -1039,22 +982,13 @@ def _step_event_from_advance(
     and checks for resets.
     """
     _step_kernel(context, kernel)
-    counter_fixup = _fixup_unfired_counters(
-        context,
-        advance.before_snap,
-        advance.pre_advance_counter_acc,
-        advance.pre_event_snapshot,
-        kernel,
-    )
     _fixup_unfired_drums(
         context,
         advance.before_snap,
-        advance.pre_advance_counter_acc,
+        advance.pre_advance_drum_acc,
         advance.pre_event_snapshot,
         kernel,
     )
-    if counter_fixup:
-        _step_kernel(context, kernel)
     if advance.firing_group is not None:
         reset_set = _detect_resets_in_group(
             context,
@@ -1068,13 +1002,11 @@ def _step_event_from_advance(
         context, advance.pre_event_snapshot, kernel, pending_sources=advance.pending_sources
     ):
         return None
-    settle_scans = 1 if counter_fixup else 0
     return _HiddenEventOutcome(
         snapshot=_snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys),
         key=edge_comp.state_key(kernel),
-        additional_scans=advance.next_event_scans + settle_scans,
+        additional_scans=advance.next_event_scans,
         pre_event_snapshot=advance.pre_event_snapshot,
-        caveats=_HIDDEN_EVENT_CAVEAT if counter_fixup else (),
     )
 
 
@@ -1107,16 +1039,10 @@ def _materialize_abstract_threshold_outcome(
     scans = _scans_until_threshold_event(spec, before_snap, kernel, quantum)
     if scans is None:
         return None
-    pre_advance_counter_acc: dict[str, int] = {}
-    if spec.kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN}:
-        pre_advance_counter_acc[spec.acc_name] = int(kernel.tags.get(spec.acc_name, 0) or 0)
     skipped_scans = max(scans - 1, 0)
     _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel, quantum)
     pre_event_snapshot = _snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys)
     _step_kernel(context, kernel)
-    _fixup_unfired_counters(
-        context, before_snap, pre_advance_counter_acc, pre_event_snapshot, kernel
-    )
     if not _threshold_crossed(kernel, spec.kind, spec.acc_name, spec.threshold, spec.form):
         return None
     return _HiddenEventOutcome(
@@ -1143,7 +1069,7 @@ def _materialize_unresolvable_abstracts(
     seen_keys: set[tuple[Any, ...]] = set()
 
     for spec in context.threshold_event_specs:
-        if spec.mode == _THRESHOLD_MODE_EXACT:
+        if spec.mode == _THRESHOLD_MODE_EXACT or spec.kind in _COUNTER_KINDS:
             continue
         vector = key[vector_offset + spec.vector_index]
         if vector[spec.atom_index]:
@@ -1292,10 +1218,9 @@ def _settle_pending(
     return outcomes
 
 
-# Scans a flip may take to start an idle timer or counter (a latch, then the
-# rung that runs it, may sit a scan or two behind the input).
+# Scans a flip may take to start an idle timer (a latch, then the rung that
+# runs it, may sit a scan or two behind the input).
 _STOP_START_DELAY = 2
-_IDLE_COUNTER_KINDS = frozenset((_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN))
 # Plateaus kept just before each crossing when the program has edge-sensitive
 # sites: the crossing scan and the one before it see every input combination.
 _EDGE_STOP_OFFSETS = (2, 1)
@@ -1307,39 +1232,32 @@ def _idle_scans_to_cross(
     key: tuple[Any, ...],
     running: set[str],
 ) -> list[int] | None:
-    """Scans each idle timer or counter needs to cross a threshold once started.
+    """Scans each idle timer needs to cross a threshold once started.
 
     Idle: its Done is not pending in *key*, it does not advance on a held
     scan, and it is still below the threshold.  None when one of them cannot
     be timed (no single per-scan quantum, a preset that does not resolve).
+    A counter is never timed: it counts input edges, which BFS tries at every
+    node, not held scans.
     """
     needs: list[int] = []
     for spec in context.done_event_specs:
         if spec.acc_name in running or key[spec.state_index] == PENDING:
             continue
-        if spec.kind not in (_TIMER_DELAY_KINDS | _IDLE_COUNTER_KINDS):
-            continue
-        if spec.kind == _DONE_KIND_TIME_DRUM:
+        if spec.kind not in _TIMER_DELAY_KINDS or spec.kind == _DONE_KIND_TIME_DRUM:
             continue
         preset = _resolve_done_preset(spec.preset, spec.preset_memory_key, kernel)
         if preset is None:
             return None
-        if spec.kind in _TIMER_DELAY_KINDS:
-            acc, frac = _timer_reading(kernel, spec.acc_name)
-            if acc >= preset:
-                continue
-            quantum = context.timer_quanta.get(spec.acc_name)
-            if quantum is None or not quantum > 0.0:
-                return None
-            scans = _timer_scans_to_reach(acc, frac, quantum, preset)
-            if scans is None:
-                continue
-        else:
-            acc = int(kernel.tags.get(spec.acc_name, 0) or 0)
-            progress = acc if spec.kind == _DONE_KIND_COUNT_UP else -acc
-            if progress >= preset:
-                continue
-            scans = preset - progress
+        acc, frac = _timer_reading(kernel, spec.acc_name)
+        if acc >= preset:
+            continue
+        quantum = context.timer_quanta.get(spec.acc_name)
+        if quantum is None or not quantum > 0.0:
+            return None
+        scans = _timer_scans_to_reach(acc, frac, quantum, preset)
+        if scans is None:
+            continue
         needs.append(scans)
 
     vector_offset = len(context.stateful_names)

@@ -46,7 +46,14 @@ def test_count_up_down_and_reset_accept_variadic_grouped_conditions(runner_facto
     runner.step()
     assert runner.current_state.tags["Counter_Acc"] == 1
 
+    # DownA and DownB together: the down input rises once.
     runner.patch({"DownB": True})
+    runner.step()
+    assert runner.current_state.tags["Counter_Acc"] == 0
+
+    runner.patch({"Enable": False})
+    runner.step()
+    runner.patch({"Enable": True})
     runner.step()
     assert runner.current_state.tags["Counter_Acc"] == 1
 
@@ -141,7 +148,9 @@ def test_count_down_reset_accepts_variadic_grouped_conditions(runner_factory) ->
     runner.step()
     assert runner.current_state.tags["Counter2_Acc"] == -1
 
-    runner.patch({"ResetA": True, "ResetB": False})
+    runner.patch({"Enable": False, "ResetA": True, "ResetB": False})
+    runner.step()
+    runner.patch({"Enable": True})
     runner.step()
     assert runner.current_state.tags["Counter2_Acc"] == -2
 

@@ -240,7 +240,10 @@ def _uncrossed_limits(
         resolved = _resolve_done_preset(preset, memory_key, kernel)
         if resolved is None:
             return None
-        limits.append((float(resolved), False))
+        # A down counter is done at ``Acc <= preset``: progress ``-Acc`` reaching
+        # ``-preset``.  Every other Done kind crosses at progress ``preset``.
+        limit = -float(resolved) if source.kind == _DONE_KIND_COUNT_DOWN else float(resolved)
+        limits.append((limit, False))
     for slot, atoms in source.vector_slots:
         for atom, crossed in zip(atoms, key[slot], strict=True):
             if crossed:

@@ -6,6 +6,7 @@ from pyrung.core import (
     Block,
     Bool,
     Counter,
+    Dint,
     Int,
     Program,
     Rung,
@@ -120,10 +121,29 @@ def test_edge_counter_requests_a_pulse_and_keeps_one_bounded_frontier() -> None:
     assert step.holds == ()
     assert profile.linear is not None
     assert profile.linear.direction == 1
-    assert profile.linear.estimate_scans(target, snapshot, 0.010) == 5
+    # Five more counts, each a rising edge: an on scan and an off scan.
+    assert profile.linear.estimate_scans(target, snapshot, 0.010) == 10
 
 
-def test_count_down_uses_a_negative_boundary() -> None:
+def test_level_counter_requests_a_pulse() -> None:
+    # A counter counts the rising edges of its rung (as a CLICK does), so a
+    # plain contact must be pulsed too: holding it counts once.
+    reset = Bool("reset", external=True)
+    clock = Bool("clock", external=True)
+    with Program() as program:
+        with Rung(clock):
+            count_up(Counter[1], preset=7).reset(reset)
+
+    profile = _only_profile(program)
+    assert profile is not None
+    target = Eq(Counter[1].Done.name, frozenset((True,)))
+    step = profile.plan(target, {Counter[1].Done.name: False, Counter[1].Acc.name: 2})
+    assert step is not None
+    assert step.pulse is not None
+    assert step.holds == ()
+
+
+def test_count_down_is_done_at_its_preset() -> None:
     reset = Bool("reset", external=True)
     clock = Bool("clock", external=True)
     with Program() as program:
@@ -133,14 +153,32 @@ def test_count_down_uses_a_negative_boundary() -> None:
     profile = _only_profile(program)
     assert profile is not None
     target = Eq(Counter[1].Done.name, frozenset((True,)))
-    snapshot = {Counter[1].Done.name: False, Counter[1].Acc.name: -1}
+    # Staged above its preset: done once it counts down to 4.
+    snapshot = {Counter[1].Done.name: False, Counter[1].Acc.name: 6}
     step = profile.plan(target, snapshot)
 
     assert step is not None
-    assert step.until == Cmp(Counter[1].Acc.name, "<=", -4)
+    assert step.until == Cmp(Counter[1].Acc.name, "<=", 4)
+    assert step.pulse is not None
     assert profile.linear is not None
     assert profile.linear.direction == -1
-    assert profile.linear.estimate_scans(target, snapshot, 0.010) == 3
+    assert profile.linear.estimate_scans(target, snapshot, 0.010) == 4
+
+
+def test_count_down_tag_preset_boundary_reads_the_tag() -> None:
+    reset = Bool("reset", external=True)
+    clock = Bool("clock", external=True)
+    preset = Dint("Preset", external=True)
+    with Program() as program:
+        with Rung(clock):
+            count_down(Counter[1], preset=preset).reset(reset)
+
+    profile = _only_profile(program)
+    assert profile is not None
+    assert profile.completion_boundary is not None
+    assert profile.completion_boundary({}) == Cmp(
+        Counter[1].Acc.name, "<=", "Preset", bound_is_tag=True
+    )
 
 
 def test_plain_output_has_no_advance_profile() -> None:

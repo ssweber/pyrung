@@ -1696,7 +1696,15 @@ def test_counter_int_advance_resolves_steerable_value():
     )
     action = next(action for action in tree.ordered_action_details() if action.tag == "Sel")
     assert action.pair == ("Sel", 3)
-    assert not action.pulse
+    # The counter counts rising edges of ``Sel == 3``: the value is pulsed.
+    assert action.pulse
+
+
+def test_counter_int_advance_pulses_the_value():
+    Sel = Int("Sel", choices={0: "IDLE", 1: "WARM", 3: "GO"}, external=True)
+    logic = _int_advance_counter(Sel)
+    plan = PLC(logic).how(Bool("Done"))
+    assert plan.status.name == "REACHED"
 
 
 def test_prerequisite_action_carries_nearest_advance_frontier():

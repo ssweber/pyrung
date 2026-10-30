@@ -46,7 +46,7 @@ with Program() as logic:
 
 `rise(EntrySensor)` fires for exactly one scan when the sensor transitions from False to True. Without it, the copy and calc above would execute *every scan* while the sensor stays active. If a box sits on the sensor for 100 scans, you'd get 100 copies and 100 increments instead of one.
 
-This is the biggest conceptual jump from Python. In Python, `if sensor:` is about the *current value*. In ladder, `rise()` is about the *transition* — it detects the leading edge and fires once. `fall()` does the same for the trailing edge (True → False). You'll use `rise()` constantly from here on: edge-triggered counting in [Lesson 6](counters.md), state transitions in [Lesson 7](state-machines.md), and anywhere you need "do this once when the condition changes."
+This is the biggest conceptual jump from Python. In Python, `if sensor:` is about the *current value*. In ladder, `rise()` is about the *transition* — it detects the leading edge and fires once. `fall()` does the same for the trailing edge (True → False). You'll use `rise()` constantly from here on: state transitions in [Lesson 7](state-machines.md), and anywhere you need "do this once when the condition changes."
 
 ## Try it
 

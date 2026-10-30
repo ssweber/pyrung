@@ -877,11 +877,12 @@ def count_up(
 ) -> CountUpBuilder:
     """Count Up instruction (CTU).
 
-    Creates a counter that increments every scan while the rung condition is True.
-    Use `rise()` on the condition for edge-triggered counting.
+    Creates a counter that counts the rising edges of the rung condition (as
+    a CLICK does): one count each time it goes True, however long it stays
+    True.  Done is True while acc >= preset.
 
     Example:
-        with Rung(rise(PartSensor)):
+        with Rung(PartSensor):
             count_up(Counter[1], preset=100).reset(ResetBtn)
 
     This is a terminal instruction. Requires .reset() chaining.
@@ -915,12 +916,14 @@ def count_down(
 ) -> CountDownBuilder:
     """Count Down instruction (CTD).
 
-    Creates a counter that decrements every scan while the rung condition is True.
-    Use `rise()` on the condition for edge-triggered counting.
+    Creates a counter that counts down on the rising edges of the rung
+    condition (as a CLICK does), from 0.  Done is True while acc <= preset, so
+    a positive preset is done from the start; stage acc above the preset with
+    ``copy()`` to count down to it.
 
     Example:
-        with Rung(rise(Dispense)):
-            count_down(Counter[1], preset=25).reset(Reload)
+        with Rung(Dispense):
+            count_down(Counter[1], preset=-25).reset(Reload)
 
     This is a terminal instruction. Requires .reset() chaining.
 

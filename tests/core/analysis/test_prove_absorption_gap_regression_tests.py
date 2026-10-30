@@ -1167,7 +1167,9 @@ class TestEdgeInAnInstructionCondition:
         counter = Counter.clone("UdCtr")
         hit = Bool("UdHit")
         with Program(strict=False) as logic:
-            with Rung(y):
+            # Counted up on x's rises (on y's, the up and down edges would
+            # always land on one scan and cancel).
+            with Rung(x):
                 count_up(counter, preset=5).down(rise(y)).reset(l2)
             with Rung(~y, ~l1):
                 reset(l2)

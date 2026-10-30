@@ -34,11 +34,11 @@ tells which model apart, and what the other model reads:
   once (Result1 = 1, what CLICK's per-contact edge memory predicts, FINDINGS
   item 2); one judged against the previous scan (pyrung today) rises on all
   three (3).
-- ``counter_inside_loop`` (F8, probe, pending S2): the count input is on in
-  iterations 1, 2 and 4 of 4.  A counter that counts edges remembered by the
-  instruction reads 2 (CLICK's edge counters, FINDINGS item 1); one that
-  counts every enabled execution (pyrung today) reads 3; an edge judged once
-  per scan reads 1.
+- ``counter_inside_loop`` (F8, probe): the count input is on in iterations 1,
+  2 and 4 of 4.  A counter that counts edges remembered by the instruction
+  reads 2 (CLICK's edge counters, FINDINGS item 1, which pyrung implements);
+  one that counts every enabled execution (pyrung before) reads 3; an edge
+  judged once per scan reads 1.
 - ``oneshot_inside_loop`` (F14): the one-shot's rung is true in iterations
   1, 2 and 4 of 4.  Memory per instruction, re-armed by iteration 3, fires
   twice (Result1 = 2); once per scan reads 1; a one-shot ignored inside loops
@@ -68,9 +68,9 @@ tells which model apart, and what the other model reads:
   reads 1, 1.  The For rung is true while ``Cmd = 0``, so the case's own
   reset is scanned whatever the answer.
 
-F6, F8 and F18 expect what a CLICK is predicted to read and are pending the
-per-contact edge memory (S3) and edge-counting (S2) steps; on pyrung's own
-targets they run as strict xfails.
+F6 and F18 expect what a CLICK is predicted to read and are pending the
+per-contact edge memory step (S3); on pyrung's own targets they run as strict
+xfails.
 """
 
 from __future__ import annotations
@@ -417,7 +417,6 @@ group = Group(
             "iteration) or 1 (once a scan)",
             ladder=prove_counter_inside_loop,
             expect={"Result1": 2},
-            pending="S2",
             probe="counter edge memory across For iterations",
         ),
         case(

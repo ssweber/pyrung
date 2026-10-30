@@ -149,7 +149,11 @@ See [Structured Tags](../learn/structured-tags.md) for the full UDT pattern.
 
 Counters use a `.Done` bit (Bool) and a `.Acc` accumulator (Dint).
 
-Counters count **every scan** while the condition is True — they are not edge-triggered. Use `rise()` on the rung condition if you want one increment per leading edge.
+Counters count **rising edges**, as on a CLICK: one count each time the rung goes from False to True, however long it then stays True. Each counter keeps its own memory of each count input (the input as that counter last saw it), updated on every scan the counter runs, reset scans included. So:
+
+- an input held True through a reset does not count again once the reset releases;
+- an input already True on the first scan counts once;
+- a counter inside a `for` loop sees each iteration's input, so it counts the edges between iterations.
 
 ### Count up (CTU)
 
@@ -158,8 +162,8 @@ count_up(PartCounter, preset=100) \
     .reset(ResetButton)
 ```
 
-- rung True → accumulator increments each scan; done = True when acc ≥ preset
-- `.reset(tag)` → resets acc and done when that tag is True
+- rung goes True → accumulator increments by one; done = True when acc ≥ preset
+- `.reset(tag)` → resets acc and done while that tag is True (a level: it wins over a count on the same scan)
 
 `count_up(...).reset(...)` is terminal.
 
@@ -170,8 +174,8 @@ count_down(Dispense, preset=100) \
     .reset(ResetButton)
 ```
 
-- Accumulator starts at 0 and goes negative each scan
-- done = True when acc ≤ −preset
+- Accumulator starts at 0 and goes down by one on each rising edge
+- done = True when acc ≤ preset, so with a positive preset the counter is done from its first scan (stage the accumulator above the preset with `copy()` to count down to it, as on a CLICK)
 
 `count_down(...).reset(...)` is terminal.
 
@@ -183,16 +187,10 @@ count_up(ZoneCounter, preset=100) \
     .reset(ResetButton)
 ```
 
-Both up and down conditions are evaluated every scan; the net delta is applied once.
+Each input counts its own rising edges; an up edge and a down edge on the same scan cancel.
 
-### Edge-triggered counting
+### Counting a held condition
 
-To count edges instead of scans, wrap the condition with `rise()`:
-
-```python
-with rung(rise(Sensor)):
-    count_up(PartCounter, preset=9999) \
-        .reset(CountReset)
-```
+A counter never counts a held condition more than once. To count scans or time while something is on, use a timer, or `calc()` (`calc(N + 1, N)` adds one every scan its rung is True). `rise()` on the rung is allowed but redundant: the counter already counts edges.
 
 For chained builders (counters, shift registers, drums), complete the full chain (`.down(...)`, `.clock(...)`, `.reset(...)`) before any later DSL statement.

@@ -551,8 +551,13 @@ class TestReachableStates:
         )
 
     def test_reaction_time_window_counters(self):
-        """Counter variant: three mutually exclusive count thresholds."""
+        """Counter variant: three mutually exclusive count thresholds.
+
+        A counter counts rising edges, so the counters count ``Tick`` pulses
+        while running.
+        """
         trigger = Bool("Trigger", external=True)
+        tick = Bool("Tick", external=True)
         running = Bool("Running")
         too_few = Bool("TooFew", lock=True)
         just_right = Bool("JustRight", lock=True)
@@ -564,9 +569,9 @@ class TestReachableStates:
         with Program(strict=False) as logic:
             with Rung(~too_few, ~just_right, ~too_many):
                 out(running)
-            with Rung(running):
+            with Rung(running, tick):
                 count_up(ready_ctr, preset=3).reset(never)
-            with Rung(running):
+            with Rung(running, tick):
                 count_up(limit_ctr, preset=5).reset(never)
             with Rung(running, ~ready_ctr.Done, trigger):
                 latch(too_few)

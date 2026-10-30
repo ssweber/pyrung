@@ -117,6 +117,6 @@ src/pyrung/
 ## Gotchas
 
 - `copy()` clamps out-of-range; `calc()` wraps (modular arithmetic)
-- Counters count every scan while condition is True — use `rise()` for edge-triggered
+- Counters count rising edges (CLICK semantics, per-counter input memory `_cu:i{N}`/`_cd:i{N}`); a held input counts once. Down counter Done is `Acc <= preset` (stage Acc above preset to count down)
 - Division by zero → result = 0, fault flag set
 - Comma inside `Rung(...)` is implicit AND; use `Or()` for OR logic

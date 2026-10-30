@@ -114,7 +114,11 @@ class TestBindSites:
         logic, _shared = _program()
         table = site_table_of(logic)
         assert table is not None
-        assert table.memory_defaults() == {"_oneshot:i1": False, "_oneshot:i5": False}
+        assert table.memory_defaults() == {
+            "_oneshot:i1": False,
+            "_cu:i3": False,
+            "_oneshot:i5": False,
+        }
 
     def test_rebinding_reproduces_keys(self):
         logic, _shared = _program()

@@ -463,7 +463,15 @@ class _PassContext:
                                 f"{max(domain)} < preset {preset} for {done_name}. "
                                 f"BFS tracks concrete values so this is diagnostic only.",
                             )
-                    elif kind in {_DONE_KIND_COUNT_DOWN, _DONE_KIND_OFF_DELAY}:
+                    elif kind == _DONE_KIND_COUNT_DOWN:
+                        if min(domain) > preset:
+                            caveats = (
+                                *caveats,
+                                f"Consumed accumulator {acc_name} has domain min "
+                                f"{min(domain)} > {preset} for {done_name}. "
+                                f"BFS tracks concrete values so this is diagnostic only.",
+                            )
+                    elif kind == _DONE_KIND_OFF_DELAY:
                         if min(domain) > -preset:
                             caveats = (
                                 *caveats,

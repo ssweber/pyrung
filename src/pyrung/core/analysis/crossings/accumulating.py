@@ -3,12 +3,13 @@
 A counter or timer sets its done bit by comparing its accumulator to a preset:
 
 - ``count_up`` / ``on_delay``: ``done == (acc >= preset)``
-- ``count_down``: ``done == (acc <= -preset)``
+- ``count_down``: ``done == (acc <= preset)`` (as on a CLICK: it starts at 0,
+  so a preset >= 0 is done from its first scan)
 
-Counters change the accumulator before comparing it. A count-up can therefore
-finish from ``acc == preset - 1`` and a count-down from
-``acc == -preset + 1``. Their inexact reverse bounds include that one-scan
-frontier, producing a sound predecessor superset. Dynamic presets use an
+Counters change the accumulator before comparing it, by one count on a rising
+edge of an input. A count-up can therefore finish from ``acc == preset - 1``
+and a count-down from ``acc == preset + 1``. Their inexact reverse bounds
+include that one-scan frontier, producing a sound predecessor superset. Dynamic presets use an
 explicit :class:`~pyrung.core.crossing.AffineCmp`, preserving both the preset
 dependency and the one-scan offset.
 
@@ -51,7 +52,6 @@ class _CounterDoneCrossing(BaseCrossing):
     """Invert ``done == True`` to a sound one-scan predecessor bound."""
 
     _op = ">="  # comparison that makes the done bit true
-    _negate_preset = False  # count_down compares against -preset
     _frontier_offset = -1
 
     def reverse(
@@ -73,12 +73,9 @@ class _CounterDoneCrossing(BaseCrossing):
                     instr.accumulator.name,
                     self._op,
                     bound_value,
-                    scale=-1 if self._negate_preset else 1,
                     offset=self._frontier_offset,
                 )
             )
-        if self._negate_preset:
-            bound_value = -bound_value
         return single(
             Cmp(
                 instr.accumulator.name,
@@ -96,10 +93,9 @@ class CountUpDoneCrossing(_CounterDoneCrossing):
 
 
 class CountDownDoneCrossing(_CounterDoneCrossing):
-    """Count-down: ``done`` can cross true from ``acc == -preset + 1``."""
+    """Count-down: ``done`` can cross true from ``acc == preset + 1``."""
 
     _op = "<="
-    _negate_preset = True
     _frontier_offset = 1
 
 

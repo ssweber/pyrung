@@ -31,7 +31,7 @@ from pyrung.core import (
 from pyrung.core.analysis.causal._rung_writes import build_scan_rung_write_projection
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.theory_orientation import _counterfactual_boundary
-from pyrung.core.analysis.prove import Counterexample, Intractable, always
+from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always
 from pyrung.core.analysis.return_guards import return_early_guard_exprs
 from pyrung.core.context import RungId
 from pyrung.core.intrascan_counterfactual import (
@@ -220,16 +220,21 @@ def test_prover_names_body_rungs_as_intractable():
     assert "forloop body rung" in result.reason
 
 
-def test_prover_still_models_a_bare_loop():
+def _bare_loop_counter(preset: int) -> Program:
     with Program() as logic:
         with Rung(Enable):
             with forloop(3):
-                count_up(Ctr, 30).reset(Rst)
+                count_up(Ctr, preset).reset(Rst)
+    return logic
 
-    result = always(logic, ~Ctr.Done, max_states=1000)
+
+def test_prover_still_models_a_bare_loop():
+    # A bare body counter's input is always on, and a false loop rung skips
+    # the body: the counter never sees its input fall, so it counts once ever.
+    result = always(_bare_loop_counter(1), ~Ctr.Done, max_states=1000)
     assert isinstance(result, Counterexample)
-    # Three counts per scan: ten enabled scans reach the preset.
-    assert sum(step.scans for step in result.trace) == 10
+    assert sum(step.scans for step in result.trace) == 1
+    assert isinstance(always(_bare_loop_counter(2), ~Ctr.Done, max_states=1000), Proven)
 
 
 def test_how_keeps_its_prover_context_with_body_rungs():
@@ -256,6 +261,8 @@ def test_how_keeps_its_prover_context_with_body_rungs():
 def test_how_counts_a_counter_inside_a_loop(conditioned: bool):
     # PILOT-GOTCHAS X7: body instructions had no enable condition, so the
     # counter's advance profile asked for no hold and how() stopped.
+    # A bare body counter counts once ever (see above); a body rung's counter
+    # counts each rise of its rung's condition while the loop runs.
     with Program(strict=False) as logic:
         with Rung(Enable):
             with forloop(3):
@@ -263,7 +270,7 @@ def test_how_counts_a_counter_inside_a_loop(conditioned: bool):
                     with Rung(Gate):
                         count_up(Ctr, 30).reset(Rst)
                 else:
-                    count_up(Ctr, 30).reset(Rst)
+                    count_up(Ctr, 1).reset(Rst)
 
     plan = PLC(logic).how(Ctr.Done)
     assert plan.status.name == "REACHED"

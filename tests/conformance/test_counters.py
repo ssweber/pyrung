@@ -20,10 +20,11 @@ The expectations are what a CLICK does (hardware round 1, 2026-10-29): a
 counter counts the rising edges of its count inputs, with a memory of its own
 updated on every scan, reset scans included, so an input held through a reset
 does not count again; a down counter starts at 0 and is done at ``Acc <=
-preset``.  pyrung counts every scan an input is on and has a down counter done
-at ``Acc <= -preset``; the cases where that shows are ``pending="S2"``.  Most
-cases pulse their inputs for one scan at a time, so each asks its own question
-under either counting rule.  What each tells apart:
+preset``, and pyrung does the same.  (pyrung used to count every scan an
+input was on and had a down counter done at ``Acc <= -preset``; the cases that
+showed it were pending S2.)  Most cases pulse their inputs for one scan at a
+time, so each asks its own question under either counting rule.  What each
+tells apart:
 
 - ``level_vs_edge``: a bit on for scans 2..3 and 5..7 counts its 2 rising
   edges (Result1 = 2); counting every scan it is on reads 5.  The rise()
@@ -328,7 +329,6 @@ group = Group(
             ladder=prove_level_vs_edge,
             expect={"Result1": 2, "Result2": 2},
             scans=SCANS,
-            pending="S2",
         ),
         case(
             "A counter keeps its count and Done when its rung goes false: preset 3, "
@@ -380,7 +380,6 @@ group = Group(
             ladder=prove_count_down_negative,
             expect={"Result1": -3, "Result2": 1, "Result3": -1},
             scans=SCANS,
-            pending="S2",
         ),
         case(
             "An up/down counter whose up and down inputs rise on the same scan does not "
@@ -408,7 +407,6 @@ group = Group(
             ladder=prove_held_input_not_recounted,
             expect={"Result1": 1, "Result2": 0},
             scans=SCANS,
-            pending="S2",
         ),
         case(
             "A down counter is done once Acc <= preset: staged at 5 with preset 3 and "
@@ -417,7 +415,6 @@ group = Group(
             ladder=prove_count_down_done_at_preset,
             expect={"Result1": -3, "Result2": 4, "Result3": 4},
             scans=scans_for(DOWN_WINDOW),
-            pending="S2",
             probe="down-counter Done threshold",
         ),
         case(
@@ -427,7 +424,6 @@ group = Group(
             ladder=prove_edge_on_reset_scan,
             expect={"Result1": 0, "Result2": 1},
             scans=SCANS,
-            pending="S2",
             probe="counter edge on a reset scan",
         ),
         case(

@@ -3,7 +3,10 @@
 Between accumulator crossings every rung emits identical output.  The fold
 detects these plateaus, computes the nearest crossing in closed form, and
 folds the runner forward — dt knob for timers, acc-patch for per-scan
-counters, modular arithmetic for wrapping self-calcs.  Soundness rests on
+self-calcs, modular arithmetic for wrapping self-calcs.  A counter counts
+rising edges, so the ordinary fold never projects one: a probe scan that
+counts declines the window (CycleFold still certifies a counter that rides
+a whole input cycle, see ``pilot/cyclefold.py``).  Soundness rests on
 the plateau guard for every value it checks, and on the crossing set for
 every value it lets move: each read of a moving value is a comparison the
 crossing arithmetic places, a read the landing scan reproduces, or it bounds
@@ -80,7 +83,7 @@ class _AccSource:
     done_bit: str
     preset: Any  # int literal or tag-name str (dynamic preset)
     kind: str  # "up" (on/off-delay, count-up) | "down" (count-down)
-    timed: bool  # True: time-based (dt knob).  False: per-scan (acc patch).
+    timed: bool  # True: time-based (dt knob).  False: counter or self-calc (acc patch).
     bidir: bool = False  # CountUp with down_condition — delta sign varies at runtime
     unit: Any = None  # TimeUnit for timed sources; None for counters / synthetic sources.
     acc_max: int = 32767  # Timed sources: the accumulator's clamp (a time drum's DINT is wider).
@@ -3454,16 +3457,6 @@ def _timer_landing(
     return tuple(out)
 
 
-def _counter_clamp_bounds(kind: str) -> tuple[tuple[float, bool], ...]:
-    """A counter's DINT clamps as boundaries in its progress coordinate."""
-    from pyrung.core.instruction.conversions import _DINT_MAX, _DINT_MIN
-
-    hi, lo = (float(_DINT_MAX), float(_DINT_MIN))
-    if kind == "down":
-        hi, lo = -lo, -hi
-    return ((hi, False), (lo, True))
-
-
 def _nearest_acc_crossing(
     ctx: _FoldContext,
     before_tot: dict[str, float],
@@ -3492,34 +3485,19 @@ def _nearest_acc_crossing(
         delta = pa - pb
         if abs(delta) <= _EPS:
             continue
-        if src.step is None and abs(abs(delta) - 1.0) > _EPS:
-            # A counter moves one count per scan.  Anything else is a reset, a
-            # patch or a write the probe saw once (a one-scan reset pulse
-            # leaves it counting again on the next scan): not a recurrence.
+        if src.step is None:
+            # A counter counts the rising edges of its inputs: one that moved
+            # on the probe scan saw an edge the next scan does not repeat (its
+            # memory now holds the input), so the probe is no recurrence.  A
+            # counter that held still is as guarded as any plateau tag.
             return 1
         if delta < 0 and not src.bidir:
             return 1
         if src.acc_name in unmodeled:
             return 1
+        # What is left is a self-calc source: no Done bit, so its sentinel
+        # preset is no crossing (its wrap is :func:`_selfcalc_wrap_bound`).
         bounds: list[tuple[float, bool]] = []
-        if src.step is None:
-            # The accumulator clamps at the DINT range: a projection stops there.
-            bounds.extend(_counter_clamp_bounds(src.kind))
-        # A self-calc source has no Done bit: its sentinel preset is no crossing.
-        preset = None if src.step is not None else _resolve_num(src.preset, state)
-        if preset is not None:
-            # Crossing the preset flips the Done bit, which is a written, visible
-            # tag (never excluded from the plateau guard) — so the preset is a
-            # crossing whether or not any rung reads Done.  Targeting it lets an
-            # unread, never-completing timer/counter fold its ramp instead of
-            # stepping scan-by-scan to the time/cycle bound.
-            bounds.append((preset, False))
-        elif src.done_bit in ctx.read_done:
-            # Read Done with an unresolvable dynamic preset: can't place the
-            # crossing — step one scan to stay exact.  (Unread + unresolvable
-            # leaves this source unbounded; other sources may still fold.)
-            best = 1 if best is None else min(best, 1)
-            continue
         cmps = ctx.comparisons.get(src.acc_name, ())
         if extra_comparisons:
             cmps = cmps + extra_comparisons.get(src.acc_name, ())

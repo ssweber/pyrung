@@ -453,7 +453,9 @@ def _separate_prerequisites(
             if tag in pulse_tags:
                 seen_prereq.add(tag)
                 if _action_allowed(ctx, (tag, value)):
-                    prerequisite_pilot_rungs.extend(_oscillating_rungs(tag, ctx, scope, state.work))
+                    prerequisite_pilot_rungs.extend(
+                        _oscillating_rungs(tag, ctx, scope, state.work, value)
+                    )
             elif (
                 tag not in ctx.edge_tags
                 and tag not in ctx.clear_only
