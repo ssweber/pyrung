@@ -34,6 +34,7 @@ PENDING_STEPS: Mapping[str, str] = {
     "INF": "REAL overflow stores +/-Inf",
     "TEXT": "text, pack, NUL, search cursor and MDN fixes",
     "SYS": "SC3/SD9 phase and the fault-flag model",
+    "CONST16": "a Math constant into an Int is cut to 16 bits",
 }
 
 

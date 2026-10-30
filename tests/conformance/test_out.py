@@ -28,6 +28,8 @@ alone, so a contact on that T<n> is always off.  pyrung sets it
   and at 750-800 ms (Result4).  Adopted, the flasher freezes and resumes:
   2, 2, 1, then off (0) and on (1), the off phase's last 150 ms then a new on
   phase.  pyrung clears both TDs and restarts with an on phase: 1, 1, 1, 1, 1.
+  A CLICK keeps both TDs, frozen, yet restarts with an on phase: 2, 1, 2, 1, 1
+  (hardware round 2, 2026-10-30).
   A fresh off phase reads Result2 = 0, Result4 = 0.
 """
 
@@ -179,12 +181,12 @@ group = Group(
             scans=80,
         ),
         case(
-            "A flasher whose rung goes false freezes and resumes: 150 ms into its off phase, "
-            "its on-side TD is kept (Result1 = 2) and its off-side TD kept (Result3 = 2) "
-            "and standing still (ErrorCode = 1); back on, it finishes the off phase (off "
-            "at 600-650 ms, Result2 = 0) and then turns on (750-800 ms, Result4 = 1)",
+            "A flasher whose rung goes false freezes, then restarts with an on phase: 150 ms "
+            "into its off phase, its on-side TD is kept (Result1 = 2) and its off-side TD "
+            "kept (Result3 = 2) and standing still (ErrorCode = 1); back on, it is on at "
+            "600-650 ms (Result2 = 1) and at 750-800 ms (Result4 = 1)",
             ladder=prove_flasher_restarts_with_on_phase,
-            expect={"Result1": 2, "Result2": 0, "Result3": 2, "Result4": 1, "ErrorCode": 1},
+            expect={"Result1": 2, "Result2": 1, "Result3": 2, "Result4": 1, "ErrorCode": 1},
             scans=100,
             pending="OUT",
             probe="flasher with its rung false: TDs cleared, kept or frozen; restart phase",

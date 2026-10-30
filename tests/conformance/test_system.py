@@ -23,7 +23,9 @@ end of the scan.  The adopted model: a flag follows the last instruction, any
 instruction (Result1..3 = 0, 0, 0).  The others: any Math clears it (346, 0,
 0); only an instruction of its own kind (346, 346, 0); pyrung's flag on from
 the fault to the end of the scan (346, 346, 346).  pyrung's is the last, so
-the three cases are ``pending="SYS"``.
+the three cases are ``pending="SYS"``.  hardware round 2, 2026-10-30: SC43 and SC44 follow
+the last instruction (0, 0, 0); SC40 follows the last Math (346, 0, 0), so a
+Copy leaves it as it is.
 
 Scan clock and counter.  ``scan_counter_steps_by_one`` shows SD9 counts every
 scan (7 steps of one over scans 1..8), and ``scan_clock_follows_counter`` that
@@ -32,9 +34,9 @@ even, as round 1 read on a CLICK (``pending="SYS"``: pyrung's SC3 is on when
 SD9 is odd, and reads Result2 = 0).  ``first_scan_counter_and_clock`` pins
 which of the two is offset from pyrung's: rungs outside the ``Cmd`` gate copy
 SD9 and SC3 on the first scan (SC2) into DD981..DD983, which the reset leaves
-alone.  Adopted: SD9 starts at 1 with SC3 off (Result1 = 1, Result3 = 0);
-SD9 starting at 0 with SC3 on reads Result1 = 0, Result3 = 1; pyrung reads 0,
-0.  Result2 = 1 shows the capture ran.  ``scan_counter_wraps_to_zero`` keeps
+alone.  SD9 starts at 0 with SC3 on (Result1 = 0, Result3 = 1; hardware round 2, 2026-10-30,
+where SD9 starting at 1 with SC3 off was adopted); pyrung reads 0, 0, so its
+SD9 is right and its SC3 is a scan out of phase.  Result2 = 1 shows the capture ran.  ``scan_counter_wraps_to_zero`` keeps
 the least SD9 seen since the first scan in DD991: SD9 wrapping from 32767 to
 0 (adopted) reads Result1 = 0, one counting on into negative values (an
 unsigned 16-bit counter read as an Int) reads 1.  It only tells once the PLC
@@ -285,13 +287,13 @@ group = Group(
     "system",
     [
         case(
-            "The division-by-zero flag SC40 shows the last instruction: dividing by zero "
-            "on scans 3, 4 and 6, it reads off right after a plain copy (Result1 = 0), a "
-            "Math that does not divide (Result2 = 0) and a division that succeeds "
-            "(Result3 = 0), each run after the fault on the same scan",
+            "The division-by-zero flag SC40 shows the last Math: dividing by zero on "
+            "scans 3, 4 and 6, it is still on right after a plain copy (Result1 = 346), "
+            "and off after a Math that does not divide (Result2 = 0) and a division that "
+            "succeeds (Result3 = 0), each run after the fault on the same scan",
             ladder=prove_division_flag_clears_each_scan,
             init=_fault_init(901),
-            expect=_FAULT_EXPECT,
+            expect={"Result1": 346, "Result2": 0, "Result3": 0},
             scans=SCANS,
             pending="SYS",
             probe=_FAULT_PROBE,
@@ -358,11 +360,11 @@ group = Group(
             scans=RTC_WINDOW_MS // 10 + 5,
         ),
         case(
-            "On the first scan after STOP->RUN the scan counter SD9 reads 1 (Result1) and "
-            "the scan clock SC3 is off (Result3 = 0); Result2 = 1 shows the first-scan "
+            "On the first scan after STOP->RUN the scan counter SD9 reads 0 (Result1) and "
+            "the scan clock SC3 is on (Result3 = 1); Result2 = 1 shows the first-scan "
             "rung ran",
             ladder=prove_first_scan_counter_and_clock,
-            expect={"Result1": 1, "Result2": 1, "Result3": 0},
+            expect={"Result1": 0, "Result2": 1, "Result3": 1},
             pending="SYS",
             probe="first scan: SD9 starts at 1, or SC3 starts on",
         ),

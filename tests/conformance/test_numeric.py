@@ -36,9 +36,9 @@ could plausibly differ, these cases tell the models apart:
 - ``dint_quotient_into_int`` (probe): round 1 read 0 for -2147483648 / 65536
   into an Int, where pyrung reads -32768.  Preset to 99, the same quotient
   with the constant 65536 (Result1), with 65536 staged in a DD (Result2), and
-  -2147418112 / 65536 (Result3, -32767).  Exact quotients (adopted): -32768,
-  -32768, -32767.  A constant cut to 16 bits (65536 -> 0, a division by zero
-  that writes 0): 0, -32768, 0.  A quotient of -32768 refused by the Int: 99
+  -2147418112 / 65536 (Result3, -32767).  Exact quotients: -32768, -32768,
+  -32767 (pyrung).  A constant cut to 16 bits (65536 -> 0, a division by zero
+  that writes 0): 0, -32768, 0, which a CLICK reads (hardware round 2, 2026-10-30).  A quotient of -32768 refused by the Int: 99
   (or a clamp, -32767), the same for Result2, and -32767.  (SC40 is not read:
   other cases divide by zero on the same scan.)
 - ``copy_clamps_calc_wraps``: Copy clamps where Math wraps.  A Copy that
@@ -468,12 +468,13 @@ group = Group(
             scans=scans_for(REAL_DIV_WINDOW),
         ),
         case(
-            "A Dint quotient into an Int is exact: -2147483648 / 65536 is -32768 with the "
-            "constant (Result1) and with 65536 in a DD (Result2), -2147418112 / 65536 is "
-            "-32767 (Result3)",
+            "A Math constant into an Int is cut to 16 bits: -2147483648 / 65536 is 0 with "
+            "the constant (Result1; 65536 is cut to 0, a division by zero) and -32768 with "
+            "65536 in a DD (Result2); -2147418112 / 65536 is 0 too (Result3)",
             ladder=prove_dint_quotient_into_int,
             init=init_dint_quotient_into_int,
-            expect={"Result1": -32768, "Result2": -32768, "Result3": -32767},
+            expect={"Result1": 0, "Result2": -32768, "Result3": 0},
+            pending="CONST16",
             probe="dint quotient into an Int: constant cut to 16 bits, or -32768 refused",
         ),
     ],

@@ -48,15 +48,17 @@ tells apart:
   the second; text that is not hex leaves the destination alone.
 - ``pack_text_int``: into an INT parses signed decimal ("0042" is 42, not
   hex 66), clamps 123456 to 32767 (Result3), and reads "12.5" as 12 (Result4).
-  Adopted, the clamp raises no fault (ErrorCode = 0).  pyrung refuses both
-  and leaves 5 and 9.
+  The clamp raises the fault (ErrorCode = 1; hardware round 2, 2026-10-30, where no fault
+  was adopted).  pyrung refuses both and leaves 5 and 9.
 - ``pack_text_dint``: into a DINT parses signed decimal over 32 bits, and
-  clamps 2147483648 to 2147483647 (Result3 = 1); adopted, without a fault
-  (Result4 = 0).  pyrung refuses it (Result3 = 0, Result4 = 1).
+  clamps 2147483648 to 2147483647 (Result3 = 1) with the fault (Result4 = 1;
+  hardware round 2, 2026-10-30).  pyrung refuses it (Result3 = 0, Result4 = 1).
 - ``pack_text_int_fraction`` (probe): "12.9" reads 12 if the parse stops at
   the point (adopted), 13 if it rounds, 99 (the preset) if refused (Result1);
-  "12x" reads 12 if the parse stops at the first non-digit (adopted), 99 if
-  refused (Result2).  Result3 and Result4 are SC43 after each (adopted 0, 0).
+  "12x" reads 12 if the parse stops at the first non-digit, 99 if refused
+  (Result2).  Result3 and Result4 are SC43 after each.  A CLICK reads 12, 99,
+  0, 1: "12.9" stops at the point with no fault, "12x" is refused with SC43
+  (hardware round 2, 2026-10-30).
 - ``pack_text_whitespace``: leading or trailing whitespace faults and leaves
   the destination alone unless ``allow_whitespace``, which trims it.  A model
   that always trims reads 12 in Result1.  Round 1 read Result2 = 0 with an
@@ -505,7 +507,7 @@ group = Group(
         ),
         case(
             "Pack text into an Int parses signed decimal: -123 is -123 (Result1), 0042 is 42 "
-            "(Result2), 123456 clamps to 32767 (Result3) with no fault (ErrorCode = 0), and "
+            "(Result2), 123456 clamps to 32767 (Result3) with the fault (ErrorCode = 1), and "
             "12.5 stops at the point, 12 (Result4)",
             ladder=prove_pack_text_int,
             init=init_pack_text_int,
@@ -514,17 +516,17 @@ group = Group(
                 "Result2": 42,
                 "Result3": 32767,
                 "Result4": 12,
-                "ErrorCode": 0,
+                "ErrorCode": 1,
             },
             pending="TEXT",
             probe="does a clamping pack_text set SC43",
         ),
         case(
             "Pack text into a Dint parses signed decimal over 32 bits (Result1 = 1, Result2 = "
-            "1), and 2147483648 clamps to 2147483647 (Result3 = 1) with no fault (Result4 = 0)",
+            "1), and 2147483648 clamps to 2147483647 (Result3 = 1) with the fault (Result4 = 1)",
             ladder=prove_pack_text_dint,
             init=init_pack_text_dint,
-            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 0},
+            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1},
             pending="TEXT",
             probe="does a clamping pack_text set SC43",
         ),
@@ -553,12 +555,13 @@ group = Group(
             in_process_only="CLICK's Reset coil takes bit memory only (X, Y, C, T, CT, SC), not TXT",
         ),
         case(
-            "Pack text into an Int stops at the first character that is not a digit: 12.9 "
-            "is 12 (Result1), not rounded, and 12x is 12 (Result2), neither with a fault "
-            "(Result3 = 0, Result4 = 0)",
+            "Pack text into an Int stops at a decimal point but refuses any other "
+            "character that is not a digit: 12.9 is 12 (Result1), not rounded, with no "
+            "fault (Result3 = 0); 12x is refused, the destination keeps 99 (Result2), "
+            "with the fault (Result4 = 1)",
             ladder=prove_pack_text_int_fraction,
             init=init_pack_text_int_fraction,
-            expect={"Result1": 12, "Result2": 12, "Result3": 0, "Result4": 0},
+            expect={"Result1": 12, "Result2": 99, "Result3": 0, "Result4": 1},
             pending="TEXT",
             probe='pack_text "12.9" -> 12 or 13; "12x" -> 12 or refused',
         ),

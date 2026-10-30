@@ -66,10 +66,11 @@ What each case tells apart:
   writes step 1's output on the reset scan (Result4 = 5).
 - ``completion_turns_outputs_off``: a 2-step drum completed on scan 3 turns
   its outputs off, so step 2's output is on for scan 2 only, and on scan 8
-  again after a jog (Result2 = 2 scans); a jump to step 1 on scan 6 brings
-  step 1's output back (Result3 = 6) and the jog step 2's (ErrorCode = 8).
-  pyrung leaves step 2's output on until the jump (Result2 = 5); a drum whose
-  outputs stay off after completion until a reset reads Result3 = 0.
+  again after a jog (Result2 = 2 scans).  After completion a jump to step 1
+  on scan 6 moves the step but leaves step 1's output off (Result3 = 0); the
+  jog on scan 8 brings step 2's back (ErrorCode = 8) (hardware round 2, 2026-10-30: the adopted
+  answer was Result3 = 6, the jump turning step 1's output on).  pyrung leaves
+  step 2's output on until the jump (Result2 = 5).
 - ``paused_drum_jumps`` (probe): paused on step 1 for scans 3..5, a jump to
   step 3 on scan 4.  A jump taken while paused (adopted) reads step 3 on scan
   4 (Result2) and at the end (Result1); step 1's output stays on until the
@@ -571,13 +572,13 @@ group = Group(
             pending="DRUM",
         ),
         case(
-            "A drum turns its outputs off when it completes and back on when a jump or "
-            "jog changes the step: completed on scan 3, step 2's output is on for 2 "
+            "A drum turns its outputs off when it completes; after that a jog brings them "
+            "back but a jump does not: completed on scan 3, step 2's output is on for 2 "
             "scans (Result2), scan 2 and after a jog on scan 8 (ErrorCode = 8) to step "
-            "2 (Result1); a jump to step 1 (Result4) on scan 6 turns step 1's on "
-            "(Result3 = 6)",
+            "2 (Result1); a jump to step 1 (Result4) on scan 6 leaves step 1's off "
+            "(Result3 = 0)",
             ladder=prove_completion_turns_outputs_off,
-            expect={"Result1": 2, "Result2": 2, "Result3": 6, "Result4": 1, "ErrorCode": 8},
+            expect={"Result1": 2, "Result2": 2, "Result3": 0, "Result4": 1, "ErrorCode": 8},
             scans=SCANS,
             pending="DRUM",
         ),

@@ -42,7 +42,7 @@ def test_rungs():
 
 ## Pending and probes
 
-**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `S4` live row-by-row rung solve, `DRUM` drum ordering, `OUT` Out coils never set T<n> (and flasher phases), `NOSTOP` a math error does not stop the PLC, `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` SC3/SD9 phase and the fault-flag model.
+**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `S4` live row-by-row rung solve, `DRUM` drum ordering, `OUT` Out coils never set T<n> (and flasher phases), `NOSTOP` a math error does not stop the PLC, `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` SC3/SD9 phase and the fault-flag model, `CONST16` a Math constant into an Int is cut to 16 bits.
 
 - On pyrung's own targets (in-process `run()`, the local sim, `TARGET=circuitpy`) a pending case is a **strict xfail**: it passes, reported `XFAIL` with what pyrung read, only if no run meets its expectation and its reset is clean (a leak still fails it). Once pyrung starts meeting the expectation, the case fails with "remove pending=": the fixer of that step deletes the marker in the same commit, so `grep 'pending="S2"'` lists exactly what a step must flip.
 - Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `pending=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
@@ -340,7 +340,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] Word wrap at 65535 (`numeric/word_calc_wraps`)
 - [x] Real precision: pyrung keeps 64 bits, CLICK 32 (`numeric/real_is_64_bit_in_pyrung`, expected to fail on a CLICK: a documented deviation)
 - [x] Real range: an overflow stores +/-Inf with SC43 (`numeric/real_overflow_stays_finite`, pending INF)
-- [x] a Dint quotient into an Int (probe; `numeric/dint_quotient_into_int`)
+- [x] a Dint quotient into an Int: a Math constant into an Int is cut to 16 bits (`numeric/dint_quotient_into_int`, pending CONST16)
 - [x] division by zero -> 0 + fault (`numeric/div_by_zero`)
 - [x] non-finite float (NaN, +/-Inf) -> 0 + fault (`numeric/real_div_by_zero`)
 - [x] math domain error (sqrt, ln/log, asin/acos) -> 0 + SC46 for the rest of the scan, and the PLC stays in RUN (`math_error/math_errors_do_not_stop`, pending NOSTOP)
