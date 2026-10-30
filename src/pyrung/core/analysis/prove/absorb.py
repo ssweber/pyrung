@@ -103,6 +103,29 @@ class _DoneAccInfo:
     drum_meta: dict[str, _DrumEventMeta] = field(default_factory=dict)
 
 
+def _drum_times_under_its_flag(drum: Any, program: Program) -> bool:
+    """True when *drum* can time a step while its completion flag is on.
+
+    The Done/Acc tri-state reads a flag that is on as settled, whatever the
+    accumulator holds.  That holds for a time drum only while the flag comes
+    on at the last step and stays there until a reset.  A jump keeps the flag
+    on but takes the drum back to an earlier step it times again, and so can
+    another writer of its step register (or of the flag itself): then the
+    drum's time is a real dimension, not absorbed.
+    """
+    from pyrung.core.validation._common import walk_instructions
+
+    if drum.jump_condition is not None:
+        return True
+    owned = {drum.current_step.name, drum.completion_flag.name}
+    for instr in walk_instructions(program):
+        if instr is drum:
+            continue
+        if any(name in owned for name, _ in _all_write_targets(instr)):
+            return True
+    return False
+
+
 def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     """Map Done tag names to their Acc tag names for timer/counter instructions.
 
@@ -130,6 +153,9 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
         elif isinstance(instr, CountDownInstruction):
             kind = _DONE_KIND_COUNT_DOWN
         elif isinstance(instr, TimeDrumInstruction):
+            if _drum_times_under_its_flag(instr, program):
+                # Tracked exactly: the tri-state would hide its time.
+                continue
             done_name = instr.completion_flag.name
             pairs[done_name] = instr.accumulator.name
             kinds[done_name] = _DONE_KIND_TIME_DRUM

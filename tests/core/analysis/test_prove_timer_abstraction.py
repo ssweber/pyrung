@@ -1163,3 +1163,78 @@ class TestTimeEventDrum:
         assert prover.key_config is not None
         assert "Step" in prover.key_config.stateful_names
         assert plc.how(Bool("Done"), max_scans=200).reachable
+
+
+class TestDrumCompletion:
+    """A completed drum turns its outputs off and keeps its flag on through a
+    jump (only a reset clears it); a jog or its own step forward brings the
+    outputs back.  A time drum with a jump times its steps again under that
+    flag, so the Done/Acc tri-state (flag on = settled) cannot stand for it."""
+
+    @staticmethod
+    def _time_drum(*, jump: bool) -> Program:
+        from pyrung.core import time_drum
+
+        with Program(strict=False) as logic:
+            with Rung(Bool("Enable")):
+                drum = time_drum(
+                    outputs=[Bool("Y1"), Bool("Y2"), Bool("Y3")],
+                    presets=[200, 300, 500],
+                    unit="ms",
+                    pattern=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                    current_step=Int("Step"),
+                    accumulator=Int("Acc"),
+                    completion_flag=Bool("Done"),
+                ).reset(Bool("Reset"))
+                if jump:
+                    drum.jump(Bool("Jump"), step=1)
+        return logic
+
+    def test_jumping_time_drum_is_intractable_naming_the_drum(self) -> None:
+        logic = self._time_drum(jump=True)
+        # Reachable: complete, jump to step 1, time steps 1 and 2 again.
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Enable": True})
+        plc.run_for(1.1)
+        assert plc.current_state.tags["Done"] is True
+        plc.patch({"Jump": True})
+        plc.step()
+        plc.patch({"Jump": False})
+        plc.run_for(0.6)
+        tags = plc.current_state.tags
+        assert (tags["Done"], tags["Step"], tags["Y3"]) == (True, 3, True)
+
+        result = never(logic, Bool("Done"), Int("Step") == 3, Bool("Y3"))
+        assert isinstance(result, Intractable)
+        assert "Acc" in result.tags
+        assert any("jumping time_drum" in hint for hint in result.hints)
+
+    def test_time_drum_without_a_jump_keeps_its_abstraction(self) -> None:
+        logic = self._time_drum(jump=False)
+        assert isinstance(never(logic, Bool("Y1"), Bool("Y2")), Proven)
+        # Completed: every output off under the flag.
+        assert isinstance(never(logic, Bool("Done"), Bool("Y3")), Proven)
+        result = never(logic, Bool("Done"), Int("Step") == 3, ~Bool("Y3"))
+        assert isinstance(result, Counterexample)
+        tags = _replay_trace(logic, result.trace).current_state.tags
+        assert (tags["Done"], tags["Step"], tags["Y3"]) == (True, 3, False)
+
+    def test_event_drum_jump_leaves_a_completed_drum_off(self) -> None:
+        from pyrung.core import event_drum
+
+        with Program(strict=False) as logic:
+            with Rung(Bool("Enable")):
+                event_drum(
+                    outputs=[Bool("Y1"), Bool("Y2")],
+                    events=[Bool("E1"), Bool("E2")],
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=Int("Step"),
+                    completion_flag=Bool("Done"),
+                ).reset(Bool("Reset")).jump(Bool("Jump"), step=1).jog(Bool("Jog"))
+
+        result = never(logic, Bool("Enable"), Bool("Done"), Int("Step") == 1, ~Bool("Y1"))
+        assert isinstance(result, Counterexample)
+        tags = _replay_trace(logic, result.trace).current_state.tags
+        assert (tags["Enable"], tags["Done"], tags["Step"], tags["Y1"]) == (True, True, 1, False)
+        # Off by completion, never with both outputs on.
+        assert isinstance(never(logic, Bool("Y1"), Bool("Y2")), Proven)
