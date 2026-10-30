@@ -838,9 +838,14 @@ class TestRangeAggregateExpr:
     def test_median_odd_count_is_middle_value(self):
         assert _eval_in(self.DS.select(1, 3).median(), self.VALUES) == 3
 
-    def test_median_even_count_is_mean_of_middle_two(self):
-        # sorted: -7, 3, 4, 10 -> (3 + 4) / 2
-        assert _eval_in(self.DS.select(1, 4).median(), self.VALUES) == 3.5
+    def test_median_even_count_of_integers_truncates_toward_zero(self):
+        # sorted: -7, 3, 4, 10 -> (3 + 4) / 2 = 3.5, an integer on a CLICK: 3
+        assert _eval_in(self.DS.select(1, 4).median(), self.VALUES) == 3
+        assert _eval_in(self.DS.select(1, 2).median(), {"DS1": -9, "DS2": -2}) == -5
+
+    def test_median_even_count_of_reals_keeps_the_fraction(self):
+        DF = Block("DF", TagType.REAL, 1, 4)
+        assert _eval_in(DF.select(1, 2).median(), {"DF1": 1.0, "DF2": 2.0}) == 1.5
 
     def test_mean_is_exact_quotient(self):
         assert _eval_in(self.DS.select(1, 4).mean(), self.VALUES) == 2.5
