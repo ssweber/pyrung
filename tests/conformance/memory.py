@@ -89,7 +89,13 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DF": range(301, 401),
         "TXT": range(201, 301),
     },
-    "system": {"C": range(901, 1001), "T": range(101, 151), "DD": range(901, 1001)},
+    "system": {
+        "C": range(901, 1001),
+        "T": range(101, 151),
+        "CT": range(171, 181),
+        "DD": range(901, 1001),
+        "DH": range(401, 411),
+    },
     # Math errors (tests/conformance/test_math_error.py).
     "math_error": {"DF": range(401, 411)},
     # A subroutine called twice a scan (tests/conformance/test_call_twice.py).

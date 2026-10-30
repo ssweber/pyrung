@@ -43,6 +43,20 @@ could plausibly differ, these cases tell the models apart:
   constants to 16 bits.  A quotient of -32768 refused by the Int: 99
   (or a clamp, -32767), the same for Result2, and -32767.  (SC40 is not read:
   other cases divide by zero on the same scan.)
+- ``int_math_wide_constant`` (probe): what else an Int Math does with its
+  constants.  Preset to 99, 65536 staged in DD171 is divided by the constant
+  40000 (Result1) and by -40000 (Result3), and 10 in DD172 is multiplied by
+  the constant 1.5 (Result2).  A constant past 16 bits cut to its low 16 bits,
+  signed (pyrung, adopted): 40000 is -25536 and -40000 is 25536, so -2, 15, 2.
+  Kept whole (unsigned 16 bits or wider): 1, 15, -1.  Clamped to the Int
+  range: 2 (/ 32767), 15, -2 (/ -32768).  Refused by the Math (the write
+  skipped): 99 for Result1 and Result3.  A float constant cut to an integer
+  reads Result2 = 10 (1) or 20 (2); kept, 15.  Paste refused: never fires.
+- ``int_math_rand_wide_bounds`` (probe, a case of its own so a refused paste
+  loses only it): RAND ( 70000 , 70000 ) / 2 into an Int, preset 99.  Bounds
+  kept whole (pyrung, adopted): 35000, which wraps to -30536 (Result1).  Bounds
+  cut to 16 bits, signed, like the other constants: 70000 is 4464, so 2232.
+  Clamped to 32767: 16383.  CLICK refusing the bounds at paste: never fires.
 - ``copy_clamps_calc_wraps``: Copy clamps where Math wraps.  A Copy that
   wraps (or keeps the low word) reads -25536 and 25536 for Result1/Result3.
 - ``real_to_int_truncates``: Real to Int truncates toward zero.  Rounding
@@ -85,6 +99,7 @@ from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, calc, copy, fill, system
+from pyrung.core.expression import randint
 from tests.conformance.memory import dd, df, dh
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -127,6 +142,28 @@ def prove_dint_quotient_into_int(slot):
         calc(dd[161] / 65536, slot.Result1)
         calc(dd[161] / dd[162], slot.Result2)
         calc(dd[163] / 65536, slot.Result3)
+        copy(1, slot.Fired)
+
+
+def prove_int_math_wide_constant(slot):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(65536, dd[171])
+        copy(10, dd[172])
+        copy(99, slot.Result1)
+        copy(99, slot.Result2)
+        copy(99, slot.Result3)
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        calc(dd[171] / 40000, slot.Result1)
+        calc(dd[172] * 1.5, slot.Result2)
+        calc(dd[171] / -40000, slot.Result3)
+        copy(1, slot.Fired)
+
+
+def prove_int_math_rand_wide_bounds(slot):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(99, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        calc(randint(70000, 70000) / 2, slot.Result1)
         copy(1, slot.Fired)
 
 
@@ -322,6 +359,10 @@ def init_dint_quotient_into_int(slot):
     fill(0, dd.select(161, 163))
 
 
+def init_int_math_wide_constant(slot):
+    fill(0, dd.select(171, 172))
+
+
 def init_word_calc_wraps(slot):
     fill(0, dh.select(201, 206))
 
@@ -476,6 +517,22 @@ group = Group(
             ladder=prove_dint_quotient_into_int,
             init=init_dint_quotient_into_int,
             expect={"Result1": 0, "Result2": -32768, "Result3": 0},
+        ),
+        case(
+            "A Math constant into an Int is cut to its low 16 bits, signed: 65536 / 40000 "
+            "is -2 (Result1; 40000 reads -25536) and 65536 / -40000 is 2 (Result3; -40000 "
+            "reads 25536); a float constant is kept: 10 * 1.5 is 15 (Result2)",
+            ladder=prove_int_math_wide_constant,
+            init=init_int_math_wide_constant,
+            expect={"Result1": -2, "Result2": 15, "Result3": 2},
+            probe="Int Math constant 32768..65535 and float constant: cut, kept, clamped",
+        ),
+        case(
+            "RAND keeps its bounds whole in an Int Math: RAND ( 70000 , 70000 ) / 2 is "
+            "35000, which wraps to -30536 in the Int (Result1)",
+            ladder=prove_int_math_rand_wide_bounds,
+            expect={"Result1": -30536},
+            probe="RAND bounds past 16 bits in an Int Math",
         ),
     ],
 )

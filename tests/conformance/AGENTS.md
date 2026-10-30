@@ -273,6 +273,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [ ] patch applied before logic, on the same scan
 - [ ] forces persist across scans
 - [x] fault flags (SC40/SC43/SC44): which later instruction clears them (answered on hardware round 2: SC40 the next Math, SC43/SC44 the next instruction; pending SYS; `system/division_flag_clears_each_scan`, `system/out_of_range_flag_clears_each_scan`, `system/address_flag_clears_each_scan`)
+- [x] fault flags after a coil, an open rung, a timer, a counter (SC43/SC44), and after a hex-mode Math (SC40) (probes, pending SYS; `system/out_of_range_flag_vs_other_instructions`, `system/address_flag_vs_other_instructions`, `system/division_flag_vs_hex_math`)
 - [x] first scan after STOP->RUN: SD9 = 0 with SC3 on (`system/first_scan_counter_and_clock`, answered on hardware round 2); SD9's wrap (answered on hardware; `system/scan_counter_wraps_to_zero`)
 - [x] edge and counter memory at STOP->RUN (answered on hardware; `coils/edge_on_first_scan`, `counters/first_scan_input_already_on`)
 - [ ] first_scan true once, on scan 0
@@ -334,6 +335,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] Real precision: pyrung keeps 64 bits, CLICK 32 (`numeric/real_is_64_bit_in_pyrung`, expected to fail on a CLICK: a documented deviation)
 - [x] Real range: an overflow stores +/-Inf with SC43 (`numeric/real_overflow_stays_finite`, pending INF)
 - [x] a Dint quotient into an Int: a Math constant into an Int is cut to 16 bits (`numeric/dint_quotient_into_int`)
+- [x] an Int Math constant in 32768..65535 or below -32768, a float constant, and RAND bounds past 16 bits (probes; `numeric/int_math_wide_constant`, `numeric/int_math_rand_wide_bounds`)
 - [x] division by zero -> 0 + fault (`numeric/div_by_zero`)
 - [x] non-finite float (NaN, +/-Inf) -> 0 + fault (`numeric/real_div_by_zero`)
 - [x] math domain error (sqrt, ln/log, asin/acos) -> 0 + SC46 for the rest of the scan, and the PLC stays in RUN (`math_error/math_errors_do_not_stop`)
