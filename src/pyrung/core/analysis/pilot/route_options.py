@@ -32,6 +32,7 @@ from pyrung.core.analysis.pilot.overlay import (
 )
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.storage import BLANK_CHAR
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.pipeline_graph import StaticPath
@@ -771,9 +772,10 @@ def _away_value(source: Any, value: Any, resting: Any) -> Any:
     """A value other than *value* that *source* may hold, or ``None``.
 
     The resting value first, then the default, 0, 1 and the neighbours of
-    *value*, then the declared ``choices``/``min``/``max``; a value outside the
-    tag's declared domain is never driven.  ``None`` when the domain has no
-    other value: the driver cannot alternate.
+    *value* (for a CHAR: blank, then ``"A"``/``"B"``), then the declared
+    ``choices``/``min``/``max``; a value outside the tag's declared domain is
+    never driven.  ``None`` when the domain has no other value: the driver
+    cannot alternate.
     """
     choices = getattr(source, "choices", None)
     lo, hi = getattr(source, "min", None), getattr(source, "max", None)
@@ -794,6 +796,8 @@ def _away_value(source: Any, value: Any, resting: Any) -> Any:
     candidates: list[Any] = [resting, source.default]
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         candidates.extend((0, 1, value - 1, value + 1))
+    elif isinstance(value, str):
+        candidates.extend((BLANK_CHAR, "A", "B"))
     if choices:
         candidates.extend(sorted(choices))
     candidates.extend((lo, hi))

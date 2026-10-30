@@ -581,11 +581,36 @@ def _mark_pulse_last_conjunct(nodes: list[TraceNode]) -> None:
     nearest the instruction; the conjuncts before it hold their value.  Other
     owners' pulse demands (drum events, shift clocks, edge-reset pins) pulse
     every steerable leaf, as before counters counted edges.
+
+    Within that conjunct the pulsed leaves must toggle in phase.  Each pulsed
+    leaf flips every scan from its current value, so leaves still away from
+    their needed value and leaves already at it would never all agree on one
+    scan (a seal-in's ``Start`` pulsed against its already-off ``Stop``).  So
+    when the conjunct has leaves still to move, only those pulse; a conjunct
+    already fully on (every leaf satisfied, retained) pulses all its leaves.
     """
     for node in reversed(nodes):
-        if _has_steerable(node):
-            _mark_pulse([node])
+        leaves = _pulsable_leaves(node)
+        if leaves:
+            unsatisfied = [leaf for leaf in leaves if not leaf.satisfied]
+            for leaf in unsatisfied or leaves:
+                leaf.pulse = True
             return
+
+
+def _pulsable_leaves(node: TraceNode) -> list[TraceNode]:
+    """Steerable leaves that drive *node* within the scan.
+
+    A self-advancing frontier (a timer feeding the counter's input) makes its
+    own edges; the steerable leaves beneath it are that timer's holds, and
+    pulsing them would only restart it.
+    """
+    if node.advance is not None or any(child.advance is not None for child in node.children):
+        return []
+    leaves = [node] if node.is_steerable else []
+    for child in node.children:
+        leaves.extend(_pulsable_leaves(child))
+    return leaves
 
 
 def _needs_prior_program_stage(node: TraceNode, env: _TraceEnv) -> bool:
@@ -618,7 +643,9 @@ def _trace_demand(
     an edge on its reset pin).  A counter counts its input's rising edges, so
     an input already on is no count: its steerable leaves stay actions (to be
     pulsed off and on again), and only the conjunct nearest the counter
-    pulses (:func:`_mark_pulse_last_conjunct`).
+    pulses (:func:`_mark_pulse_last_conjunct`).  An input carried by program
+    state instead (a coil, a latch) is moved by
+    :func:`_counter_input_transition` in the caller.
     """
 
     if demand is None or demand.condition is None:
@@ -626,6 +653,29 @@ def _trace_demand(
     expression = _condition_to_expr(demand.condition)
     if not demand.value:
         expression = _negate(expression)
+    return _trace_demand_expression(
+        env,
+        expression,
+        pulse=pulse,
+        provenance=provenance,
+        depth=depth,
+        retain_satisfied=retain_satisfied,
+        counts_edges=counts_edges,
+    )
+
+
+def _trace_demand_expression(
+    env: _TraceEnv,
+    expression: Any,
+    *,
+    pulse: bool,
+    provenance: tuple[str, ...],
+    depth: int,
+    retain_satisfied: bool,
+    counts_edges: bool = False,
+) -> list[TraceNode]:
+    """:func:`_trace_demand` for an already-lowered demand expression."""
+
     nodes = _trace_expression(
         env,
         expression,
@@ -666,6 +716,86 @@ def _trace_demand(
     elif pulse:
         _mark_pulse(nodes)
     return nodes
+
+
+def _edges_as_levels(expr: Any) -> Any:
+    """*expr* with each ``rise(X)``/``fall(X)`` read as the level ``X``/``~X``.
+
+    A counter counts the rising edges of its input, and ``rise(X)`` rises
+    exactly when ``X`` does, so for counting the edge contact is its level.
+    """
+
+    if isinstance(expr, Atom) and expr.form in ("rise", "fall"):
+        return Atom(expr.tag, "xic" if expr.form == "rise" else "xio")
+    if isinstance(expr, And):
+        return And(tuple(_edges_as_levels(term) for term in expr.terms))
+    if isinstance(expr, Or):
+        return Or(tuple(_edges_as_levels(term) for term in expr.terms))
+    return expr
+
+
+def _counter_input_transition(
+    env: _TraceEnv,
+    constraint: Eq | Cmp | AffineCmp,
+    demand: Any,
+    pulse_nodes: list[TraceNode],
+    provenance: tuple[str, ...],
+    depth: int,
+) -> TraceNode | None:
+    """The one-shot frontier that moves a counter's input, or ``None``.
+
+    A counter counts its input's rising edges, so holding its input never
+    advances it: each count is one off-to-on transition of the input.  When
+    the input is carried by program-owned state (an internal coil, a latched
+    or sealed-in bit), that transition is not a pulse of a steerable leaf but
+    an ordinary one-shot demand on the input itself:
+
+    - the input is already on and no steerable leaf of it can be pulsed: no
+      count can come until it falls, so release it (trace its negation);
+    - the input is off and first needs a persistent program stage (a latch)
+      established: establish it once.  The count lands as it comes on.
+
+    Neither transition owns a counter lifetime (no hold until Done).  After
+    it lands, a fresh read traces the next transition, so a latched driver is
+    cycled off and on once per count.  ``None`` keeps the ordinary pulse
+    frontier: a steerable leaf to pulse, or no steerable route at all.
+    """
+
+    if demand is None or demand.condition is None:
+        return None
+    level = _edges_as_levels(_condition_to_expr(demand.condition))
+    if not demand.value:
+        level = _negate(level)
+    if _expr_satisfied(level, env.snapshot):
+        if any(_pulsable_leaves(node) for node in pulse_nodes):
+            return None
+        wanted = _negate(level)
+        note = "counter input already on: release it before the next rising edge"
+    elif any(node.data_flow == "enable" and not node.satisfied for node in pulse_nodes):
+        wanted = level
+        note = "counter input needs program state: establish it for one rising edge"
+    else:
+        return None
+    nodes = _trace_demand_expression(
+        env,
+        wanted,
+        pulse=False,
+        provenance=provenance,
+        depth=depth + 1,
+        retain_satisfied=False,
+    )
+    if not any(_has_steerable(node) for node in nodes):
+        return None
+    target_atom = _trace_constraints._constraint_atom(constraint)
+    return TraceNode(
+        tag=constraint.tag,
+        value=(target_atom.operand if target_atom is not None else constraint),
+        provenance=provenance,
+        relational=isinstance(constraint, (Cmp, AffineCmp)),
+        predicate=target_atom,
+        children=nodes,
+        note=note,
+    )
 
 
 @dataclass(frozen=True)
@@ -813,6 +943,7 @@ def _advance_frontier(
         # reader-owned chain.
         return None
     stage_boundary = owner.profile.linear is None
+    counts_edges = isinstance(owner.instruction, (CountUpInstruction, CountDownInstruction))
     atom = _trace_constraints._constraint_atom(step.until)
     boundary = TraceNode(
         tag=step.until.tag,
@@ -839,11 +970,14 @@ def _advance_frontier(
         and owner.profile.accumulator is not None
         and constraint.tag == owner.profile.accumulator.name
         and owner.instruction is not None
+        and not (step.pulse is not None and counts_edges)
     ):
         # Keep the established scalar coast shape for an instruction-owned
         # accumulator threshold. Its enable is traced at the producer that
         # needs it; expanding that future enable here would add a second
-        # prerequisite and distort route scoring and target distance.
+        # prerequisite and distort route scoring and target distance.  A
+        # counter is the exception: it counts edges, so its accumulator never
+        # moves under a coast; it needs the same pulse demand as its Done.
         return boundary
     gate_nodes = _owner_call_gate_nodes(env, owner, provenance, depth)
     running_linear = owner.profile.linear is not None and step.progress is not None
@@ -862,19 +996,22 @@ def _advance_frontier(
             )
         )
     if step.pulse is not None:
-        demand_nodes.extend(
-            _trace_demand(
-                env,
-                step.pulse,
-                pulse=True,
-                provenance=provenance,
-                depth=depth + 1,
-                retain_satisfied=owner.profile.linear is None,
-                counts_edges=isinstance(
-                    owner.instruction, (CountUpInstruction, CountDownInstruction)
-                ),
-            )
+        pulse_nodes = _trace_demand(
+            env,
+            step.pulse,
+            pulse=True,
+            provenance=provenance,
+            depth=depth + 1,
+            retain_satisfied=owner.profile.linear is None,
+            counts_edges=counts_edges,
         )
+        if counts_edges:
+            transition = _counter_input_transition(
+                env, constraint, step.pulse, pulse_nodes, provenance, depth
+            )
+            if transition is not None:
+                return transition
+        demand_nodes.extend(pulse_nodes)
     establish_nodes = [
         node
         for node in (*gate_nodes, *demand_nodes)
