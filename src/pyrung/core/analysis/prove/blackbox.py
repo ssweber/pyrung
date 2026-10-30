@@ -13,8 +13,14 @@ accumulator ``a``, limit ``P``  values the tick may take
 ``a < P``                       ``a`` (no visible progress) or ``P`` (done)
 ``a >= P``, ``a == 0``          ``0`` or ``1`` (progress past a preset <= 0)
 ``a >= P`` otherwise            ``a``
-read by a comparison            also every value of its domain above ``a``
+read by a plain comparison      also every value above ``a`` it splits at
+read any other way              also every value up to the limit (a sweep)
 ==============================  ===============================================
+
+Who reads an accumulator is decided by tag reference over every condition,
+data read and search expression (``accumulator_reads``), not the atom index:
+``T.Acc * 2 > 700`` is an opaque atom there.  The same reads decide a
+counter's ``min(Acc, preset)`` key clamp (``count_clamps``).
 
 So an enabled on-delay's Done may go False -> True on any scan, an off-delay's
 may go True -> False on any scan while disabled, and a drum step may end on
@@ -36,10 +42,20 @@ trace on the concrete PLC at the search's fixed ``dt``: a step where no tick
 moved is one scan; a step where one did runs, inputs held, until the state the
 search compares (``_compared_names``) changes, folding long waits.  If the
 first try lands elsewhere, the step's input change is moved to the scan the
-state would change on.  A replay that reaches a state violating the property
-is a ``Counterexample`` with the concrete trace; one that does not is an
-``Intractable`` of kind ``"timing"`` carrying the abstract trace and the step
-where replay diverged.
+state would change on, and then the wait is moved before the plain steps
+leading up to it (``_slide_wait``: a timer that must finish two scans after
+a button press starts earlier).  A replay that reaches a state violating the
+property is a ``Counterexample`` with the concrete trace; one that does not is
+an ``Intractable`` of kind ``"timing"`` carrying the abstract trace and the
+step where replay diverged.
+
+Under ``settled=True`` the replay accepts a violation only in a state no
+timer was left running short of its limit (``_concretely_settled``), as the
+search judges it.  A trace is replayed whenever the model has a timer that
+can tick, even with no tick moved: holding a running timer is a timing
+choice too.  A property's ``rise()``/``fall()`` the search leaves undecided is
+decided on the PLC's scans; a counterexample standing only on one is an
+``Intractable`` of kind ``"property"``.
 """
 
 from __future__ import annotations
@@ -163,6 +179,218 @@ def timer_held_tags(program: Program) -> frozenset[str]:
 
 
 @dataclass(frozen=True)
+class AccumulatorReads:
+    """How anything but its own instruction reads each accumulator.
+
+    ``read``: some rung, instruction condition, data read, search expression
+    (the property) or outside observer reads it.  ``swept``: some read is one
+    the values it compares against cannot stand for (arithmetic, a data read,
+    an observer, a comparison with a tag whose values the search does not
+    fix): every value is told apart.  ``values``: for every other read
+    accumulator, the values its plain comparisons split at.
+    """
+
+    read: frozenset[str] = frozenset()
+    swept: frozenset[str] = frozenset()
+    values: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
+
+
+_PLAIN_COMPARES: tuple[type, ...] = ()
+_COMPARE_FORMS = frozenset({"eq", "ne", "lt", "le", "gt", "ge"})
+
+
+def _plain_compare_types() -> tuple[type, ...]:
+    global _PLAIN_COMPARES
+    if not _PLAIN_COMPARES:
+        from pyrung.core.condition import (
+            CompareEq,
+            CompareGe,
+            CompareGt,
+            CompareLe,
+            CompareLt,
+            CompareNe,
+        )
+
+        _PLAIN_COMPARES = (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)
+    return _PLAIN_COMPARES
+
+
+def _split_points(value: Any) -> tuple[int, ...] | None:
+    """Where an integer compared with *value* changes truth: ``floor(v)``, ``floor(v)+1``."""
+    if isinstance(value, bool):
+        value = int(value)
+    if not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    low = math.floor(value)
+    return (low, low + 1)
+
+
+def accumulator_reads(
+    program: Program,
+    graph: Any,
+    all_exprs: list[Any],
+    names: frozenset[str],
+    *,
+    observed: frozenset[str],
+    observe_all: bool,
+    domains: Mapping[str, tuple[Any, ...]],
+) -> AccumulatorReads:
+    """Which of *names* are read other than by their own instruction, and how.
+
+    By tag reference over every condition, data read and search expression,
+    not the atom index: a comparison inside arithmetic (``T.Acc * 2 > 700``)
+    is an opaque atom there, and a timer whose accumulator only such a
+    comparison reads would otherwise get no in-between values.  The program
+    graph's readers are the backstop: a read none of the walks below explains
+    is swept.  *domains* are the search's values of the other tags a
+    comparison names (stateful and nondeterministic dimensions).
+    """
+    from pyrung.core.analysis.pdg import _extract_tag_names
+    from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Or
+    from pyrung.core.condition import AllCondition, AnyCondition
+    from pyrung.core.instruction.control import ForLoopInstruction
+    from pyrung.core.tag import Tag
+    from pyrung.core.validation._common import iter_rungs, walk_instructions
+
+    from .absorb import _has_forbidden_data_read
+
+    if not names:
+        return AccumulatorReads()
+    plain = _plain_compare_types()
+    read: set[str] = set()
+    swept: set[str] = set()
+    values: dict[str, set[int]] = {}
+
+    def opaque_refs(obj: Any) -> None:
+        hit = _extract_tag_names(obj, {}) & names
+        read.update(hit)
+        swept.update(hit)
+
+    def compared(acc: str, other: Any) -> None:
+        read.add(acc)
+        if isinstance(other, Tag):
+            domain = None if other.name in names else domains.get(other.name)
+            points: set[int] = set()
+            for value in domain or ():
+                split = _split_points(value)
+                if split is None:
+                    domain = None
+                    break
+                points.update(split)
+            if not domain:
+                swept.add(acc)
+                return
+            values.setdefault(acc, set()).update(points)
+            return
+        split = _split_points(other)
+        if split is None:
+            swept.add(acc)
+            return
+        values.setdefault(acc, set()).update(split)
+
+    def walk(obj: Any) -> None:
+        if obj is None:
+            return
+        if isinstance(obj, (list, tuple)):
+            for item in obj:
+                walk(item)
+            return
+        if isinstance(obj, (AllCondition, AnyCondition)):
+            walk(obj.conditions)
+            return
+        if isinstance(obj, plain):
+            tag, other = obj.tag, obj.value  # type: ignore[attr-defined]
+            for side, against in ((tag, other), (other, tag)):
+                if not isinstance(side, Tag):
+                    # A literal, or an expression or reference: what it
+                    # reads is read through arithmetic.
+                    opaque_refs(side)
+                elif side.name in names:
+                    compared(side.name, against)
+            return
+        # Any other condition, a bare tag read as a truth value, an
+        # expression: every tag in it is read in a way no value set covers.
+        opaque_refs(obj)
+
+    def walk_rung(rung: Any) -> None:
+        walk(list(rung._conditions))
+        for branch in rung._branches:
+            walk_rung(branch)
+
+    for _loc, rung in iter_rungs(program):
+        walk(list(rung._conditions))
+    for instr in walk_instructions(program):
+        for field_name in getattr(type(instr), "_conditions", ()):
+            walk(getattr(instr, field_name, None))
+        if isinstance(instr, ForLoopInstruction):
+            for body_rung in instr.body_rungs:
+                walk_rung(body_rung)
+
+    # Data reads (copies, math, indices, an unbounded index that can reach it).
+    for node in graph.rung_nodes:
+        hit = node.data_reads & names
+        read.update(hit)
+        swept.update(hit)
+    for name in names:
+        if _has_forbidden_data_read(program, graph, name):
+            read.add(name)
+            swept.add(name)
+
+    # Search expressions: the property's atoms, and the rungs' as simplified.
+    def walk_expr(expr: Any) -> None:
+        if isinstance(expr, (And, Or)):
+            for term in expr.terms:
+                walk_expr(term)
+        elif isinstance(expr, ArithAtom):
+            hit = {expr.left, expr.right} & names
+            read.update(hit)
+            swept.update(hit)
+        elif isinstance(expr, Atom):
+            if expr.unsupported is not None:
+                opaque_refs(expr.unsupported)
+            plain_form = expr.form in _COMPARE_FORMS and (
+                expr.operand_scale == 1 and expr.operand_offset == 0
+            )
+            other_name = expr.operand if expr.operand_is_tag else None
+            for acc, other in ((expr.tag, other_name), (other_name, expr.tag)):
+                if acc not in names:
+                    continue
+                if not plain_form:
+                    read.add(acc)
+                    swept.add(acc)
+                elif other is None:
+                    compared(acc, expr.operand)
+                else:
+                    other_tag = graph.tags.get(other)
+                    if other_tag is None:
+                        read.add(acc)
+                        swept.add(acc)
+                    else:
+                        compared(acc, other_tag)
+
+    for expr in all_exprs:
+        walk_expr(expr)
+
+    for name in names:
+        if observe_all or name in observed:
+            read.add(name)
+            swept.add(name)
+        elif graph.readers_of.get(name) and name not in read:
+            # The graph sees a read none of the walks explains.
+            read.add(name)
+            swept.add(name)
+    return AccumulatorReads(
+        read=frozenset(read),
+        swept=frozenset(swept),
+        values={
+            name: tuple(sorted(points))
+            for name, points in sorted(values.items())
+            if name not in swept
+        },
+    )
+
+
+@dataclass(frozen=True)
 class _TimerModel:
     """What the search's oracle needs: which ticks branch, and onto what."""
 
@@ -181,26 +409,33 @@ def build_timer_model(
     *,
     stateful_dims: Mapping[str, tuple[Any, ...]],
     combinational: frozenset[str],
-    consumed: frozenset[str],
-    exact: frozenset[str] = frozenset(),
+    reads: AccumulatorReads,
 ) -> _TimerModel:
+    """The oracle's model: *reads* (``accumulator_reads``) says which ticks land between.
+
+    A swept accumulator is ``exact``; every read one gets classify's domain
+    for it as ``reps`` (a swept one's sweep is short per scan, so the domain's
+    values, back-propagated through arithmetic, are still worth a jump), and
+    one read only by plain comparisons the values they split at too.
+    """
     sites = timed_sites(program)
+    names = frozenset(sites)
+    exact = reads.swept & names
     # An unread timer (classify: its Done is combinational, its accumulator
     # in no key) changes no other tag, whatever its tick does.
     branch = frozenset(
         name
         for name, site in sites.items()
-        if name in stateful_dims or site.owner not in combinational
+        if name in stateful_dims or site.owner not in combinational or name in reads.read
     )
     reps: dict[str, tuple[int, ...]] = {}
-    for name in sorted(consumed & set(sites)):
+    for name in sorted(reads.read & names):
         domain = stateful_dims.get(name, ())
-        values = sorted(
-            {int(v) for v in domain if isinstance(v, (int, float)) and not isinstance(v, bool)}
-        )
+        values = {int(v) for v in domain if isinstance(v, (int, float)) and not isinstance(v, bool)}
+        values.update(reads.values.get(name, ()))
         if values:
-            reps[name] = tuple(values)
-    return _TimerModel(sites=sites, branch=branch, reps=reps, exact=exact & frozenset(sites))
+            reps[name] = tuple(sorted(values))
+    return _TimerModel(sites=sites, branch=branch, reps=reps, exact=exact)
 
 
 class _TimerOracle:
@@ -211,7 +446,7 @@ class _TimerOracle:
     ``taken``/``widths`` describe the choice points met, in order.
     """
 
-    __slots__ = ("_branch", "_reps", "_exact", "forced", "taken", "widths", "moved", "open")
+    __slots__ = ("_branch", "_reps", "_exact", "forced", "taken", "widths", "moved", "open", "met")
 
     def __init__(self, model: _TimerModel) -> None:
         self._branch = model.branch
@@ -226,6 +461,8 @@ class _TimerOracle:
         self.moved: list[tuple[str, int]] = []
         # A tick this run left below its limit: a Done choice still open.
         self.open = False
+        # Accumulators whose tick was a choice point this run.
+        self.met: set[str] = set()
 
     def __call__(self, key: str, acc: int, limit: int | None) -> int:
         if key not in self._branch:
@@ -244,6 +481,7 @@ class _TimerOracle:
         if not higher:
             return acc
         candidates = sorted(higher)
+        self.met.add(key)
         i = len(self.taken)
         choice = self.forced[i] if i < len(self.forced) else 0
         self.taken.append(choice)
@@ -289,7 +527,7 @@ def choice_runs(oracle: _TimerOracle, run: Callable[[], None]) -> Iterator[None]
                 stack.append((*taken[:j], c))
         runs += 1
         if runs > _CHOICE_RUN_CAP:
-            raise ChoiceOverflow(tuple(sorted({key for key, _ in oracle.moved})))
+            raise ChoiceOverflow(tuple(sorted(oracle.met)))
         yield
 
 
@@ -303,26 +541,24 @@ def count_clamps(
     graph: Any,
     stateful_names: tuple[str, ...],
     *,
-    observed: frozenset[str],
-    observe_all: bool,
-    atoms: Mapping[str, Any],
+    reads: AccumulatorReads,
 ) -> tuple[tuple[int, bool, int], ...]:
     """Counters whose key may stop at the preset: ``(index, counts up, preset)``.
 
     Counters count concretely.  Past its preset a counter that only counts
     one way stays done until a reset sets it to 0, so states that differ only
     in how far past the preset it is behave alike when nothing else reads the
-    accumulator: no comparison, data read or outside observer, a literal
-    preset, one counter instruction writing it and no other writer.  Keying
-    them as the preset keeps an unreset counter from walking the key up to
-    its type's limit.
+    accumulator (*reads*, ``accumulator_reads``: no condition, arithmetic,
+    data read, property or outside observer), its preset is a literal, and
+    one counter instruction writes it.  Keying them as the preset keeps an
+    unreset counter from walking the key up to its type's limit.
     """
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.validation._common import walk_instructions
 
-    from .absorb import _all_write_targets, _has_forbidden_data_read
+    from .absorb import _all_write_targets
 
-    if not _COUNT_CLAMPS or observe_all:
+    if not _COUNT_CLAMPS:
         return ()
     writers: dict[str, list[Any]] = {}
     for instr in walk_instructions(program):
@@ -346,13 +582,23 @@ def count_clamps(
             or not isinstance(preset, int)
             or isinstance(preset, bool)
             or [w for w in writers.get(acc, ()) if w is not instr]
-            or acc in observed
-            or atoms.get(acc)
-            or _has_forbidden_data_read(program, graph, acc)
+            or acc in reads.read
         ):
             continue
         clamps.append((slots[acc], up, int(preset)))
     return tuple(sorted(set(clamps)))
+
+
+def counter_accumulators(program: Program) -> frozenset[str]:
+    """Every counter's accumulator (``count_clamps``' candidates)."""
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    return frozenset(
+        instr.accumulator.name
+        for instr in walk_instructions(program)
+        if isinstance(instr, (CountUpInstruction, CountDownInstruction))
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +716,14 @@ class _Replay:
     classed: tuple[tuple[str, tuple[int, ...] | None], ...] = ()
     plc: Any = None
     steps: list[TraceStep] = field(default_factory=list)
+    # ``settled=True``: a violation counts only where no running timer is
+    # still short of its limit (``accepts``).
+    settled: bool = False
+    # A condition property with rise()/fall() in it: the search leaves the
+    # edges undecided (possibly true), so the replay decides them on the
+    # PLC's scans (``violated``); ``negated`` for never().
+    edge_expr: Any = None
+    negated: bool = False
 
     def _view_of(self, plc: Any, state: Any) -> Mapping[str, Any]:
         return _StateView(state, self.defaults, frozenset(self.system_names), plc)
@@ -491,7 +745,28 @@ class _Replay:
         return self.key_of(plc.current_state.tags)
 
     def violated(self, plc: Any) -> bool:
-        return not self.predicate(self.view(plc))
+        if self.edge_expr is None:
+            return not self.predicate(self.view(plc))
+        from .expr import _eval_expr_from_state
+
+        state = plc.current_state
+        before = state
+        if state.scan_id > 0:
+            try:
+                before = plc.history.at(state.scan_id - 1)
+            except Exception:  # noqa: BLE001 - no earlier state: no edge decided
+                return False
+        view = self._view_of(plc, state)
+        resolved = _resolve_edges(self.edge_expr, self._view_of(plc, before), view)
+        value = _eval_expr_from_state(resolved, view)
+        # always(): violated when surely false; never(): when surely true.
+        return value is True if self.negated else value is False
+
+    def accepts(self, plc: Any) -> bool:
+        """The PLC's state is a violation the search would judge."""
+        if not self.violated(plc):
+            return False
+        return not self.settled or _concretely_settled(self.context, plc)
 
     def diff(self, plc: Any, target: dict[str, Any]) -> list[str]:
         names = [*self.compared, *(name for name, _ in self.classed)]
@@ -517,11 +792,16 @@ class _Replay:
         def stop(state: Any) -> bool:
             if reached(self.key_of(state.tags)):
                 return True
+            # Under ``settled`` a violation mid-wait is no stopping point:
+            # it may be one a running timer leaves (``accepts``).  Nor is one
+            # of a property with edges: the predicate cannot decide them.
+            if self.settled or self.edge_expr is not None:
+                return False
             return not self.predicate(self._view_of(plc, state))
 
         plc.run_until(stop, max_cycles=bound)
         scans = plc.current_state.scan_id - start_scan
-        return scans, reached(self.key(plc)) or self.violated(plc)
+        return scans, reached(self.key(plc)) or self.accepts(plc)
 
 
 class _StateView(Mapping[str, Any]):
@@ -562,6 +842,34 @@ class _StateView(Mapping[str, Any]):
         return len({*self._defaults, *self._state.tags})
 
 
+def _edge_tags(expr: Any) -> frozenset[str]:
+    """Tags a rise()/fall() atom of *expr* reads."""
+    from pyrung.core.analysis.simplified import And, Atom, Or
+
+    if isinstance(expr, Atom):
+        return frozenset({expr.tag}) if expr.form in ("rise", "fall") else frozenset()
+    if isinstance(expr, (And, Or)):
+        return frozenset().union(*(_edge_tags(term) for term in expr.terms))
+    return frozenset()
+
+
+def _resolve_edges(expr: Any, before: Mapping[str, Any], after: Mapping[str, Any]) -> Any:
+    """*expr* with each rise()/fall() decided from the scan *before* -> *after*."""
+    from pyrung.core.analysis.simplified import And, Atom, Const, Or
+
+    if isinstance(expr, Atom) and expr.form in ("rise", "fall"):
+        try:
+            was, now = bool(before[expr.tag]), bool(after[expr.tag])
+        except KeyError:
+            return expr
+        return Const((not was and now) if expr.form == "rise" else (was and not now))
+    if isinstance(expr, And):
+        return And(tuple(_resolve_edges(term, before, after) for term in expr.terms))
+    if isinstance(expr, Or):
+        return Or(tuple(_resolve_edges(term, before, after) for term in expr.terms))
+    return expr
+
+
 def _value_class(value: Any, reps: tuple[int, ...] | None) -> Any:
     """*value* as the search tells it apart: itself, or the largest rep at or below it."""
     if reps is None or not isinstance(value, (int, float)) or isinstance(value, bool):
@@ -599,13 +907,59 @@ def _wait_bound(context: _ExploreContext, moved: tuple[tuple[str, int], ...]) ->
     return min(4 * total + 16, _REPLAY_SCAN_CAP)
 
 
+def _concretely_settled(context: _ExploreContext, plc: Any) -> bool:
+    """No timer the search branches on was left running short of its limit.
+
+    The search's ``settled`` (``_TimerOracle.open``): no tick of the scan that
+    made the state ended below its limit.  On the PLC: a tick that moved its
+    accumulator (with its ``_frac:`` carry) forward this scan without being
+    done (an on-delay's Done still off, an off-delay's still on; any other
+    timed instruction mid-step).  Unknown history counts as unsettled.
+    """
+    model = context.timer_model
+    if model is None or not model.branch:
+        return True
+    state = plc.current_state
+    if state.scan_id <= 0:
+        return False
+    try:
+        before = plc.history.at(state.scan_id - 1)
+    except Exception:  # noqa: BLE001 - no earlier state: cannot tell
+        return False
+    defaults = {name: tag.default for name, tag in context.graph.tags.items()}
+
+    def progress(snapshot: Any, name: str) -> float:
+        acc = snapshot.tags.get(name, defaults.get(name, 0)) or 0
+        frac = snapshot.memory.get(f"_frac:{name}", 0.0) or 0.0
+        return float(acc) + float(frac)
+
+    for name in model.branch:
+        site = model.sites[name]
+        if progress(state, name) <= progress(before, name):
+            continue
+        done = bool(state.tags.get(site.owner, defaults.get(site.owner, False)))
+        if site.verb == "on_delay" and done:
+            continue
+        if site.verb == "off_delay" and not done:
+            continue
+        return False
+    return True
+
+
 def confirm(
     program: Program,
     context: _ExploreContext,
     predicate: Callable[[dict[str, Any]], bool],
     result: Counterexample,
+    *,
+    settled: bool = False,
 ) -> Counterexample | Intractable:
-    """Replay an abstract counterexample on the concrete PLC (module docstring)."""
+    """Replay an abstract counterexample on the concrete PLC (module docstring).
+
+    With *settled* (``always(settled=True)``) a violation is accepted only in
+    a state no running timer has left short of its limit
+    (``_concretely_settled``), as the search judged it.
+    """
     from pyrung.core import PLC
 
     # The search's root link is a zero-scan step with no inputs.
@@ -626,25 +980,37 @@ def confirm(
             )
         ),
         plc=PLC(program, dt=context.dt),
+        settled=settled,
     )
-    if not any(step.timers for step in trace) and any(
-        _split_system(step.inputs)[1] for step in trace
-    ):
-        # No timer choice in it, only free system inputs (clocks, the scan
-        # counter, the RTC) the PLC sets itself: the search's caveated
-        # counterexample as before (bfs._free_system_caveat).  Waiting for an
-        # RTC hour on the PLC is no check worth its scans.
+    expr = getattr(predicate, "_pyrung_expr", None)
+    if expr is not None and _edge_tags(expr):
+        replay.edge_expr = expr
+        replay.negated = bool(getattr(predicate, "_pyrung_negated", False))
+    model = context.timer_model
+    if (model is None or not model.branch) and any(_split_system(step.inputs)[1] for step in trace):
+        # No timer that could tick or hold, only free system inputs (clocks,
+        # the scan counter, the RTC) the PLC sets itself: the search's
+        # caveated counterexample as before (bfs._free_system_caveat).
+        # Waiting for an RTC hour on the PLC is no check worth its scans.
+        # A timer the trace holds is a timing choice even where no tick
+        # moved, so with one in the model the trace is replayed.
         return result
     if not trace:
         # The power-on state itself.
-        if replay.violated(replay.plc):
+        if replay.accepts(replay.plc):
             return replace(result, trace=[TraceStep(inputs={}, scans=0)])
-        return _unconfirmed(context, result, trace, 0, ["power-on state"])
+        return _unconfirmed(
+            context, result, trace, 0, ["power-on state"], edges=_edge_tags(replay.edge_expr)
+        )
 
     initial, abstract = _abstract_states(context, trace)
     diverged_at: int | None = None
     diverged_tags: list[str] = []
     previous = initial
+    # The PLC before each step (and the concrete steps taken by then), and
+    # whether the step is plain scans (no tick moved, no system input).
+    checkpoints: list[tuple[Any, int]] = []
+    plain: list[bool] = []
     for index, (step, (target, moved)) in enumerate(zip(trace, abstract, strict=True)):
         inputs, system = _split_system(step.inputs)
         # A system input the search changed (a clock bit, the scan counter)
@@ -652,11 +1018,13 @@ def confirm(
         system_moved = any(previous.get(name) != value for name, value in system.items())
         previous = target
         plc = replay.plc
+        checkpoints.append((plc.fork(), len(replay.steps)))
+        plain.append(not moved and not system_moved)
         if not moved and not system_moved:
             plc.patch(inputs)
             _run_scans(plc, step.scans)
             replay.steps.append(TraceStep(inputs=inputs, scans=step.scans))
-            if replay.violated(plc):
+            if replay.accepts(plc):
                 return _confirmed(result, replay)
             mismatch = replay.diff(plc, target)
             if mismatch and diverged_at is None:
@@ -667,6 +1035,15 @@ def confirm(
         if system_moved:
             bound = max(bound, _SYSTEM_WAIT)
         landed = _fire_step(replay, inputs, target, bound)
+        if landed is None and not system_moved:
+            slid = _slide_wait(replay, trace, index, target, moved, checkpoints, plain, bound)
+            if slid is not None:
+                replay.plc, kept, steps = slid
+                del replay.steps[kept:]
+                replay.steps.extend(steps)
+                if replay.accepts(replay.plc):
+                    return _confirmed(result, replay)
+                continue
         if landed is None:
             if diverged_at is None:
                 diverged_at = index
@@ -679,7 +1056,7 @@ def confirm(
         else:
             replay.plc, steps = landed
             replay.steps.extend(steps)
-        if replay.violated(replay.plc):
+        if replay.accepts(replay.plc):
             return _confirmed(result, replay)
 
     return _unconfirmed(
@@ -688,6 +1065,7 @@ def confirm(
         trace,
         diverged_at if diverged_at is not None else len(trace) - 1,
         diverged_tags,
+        edges=_edge_tags(replay.edge_expr),
     )
 
 
@@ -746,11 +1124,111 @@ def _fire_step(
             last = {**early, **late}
         trial.patch(last)
         trial.step()
-        if replay.diff(trial, target) and not replay.violated(trial):
+        if replay.diff(trial, target) and not replay.accepts(trial):
             continue
         steps = [TraceStep(inputs=early, scans=wait - 1)] if wait > 1 else []
         steps.append(TraceStep(inputs=last, scans=1))
         return trial, steps
+    return None
+
+
+# Plain steps before a timer's step that ``_slide_wait`` moves its wait past.
+_SLIDE_STEP_CAP = 8
+
+
+def _slide_wait(
+    replay: _Replay,
+    trace: list[TraceStep],
+    index: int,
+    target: dict[str, Any],
+    moved: tuple[tuple[str, int], ...],
+    checkpoints: list[tuple[Any, int]],
+    plain: list[bool],
+    bound: int,
+) -> tuple[Any, int, list[TraceStep]] | None:
+    """Reach step *index*'s *target* by letting its timer run before earlier steps.
+
+    The search may finish a timer a few plain scans after an input change
+    (a button whose effect a chain of coils carries for two scans): at a
+    fixed scan time the timer then has to start earlier.  For each plain
+    step ``j`` before *index* (nearest first), the wait goes before it: the
+    inputs steps ``j..index`` change (all, or a subset: the ones that start
+    the timer), at their last value, are applied there and held; the PLC
+    waits as long as the moved ticks' owners take to reach the target, less
+    the scans of steps ``j..index``; then those steps run as recorded, with
+    the early inputs kept.  Accepted when the PLC lands on *target* or on a
+    violation the search would judge (any concrete run to one is a real
+    counterexample, however it got there).
+
+    Returns ``(plc, concrete steps kept, concrete steps after them)`` or None.
+    """
+    from itertools import combinations
+
+    model = replay.context.timer_model
+    assert model is not None
+    owners = sorted({model.sites[key].owner for key, _ in moved if key in model.sites})
+    if not owners or any(owner not in target for owner in owners):
+        return None
+    step = trace[index]
+    inputs, _system = _split_system(step.inputs)
+
+    def owners_reached(state: Any) -> bool:
+        tags = state.tags
+        return all(tags.get(owner, replay.defaults.get(owner)) == target[owner] for owner in owners)
+
+    span = step.scans
+    for j in range(index - 1, max(-1, index - 1 - _SLIDE_STEP_CAP), -1):
+        if not plain[j]:
+            break
+        span += trace[j].scans
+        base, kept = checkpoints[j]
+        held = base.current_state.tags
+        # The inputs steps ``j..index`` change, at their last value: the
+        # ones that start the timer may need to come before the wait.
+        last: dict[str, Any] = {}
+        for k in range(j, index + 1):
+            last.update(_split_system(trace[k].inputs)[0])
+        changed = sorted(
+            name
+            for name in last
+            if any(
+                _split_system(trace[k].inputs)[0].get(name, last[name])
+                != held.get(name, replay.defaults.get(name))
+                for k in range(j, index + 1)
+            )
+        )
+        subsets: list[tuple[str, ...]] = [tuple(changed)]
+        if 0 < len(changed) <= _SPLIT_INPUT_CAP:
+            for size in range(len(changed) - 1, -1, -1):
+                subsets.extend(combinations(changed, size))
+        for early_names in subsets:
+            early = {name: last[name] for name in early_names}
+            probe = base.fork()
+            probe.patch(early)
+            start = probe.current_state.scan_id
+            probe.run_until(owners_reached, max_cycles=bound)
+            if not owners_reached(probe.current_state):
+                continue
+            wait = probe.current_state.scan_id - start - span
+            if wait < 0:
+                continue
+            trial = base.fork()
+            steps: list[TraceStep] = []
+            if wait:
+                trial.patch(early)
+                _run_scans(trial, wait)
+                steps.append(TraceStep(inputs=dict(early), scans=wait))
+            for k in range(j, index):
+                k_inputs = {**_split_system(trace[k].inputs)[0], **early}
+                trial.patch(k_inputs)
+                _run_scans(trial, trace[k].scans)
+                steps.append(TraceStep(inputs=k_inputs, scans=trace[k].scans))
+            trial.patch(inputs)
+            _run_scans(trial, step.scans)
+            steps.append(TraceStep(inputs=inputs, scans=step.scans))
+            if replay.diff(trial, target) and not replay.accepts(trial):
+                continue
+            return trial, kept, steps
     return None
 
 
@@ -767,8 +1245,15 @@ def _unconfirmed(
     trace: list[TraceStep],
     diverged_at: int,
     tags: list[str],
+    *,
+    edges: frozenset[str] = frozenset(),
 ) -> Intractable:
-    """The timing kind of Intractable: what the search let timers do, and where replay left it."""
+    """The timing kind of Intractable: what the search let timers do, and where replay left it.
+
+    With *edges* (the property's rise()/fall() tags) it is the ``"property"``
+    kind: the search counts those edges as possibly true on every scan, so
+    its counterexample may stand on an edge no scan makes.
+    """
     model = context.timer_model
     sites = model.sites if model is not None else {}
     owners = {site.owner: name for name, site in sites.items()}
@@ -799,14 +1284,31 @@ def _unconfirmed(
             "  whether it can happen depends on timer timing: check it with a run_for() test",
         ]
     )
+    reason = f"unconfirmed: the counterexample depends on timer timing ({named})"
+    kind = "timing"
+    if edges:
+        edge_names = ", ".join(sorted(edges))
+        reason = (
+            f"unconfirmed: the property's rise()/fall() of [{edge_names}] is one the"
+            f" search does not decide, and its counterexample did not replay"
+        )
+        kind = "property"
+        if not (moved or held):
+            # No timer in it: the edge alone is the open question.
+            hints = hints[:-1]
+        hints.append(
+            "  the search counts a property's rise()/fall() as possibly true on every"
+            " scan; latch or one-shot the edge in the program and name that coil in"
+            " the property instead"
+        )
     return Intractable(
-        reason=f"unconfirmed: the counterexample depends on timer timing ({named})",
+        reason=reason,
         dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
         estimated_space=0,
-        tags=timers,
+        tags=sorted({*timers, *edges}),
         hints=hints,
         journal=result.journal,
-        kind="timing",
+        kind=kind,
         trace=trace,
         diverged_at=diverged_at,
     )

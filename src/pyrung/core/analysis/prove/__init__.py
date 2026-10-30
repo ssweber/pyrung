@@ -382,6 +382,9 @@ def _compile_property(
         return _eval_expr_from_state(expr, state) is not False
 
     setattr(_predicate, "_pyrung_tags", _condition_tags(normalized))  # noqa: B010
+    # The expression, for the black-box replay to decide rise()/fall() in it
+    # on concrete scans (blackbox.confirm); the search leaves them undecided.
+    setattr(_predicate, "_pyrung_expr", expr)  # noqa: B010
     return _predicate, tags_in_expr, expr
 
 
@@ -692,7 +695,7 @@ def _always_compiled(
                 bfs_config=opt.bfs_config,
                 settled=settled,
             )
-        result = _confirm_results(program, context, [predicate], [result])[0]
+        result = _confirm_results(program, context, [predicate], [result], settled=settled)[0]
         if split_at and isinstance(result, Counterexample):
             names = ", ".join(sorted(split_at))
             result = replace(
@@ -767,7 +770,9 @@ def _always_compiled(
                 bfs_config=opt.bfs_config,
                 settled=settled,
             )
-        group_results = _confirm_results(program, context, group_predicates, group_results)
+        group_results = _confirm_results(
+            program, context, group_predicates, group_results, settled=settled
+        )
         for i, r in zip(indices, group_results, strict=True):
             if split_at and isinstance(r, Counterexample):
                 names = ", ".join(sorted(split_at))
@@ -789,13 +794,16 @@ def _confirm_results(
     context: _ExploreContext,
     predicates: list[Callable[[dict[str, Any]], bool]],
     results: list[Proven | Counterexample | Intractable],
+    *,
+    settled: bool = False,
 ) -> list[Proven | Counterexample | Intractable]:
     """Under black-box timers, replay every counterexample on the concrete PLC.
 
     A trace the PLC follows to a violation stays a ``Counterexample`` (with
     the concrete trace); one it cannot is an ``Intractable`` of kind
     ``"timing"`` (blackbox.confirm).  A paced ``Proven``'s aggressive
-    counterexample is kept only if it replays.
+    counterexample is kept only if it replays.  With *settled*, the replay
+    accepts a violation only in a state no running timer leaves unsettled.
     """
     if not context.abstract_timers:
         return results
@@ -804,9 +812,15 @@ def _confirm_results(
     confirmed: list[Proven | Counterexample | Intractable] = []
     for predicate, result in zip(predicates, results, strict=True):
         if isinstance(result, Counterexample):
-            result = confirm(program, context, predicate, result)
+            result = confirm(program, context, predicate, result, settled=settled)
         elif isinstance(result, Proven) and result.aggressive_counterexample is not None:
-            aggressive = confirm(program, context, predicate, result.aggressive_counterexample)
+            aggressive = confirm(
+                program,
+                context,
+                predicate,
+                result.aggressive_counterexample,
+                settled=settled,
+            )
             result = replace(
                 result,
                 aggressive_counterexample=aggressive
@@ -874,10 +888,11 @@ def _negated_property(compiled: _CompiledProperty) -> _CompiledProperty:
     def _negated(state: dict[str, Any]) -> bool:
         return not predicate(state)
 
-    for attr in ("_pyrung_bind_system", "_pyrung_tags"):
+    for attr in ("_pyrung_bind_system", "_pyrung_tags", "_pyrung_expr"):
         value = getattr(predicate, attr, None)
         if value is not None:
             setattr(_negated, attr, value)
+    setattr(_negated, "_pyrung_negated", True)  # noqa: B010
     return _negated, auto_scope, expr
 
 

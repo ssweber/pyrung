@@ -1877,42 +1877,52 @@ def _pass_compile_abstract_kernel(ctx: _PassContext) -> None:
 
 def _pass_build_timer_model(ctx: _PassContext) -> None:
     """``build_event_specs`` for black-box timers: no events, a choice model instead."""
-    from .blackbox import build_timer_model, count_clamps, timed_sites
+    from .blackbox import (
+        accumulator_reads,
+        build_timer_model,
+        count_clamps,
+        counter_accumulators,
+        timed_sites,
+    )
 
     assert ctx.graph is not None and ctx.all_exprs is not None
-    assert ctx.stateful_dims is not None
+    assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
     ctx.state_key_done_specs = ()
     ctx.done_event_specs = ()
     ctx.threshold_event_specs = ()
     ctx.timer_quanta = {}
     ctx.drum_event_meta = {}
-    atoms = _build_atom_index(ctx.all_exprs)
-    observed = {*(ctx.project or ()), *ctx.opaque_reads}
-    sites = timed_sites(ctx.program)
-    exact = frozenset(
-        name
-        for name in sites
-        if ctx.opaque_reads_all
-        or name in observed
-        or _has_forbidden_data_read(ctx.program, ctx.graph, name)
+    # Who reads each accumulator, by tag reference (not the atom index: an
+    # accumulator inside arithmetic is an opaque atom there).
+    reads = accumulator_reads(
+        ctx.program,
+        ctx.graph,
+        ctx.all_exprs,
+        frozenset(timed_sites(ctx.program)) | counter_accumulators(ctx.program),
+        observed=frozenset({*(ctx.project or ()), *ctx.opaque_reads}),
+        observe_all=ctx.opaque_reads_all,
+        # A compared tag's values: its search domain; for one written only by
+        # literal copies (an init constant leaves the key), those values; for
+        # one nothing writes and the search does not vary, its default.
+        domains={
+            **{
+                name: (tag.default,)
+                for name, tag in ctx.graph.tags.items()
+                if not ctx.graph.writers_of.get(name)
+            },
+            **_collect_literal_write_domains(ctx.program, ctx.graph.tags, ctx.graph.indirect_reach),
+            **ctx.stateful_dims,
+            **ctx.nondeterministic_dims,
+        },
     )
-    consumed = exact | frozenset(name for name in sites if atoms.get(name))
     ctx.timer_model = build_timer_model(
         ctx.program,
         stateful_dims=ctx.stateful_dims,
         combinational=ctx._combinational_tags or frozenset(),
-        consumed=consumed,
-        exact=exact,
+        reads=reads,
     )
     assert ctx.stateful_names is not None
-    ctx.count_clamps = count_clamps(
-        ctx.program,
-        ctx.graph,
-        ctx.stateful_names,
-        observed=frozenset(observed),
-        observe_all=ctx.opaque_reads_all,
-        atoms=atoms,
-    )
+    ctx.count_clamps = count_clamps(ctx.program, ctx.graph, ctx.stateful_names, reads=reads)
 
 
 def _pass_collect_done_acc_pairs(ctx: _PassContext) -> None:

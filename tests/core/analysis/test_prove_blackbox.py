@@ -13,19 +13,23 @@ import pytest
 from pyrung.circuitpy.codegen import compile_kernel
 from pyrung.core import (
     PLC,
+    And,
     Bool,
     Counter,
     Int,
+    Or,
     Program,
     Rung,
     Timer,
     copy,
+    count_down,
     count_up,
     flasher,
     latch,
     off_delay,
     on_delay,
     out,
+    reset,
     rise,
 )
 from pyrung.core.analysis.prove import (
@@ -387,6 +391,188 @@ class TestCounters:
         assert frozenset({("BbCtDone", True)}) in states
 
 
+def _never_concretely(program: Program, tag: str, *, dts=(0.010, 0.001), scans=3000) -> None:
+    """Stepping truth for a free-running program: *tag* stays off at these dts."""
+    for dt in dts:
+        plc = PLC(program, dt=dt)
+        for _ in range(scans):
+            plc.step()
+            assert not plc.current_state.tags.get(tag), (dt, plc.current_state.scan_id)
+
+
+ALL_OFF_BLACKBOX = _OptConfig(
+    **{
+        name: False
+        for name in _OptConfig.__dataclass_fields__
+        if name not in ("domains_only", "abstract_timers")
+    },
+    abstract_timers=True,
+)
+
+
+class TestReviewRound1:
+    """The first review's false Proven and replay findings, each against stepping."""
+
+    def test_counter_read_through_arithmetic_keeps_its_count(self):
+        # B1: ``C.Acc * 2 > 8`` reads the accumulator inside arithmetic, an
+        # opaque atom to the atom index; the min(Acc, preset) clamp hid 5.
+        pulse, reset = Bool("BbR1KP", external=True), Bool("BbR1KR", external=True)
+        count, bad = Counter.clone("BbR1KC"), Bool("BbR1KBad")
+        with Program(strict=False) as logic:
+            with Rung(pulse):
+                count_up(count, 3).reset(reset)
+            with Rung(count.Acc * 2 > 8):
+                latch(bad)
+        seq = [({"BbR1KP": i % 2 == 0}, 1) for i in range(1, 14)]
+        assert _first_hit(logic, seq, bad.name) == 10
+        result = never(logic, bad, _opt_config=BLACKBOX, _debug=True)
+        _assert_replays(logic, result, bad.name)
+        assert not result._debug_context.count_clamps
+
+    def test_down_counter_read_through_arithmetic_keeps_its_count(self):
+        pulse, reset = Bool("BbR1KP2", external=True), Bool("BbR1KR2", external=True)
+        count, bad = Counter.clone("BbR1KC2"), Bool("BbR1KBad2")
+        with Program(strict=False) as logic:
+            with Rung(pulse):
+                count_down(count, -2).reset(reset)
+            with Rung(count.Acc - 1 < -4):
+                latch(bad)
+        seq = [({"BbR1KP2": i % 2 == 0}, 1) for i in range(1, 14)]
+        assert _first_hit(logic, seq, bad.name) == 8
+        _assert_replays(logic, never(logic, bad, _opt_config=BLACKBOX), bad.name)
+
+    @pytest.mark.parametrize("config", [BLACKBOX, ALL_OFF_BLACKBOX], ids=["default", "all_off"])
+    def test_timer_read_through_arithmetic_lands_between(self, config):
+        # B2: ``T.Acc * 2`` in a comparison; only hold/jump-to-preset was offered.
+        en = Bool("BbR1ExEn", external=True)
+        timer, bad = Timer.clone("BbR1ExT"), Bool("BbR1ExBad")
+        with Program(strict=False) as logic:
+            with Rung(en):
+                on_delay(timer, 1000)
+            with Rung(timer.Acc * 2 > 700, timer.Acc * 2 < 760):
+                latch(bad)
+        assert _first_hit(logic, [({"BbR1ExEn": True}, 60)], bad.name) == 36
+        result = never(logic, bad, _opt_config=config, _debug=True)
+        _assert_replays(logic, result, bad.name)
+        assert "BbR1ExT_Acc" in result._debug_context.timer_model.exact
+
+    @pytest.mark.parametrize("config", [BLACKBOX, ALL_OFF_BLACKBOX], ids=["default", "all_off"])
+    def test_off_delay_read_through_arithmetic_lands_between(self, config):
+        en = Bool("BbR1E3", external=True)
+        timer, bad = Timer.clone("BbR1E3T"), Bool("BbR1E3Bad")
+        with Program(strict=False) as logic:
+            with Rung(en):
+                off_delay(timer, 1000)
+            with Rung(timer.Acc + 1 > 300, timer.Done):
+                latch(bad)
+        seq = [({"BbR1E3": True}, 2), ({"BbR1E3": False}, 60)]
+        assert _first_hit(logic, seq, bad.name) == 32
+        _assert_replays(logic, never(logic, bad, _opt_config=config), bad.name)
+
+    def test_settled_replay_does_not_confirm_a_running_timer(self):
+        # B3: Y is on only while the long timer runs; Z needs it done before
+        # the short one, which no timing gives.  The replay stopped at Y.
+        en = Bool("BbR1SEn", external=True)
+        long_t, short_t = Timer.clone("BbR1SLong"), Timer.clone("BbR1SShort")
+        y, z = Bool("BbR1SY"), Bool("BbR1SZ")
+        with Program(strict=False) as logic:
+            with Rung(en):
+                on_delay(long_t, 1000)
+            with Rung(en):
+                on_delay(short_t, 30)
+            with Rung(en, ~long_t.Done):
+                out(y)
+            with Rung(long_t.Done, ~short_t.Done):
+                latch(z)
+        exact = _OptConfig(abstract_timers=False)
+        assert isinstance(never(logic, Or(y, z), settled=True, _opt_config=exact), Proven)
+        result = never(logic, Or(y, z), settled=True, _opt_config=BLACKBOX)
+        assert not isinstance(result, Counterexample), result.trace
+
+    def test_settled_counterexample_ends_settled(self):
+        en = Bool("BbR1S2En", external=True)
+        timer, z = Timer.clone("BbR1S2T"), Bool("BbR1S2Z")
+        with Program(strict=False) as logic:
+            with Rung(en):
+                on_delay(timer, 30)
+            with Rung(timer.Done):
+                latch(z)
+        result = never(logic, z, settled=True, _opt_config=BLACKBOX)
+        _assert_replays(logic, result, z.name)
+        assert _replay(logic, result.trace).current_state.tags["BbR1S2T_Done"] is True
+
+    def test_free_system_input_trace_holding_a_timer_is_replayed(self):
+        # B4: no tick moved, but the search held T at 0 for 11 scans; the
+        # shortcut for clock-only traces returned it unreplayed.
+        from pyrung.core.system_points import system
+
+        timer, osc = Timer.clone("BbR1YT"), Bool("BbR1YOsc")
+        count, bad = Counter.clone("BbR1YC"), Bool("BbR1YBad")
+        with Program(strict=False) as logic:
+            with Rung():
+                on_delay(timer, 30)
+            with Rung(~osc):
+                out(osc)
+            with Rung(osc):
+                count_up(count, 6).reset(Bool("BbR1YRst", external=True))
+            with Rung(count.Done, ~timer.Done, system.sys.clock_1s):
+                latch(bad)
+        _never_concretely(logic, bad.name)
+        result = never(logic, bad, _opt_config=BLACKBOX)
+        assert not isinstance(result, Counterexample), result.trace
+
+    def test_choice_overflow_is_its_own_kind(self):
+        # N4: too many timers finishing on one scan is not a choices= problem.
+        en = Bool("BbR1OvEn", external=True)
+        timers = [Timer.clone(f"BbR1Ov{i}") for i in range(15)]
+        bad = Bool("BbR1OvBad")
+        with Program(strict=False) as logic:
+            with Rung(en):
+                for i, timer in enumerate(timers):
+                    on_delay(timer, 100 + i)
+            with Rung(*(timer.Done for timer in timers), ~en):
+                latch(bad)
+        result = never(logic, bad, _opt_config=BLACKBOX)
+        assert isinstance(result, Intractable)
+        assert result.kind == "timers"
+        assert any("run_for()" in hint for hint in result.hints)
+
+    def test_timer_started_before_an_edge_window_replays(self):
+        # The wait moves before an input change a plain step earlier: the
+        # button's pulse reaches the reader a scan later (``d1`` latched below
+        # its reader), and the timer must finish on that scan.
+        btn, run = Bool("BbR1WBtn", external=True), Bool("BbR1WRun", external=True)
+        d1, d2, z = Bool("BbR1WD1"), Bool("BbR1WD2"), Bool("BbR1WZ")
+        timer = Timer.clone("BbR1WT")
+        with Program(strict=False) as logic:
+            with Rung(d1):
+                out(d2)
+            with Rung():
+                reset(d1)
+            with Rung(rise(btn)):
+                latch(d1)
+            with Rung(run):
+                on_delay(timer, 80)
+            with Rung(d2, rise(timer.Done)):
+                latch(z)
+        seq = [({"BbR1WRun": True}, 6), ({"BbR1WBtn": True}, 3)]
+        assert _first_hit(logic, seq, z.name) == 8
+        _assert_replays(logic, never(logic, z, _opt_config=BLACKBOX), z.name)
+
+    def test_property_edge_on_an_unread_input_does_not_confirm_power_on(self):
+        # A property's rise() the search leaves undecided: the power-on
+        # counterexample did not replay, and is now named for it.
+        a, c, y = Bool("BbR1PA", external=True), Bool("BbR1PC", external=True), Bool("BbR1PY")
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(y)
+        for prop in (rise(c), And(y, rise(c))):
+            result = never(logic, prop, _opt_config=BLACKBOX)
+            assert isinstance(result, Intractable), result
+            assert result.kind == "property"
+            assert "BbR1PC" in result.tags
+
+
 class TestKnownHoles:
     @pytest.mark.xfail(
         strict=True,
@@ -412,3 +598,32 @@ class TestKnownHoles:
         seq = [({}, 1), ({"BbDlBtn": True}, 2), ({"BbDlC": True}, 1)]
         assert _first_hit(logic, seq, bad.name) is not None
         assert not isinstance(never(logic, bad, _opt_config=BLACKBOX), Proven)
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "classify: the same delay-line hole (bob/classify-entry-read, 6e6f006); "
+            "with it the black-box replay slides the timer's wait before the button "
+            "and confirms the counterexample"
+        ),
+    )
+    def test_delay_line_into_a_timer_edge_is_not_proven(self):
+        btn, run = Bool("BbDtBtn", external=True), Bool("BbDtRun", external=True)
+        y1, y2, y3, z = Bool("BbDtY1"), Bool("BbDtY2"), Bool("BbDtY3"), Bool("BbDtZ")
+        timer = Timer.clone("BbDtT")
+        with Program(strict=False) as logic:
+            with Rung(y2):
+                out(y3)
+            with Rung(y1):
+                out(y2)
+            with Rung(rise(btn)):
+                out(y1)
+            with Rung(run):
+                on_delay(timer, 80)
+            with Rung(y3, rise(timer.Done)):
+                latch(z)
+        seq = [({"BbDtRun": True}, 5), ({"BbDtBtn": True}, 3)]
+        assert _first_hit(logic, seq, z.name) == 8
+        result = never(logic, z, _opt_config=BLACKBOX)
+        assert not isinstance(result, Proven)
+        _assert_replays(logic, result, z.name)

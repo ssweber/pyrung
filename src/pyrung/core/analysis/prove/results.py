@@ -151,10 +151,15 @@ class Intractable:
     """Verification cannot complete within resource bounds.
 
     ``kind`` says which: ``"search"`` (the state space is too big or
-    unbounded: narrow it with ``choices=``/``min=``/``max=``) or ``"timing"``
+    unbounded: narrow it with ``choices=``/``min=``/``max=``), ``"timing"``
     (unconfirmed: the search found a violation, but replaying it on the
     concrete PLC diverged because it needs a timer to finish on a scan the
-    PLC's timing does not give; check the timing with a ``run_for()`` test).
+    PLC's timing does not give; check the timing with a ``run_for()`` test),
+    ``"timers"`` (so many timers run at once that the ways they can finish
+    on one scan pass the verifier's cap: prove a property whose scope reaches
+    fewer of them, or test the timing with ``run_for()``) or ``"property"``
+    (the property's ``rise()``/``fall()``, which the search leaves undecided,
+    gave a counterexample the concrete PLC did not reproduce).
     A timing result carries the search's ``trace`` (each step's ``timers``
     names the ticks it moved; empty for the search kind) and
     ``diverged_at``, the index of the step where replay left it.

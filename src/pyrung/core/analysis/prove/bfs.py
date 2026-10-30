@@ -226,17 +226,21 @@ def _bfs_explore(
         names = ", ".join(exc.keys) or "several timers"
         overflow = Intractable(
             reason=(
-                f"timers [{names}] can each finish on one scan in more ways than the"
+                f"timers [{names}] can finish on one scan in more combinations than the"
                 f" verifier enumerates"
             ),
             dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
             estimated_space=0,
             tags=list(exc.keys),
             hints=[
-                "  every running timer may finish on any scan; a property whose scope"
-                " reaches fewer of them at once stays under the cap"
+                "  every running timer may finish on any scan, so timers running at once"
+                " multiply each scan's successors; narrowing choices=/min=/max= does not"
+                " help",
+                "  prove a property whose scope reaches fewer of them at once, or check"
+                " the timing with a run_for() test",
             ],
             journal=context.journal,
+            kind="timers",
         )
         if predicates is None:
             return overflow
