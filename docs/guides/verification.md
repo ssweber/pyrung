@@ -64,6 +64,8 @@ elif isinstance(result, Intractable):
 
 `Intractable` means the state space is too large. The `hints` list describes the largest dimensions — which tags are blowing up the state space and why. The fix is usually adding `choices` or `min`/`max` metadata to the unbounded tags — the same metadata you'd declare anyway for Data View dropdowns and static validation.
 
+Some accumulators have no exact model yet, and a program that has one is `Intractable` for every query, whatever it reads: a `time_event_drum`, a `debounce`, `flasher` or `timed` coil, and a `time_drum` that can time a step while its completion flag is on (one with a jump, a flag that starts on, or another writer of its step register or flag). The hint names the accumulator and why; cover that logic with tests.
+
 ### Scoping
 
 With condition expressions, scope is derived automatically from the referenced tags. Override with `scope=` when needed:

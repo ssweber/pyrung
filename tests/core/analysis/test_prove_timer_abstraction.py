@@ -1207,7 +1207,55 @@ class TestDrumCompletion:
         result = never(logic, Bool("Done"), Int("Step") == 3, Bool("Y3"))
         assert isinstance(result, Intractable)
         assert "Acc" in result.tags
-        assert any("jumping time_drum" in hint for hint in result.hints)
+        assert any(
+            "time_drum (its jump keeps the completion flag on)" in hint for hint in result.hints
+        )
+
+    def test_flag_that_starts_on_is_intractable_naming_it(self) -> None:
+        """No jump, but the flag is on from the start, while the drum times
+        steps 1 and 2: the tri-state read it as settled and missed step 2."""
+        from pyrung.core import time_drum
+
+        with Program(strict=False) as logic:
+            with Rung(Bool("Enable")):
+                time_drum(
+                    outputs=[Bool("Y1"), Bool("Y2"), Bool("Y3")],
+                    presets=[200, 300, 500],
+                    unit="ms",
+                    pattern=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                    current_step=Int("Step"),
+                    accumulator=Int("Acc"),
+                    completion_flag=Bool("Done", default=True),
+                ).reset(Bool("Reset"))
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Enable": True})
+        plc.run_for(0.25)
+        tags = plc.current_state.tags
+        assert (tags["Done"], tags["Step"], tags["Y2"]) == (True, 2, True)
+
+        result = never(logic, Bool("Done"), Int("Step") == 2, Bool("Y2"))
+        assert isinstance(result, Intractable)
+        assert any("its completion flag Done starts on" in hint for hint in result.hints)
+
+    def test_another_step_writer_is_intractable_naming_it(self) -> None:
+        from pyrung.core import time_drum
+
+        with Program(strict=False) as logic:
+            with Rung(Bool("Enable")):
+                time_drum(
+                    outputs=[Bool("Y1"), Bool("Y2")],
+                    presets=[200, 300],
+                    unit="ms",
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=Int("Step"),
+                    accumulator=Int("Acc"),
+                    completion_flag=Bool("Done"),
+                ).reset(Bool("Reset"))
+            with Rung(Bool("Back")):
+                copy(1, Int("Step"), oneshot=True)
+        result = never(logic, Bool("Done"), Int("Step") == 2, Bool("Y2"))
+        assert isinstance(result, Intractable)
+        assert any("its step register Step has another writer" in hint for hint in result.hints)
 
     def test_time_drum_without_a_jump_keeps_its_abstraction(self) -> None:
         logic = self._time_drum(jump=False)

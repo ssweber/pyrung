@@ -2367,10 +2367,11 @@ def _unmodeled_accumulators(program: Program) -> dict[str, str]:
     for instr in walk_instructions(program):
         if isinstance(instr, TimeEventDrumInstruction):
             out[instr.accumulator.name] = "time_event_drum"
-        elif isinstance(instr, TimeDrumInstruction) and _drum_times_under_its_flag(instr, program):
-            # A jump (or another writer of its step or flag) times steps
-            # again under a completion flag that is on.
-            out[instr.accumulator.name] = "jumping time_drum"
+        elif isinstance(instr, TimeDrumInstruction):
+            # It times steps under a completion flag that is on.
+            reason = _drum_times_under_its_flag(instr, program)
+            if reason is not None:
+                out[instr.accumulator.name] = f"time_drum ({reason})"
         elif isinstance(instr, (DebounceInstruction, FlasherInstruction)):
             verb = "debounce" if isinstance(instr, DebounceInstruction) else "flasher"
             out[instr.on_acc.name] = verb
