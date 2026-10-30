@@ -703,3 +703,36 @@ class TestKnownHoles:
         assert not isinstance(result, Proven)
         _assert_replays(logic, result, z.name)
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "classify input partition (fixed on bob/input-partition): an Int input "
+            "with min/max compared tag-to-tag with a timer accumulator "
+            "(T.Acc == In) is explored only at representatives derived from its "
+            "own literal comparisons, so the accumulator values the program "
+            "checks between them are never tried"
+        ),
+    )
+    def test_input_compared_to_an_accumulator_is_not_partitioned_by_its_own_literals(self):
+        en = Bool("BbEqEn", external=True)
+        inp = Int("BbEqIn", external=True, min=0, max=1000)
+        timer = Timer.clone("BbEqT")
+        y, a, b, bad = Bool("BbEqY"), Bool("BbEqA"), Bool("BbEqB"), Bool("BbEqBad")
+        with Program(strict=False) as logic:
+            with Rung(en):
+                on_delay(timer, 1000)
+            with Rung(inp > 500, inp < 600):
+                out(y)
+            with Rung(timer.Acc == inp, timer.Acc < 540, y):
+                latch(a)
+            with Rung(a, timer.Acc == inp, timer.Acc > 540, timer.Acc < 560, y):
+                latch(b)
+            with Rung(b, timer.Acc == inp, timer.Acc > 570, y):
+                latch(bad)
+        seq = [
+            ({"BbEqEn": True, "BbEqIn": 520}, 52),
+            ({"BbEqIn": 550}, 3),
+            ({"BbEqIn": 580}, 3),
+        ]
+        assert _first_hit(logic, seq, bad.name) == 58
+        assert not isinstance(never(logic, bad, _opt_config=BLACKBOX), Proven)
