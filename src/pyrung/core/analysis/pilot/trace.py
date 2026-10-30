@@ -614,10 +614,11 @@ def _trace_demand(
 ) -> list[TraceNode]:
     """Resolve one profile condition through the ordinary trace machinery.
 
-    *counts_edges*: the demand is a counter's count input.  A counter counts
-    its input's rising edges, so an input already on is no count: its
-    steerable leaves stay actions (to be pulsed off and on again), and only
-    the conjunct nearest the counter pulses (:func:`_mark_pulse_last_conjunct`).
+    *counts_edges*: the demand is a counter's pulse demand (a count input, or
+    an edge on its reset pin).  A counter counts its input's rising edges, so
+    an input already on is no count: its steerable leaves stay actions (to be
+    pulsed off and on again), and only the conjunct nearest the counter
+    pulses (:func:`_mark_pulse_last_conjunct`).
     """
 
     if demand is None or demand.condition is None:
