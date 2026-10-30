@@ -476,6 +476,8 @@ Both forms produce identical CSV output.
 
 A NOP has to sit alone on a bare wire, so the exporter refuses two shapes CLICK will not hold: an empty rung with conditions (`with Rung(C1): pass`; CLICK rejects a contact in front of NOP) and an empty rung next to a `.continued()` rung (they would share one CLICK rung, and CLICK deletes the NOP row).
 
+A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) needs a rung of its own. CLICK takes all inputs (pins) of a box from the same branch, the rail, so a box whose input wire also feeds another output (`latch(C3)` then `count_up(...).reset(...)` on one rung, or the box in one `branch()` beside another) can be drawn but does not compile (C000A). The exporter refuses it; put the box on its own rung, and an output below it on a `.continued()` rung. A box with no pins, such as a TON, can share the wire.
+
 ## Loading PLC state
 
 Use CLICK Programming Software's **PLC > Read Data from PLC** to dump the live state of a CLICK PLC to CSV, then load that snapshot into a pyrung runner so it starts right where the PLC was.

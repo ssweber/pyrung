@@ -318,8 +318,39 @@ class _LadderExporter(
                 source=rung,
             )
 
+    def _check_box_alone(self, rung: Rung, *, path: str) -> None:
+        """Refuse a box with pins that shares its rung's wire with another output.
+
+        CLICK takes all inputs (pins) of a box from the same branch, the rail
+        (C000A), so the box's input wire cannot also feed another output.
+        """
+        outputs: list[tuple[str, Any]] = []
+
+        def collect(item: Rung, item_path: str) -> None:
+            for index, instruction in enumerate(item._instructions):
+                outputs.append((f"{item_path}.instruction[{index}]", instruction))
+            for index, child in enumerate(item._branches):
+                collect(child, f"{item_path}.branch[{index}]")
+
+        collect(rung, path)
+        if len(outputs) < 2:
+            return
+        for instruction_path, instruction in outputs:
+            if self._pin_specs(instruction, path=instruction_path):
+                self._raise_issue(
+                    path=instruction_path,
+                    message=(
+                        f"CLICK refuses {type(instruction).__name__} with other outputs on "
+                        "its rung (C000A: all inputs (pins) of a box instruction must start "
+                        "from the same branch). Give the box a rung of its own; an output below "
+                        "it can go on a continued() rung."
+                    ),
+                    source=instruction,
+                )
+
     def _render_rung(self, rung: Rung, *, path: str) -> list[tuple[str, ...]]:
         comment_rows = self._comment_rows(rung)
+        self._check_box_alone(rung, path=path)
 
         if not rung._instructions and not rung._branches:
             # Empty rung (comment-only or bare pass) → emit NOP in AF column.

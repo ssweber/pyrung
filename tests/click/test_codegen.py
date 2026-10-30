@@ -2249,44 +2249,6 @@ class TestRoundTrip:
             """,
         )
 
-    def test_coil_before_pinned_drum(self):
-        """A coil and a drum share a rung; the drum's reset pin stays with the drum."""
-        _assert_codegen_body(
-            """
-            with Program() as p:
-                with rung(X1):
-                    latch(C3)
-                    event_drum(
-                        outputs=[C3],
-                        events=[C2],
-                        pattern=[[1]],
-                        current_step=DS1,
-                        completion_flag=C1,
-                    ).reset(C4)
-            """,
-            """
-            with rung(X001):
-                latch(C3)
-                event_drum(outputs=[C3], events=[C2], pattern=[[1]], current_step=DS1, completion_flag=C1).reset(C4)
-            """,
-        )
-
-    def test_coil_before_pinned_timer(self):
-        """A coil and a retentive timer share a rung; the reset pin stays with the timer."""
-        _assert_codegen_body(
-            """
-            with Program() as p:
-                with rung(X1):
-                    out(Y1)
-                    on_delay(Timer[1], preset=100, unit="Tms").reset(X2)
-            """,
-            """
-            with rung(X001):
-                out(Y001)
-                on_delay(T1, 100).reset(X002)
-            """,
-        )
-
     def test_time_event_drum(self):
         """Time & event drum: blank presets and events round-trip as None."""
         _assert_codegen_body(
