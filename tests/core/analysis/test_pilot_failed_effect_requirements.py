@@ -761,8 +761,8 @@ def test_scan_zero_observation_emits_exact_preset_requirement() -> None:
     assert started.data["active_requirements"] == ()
     requirement = activated.data["requirement"]
     assert requirement.condition == Cmp("FirstScanWatchdogPresetMs", ">", 10)
-    assert requirement.deadline.ordinal == 27
-    assert requirement.demanding_occurrence.ordinal == 33
+    assert requirement.deadline.ordinal == 28
+    assert requirement.demanding_occurrence.ordinal == 34
     assert requirement.operand_authority is OperandAuthority.ADJUSTABLE
     assert requirement.source_scan == 0
 
@@ -815,8 +815,8 @@ def test_failed_alarm_effect_derives_exact_preset_requirement() -> None:
     assert result.requirement is not None
     requirement = result.requirement
     assert requirement.condition == Cmp("WatchdogPresetMs", ">", 10)
-    assert requirement.deadline.ordinal == 29
-    assert requirement.demanding_occurrence.ordinal == 35
+    assert requirement.deadline.ordinal == 30
+    assert requirement.demanding_occurrence.ordinal == 36
     assert requirement.operand_authority is OperandAuthority.ADJUSTABLE
 
 
@@ -1174,8 +1174,8 @@ def test_conditional_negative_uses_upstream_deadline_but_honors_set_preset() -> 
     assert result.requirement is not None
     requirement = result.requirement
     assert requirement.condition == Cmp("ConditionalNegativePresetMs", "<=", 10)
-    assert requirement.deadline.ordinal == 17
-    assert requirement.demanding_occurrence.ordinal == 23
+    assert requirement.deadline.ordinal == 18
+    assert requirement.demanding_occurrence.ordinal == 24
     assert not requirement.permits_assignment
 
 

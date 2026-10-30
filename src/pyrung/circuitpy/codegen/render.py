@@ -1146,7 +1146,8 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
         ]
     )
     # The RUN scan: the STOP command a rung wrote last scan is taken first
-    # (core's on_scan_start), and the code is in STOP at its end.
+    # (core's on_scan_start), and that command puts the code in STOP at its
+    # end.
     run_scan_lines = [
         *_render_stop_command_take_lines(ctx, 8),
         *_render_system_point_scan_lines(ctx, 8),

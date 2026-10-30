@@ -95,7 +95,7 @@ def test_recorded_startup_cause_survives_later_pilot_overlay() -> None:
 
     original = plc.cause(trip, scan=trip_scan, deep=True)
     assert original is not None
-    assert original.effect == Transition(trip.name, trip_scan, False, True, 17)
+    assert original.effect == Transition(trip.name, trip_scan, False, True, 18)
     assert original.steps[0].triggers == (
         Transition(system.sys.first_scan.name, trip_scan, None, True),
     )
@@ -178,7 +178,7 @@ def test_deep_cause_resolves_synthetic_rung_in_its_executing_overlay_epoch() -> 
         establishing_scan,
         False,
         True,
-        16,
+        17,
     )
     assert establishing_step.subroutine == "PILOT"
     assert establishing_step.rung_index == 0

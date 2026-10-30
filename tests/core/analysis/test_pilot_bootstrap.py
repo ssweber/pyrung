@@ -136,20 +136,20 @@ def test_cold_start_retains_boundary_zero_and_exact_bootstrap_execution() -> Non
     )
     assert snapshot.landing[first_scan.ProcessStep.name] == first_scan.ABORTED
     assert _snapshot_accesses(snapshot) == (
-        (14, "read", "sys.first_scan", True, 0),
-        (15, "write", "FirstScanProcessStep", 0, 10, 0),
-        (16, "read", "FirstScanProcessStep", 10, 1),
-        (19, "write", "FirstScanProcessStep", 10, 40, 1),
-        (20, "read", "FirstScanProcessStep", 40, 2),
-        (23, "write", "FirstScanProcessStep", 40, 80, 2),
-        (24, "read", "FirstScanWatchdog_Acc", 0, 2),
-        (27, "read", "FirstScanWatchdogPresetMs", 0, 2),
-        (29, "write", "FirstScanWatchdog_Done", False, True, 2),
-        (30, "write", "FirstScanWatchdog_Acc", 0, 10, 2),
-        (31, "write", "FirstScanWatchdog_EN", False, True, 2),
-        (32, "write", "FirstScanWatchdog_TT", False, False, 2),
-        (33, "read", "FirstScanWatchdog_Done", True, 3),
-        (36, "write", "FirstScanProcessStep", 80, 90, 3),
+        (15, "read", "sys.first_scan", True, 0),
+        (16, "write", "FirstScanProcessStep", 0, 10, 0),
+        (17, "read", "FirstScanProcessStep", 10, 1),
+        (20, "write", "FirstScanProcessStep", 10, 40, 1),
+        (21, "read", "FirstScanProcessStep", 40, 2),
+        (24, "write", "FirstScanProcessStep", 40, 80, 2),
+        (25, "read", "FirstScanWatchdog_Acc", 0, 2),
+        (28, "read", "FirstScanWatchdogPresetMs", 0, 2),
+        (30, "write", "FirstScanWatchdog_Done", False, True, 2),
+        (31, "write", "FirstScanWatchdog_Acc", 0, 10, 2),
+        (32, "write", "FirstScanWatchdog_EN", False, True, 2),
+        (33, "write", "FirstScanWatchdog_TT", False, False, 2),
+        (34, "read", "FirstScanWatchdog_Done", True, 3),
+        (37, "write", "FirstScanProcessStep", 80, 90, 3),
     )
 
 
@@ -201,29 +201,29 @@ def test_destructive_bootstrap_reports_exact_target_overwrite_and_consumed_hando
     assert target.disposition == "OVERWRITTEN"
     assert target.appeared is not None
     assert (target.appeared.ordinal, target.appeared.values) == (
-        23,
+        24,
         (first_scan.RUNNING, first_scan.AT_TARGET),
     )
     assert target.displacement is not None
     assert (target.displacement.ordinal, target.displacement.values) == (
-        36,
+        37,
         (first_scan.AT_TARGET, first_scan.ABORTED),
     )
     assert tuple((read.ordinal, read.tag, read.values) for read in target.observed_reads) == (
-        (33, first_scan.Watchdog.Done.name, (True,)),
+        (34, first_scan.Watchdog.Done.name, (True,)),
     )
 
     # Each intermediate value was correctly consumed at its exact read.  Its
     # later advancement is legitimate and does not become an overwrite.
     assert (running.disposition, running.appeared.ordinal, running.consumer_read.ordinal) == (
         "SURVIVED",
-        19,
         20,
+        21,
     )
     assert (ready.disposition, ready.appeared.ordinal, ready.consumer_read.ordinal) == (
         "SURVIVED",
-        15,
         16,
+        17,
     )
 
 
@@ -376,20 +376,20 @@ def test_alarmed_action_scan_retains_complete_then_watchdog_overwrite() -> None:
     assert projection.entry_tags[alarmed.ProcessStep.name] == alarmed.ALARMED
     assert projection.exit_tags[alarmed.ProcessStep.name] == alarmed.ALARMED
     assert _ordered_accesses(projection) == (
-        (16, "read", "Reset", True, 0),
-        (17, "read", "ProcessStep", 91, 0),
-        (20, "write", "ProcessStep", 91, 40, 0),
-        (21, "read", "ProcessStep", 40, 1),
-        (22, "read", "AtTarget", True, 1),
-        (25, "write", "ProcessStep", 40, 80, 1),
-        (26, "read", "Watchdog_Acc", 0, 1),
-        (29, "read", "WatchdogPresetMs", 0, 1),
-        (31, "write", "Watchdog_Done", False, True, 1),
-        (32, "write", "Watchdog_Acc", 0, 10, 1),
-        (33, "write", "Watchdog_EN", False, True, 1),
-        (34, "write", "Watchdog_TT", False, False, 1),
-        (35, "read", "Watchdog_Done", True, 2),
-        (38, "write", "ProcessStep", 80, 91, 2),
+        (17, "read", "Reset", True, 0),
+        (18, "read", "ProcessStep", 91, 0),
+        (21, "write", "ProcessStep", 91, 40, 0),
+        (22, "read", "ProcessStep", 40, 1),
+        (23, "read", "AtTarget", True, 1),
+        (26, "write", "ProcessStep", 40, 80, 1),
+        (27, "read", "Watchdog_Acc", 0, 1),
+        (30, "read", "WatchdogPresetMs", 0, 1),
+        (32, "write", "Watchdog_Done", False, True, 1),
+        (33, "write", "Watchdog_Acc", 0, 10, 1),
+        (34, "write", "Watchdog_EN", False, True, 1),
+        (35, "write", "Watchdog_TT", False, False, 1),
+        (36, "read", "Watchdog_Done", True, 2),
+        (39, "write", "ProcessStep", 80, 91, 2),
     )
 
 
@@ -462,13 +462,13 @@ def test_conditional_negative_occurrence_and_separate_recovery_are_execution_fac
         consequence_write.ordinal,
         done_read.run_order,
         consequence_write.run_order,
-    ) == (23, False, 24, 1, 1)
+    ) == (24, False, 25, 1, 1)
     assert observed_definition is not None
     assert (
         observed_definition.occurrence_ordinal,
         observed_definition.from_value,
         observed_definition.to_value,
-    ) == (19, False, False)
+    ) == (20, False, False)
     assert committed.entry_tags[fixture.Watchdog.Done.name] is False
     assert committed.exit_tags[fixture.Watchdog.Done.name] is False
     assert committed.exit_tags[fixture.Consequence.name] is True
@@ -495,7 +495,7 @@ def test_conditional_negative_occurrence_and_separate_recovery_are_execution_fac
         for read in prevented_projection.reads
         if read.occurrence.name == fixture.Watchdog.Done.name
     )
-    assert (prevented_done_read.ordinal, prevented_done_read.occurrence.value) == (24, True)
+    assert (prevented_done_read.ordinal, prevented_done_read.occurrence.value) == (25, True)
     assert prevented_projection.exit_tags[fixture.Consequence.name] is False
     assert not any(
         write.transition.tag_name == fixture.Consequence.name
