@@ -159,7 +159,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         '    if text == "":',
         '        raise ValueError("empty text cannot be parsed")',
         '    if dest_type in {"INT", "DINT"}:',
-        '        _m = re.match(r"[+-]?\\d+", text)',
+        '        _m = re.match(r"([+-]?\\d+)(?:\\.\\d*)?$", text)',
         "        if _m is None:",
         '            raise ValueError("integer parse failed")',
         "        return int(_m.group(1), 10)",
