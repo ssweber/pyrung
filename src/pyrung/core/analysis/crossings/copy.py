@@ -12,7 +12,7 @@ the over-range preimages) — unsound.
 
 It also inverts the two **bijective** conversions:
 
-- ``to_ascii`` (Char->Int, ``ord``) — exact for codes 0..127.
+- ``to_ascii`` (Char->Int, ``ord``) — exact for codes 0..255 (a TXT is a whole byte).
 - ``to_binary`` (Int->Char, ``chr(src & 0xFF)``) — exact only when the source
   range fits one byte (else ``& 0xFF`` aliasing -> fallthrough).
 
@@ -71,7 +71,7 @@ from pyrung.core.instruction.data_transfer import (
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.tag import TagType
 
-_ASCII_MAX = 127  # _ascii_char_from_code / to_ascii cap (instruction/conversions.py)
+_ASCII_MAX = 255  # a TXT is one whole byte (CLICK), so to_ascii/to_binary span 0..255
 _INEQ_OPS = frozenset({"<", "<=", ">", ">="})  # ordering ops a copy passes through
 _NO_STORED_VALUE = object()
 
@@ -394,13 +394,13 @@ class CopyCrossing(BaseCrossing):
             if isinstance(value, int) and not isinstance(value, bool):
                 if 0 <= value <= _ASCII_MAX:
                     return single(Eq(named.name, frozenset({chr(value)})), exact=True)
-                return unsatisfiable(dest_name)  # int outside producible 0..127
+                return unsatisfiable(dest_name)  # int outside producible 0..255
             return REVERSE_FALLTHROUGH  # non-int target -> unsure, defer
         if conv.mode == "binary":  # Int -> Char: dest == chr(src & 0xFF)
             if not (isinstance(value, str) and len(value) == 1):
                 return REVERSE_FALLTHROUGH  # not a single CHAR target -> unsure, defer
             code = ord(value)
-            if code > _ASCII_MAX:  # writer faults above ASCII -> never produced
+            if code > _ASCII_MAX:  # beyond one byte -> never produced
                 return unsatisfiable(dest_name)
             if _source_fits_one_byte(named, ctx):
                 return single(Eq(named.name, frozenset({code})), exact=True)

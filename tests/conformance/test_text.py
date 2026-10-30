@@ -77,6 +77,14 @@ tells apart:
 - ``reset_blank_ascii`` (in-process only): ``reset()`` of a TXT stores the same
   NUL, so its ASCII code is 0 too.  CLICK's Reset coil takes bit memory only
   (X, Y, C, T, CT, SC), so this is pyrung's answer with nothing to compare.
+
+Ordering note: every case fires on one scan and pyrung keeps SC43 on for the rest of
+the scan (a CLICK's flag follows only the last instruction), so the cases that read
+the fault are placed after the ones that expect it clear.  Until the SYS step lands,
+an in-process run cannot tell the expect-1 cases (the clamping ``pack_text_int`` and
+``pack_text_dint``) from a runtime that never faults, since earlier cases already set
+the flag.  The one-scan-per-scenario unit tests in
+``tests/core/test_click_text_semantics.py`` pin the clamp fault itself.
 """
 
 from __future__ import annotations

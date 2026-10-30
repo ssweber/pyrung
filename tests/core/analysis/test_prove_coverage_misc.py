@@ -214,3 +214,16 @@ class TestCheckLockChange:
         d = check_lock(modified, lock_path)
         assert d is not None
         assert d.added or d.removed
+
+
+def test_to_ascii_target_domain_covers_every_byte():
+    """A TXT is a whole byte: copy(chr(200), DS, to_ascii) writes 200, so the
+    inferred domain of the target must reach 255, not stop at 127."""
+    from pyrung.core import Block, Int, TagType
+    from pyrung.core.analysis.prove.classify import _domain_from_copy_convert
+    from pyrung.core.copy_converters import to_ascii
+    from pyrung.core.instruction import CopyInstruction
+
+    CH = Block("CH", TagType.CHAR, 1, 2)
+    domain = _domain_from_copy_convert(CopyInstruction(CH[1], Int("Code"), convert=to_ascii))
+    assert domain == tuple(range(256))
