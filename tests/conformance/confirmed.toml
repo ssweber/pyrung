@@ -38,6 +38,7 @@
 "counters/reset_zero_preset" = { hash = "922a21c0deaa", on = "2026-10-30" }
 "counters/survives_rung_false" = { hash = "a51735615a61", on = "2026-10-30" }
 "counters/up_down_same_scan" = { hash = "6c04b9e3dea6", on = "2026-10-30" }
+"drum/completion_turns_outputs_off" = { hash = "b4facffd4fe1", on = "2026-10-30" }
 "drum/events_are_edges" = { hash = "65ea26ca6cad", on = "2026-10-30" }
 "drum/invalid_step_corrects_to_1" = { hash = "453b9ec24c46", on = "2026-10-30" }
 "drum/jump_jog_edge_triggered" = { hash = "2646e32ab105", on = "2026-10-30" }
@@ -80,6 +81,7 @@
 "numeric/copy_clamps_calc_wraps" = { hash = "b58406ac7737", on = "2026-10-30" }
 "numeric/copy_source_to_dest" = { hash = "3a43843761cb", on = "2026-10-30" }
 "numeric/dint_calc_wraps" = { hash = "e280219d1273", on = "2026-10-30" }
+"numeric/dint_quotient_into_int" = { hash = "19bfe244ed5e", on = "2026-10-30" }
 "numeric/div_by_zero" = { hash = "038935904fff", on = "2026-10-30" }
 "numeric/hex_literal_is_decimal" = { hash = "276c8ddb2768", on = "2026-10-30" }
 "numeric/int_calc_wraps" = { hash = "730a97d1e411", on = "2026-10-30" }
