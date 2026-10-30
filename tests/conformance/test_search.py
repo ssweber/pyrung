@@ -334,7 +334,6 @@ group = Group(
             "A search of DS4203..DS4207 = {5, 20, 7, 20, 9} for == 20 writes the register number "
             "of the first match, 4204 (Result1), and turns found on (Result2 = 1)",
             ladder=prove_hit_returns_address,
-            confirmed=True,
             init=_init(4203, 4207, 851),
             expect={"Result1": 4204, "Result2": 1},
         ),
@@ -342,7 +341,6 @@ group = Group(
             "A search that finds nothing writes -1 over the old result and turns found off: "
             "result 77 and found on become -1 (Result1) and off (Result2 = 1 when found is off)",
             ladder=prove_miss_writes_minus_one,
-            confirmed=True,
             init=_init(4223, 4225, 852),
             expect={"Result1": -1, "Result2": 1},
         ),
@@ -352,7 +350,6 @@ group = Group(
             "(Result2), <= 3 finds 4243 (Result3), >= 9 finds 4246 (Result4), != 3 finds "
             "4244 (Scratch)",
             ladder=prove_operators_signed,
-            confirmed=True,
             init=_init(4243, 4247, 853, 854, 855, 856, 857),
             expect={
                 "Result1": 4245,
@@ -368,7 +365,6 @@ group = Group(
             "(Result2); the same == 9 over DS4263..DS4265 (Result3) and == 7 over "
             "DS4264..DS4266 (Result4) find nothing, -1",
             ladder=prove_range_ends_inclusive,
-            confirmed=True,
             init=_init(4263, 4266, 858, 859, 860, 861),
             expect={"Result1": 4263, "Result2": 4266, "Result3": -1, "Result4": -1},
         ),
@@ -377,7 +373,6 @@ group = Group(
             "hit on scan 2 (4284, found on) and a miss on scan 3 (-1, found off) are the same "
             "on scan 8, though from scan 4 the table would now give a miss and a hit",
             ladder=prove_false_rung_preserves,
-            confirmed=True,
             init=_init(4283, 4292, 862, 863),
             expect={"Result1": 4284, "Result2": 1, "Result3": -1, "Result4": 1},
             scans=SCANS,
@@ -387,7 +382,6 @@ group = Group(
             "over DS4303..DS4308 = {7, 1, 7, 7, 2, 7} for == 7 the results on scans 1..4 are "
             "4303, 4305, 4306, 4308 (Result1..4)",
             ladder=prove_continuous_walks,
-            confirmed=True,
             init=_init(4303, 4311, 864),
             expect={"Result1": 4303, "Result2": 4305, "Result3": 4306, "Result4": 4308},
             scans=SCANS,
@@ -399,7 +393,6 @@ group = Group(
             "scan 4 (Result2, Result4 = 1 when found is off), then 4323 on scan 5 (Result3) "
             "after the ladder wrote 0",
             ladder=prove_continuous_exhausted,
-            confirmed=True,
             init=_init(4323, 4331, 865),
             expect={"Result1": -1, "Result2": -1, "Result3": 4323, "Result4": 1},
             scans=SCANS,
@@ -410,7 +403,6 @@ group = Group(
             "results on scans 1..4 are 4343, 4345, 4343, 4345 when the ladder writes 0 on "
             "scan 3",
             ladder=prove_continuous_zero_restarts,
-            confirmed=True,
             init=_init(4343, 4351, 866),
             expect={"Result1": 4343, "Result2": 4345, "Result3": 4343, "Result4": 4345},
             scans=SCANS,
@@ -420,7 +412,6 @@ group = Group(
             "address every scan: over DS4363..DS4367 = {7, 1, 7, 7, 2} with the result preset "
             "to 4365 it still finds 4363 on scans 1..3 (Result1..3), found on (Result4 = 1)",
             ladder=prove_plain_search_ignores_result,
-            confirmed=True,
             init=_init(4363, 4371, 867),
             expect={"Result1": 4363, "Result2": 4363, "Result3": 4363, "Result4": 1},
             scans=SCANS,
@@ -434,7 +425,6 @@ group = Group(
             ladder=prove_continuous_cursor_is_address,
             init=_init(4383, 4394, 868, 869, 870, 871),
             expect={"Result1": 4386, "Result2": 4385, "Result3": -1, "Result4": -1},
-            confirmed=True,
             pending="TEXT",
         ),
         case(
@@ -442,7 +432,6 @@ group = Group(
             "numbers: DD401..DD404 = {10, 100000, 5, 100000} for >= 100000 finds 402 "
             "(Result1), DF301..DF303 = {1.5, 2.5, 3.5} for > 2.0 finds 302 (Result2)",
             ladder=prove_dint_real_tables,
-            confirmed=True,
             init=init_dint_real_tables,
             expect={"Result1": 402, "Result2": 302},
         ),
@@ -452,7 +441,6 @@ group = Group(
             '"ZA" at the very end finds 207 (Result2), "AZ" finds nothing, -1 (Result3), and '
             'a continuous "AB" search with the result at 202 finds 205 (Result4)',
             ladder=prove_text_windows,
-            confirmed=True,
             init=init_text_windows,
             expect={"Result1": 202, "Result2": 207, "Result3": -1, "Result4": 205},
         ),

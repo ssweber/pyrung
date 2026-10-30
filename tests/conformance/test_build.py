@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from pyrung.click import ClickBlocks
 from pyrung.click.ladder import estimate_steps, pyrung_to_ladder
 from pyrung.conformance import (
     Case,
+    CaseResult,
+    Confirmation,
     Group,
     Manifest,
     ManifestError,
@@ -15,8 +19,11 @@ from pyrung.conformance import (
     build_program,
     case,
     format_report,
+    is_confirmed,
+    load_confirmations,
     load_manifest,
     parse_endpoint,
+    record_confirmations,
     run,
 )
 from pyrung.conformance._ladder import case_comment
@@ -291,13 +298,43 @@ def test_run_a_group_in_process_inside_its_subroutine() -> None:
 
 
 def test_report_marks_unconfirmed_cases() -> None:
-    confirmed = case("on hardware", ladder=_prove_constant, expect={"Result1": 7}, confirmed=True)
+    confirmed = case("on hardware", ladder=_prove_constant, expect={"Result1": 7})
     results = run(Group("g", [confirmed, _seven(sentence="not yet")]))
-    report = format_report(results)
+    report = format_report(results, {"g/constant": Confirmation("abc", "2026-10-30")})
     assert "PASS  g/constant [confirmed] on hardware" in report
     assert "PASS  g/seven [unconfirmed] not yet" in report
     assert report.endswith("1 unconfirmed on hardware")
     assert report.isascii()
+
+
+def test_case_hash_follows_only_its_own_rows() -> None:
+    def hashes(*cases: Case) -> dict[str, str]:
+        return build_program(Group("g", list(cases))).groups[0].case_hashes
+
+    before = hashes(_seven(), case("x", ladder=_prove_constant, expect={"Result1": 7}))
+    assert set(before) == {"seven", "constant"}
+    # Editing one case's expectation changes its hash and no other's.
+    after = hashes(_seven(), case("x", ladder=_prove_constant, expect={"Result1": 8}))
+    assert after["seven"] == before["seven"]
+    assert after["constant"] != before["constant"]
+
+
+def test_a_click_run_records_passes_and_drops_failures(tmp_path) -> None:
+    path = tmp_path / "confirmed.toml"
+    one, two = _seven(), case("x", ladder=_prove_constant, expect={"Result1": 7})
+    passed = CaseResult(case=one, passed=True, actual={}, slot_index=1, group="g", case_hash="h1")
+    failed = CaseResult(case=two, passed=False, actual={}, slot_index=2, group="g", case_hash="h2")
+    added, dropped = record_confirmations(
+        path, [passed, replace(failed, passed=True)], on="2026-10-30"
+    )
+    assert (sorted(added), dropped) == (["g/constant", "g/seven"], [])
+    added, dropped = record_confirmations(path, [passed, failed], on="2026-10-31")
+    assert (added, dropped) == ([], ["g/constant"])
+    record = load_confirmations(path)
+    assert record == {"g/seven": Confirmation("h1", "2026-10-31")}
+    assert is_confirmed(passed, record)
+    # Rewritten since (another hash): unconfirmed until it passes again.
+    assert not is_confirmed(replace(passed, case_hash="h9"), record)
 
 
 def test_pending_case_is_a_strict_xfail_on_pyrung() -> None:

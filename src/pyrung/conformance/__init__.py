@@ -11,6 +11,12 @@ or a real CLICK given its ``host[:port]``, all groups or a chosen subset.
 from pyrung.conformance._build import ConformanceProgram, GroupBuild, build_program
 from pyrung.conformance._case import Case, CaseResult, Group, case
 from pyrung.conformance._circuitpy import CircuitPySim
+from pyrung.conformance._confirm import (
+    Confirmation,
+    is_confirmed,
+    load_confirmations,
+    record_confirmations,
+)
 from pyrung.conformance._manifest import GroupLayout, Manifest, ManifestError, load_manifest
 from pyrung.conformance._modbus import (
     BuildMismatchError,
@@ -30,6 +36,7 @@ __all__ = [
     "CaseResult",
     "CircuitPySim",
     "ConformanceError",
+    "Confirmation",
     "ConformanceProgram",
     "Endpoint",
     "Group",
@@ -42,9 +49,12 @@ __all__ = [
     "build_program",
     "case",
     "format_report",
+    "is_confirmed",
+    "load_confirmations",
     "load_manifest",
     "parse_endpoint",
     "read_program_hash",
+    "record_confirmations",
     "run",
     "run_modbus",
     "wait_for_scan_counter_wrap",

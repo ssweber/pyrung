@@ -46,8 +46,6 @@ class Case:
     id: str
     scans: int = 2
     in_process_only: str | None = None
-    #: True once the case has passed against a real CLICK.
-    confirmed: bool = False
     #: Instructions run every scan while ``Cmd == 0``, after the slot is zeroed.
     init: Callable[[Any], None] | None = None
     #: Conditions that must hold, while ``Cmd == 0``, before the case reports ``Ready``.
@@ -127,6 +125,8 @@ class CaseResult:
     stale: bool = False
     #: The case is ``pending`` and failed its expectation, as it must until its fix lands.
     xfail: bool = False
+    #: Hash of the case's exported rows (over the wire only; ``""`` in-process).
+    case_hash: str = ""
 
 
 def case(
@@ -137,7 +137,6 @@ def case(
     scans: int = 2,
     in_process_only: str | None = None,
     id: str | None = None,
-    confirmed: bool = False,
     init: Callable[[Any], None] | None = None,
     ready: Callable[[Any], Any] | None = None,
     keep: Sequence[Tag] = (),
@@ -158,7 +157,6 @@ def case(
             runner reports it as skipped with this reason.
         id: Stable key of the case's slot in the manifest.  Defaults to the
             ladder function's name without a leading ``_`` or ``prove_``.
-        confirmed: True once the case has passed against a real CLICK.
         init: Puts the case's own state back the way a fresh PLC has it, using
             the instructions' own semantics (a counter's reset input, a drum's
             reset, ``reset()`` on a latched bit, ``fill(0, ...)`` on staged
@@ -217,7 +215,6 @@ def case(
         id=case_id,
         scans=scans,
         in_process_only=in_process_only,
-        confirmed=confirmed,
         init=init,
         ready=ready,
         keep=tuple(keep),

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from pyrung.conformance._case import (
@@ -14,6 +14,7 @@ from pyrung.conformance._case import (
     judge,
     system_tag_name,
 )
+from pyrung.conformance._confirm import Confirmation, is_confirmed
 from pyrung.conformance._ladder import case_label, check_disjoint, emit_case
 from pyrung.conformance._slot import SLOT_FIELDS, make_slot
 from pyrung.core import PLC, Program, Rung, call, subroutine
@@ -232,14 +233,18 @@ def assert_all_passed(results: list[CaseResult]) -> None:
         raise AssertionError("\n".join(lines))
 
 
-def format_report(results: Sequence[CaseResult]) -> str:
+def format_report(
+    results: Sequence[CaseResult], confirmations: Mapping[str, Confirmation] | None = None
+) -> str:
     """One ASCII line per case, then totals.
 
     Each line has the status (PASS, XFAIL for a ``pending`` case that misses
-    CLICK's expectation as it must, FAIL, SKIP, STALE), the hardware
-    confirmation, the pending step and the probe question; a FAIL or XFAIL
-    line is followed by what the case read.
+    CLICK's expectation as it must, FAIL, SKIP, STALE), whether the case has
+    passed on a CLICK as it is now (*confirmations*, see ``_confirm.py``), the
+    pending step and the probe question; a FAIL or XFAIL line is followed by
+    what the case read.
     """
+    confirmations = confirmations or {}
     lines: list[str] = []
     counts = {"PASS": 0, "XFAIL": 0, "FAIL": 0, "SKIP": 0, "STALE": 0}
     unconfirmed = 0
@@ -253,9 +258,10 @@ def format_report(results: Sequence[CaseResult]) -> str:
         else:
             status = "PASS" if r.passed else "FAIL"
         counts[status] += 1
-        if not r.case.confirmed:
+        confirmed = is_confirmed(r, confirmations)
+        if not confirmed:
             unconfirmed += 1
-        marks = ["confirmed" if r.case.confirmed else "unconfirmed"]
+        marks = ["confirmed" if confirmed else "unconfirmed"]
         if r.case.pending is not None:
             marks.append(f"pending {r.case.pending}")
         if r.case.probe is not None:

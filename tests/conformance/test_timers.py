@@ -282,7 +282,6 @@ group = Group(
             "its 200 ms preset (Acc 500 or more, Result3 = 1), its rung dropped at 600 ms, "
             "it reads Acc 0 on that scan (Result1 = 0) and Done never on after (Result2 = 0)",
             ladder=prove_ton_auto_reset,
-            confirmed=True,
             expect={"Result1": 0, "Result2": 0, "Result3": 1},
             scans=80,
         ),
@@ -291,7 +290,6 @@ group = Group(
             "preset and its rung true from scan 3, Done is on for 6 scans (Result1 = 6), "
             "from scan 3 (Result2) to scan 8 (Result3)",
             ladder=prove_ton_done_on_enabling_scan,
-            confirmed=True,
             expect={"Result1": 6, "Result2": 3, "Result3": 8},
             scans=SCANS,
         ),
@@ -300,7 +298,6 @@ group = Group(
             "200 ms preset, 200 ms later it is still done (Result1 = 1) and its Acc still "
             "reads 200..299 (Result2 = 1)",
             ladder=prove_rton_holds_across_rung_false,
-            confirmed=True,
             expect={"Result1": 1, "Result2": 1},
             scans=60,
         ),
@@ -310,7 +307,6 @@ group = Group(
             "Done is off for 1 scan (Result1 = 1), scan 4 (Result2 = 4, Result3 = 4), "
             "with Acc 0 (Result4 = 1)",
             ladder=prove_rton_reset_gap,
-            confirmed=True,
             expect={"Result1": 1, "Result2": 4, "Result3": 4, "Result4": 1},
             scans=SCANS,
         ),
@@ -321,7 +317,6 @@ group = Group(
             "(Result3 = 0), while the one true on scans 1..2 is done on all 8 "
             "(Result2 = 8)",
             ladder=prove_tof_never_enabled,
-            confirmed=True,
             keep=[ClickTimer(41).Done, ClickTimer(41).Acc],
             expect={"Result1": 0, "Result2": 8, "Result3": 0},
             scans=SCANS,
@@ -332,7 +327,6 @@ group = Group(
             "preset (Result2 = 0 scans not, Result3 = 1), and its Acc goes on past the "
             "preset after Done falls (Result4 = 1)",
             ladder=prove_tof_times_only_when_false,
-            confirmed=True,
             keep=[ClickTimer(51).Done, ClickTimer(51).Acc],
             expect={"Result1": 0, "Result2": 0, "Result3": 1, "Result4": 1},
             scans=100,
@@ -343,7 +337,6 @@ group = Group(
             "(Result1 = 2), scans 3 (Result2) to 4 (Result3), and never on with Acc "
             "not 0 (Result4 = 0)",
             ladder=prove_tof_enable_atomic,
-            confirmed=True,
             keep=[ClickTimer(61).Done, ClickTimer(61).Acc],
             expect={"Result1": 2, "Result2": 3, "Result3": 4, "Result4": 0},
             scans=SCANS,
@@ -353,7 +346,6 @@ group = Group(
             "on the scan it is done, the next scan it is not done (Result1 = 1) with its "
             "Acc kept (Result2 = 1), and it is done again before 600 ms (Result3 = 1)",
             ladder=prove_preset_raised_resumes,
-            confirmed=True,
             expect={"Result1": 1, "Result2": 1, "Result3": 1},
             scans=70,
         ),
@@ -362,7 +354,6 @@ group = Group(
             "lowered from 1000 to 100 ms at Acc 300, the next scan it is done "
             "(Result1 = 1) with its Acc kept (Result2 = 1)",
             ladder=prove_preset_lowered_fires_at_once,
-            confirmed=True,
             expect={"Result1": 1, "Result2": 1},
             scans=50,
         ),
@@ -371,7 +362,6 @@ group = Group(
             "scans each add 0.01 s reads 1 at 1.5 s (Result1 = 1), and is done once "
             "990..1099 ms have passed since its enable (Result2 = 1, Result3 = 1)",
             ladder=prove_fractional_accumulation,
-            confirmed=True,
             expect={"Result1": 1, "Result2": 1, "Result3": 1},
             scans=170,
         ),
@@ -380,7 +370,6 @@ group = Group(
             "TD is written to 32000 once it is timing keeps counting from there "
             "(Result3 = 1), reads 32767 (Result1) and is still done (Result2 = 1)",
             ladder=prove_acc_clamps_at_32767,
-            confirmed=True,
             expect={"Result1": 32767, "Result2": 1, "Result3": 1},
             scans=100,
         ),

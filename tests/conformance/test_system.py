@@ -326,7 +326,6 @@ group = Group(
             ladder=prove_scan_counter_steps_by_one,
             expect={"Result1": 7},
             scans=SCANS,
-            confirmed=True,
         ),
         case(
             "The scan clock SC3 toggles every scan and is on exactly when the scan "
@@ -335,7 +334,6 @@ group = Group(
             ladder=prove_scan_clock_follows_counter,
             expect={"Result1": 8, "Result2": 8},
             scans=SCANS,
-            confirmed=True,
             pending="SYS",
         ),
         case(
@@ -345,14 +343,12 @@ group = Group(
             ladder=prove_clock_bits_toggle_at_their_rate,
             expect={"Result1": range(19, 22), "Result2": range(3, 6)},
             scans=CLOCK_WINDOW_MS // 10 + 5,
-            confirmed=True,
         ),
         case(
             "The ladder reads the PLC mode bit SC11 and the mode switch bit SC10 on "
             "in RUN (Result1 = 1, Result2 = 1; 2 would mean off)",
             ladder=prove_mode_bits_on_in_run,
             expect={"Result1": 1, "Result2": 1},
-            confirmed=True,
         ),
         case(
             "The real-time clock runs while the ladder does: its seconds SD26 move "
@@ -360,7 +356,6 @@ group = Group(
             ladder=prove_rtc_seconds_advance,
             expect={"Result1": range(1, 3)},
             scans=RTC_WINDOW_MS // 10 + 5,
-            confirmed=True,
         ),
         case(
             "On the first scan after STOP->RUN the scan counter SD9 reads 1 (Result1) and "

@@ -1,0 +1,103 @@
+# Cases that passed on a real CLICK, written by `make test-conformance PLC=...`.
+# hash: the case's exported rows when it passed; a case whose rows have changed
+# since counts as unconfirmed until it passes again.  hash = "" marks an
+# in-process-only case confirmed some other way.
+
+[cases]
+"call_twice/rise_once_per_scan" = { hash = "907601404de8", on = "2026-10-30" }
+"coils/edge_before_its_writer" = { hash = "8ad43fc30860", on = "2026-10-30" }
+"coils/edge_behind_open_contact" = { hash = "c950cf050de3", on = "2026-10-30" }
+"coils/edge_in_false_rung_branch" = { hash = "e6a06981b660", on = "2026-10-30" }
+"coils/edge_on_first_scan" = { hash = "567ba6961db1", on = "2026-10-30" }
+"coils/edge_sees_previous_scan_end" = { hash = "fc0475cb7a13", on = "2026-10-30" }
+"coils/latch_reset_sticky" = { hash = "77c0a873f230", on = "2026-10-30" }
+"coils/out_follows_rung" = { hash = "604272a50871", on = "2026-10-30" }
+"coils/out_oneshot_fires_one_scan" = { hash = "b09709de46a5", on = "2026-10-30" }
+"coils/out_oneshot_refires" = { hash = "93c702b8a8d8", on = "2026-10-30" }
+"coils/rise_fall_fire_one_scan" = { hash = "6e56cb179136", on = "2026-10-30" }
+"loop/body_oneshot_holds_while_for_false" = { hash = "c320f1d7a513", on = "2026-10-30" }
+"loop/body_rung_contact_per_iteration" = { hash = "6cab715db8c3", on = "2026-10-30" }
+"loop/break_leaves_innermost_loop" = { hash = "3689bec29bc5", on = "2026-10-30" }
+"loop/break_on_same_iteration_write" = { hash = "c7f4f3cfb5dd", on = "2026-10-30" }
+"loop/break_runs_earlier_body_rungs" = { hash = "fcd53f8be3ed", on = "2026-10-30" }
+"loop/continue_on_last_iteration" = { hash = "6a3a0d027a60", on = "2026-10-30" }
+"loop/continue_skips_rest_of_iteration" = { hash = "7c0d48ace0b1", on = "2026-10-30" }
+"loop/count_read_once" = { hash = "a2b5561ac934", on = "2026-10-30" }
+"loop/counter_inside_loop" = { hash = "7dcf4908e96b", on = "2026-10-30" }
+"loop/edge_contact_inside_loop" = { hash = "f70d20a3ab39", on = "2026-10-30" }
+"loop/edge_memory_across_iterations" = { hash = "e0ab13459da1", on = "2026-10-30" }
+"loop/false_for_rung_skips_body" = { hash = "ca9b3ab7ba71", on = "2026-10-30" }
+"loop/loop_runs_n_times" = { hash = "909fbe3065e4", on = "2026-10-30" }
+"loop/negative_count_reads_unsigned" = { hash = "", on = "before 2026-10-30" }
+"loop/oneshot_inside_loop" = { hash = "56afd9aa5e96", on = "2026-10-30" }
+"loop/skipped_body_holds_timer_and_counter" = { hash = "45a9b3e94b4a", on = "2026-10-30" }
+"loop/timer_inside_loop" = { hash = "75660e4584e4", on = "2026-10-30" }
+"loop/zero_count" = { hash = "bcb261d3e9aa", on = "2026-10-30" }
+"out/debounce_bounce_restarts_on_side" = { hash = "b2f6e2f12137", on = "before 2026-10-30" }
+"out/debounce_td_keeps_counting" = { hash = "82a3a4f29bb6", on = "before 2026-10-30" }
+"out/out_coil_sets_timer_done" = { hash = "038097cbf765", on = "before 2026-10-30" }
+"out/timed_needs_fresh_edge" = { hash = "7773a25a244e", on = "before 2026-10-30" }
+"out/toggle_flips_once_per_edge" = { hash = "867adbc3450f", on = "before 2026-10-30" }
+"rungs/branch_and_with_parent" = { hash = "0a91f7b8bb1c", on = "2026-10-30" }
+"rungs/branch_sees_rung_entry" = { hash = "af0402ff4ba8", on = "2026-10-30" }
+"rungs/continued_chain_breaks" = { hash = "de111148a272", on = "2026-10-30" }
+"rungs/continued_shares_snapshot" = { hash = "4b8702b3b0ec", on = "2026-10-30" }
+"rungs/global_mutation" = { hash = "151d01032818", on = "2026-10-30" }
+"rungs/last_rung_wins_shared_coil" = { hash = "60b8698d678e", on = "2026-10-30" }
+"rungs/memory_is_immediate" = { hash = "621f235387b2", on = "2026-10-30" }
+"rungs/nested_branches_see_rung_entry" = { hash = "1bea59bf40e4", on = "2026-10-30" }
+"search/continuous_cursor_is_address" = { hash = "122971143f65", on = "before 2026-10-30" }
+"search/continuous_exhausted" = { hash = "457e70613fcb", on = "before 2026-10-30" }
+"search/continuous_walks" = { hash = "78877d9e796f", on = "before 2026-10-30" }
+"search/continuous_zero_restarts" = { hash = "1b85d667ea97", on = "before 2026-10-30" }
+"search/dint_real_tables" = { hash = "4d801a8651f1", on = "before 2026-10-30" }
+"search/false_rung_preserves" = { hash = "310b8673754c", on = "before 2026-10-30" }
+"search/hit_returns_address" = { hash = "ba3f4b5a0c32", on = "before 2026-10-30" }
+"search/miss_writes_minus_one" = { hash = "3f82abfa8c2d", on = "before 2026-10-30" }
+"search/operators_signed" = { hash = "61b49d349473", on = "before 2026-10-30" }
+"search/plain_search_ignores_result" = { hash = "d00b332a0555", on = "before 2026-10-30" }
+"search/range_ends_inclusive" = { hash = "94e7ce07efab", on = "before 2026-10-30" }
+"search/text_windows" = { hash = "e4be90f5dd2e", on = "before 2026-10-30" }
+"shift/bit_leaves_the_end" = { hash = "c3460b7dfd97", on = "before 2026-10-30" }
+"shift/clock_is_a_rising_edge" = { hash = "f5586892395d", on = "before 2026-10-30" }
+"shift/data_is_the_rung_at_the_edge" = { hash = "de4f41037038", on = "before 2026-10-30" }
+"shift/forward_range_shifts_up" = { hash = "c7ebaa24141b", on = "before 2026-10-30" }
+"shift/reset_beats_clock" = { hash = "661e0ce49892", on = "before 2026-10-30" }
+"shift/reset_swallows_the_edge" = { hash = "6908a6c6e5a2", on = "before 2026-10-30" }
+"shift/reversed_range_shifts_down" = { hash = "57c5f5b2315d", on = "before 2026-10-30" }
+"solve_order/box_leg_reads_row_below" = { hash = "8586b802fbf7", on = "2026-10-30" }
+"solve_order/branch_or_reads_row_above" = { hash = "c7b644b4aaf6", on = "2026-10-30" }
+"solve_order/bus_coils_last_write_wins" = { hash = "3decec083c47", on = "2026-10-30" }
+"solve_order/bus_operand_sees_coil" = { hash = "9467603be7db", on = "2026-10-30" }
+"solve_order/continued_reads_later_wire" = { hash = "10d961f8dc31", on = "2026-10-30" }
+"solve_order/for_body_rung_reads_body_rung_above" = { hash = "25b2e1a7d9fa", on = "2026-10-30" }
+"solve_order/input_or_legs_read_before_outputs" = { hash = "1c5155e44676", on = "2026-10-30" }
+"solve_order/outer_row_reads_inner_branch_write" = { hash = "d2ba2a51498e", on = "2026-10-30" }
+"solve_order/row_reads_row_below" = { hash = "e6a7c07513d1", on = "2026-10-30" }
+"solve_order/row_series_reads_rows_above" = { hash = "5cd8f08b78a1", on = "2026-10-30" }
+"solve_order/sibling_branch_reads_sibling_above" = { hash = "4c490b7fd70a", on = "2026-10-30" }
+"system/clock_bits_toggle_at_their_rate" = { hash = "357ef615d3b3", on = "before 2026-10-30" }
+"system/mode_bits_on_in_run" = { hash = "4a658f991de6", on = "before 2026-10-30" }
+"system/rtc_seconds_advance" = { hash = "be3cbc8d1dd2", on = "before 2026-10-30" }
+"system/scan_clock_follows_counter" = { hash = "b9e17b5dcd8f", on = "before 2026-10-30" }
+"system/scan_counter_steps_by_one" = { hash = "1af8fddb503d", on = "before 2026-10-30" }
+"text/fill_blank_ascii" = { hash = "e8ce876f344c", on = "before 2026-10-30" }
+"text/literal_fanout" = { hash = "a05724be3780", on = "before 2026-10-30" }
+"text/null_ascii" = { hash = "f59e22a3283a", on = "before 2026-10-30" }
+"text/pack_text_word_hex" = { hash = "31374483e39b", on = "before 2026-10-30" }
+"text/to_text_fixed" = { hash = "7a86152e50fd", on = "before 2026-10-30" }
+"text/to_text_fixed_negative" = { hash = "736d2f18f1d0", on = "before 2026-10-30" }
+"text/to_text_suppress" = { hash = "508030e5f819", on = "before 2026-10-30" }
+"text/to_text_termination" = { hash = "37d88e1c0894", on = "before 2026-10-30" }
+"text/value_vs_ascii" = { hash = "2e13abc1e650", on = "before 2026-10-30" }
+"timers/acc_clamps_at_32767" = { hash = "107a4da4d02f", on = "before 2026-10-30" }
+"timers/fractional_accumulation" = { hash = "0b6389bec438", on = "before 2026-10-30" }
+"timers/preset_lowered_fires_at_once" = { hash = "672bd87ca214", on = "before 2026-10-30" }
+"timers/preset_raised_resumes" = { hash = "22fc0585f673", on = "before 2026-10-30" }
+"timers/rton_holds_across_rung_false" = { hash = "662361cd17d8", on = "before 2026-10-30" }
+"timers/rton_reset_gap" = { hash = "242c2c230132", on = "before 2026-10-30" }
+"timers/tof_enable_atomic" = { hash = "f669affebdfc", on = "before 2026-10-30" }
+"timers/tof_never_enabled" = { hash = "5da1f7a07013", on = "before 2026-10-30" }
+"timers/tof_times_only_when_false" = { hash = "455ab06cdb61", on = "before 2026-10-30" }
+"timers/ton_auto_reset" = { hash = "36008261d96e", on = "before 2026-10-30" }
+"timers/ton_done_on_enabling_scan" = { hash = "be32e270b67a", on = "before 2026-10-30" }

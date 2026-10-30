@@ -431,7 +431,6 @@ group = Group(
             "Copy Character Value reads '5' as 5 and Copy ASCII Code Value reads the same '5' as 53, "
             "and ASCII Code Value of 'A' is 65",
             ladder=prove_value_vs_ascii,
-            confirmed=True,
             init=init_value_vs_ascii,
             expect={"Result1": 5, "Result2": 53, "Result3": 65, "Result4": 65},
         ),
@@ -439,7 +438,6 @@ group = Group(
             "ASCII Code Value of a TXT nothing wrote (NUL) writes 0 over the destination, "
             "and of a space writes 32",
             ladder=prove_null_ascii,
-            confirmed=True,
             init=init_null_ascii,
             expect={"Result1": 0, "Result2": 0, "Result3": 32},
         ),
@@ -457,7 +455,6 @@ group = Group(
             "Copy to text with suppress zero writes 123 as the characters 1, 2, 3 and leaves "
             "the next TXT alone",
             ladder=prove_to_text_suppress,
-            confirmed=True,
             init=init_to_text_suppress,
             expect={"Result1": 49, "Result2": 51, "Result3": 90, "Result4": 90},
         ),
@@ -465,7 +462,6 @@ group = Group(
             "Copy to text without suppress zero writes an Int 42 as five digits 00042 and "
             "leaves the next TXT alone",
             ladder=prove_to_text_fixed,
-            confirmed=True,
             init=init_to_text_fixed,
             expect={"Result1": 48, "Result2": 52, "Result3": 50, "Result4": 90},
         ),
@@ -473,7 +469,6 @@ group = Group(
             "Copy to text without suppress zero writes an Int -42 as a minus sign and five "
             "digits: -00042, six characters",
             ladder=prove_to_text_fixed_negative,
-            confirmed=True,
             init=init_to_text_fixed_negative,
             expect={"Result1": 45, "Result2": 48, "Result3": 52, "Result4": 90},
         ),
@@ -481,7 +476,6 @@ group = Group(
             "A termination code adds one character after the digits, and code 0 is written "
             "as NUL, not skipped",
             ladder=prove_to_text_termination,
-            confirmed=True,
             init=init_to_text_termination,
             expect={"Result1": 51, "Result2": 13, "Result3": 90, "Result4": 0},
         ),
@@ -489,7 +483,6 @@ group = Group(
             "Copying the literal HELLO to a TXT fills five consecutive TXT, one character "
             "each, and not the sixth",
             ladder=prove_literal_fanout,
-            confirmed=True,
             init=init_literal_fanout,
             expect={"Result1": 72, "Result2": 76, "Result3": 79, "Result4": 90},
         ),
@@ -507,7 +500,6 @@ group = Group(
             "Pack text into a WORD parses hex: 00FF is 255, 0010 is 16, ABCD is 0xABCD, and "
             "12G4 is refused and leaves the WORD alone",
             ladder=prove_pack_text_word_hex,
-            confirmed=True,
             init=init_pack_text_word_hex,
             expect={"Result1": 255, "Result2": 16, "Result3": 1, "Result4": 7},
         ),
@@ -549,7 +541,6 @@ group = Group(
             "Fill with empty text blanks a TXT to NUL, so ASCII Code Value of it writes 0 over "
             "the destination, as for a TXT nothing wrote",
             ladder=prove_fill_blank_ascii,
-            confirmed=True,
             init=init_fill_blank_ascii,
             expect={"Result1": 0, "Result2": 0},
         ),

@@ -584,6 +584,7 @@ async def _drive(
                     note="; ".join(notes),
                     group=g.name,
                     xfail=xfail,
+                    case_hash=g.case_hashes.get(c.id, ""),
                 )
             )
         results[g.name] = group_results

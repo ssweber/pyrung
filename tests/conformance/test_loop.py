@@ -380,14 +380,12 @@ group = Group(
             "For 5 runs its body five times on one scan (Result1 = 5)",
             ladder=prove_loop_runs_n_times,
             expect={"Result1": 5},
-            confirmed=True,
         ),
         case(
             "The count register is read once at For: lowering it in the body still "
             "runs 5 iterations (Result1 = 5)",
             ladder=prove_count_read_once,
             expect={"Result1": 5},
-            confirmed=True,
         ),
         case(
             "A body rung evaluates its contact on every iteration: true on iteration 2 "
@@ -396,7 +394,6 @@ group = Group(
             ladder=prove_body_rung_contact_per_iteration,
             init=init_body_rung_contact_per_iteration,
             expect={"Result1": 2, "Result2": 2},
-            confirmed=True,
         ),
         case(
             "An edge contact inside a loop keeps its own memory: a bit latched on "
@@ -413,7 +410,6 @@ group = Group(
             ladder=prove_timer_inside_loop,
             expect={"Result1": 1},
             scans=30,
-            confirmed=True,
         ),
         case(
             "A counter inside For 4 counts the edges of its input across iterations: "
@@ -429,27 +425,23 @@ group = Group(
             "iteration each time (Result1 = 6) and the outer loop runs on (Result2 = 3)",
             ladder=prove_break_leaves_innermost_loop,
             expect={"Result1": 6, "Result2": 3},
-            confirmed=True,
         ),
         case(
             "Rungs before Break run on the breaking iteration, rungs after do not "
             "(Result1 = 3, Result2 = 2)",
             ladder=prove_break_runs_earlier_body_rungs,
             expect={"Result1": 3, "Result2": 2},
-            confirmed=True,
         ),
         case(
             "Continue on iteration 2 skips only the rest of that iteration "
             "(Result1 = 5, Result2 = 4)",
             ladder=prove_continue_skips_rest_of_iteration,
             expect={"Result1": 5, "Result2": 4},
-            confirmed=True,
         ),
         case(
             "Continue on the last iteration ends the loop (Result1 = 5, Result2 = 4)",
             ladder=prove_continue_on_last_iteration,
             expect={"Result1": 5, "Result2": 4},
-            confirmed=True,
         ),
         case(
             "A Break contact written by an earlier body rung in the same iteration "
@@ -457,7 +449,6 @@ group = Group(
             ladder=prove_break_on_same_iteration_write,
             init=init_break_on_same_iteration_write,
             expect={"Result1": 2, "Result2": 3},
-            confirmed=True,
         ),
         case(
             "A one-shot inside a loop re-arms on an iteration its rung is false: true "
@@ -489,7 +480,6 @@ group = Group(
                 "65535 iterations make a scan of about 1.1 s on a CLICK, which every "
                 "wall-clock case run beside it would see"
             ),
-            confirmed=True,
         ),
         case(
             "A one-shot in a loop holds while the For rung is false: skipped on scan 2, "

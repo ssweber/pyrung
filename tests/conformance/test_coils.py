@@ -238,7 +238,6 @@ group = Group(
             ladder=prove_rise_fall_fire_one_scan,
             expect={"Result1": 1, "Result2": 3, "Result3": 1, "Result4": 6},
             scans=SCANS,
-            confirmed=True,
         ),
         case(
             "Each edge contact compares the bit with what it saw itself when it last "

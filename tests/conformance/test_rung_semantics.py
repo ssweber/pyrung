@@ -208,13 +208,11 @@ group = Group(
             "Memory writes are visible to the next instruction on the same scan",
             ladder=prove_memory_is_immediate,
             expect={"Result1": 42},
-            confirmed=True,
         ),
         case(
             "Instructions mutate global memory",
             ladder=prove_global_mutation,
             expect={"Result1": 99},
-            confirmed=True,
         ),
         case(
             "A branch reads its contacts live, when the solve reaches its row, after the "
@@ -225,7 +223,6 @@ group = Group(
             ladder=prove_branch_sees_rung_entry,
             init=init_branch_sees_rung_entry,
             expect={"Result1": 0, "Result2": 1},
-            confirmed=True,
             pending="S4",
         ),
         case(
@@ -234,7 +231,6 @@ group = Group(
             ladder=prove_nested_branches_see_rung_entry,
             init=init_nested_branches_see_rung_entry,
             expect={"Result1": 0, "Result2": 0},
-            confirmed=True,
             pending="S4",
         ),
         case(
@@ -244,7 +240,6 @@ group = Group(
             "stays off (Result3 = 0) and a true one runs (Result4 = 1)",
             ladder=prove_branch_and_with_parent,
             expect={"Result1": 0, "Result2": 0, "Result3": 0, "Result4": 1},
-            confirmed=True,
         ),
         case(
             "When two rungs drive one out coil, the lower rung decides how the scan "
@@ -255,7 +250,6 @@ group = Group(
             ladder=prove_last_rung_wins_shared_coil,
             expect={"Result1": 2, "Result2": 4, "Result3": 5, "Result4": 3},
             scans=scans_for(LAST_RUNG_WINDOW),
-            confirmed=True,
         ),
         case(
             "A continued wire reads live, like a rung of its own: the second wire needs "
@@ -264,7 +258,6 @@ group = Group(
             ladder=prove_continued_shares_snapshot,
             init=init_continued_shares_snapshot,
             expect={"Result1": 0, "Result2": 0},
-            confirmed=True,
             pending="S4",
         ),
         case(
@@ -275,7 +268,6 @@ group = Group(
             ladder=prove_continued_chain_breaks,
             init=init_continued_chain_breaks,
             expect={"Result1": 0, "Result2": 0, "Result3": 1},
-            confirmed=True,
             pending="S4",
         ),
     ],

@@ -55,6 +55,8 @@ from tests.conformance import (
 )
 
 MANIFEST_PATH = Path(__file__).with_name("manifest.toml")
+#: Cases that passed on a real CLICK, as they are now (``record_confirmations``).
+CONFIRMED_PATH = Path(__file__).with_name("confirmed.toml")
 #: The ClickNick workspace linked to the conformance CLICK project.
 WORKSPACE_PATH = Path(__file__).with_name("workspace")
 

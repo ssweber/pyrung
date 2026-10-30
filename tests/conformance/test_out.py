@@ -157,7 +157,6 @@ group = Group(
             init=init_toggle_flips_once_per_edge,
             expect={"Result1": 1},
             scans=20,
-            confirmed=True,
         ),
         case(
             "A debounce coil's on-side TD keeps counting past its preset while the input "
@@ -168,7 +167,6 @@ group = Group(
             keep=[t[311], td[311]],
             expect={"Result1": 1, "Result2": 1},
             scans=50,
-            confirmed=True,
         ),
         case(
             "A bounce restarts a debounce coil's on-side timing: on for 200 ms, off for "
@@ -179,7 +177,6 @@ group = Group(
             keep=[t[304], td[304]],
             expect={"Result1": 1, "Result2": 0},
             scans=80,
-            confirmed=True,
         ),
         case(
             "A flasher whose rung goes false freezes and resumes: 150 ms into its off phase, "
@@ -198,7 +195,6 @@ group = Group(
             ladder=prove_timed_needs_fresh_edge,
             expect={"Result1": 1, "Result2": 0},
             scans=50,
-            confirmed=True,
         ),
         case(
             "An Out coil never sets its Timer's done bit T<n>: a debounce coil whose on "
@@ -208,7 +204,6 @@ group = Group(
             keep=[t[312], td[312]],
             expect={"Result1": 0, "Result2": 1},
             scans=40,
-            confirmed=True,
             pending="OUT",
         ),
     ],

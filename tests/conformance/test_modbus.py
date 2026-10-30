@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import date
 
 import pytest
 
@@ -29,6 +30,8 @@ from pyrung.conformance import (
     build_program,
     case,
     format_report,
+    load_confirmations,
+    record_confirmations,
     run_modbus,
     wait_for_scan_counter_wrap,
 )
@@ -58,7 +61,13 @@ def test_all_groups_over_modbus(
         with capsys.disabled():
             wait_for_scan_counter_wrap(conformance_endpoint)
     results = run_modbus(build, conformance_endpoint, groups=groups, sim=conformance_sim)
-    print(format_report(results))
+    if conformance_endpoint is not None:
+        # A real CLICK: record what passed, drop what failed (confirmed.toml).
+        added, dropped = record_confirmations(
+            suite.CONFIRMED_PATH, results, on=date.today().isoformat()
+        )
+        print(f"confirmed.toml: {len(added)} newly confirmed, {len(dropped)} dropped {dropped}")
+    print(format_report(results, load_confirmations(suite.CONFIRMED_PATH)))
     if conformance_groups is None:
         assert len(results) == sum(len(g.cases) for g in normal)
     assert_all_passed(results)

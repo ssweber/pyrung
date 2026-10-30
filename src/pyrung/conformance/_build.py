@@ -12,8 +12,8 @@ from __future__ import annotations
 import hashlib
 import shutil
 import tempfile
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -53,6 +53,9 @@ class GroupBuild:
     hash_tag: Tag
     #: What the subroutine writes to its group header every scan (1..32767).
     group_hash: int
+    #: Case id -> hash of the case's own exported rows (comment, reset, ladder).
+    #: A hardware confirmation holds while it matches (``confirmed.toml``).
+    case_hashes: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -231,7 +234,8 @@ def build_program(
         # any wire traffic.  Mark such a case ``in_process_only``.
         bundle = pyrung_to_ladder(body, tag_map)
         group_hash = _fold(repr(bundle.subroutine_rows))
-        built.append(GroupBuild(g, layout, cases, slot, hash_tag, group_hash))
+        case_hashes = _case_hashes(g.name, bundle.subroutine_rows)
+        built.append(GroupBuild(g, layout, cases, slot, hash_tag, group_hash, case_hashes))
 
     program_hash = _fold(
         repr(
@@ -283,6 +287,26 @@ def _check_nicknames(group: Group, hash_tag: Tag, slot: _NamedArrayRuntime, slot
                 f"Group {group.name!r} makes nickname {name!r} ({len(name)} chars); CLICK allows "
                 f"{NICKNAME_MAX_LENGTH}. Use a shorter group name."
             )
+
+
+def _case_hashes(
+    group: str, subroutine_rows: Sequence[tuple[str, Sequence[Sequence[str]]]]
+) -> dict[str, str]:
+    """Case id -> SHA-256 (12 hex digits) of its rows, from its ``Case`` comment to the next."""
+    marker = f"Case {group}/"
+    spans: dict[str, list[Sequence[str]]] = {}
+    current: list[Sequence[str]] | None = None
+    for _name, rows in subroutine_rows:
+        for row in rows:
+            text = row[1] if row and row[0] == "#" and len(row) > 1 else ""
+            if text.startswith(marker):
+                current = spans.setdefault(text[len(marker) :], [])
+            if current is not None:
+                current.append(tuple(row))
+    return {
+        case_id: hashlib.sha256(repr(rows).encode("utf-8")).hexdigest()[:12]
+        for case_id, rows in spans.items()
+    }
 
 
 def _fold(payload: str) -> int:
