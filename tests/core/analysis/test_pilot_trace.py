@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -871,7 +872,8 @@ def test_counter_done_program_owned_held_input_is_released_first():
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, _known(logic), logic)
 
-    tree = trace_back("C1_Done", True, {"Running": True, "x_Run": True}, pdg, logic, steerable)
+    snapshot = {"Running": True, "x_Run": True, "x_Rst": False}
+    tree = trace_back("C1_Done", True, snapshot, pdg, logic, steerable)
     assert not any(lf.advance is not None for lf in _leaves(tree))
     [action] = tree.ordered_action_details()
     assert action.pair == ("x_Run", False)
@@ -1755,12 +1757,119 @@ def test_counter_with_its_input_held_on_is_pulsed_again():
     assert plc.how(C.Done).status.name == "REACHED"
 
 
+# These drives take well under a second.  A drive that cycles a counter's
+# input without ever counting spins until the search budget runs out (minutes),
+# so a wall-clock bound turns that regression into a loud failure.
+_COUNTER_DRIVE_SECONDS = 20.0
+
+
+def _timed_how(plc, target):
+    start = time.perf_counter()
+    plan = plc.how(target)
+    elapsed = time.perf_counter() - start
+    assert elapsed < _COUNTER_DRIVE_SECONDS, f"how() took {elapsed:.1f}s: {plan.reason}"
+    return plan
+
+
 def _reached_by_replay(plc, target):
     """how(*target*) reaches it, and replaying the recorded plan reaches it too."""
-    plan = plc.how(target)
+    plan = _timed_how(plc, target)
     assert plan.status.name == "REACHED", plan.reason
     assert plan.replay().state.tags[target.name] is True
     return plan
+
+
+def _latched_counter(name, *, reset_pin=None, gate=None):
+    """``Start`` latches ``Run``, ``Stop`` resets it, ``Run`` counts to 3."""
+    Start = Bool(f"{name}Start", external=True)
+    Stop = Bool(f"{name}Stop", external=True)
+    Run = Bool(f"{name}Run")
+    C = Counter.clone(f"{name}C")
+    R = reset_pin if reset_pin is not None else Bool(f"{name}R", external=True)
+    with Program(strict=False) as logic:
+        with rung(Start):
+            latch(Run)
+        with rung(Stop):
+            reset(Run)
+        if gate is None:
+            with rung(Run):
+                count_up(C, 3).reset(R)
+        else:
+            with rung(gate):
+                call(f"{name}Sub")
+            with subroutine(f"{name}Sub"):
+                with rung(Run):
+                    count_up(C, 3).reset(R)
+    return logic, Start, Run, C
+
+
+@pytest.mark.parametrize("run_on", [False, True])
+def test_counter_reset_pin_held_is_released_before_cycling_a_latch(run_on):
+    """A held level reset pin wins over every count: it is released (in the
+    same act as the input's first transition), then the latch is cycled."""
+    R = Bool("HeldResetR", external=True)
+    logic, Start, Run, C = _latched_counter("HeldReset", reset_pin=R)
+    plc = PLC(logic)
+    if run_on:
+        plc.patch({Start.name: True})
+        plc.run(cycles=2)
+        plc.patch({Start.name: False})
+    plc.patch({R.name: True})
+    plc.run(cycles=2)
+    assert plc.current_state.tags[Run.name] is run_on
+    plan = _reached_by_replay(plc, C.Done)
+    assert plan.ordered_steps[0][1].get(R.name) is False
+
+
+@pytest.mark.parametrize("run_on", [False, True])
+def test_counter_in_an_uncalled_subroutine_is_called_before_cycling_a_latch(run_on):
+    Mode = Bool("GatedMode", external=True)
+    logic, Start, Run, C = _latched_counter("Gated", gate=Mode)
+    plc = PLC(logic)
+    if run_on:
+        plc.patch({Start.name: True})
+        plc.run(cycles=2)
+        plc.patch({Start.name: False})
+    plc.run(cycles=2)
+    assert plc.current_state.tags[Run.name] is run_on
+    plan = _reached_by_replay(plc, C.Done)
+    assert plan.ordered_steps[0][1].get(Mode.name) is True
+
+
+def test_counter_fed_by_a_held_coil_with_its_reset_pin_held():
+    Btn = Bool("HeldBothBtn", external=True)
+    R = Bool("HeldBothR", external=True)
+    Y = Bool("HeldBothY")
+    C = Counter.clone("HeldBothC")
+    with Program() as logic:
+        with rung(Btn):
+            out(Y)
+        with rung(Y):
+            count_up(C, 3).reset(R)
+    plc = PLC(logic)
+    plc.patch({Btn.name: True, R.name: True})
+    plc.run(cycles=3)
+    _reached_by_replay(plc, C.Done)
+
+
+def test_counter_reset_held_by_unsteerable_logic_declines_without_spinning():
+    """Nothing steerable clears the reset: cycling the input would count
+    nothing forever, so the drive stops promptly instead."""
+    Btn = Bool("StuckResetBtn", external=True)
+    Y = Bool("StuckResetY")
+    Held = Bool("StuckResetHeld")
+    C = Counter.clone("StuckResetC")
+    with Program() as logic:
+        with rung():
+            latch(Held)
+        with rung(Btn):
+            out(Y)
+        with rung(Y):
+            count_up(C, 3).reset(Held)
+    plc = PLC(logic)
+    plc.patch({Btn.name: True})
+    plc.run(cycles=2)
+    assert _timed_how(plc, C.Done).status.name != "REACHED"
 
 
 def test_counter_fed_by_a_held_coil_is_cycled_through_its_button():

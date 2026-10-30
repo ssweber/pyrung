@@ -75,6 +75,7 @@ from pyrung.core.analysis.sp_values import (
     _values_match,
     _written_value_for_tag,
 )
+from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
 from pyrung.core.crossing import (
     Affine,
     AffineCmp,
@@ -86,7 +87,7 @@ from pyrung.core.crossing import (
     ReverseResult,
     eq_target,
 )
-from pyrung.core.instruction.advance import constraint_holds
+from pyrung.core.instruction.advance import ConditionDemand, constraint_holds
 from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
 
 if TYPE_CHECKING:
@@ -734,11 +735,33 @@ def _edges_as_levels(expr: Any) -> Any:
     return expr
 
 
+def _counter_reset_off(owner: Any, step: Any, counts_edges: bool) -> tuple[ConditionDemand, ...]:
+    """A counter's level reset pin must be off for a count to land.
+
+    The reset wins over a count on the same scan and holds ``Acc`` at 0, so
+    while a counter advances (its pulse demand is a count input, not the reset
+    pin itself) the reset is one more hold.  An edge reset (``rise(R)``) is
+    off on every scan but the one it rises on, so it adds nothing.
+    """
+
+    if not counts_edges or step.pulse is None:
+        return ()
+    reset = getattr(owner.instruction, "reset_condition", None)
+    if (
+        reset is None
+        or step.pulse.condition is reset
+        or isinstance(reset, (RisingEdgeCondition, FallingEdgeCondition))
+    ):
+        return ()
+    return (ConditionDemand(reset, False),)
+
+
 def _counter_input_transition(
     env: _TraceEnv,
     constraint: Eq | Cmp | AffineCmp,
     demand: Any,
     pulse_nodes: list[TraceNode],
+    blockers: list[TraceNode],
     provenance: tuple[str, ...],
     depth: int,
 ) -> TraceNode | None:
@@ -759,6 +782,13 @@ def _counter_input_transition(
     it lands, a fresh read traces the next transition, so a latched driver is
     cycled off and on once per count.  ``None`` keeps the ordinary pulse
     frontier: a steerable leaf to pulse, or no steerable route at all.
+
+    *blockers* are the counter's other unmet needs (its subroutine's call
+    gate, its level reset pin off).  An input moved while they are unmet
+    counts nothing, and cycling it would repeat forever, so they ride the
+    same one-shot act.  That act is marked as establishing program state, as
+    a latch input already is: an establishing action is the sole bearing and
+    defers the others, which would leave the blockers behind for good.
     """
 
     if demand is None or demand.condition is None:
@@ -784,7 +814,11 @@ def _counter_input_transition(
         depth=depth + 1,
         retain_satisfied=False,
     )
-    if not any(_has_steerable(node) for node in nodes):
+    if not any(_has_steerable(node) for node in nodes) or not all(
+        _has_steerable(node) for node in blockers
+    ):
+        # No steerable way to move the input, or to clear a blocker: cycling
+        # the input alone would count nothing, forever.
         return None
     target_atom = _trace_constraints._constraint_atom(constraint)
     return TraceNode(
@@ -793,7 +827,8 @@ def _counter_input_transition(
         provenance=provenance,
         relational=isinstance(constraint, (Cmp, AffineCmp)),
         predicate=target_atom,
-        children=nodes,
+        children=[*blockers, *nodes],
+        data_flow="enable" if blockers else None,
         note=note,
     )
 
@@ -982,7 +1017,7 @@ def _advance_frontier(
     gate_nodes = _owner_call_gate_nodes(env, owner, provenance, depth)
     running_linear = owner.profile.linear is not None and step.progress is not None
     demand_nodes: list[TraceNode] = []
-    for demand in step.holds:
+    for demand in (*step.holds, *_counter_reset_off(owner, step, counts_edges)):
         if running_linear and demand_holds(demand, env.snapshot):
             continue
         demand_nodes.extend(
@@ -1007,7 +1042,13 @@ def _advance_frontier(
         )
         if counts_edges:
             transition = _counter_input_transition(
-                env, constraint, step.pulse, pulse_nodes, provenance, depth
+                env,
+                constraint,
+                step.pulse,
+                pulse_nodes,
+                [node for node in (*gate_nodes, *demand_nodes) if not node.satisfied],
+                provenance,
+                depth,
             )
             if transition is not None:
                 return transition
