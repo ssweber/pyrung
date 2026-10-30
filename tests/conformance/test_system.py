@@ -39,7 +39,8 @@ the least SD9 seen since the first scan in DD991: SD9 wrapping from 32767 to
 0 (adopted) reads Result1 = 0, one counting on into negative values (an
 unsigned 16-bit counter read as an Int) reads 1.  It only tells once the PLC
 has run 32768 scans since it went to RUN (5.5 minutes at 10 ms a scan); before
-that both read 0.  The first-scan cases read the loaded program's first scan,
+that both read 0, so against a CLICK the wire test first waits for SD9 to pass
+32767 (``wait_for_scan_counter_wrap``).  The first-scan cases read the loaded program's first scan,
 whatever run reads them.
 
 Clocks.  ``clock_bits_toggle_at_their_rate`` counts rising edges of SC5 and

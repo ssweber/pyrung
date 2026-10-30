@@ -30,9 +30,11 @@ from pyrung.conformance import (
     case,
     format_report,
     run_modbus,
+    wait_for_scan_counter_wrap,
 )
+from pyrung.conformance._modbus import scan_counter_wrapped
 from pyrung.core import Rung, calc, copy
-from tests.conformance import suite
+from tests.conformance import suite, test_system
 
 ds = ClickBlocks().ds
 
@@ -43,12 +45,18 @@ def test_all_groups_over_modbus(
     conformance_endpoint: Endpoint | None,
     conformance_groups: list[str] | None,
     conformance_sim: type[SimServer] | type[CircuitPySim],
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     build = suite.build_for(conformance_endpoint)
     # Without GROUP=, every loaded group (on pyrung's own targets, but the ones
     # that stop pyrung's PLC: test_math_error.py runs those alone).
     normal = suite.wire_groups(build, conformance_endpoint)
     groups = conformance_groups or [g.name for g in normal]
+    # system/scan_counter_wraps_to_zero only tells once SD9 has passed 32767.
+    # pyrung's own targets read 0 either way, so only a CLICK waits.
+    if conformance_endpoint is not None and test_system.group.name in groups:
+        with capsys.disabled():
+            wait_for_scan_counter_wrap(conformance_endpoint)
     results = run_modbus(build, conformance_endpoint, groups=groups, sim=conformance_sim)
     print(format_report(results))
     if conformance_groups is None:
@@ -105,6 +113,32 @@ def test_suite_repeats_without_restarting(
 
 
 # --- harness self-checks (always on the local sim) ---------------------------
+
+
+@pytest.mark.parametrize(
+    ("previous", "current", "wrapped"),
+    [
+        (100, 101, False),
+        (32766, 32767, False),
+        (32767, 0, True),  # wraps to 0
+        (32760, 5, True),  # wrapped between reads
+        (32767, -32768, True),  # counts on, read signed
+        (32767, 32768, True),  # counts on, read unsigned
+        (-5, -5, True),  # already past
+    ],
+)
+def test_scan_counter_wrapped(previous: int, current: int, wrapped: bool) -> None:
+    assert scan_counter_wrapped(previous, current) is wrapped
+
+
+def test_wait_for_scan_counter_wrap_reads_sd9_and_times_out() -> None:
+    build = build_program([_alpha()], _TWO_GROUPS)
+    lines: list[str] = []
+    with SimServer(build) as sim:
+        assert sim.endpoint is not None
+        with pytest.raises(ConformanceError, match="did not pass 32767 within 0 s"):
+            wait_for_scan_counter_wrap(sim.endpoint, timeout=0.3, report=lines.append)
+    assert len(lines) == 1 and "scans/s" in lines[0]
 
 
 def _prove_constant(slot):

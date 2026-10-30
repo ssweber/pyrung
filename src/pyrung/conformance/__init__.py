@@ -20,6 +20,7 @@ from pyrung.conformance._modbus import (
     parse_endpoint,
     read_program_hash,
     run_modbus,
+    wait_for_scan_counter_wrap,
 )
 from pyrung.conformance._runner import assert_all_passed, format_report, run
 
@@ -46,4 +47,5 @@ __all__ = [
     "read_program_hash",
     "run",
     "run_modbus",
+    "wait_for_scan_counter_wrap",
 ]

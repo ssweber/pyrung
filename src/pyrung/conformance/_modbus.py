@@ -42,6 +42,12 @@ CONFIRM_GAP_S = 0.1
 _THREAD_TIMEOUT_S = 5.0
 #: CLICK's ``_PLC_Mode`` bit: ON in RUN.
 _MODE_RUN_BIT = 11
+#: SD9, CLICK's scan counter.
+_SCAN_COUNTER = 9
+#: Seconds between SD9 reads while waiting for it to wrap.
+_WRAP_POLL_S = 0.2
+#: Seconds of SD9 reads that size the wait for it to wrap.
+_WRAP_RATE_S = 1.0
 
 
 class ConformanceError(RuntimeError):
@@ -364,6 +370,78 @@ def read_program_hash(endpoint: Endpoint | str, *, timeout: float = 10.0) -> int
             return await _await_program_hash(client, endpoint, timeout)
 
     return asyncio.run(read(endpoint))
+
+
+def wait_for_scan_counter_wrap(
+    endpoint: Endpoint | str,
+    *,
+    timeout: float | None = None,
+    report: Callable[[str], None] = print,
+) -> int:
+    """Wait until the scan counter SD9 at *endpoint* has passed 32767.
+
+    A probe of what SD9 does after 32767 can only tell once it has got there.
+    SD9 has passed it when a read is lower than the one before (it wrapped,
+    to 0 or negative) or is outside 0..32767 (it counts on, read signed or
+    unsigned).  A PLC that passed it long ago wraps again within one lap,
+    so this waits at most one lap: 32768 scans, 5.5 minutes at 10 ms.
+
+    Args:
+        timeout: Seconds to wait.  ``None``: half again the time the lap
+            should take at the scan rate measured over the first second, plus
+            30 s.
+        report: Called with one line saying how long the wait should take.
+
+    Returns:
+        The first SD9 read past 32767.
+
+    Raises:
+        ConformanceError: The endpoint is unreachable, SD9 does not move, or
+            it does not wrap in time.
+    """
+    from pyclickplc.client import ClickClient
+
+    if isinstance(endpoint, str):
+        endpoint = parse_endpoint(endpoint)
+
+    async def wait(endpoint: Endpoint) -> int:
+        client = ClickClient(endpoint.host, endpoint.port, timeout=10)
+        async with client:
+            if not client._client.connected:
+                raise ConformanceError(f"Cannot connect to Modbus endpoint {endpoint}")
+            first = int(await client.sd[_SCAN_COUNTER])
+            if scan_counter_wrapped(first, first):
+                return first
+            await asyncio.sleep(_WRAP_RATE_S)
+            now = int(await client.sd[_SCAN_COUNTER])
+            if scan_counter_wrapped(first, now):
+                return now
+            rate = (now - first) / _WRAP_RATE_S
+            if rate <= 0:
+                raise ConformanceError(f"SD9 on {endpoint} does not count (reads {now})")
+            eta = (32768 - now) / rate
+            limit = timeout if timeout is not None else eta * 1.5 + 30
+            report(
+                f"Waiting ~{eta:.0f} s for SD9 on {endpoint} to pass 32767 "
+                f"(reads {now}, {rate:.0f} scans/s)"
+            )
+            deadline = time.monotonic() + limit
+            while True:
+                await asyncio.sleep(_WRAP_POLL_S)
+                prev, now = now, int(await client.sd[_SCAN_COUNTER])
+                if scan_counter_wrapped(prev, now):
+                    return now
+                if time.monotonic() >= deadline:
+                    raise ConformanceError(
+                        f"SD9 on {endpoint} did not pass 32767 within {limit:.0f} s (reads {now})"
+                    )
+
+    return asyncio.run(wait(endpoint))
+
+
+def scan_counter_wrapped(previous: int, current: int) -> bool:
+    """Whether two SD9 reads, *previous* then *current*, show it passed 32767."""
+    return current < previous or not 0 <= current <= 32767
 
 
 async def _await_program_hash(client: Any, endpoint: Endpoint, timeout: float) -> int:

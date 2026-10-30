@@ -256,7 +256,7 @@ First load:
 2. In a new CLICK project, ClickNick **Ladder > Open in Guided Paste...** on `dir`: it imports `nicknames.csv`, then walks through main and each subroutine.
 3. In ClickNick's Workspace controls, find an existing workspace and pick `tests/conformance/workspace/`. ClickNick asks a project without a PLC name for one: enter `PYRUNG_CONFORMANCE`. It refuses the folder if the project already has another name; rename the PLC in CLICK.
 4. Save in CLICK (ClickNick fills `src/plc/` and `csv/`), write to the PLC, put it in RUN.
-5. `make test-conformance PLC=192.168.0.10` (port defaults to 502). The run reads `DS1` and takes the groups of whichever part is loaded (`suite.build_for`); `GROUP=` may name only groups of that part.
+5. `make test-conformance PLC=192.168.0.10` (port defaults to 502). The run reads `DS1` and takes the groups of whichever part is loaded (`suite.build_for`); `GROUP=` may name only groups of that part. When the `system` group runs, the run first waits (at most one lap of SD9, 5.5 minutes at 10 ms, and says how long) for the scan counter SD9 to pass 32767, so `system/scan_counter_wraps_to_zero` can tell its answers apart (`wait_for_scan_counter_wrap()`).
 
 A change to the header protocol (`LAYOUT_VERSION`, now 3 for the `Ready` field) changes the layout hash in `DS1`; every run then bails with `BuildMismatchError` until each part is exported and loaded again.
 
