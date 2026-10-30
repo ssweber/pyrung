@@ -295,12 +295,21 @@ def _check_nicknames(group: Group, hash_tag: Tag, slot: _NamedArrayRuntime, slot
 def _case_hashes(
     group: str, subroutine_rows: Sequence[tuple[str, Sequence[Sequence[str]]]]
 ) -> dict[str, str]:
-    """Case id -> SHA-256 (12 hex digits) of its rows, from its ``Case`` comment to the next."""
+    """Case id -> SHA-256 (12 hex digits) of its rows, from its ``Case`` comment to the next.
+
+    The last case's span stops before the subroutine's closing tail: the exporter ends every
+    subroutine with one unconditional ``return()`` rung (``_ensure_subroutine_return_tail``),
+    so that row belongs to the group, not to the case before it.  Without that, appending a
+    case would re-hash the previous last case.
+    """
     marker = f"Case {group}/"
     spans: dict[str, list[Sequence[str]]] = {}
-    current: list[Sequence[str]] | None = None
     for _name, rows in subroutine_rows:
-        for row in rows:
+        body = list(rows)
+        if body and _is_return_tail(body[-1]):
+            body.pop()
+        current: list[Sequence[str]] | None = None
+        for row in body:
             text = row[1] if row and row[0] == "#" and len(row) > 1 else ""
             if text.startswith(marker):
                 current = spans.setdefault(text[len(marker) :], [])
@@ -310,6 +319,16 @@ def _case_hashes(
         case_id: hashlib.sha256(repr(rows).encode("utf-8")).hexdigest()[:12]
         for case_id, rows in spans.items()
     }
+
+
+def _is_return_tail(row: Sequence[str]) -> bool:
+    """True for the unconditional ``return()`` rung the exporter closes a subroutine with."""
+    return (
+        len(row) > 2
+        and row[0].startswith("R")
+        and row[-1] == "return()"
+        and all(cell == "-" for cell in row[1:-1])
+    )
 
 
 def _fold(payload: str) -> int:
