@@ -792,7 +792,7 @@ class CountDownBuilder(_BuilderBase):
     """Builder for count_down instruction with chaining API.
 
     Supports required .reset() chaining:
-        count_down(Counter[1], preset=25).reset(reset_tag)
+        count_down(Counter[1], preset=-25).reset(reset_tag)
     """
 
     def __init__(

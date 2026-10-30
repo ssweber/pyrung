@@ -213,7 +213,7 @@ Built-in `Counter` type: `.Done` (Bool) + `.Acc` (Dint). Counts rising edges of 
 PartCounter = Counter.clone("PartCounter")
 
 count_up(PartCounter, 100).reset(ResetBtn)
-count_down(Dispense, 100).reset(ResetBtn)
+count_down(Dispense, -100).reset(ResetBtn)  # done after 100 counts: Acc <= -100
 
 # One count per rising edge of Sensor
 with rung(Sensor):

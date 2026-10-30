@@ -170,12 +170,12 @@ count_up(PartCounter, preset=100) \
 ### Count down (CTD)
 
 ```python
-count_down(Dispense, preset=100) \
+count_down(Dispense, preset=-100) \
     .reset(ResetButton)
 ```
 
-- Accumulator starts at 0 and goes down by one on each rising edge
-- done = True when acc ≤ preset, so with a positive preset the counter is done from its first scan (stage the accumulator above the preset with `copy()` to count down to it, as on a CLICK)
+- Accumulator starts at 0 (a reset puts it back there) and goes down by one on each rising edge
+- done = True when acc ≤ preset, so the example is done after 100 counts. A positive preset is done from the counter's first scan unless the accumulator is staged above it with `copy()` first (as on a CLICK)
 
 `count_down(...).reset(...)` is terminal.
 
