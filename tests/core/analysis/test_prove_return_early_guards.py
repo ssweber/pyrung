@@ -8,7 +8,9 @@ program dependence graph used to see only a return in a rung's own items and
 guard only top-level nodes of later rungs, so a return in a branch, or a
 writer in a branch, dropped the guard's input from the writer's upstream
 slice and ``never()`` came back Proven although a concrete PLC reaches the
-state.
+state.  A coil no rung reads, observed only by the property, was taken for a
+function of its contacts however often its rung was skipped (behind a
+return, in a subroutine not called every scan, in a forloop body).
 
 Each shape is checked against an exhaustive concrete search over its inputs
 under the default, all-off and sound-baseline configurations, and every
@@ -357,7 +359,78 @@ def _guarded_write_read_after_call():
     return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y3, ~Btn), _y3_without_btn
 
 
+def _y2_without_btn(tags: Any) -> bool:
+    return tags["Y2"] and not tags["Btn"]
+
+
+# Unread coils: nothing in the program reads Y2, only the property does, so
+# the coil reaches the unread-tag rule rather than the OTE rule.
+
+
+def _unread_coil_behind_branch_return():
+    with Program(strict=False) as logic:
+        with Rung():
+            call("work")
+        with subroutine("work"):
+            with Rung():
+                with branch(G):
+                    return_early()
+            with Rung(Btn):
+                out(Y2)
+    return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y2, ~Btn), _y2_without_btn
+
+
+def _unread_coil_behind_return():
+    with Program(strict=False) as logic:
+        with Rung():
+            call("work")
+        with subroutine("work"):
+            with Rung(G):
+                return_early()
+            with Rung(Btn):
+                out(Y2)
+    return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y2, ~Btn), _y2_without_btn
+
+
+def _unread_branch_coil_after_branch_return():
+    with Program(strict=False) as logic:
+        with Rung():
+            call("work")
+        with subroutine("work"):
+            with Rung():
+                with branch(G):
+                    return_early()
+                with branch(Btn):
+                    out(Y2)
+    return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y2, ~Btn), _y2_without_btn
+
+
+def _unread_coil_in_conditional_call():
+    """No return at all: the subroutine is not called on every scan."""
+    with Program(strict=False) as logic:
+        with Rung(G):
+            call("work")
+        with subroutine("work"):
+            with Rung(Btn):
+                out(Y2)
+    return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y2, ~Btn), _y2_without_btn
+
+
+def _unread_coil_in_forloop_body():
+    """A false For rung skips its body, so the coil holds."""
+    with Program(strict=False) as logic:
+        with Rung(Btn):
+            with forloop(1):
+                out(Y2)
+    return logic, {"Btn": _BOOL}, And(Y2, ~Btn), _y2_without_btn
+
+
 _SHAPES = {
+    "unread_coil_behind_branch_return": _unread_coil_behind_branch_return,
+    "unread_coil_behind_return": _unread_coil_behind_return,
+    "unread_branch_coil_after_branch_return": _unread_branch_coil_after_branch_return,
+    "unread_coil_in_conditional_call": _unread_coil_in_conditional_call,
+    "unread_coil_in_forloop_body": _unread_coil_in_forloop_body,
     "return_in_branch": _return_in_branch,
     "return_in_branch_reader_apart": _return_in_branch_reader_apart,
     "writer_in_branch": _writer_in_branch,
@@ -382,6 +455,20 @@ def test_prover_finds_state_a_skipping_return_reaches(shape: str, config: str) -
     result = never(logic, prop, _opt_config=_CONFIGS[config])
     assert isinstance(result, Counterexample), result
     assert _replays(logic, result, predicate)
+
+
+@pytest.mark.parametrize("config", sorted(_CONFIGS))
+def test_unread_coil_reached_every_scan_stays_proven(config: str) -> None:
+    # The same unread coil with nothing to skip it follows Btn on every scan.
+    with Program(strict=False) as logic:
+        with Rung():
+            call("work")
+        with subroutine("work"):
+            with Rung(Btn):
+                out(Y2)
+    assert not _concrete_reaches(logic, {"Btn": _BOOL}, _y2_without_btn)
+    result = never(logic, And(Y2, ~Btn), _opt_config=_CONFIGS[config])
+    assert isinstance(result, Proven), result
 
 
 @pytest.mark.parametrize("config", sorted(_CONFIGS))

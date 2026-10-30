@@ -1632,20 +1632,18 @@ def _nodes_after_first_return(rung: Rung, node_index_by_rung: dict[int, int]) ->
 
 
 def _items_hold_return(items: Any) -> bool:
-    """Whether a return sits among *items* or in a loop body among them."""
+    """Whether a return sits among *items*, in a rung among them or in a loop body."""
     from pyrung.core.instruction.control import ReturnInstruction
     from pyrung.core.rung import Rung as RungClass
 
     for item in items:
         if isinstance(item, ReturnInstruction):
             return True
-        if isinstance(item, ForLoopInstruction):
-            for body_item in item.body:
-                if isinstance(body_item, RungClass):
-                    if _items_hold_return(body_item._execution_items):
-                        return True
-                elif _items_hold_return((body_item,)):
-                    return True
+        if isinstance(item, RungClass):
+            if _items_hold_return(item._execution_items):
+                return True
+        elif isinstance(item, ForLoopInstruction) and _items_hold_return(item.body):
+            return True
     return False
 
 

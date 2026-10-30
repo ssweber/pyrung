@@ -289,6 +289,34 @@ def _has_out_oneshot_writer(program: Program, tag_name: str) -> bool:
     return False
 
 
+def _has_skippable_coil_writer(program: Program, tag_name: str, graph: ProgramGraph) -> bool:
+    """Whether an ``out()`` coil of *tag_name* sits where some scans skip it.
+
+    An ``out()`` writes False when its rung is off, but only on a scan that
+    runs it.  One behind a ``return_early()``, in a subroutine not called on
+    every scan, or in a forloop body (a false For rung skips the body) holds
+    its value on the scans that skip it, so the tag carries state even when
+    nothing in the program reads it.
+    """
+    from pyrung.core.instruction.coils import OutInstruction
+    from pyrung.core.instruction.control import ForLoopInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    writes_coil = False
+    for instr in walk_instructions(program):
+        if isinstance(instr, ForLoopInstruction):
+            for body_instr in instr.instructions:
+                if isinstance(body_instr, OutInstruction) and tag_name in {
+                    name for name, _itype in _all_write_targets(body_instr, graph.indirect_reach)
+                }:
+                    return True
+        elif isinstance(instr, OutInstruction) and tag_name in {
+            name for name, _itype in _all_write_targets(instr, graph.indirect_reach)
+        }:
+            writes_coil = True
+    return writes_coil and not _is_ote_unconditionally_reachable(tag_name, graph)
+
+
 def _collect_all_exprs(
     program: Program,
     graph: ProgramGraph,
@@ -2970,6 +2998,7 @@ def _classify_dimensions_from_graph(
                 and (
                     _has_inert_writer(program, tag_name, graph.indirect_reach)
                     or _has_out_oneshot_writer(program, tag_name)
+                    or _has_skippable_coil_writer(program, tag_name, graph)
                 )
             )
         ):
