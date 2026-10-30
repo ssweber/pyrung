@@ -1,0 +1,73 @@
+# mergeq configuration for pyrung. Paths are relative to the main checkout.
+# Copy devtools/mergeq/ into another repo and edit only this file.
+
+base = "dev"                        # branch that trains land on
+home = "../pyrung-wt/buildbot"      # queue, logs, results, scratch worktrees, job notes
+worktree_root = "../pyrung-wt"      # `mergeq worktree new <name>` -> <root>/<name>
+branch_prefix = "bob/"              # ... on branch <prefix><name>
+lock_file = "../pyrung-wt/.heavy.lock"
+lock_wait = 10800                   # seconds a heavy run waits for the lock
+job_memory_mb = 0                   # cap per job (Windows Job Object); 0 = no cap
+install = { cmd = ["make", "install"], timeout = 900 }
+
+# Gate stages, cheapest first. A job runs them in this order and stops at the first failure.
+[stages]
+lint = { cmd = ["make", "lint"], timeout = 600, light = true }   # light: agents may run it
+prove = { cmd = ["make", "test-prove"], timeout = 300 }
+pilot = { cmd = ["make", "test-pilot"], timeout = 420 }
+test = { cmd = ["make", "test"], timeout = 1200 }
+soundness = { cmd = ["make", "test-soundness"], timeout = 1200 }
+fold = { cmd = ["make", "test-fold"], timeout = 1800 }
+tumbler = { cmd = ["make", "test-tumbler"], timeout = 900 }
+conf = { cmd = ["make", "test-conformance"], timeout = 1200 }
+conf-cp = { cmd = ["make", "test-conformance", "TARGET=circuitpy"], timeout = 1200 }
+
+[presets]
+default = ["lint", "prove", "pilot", "test", "soundness", "fold"]
+fast = ["lint", "prove", "pilot"]
+heavy = ["lint", "test", "soundness", "fold", "conf", "conf-cp"]
+train = ["lint", "prove", "pilot", "test", "soundness", "fold", "tumbler", "conf", "conf-cp"]
+
+# PreToolUse hook (hook.py). Regexes are searched in the shell command text.
+[hook]
+# Every non-light [stages] command is "heavy" automatically: subagents are refused, and the
+# main session must wrap it in `mergeq run --heavy -- ...` so the machine-wide lock applies.
+# heavy_extra adds commands that are heavy but are not stages.
+heavy_extra = [
+    '\bmake\s*($|[;&|])',                                   # bare `make` = install + lint + test
+    '\bmake\s+([^\s;&|]+\s+)*(test-hypothesis|test-fuzz|test-integration)\b',
+    '\bpytest\b[^;&|]*\s-m\s+\W?conformance',                    # conformance over Modbus (soft PLC)
+    '\bpytest\b[^;&|]*--conformance-target',
+]
+# Commands that get a hard timeout and a named process group: in Bash they are rewritten to
+# `mergeq.py run --timeout N --name <agent>@<worktree> -- bash -c '...'` (N from a leading
+# `timeout N`, else default_timeout); in PowerShell they are refused with the fix.
+needs_timeout = ['\bpytest\b']
+default_timeout = 600
+
+# The read-only reviewer (matched on the hook's agent_type). Every shell segment must match an
+# allow pattern; redirects only to /dev/null or the write roots; no heredocs, no $(...),
+# no PowerShell; Write/Edit only under the write roots.
+reviewer_agent = "bob-reviewer"
+reviewer_write_roots = ["$TEMP", "$TMP", "/tmp"]
+# `[uv run] python <script>.py`: allowed only when the script is under a write root.
+reviewer_script = '^(timeout\s+\S+\s+)?(uv\s+run\s+(--\S+\s+)*)?python[0-9.]*(\s+-\S+)*\s+(?P<script>\S+\.py)\b'
+reviewer_allow = [
+    '^cd(\s|$)',
+    '^git\s+(-C\s+\S+\s+)?(diff|log|show|status|blame|grep|rev-parse|rev-list|merge-base|ls-files|ls-tree|cat-file|describe|shortlog|range-diff|for-each-ref|name-rev|whatchanged)\b',
+    '^git\s+(-C\s+\S+\s+)?branch(\s+(-a|-r|-v|-vv|--list|--contains|--merged|--no-merged|--show-current)\b.*)?$',
+    '^git\s+(-C\s+\S+\s+)?worktree\s+list\b',
+    '^(rg|grep|egrep|ls|cat|head|tail|wc|sort|uniq|cut|tr|diff|cmp|pwd|echo|printf|which|file|stat|du|tree|basename|dirname|realpath|true|false|test|\[|date|env|nl|column|jq)(\s|$)',
+    '^sed\s+-n(\s|$)',
+    '^awk\s+[^>]*$',
+    '^find\s(?!.*\s-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b)',
+    '^(timeout\s+\S+\s+)?(uv\s+run\s+(--\S+\s+)*)?(python[0-9.]*\s+(-I\s+)?-m\s+)?pytest\b',
+    '^python[0-9.]*\s+-I\s+\S*mergeq\.py\s+(status|ps|lock|worktree\s+list)\b',
+    '^(timeout\s+\S+\s+)?(uv\s+run\s+(--\S+\s+)*)?python[0-9.]*\s+--version\b',
+]
+
+[ps]
+# Processes shown by `mergeq ps --all` and offered to `reap --unmanaged`.
+names = ["python.exe", "python3.exe", "pytest.exe", "make.exe", "uv.exe"]
+# Never listed or reaped (language servers, linters' daemons).
+ignore = ['pyright', 'langserver', 'language[-_]server', '\bty\b.*\bserver\b', 'ruff\s+server', 'debugpy']
