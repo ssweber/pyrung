@@ -758,13 +758,46 @@ def _oscillating_rungs(
             PilotRung(tag, other, AllCondition(scope, CompareNe(source, other))),
             PilotRung(tag, resting, AllCondition(scope, CompareNe(source, resting))),
         )
-    away = ctx.resting.get(tag, source.default)
-    if _values_match(away, value):
-        away = 0 if not _values_match(value, 0) else 1
+    away = _away_value(source, value, ctx.resting.get(tag, source.default))
+    if away is None:
+        return ()
     return (
         PilotRung(tag, value, AllCondition(scope, CompareNe(source, value))),
         PilotRung(tag, away, AllCondition(scope, CompareEq(source, value))),
     )
+
+
+def _away_value(source: Any, value: Any, resting: Any) -> Any:
+    """A value other than *value* that *source* may hold, or ``None``.
+
+    The resting value first, then the default, 0, 1 and the neighbours of
+    *value*, then the declared ``choices``/``min``/``max``; a value outside the
+    tag's declared domain is never driven.  ``None`` when the domain has no
+    other value: the driver cannot alternate.
+    """
+    choices = getattr(source, "choices", None)
+    lo, hi = getattr(source, "min", None), getattr(source, "max", None)
+
+    def allowed(candidate: Any) -> bool:
+        if candidate is None or isinstance(candidate, bool) != isinstance(value, bool):
+            return False
+        if isinstance(value, str) != isinstance(candidate, str):
+            return False
+        if _values_match(candidate, value):
+            return False
+        if choices:
+            return candidate in choices
+        if isinstance(candidate, str):
+            return True
+        return (lo is None or candidate >= lo) and (hi is None or candidate <= hi)
+
+    candidates: list[Any] = [resting, source.default]
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        candidates.extend((0, 1, value - 1, value + 1))
+    if choices:
+        candidates.extend(sorted(choices))
+    candidates.extend((lo, hi))
+    return next((candidate for candidate in candidates if allowed(candidate)), None)
 
 
 def _managed_boolean_rungs(

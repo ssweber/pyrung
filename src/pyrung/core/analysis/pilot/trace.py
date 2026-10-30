@@ -87,6 +87,7 @@ from pyrung.core.crossing import (
     eq_target,
 )
 from pyrung.core.instruction.advance import constraint_holds
+from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -571,13 +572,15 @@ def _has_steerable(node: TraceNode) -> bool:
 
 
 def _mark_pulse_last_conjunct(nodes: list[TraceNode]) -> None:
-    """Pulse one conjunct of a demand; the others are holds.
+    """Pulse one conjunct of a counter's count demand; the others are holds.
 
-    A counter counts the rising edges of its whole input: pulsing every
-    conjunct in phase can defeat it (a ``forloop`` guard pulsed off skips the
-    body, so the counter never sees its input fall).  The last conjunct with
-    a steerable leaf is the one nearest the instruction; the conjuncts before
-    it hold their value.
+    A counter counts the rising edges of its whole input, with a memory that
+    changes only on scans it runs: pulsing every conjunct in phase can defeat
+    it (a ``forloop`` guard pulsed off skips the body, so the counter never
+    sees its input fall).  The last conjunct with a steerable leaf is the one
+    nearest the instruction; the conjuncts before it hold their value.  Other
+    owners' pulse demands (drum events, shift clocks, edge-reset pins) pulse
+    every steerable leaf, as before counters counted edges.
     """
     for node in reversed(nodes):
         if _has_steerable(node):
@@ -607,8 +610,15 @@ def _trace_demand(
     provenance: tuple[str, ...],
     depth: int,
     retain_satisfied: bool,
+    counts_edges: bool = False,
 ) -> list[TraceNode]:
-    """Resolve one profile condition through the ordinary trace machinery."""
+    """Resolve one profile condition through the ordinary trace machinery.
+
+    *counts_edges*: the demand is a counter's count input.  A counter counts
+    its input's rising edges, so an input already on is no count: its
+    steerable leaves stay actions (to be pulsed off and on again), and only
+    the conjunct nearest the counter pulses (:func:`_mark_pulse_last_conjunct`).
+    """
 
     if demand is None or demand.condition is None:
         return []
@@ -633,7 +643,7 @@ def _trace_demand(
         for child in node.children:
             _retain_satisfied_steerables(child)
 
-    if retain_satisfied:
+    if retain_satisfied or counts_edges:
         for node in nodes:
             _retain_satisfied_steerables(node)
     for node in nodes:
@@ -650,8 +660,10 @@ def _trace_demand(
             # the instruction needs.  The command that establishes that state
             # is not itself a level hold for the later timer/counter coast.
             node.data_flow = "enable"
-    if pulse:
+    if pulse and counts_edges:
         _mark_pulse_last_conjunct(nodes)
+    elif pulse:
+        _mark_pulse(nodes)
     return nodes
 
 
@@ -857,6 +869,9 @@ def _advance_frontier(
                 provenance=provenance,
                 depth=depth + 1,
                 retain_satisfied=owner.profile.linear is None,
+                counts_edges=isinstance(
+                    owner.instruction, (CountUpInstruction, CountDownInstruction)
+                ),
             )
         )
     establish_nodes = [

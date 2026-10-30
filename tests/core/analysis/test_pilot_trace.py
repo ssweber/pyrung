@@ -1707,6 +1707,45 @@ def test_counter_int_advance_pulses_the_value():
     assert plan.status.name == "REACHED"
 
 
+def test_counter_int_advance_alternates_inside_the_declared_choices():
+    """``Sel`` already at 3 with no 0 among its choices: the counter needs
+    fresh rises of ``Sel == 3``, so ``Sel`` alternates with 1, never 0."""
+    Sel = Int("Sel", choices={1: "WARM", 3: "GO"}, default=3, external=True)
+    plan = PLC(_int_advance_counter(Sel)).how(Bool("Done"))
+    assert plan.status.name == "REACHED"
+
+
+@pytest.mark.parametrize(
+    ("tag", "value", "resting", "away"),
+    [
+        (Int("AwayChoices", choices={1: "a", 2: "b", 3: "c"}), 1, 1, 2),
+        (Int("AwayRange", min=5, max=9, default=5), 5, 5, 6),
+        (Int("AwaySingle", choices={5: "only"}, default=5), 5, 5, None),
+        (Int("AwayRest", choices={0: "x", 3: "y"}), 3, 0, 0),
+        (Int("AwayOpen"), 0, 0, 1),
+    ],
+)
+def test_counter_driver_away_value_stays_in_the_domain(tag, value, resting, away):
+    from pyrung.core.analysis.pilot.route_options import _away_value
+
+    assert _away_value(tag, value, resting) == away
+
+
+def test_counter_with_its_input_held_on_is_pulsed_again():
+    """A counter counted its held input once; reaching its preset needs that
+    input off and on again, not a hold the trace sees as already met."""
+    Btn = Bool("Btn", external=True)
+    C = Counter.clone("HeldC")
+    with Program() as logic:
+        with rung(Btn):
+            count_up(C, 3).reset(Bool("HeldR", external=True))
+    plc = PLC(logic)
+    plc.patch({"Btn": True})
+    plc.run(cycles=2)
+    assert plc.current_state.tags["HeldC_Acc"] == 1
+    assert plc.how(C.Done).status.name == "REACHED"
+
+
 def test_prerequisite_action_carries_nearest_advance_frontier():
     from pyrung.core.crossing import Cmp
     from pyrung.core.instruction.advance import AdvanceStep
