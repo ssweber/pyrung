@@ -119,6 +119,9 @@ class ConformanceProgram:
 
         out = Path(directory)
         out.mkdir(parents=True, exist_ok=True)
+        # A subroutine left by an earlier export into *out* would be pasted too.
+        for stale in (out / "subroutines").glob("*.csv"):
+            stale.unlink()
         pyrung_to_ladder(self.program, self.tag_map).write(out)
         self.tag_map.to_nickname_file(out / "nicknames.csv")
         return out

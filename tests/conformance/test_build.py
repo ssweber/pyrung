@@ -221,6 +221,13 @@ def test_export_writes_main_one_subroutine_per_group_and_nicknames(tmp_path) -> 
     assert (out / "nicknames.csv").exists()
 
 
+def test_export_leaves_no_subroutine_from_an_earlier_export(tmp_path) -> None:
+    out = tmp_path / "part"
+    build_program([Group("alpha", [_seven()])]).export(out)
+    build_program([Group("beta", [_seven()])]).export(out)
+    assert sorted(p.name for p in (out / "subroutines").iterdir()) == ["Conf_Beta.csv"]
+
+
 # --- manifest errors -----------------------------------------------------------
 
 
