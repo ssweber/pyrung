@@ -924,9 +924,12 @@ def _fixup_unfired_drums(
     """Apply missing delta for drum sources that didn't fire during the event step.
 
     Same principle as ``_fixup_unfired_counters`` but handles the drum's
-    multi-step crossing: when the accumulator crosses the current step's
-    preset, advance the step, reset the accumulator, and apply the new
-    step's output pattern.
+    multi-step crossing, as the drum's own enabled scan does: when the
+    accumulator crosses the current step's preset, advance the step, reset
+    the accumulator, end a completion (``_drum_done``) and apply the new
+    step's output pattern, leaving the completion flag as it is (only a reset
+    clears it); on the last step, set the flag and ``_drum_done`` and turn
+    every output off.
     """
     if not pre_advance_acc:
         return
@@ -965,12 +968,15 @@ def _fixup_unfired_drums(
                 kernel.tags[meta.step_name] = new_step
                 kernel.tags[spec.acc_name] = 0
                 kernel.memory[f"_frac:{spec.acc_name}"] = 0.0
+                kernel.memory[meta.done_memory_key] = False
                 for i, out_name in enumerate(meta.output_names):
                     kernel.tags[out_name] = meta.pattern[new_step - 1][i]
-                kernel.tags[done_name] = False
             else:
                 kernel.tags[spec.acc_name] = new_acc
                 kernel.tags[done_name] = True
+                kernel.memory[meta.done_memory_key] = True
+                for out_name in meta.output_names:
+                    kernel.tags[out_name] = False
         else:
             kernel.tags[spec.acc_name] = new_acc
 

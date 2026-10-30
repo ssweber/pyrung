@@ -159,6 +159,8 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
     if isinstance(instr, _DrumBaseInstruction):
         slots.append(("_drum_jump_prev", False))
         slots.append(("_drum_jog_prev", False))
+        # Completed: every output off until the drum steps forward or resets.
+        slots.append(("_drum_done", False))
     if isinstance(instr, EventDrumInstruction):
         slots.append(("_drum_event_prev", False))
         slots.append(("_drum_event_ready", True))

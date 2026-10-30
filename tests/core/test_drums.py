@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from pyrung.core import (
+    PLC,
     Bool,
     Int,
     Program,
@@ -76,7 +77,9 @@ def test_drum_is_terminal_in_flow() -> None:
                 out(light)
 
 
-def test_event_drum_pause_reset_and_disabled_jump_jog_behavior(runner_factory) -> None:
+def test_event_drum_paused_takes_jump_jog_and_reset_without_writing_outputs(
+    runner_factory,
+) -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump = Bool("Jump")
@@ -116,15 +119,25 @@ def test_event_drum_pause_reset_and_disabled_jump_jog_behavior(runner_factory) -
     assert runner.current_state.tags["Y1"] is False
     assert runner.current_state.tags["Y2"] is True
 
+    # Paused: the jump and jog still act on their edges, jump last (to step 1),
+    # and the paused drum leaves its outputs as they are.
     runner.patch({"Enable": False, "Jump": True, "Jog": True})
     runner.step()
-    assert runner.current_state.tags["Step"] == 2
+    assert runner.current_state.tags["Step"] == 1
+    assert runner.current_state.tags["Y1"] is False
     assert runner.current_state.tags["Y2"] is True
 
+    # Reset is a level that wins, paused or not: every output off.
     runner.patch({"Reset": True})
     runner.step()
     assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["Done"] is False
+    assert runner.current_state.tags["Y1"] is False
+    assert runner.current_state.tags["Y2"] is False
+
+    # Step 1's output comes on once the reset ends and the rung is true.
+    runner.patch({"Reset": False, "Enable": True})
+    runner.step()
     assert runner.current_state.tags["Y1"] is True
     assert runner.current_state.tags["Y2"] is False
 
@@ -208,7 +221,7 @@ def test_event_drum_events_use_rung_entry_snapshot(runner_factory) -> None:
     assert runner.current_state.tags["Step"] == 2
 
 
-def test_time_drum_precedence_auto_reset_jump_jog(runner_factory) -> None:
+def test_time_drum_reset_wins_then_jump_beats_jog(runner_factory) -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump = Bool("Jump")
@@ -241,12 +254,109 @@ def test_time_drum_precedence_auto_reset_jump_jog(runner_factory) -> None:
     runner.patch({"Enable": False, "Reset": False, "Jump": False, "Jog": False})
     runner.step()
 
+    # Reset wins and drops the scan's jump and jog: step 1, every output off.
     runner.patch({"Enable": True, "Reset": True, "Jump": True, "Jog": True})
     runner.step()
 
-    assert runner.current_state.tags["Step"] == 4
+    assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["Acc"] == 0
-    assert runner.current_state.tags["Y4"] is True
+    assert not any(runner.current_state.tags[f"Y{i}"] for i in range(1, 5))
+
+    # The dropped edges are spent: held through the reset's end they do nothing.
+    runner.patch({"Reset": False})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 2  # step 1's 0 ms preset is up
+    assert runner.current_state.tags["Y2"] is True
+
+    # Jump and jog on one scan: the jog runs first, the jump (to 3) wins.
+    runner.patch({"Jump": False, "Jog": False})
+    runner.step()
+    runner.patch({"Jump": True, "Jog": True})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 3
+    assert runner.current_state.tags["Acc"] == 0
+    assert runner.current_state.tags["Y3"] is True
+
+
+def test_time_drum_completion_outputs_stay_off_through_a_jump_until_a_jog(
+    runner_factory,
+) -> None:
+    with Program() as logic:
+        with Rung(Bool("Enable")):
+            time_drum(
+                outputs=[Bool("Y1"), Bool("Y2")],
+                presets=[20, 20],
+                pattern=[[1, 0], [0, 1]],
+                current_step=Int("Step"),
+                accumulator=Int("Acc"),
+                completion_flag=Bool("Done"),
+            ).reset(Bool("Reset")).jump(Bool("Jump"), step=1).jog(Bool("Jog"))
+
+    runner = runner_factory(logic, dt=0.010)
+    runner.patch({"Enable": True})
+    for _ in range(3):  # the first scan's dt is 0
+        runner.step()
+    assert runner.current_state.tags["Step"] == 2
+    assert runner.current_state.tags["Y2"] is True
+    runner.step()
+    assert runner.current_state.tags["Y2"] is True
+    runner.step()
+    assert runner.current_state.tags["Done"] is True
+    assert runner.current_state.tags["Y1"] is False
+    assert runner.current_state.tags["Y2"] is False
+    runner.step()
+    assert runner.current_state.tags["Y2"] is False
+
+    # A jump moves the step and clears its time, but the outputs stay off.
+    runner.patch({"Jump": True})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 1
+    assert runner.current_state.tags["Acc"] == 0
+    assert runner.current_state.tags["Done"] is True
+    assert runner.current_state.tags["Y1"] is False
+
+    # A jog brings them back: step 2's output on, the flag still on.
+    runner.patch({"Jump": False, "Jog": True})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 2
+    assert runner.current_state.tags["Acc"] == 0
+    assert runner.current_state.tags["Done"] is True
+    assert runner.current_state.tags["Y2"] is True
+
+
+def test_event_drum_advance_after_a_jump_ends_completion(runner_factory) -> None:
+    """pyrung's reading (no CLICK probe yet): the drum's own step forward, like a
+    jog, ends the all-outputs-off state a completion left through a jump."""
+    with Program() as logic:
+        with Rung(Bool("Enable")):
+            event_drum(
+                outputs=[Bool("Y1"), Bool("Y2")],
+                events=[Bool("E1"), Bool("E2")],
+                pattern=[[1, 0], [0, 1]],
+                current_step=Int("Step"),
+                completion_flag=Bool("Done"),
+            ).reset(Bool("Reset")).jump(Bool("Jump"), step=1)
+
+    runner = runner_factory(logic)
+    runner.patch({"Enable": True})
+    runner.step()
+    runner.patch({"E1": True})
+    runner.step()
+    runner.patch({"E1": False, "E2": True})
+    runner.step()
+    assert runner.current_state.tags["Done"] is True
+    assert runner.current_state.tags["Y2"] is False
+
+    runner.patch({"E2": False, "Jump": True})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 1
+    assert runner.current_state.tags["Y1"] is False
+
+    runner.patch({"Jump": False, "E1": True})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 2
+    assert runner.current_state.tags["Done"] is True
+    assert runner.current_state.tags["Y2"] is True
 
 
 def test_time_drum_jump_uses_rung_entry_snapshot(runner_factory) -> None:
@@ -343,13 +453,23 @@ def test_event_drum_completion_sticky_until_reset(runner_factory) -> None:
     runner.step()
     assert runner.current_state.tags["Done"] is True
 
+    # Completion turns every output off, and they stay off.
+    assert runner.current_state.tags["Y1"] is False
+    assert runner.current_state.tags["Y2"] is False
+
     runner.patch({"E2": False})
     runner.step()
     assert runner.current_state.tags["Done"] is True
+    assert runner.current_state.tags["Y2"] is False
 
     runner.patch({"Reset": True})
     runner.step()
     assert runner.current_state.tags["Done"] is False
+    assert runner.current_state.tags["Y1"] is False
+
+    runner.patch({"Reset": False})
+    runner.step()
+    assert runner.current_state.tags["Y1"] is True
 
 
 def test_time_drum_accumulates_and_resets_accumulator_on_step_transition(runner_factory) -> None:
@@ -507,12 +627,65 @@ def test_time_event_drum_event_only_steps_follow_the_level(runner_factory) -> No
         runner.step()
     assert runner.current_state.tags["Done"] is True
     assert runner.current_state.tags["Step"] == 3
+    assert not any(runner.current_state.tags[f"Y{i}"] for i in range(1, 4))
 
     runner.patch({"Reset": True})
     runner.step()
     assert runner.current_state.tags["Done"] is False
     assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["Acc"] == 0
+
+
+def test_time_event_drum_outputs_stay_off_after_completion_until_a_jog(
+    runner_factory,
+) -> None:
+    with Program() as logic:
+        with Rung(Bool("Enable")):
+            time_event_drum(
+                outputs=[Bool("Y1"), Bool("Y2")],
+                presets=[None, None],
+                events=[Bool("E1"), Bool("E2")],
+                pattern=[[1, 0], [0, 1]],
+                current_step=Int("Step"),
+                accumulator=Int("Acc"),
+                completion_flag=Bool("Done"),
+            ).reset(Bool("Reset")).jump(Bool("Jump"), step=1).jog(Bool("Jog"))
+
+    runner = runner_factory(logic, dt=0.010)
+    runner.patch({"Enable": True, "E1": True})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 2
+    assert runner.current_state.tags["Y2"] is True
+
+    runner.patch({"E2": True})
+    runner.step()
+    assert runner.current_state.tags["Done"] is True
+    assert runner.current_state.tags["Y2"] is False
+
+    # The last event is a level; it going off does not bring the outputs back.
+    runner.patch({"E2": False})
+    runner.step()
+    assert runner.current_state.tags["Y2"] is False
+
+    # Paused: a jump still acts, but only the enabled drum writes its outputs.
+    runner.patch({"Enable": False, "E1": False, "Jump": True})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 1
+    assert runner.current_state.tags["Y1"] is False
+
+    # Back on, the drum is still complete: the jump left its outputs off.
+    runner.patch({"Enable": True, "Jump": False})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 1
+    assert runner.current_state.tags["Done"] is True
+    assert runner.current_state.tags["Y1"] is False
+
+    # A jog brings them back.
+    runner.patch({"Jog": True})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 2
+    assert runner.current_state.tags["Done"] is True
+    assert runner.current_state.tags["Y2"] is True
 
 
 def test_time_event_drum_events_use_rung_entry_snapshot(runner_factory) -> None:
@@ -560,3 +733,99 @@ def test_time_event_drum_tag_presets_jump_and_jog(runner_factory) -> None:
     runner.step()
     assert runner.current_state.tags["Step"] == 3
     assert runner.current_state.tags["Y3"] is True
+
+
+def _long_run_time_program(kind: str) -> Program:
+    with Program(strict=False) as logic:
+        with Rung(Bool("Enable")):
+            if kind == "time":
+                time_drum(
+                    outputs=[Bool("Y1"), Bool("Y2"), Bool("Y3")],
+                    presets=[500, 300, 700],
+                    unit="ms",
+                    pattern=[[1, 0, 0], [0, 1, 0], [0, 1, 1]],
+                    current_step=Int("Step"),
+                    accumulator=Int("Acc"),
+                    completion_flag=Bool("Done"),
+                ).reset(Bool("Reset")).jump(Bool("Jump"), step=2).jog(Bool("Jog"))
+            else:
+                time_event_drum(
+                    outputs=[Bool("Y1"), Bool("Y2"), Bool("Y3")],
+                    presets=[500, None, 700],
+                    events=[None, Bool("E2"), Bool("E3")],
+                    unit="ms",
+                    pattern=[[1, 0, 0], [0, 1, 0], [0, 1, 1]],
+                    current_step=Int("Step"),
+                    accumulator=Int("Acc"),
+                    completion_flag=Bool("Done"),
+                ).reset(Bool("Reset")).jump(Bool("Jump"), step=2).jog(Bool("Jog"))
+        with Rung(Bool("Y3")):
+            out(Bool("Lamp"))
+        with Rung(Bool("Done")):
+            out(Bool("DoneLamp"))
+    return logic
+
+
+def _long_run_event_program() -> Program:
+    with Program(strict=False) as logic:
+        with Rung(Bool("Enable")):
+            event_drum(
+                outputs=[Bool("Y1"), Bool("Y2")],
+                events=[Bool("E1"), Bool("E2")],
+                pattern=[[1, 0], [0, 1]],
+                current_step=Int("Step"),
+                completion_flag=Bool("Done"),
+            ).reset(Bool("Reset")).jump(Bool("Jump"), step=1).jog(Bool("Jog"))
+        with Rung(Bool("Y2")):
+            out(Bool("Lamp"))
+    return logic
+
+
+@pytest.mark.parametrize("kind", ["time", "time_event"])
+def test_time_drums_complete_pause_and_reset_over_long_runs(kind: str) -> None:
+    """Long ``run_for`` windows, which fold: ``make test-fold`` checks them scan by scan."""
+    plc = PLC(_long_run_time_program(kind), dt=0.01)
+    plc.patch({"Enable": True, "E3": True})
+    plc.run_for(0.4)
+    plc.patch({"E2": True})
+    plc.run_for(3.0)  # completes; outputs off; clamped timing past completion
+    assert plc.current_state.tags["Done"] is True
+    assert plc.current_state.tags["Y3"] is False
+    # Paused: jog/jump still act.
+    plc.patch({"Enable": False, "Jump": True})
+    plc.run_for(0.5)
+    assert plc.current_state.tags["Step"] == 2
+    plc.patch({"Enable": True, "Jump": False})
+    plc.run_for(2.0)
+    plc.patch({"Jog": True})
+    plc.run_for(1.0)
+    plc.patch({"Reset": True, "Jog": False})
+    plc.run_for(0.5)
+    assert plc.current_state.tags["Y1"] is False
+    plc.patch({"Reset": False})
+    plc.run_for(5.0)
+
+
+def test_event_drum_completes_pauses_and_resets_over_long_runs() -> None:
+    plc = PLC(_long_run_event_program(), dt=0.01)
+    plc.patch({"Enable": True})
+    plc.run_for(0.5)
+    plc.patch({"E1": True})
+    plc.run_for(0.5)
+    plc.patch({"E2": True})
+    plc.run_for(0.5)
+    assert plc.current_state.tags["Y2"] is False
+    plc.patch({"Enable": False, "Jump": True})
+    plc.run_for(0.5)
+    plc.patch({"Enable": True, "Jump": False})
+    plc.run_for(0.5)
+    assert plc.current_state.tags["Step"] == 1
+    assert plc.current_state.tags["Y1"] is False  # a jump leaves a completed drum off
+    plc.patch({"Jog": True})
+    plc.run_for(0.5)
+    assert plc.current_state.tags["Step"] == 2
+    assert plc.current_state.tags["Y2"] is True
+    plc.patch({"Reset": True, "Jog": False})
+    plc.run_for(0.5)
+    plc.patch({"Reset": False})
+    plc.run_for(0.5)

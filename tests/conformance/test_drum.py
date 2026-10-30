@@ -25,8 +25,10 @@ drum (drum/model_a.py in the round-1 notes reproduces every reading): jump and
 jog act on their rising edges even while the drum is paused; reset is a level
 that wins, taking the drum to step 1 with its flag off and ALL its outputs off,
 and drops a jump or jog on its scan; jump beats jog on one scan; a paused drum
-does not write its outputs; at completion all its outputs go off until the
-step changes.  pyrung differs in each, so those cases are ``pending="DRUM"``.
+does not write its outputs; at completion all its outputs go off until a jog
+(hardware round 2: a jump moves the step but leaves them off).  pyrung matches
+each since step DRUM; what pyrung read before it is noted below as "pyrung
+before DRUM".
 What each case tells apart:
 
 - ``te_acc_counts_while_waiting``, ``te_level_event_already_on``: the open
@@ -48,29 +50,29 @@ What each case tells apart:
   Result3 = 5); if a jog does, 3 scans, last on scan 6.
 - ``reset_no_stale_outputs``: a drum on step 2 of 3 (never complete) reset
   on scans 5 and 6.  A reset that turns every output off keeps step 1's
-  output off until the reset ends, on from scan 7 (Result2 = 7); pyrung writes
-  step 1's outputs on the reset scan (Result2 = 5).  A drum that writes its
-  outputs before it handles the reset leaves step 2's output on for a stale
-  scan (Result3 = 5).  Result4 = 1: the step on scan 5.
+  output off until the reset ends, on from scan 7 (Result2 = 7); pyrung
+  before DRUM wrote step 1's outputs on the reset scan (Result2 = 5).  A
+  drum that writes its outputs before it handles the reset leaves step 2's
+  output on for a stale scan (Result3 = 5).  Result4 = 1: the step on scan 5.
 - ``reset_jump_jog_order``: reset wins, and jump beats jog: steps on scans 3
   and 5 read 1 (Result2 = 1, Result3 = 1), and jump with jog on scan 7 leaves
-  step 3 (Result1 = 3).  pyrung applies the reset, then the jump, then the
-  jog, each from where the last left the step: 3, 2, 4.
+  step 3 (Result1 = 3).  pyrung before DRUM applied the reset, then the
+  jump, then the jog, each from where the last left the step: 3, 2, 4.
 - ``pause_holds_and_drops_jog``: retired, the drum it asked about acts on a
   paused jog (see ``paused_drum_jogs_and_resets``).
 - ``paused_drum_jogs_and_resets``: paused on step 2 for scans 3..5, a jog on
   scan 4 still steps (the step on scan 4 reads 3, Result2), the paused drum
   leaves step 2's output on through scan 4 (Result3 = 4), a reset on scan 5
   turns every output off, and step 1's output comes on when the rung comes
-  back, scan 6 (Result4).  pyrung ignores the paused jog (Result2 = 2) and
-  writes step 1's output on the reset scan (Result4 = 5).
+  back, scan 6 (Result4).  pyrung before DRUM ignored the paused jog
+  (Result2 = 2) and wrote step 1's output on the reset scan (Result4 = 5).
 - ``completion_turns_outputs_off``: a 2-step drum completed on scan 3 turns
   its outputs off, so step 2's output is on for scan 2 only, and on scan 8
   again after a jog (Result2 = 2 scans).  After completion a jump to step 1
   on scan 6 moves the step but leaves step 1's output off (Result3 = 0); the
   jog on scan 8 brings step 2's back (ErrorCode = 8) (hardware round 2, 2026-10-30: the adopted
-  answer was Result3 = 6, the jump turning step 1's output on).  pyrung leaves
-  step 2's output on until the jump (Result2 = 5).
+  answer was Result3 = 6, the jump turning step 1's output on).  pyrung
+  before DRUM left step 2's output on until the jump (Result2 = 5).
 - ``paused_drum_jumps`` (probe): paused on step 1 for scans 3..5, a jump to
   step 3 on scan 4.  A jump taken while paused (adopted) reads step 3 on scan
   4 (Result2) and at the end (Result1); step 1's output stays on until the
@@ -80,7 +82,7 @@ What each case tells apart:
   and is held to scan 6.  Reset drops it and its edge is spent (adopted): the
   drum stays on step 1 (Result1 = 1) and never enters step 2 (Result2 = 0).
   An edge kept for the scan after the reset enters step 2 on scan 5; pyrung
-  applies the jog after the reset on scan 4 (Result2 = 4).
+  before DRUM applied the jog after the reset on scan 4 (Result2 = 4).
 - ``invalid_step_corrects_to_1``: an enabled drum whose step register is out of
   range goes to step 1 and writes step 1's outputs; a paused one leaves the
   register alone.  Clamping to the last step reads Result3 = 3, wrapping
@@ -530,7 +532,6 @@ group = Group(
             ladder=prove_reset_no_stale_outputs,
             expect={"Result1": 1, "Result2": 7, "Result3": 4, "Result4": 1},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "Drum reset wins over jump and jog on its scan, and jump beats jog: from "
@@ -539,7 +540,6 @@ group = Group(
             ladder=prove_reset_jump_jog_order,
             expect={"Result1": 3, "Result2": 1, "Result3": 1},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A drum whose step register holds a step it does not have goes to step 1 "
@@ -569,7 +569,6 @@ group = Group(
             ladder=prove_paused_drum_jogs_and_resets,
             expect={"Result1": 1, "Result2": 3, "Result3": 4, "Result4": 6},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A drum turns its outputs off when it completes; after that a jog brings them "
@@ -580,7 +579,6 @@ group = Group(
             ladder=prove_completion_turns_outputs_off,
             expect={"Result1": 2, "Result2": 2, "Result3": 0, "Result4": 1, "ErrorCode": 8},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A paused drum takes a jump: paused on step 1 for scans 3..5, a jump to step "
@@ -590,7 +588,6 @@ group = Group(
             ladder=prove_paused_drum_jumps,
             expect={"Result1": 3, "Result2": 3, "Result3": 5, "Result4": 6},
             scans=SCANS,
-            pending="DRUM",
             probe="drum jump while paused",
         ),
         case(
@@ -600,7 +597,6 @@ group = Group(
             ladder=prove_reset_swallows_held_jog,
             expect={"Result1": 1, "Result2": 0},
             scans=SCANS,
-            pending="DRUM",
             probe="reset swallowing a held jog edge",
         ),
     ],

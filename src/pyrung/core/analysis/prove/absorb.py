@@ -90,6 +90,8 @@ class _DrumEventMeta:
     step_count: int
     output_names: tuple[str, ...]
     pattern: tuple[tuple[bool, ...], ...]
+    #: The drum's ``_drum_done`` memory: completed, every output off.
+    done_memory_key: str
 
 
 @dataclass(frozen=True)
@@ -137,6 +139,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
                 step_count=len(instr.pattern),
                 output_names=tuple(t.name for t in instr.outputs),
                 pattern=tuple(tuple(bool(cell) for cell in row) for row in instr.pattern),
+                done_memory_key=instr.memory_key("_drum_done"),
             )
             continue
         else:

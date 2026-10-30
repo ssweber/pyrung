@@ -91,6 +91,19 @@ Events are levels, unlike `event_drum`'s rising edges: an event already on when 
 
 `event_drum(...)`, `time_drum(...)` and `time_event_drum(...)` are terminal builders. `.reset(...)` is required and finalizes the instruction. `.jump(...)` and `.jog(...)` are optional.
 
+### What a drum does each scan
+
+All three drums follow a CLICK, measured on hardware:
+
+- **Reset** is a level, and it wins: while it is on the drum sits on step 1 with its completion flag and **every output off**, and a jump or jog that rises on a reset scan is dropped, not saved for later.
+- **Jump and jog** act on their rising edges, even while the rung is false. The jog runs first and the jump last, so a jump and a jog on one scan land on the jump's step. A jog on the last step does nothing.
+- **A false rung** pauses the drum: no timing, no event steps, and its outputs stay as they were. They show the step a paused jump or jog took once the rung is true again.
+- **Completion** sets the flag and turns every output off. They stay off until the drum steps forward again, by a jog or by its own event or time. A jump moves the step but leaves them off. Only a reset clears the flag.
+- **A step register out of range** goes to step 1 the next scan the rung is true; a paused drum leaves it alone.
+- A time drum's accumulator is 0 on the scan of every step change: an advance, a jog, a jump and a reset.
+
+CLICK has not been asked yet whether an event or time step after a jump ends a completion; pyrung takes it that one does, as a jog does.
+
 ### Variadic condition chaining
 
 Builder condition arguments (`.down(...)`, `.clock(...)`, `.reset(...)`, `.jump(...)`, `.jog(...)`) all accept single conditions, multiple positional conditions, or tuple/list groups. All forms normalize to one AND expression:

@@ -393,6 +393,7 @@ def _compile_event_drum_instruction(
     last_step_key = f"_drum_last_step:{key_base}"
     jump_prev_key = f"_drum_jump_prev:{key_base}"
     jog_prev_key = f"_drum_jog_prev:{key_base}"
+    done_key = f"_drum_done:{key_base}"
 
     snap_events = ctx._helper_condition_snapshots.get(id(instr), {}).get("events")
     if snap_events is not None:
@@ -409,12 +410,11 @@ def _compile_event_drum_instruction(
         f"_step_raw = int({step_read})",
         "_step = _step_raw",
         "_step_changed = False",
-        f"if _enabled and ((_step < 1) or (_step > {step_count})):",
+        f"if (_step < 1) or (_step > {step_count}):",
         "    _step = 1",
-        f"    {step_write} = 1",
-        "    _step_changed = True",
-        f"elif (_step < 1) or (_step > {step_count}):",
-        "    _step = 1",
+        "    if _enabled:",
+        f"        {step_write} = 1",
+        "        _step_changed = True",
     ]
 
     if instr.jump_condition is not None:
@@ -446,8 +446,13 @@ def _compile_event_drum_instruction(
         lines.extend(["_jog_curr = False", "_jog_edge = False"])
 
     lines.append(f"_reset_active = bool({reset_expr})")
-    lines.append("if _enabled:")
+    lines.append(f"_done = bool(_mem.get({done_key!r}, False))")
+    # Reset wins: step 1, flag off, every output off, the jump and jog dropped.
     lines.extend(
+        _compile_drum_reset_lines(output_symbols, step_write, completion_write, timed=False)
+    )
+    not_reset: list[str] = ["if _enabled:"]
+    not_reset.extend(
         _indent_body(
             [
                 *_compile_step_selector_lines(
@@ -468,54 +473,24 @@ def _compile_event_drum_instruction(
                 "        _step += 1",
                 f"        {step_write} = _step",
                 "        _step_changed = True",
+                "        _done = False",
                 "    else:",
                 f"        {completion_write} = True",
+                "        _done = True",
             ],
             4,
         )
     )
-
-    lines.extend(
+    not_reset.extend(_compile_drum_jog_jump_lines(instr, ctx, step_write, step_count))
+    not_reset.extend(
         [
-            "if _reset_active:",
-            "    _step = 1",
-            "    _step_changed = True",
-            f"    {step_write} = 1",
-            f"    {completion_write} = False",
+            "if _jogged:",
+            "    _done = False",
+            *_compile_drum_output_lines(output_symbols, pattern_literal),
         ]
     )
-
-    if instr.jump_condition is not None and instr.jump_step is not None:
-        jump_step_expr = _compile_value(instr.jump_step, ctx)
-        lines.extend(
-            [
-                "if _enabled and _jump_edge:",
-                f"    _target = int({jump_step_expr})",
-                f"    if 1 <= _target <= {step_count}:",
-                "        _step_changed = _step_changed or (_step != _target)",
-                "        _step = _target",
-                f"        {step_write} = _step",
-            ]
-        )
-
-    if instr.jog_condition is not None:
-        lines.extend(
-            [
-                f"if _enabled and _jog_edge and (_step < {step_count}):",
-                "    _step += 1",
-                "    _step_changed = True",
-                f"    {step_write} = _step",
-            ]
-        )
-
-    lines.extend(
-        [
-            "if _enabled or _reset_active:",
-            f"    _row = {pattern_literal}[_step - 1]",
-        ]
-    )
-    for idx, output_symbol in enumerate(output_symbols):
-        lines.append(f"    {output_symbol} = bool(_row[{idx}])")
+    lines.append("else:")
+    lines.extend(_indent_body(not_reset, 4))
 
     lines.extend(
         [
@@ -532,6 +507,7 @@ def _compile_event_drum_instruction(
             f"_mem[{event_ready_key!r}] = _event_ready_final",
             f"_mem[{event_prev_key!r}] = _event_curr_final",
             f"_mem[{last_step_key!r}] = _step",
+            f"_mem[{done_key!r}] = _done",
         ]
     )
     if instr.jump_condition is not None:
@@ -540,6 +516,77 @@ def _compile_event_drum_instruction(
         lines.append(f"_mem[{jog_prev_key!r}] = _jog_curr")
 
     return [" " * indent + line for line in lines]
+
+
+def _compile_drum_reset_lines(
+    output_symbols: list[str], step_write: str, completion_write: str, *, timed: bool
+) -> list[str]:
+    """``if _reset_active:`` the reset level: step 1, flag off, every output off."""
+    body = ["_step = 1", "_step_changed = True"]
+    if timed:
+        body.append("_reset_step_data = True")
+    body.extend(
+        [
+            "_done = False",
+            f"{step_write} = 1",
+            f"{completion_write} = False",
+            *(f"{output_symbol} = False" for output_symbol in output_symbols),
+        ]
+    )
+    return ["if _reset_active:", *_indent_body(body, 4)]
+
+
+def _compile_drum_jog_jump_lines(
+    instr: EventDrumInstruction | TimeDrumInstruction | TimeEventDrumInstruction,
+    ctx: CodegenContext,
+    step_write: str,
+    step_count: int,
+) -> list[str]:
+    """A jog, then a jump, on their edges whether or not the drum is enabled.
+
+    Sets ``_jogged`` when the jog moved the drum, ``_taken`` when either did
+    and ``_step_changed`` when the step differs; the jump comes last, so it
+    beats a jog on the same scan.
+    """
+    lines: list[str] = ["_jogged = False", "_taken = False"]
+    if instr.jog_condition is not None:
+        lines.extend(
+            [
+                f"if _jog_edge and (_step < {step_count}):",
+                "    _step += 1",
+                "    _step_changed = True",
+                "    _jogged = True",
+                "    _taken = True",
+            ]
+        )
+    if instr.jump_condition is not None and instr.jump_step is not None:
+        jump_step_expr = _compile_value(instr.jump_step, ctx)
+        lines.extend(
+            [
+                "if _jump_edge:",
+                f"    _target = int({jump_step_expr})",
+                f"    if 1 <= _target <= {step_count}:",
+                "        _step_changed = _step_changed or (_step != _target)",
+                "        _step = _target",
+                "        _taken = True",
+            ]
+        )
+    lines.extend(["if _taken:", f"    {step_write} = _step"])
+    return lines
+
+
+def _compile_drum_output_lines(output_symbols: list[str], pattern_literal: str) -> list[str]:
+    """Only an enabled drum writes its outputs: its step's row, or all off once complete."""
+    lines = [
+        "if _enabled:",
+        "    if _done:",
+        *(f"        {output_symbol} = False" for output_symbol in output_symbols),
+        "    else:",
+        f"        _row = {pattern_literal}[_step - 1]",
+    ]
+    for idx, output_symbol in enumerate(output_symbols):
+        lines.append(f"        {output_symbol} = bool(_row[{idx}])")
+    return lines
 
 
 def _compile_time_drum_instruction(
@@ -563,6 +610,7 @@ def _compile_time_drum_instruction(
     frac_key = f"_frac:{instr.accumulator.name}"
     jump_prev_key = f"_drum_jump_prev:{key_base}"
     jog_prev_key = f"_drum_jog_prev:{key_base}"
+    done_key = f"_drum_done:{key_base}"
     max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX
 
     timed_event = isinstance(instr, TimeEventDrumInstruction)
@@ -581,13 +629,12 @@ def _compile_time_drum_instruction(
         "_step = _step_raw",
         "_step_changed = False",
         "_reset_step_data = False",
-        f"if _enabled and ((_step < 1) or (_step > {step_count})):",
+        f"if (_step < 1) or (_step > {step_count}):",
         "    _step = 1",
-        "    _step_changed = True",
-        "    _reset_step_data = True",
-        f"    {step_write} = 1",
-        f"elif (_step < 1) or (_step > {step_count}):",
-        "    _step = 1",
+        "    if _enabled:",
+        "        _step_changed = True",
+        "        _reset_step_data = True",
+        f"        {step_write} = 1",
         f"_acc = int({accumulator_read})",
         f"_frac = float(_mem.get({frac_key!r}, 0.0))",
     ]
@@ -621,6 +668,7 @@ def _compile_time_drum_instruction(
         lines.extend(["_jog_curr = False", "_jog_edge = False"])
 
     lines.append(f"_reset_active = bool({reset_expr})")
+    lines.append(f"_done = bool(_mem.get({done_key!r}, False))")
     enabled_body = [
         "_dt = float(_mem.get('_dt', 0.0))",
         f"_dt_units = {unit_expr}",
@@ -655,61 +703,38 @@ def _compile_time_drum_instruction(
             "        _step += 1",
             "        _step_changed = True",
             "        _reset_step_data = True",
+            "        _done = False",
             f"        {step_write} = _step",
             "    else:",
             f"        {completion_write} = True",
+            "        _done = True",
         ]
     )
-    lines.append("if _enabled:")
-    lines.extend(_indent_body(enabled_body, 4))
-
+    # Reset wins: step 1, flag off, every output off, the jump and jog dropped.
     lines.extend(
+        _compile_drum_reset_lines(output_symbols, step_write, completion_write, timed=True)
+    )
+    not_reset: list[str] = ["if _enabled:", *_indent_body(enabled_body, 4)]
+    not_reset.extend(_compile_drum_jog_jump_lines(instr, ctx, step_write, step_count))
+    not_reset.extend(
         [
-            "if _reset_active:",
-            "    _step = 1",
-            "    _step_changed = True",
+            "if _taken:",
             "    _reset_step_data = True",
-            f"    {step_write} = 1",
-            f"    {completion_write} = False",
+            "if _jogged:",
+            "    _done = False",
+            *_compile_drum_output_lines(output_symbols, pattern_literal),
         ]
     )
-
-    if instr.jump_condition is not None and instr.jump_step is not None:
-        jump_step_expr = _compile_value(instr.jump_step, ctx)
-        lines.extend(
-            [
-                "if _enabled and _jump_edge:",
-                f"    _target = int({jump_step_expr})",
-                f"    if 1 <= _target <= {step_count}:",
-                "        _step_changed = _step_changed or (_step != _target)",
-                "        _step = _target",
-                "        _reset_step_data = True",
-                f"        {step_write} = _step",
-            ]
-        )
-
-    if instr.jog_condition is not None:
-        lines.extend(
-            [
-                f"if _enabled and _jog_edge and (_step < {step_count}):",
-                "    _step += 1",
-                "    _step_changed = True",
-                "    _reset_step_data = True",
-                f"    {step_write} = _step",
-            ]
-        )
+    lines.append("else:")
+    lines.extend(_indent_body(not_reset, 4))
 
     lines.extend(
         [
             "if _reset_step_data:",
             "    _acc = 0",
             "    _frac = 0.0",
-            "if _enabled or _reset_active:",
-            f"    _row = {pattern_literal}[_step - 1]",
         ]
     )
-    for idx, output_symbol in enumerate(output_symbols):
-        lines.append(f"    {output_symbol} = bool(_row[{idx}])")
 
     lines.extend(
         [
@@ -721,6 +746,7 @@ def _compile_time_drum_instruction(
     if timed_event:
         # Every scan, as the interpreter writes it.
         lines.append(f"_mem[{frac_key!r}] = _frac")
+    lines.append(f"_mem[{done_key!r}] = _done")
 
     if instr.jump_condition is not None:
         lines.append(f"_mem[{jump_prev_key!r}] = _jump_curr")
