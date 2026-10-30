@@ -499,7 +499,6 @@ group = Group(
             ladder=prove_to_binary,
             init=init_to_binary,
             expect={"Result1": 65, "Result2": 90, "Result3": 200, "Result4": 0},
-            probe="does Copy Binary of 200 set SC43",
         ),
         case(
             "Fill with empty text blanks a TXT to NUL, so ASCII Code Value of it writes 0 over "
@@ -536,7 +535,6 @@ group = Group(
             init=init_to_value_rejects,
             expect={"Result1": 77, "Result2": 1, "Result3": 0, "Result4": 0},
             pending="SYS",
-            probe="does Character Value of NUL set SC43",
         ),
         case(
             "Pack text into a WORD parses hex: 00FF is 255, 0010 is 16, ABCD is 0xABCD, and "
@@ -552,7 +550,6 @@ group = Group(
             ladder=prove_pack_text_whitespace,
             init=init_pack_text_whitespace,
             expect={"Result1": 99, "Result2": 1, "Result3": 12, "Result4": 12},
-            probe="does a refused pack_text set SC43",
         ),
         case(
             "Pack text into an Int parses signed decimal: -123 is -123 (Result1), 0042 is 42 "

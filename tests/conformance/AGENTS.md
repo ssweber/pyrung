@@ -273,8 +273,8 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [ ] patch applied before logic, on the same scan
 - [ ] forces persist across scans
 - [x] fault flags (SC40/SC43/SC44): which later instruction clears them (answered on hardware round 2: SC40 the next Math, SC43/SC44 the next instruction; pending SYS; `system/division_flag_clears_each_scan`, `system/out_of_range_flag_clears_each_scan`, `system/address_flag_clears_each_scan`)
-- [x] first scan after STOP->RUN: SD9 = 0 with SC3 on (`system/first_scan_counter_and_clock`, answered on hardware round 2); SD9's wrap (probe; `system/scan_counter_wraps_to_zero`)
-- [x] edge and counter memory at STOP->RUN (probes; `coils/edge_on_first_scan`, `counters/first_scan_input_already_on`)
+- [x] first scan after STOP->RUN: SD9 = 0 with SC3 on (`system/first_scan_counter_and_clock`, answered on hardware round 2); SD9's wrap (answered on hardware; `system/scan_counter_wraps_to_zero`)
+- [x] edge and counter memory at STOP->RUN (answered on hardware; `coils/edge_on_first_scan`, `counters/first_scan_input_already_on`)
 - [ ] first_scan true once, on scan 0
 - [ ] first_scan re-triggers on STOP->RUN
 - [x] scan clock on when SD9 is even (`system/scan_clock_follows_counter`)
@@ -300,19 +300,19 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] an OR on the rail is solved once, before the outputs (`solve_order/input_or_legs_read_before_outputs`); an OR on a branch reads live (`solve_order/branch_or_reads_row_above`, pending S4)
 - [x] output bus: an operand sees the coil above it (`solve_order/bus_operand_sees_coil`); the last coil write wins (`solve_order/bus_coils_last_write_wins`)
 - [x] a wire does not see a later continued wire's write (`solve_order/continued_reads_later_wire`)
-- [x] a box leg does not see a continued wire below the box (probe; `solve_order/box_leg_reads_row_below`)
+- [x] a box leg does not see a continued wire below the box (answered on hardware; `solve_order/box_leg_reads_row_below`)
 - [x] For body: a body rung sees the body rung above it in the same pass (`solve_order/for_body_rung_reads_body_rung_above`)
 - [ ] solve order around a `call()` between the rows of one rung (needs the subroutine home called from main); a branch row in a For body rung (pyrung refuses `branch()` inside `forloop()`)
 - [ ] empty rung (NOP): nothing to observe. CLICK refuses a contact before NOP and deletes a NOP row that shares its rung (so `rungs/nop_rung_takes_snapshot` is retired); the exporter refuses both, and a bare NOP round-trips (`tests/click/test_codegen.py`)
 - [x] subroutines: same rules (every case runs inside its group's subroutine)
-- [x] a subroutine called twice a scan: an edge contact fires once per edge (probe; `call_twice/rise_once_per_scan`, pending S3)
+- [x] a subroutine called twice a scan: an edge contact fires once per edge (answered on hardware; `call_twice/rise_once_per_scan`, pending S3)
 - [ ] call into subroutine (not inside a group: CLICK has no nested calls)
 - [ ] subroutine memory writes visible to the caller after the call
 - [x] forloop runs N times in one scan (`loop/loop_runs_n_times`)
 - [x] forloop body sees its own prior-iteration writes (`loop/loop_runs_n_times`)
 - [ ] forloop loop.idx indirect addressing
-- [x] forloop dynamic count == 0: no iteration (probe; 65536 is the other reading) (`loop/zero_count`); -1 runs 65535 (unsigned 16-bit) (`loop/negative_count_reads_unsigned`, in-process only)
-- [x] forloop (`loop` group, F1-F14, F17-F19): a false For rung skips its body (F2); count read as unsigned 16-bit (F3); count read once (F4); body-rung contacts per iteration (F5); edges inside a loop (F6, probe, pending S3); timers accumulate per iteration (F7); counters count edges across iterations (F8, probe, pending S2); Break leaves the innermost loop (F9) after the earlier body rungs (F10); Continue skips the rest of one iteration (F11, F12); a Break contact sees same-iteration writes (F13); a one-shot re-arms on an iteration its rung is false (F14); a body one-shot holds while its For rung is false (F17); an edge contact's memory across iterations of one scan (F18, probe, pending S3); a timer and a counter in a skipped body hold, reset unscanned (F19, probe)
+- [x] forloop dynamic count == 0: no iteration (answered on hardware; 65536 was the other reading) (`loop/zero_count`); -1 runs 65535 (unsigned 16-bit) (`loop/negative_count_reads_unsigned`, in-process only)
+- [x] forloop (`loop` group, F1-F14, F17-F19): a false For rung skips its body (F2); count read as unsigned 16-bit (F3); count read once (F4); body-rung contacts per iteration (F5); edges inside a loop (F6, answered, pending S3); timers accumulate per iteration (F7); counters count edges across iterations (F8, answered, pending S2); Break leaves the innermost loop (F9) after the earlier body rungs (F10); Continue skips the rest of one iteration (F11, F12); a Break contact sees same-iteration writes (F13); a one-shot re-arms on an iteration its rung is false (F14); a body one-shot holds while its For rung is false (F17); an edge contact's memory across iterations of one scan (F18, answered, pending S3); a timer and a counter in a skipped body hold, reset unscanned (F19, answered)
 - [ ] forloop inner one-shot: does CLICK reject it (C0111) or ignore it (F15); a loop in a called subroutine counts toward depth 3 (F16, needs the subroutine home)
 
 ### Memory
@@ -350,7 +350,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] out oneshot re-fires after rung goes False then True again (`coils/out_oneshot_refires`)
 - [x] rise / fall fire one scan (`coils/rise_fall_fire_one_scan`)
 - [x] each edge contact keeps its own memory, not the bit's end-of-scan value (`coils/edge_sees_previous_scan_end`, `coils/edge_before_its_writer`, pending S3)
-- [x] edge memory behind an open contact and in a false rung's branch (probes; `coils/edge_behind_open_contact`, `coils/edge_in_false_rung_branch`)
+- [x] edge memory behind an open contact and in a false rung's branch (answered on hardware; `coils/edge_behind_open_contact`, `coils/edge_in_false_rung_branch`)
 - [x] latch / reset stickiness (`coils/latch_reset_sticky`)
 - [x] toggle flips once per OFF->ON and holds (O1) (`out/toggle_flips_once_per_edge`)
 - [x] debounce TD keeps counting past its preset while steady (O2); a bounce restarts the timing side (O3) (`out/debounce_td_keeps_counting`, `out/debounce_bounce_restarts_on_side`)
@@ -372,7 +372,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] timer fires immediately if preset lowered below Acc (`timers/preset_lowered_fires_at_once`)
 - [x] timer preset resolved dynamically each tick (the two preset cases above)
 - [x] counter counts rising edges of its inputs, not scans; a held input is not counted again after a reset (`counters/level_vs_edge`, `counters/held_input_not_recounted`, pending S2)
-- [x] counter edge on a reset scan; up and down edges on one scan (probes; `counters/edge_on_reset_scan`, `counters/up_down_same_scan`)
+- [x] counter edge on a reset scan; up and down edges on one scan (answered on hardware; `counters/edge_on_reset_scan`, `counters/up_down_same_scan`)
 - [x] counter resumes if preset raised mid-count (`counters/preset_raised_resumes`)
 - [x] counter survives rung going false (no auto-reset) (`counters/survives_rung_false`)
 - [x] counter Acc clamp at Dint range (`counters/acc_clamps_at_dint_range`)
@@ -380,7 +380,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] counter preset lowered while idle: Done turns on without a count (undocumented by CLICK; `counters/preset_lowered_while_idle` is the probe)
 - [x] counter reset with preset<=0: Done stays False for one scan even though Acc>=preset (`counters/reset_zero_preset`)
 - [x] counter preset resolved dynamically each scan (`counters/preset_raised_resumes`, `counters/preset_lowered_while_idle`)
-- [x] count_down starts at 0, counts negative, done at Acc <= preset (`counters/count_down_negative`; probe `counters/count_down_done_at_preset`)
+- [x] count_down starts at 0, counts negative, done at Acc <= preset (`counters/count_down_negative`, answered: `counters/count_down_done_at_preset`)
 - [x] copy converters: to_value, to_ascii, to_text, to_binary (`text/value_vs_ascii`, `text/to_text_suppress`, `text/to_binary`)
 - [x] to_value vs to_ascii on the same CHAR ('5' -> 5 vs 53) (`text/value_vs_ascii`)
 - [x] to_ascii of default/null TXT ($00) writes 0 to destination (not a no-op) (`text/null_ascii`); to_value of NUL writes 0 (`text/to_value_rejects`, pending TEXT)
@@ -404,8 +404,8 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] drum events are edge-based (`drum/events_are_edges`)
 - [x] time & event drum events are levels: one already on ends the step when its time is up (D3) (`drum/te_level_event_already_on`)
 - [x] time & event step keeps timing past its duration while it waits for the event (D1) (`drum/te_acc_counts_while_waiting`)
-- [x] drum reset wins, jump beats jog; a paused drum takes jog, jump and reset and leaves its outputs (`drum/reset_jump_jog_order`, `drum/paused_drum_jogs_and_resets`, probe `drum/paused_drum_jumps`)
-- [x] drum reset is a level that turns every output off (`drum/reset_no_stale_outputs`); a jog rising on a reset scan is spent (probe; `drum/reset_swallows_held_jog`)
+- [x] drum reset wins, jump beats jog; a paused drum takes jog, jump and reset and leaves its outputs (`drum/reset_jump_jog_order`, `drum/paused_drum_jogs_and_resets`, answered: `drum/paused_drum_jumps`)
+- [x] drum reset is a level that turns every output off (`drum/reset_no_stale_outputs`); a jog rising on a reset scan is spent (answered on hardware; `drum/reset_swallows_held_jog`)
 - [x] drum completion turns its outputs off; a jog brings them back, a jump does not (`drum/completion_turns_outputs_off`)
 - [x] drum jump/jog do NOT clear completion flag -- only reset does (`drum/jump_jog_keep_completion`)
 - [x] drum jump/jog are edge-triggered (no double-fire on sustained condition) (`drum/jump_jog_edge_triggered`)
@@ -414,7 +414,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] drum step auto-corrects to 1 if current_step tag holds an invalid value (`drum/invalid_step_corrects_to_1`)
 - [x] search hit / miss / continuous (`search/hit_returns_address`, `search/miss_writes_minus_one`, `search/continuous_walks`)
 - [x] search returns the register number of the match, -1 on miss (`search/hit_returns_address`, `search/miss_writes_minus_one`)
-- [x] search continuous resumes after an old result inside the range; result=0 restarts; anything else misses (`search/continuous_walks`, `search/continuous_zero_restarts`, `search/continuous_cursor_is_address`, probe `search/continuous_cursor_outside_range`)
+- [x] search continuous resumes after an old result inside the range; result=0 restarts; anything else misses (`search/continuous_walks`, `search/continuous_zero_restarts`, `search/continuous_cursor_is_address`, answered: `search/continuous_cursor_outside_range`)
 - [ ] search over a reversed range: the exporter writes it as an address list, which CLICK's Search does not take
 - [x] search rung false preserves result and found (`search/false_rung_preserves`)
 - [ ] send / receive status tags

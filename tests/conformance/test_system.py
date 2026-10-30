@@ -367,7 +367,6 @@ group = Group(
             "PLC has been in RUN for 32768 scans",
             ladder=prove_scan_counter_wraps_to_zero,
             expect={"Result1": 0},
-            probe="SD9 wrap value",
         ),
     ],
 )

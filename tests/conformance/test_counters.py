@@ -50,7 +50,7 @@ tells apart:
   0 to -3 (Result1), -1 after scan 2 (Result3), done from scan 1 (Result2), as
   0 <= 3.  pyrung's ``Acc <= -preset`` is done on scan 6; a down counter that
   a reset loads with its preset reads Result1 = 0, Result3 = 2.
-- ``up_down_same_scan`` (probe): up pulses on 1, 3, 5, 7, down pulses on 5 and
+- ``up_down_same_scan`` (answered as adopted): up pulses on 1, 3, 5, 7, down pulses on 5 and
   7, preset 2.  Both edges on one scan cancel (adopted): 2, 2, 6.  Up taking
   priority reads 3, 4, 6; down taking priority 1, 0, 2.
 - ``acc_clamps_at_dint_range``: ``Acc`` is staged a few counts inside each
@@ -60,15 +60,15 @@ tells apart:
   1 on scan 3); reset on scan 4 with the input still on, it does not count
   again (Result2 = 0).  Counting scans reads 3 and 4; an edge memory that a
   reset clears reads 1 and 1.
-- ``count_down_done_at_preset`` (probe): staged at 5 and pulsed down on every
+- ``count_down_done_at_preset`` (answered as adopted): staged at 5 and pulsed down on every
   even scan to -3, a down counter done at ``Acc <= preset`` (3) is first done
   on scan 4 (Result2, adopted); done at ``Acc <= 0`` on scan 10; at ``Acc <=
   -preset`` on scan 16.
-- ``edge_on_reset_scan`` (probe): the input rises on scan 3, the reset's last
+- ``edge_on_reset_scan`` (answered as adopted): the input rises on scan 3, the reset's last
   scan, and stays on through 5; it rises again on 7.  Edge memory updated on
   reset scans (adopted): 0 after scan 5 (Result1), 1 at the end (Result2).
   Memory left alone while reset is on counts scan 4 too: 1, 2.
-- ``first_scan_input_already_on`` (probe): an unconditional rung turns the
+- ``first_scan_input_already_on`` (answered as adopted): an unconditional rung turns the
   count input on from the first scan, and the counter is held in reset on every
   scan but the first.  Edge memory that starts off at STOP->RUN counts on the
   first scan and latches a flag (Result1 = 1, adopted); memory seeded from the
@@ -389,7 +389,6 @@ group = Group(
             ladder=prove_up_down_same_scan,
             expect={"Result1": 2, "Result2": 2, "Result3": 6},
             scans=SCANS,
-            probe="up and down edges on the same scan",
         ),
         case(
             "A counter's Acc clamps at the DINT range: staged at 2147483645 and pulsed "
@@ -415,7 +414,6 @@ group = Group(
             ladder=prove_count_down_done_at_preset,
             expect={"Result1": -3, "Result2": 4, "Result3": 4},
             scans=scans_for(DOWN_WINDOW),
-            probe="down-counter Done threshold",
         ),
         case(
             "A count input that rises on the last scan of a reset is spent: reset on "
@@ -424,7 +422,6 @@ group = Group(
             ladder=prove_edge_on_reset_scan,
             expect={"Result1": 0, "Result2": 1},
             scans=SCANS,
-            probe="counter edge on a reset scan",
         ),
         case(
             "A counter whose input is already on at the first scan after STOP->RUN "
@@ -436,7 +433,6 @@ group = Group(
             # scan's, so the state after the first reset never comes back.
             keep=[ClickCounter(121).Done, ClickCounter(121).Acc],
             expect={"Result1": 1, "Result2": 0},
-            probe="counter input already on at STOP->RUN",
         ),
     ],
 )
