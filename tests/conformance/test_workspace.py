@@ -51,6 +51,8 @@ def _csv_files(directory: Path) -> dict[str, bytes]:
     return {p.relative_to(directory).as_posix(): p.read_bytes() for p in directory.rglob("*.csv")}
 
 
+# The whole suite is over CLICK's step limit; the export warns and writes it all.
+@pytest.mark.filterwarnings("ignore:CLK_STEP_LIMIT")
 def test_workspace_source_exports_byte_identical_ladder(tmp_path: Path, plc_package):
     program = suite.build()
     expected = _csv_files(program.export(tmp_path / "export"))
@@ -71,6 +73,8 @@ def test_workspace_source_exports_byte_identical_ladder(tmp_path: Path, plc_pack
         assert actual[name] == content, f"{name} changed in the round trip"
 
 
+# The whole suite is over CLICK's step limit; the export warns and writes it all.
+@pytest.mark.filterwarnings("ignore:CLK_STEP_LIMIT")
 def test_workspace_export_replaces_only_src_plc(tmp_path: Path):
     workspace = tmp_path / "workspace"
     stale = workspace / "src" / "plc" / "subroutines" / "_sub_gone.py"

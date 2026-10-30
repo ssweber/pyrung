@@ -432,7 +432,7 @@ Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hint
 
 ### Program steps
 
-A CLICK project holds at most 8,000 program steps. `estimate_steps(pyrung_to_ladder(logic, mapping))` estimates a program's count from measured per-element costs, and validation reports `CLK_STEP_LIMIT` as a program nears or passes the limit. The costs and how they were measured are in [CLICK Internals](click-internals.md#program-steps).
+A CLICK project holds at most 8,000 program steps. `estimate_steps(pyrung_to_ladder(logic, mapping))` estimates a program's count from measured per-element costs, and validation reports `CLK_STEP_LIMIT` as a program nears or passes the limit. Export still writes such a program, with the finding as a `UserWarning`. The costs and how they were measured are in [CLICK Internals](click-internals.md#program-steps).
 
 ## Ladder CSV export
 

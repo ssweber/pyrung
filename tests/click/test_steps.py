@@ -202,3 +202,9 @@ def test_step_limit_finding():
     (finding,) = [f for f in over.warnings if f.code == CLK_STEP_LIMIT]
     assert f"{CLICK_STEP_LIMIT}" in finding.message
     assert "8503" in finding.message
+
+
+def test_export_over_the_step_limit_warns_and_still_writes():
+    with pytest.warns(UserWarning, match=r"CLK_STEP_LIMIT: Estimated 8503 program steps exceeds"):
+        bundle = pyrung_to_ladder(_rungs_of_copies(1700), TagMap([]))
+    assert estimate_steps(bundle).total == 8503

@@ -191,7 +191,9 @@ def test_in_process_only_cases_are_left_out_of_the_program() -> None:
 def test_export_writes_main_one_subroutine_per_group_and_nicknames(tmp_path) -> None:
     build = suite.build()
     rungs = build.group("rungs")
-    out = build.export(tmp_path / "conformance")
+    # The whole suite is more than one CLICK project holds: it exports, with a warning.
+    with pytest.warns(UserWarning, match="CLK_STEP_LIMIT"):
+        out = build.export(tmp_path / "conformance")
     main = (out / "main.csv").read_text(encoding="utf-8")
     assert f"copy({build.program_hash},DS1)" in main
     assert 'call(""Conf_Rungs"")' in main

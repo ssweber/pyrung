@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -11,6 +12,7 @@ from pyrung.click.codegen.constants import _PIN_RE
 from pyrung.click.codegen.models import _AnalyzedRung, _PinInfo
 from pyrung.click.codegen.parser import _parse_rows
 from pyrung.click.codegen.shaping import emitted_logic_mismatch
+from pyrung.click.validation.findings import CLK_STEP_LIMIT
 from pyrung.core.condition import AllCondition, AnyCondition, Condition
 from pyrung.core.instruction import ForLoopInstruction
 from pyrung.core.rung import Rung
@@ -46,6 +48,15 @@ class _ValidationMixin:
         report = self._tag_map.validate(self._program, mode="strict")
         # We intentionally fail on warnings and hints to keep export deterministic.
         findings = [*report.errors, *report.warnings, *report.hints]
+        # The step count is the whole project's, and an estimate: rows over the
+        # limit still render faithfully, so it warns instead of refusing.
+        for finding in findings:
+            if finding.code == CLK_STEP_LIMIT:
+                warnings.warn(
+                    f"{finding.code}: {finding.message} {finding.suggestion}",
+                    stacklevel=5,
+                )
+        findings = [f for f in findings if f.code != CLK_STEP_LIMIT]
         if findings:
             issues: list[Issue] = []
             for finding in findings:
