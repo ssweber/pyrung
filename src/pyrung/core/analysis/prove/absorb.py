@@ -90,6 +90,8 @@ class _DrumEventMeta:
     step_count: int
     output_names: tuple[str, ...]
     pattern: tuple[tuple[bool, ...], ...]
+    #: The drum's ``_drum_done`` memory: completed, every output off.
+    done_memory_key: str
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,36 @@ class _DoneAccInfo:
     preset_tags: dict[str, str]
     kinds: dict[str, str]
     drum_meta: dict[str, _DrumEventMeta] = field(default_factory=dict)
+
+
+def _drum_times_under_its_flag(drum: Any, program: Program) -> str | None:
+    """Why *drum* can time a step while its completion flag is on, or None.
+
+    The Done/Acc tri-state reads a flag that is on as settled, whatever the
+    accumulator holds.  That holds for a time drum only while the flag comes
+    on at the last step and stays there until a reset.  A jump keeps the flag
+    on but takes the drum back to an earlier step it times again; a flag that
+    starts on is on while the drum times its first steps; and another writer
+    of its step register or of the flag can do either.  Then the drum's time
+    is a real dimension, not absorbed.  The reason reads as a hint.
+    """
+    from pyrung.core.validation._common import walk_instructions
+
+    step_name = drum.current_step.name
+    flag_name = drum.completion_flag.name
+    if drum.jump_condition is not None:
+        return "its jump keeps the completion flag on"
+    if bool(drum.completion_flag.default):
+        return f"its completion flag {flag_name} starts on"
+    for instr in walk_instructions(program):
+        if instr is drum:
+            continue
+        written = {name for name, _ in _all_write_targets(instr)}
+        if step_name in written:
+            return f"its step register {step_name} has another writer"
+        if flag_name in written:
+            return f"its completion flag {flag_name} has another writer"
+    return None
 
 
 def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
@@ -128,6 +160,9 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
         elif isinstance(instr, CountDownInstruction):
             kind = _DONE_KIND_COUNT_DOWN
         elif isinstance(instr, TimeDrumInstruction):
+            if _drum_times_under_its_flag(instr, program) is not None:
+                # Tracked exactly: the tri-state would hide its time.
+                continue
             done_name = instr.completion_flag.name
             pairs[done_name] = instr.accumulator.name
             kinds[done_name] = _DONE_KIND_TIME_DRUM
@@ -137,6 +172,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
                 step_count=len(instr.pattern),
                 output_names=tuple(t.name for t in instr.outputs),
                 pattern=tuple(tuple(bool(cell) for cell in row) for row in instr.pattern),
+                done_memory_key=instr.memory_key("_drum_done"),
             )
             continue
         else:

@@ -759,6 +759,7 @@ class TestInstructionCoverage:
         assert "_frac:" in source_code
         assert "_drum_jump_prev:i" in source_code
         assert "_drum_jog_prev:i" in source_code
+        assert "_drum_done:i" in source_code
 
         class StubBase:
             def rollCall(self, modules):
@@ -782,9 +783,10 @@ class TestInstructionCoverage:
         namespace = _run_single_scan_source(
             source_code, monkeypatch, StubBase(), runtime_source=result.runtime
         )
-        assert namespace[step_symbol] == 4
+        # Reset (on, with jump and jog) wins: step 1, every output off.
+        assert namespace[step_symbol] == 1
         assert namespace[acc_symbol] == 0
-        assert namespace[out4_symbol] is True
+        assert namespace[out4_symbol] is False
 
     def test_bank_mapped_block_shares_bank_storage(self):
         """A block mapped onto a bank is a window into it, not a second array.
