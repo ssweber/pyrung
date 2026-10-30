@@ -840,7 +840,7 @@ class _OptConfig:
     abstract_timers: bool = _ABSTRACT_TIMERS_DEFAULT
 
     def __post_init__(self) -> None:
-        if self.abstract_timers:
+        if self.abstract_timers and not self.domains_only:
             for name in _EXACT_TIMING_OPTIMIZATIONS:
                 object.__setattr__(self, name, False)
 

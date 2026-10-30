@@ -156,8 +156,8 @@ class Intractable:
     concrete PLC diverged because it needs a timer to finish on a scan the
     PLC's timing does not give; check the timing with a ``run_for()`` test).
     A timing result carries the search's ``trace`` (each step's ``timers``
-    names the ticks it moved) and ``diverged_at``, the index of the step
-    where replay left it.
+    names the ticks it moved; empty for the search kind) and
+    ``diverged_at``, the index of the step where replay left it.
     """
 
     reason: str
@@ -168,7 +168,7 @@ class Intractable:
     journal: Journal | None = None
     _debug_context: Any = None
     kind: str = "search"
-    trace: list[TraceStep] | None = None
+    trace: list[TraceStep] = field(default_factory=list)
     diverged_at: int | None = None
 
 

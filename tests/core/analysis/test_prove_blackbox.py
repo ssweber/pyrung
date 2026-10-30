@@ -348,7 +348,7 @@ class TestUnconfirmed:
         result = never(logic, bad, _opt_config=BLACKBOX)
         _assert_unconfirmed(result, "BbRaceLong_Done")
         assert any("run_for" in hint for hint in result.hints)
-        assert any(step.timers for step in result.trace or ())
+        assert any(step.timers for step in result.trace)
         assert result.reason.isascii() and all(h.isascii() for h in result.hints)
 
     def test_counterexample_trace_is_concrete(self):
