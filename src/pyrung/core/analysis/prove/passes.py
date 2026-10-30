@@ -1902,14 +1902,22 @@ def _pass_build_timer_model(ctx: _PassContext) -> None:
         observed=frozenset({*(ctx.project or ()), *ctx.opaque_reads}),
         observe_all=ctx.opaque_reads_all,
         # A compared tag's values, only where they are every value it takes:
-        # one written only by literal copies takes those; an input nothing
-        # writes takes the values the search enumerates; any other tag
-        # nothing writes keeps its default.  A stateful domain is classify's
-        # sizing partition, not the tag's values (the kernel holds the real
-        # ones), and a split_at tag's writers still write real values, so a
-        # tag compared with an accumulator and computed any other way sweeps.
+        # one written only by literal copies (and not from outside) takes
+        # those; an input nothing writes takes the values the search
+        # enumerates; any other tag nothing writes keeps its default.  A
+        # stateful domain is classify's sizing partition, not the tag's values
+        # (the kernel holds the real ones), and a split_at tag's writers still
+        # write real values, so a tag compared with an accumulator and
+        # computed any other way sweeps it.
         domains={
-            **_collect_literal_write_domains(ctx.program, ctx.graph.tags, ctx.graph.indirect_reach),
+            **{
+                name: values
+                for name, values in _collect_literal_write_domains(
+                    ctx.program, ctx.graph.tags, ctx.graph.indirect_reach
+                ).items()
+                if name not in ctx.nondeterministic_dims
+                and not getattr(ctx.graph.tags.get(name), "external", False)
+            },
             **{
                 name: ctx.nondeterministic_dims.get(name, (tag.default,))
                 for name, tag in ctx.graph.tags.items()
