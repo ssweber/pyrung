@@ -51,10 +51,9 @@ def test_all_groups_over_modbus(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     build = suite.build_for(conformance_endpoint)
-    # Without GROUP=, every loaded group (on pyrung's own targets, but the ones
-    # that stop pyrung's PLC: test_math_error.py runs those alone).
-    normal = suite.wire_groups(build, conformance_endpoint)
-    groups = conformance_groups or [g.name for g in normal]
+    # Without GROUP=, every loaded group.
+    loaded = [g for g in suite.ALL_GROUPS if g.name in build.names]
+    groups = conformance_groups or [g.name for g in loaded]
     # system/scan_counter_wraps_to_zero only tells once SD9 has passed 32767.
     # pyrung's own targets read 0 either way, so only a CLICK waits.
     if conformance_endpoint is not None and test_system.group.name in groups:
@@ -69,7 +68,7 @@ def test_all_groups_over_modbus(
         print(f"confirmed.toml: {len(added)} newly confirmed, {len(dropped)} dropped {dropped}")
     print(format_report(results, load_confirmations(suite.CONFIRMED_PATH)))
     if conformance_groups is None:
-        assert len(results) == sum(len(g.cases) for g in normal)
+        assert len(results) == sum(len(g.cases) for g in loaded)
     assert_all_passed(results)
 
 
@@ -108,10 +107,7 @@ def test_suite_repeats_without_restarting(
     """
     build = suite.build_for(conformance_endpoint)
     local = conformance_endpoint is None
-    allowed = {g.name for g in suite.wire_groups(build, conformance_endpoint)}
-    names = [n for n in conformance_groups or [g.name for g in build.groups] if n in allowed]
-    if not names:
-        pytest.skip("a group that stops pyrung's PLC runs once per target")
+    names = conformance_groups or [g.name for g in build.groups]
     with _one_plc(build, conformance_endpoint, conformance_sim) as endpoint:
         for n in (1, 2):
             results = run_modbus(build, endpoint, groups=names, pending=local)

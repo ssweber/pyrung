@@ -1,10 +1,12 @@
-"""calc math-domain errors: 0 in the destination, SC46 on, and the PLC in STOP.
+"""calc math-domain errors: 0 in the destination, SC46 on for the scan, PLC in RUN.
 
-CLICK: "SC46 _Math_Operation_Error: Data Registers used in the Math formula
-have Invalid values.  SC50 is turned to ON, the PLC is put in Stop Mode."
-pyrung finishes the faulting scan, then stops with SC46 and SC50 on.  The
-``runner_factory`` cases run on the interpreter and the compiled kernel (and
-assert they agree under ``--runner-backend=both``).
+CLICK's help: "SC46 _Math_Operation_Error: Data Registers used in the Math
+formula have Invalid values.  SC50 is turned to ON, the PLC is put in Stop
+Mode."  The hardware does not stop (conformance ``math_error``): SC46 is on
+for the rest of the faulting scan, clears at the next scan start, SC50 stays
+off and the PLC keeps running.  The ``runner_factory`` cases run on the
+interpreter and the compiled kernel (and assert they agree under
+``--runner-backend=both``).
 """
 
 from __future__ import annotations
@@ -59,7 +61,7 @@ def _program(func, dest_type=Real):
 
 
 @pytest.mark.parametrize(("func", "operand"), DOMAIN_ERRORS)
-def test_domain_error_writes_zero_and_stops_the_plc(runner_factory, func, operand):
+def test_domain_error_writes_zero_and_keeps_running(runner_factory, func, operand):
     program, x, go = _program(func)
     plc = runner_factory(program)
     plc.patch({x: operand, go: True})
@@ -71,9 +73,9 @@ def test_domain_error_writes_zero_and_stops_the_plc(runner_factory, func, operan
     # The rest of the faulting scan runs: a later rung sees SC46 ...
     assert tags["Seen"] is True
     assert tags["After"] == 7
-    # ... and the scan ends in STOP with SC50 on.
-    assert tags[SC50.name] is True
-    assert plc.mode == "stop"
+    # ... and the PLC stays in RUN, SC50 off.
+    assert not tags.get(SC50.name, False)
+    assert plc.mode == "run"
 
 
 @pytest.mark.parametrize("dest_type", [Int, Real])
@@ -83,25 +85,38 @@ def test_domain_error_into_any_destination_writes_zero(runner_factory, dest_type
     plc.patch({x: -1.0, go: True})
     plc.step()
     assert plc.current_state.tags["Dest"] == 0
-    assert plc.mode == "stop"
+    assert plc.mode == "run"
 
 
-def test_return_to_run_clears_the_error(runner_factory):
+def test_the_error_clears_at_the_next_scan(runner_factory):
     program, x, go = _program(sqrt)
     plc = runner_factory(program)
     plc.patch({x: -4.0, go: True})
     plc.step()
-    assert plc.mode == "stop"
+    assert plc.current_state.tags[SC46.name] is True
 
-    plc.start()
     plc.patch({x: 16.0, go: True})
     plc.step()
     tags = plc.current_state.tags
     assert plc.mode == "run"
     assert tags["Dest"] == 4.0
-    assert not tags.get(SC46.name, False)
+    assert tags[SC46.name] is False
     assert not tags.get(SC50.name, False)
     assert tags["Seen"] is False
+
+
+def test_an_error_every_scan_raises_sc46_every_scan(runner_factory):
+    program, x, go = _program(sqrt)
+    plc = runner_factory(program)
+    plc.patch({x: -4.0, go: True})
+    for _ in range(5):
+        plc.patch({go: True})
+        plc.step()
+        tags = plc.current_state.tags
+        assert plc.mode == "run"
+        assert tags[SC46.name] is True
+        assert tags["Seen"] is True
+        assert tags["Dest"] == 0.0
 
 
 def test_a_valid_operand_does_not_fault(runner_factory):

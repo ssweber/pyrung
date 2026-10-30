@@ -30,7 +30,6 @@ PENDING_STEPS: Mapping[str, str] = {
     "S4": "rungs solve row by row, live",
     "DRUM": "drum ordering (jump/jog/reset/pause/completion)",
     "OUT": "Out coils never set T<n>; flasher phases",
-    "NOSTOP": "a Math error does not stop the PLC",
     "INF": "REAL overflow stores +/-Inf",
     "TEXT": "text, pack, NUL, search cursor and MDN fixes",
     "SYS": "SC3/SD9 phase and the fault-flag model",

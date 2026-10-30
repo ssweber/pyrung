@@ -6,16 +6,9 @@ Mode."  A CLICK does not do that (hardware round 1, 2026-10-29: all seven
 errors below, one per run): the Math writes 0 over its destination, SC46 is on
 for the rest of that scan, and the PLC stays in RUN, with SC46 and SC50 off
 when the harness reads them afterwards.  No CLICK setting is known to change
-this; record the firmware version with the next round.
-
-pyrung still stops the PLC at the end of a scan with a math error (SC50 on,
-SC11 off), so the case is ``pending="NOSTOP"``.  Until that lands it cannot
-share a run with any other case on pyrung's own targets: in-process, its group
-runs alone (``run()`` puts the PLC back in RUN before the next reset), and over
-the wire it is in ``suite.STOP_GROUPS``, which a local run gives a fresh
-target of its own and a run against a CLICK takes with every other group.
-Once pyrung keeps running, the group moves to ``suite.ALL_GROUPS`` and
-``STOP_GROUPS`` goes away.
+this; record the firmware version with the next round.  pyrung matches the
+hardware, so the group runs with every other group, last in
+``suite.ALL_GROUPS``.
 
 The case counts its own scans (``scans.py``) and runs one Math error every
 other scan, each of the seven on its own scan 2, 4, ..., 14, so a flag left by
@@ -31,15 +24,13 @@ all seven have run.  What tells the models apart:
   off: that one raised no error, or SC46 comes up only after the scan.
 - SC11 = 1, SC50 = 0 (read by the harness at the end): the PLC kept running.
   A PLC that stops does so after the first error, scan 2: the case never
-  fires, and the harness reads SC11 = 0 (pyrung's model: SC50 = 1).
+  fires, and the harness reads SC11 = 0 (and SC50 = 1 if it follows the help).
 - SC46 = 0 at the end: no error is left standing.
 """
 
 from __future__ import annotations
 
-import pytest
-
-from pyrung.conformance import Group, assert_all_passed, case, run, run_modbus
+from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, calc, copy, fill, system
 from pyrung.core.expression import acos, asin, log, log10, sqrt
 from tests.conformance.memory import df
@@ -96,7 +87,6 @@ group = Group(
             expect={"Result1": ALL_SEVEN, "Result2": ALL_SEVEN},
             expect_system={"SC11": 1, "SC50": 0, "SC46": 0},
             scans=scans_for(WINDOW),
-            pending="NOSTOP",
         ),
     ],
 )
@@ -104,23 +94,3 @@ group = Group(
 
 def test_math_error():
     assert_all_passed(run(group))
-
-
-@pytest.mark.conformance
-def test_math_error_runs_alone_on_the_local_target(
-    conformance_endpoint, conformance_groups, conformance_sim
-):
-    """The group on a fresh local target: pyrung's stops at the first error (NOSTOP).
-
-    A real CLICK runs it with the rest of its part (``test_all_groups_over_modbus``).
-    """
-    if conformance_endpoint is not None:
-        pytest.skip("a real PLC runs math_error with the other groups")
-    if conformance_groups is not None and group.name not in conformance_groups:
-        pytest.skip("math_error not selected")
-    from tests.conformance import suite  # suite imports this module
-
-    # A target that stops never raises Fired; do not wait the full 10 s for it.
-    results = run_modbus(suite.build(), groups=[group.name], sim=conformance_sim, timeout=3.0)
-    assert len(results) == 1
-    assert_all_passed(results)

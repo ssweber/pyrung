@@ -42,7 +42,7 @@ def test_rungs():
 
 ## Pending and probes
 
-**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `S4` live row-by-row rung solve, `DRUM` drum ordering, `OUT` Out coils never set T<n> (and flasher phases), `NOSTOP` a math error does not stop the PLC, `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` SC3/SD9 phase and the fault-flag model, `CONST16` a Math constant into an Int is cut to 16 bits.
+**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `S4` live row-by-row rung solve, `DRUM` drum ordering, `OUT` Out coils never set T<n> (and flasher phases), `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` SC3/SD9 phase and the fault-flag model, `CONST16` a Math constant into an Int is cut to 16 bits.
 
 - On pyrung's own targets (in-process `run()`, the local sim, `TARGET=circuitpy`) a pending case is a **strict xfail**: it passes, reported `XFAIL` with what pyrung read, only if no run meets its expectation and its reset is clean (a leak still fails it). Once pyrung starts meeting the expectation, the case fails with "remove pending=": the fixer of that step deletes the marker in the same commit, so `grep 'pending="S2"'` lists exactly what a step must flip.
 - Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `pending=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
@@ -194,16 +194,9 @@ A case that cannot run over Modbus passes `in_process_only="reason"`. The Modbus
 
 `expect_system` maps a CLICK system bit (`"SC46"`) to an expected 0/1 (or a `range`) that the harness reads itself, after the case has run, in-process from the system runtime and over the wire with a Modbus read of the bit. It is for what the ladder cannot record: a PLC in STOP runs no ladder, so whether `SC11` (`_PLC_Mode`) is off has to be read from outside. The case comment lists these with the slot expectations (`Expect: Result1 = 0, SC46 = 1, SC11 = 0`).
 
-## Groups that stop pyrung's PLC
+## Math errors do not stop the PLC
 
-A CLICK does not stop on a Math error (hardware round 1, finding 14): it writes 0, sets `SC46` for the rest of the scan, and stays in RUN. pyrung still stops at the end of that scan (`pending="NOSTOP"`), so on pyrung's own targets a case that raises one ends the run it is in: no other case could fire or reset after it. Until NOSTOP lands, such a group is listed in `suite.STOP_GROUPS`, not `suite.ALL_GROUPS` (`test_math_error.py`: `math_error`, the seven domain errors, one every other scan):
-
-- **Project.** `suite.build()` builds `ALL_GROUPS + STOP_GROUPS`; the group is in part A like any other.
-- **A real CLICK** runs it with every other group of its part (`suite.wire_groups`): a CLICK keeps running.
-- **pyrung's own targets.** A run without `GROUP=` leaves it out; `test_math_error_runs_alone_on_the_local_target` runs it on a fresh target, where it never fires (the target stopped) and so reads as `XFAIL`. `test_suite_repeats_without_restarting` leaves it out locally.
-- **In-process.** `run()` stops stepping a PLC that is in STOP (`step()` would put it back in RUN) and reads what the case left; before the next reset it calls `PLC.start()`. The `SimServer` does not scan a PLC in STOP; it keeps serving Modbus.
-
-When NOSTOP lands, move the group to `ALL_GROUPS`, drop `STOP_GROUPS` and its special cases (`wire_groups`, the alone-test), and remove the marker. The seven retired `stop_*` groups keep their manifest blocks (DS2901..DS3040), never reused.
+A CLICK does not stop on a Math error (hardware round 1, finding 14): it writes 0, sets `SC46` for the rest of the scan, and stays in RUN; `SC46` clears at the next scan start, like the other fault flags. pyrung does the same, so `math_error` (`test_math_error.py`, the seven domain errors, one every other scan) is an ordinary group in `suite.ALL_GROUPS` (part A), last so that no other group's rung reads `SC46` on a scan it raised it. The harness still copes with a PLC in STOP (a case that writes `SC50`, the STOP command): in-process, `run()` stops stepping a PLC that is in STOP (`step()` would put it back in RUN) and calls `PLC.start()` before the next reset; the `SimServer` does not scan a PLC in STOP and keeps serving Modbus. The seven retired `stop_*` groups keep their manifest blocks (DS2901..DS3040), never reused.
 
 ## 8-step protocol
 
@@ -242,7 +235,7 @@ The default 10 s timeout is far above what the sim needs (a debounce coil's 1 s 
 
 `CircuitPySim` (`src/pyrung/conformance/_circuitpy.py`) stands where `SimServer` does, but serves the program's generated P1AM-200 code instead of pyrung's engine: `generate(build)` runs `generate_circuitpy()` on the suite with a Modbus server, and `src/pyrung/circuitpy/host.py` runs the resulting `code.py` unchanged in a child Python (`python -I host.py DIR --port N`), with stand-ins for the board: `board`, `digitalio`, `busio`, `P1AM` (every module reads 0), no SD card (retentive memory starts fresh), the RUN/STOP switch in RUN, and the WIZnet socket pool played by ordinary TCP sockets. The generated scan loop, wall-clock timers and Modbus server all run as they would on the board; the harness talks to it exactly as to a CLICK. A child that dies (an exception in a scan) fails the run with its output.
 
-The generated server serves only what the TagMap maps and what rungs use, so every register the harness reads or zeroes must be mapped; that is why slot spares are. Each `run_modbus()` without an endpoint starts a fresh child, so the STOP groups get one each, as on the sim.
+The generated server serves only what the TagMap maps and what rungs use, so every register the harness reads or zeroes must be mapped; that is why slot spares are. Each `run_modbus()` without an endpoint starts a fresh child, as the sim starts a fresh PLC.
 
 What this target cannot see is what only the board does: REAL math in single precision, the CircuitPython language subset, scan timing and memory. The whole suite also makes a 2 MB `code.py`, far too big for the board, so loading it on a real P1AM will take one build per group.
 
@@ -343,7 +336,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] a Dint quotient into an Int: a Math constant into an Int is cut to 16 bits (`numeric/dint_quotient_into_int`, pending CONST16)
 - [x] division by zero -> 0 + fault (`numeric/div_by_zero`)
 - [x] non-finite float (NaN, +/-Inf) -> 0 + fault (`numeric/real_div_by_zero`)
-- [x] math domain error (sqrt, ln/log, asin/acos) -> 0 + SC46 for the rest of the scan, and the PLC stays in RUN (`math_error/math_errors_do_not_stop`, pending NOSTOP)
+- [x] math domain error (sqrt, ln/log, asin/acos) -> 0 + SC46 for the rest of the scan, and the PLC stays in RUN (`math_error/math_errors_do_not_stop`)
 - [x] copy clamps, calc wraps (`numeric/copy_clamps_calc_wraps`)
 - [x] copy argument order is source -> dest (`numeric/copy_source_to_dest`)
 - [x] calc mode inference (hex vs decimal) (`numeric/word_math_unsigned`)

@@ -58,8 +58,8 @@ class CircuitPySim:
     ``code.py`` runs in a child Python with stand-ins for the board's hardware
     (:mod:`pyrung.circuitpy.host`): its own scan loop, wall-clock timers, and
     its own generated Modbus server between scans.  The RUN/STOP switch reads
-    RUN; a math error puts the code in STOP, where it keeps serving Modbus.
-    Same interface as :class:`~pyrung.conformance.SimServer`: a context
+    RUN; the STOP command (SC50) puts the code in STOP, where it keeps serving
+    Modbus.  Same interface as :class:`~pyrung.conformance.SimServer`: a context
     manager with :attr:`endpoint` and :meth:`raise_if_failed`.
     """
 

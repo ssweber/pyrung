@@ -169,8 +169,9 @@ class CalcInstruction(OneShotMixin, Instruction):
     **Math domain error** (``sqrt`` of a negative, ``log``/``log10`` of 0 or a
     negative, ``asin``/``acos`` outside -1..1): Result is forced to 0 and the
     math-operation error flag (``system.fault.math_operation_error``, CLICK's
-    SC46) is set.  The rest of the scan runs; at its end the PLC goes to STOP
-    with ``system.sys.cmd_mode_stop`` (SC50) on, as a CLICK does.
+    SC46) is set for the rest of the scan; the next scan starts with it
+    off.  The PLC stays in RUN, as a CLICK does (its help says SC50 turns on
+    and the PLC goes to STOP; the hardware does not).
 
     **Mode inference:**
     - Uses ``"hex"`` only when all referenced tags (plus destination) are WORD.

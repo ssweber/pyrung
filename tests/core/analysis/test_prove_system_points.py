@@ -16,6 +16,7 @@ from pyrung.core import (
     Int,
     Or,
     Program,
+    Real,
     Rung,
     calc,
     call,
@@ -44,6 +45,7 @@ from pyrung.core.analysis.prove.classify import (
     _collect_structural_domain_info,
 )
 from pyrung.core.analysis.prove.passes import _OptConfig
+from pyrung.core.expression import sqrt
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
 S = system.sys
@@ -370,6 +372,46 @@ class TestFaultFlags:
         result = always(logic, ~hit)
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "Hit")
+
+    def test_math_error_is_reachable(self):
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(sqrt(_operand()), Real("Root"))
+            with Rung(F.math_operation_error):
+                out(hit)
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_math_error_clears_before_the_next_scan(self):
+        # SC46 is reset at scan start like the other fault flags, so a rung
+        # above the Math never reads it on (a math error does not stop the PLC).
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung(F.math_operation_error):
+                out(hit)
+            with Rung():
+                calc(sqrt(_operand()), Real("Root"))
+        assert isinstance(always(logic, ~hit), Proven)
+
+    def test_scans_after_a_math_error_run(self):
+        seen = Bool("Seen")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung(~F.math_operation_error, seen):
+                out(hit)
+            with Rung():
+                calc(sqrt(_operand()), Real("Root"))
+            with Rung(F.math_operation_error):
+                latch(seen)
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+
+def _operand() -> Real:
+    return Real("Operand", external=True, choices={4.0: "four", -4.0: "minus four"}, default=4.0)
 
 
 def _enable_hit() -> tuple[Program, Bool]:

@@ -343,7 +343,8 @@ class MathDomainError(ValueError):
 
     ``sqrt`` of a negative, ``log``/``log10`` of 0 or a negative, ``asin``/``acos``
     outside -1..1.  ``calc`` turns it into CLICK's math-operation error (SC46):
-    the destination gets 0 and the PLC goes to STOP.
+    the destination gets 0, the flag is on for the rest of the scan, and the
+    PLC stays in RUN.
     """
 
 

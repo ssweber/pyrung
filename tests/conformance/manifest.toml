@@ -308,7 +308,7 @@ slots = 1
 acos_above_1 = 1 # retired: one case of math_error/math_errors_do_not_stop
 
 [groups.math_error]
-base = 3041 # Conf_MathError: DS3041..DS3090; stops pyrung's PLC (pending NOSTOP), in suite.STOP_GROUPS
+base = 3041 # Conf_MathError: DS3041..DS3090
 slots = 4
 
 [groups.math_error.cases]

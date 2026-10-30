@@ -1425,7 +1425,7 @@ class TestBoardPeripheralsAndRunStop:
 
         assert [char(n) for n in (1, 2, 3, 8, 9, 10)] == ["A", "B", "C", "B", "C", "X"]
 
-    def test_math_domain_error_writes_zero_and_holds_stop(self, monkeypatch):
+    def test_math_domain_error_writes_zero_and_keeps_running(self, monkeypatch):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         outputs = hw.slot(2, "P1-08TRS")
@@ -1471,12 +1471,14 @@ class TestBoardPeripheralsAndRunStop:
             result.code, monkeypatch, stub_base, runtime_source=result.runtime, scans=2
         )
         ctx = _context_for_program(prog, hw)
-        # Scan 1 runs the logic: the calc stores 0 and sets SC46, the output is on.
+        # Every scan runs the logic: the calc stores 0 and sets SC46 again
+        # (it clears at each scan start), and the output stays on.
         assert namespace[ctx.symbol_for_tag(dest)] == 0.0
         assert namespace[ctx.symbol_for_tag(system.fault.math_operation_error)] is True
+        # No scan is in STOP: the outputs are never forced off.
         assert (2, 1) in stub_base.discrete_writes
-        # Scan 2 is in STOP with the switch still on RUN: outputs forced off.
-        assert stub_base.discrete_writes[-1] == (2, 0)
+        assert stub_base.discrete_writes[-1] == (2, 1)
+        assert (2, 0) not in stub_base.discrete_writes
 
 
 class TestCopyConverterCodegen:

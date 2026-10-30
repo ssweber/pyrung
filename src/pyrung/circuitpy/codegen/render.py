@@ -10,7 +10,6 @@ from pyrung.circuitpy.codegen._constants import (
     _BOARD_SAVE_MEMORY_CMD_TAG,
     _BOARD_SWITCH_TAG,
     _FAULT_ADDRESS_ERROR_TAG,
-    _FAULT_MATH_OPERATION_ERROR_TAG,
     _SD_DELETE_ALL_CMD_TAG,
     _SD_EJECT_CMD_TAG,
     _SD_ERROR_CODE_TAG,
@@ -73,6 +72,7 @@ _RTC_FIELDS = (
 #: sets its flag again for the rest of that scan.
 _SCAN_CLEARED_FAULTS = (
     system.fault.division_error.name,
+    system.fault.math_operation_error.name,
     system.fault.out_of_range.name,
     system.fault.address_error.name,
 )
@@ -97,28 +97,15 @@ def _system_first_needed(ctx: CodegenContext) -> bool:
     return system.sys.first_scan.name in ctx.referenced_tags or bool(_system_clock_symbols(ctx))
 
 
-def _math_stop_symbol(ctx: CodegenContext) -> str | None:
-    """SC46's symbol when a Math in the program can raise it, else ``None``.
-
-    Call after the rungs are compiled: ``_math_func`` marks the program's use.
-    """
-    if "_math_func" not in ctx.used_helpers:
-        return None
-    return ctx.symbol_if_referenced(_FAULT_MATH_OPERATION_ERROR_TAG)
-
-
 def _stop_hold_needed(ctx: CodegenContext) -> bool:
     """Whether something besides the switch can put the code in STOP.
 
-    A math error (SC46) or the STOP command (SC50, from a rung or over Modbus)
-    stops the code and ``_stop_hold`` keeps it there: with a RUN/STOP switch,
-    until the switch reads STOP; without one, until a restart.  Call after the
-    rungs are compiled.
+    The STOP command (SC50, from a rung or over Modbus) stops the code and
+    ``_stop_hold`` keeps it there: with a RUN/STOP switch, until the switch
+    reads STOP; without one, until a restart.  A math error (SC46) does not
+    stop the code, as it does not stop a CLICK.
     """
-    return (
-        _math_stop_symbol(ctx) is not None
-        or ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG) is not None
-    )
+    return ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG) is not None
 
 
 def _mode_state_needed(ctx: CodegenContext) -> bool:
@@ -162,29 +149,7 @@ def _render_stop_command_end_lines(ctx: CodegenContext, indent: int) -> list[str
     if ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG) is None:
         return []
     sp = " " * indent
-    # A math error in the same scan has already stopped the code.
     return [f"{sp}if _stop_cmd and _mode_run:", *_render_stop_lines(ctx, sp + "    ")]
-
-
-def _render_math_stop_lines(ctx: CodegenContext, indent: int) -> list[str]:
-    """End of a RUN scan: a math error (SC46) puts the code in STOP.
-
-    As in core, the faulting scan runs to its end, then the PLC is in STOP
-    with SC50 on and SC11 off; no scan runs in STOP, so SC46 and SC50 read on
-    until the STOP->RUN reset clears them.  ``_stop_hold`` keeps STOP: with a
-    RUN/STOP switch until the switch reads STOP; without one, nothing returns
-    the code to RUN but a restart.
-    """
-    math_error_symbol = _math_stop_symbol(ctx)
-    if math_error_symbol is None:
-        return []
-    sp = " " * indent
-    lines = [f"{sp}if {math_error_symbol}:"]
-    cmd_mode_stop_symbol = ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG)
-    if cmd_mode_stop_symbol is not None:
-        lines.append(f"{sp}    {cmd_mode_stop_symbol} = True")
-    lines.extend(_render_stop_lines(ctx, sp + "    "))
-    return lines
 
 
 def _render_system_point_state_lines(ctx: CodegenContext) -> list[str]:
@@ -1181,15 +1146,13 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
         ]
     )
     # The RUN scan: the STOP command a rung wrote last scan is taken first
-    # (core's on_scan_start), and a math error or that command stops the code
-    # at its end (core's on_scan_end).
+    # (core's on_scan_start), and the code is in STOP at its end.
     run_scan_lines = [
         *_render_stop_command_take_lines(ctx, 8),
         *_render_system_point_scan_lines(ctx, 8),
         "        _run_main_rungs()",
         "        _write_outputs()",
         *_render_system_point_advance_lines(ctx, 8),
-        *_render_math_stop_lines(ctx, 8),
         *_render_stop_command_end_lines(ctx, 8),
     ]
     if ctx.runstop is not None:
@@ -1217,10 +1180,9 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
         else:
             lines.append("    _desired_run = (not bool(_runstop_debounced))")
         if _stop_hold_needed(ctx):
-            # A math error or the STOP command put the code in STOP; the hold
-            # keeps STOP while the switch says RUN.  The switch reading STOP
-            # releases it, and its next RUN resets SC46 and SC50 with the
-            # other tags, as core's STOP->RUN.
+            # The STOP command put the code in STOP; the hold keeps STOP
+            # while the switch says RUN.  The switch reading STOP releases
+            # it, and its next RUN resets the tags, as core's STOP->RUN.
             lines.extend(
                 [
                     "    if _stop_hold:",
@@ -1247,7 +1209,7 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
         )
         if mode_switch_symbol is not None:
             # SC10 is the switch itself, set after the STOP->RUN reset: on in
-            # RUN even while a math error or cmd_mode_stop holds the PLC in STOP.
+            # RUN even while cmd_mode_stop holds the PLC in STOP.
             switch_run = (
                 "bool(_runstop_debounced)"
                 if ctx.runstop.run_when_high
@@ -1281,9 +1243,8 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             ]
         )
     else:
-        # No RUN/STOP switch, but a math error or the STOP command still stops
-        # the code, as on a CLICK; with no switch to turn back to RUN, only a
-        # restart does.
+        # No RUN/STOP switch, but the STOP command still stops the code, as on
+        # a CLICK; with no switch to turn back to RUN, only a restart does.
         if cmd_mode_stop_symbol is not None:
             # SC50 written over Modbus (_mb_write_coil_plc) stops the code
             # before the next scan.

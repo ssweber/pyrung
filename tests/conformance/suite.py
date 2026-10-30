@@ -80,14 +80,9 @@ ALL_GROUPS = [
     test_numeric.group,
     test_timers.group,
     test_call_twice.group,
+    # Last, so no other group's rung reads SC46 on a scan a Math error raised it.
+    test_math_error.group,
 ]
-
-#: Groups whose case stops pyrung's PLC (a math error), though a CLICK keeps
-#: running (pending NOSTOP, see ``test_math_error.py``).  A run against a CLICK
-#: takes them with every other group; a run on one of pyrung's own targets
-#: gives each a fresh target of its own, since nothing could reset after it.
-#: Once pyrung keeps running they join ``ALL_GROUPS`` and this list goes away.
-STOP_GROUPS = [test_math_error.group]
 
 #: Group names per CLICK project, split by topic to keep each part under
 #: ``PART_STEP_BUDGET``: A and B the instructions, C how a rung is solved
@@ -101,7 +96,7 @@ PARTS: dict[str, tuple[str, ...]] = {
         "counters",
         "drum",
         "math",
-        *(g.name for g in STOP_GROUPS),
+        "math_error",
         "numeric",
     ),
     "B": ("out", "search", "shift", "system", "text", "timers"),
@@ -114,24 +109,13 @@ PARTS: dict[str, tuple[str, ...]] = {
 PART_STEP_BUDGET = 7500
 
 
-def wire_groups(build: ConformanceProgram, endpoint: Endpoint | None) -> list[Group]:
-    """The groups of *build* a run without ``GROUP=`` takes at *endpoint*.
-
-    Every loaded group against a real PLC; on one of pyrung's own targets
-    (``None``) every group but ``STOP_GROUPS``, which run alone.
-    """
-    every = ALL_GROUPS if endpoint is None else [*ALL_GROUPS, *STOP_GROUPS]
-    return [g for g in every if g.name in build.names]
-
-
 def groups(part: str | None = None) -> list[Group]:
     """Every group of *part* (``None``: the whole suite), in ``ALL_GROUPS`` order."""
-    every = [*ALL_GROUPS, *STOP_GROUPS]
     if part is None:
-        return every
+        return list(ALL_GROUPS)
     if part not in PARTS:
         raise ValueError(f"Unknown part {part!r}; choose one of {', '.join(PARTS)}")
-    return [g for g in every if g.name in PARTS[part]]
+    return [g for g in ALL_GROUPS if g.name in PARTS[part]]
 
 
 def build(part: str | None = None) -> ConformanceProgram:

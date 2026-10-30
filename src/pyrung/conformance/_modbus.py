@@ -111,9 +111,9 @@ class SimServer:
     The PLC free-runs in ``realtime`` mode on its own thread, one scan every
     *scan_period* seconds of wall clock, so timers see wall-clock time as on a
     CLICK.  Modbus writes become patches applied at the start of the next
-    scan.  A PLC in STOP (a math error stopped it) does not scan: the sim keeps
-    serving Modbus and stays in STOP, as a CLICK does.  Use as a context
-    manager; :attr:`endpoint` is where to connect.
+    scan.  A PLC in STOP (SC50, the STOP command, stopped it) does not scan:
+    the sim keeps serving Modbus and stays in STOP, as a CLICK does.  Use as a
+    context manager; :attr:`endpoint` is where to connect.
     """
 
     def __init__(

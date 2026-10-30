@@ -137,9 +137,9 @@ def run(cases: Sequence[Case] | Group) -> list[CaseResult]:
 def _reset(plc: Any, slot: _NamedArrayRuntime, indexes: Collection[int]) -> set[int]:
     """Zero every slot, as the wire harness does, and scan until each reports ``Ready``.
 
-    A case that stopped the PLC (a math error) leaves it in STOP: put it back in
-    RUN first, as the operator of a real CLICK does by hand.  Returns the slots
-    that never reported ``Ready``.
+    A case that stopped the PLC (SC50, the STOP command) leaves it in STOP: put
+    it back in RUN first, as the operator of a real CLICK does by hand.
+    Returns the slots that never reported ``Ready``.
     """
     if plc.mode == "stop":
         plc.start()

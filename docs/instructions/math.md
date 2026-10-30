@@ -31,17 +31,15 @@ Inside the range pyrung keeps a `Real` at Python's 64-bit precision, where a CLI
 - Division by zero produces result = 0 and sets `system.fault.division_error`.
 - Integer division truncates toward zero: `−7 / 2 = −3`.
 
-## Math errors stop the PLC
+## Math errors
 
 ```python
 calc(sqrt(Level), Root)     # Level = -4.0
 ```
 
-A math function given an operand outside its domain — `sqrt` of a negative, `log`/`log10` of 0 or a negative, `asin`/`acos` outside −1..1 — stores 0 in the destination and sets `system.fault.math_operation_error` (CLICK's SC46). The rest of the scan runs, so a later rung can see the flag. At the end of that scan the PLC goes to STOP with `system.sys.cmd_mode_stop` (SC50) on, as a CLICK does ("SC50 is turned to ON, the PLC is put in Stop Mode"). Both stay on until the PLC returns to RUN (`plc.start()`, or the next `plc.step()`), which clears them.
+A math function given an operand outside its domain — `sqrt` of a negative, `log`/`log10` of 0 or a negative, `asin`/`acos` outside −1..1 — stores 0 in the destination and sets `system.fault.math_operation_error` (CLICK's SC46). The rest of the scan runs, so a later rung can see the flag; the next scan starts with it off, like the other fault flags. The PLC stays in RUN. That is what a CLICK does, though its help for SC46 says "SC50 is turned to ON, the PLC is put in Stop Mode": on the hardware, SC50 stays off and the PLC keeps scanning.
 
 An operand that is already infinite (from a division by zero earlier in the expression) is not a domain error: the result is not finite, so it is 0 with `division_error`.
-
-On a P1AM with a run/stop switch (`RunStopConfig`), the math error holds STOP while the switch reads RUN; moving the switch to STOP and back to RUN restarts the code, which clears both flags. Without a switch the code stays in STOP until the board restarts.
 
 ## Mode inference
 
@@ -64,7 +62,7 @@ For CLICK portability, do not mix WORD and non-WORD math in the same `calc()` ex
 | Counter accumulator | Clamps at DINT min/max |
 | REAL past ±3.4028235E+38 | Saturates; `calc()` sets `system.fault.out_of_range` |
 | Division by zero | Result = 0, `system.fault.division_error` set |
-| Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | Result = 0, `system.fault.math_operation_error` set, PLC to STOP |
+| Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | Result = 0, `system.fault.math_operation_error` set for the scan |
 
 ## Range aggregates
 
