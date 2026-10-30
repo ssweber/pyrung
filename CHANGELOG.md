@@ -110,6 +110,7 @@
 - `calc()` with `sqrt` of a negative, `log`/`log10` of 0 or a negative, or `asin`/`acos` outside -1..1 no longer raises out of the scan: it stores 0 and sets `fault.math_operation_error` (SC46) for the rest of the scan, and the PLC stays in RUN, as a CLICK does (its help says SC50 turns on and the PLC goes to STOP; the hardware does neither), on both backends and in CircuitPython.
 - `rise()` and `fall()` on the timed clocks (`sys.clock_10ms` .. `sys.clock_1h`) count one edge per toggle in realtime mode; 1 ms scans counted about 80 rises of `clock_100ms` a second.
 - An `off_delay()` with preset 0 keeps timing when a scan adds less than one unit (scans under 1 ms at `"Tms"`); its accumulator stayed at 0 for good.
+- `always()`, `never()` and `reachable_states()` no longer report `Proven` (or miss states) when an `out()` coil is read by a rung above the one that writes it, so the read sees the coil's value from the previous scan (`Rung(Y2): out(Y3)` above `Rung(Y1): out(Y2)`, in the main program, a subroutine, or through an `Or` or a branch): the verifier left such a coil out of its state, merging scans that differ on it.
 
 ## v0.15.2 (2026-10-11)
 
