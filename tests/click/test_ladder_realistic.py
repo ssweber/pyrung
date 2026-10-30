@@ -152,7 +152,7 @@ def _build_program_and_mapping():
 
         # R6: Count-down with reset pin
         with Rung(Running):
-            count_down(Counter2, preset=5).reset(ShiftReset)
+            count_down(Counter2, preset=-5).reset(ShiftReset)
 
         # R7: copy + calc + indirect copy + blockcopy + fill
         with Rung(Running, Timer[1].Done):

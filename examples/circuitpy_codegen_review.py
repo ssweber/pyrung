@@ -131,7 +131,7 @@ with Program(strict=False) as logic:
     with rung(Running):
         count_up(Ctu, preset=50).reset(Stop)
     with rung(Running):
-        count_down(Ctd, preset=5).reset(ShiftReset)
+        count_down(Ctd, preset=-5).reset(ShiftReset)
 
     # Inline expressions + inline pointer refs + block range operations.
     with rung(Running, RTon.Done):
