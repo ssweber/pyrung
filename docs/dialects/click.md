@@ -422,7 +422,7 @@ on_delay(MyTimer, preset=60, unit="sec")
 
 ### Out coil variants
 
-`toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Each phase timer must map to `T<n>` with `TD<n>` of the same number (the coil names only the TD; CLICK claims the whole timer), and a register preset to `DS`. A timer or counter whose Done and Acc map to different numbers is `CLK_TIMER_PAIR_MISMATCH`, for `on_delay` and the counters too. The CSV token names each phase's TD: `debounce(Y001,on_acc=TD1,on_preset=100,off_acc=TD2,off_preset=DS5,unit=Tms)`. CLICK's Out dialog offers fewer units than its timers: `debounce` and `flasher` take `ms` or `sec`, `timed` takes `ms`, `sec` or `min`; any other unit is `CLK_OUT_UNIT_UNSUPPORTED`. Only `toggle` takes `immediate(...)`. Whether CLICK sets the phase timer's `T` bit is not yet confirmed; pyrung sets it.
+`toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Each phase timer must map to `T<n>` with `TD<n>` of the same number (the coil names only the TD; CLICK claims the whole timer), and a register preset to `DS`. A timer or counter whose Done and Acc map to different numbers is `CLK_TIMER_PAIR_MISMATCH`, for `on_delay` and the counters too. The CSV token names each phase's TD: `debounce(Y001,on_acc=TD1,on_preset=100,off_acc=TD2,off_preset=DS5,unit=Tms)`. CLICK's Out dialog offers fewer units than its timers: `debounce` and `flasher` take `ms` or `sec`, `timed` takes `ms`, `sec` or `min`; any other unit is `CLK_OUT_UNIT_UNSUPPORTED`. Only `toggle` takes `immediate(...)`. A CLICK Out coil never sets the phase timer's `T` bit (measured on hardware), and pyrung does not either.
 
 ### For/Next
 

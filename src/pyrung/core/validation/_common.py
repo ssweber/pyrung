@@ -168,9 +168,11 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
         targets = _resolve_tag_names(instr.target)
     elif isinstance(instr, (DebounceInstruction, FlasherInstruction)):
         targets = _resolve_tag_names(instr.target)
-        targets += [instr.on_done.name, instr.on_acc.name, instr.off_done.name, instr.off_acc.name]
+        # Each phase claims its whole Timer, but only the accumulator is written:
+        # an Out coil never sets the Timer's Done.
+        targets += [instr.on_acc.name, instr.off_acc.name]
     elif isinstance(instr, TimedInstruction):
-        targets = [instr.target.name, instr.timer_done.name, instr.timer_acc.name]
+        targets = [instr.target.name, instr.timer_acc.name]
     elif isinstance(instr, (OnDelayInstruction, OffDelayInstruction)):
         targets = [instr.done_bit.name, instr.accumulator.name]
     elif isinstance(instr, (CountUpInstruction, CountDownInstruction)):

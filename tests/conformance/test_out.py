@@ -15,8 +15,8 @@ matches a fresh PLC's.
 The cases are the probes O1-O6 of ``scratchpad/click-v4/RESEARCH.md``.  Hardware
 round 1 (2026-10-29) confirmed O1, O2, O3 and O5 and answered O6: an Out coil
 never sets its Timer's done bit T<n>; the coil's phases come from the TDs
-alone, so a contact on that T<n> is always off.  pyrung sets it
-(``pending="OUT"``).  O4 is still open:
+alone, so a contact on that T<n> is always off (pyrung matches).  Round 2
+(2026-10-30) read O4:
 
 - ``flasher_restarts_with_on_phase`` (probe): 300 ms phases, the rung false
   from 450 to 550 ms, 150 ms into the off phase.  Round 1 read "not both TDs
@@ -27,8 +27,7 @@ alone, so a contact on that T<n> is always off.  pyrung sets it
   2 = still counting); after the restart, the coil at 600-650 ms (Result2)
   and at 750-800 ms (Result4).  Adopted, the flasher freezes and resumes:
   2, 2, 1, then off (0) and on (1), the off phase's last 150 ms then a new on
-  phase.  pyrung clears both TDs and restarts with an on phase: 1, 1, 1, 1, 1.
-  A CLICK keeps both TDs, frozen, yet restarts with an on phase: 2, 1, 2, 1, 1
+  phase.  A CLICK keeps both TDs, frozen, yet restarts with an on phase: 2, 1, 2, 1, 1
   (hardware round 2, 2026-10-30).
   A fresh off phase reads Result2 = 0, Result4 = 0.
 """
@@ -187,8 +186,8 @@ group = Group(
             "600-650 ms (Result2 = 1) and at 750-800 ms (Result4 = 1)",
             ladder=prove_flasher_restarts_with_on_phase,
             expect={"Result1": 2, "Result2": 1, "Result3": 2, "Result4": 1, "ErrorCode": 1},
+            keep=[t[306], td[306], t[307], td[307]],
             scans=100,
-            pending="OUT",
             probe="flasher with its rung false: TDs cleared, kept or frozen; restart phase",
         ),
         case(
@@ -206,7 +205,6 @@ group = Group(
             keep=[t[312], td[312]],
             expect={"Result1": 0, "Result2": 1},
             scans=40,
-            pending="OUT",
         ),
     ],
 )
