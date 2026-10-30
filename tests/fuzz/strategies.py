@@ -92,6 +92,14 @@ def counter_presets() -> st.SearchStrategy[int]:
     return st.one_of(boundary, boundary, st.integers(0, 10))
 
 
+def count_down_presets() -> st.SearchStrategy[int]:
+    """A down counter starts at 0 and is Done at ``Acc <= preset``: a negative
+    preset is the one it counts toward; 0 and a positive one are Done from
+    the first scan."""
+    boundary = st.sampled_from([-10, -5, -1, -1, 0, 1])
+    return st.one_of(boundary, boundary, st.integers(-10, 5))
+
+
 def real_values() -> st.SearchStrategy[float]:
     boundary = st.sampled_from([0.0, 1.0, -1.0, 0.5, 3.14, -32768.0, 32767.0])
     return st.one_of(
@@ -490,7 +498,7 @@ def instruction_specs(
         )
     elif kind == "count_down":
         counter = draw(st.sampled_from(pool.counters))
-        preset = draw(counter_presets())
+        preset = draw(count_down_presets())
         assume(has_bool)
         reset_tag = draw(st.sampled_from(writable_bool))
         return InstrSpec(
