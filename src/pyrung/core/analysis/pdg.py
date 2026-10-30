@@ -486,17 +486,23 @@ class ProgramGraph:
                 for read_tag in node.condition_reads | node.data_reads | node.exclusive_reads:
                     if read_tag not in visited_tags:
                         queue.append(read_tag)
-                if (
-                    follow_calls
-                    and node.subroutine is not None
-                    and node.subroutine not in visited_subs
-                ):
-                    visited_subs.add(node.subroutine)
-                    for caller in self.rung_nodes:
-                        if node.subroutine in caller.calls:
-                            for read_tag in caller.condition_reads:
-                                if read_tag not in visited_tags:
-                                    queue.append(read_tag)
+                if not follow_calls or node.subroutine is None:
+                    continue
+                # The call guards on every path into the subroutine: a caller
+                # rung in another subroutine runs only when that one is called.
+                pending_subs = [node.subroutine]
+                while pending_subs:
+                    sub_name = pending_subs.pop()
+                    if sub_name in visited_subs:
+                        continue
+                    visited_subs.add(sub_name)
+                    for caller_idx in self._subroutine_caller_indices().get(sub_name, ()):
+                        caller = self.rung_nodes[caller_idx]
+                        for read_tag in caller.condition_reads:
+                            if read_tag not in visited_tags:
+                                queue.append(read_tag)
+                        if caller.subroutine is not None:
+                            pending_subs.append(caller.subroutine)
 
         visited_tags.discard(tag_name)
         result = frozenset(visited_tags)

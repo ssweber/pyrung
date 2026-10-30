@@ -58,6 +58,7 @@
 
 ### Fixes
 
+- `always()` and `never()` no longer report `Proven` when a subroutine's writes depend on whether it is called and the call sits in a `forloop()` body (`with Rung(G): with forloop(1): call("work")`, or a tag count that can be 0) or in another subroutine whose own call is guarded (`Rung(G): call("outer")`, `outer` calling `work`); the inputs deciding the call were left out of the search.
 - The verifier no longer reports `Proven` for a property that an input changing on the very scan a timer finishes (or the scan before) breaks through a site that sees the edge: a one-shot (`copy(1, F, oneshot=True)` under `Rung(Btn)`), `rise(X)` of a coil `X` an input drives, or a counter, whose result a rung reading `rise(T.Done)` sees on that scan or the next; it jumped over the timer's run and tried input changes only before and after the scan it finished on.
 - A CLICK subroutine whose last rung is a conditional `return_early()` now exports with the unconditional `return()` CLICK requires after it; it used to export without one, and CLICK refused the subroutine.
 - `always()` and `never()` could report `Proven` for a violation reachable only through a one-shot (or a drum's jump, jog or event memory, a shift clock, a `toggle`) that the first scan does not reach, such as one in a subroutine not called on scan 0; that memory is now part of every explored state.

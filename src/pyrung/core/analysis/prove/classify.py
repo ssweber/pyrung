@@ -317,8 +317,8 @@ def _collect_all_exprs(
     from pyrung.core.analysis.pdg import _implicit_fault_writes
     from pyrung.core.validation._common import (
         _build_caller_map,
-        _caller_conditions,
         _collect_write_sites,
+        _transitive_caller_conditions,
     )
 
     tag_refs = dict(graph.tags)
@@ -331,15 +331,20 @@ def _collect_all_exprs(
         return sorted(seen)
 
     sites = _collect_write_sites(program, target_extractor=_write_targets_with_faults)
+    # Whether a subroutine's writes happen at all is decided by every call on
+    # a path into it: a call in a forloop body, or one from another
+    # subroutine (whose own callers then gate it too).
     caller_map = _build_caller_map(program)
+    gated_subs: set[str] = set()
     for site in sites:
         if upstream is not None and site.target_name not in upstream:
             continue
         if site.conditions:
             for cond in site.conditions:
                 exprs.append(_condition_to_expr(cond))
-        if site.scope == "subroutine":
-            for caller_chain in _caller_conditions(site, caller_map):
+        if site.subroutine is not None and site.subroutine not in gated_subs:
+            gated_subs.add(site.subroutine)
+            for caller_chain in _transitive_caller_conditions(site.subroutine, caller_map):
                 for cond in caller_chain:
                     exprs.append(_condition_to_expr(cond))
 

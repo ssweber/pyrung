@@ -391,10 +391,59 @@ def _collect_write_sites(
     return sites
 
 
-def _build_caller_map(program: Program) -> _CallerMap:
-    """Map subroutine name -> list of call sites with their conditions."""
-    from pyrung.core.instruction.control import CallInstruction
+def _loop_count_conditions(loop: Any) -> tuple[Condition, ...] | None:
+    """What a forloop's count adds to the conditions of its body, or None.
 
+    A count tag that reads 0 runs no iteration, so a body item also needs a
+    nonzero count (``count & 0xFFFF`` is the exact test, so ``!= 0`` is true
+    on a few counts that skip the body too: a superset, the safe direction).
+    A constant count that runs no iteration never runs the body (None).
+    """
+    from pyrung.core.condition import IndirectCompareNe
+    from pyrung.core.instruction.control import for_loop_iterations
+    from pyrung.core.memory_block import IndirectRef
+
+    count = loop.count
+    if isinstance(count, Tag):
+        return (CompareNe(count, 0),)
+    if isinstance(count, IndirectRef):
+        return (IndirectCompareNe(count, 0),)
+    if isinstance(count, (bool, int, float)):
+        return None if for_loop_iterations(count) == 0 else ()
+    return ()
+
+
+def _iter_rung_calls(rung: Rung) -> Iterable[tuple[str, tuple[Condition, ...]]]:
+    """Each call in *rung*'s own instructions, with the conditions it needs
+    beyond the rung's: a call in a forloop body (nested loops too) also needs
+    each enclosing loop's nonzero count and the contacts of the body rung it
+    sits in.  The rung's branches are not visited.
+    """
+    from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
+
+    def _walk(
+        items: Iterable[tuple[Any, tuple[Condition, ...]]],
+    ) -> Iterable[tuple[str, tuple[Condition, ...]]]:
+        for instr, extra in items:
+            if isinstance(instr, CallInstruction):
+                yield instr.subroutine_name, extra
+            elif isinstance(instr, ForLoopInstruction):
+                count_conditions = _loop_count_conditions(instr)
+                if count_conditions is None:
+                    continue
+                yield from _walk(
+                    (child, extra + count_conditions + local) for child, local in instr.iter_body()
+                )
+
+    yield from _walk((instr, ()) for instr in rung._instructions)
+
+
+def _build_caller_map(program: Program) -> _CallerMap:
+    """Map subroutine name -> list of call sites with their conditions.
+
+    Calls in forloop bodies are call sites too, with the loop's count and
+    body-rung contacts among their conditions (:func:`_iter_rung_calls`).
+    """
     caller_map: _CallerMap = defaultdict(list)
 
     def _scan_rung(
@@ -405,11 +454,10 @@ def _build_caller_map(program: Program) -> _CallerMap:
         branch_path: tuple[int, ...],
     ) -> None:
         conditions = tuple(rung._conditions)
-        for instr in rung._instructions:
-            if isinstance(instr, CallInstruction):
-                caller_map[instr.subroutine_name].append(
-                    (scope, subroutine, rung_index, branch_path, conditions)
-                )
+        for callee, extra in _iter_rung_calls(rung):
+            caller_map[callee].append(
+                (scope, subroutine, rung_index, branch_path, conditions + extra)
+            )
         for branch_idx, branch_rung in enumerate(rung._branches):
             _scan_rung(
                 branch_rung,
@@ -427,6 +475,29 @@ def _build_caller_map(program: Program) -> _CallerMap:
             _scan_rung(rung, "subroutine", sub_name, rung_index, ())
 
     return dict(caller_map)
+
+
+def _transitive_caller_conditions(
+    subroutine: str, caller_map: _CallerMap
+) -> list[tuple[Condition, ...]]:
+    """The conditions of every call site on some path into *subroutine*.
+
+    Its own call sites' and, transitively, those of the subroutines that call
+    it: a call nested two subroutines deep runs only when the outer call does
+    too.  Unordered and not split into per-path chains (see
+    :func:`_scope_reach_chains` for those): it is for analyses that need every
+    tag a call guard reads, not the guard itself.
+    """
+    out: list[tuple[Condition, ...]] = []
+    seen = {subroutine}
+    pending = [subroutine]
+    while pending:
+        for _scope, caller_sub, _ri, _bp, conditions in caller_map.get(pending.pop(), ()):
+            out.append(conditions)
+            if caller_sub is not None and caller_sub not in seen:
+                seen.add(caller_sub)
+                pending.append(caller_sub)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1022,17 +1093,14 @@ def _scope_reach_chains(program: Program) -> dict[str, tuple[tuple[Condition, ..
     This is scope entry only.  It says nothing about the rungs *inside* the
     subroutine — a rung that runs and evaluates false has still run.
     """
-    from pyrung.core.instruction.control import CallInstruction
-
     # sub_name -> list of (enclosing subroutine or None for main, chain within that scope)
     calls: dict[str, list[tuple[str | None, tuple[Condition, ...]]]] = defaultdict(list)
 
     def _scan(rung: Rung, subroutine: str | None, chain: tuple[Condition, ...]) -> None:
         # A branch is gated by its own conditions on top of its parent's.
         chain = chain + tuple(rung._conditions)
-        for instr in rung._instructions:
-            if isinstance(instr, CallInstruction):
-                calls[instr.subroutine_name].append((subroutine, chain))
+        for callee, extra in _iter_rung_calls(rung):
+            calls[callee].append((subroutine, chain + extra))
         for branch in rung._branches:
             _scan(branch, subroutine, chain)
 
