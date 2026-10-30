@@ -253,7 +253,9 @@ def _fall_reader_pulse():
 
 
 def _rise_reader_level():
-    # rise(Y2) above the writer fires the scan after Btn rose: Btn may be off.
+    # rise() compares against the previous scan's end value, so a rise(Y2) above
+    # Y2's only writer never fires: the property is unreachable, and the case
+    # checks the prover gives no spurious counterexample.
     with Program(strict=False) as logic:
         with Rung(rise(Y2)):
             out(Y3)
