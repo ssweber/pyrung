@@ -175,7 +175,9 @@ def exclusive_inputs_across_scans(pool: TagPool) -> list[RungSpec] | None:
 
 
 def count_down_constant_preset(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #8: count_down(C, 5).reset(R) + Rung(C.Acc <= -3)."""
+    """Pattern #8: count_down(C, -5).reset(R) + Rung(C.Acc <= -3).
+
+    The compare crosses on the third count, before Done (``Acc <= -5``)."""
     if not pool.counters or not pool.writable_bool():
         return None
     counter = pool.counters[0]
@@ -186,7 +188,7 @@ def count_down_constant_preset(pool: TagPool) -> list[RungSpec] | None:
             instructions=[
                 InstrSpec(
                     kind="count_down",
-                    args={"counter": counter, "preset": 5, "reset": reset_tag},
+                    args={"counter": counter, "preset": -5, "reset": reset_tag},
                 )
             ],
         ),

@@ -80,7 +80,7 @@ Scoping restricts input enumeration to the upstream cone of the named tags — t
 
 The verifier classifies every tag into one of three roles:
 
-- **Combinational** — OTE-only writes, derived from inputs each scan. Not a state dimension.
+- **Combinational** — OTE-only writes, derived from inputs each scan and read only below their writer. Not a state dimension. A coil a rung reads above the rung that writes it sees the previous scan's value, so it is stateful.
 - **Stateful** — latch/reset, timer/counter, copy, calc. Tracked in the visited set.
 - **Nondeterministic** — external inputs. Enumerated at each state. `InputBlock` tags (e.g., `x[1]`), `receive()` destination tags, and semantic tags mapped to input banks via `TagMap` are all automatically nondeterministic — no `external=True` annotation required.
 

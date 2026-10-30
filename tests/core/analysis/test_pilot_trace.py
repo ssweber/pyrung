@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,7 @@ from pyrung import (
     PLC,
     And,
     Bool,
+    Char,
     Counter,
     Dint,
     Int,
@@ -20,10 +22,14 @@ from pyrung import (
     calc,
     call,
     copy,
+    count_down,
     count_up,
     event_drum,
+    latch,
     on_delay,
     out,
+    reset,
+    rise,
     rung,
     shift,
     subroutine,
@@ -854,22 +860,25 @@ def _program_advance_counter():
     return logic
 
 
-def test_counter_done_program_owned_live_advance_yields_coast():
-    """A counter counting under a live program-owned level gets the coast anyway.
+def test_counter_done_program_owned_held_input_is_released_first():
+    """A counter whose program-owned input is already on is not counting.
 
-    ``_counter_driver_leaf`` resolves no steerable driver because the advance
-    reads the program-owned ``Running``. With the advance satisfied on the
-    snapshot, the Done trace emits the coast-only node.
+    The counter counts rising edges of ``Running``, so a held ``Running`` adds
+    nothing: coasting would wait forever.  The Done trace's frontier is the
+    release of the input (``x_Run`` off, so ``Running`` falls), with no
+    counter coast leaf and no counter lifetime on the action.
     """
     logic = _program_advance_counter()
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, _known(logic), logic)
 
-    tree = trace_back("C1_Done", True, {"Running": True, "x_Run": True}, pdg, logic, steerable)
-    coast = [lf for lf in _leaves(tree) if lf.advance is not None]
-    assert len(coast) == 1
-    assert (coast[0].tag, coast[0].value) == ("C1_Acc", 5)
-    assert not coast[0].is_steerable
+    snapshot = {"Running": True, "x_Run": True, "x_Rst": False}
+    tree = trace_back("C1_Done", True, snapshot, pdg, logic, steerable)
+    assert not any(lf.advance is not None for lf in _leaves(tree))
+    [action] = tree.ordered_action_details()
+    assert action.pair == ("x_Run", False)
+    assert not action.pulse
+    assert action.until is None
 
 
 def test_counter_done_idle_program_advance_keeps_enable_walk():
@@ -1723,6 +1732,8 @@ def test_counter_int_advance_alternates_inside_the_declared_choices():
         (Int("AwaySingle", choices={5: "only"}, default=5), 5, 5, None),
         (Int("AwayRest", choices={0: "x", 3: "y"}), 3, 0, 0),
         (Int("AwayOpen"), 0, 0, 1),
+        (Char("AwayChar", default="A"), "A", "A", "\x00"),
+        (Char("AwayBlank"), "\x00", "\x00", "A"),
     ],
 )
 def test_counter_driver_away_value_stays_in_the_domain(tag, value, resting, away):
@@ -1744,6 +1755,392 @@ def test_counter_with_its_input_held_on_is_pulsed_again():
     plc.run(cycles=2)
     assert plc.current_state.tags["HeldC_Acc"] == 1
     assert plc.how(C.Done).status.name == "REACHED"
+
+
+# These drives take well under a second.  A drive that cycles a counter's
+# input without ever counting spins until the search budget runs out (minutes),
+# so a wall-clock bound turns that regression into a loud failure.
+_COUNTER_DRIVE_SECONDS = 20.0
+
+
+def _timed_how(plc, target):
+    start = time.perf_counter()
+    plan = plc.how(target)
+    elapsed = time.perf_counter() - start
+    assert elapsed < _COUNTER_DRIVE_SECONDS, f"how() took {elapsed:.1f}s: {plan.reason}"
+    return plan
+
+
+def _reached_by_replay(plc, target):
+    """how(*target*) reaches it, and replaying the recorded plan reaches it too."""
+    plan = _timed_how(plc, target)
+    assert plan.status.name == "REACHED", plan.reason
+    assert plan.replay().state.tags[target.name] is True
+    return plan
+
+
+def _latched_counter(name, *, reset_pin=None, gate=None):
+    """``Start`` latches ``Run``, ``Stop`` resets it, ``Run`` counts to 3."""
+    Start = Bool(f"{name}Start", external=True)
+    Stop = Bool(f"{name}Stop", external=True)
+    Run = Bool(f"{name}Run")
+    C = Counter.clone(f"{name}C")
+    R = reset_pin if reset_pin is not None else Bool(f"{name}R", external=True)
+    with Program(strict=False) as logic:
+        with rung(Start):
+            latch(Run)
+        with rung(Stop):
+            reset(Run)
+        if gate is None:
+            with rung(Run):
+                count_up(C, 3).reset(R)
+        else:
+            with rung(gate):
+                call(f"{name}Sub")
+            with subroutine(f"{name}Sub"):
+                with rung(Run):
+                    count_up(C, 3).reset(R)
+    return logic, Start, Run, C
+
+
+@pytest.mark.parametrize("run_on", [False, True])
+def test_counter_reset_pin_held_is_released_before_cycling_a_latch(run_on):
+    """A held level reset pin wins over every count: it is released (in the
+    same act as the input's first transition), then the latch is cycled."""
+    R = Bool("HeldResetR", external=True)
+    logic, Start, Run, C = _latched_counter("HeldReset", reset_pin=R)
+    plc = PLC(logic)
+    if run_on:
+        plc.patch({Start.name: True})
+        plc.run(cycles=2)
+        plc.patch({Start.name: False})
+    plc.patch({R.name: True})
+    plc.run(cycles=2)
+    assert plc.current_state.tags[Run.name] is run_on
+    plan = _reached_by_replay(plc, C.Done)
+    assert plan.ordered_steps[0][1].get(R.name) is False
+
+
+@pytest.mark.parametrize("run_on", [False, True])
+def test_counter_in_an_uncalled_subroutine_is_called_before_cycling_a_latch(run_on):
+    Mode = Bool("GatedMode", external=True)
+    logic, Start, Run, C = _latched_counter("Gated", gate=Mode)
+    plc = PLC(logic)
+    if run_on:
+        plc.patch({Start.name: True})
+        plc.run(cycles=2)
+        plc.patch({Start.name: False})
+    plc.run(cycles=2)
+    assert plc.current_state.tags[Run.name] is run_on
+    plan = _reached_by_replay(plc, C.Done)
+    assert plan.ordered_steps[0][1].get(Mode.name) is True
+
+
+def test_counter_fed_by_a_held_coil_with_its_reset_pin_held():
+    Btn = Bool("HeldBothBtn", external=True)
+    R = Bool("HeldBothR", external=True)
+    Y = Bool("HeldBothY")
+    C = Counter.clone("HeldBothC")
+    with Program() as logic:
+        with rung(Btn):
+            out(Y)
+        with rung(Y):
+            count_up(C, 3).reset(R)
+    plc = PLC(logic)
+    plc.patch({Btn.name: True, R.name: True})
+    plc.run(cycles=3)
+    _reached_by_replay(plc, C.Done)
+
+
+def test_counter_reset_held_by_unsteerable_logic_declines_without_spinning():
+    """Nothing steerable clears the reset: cycling the input would count
+    nothing forever, so the drive stops promptly instead."""
+    Btn = Bool("StuckResetBtn", external=True)
+    Y = Bool("StuckResetY")
+    Held = Bool("StuckResetHeld")
+    C = Counter.clone("StuckResetC")
+    with Program() as logic:
+        with rung():
+            latch(Held)
+        with rung(Btn):
+            out(Y)
+        with rung(Y):
+            count_up(C, 3).reset(Held)
+    plc = PLC(logic)
+    plc.patch({Btn.name: True})
+    plc.run(cycles=2)
+    assert _timed_how(plc, C.Done).status.name != "REACHED"
+
+
+def _stops_promptly(plc, target):
+    """how(*target*) declines, and says so before spending its search budget."""
+    plan = _timed_how(plc, target)
+    assert plan.status.name != "REACHED"
+    assert "budget exhausted" not in plan.reason, plan.reason
+    return plan
+
+
+def _selector_counter(name, reset_pin):
+    """``Sel`` latches ``Run``, ``Stop`` resets it, ``Run`` counts to 3.
+
+    *reset_pin* builds the counter's reset from ``(Sel, M, Rc)``, where ``M``
+    is another external input and ``Rc`` a coil ``Sel`` and ``M`` energize.
+    """
+    Sel = Bool(f"{name}Sel", external=True)
+    Stop = Bool(f"{name}Stop", external=True)
+    M = Bool(f"{name}M", external=True)
+    Run = Bool(f"{name}Run")
+    Rc = Bool(f"{name}Rc")
+    C = Counter.clone(f"{name}C")
+    with Program(strict=False) as logic:
+        with rung(Sel):
+            latch(Run)
+        with rung(Stop):
+            reset(Run)
+        with rung(Sel, M):
+            out(Rc)
+        with rung(Run):
+            count_up(C, 3).reset(reset_pin(Sel, M, Rc))
+    plc = PLC(logic)
+    plc.patch({M.name: True})
+    plc.run(cycles=2)
+    return plc, M, C
+
+
+@pytest.mark.parametrize(
+    "reset_pin",
+    [
+        pytest.param(lambda Sel, M, Rc: And(Sel, M), id="and"),
+        pytest.param(lambda Sel, M, Rc: Rc, id="coil"),
+    ],
+)
+def test_counter_reset_the_latching_button_turns_on_is_cleared_through_another_leaf(reset_pin):
+    """Pressing ``Sel`` to latch the input also turns the reset on while ``M``
+    is held, so that count would be lost; ``M`` is cleared first, then the
+    latch is cycled with ``Stop`` and ``Sel``."""
+    plc, M, C = _selector_counter("SelClear", reset_pin)
+    plan = _reached_by_replay(plc, C.Done)
+    assert plan.ordered_steps[0][1].get(M.name) is False
+
+
+@pytest.mark.parametrize(
+    "reset_pin",
+    [
+        pytest.param(lambda Sel, M, Rc: Or(Sel, M), id="or"),
+        pytest.param(lambda Sel, M, Rc: Sel, id="same-button"),
+    ],
+)
+def test_counter_reset_every_latching_press_turns_on_stops_promptly(reset_pin):
+    """Every ``Sel`` press that latches the input also resets the counter:
+    no count can land, so the drive says so instead of cycling forever."""
+    plc, _M, C = _selector_counter("SelStuck", reset_pin)
+    _stops_promptly(plc, C.Done)
+
+
+def _held_coil_counter(name, build):
+    Btn = Bool(f"{name}Btn", external=True)
+    Y = Bool(f"{name}Y")
+    C = Counter.clone(f"{name}C")
+    with Program() as logic:
+        with rung(Btn):
+            out(Y)
+        with rung(Y):
+            build(C, Y)
+    plc = PLC(logic)
+    plc.patch({Btn.name: True})
+    plc.run(cycles=2)
+    return plc, C
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(lambda C, Y: count_up(C, 3).reset(Y), id="reset-is-input"),
+        pytest.param(lambda C, Y: count_up(C, 3).reset(~Y), id="reset-is-not-input"),
+        pytest.param(
+            lambda C, Y: count_up(C, 3).down(Y).reset(Bool("UpDownR", external=True)),
+            id="down-is-input",
+        ),
+    ],
+)
+def test_counter_whose_input_cycle_cannot_count_stops_promptly(build):
+    """A reset that is on in one phase of the input's cycle, or a down input
+    that rises with it, takes back every count: pulsing the input is futile."""
+    plc, C = _held_coil_counter("Futile", build)
+    _stops_promptly(plc, C.Done)
+
+
+@pytest.mark.parametrize(
+    "reset_pin",
+    [
+        pytest.param(lambda Sel, M, Rc: Or(Sel, M), id="or"),
+        pytest.param(lambda Sel, M, Rc: Sel, id="same-button"),
+    ],
+)
+def test_counter_input_step_that_loses_its_count_is_rejected(monkeypatch, reset_pin):
+    """The read's phase check is static; verification is the backstop.  With
+    the check blinded, the latching press that the reset swallows is rejected
+    as soon as it lands, not accepted and cycled until the budget runs out."""
+    import pyrung.core.analysis.pilot.trace as trace_module
+
+    monkeypatch.setattr(trace_module, "_counter_phase_blockers", lambda *args, **kwargs: [])
+    plc, _M, C = _selector_counter("SelBlind", reset_pin)
+    _stops_promptly(plc, C.Done)
+
+
+def test_counter_edge_loses_a_count_only_when_the_input_rises_without_it():
+    from pyrung.core.analysis.pilot.trace_tree import CounterEdge
+
+    up = CounterEdge("Acc", 1, Atom("Run", "xic"))
+    off, on = {"Run": False}, {"Run": True}
+    assert up.lost({**off, "Acc": 1}, {**on, "Acc": 1})
+    assert not up.lost({**off, "Acc": 1}, {**on, "Acc": 2})
+    assert up.lost({**on, "Acc": 1}, {**off, "Acc": 0})
+    assert not up.lost({**on, "Acc": 1}, {**off, "Acc": 1})
+    assert not up.lost({**off, "Acc": 1}, {**off, "Acc": 1})
+    down = CounterEdge("Acc", -1, Atom("Run", "xic"))
+    assert not down.lost({**off, "Acc": 0}, {**on, "Acc": -1})
+    assert down.lost({**off, "Acc": -1}, {**on, "Acc": -1})
+
+
+def test_counter_fed_by_a_held_coil_is_cycled_through_its_button():
+    """``Btn -> Y -> count_up``: with ``Btn`` held the counter counted once and
+    ``Y`` is on; each further count needs ``Btn`` off and on again."""
+    Btn = Bool("CoilBtn", external=True)
+    Y = Bool("CoilY")
+    C = Counter.clone("CoilC")
+    with Program() as logic:
+        with rung(Btn):
+            out(Y)
+        with rung(Y):
+            count_up(C, 3).reset(Bool("CoilR", external=True))
+    plc = PLC(logic)
+    plc.patch({Btn.name: True})
+    plc.run(cycles=3)
+    assert plc.current_state.tags[C.Acc.name] == 1
+    plan = _reached_by_replay(plc, C.Done)
+    assert any(inputs.get(Btn.name) is False for _scan, inputs in plan.ordered_steps)
+
+
+@pytest.mark.parametrize("down", [False, True])
+def test_counter_fed_by_a_latched_bit_is_cycled_stop_then_start(down):
+    """A latched ``Run`` already on counts once; each further count is a
+    ``Stop`` (release) then a ``Start`` (establish), never a hold until Done."""
+    Start = Bool("LatchStart", external=True)
+    Stop = Bool("LatchStop", external=True)
+    Run = Bool("LatchRun")
+    C = Counter.clone("LatchC")
+    count, preset = (count_down, -3) if down else (count_up, 3)
+    with Program() as logic:
+        with rung(Start):
+            latch(Run)
+        with rung(Stop):
+            reset(Run)
+        with rung(Run):
+            count(C, preset).reset(Bool("LatchR", external=True))
+    plc = PLC(logic)
+    plc.patch({Start.name: True})
+    plc.run(cycles=3)
+    plc.patch({Start.name: False})
+    plc.run(cycles=1)
+    assert plc.current_state.tags[Run.name] is True
+    _reached_by_replay(plc, C.Done)
+
+
+def test_counter_fed_by_a_latched_bit_from_off():
+    Start = Bool("OffStart", external=True)
+    Stop = Bool("OffStop", external=True)
+    Run = Bool("OffRun")
+    C = Counter.clone("OffC")
+    with Program() as logic:
+        with rung(Start):
+            latch(Run)
+        with rung(Stop):
+            reset(Run)
+        with rung(Run):
+            count_up(C, 3).reset(Bool("OffR", external=True))
+    _reached_by_replay(PLC(logic), C.Done)
+
+
+@pytest.mark.parametrize("sealed", [False, True])
+def test_counter_fed_by_a_seal_in_pulses_start_against_a_held_stop(sealed):
+    """``Or(Start, Run), ~Stop -> Run``: ``Start`` pulses while ``Stop``, already
+    off, holds; pulsing both in their own phases would never seal ``Run``."""
+    Start = Bool("SealStart", external=True)
+    Stop = Bool("SealStop", external=True)
+    Run = Bool("SealRun")
+    C = Counter.clone("SealC")
+    with Program() as logic:
+        with rung(Or(Start, Run), ~Stop):
+            out(Run)
+        with rung(Run):
+            count_up(C, 3).reset(Bool("SealR", external=True))
+    plc = PLC(logic)
+    if sealed:
+        plc.patch({Start.name: True})
+        plc.run(cycles=3)
+        plc.patch({Start.name: False})
+        plc.run(cycles=1)
+    _reached_by_replay(plc, C.Done)
+
+
+def test_counter_rise_of_a_held_coil_is_released_first():
+    Btn = Bool("RiseBtn", external=True)
+    Y = Bool("RiseY")
+    C = Counter.clone("RiseC")
+    with Program() as logic:
+        with rung(Btn):
+            out(Y)
+        with rung(rise(Y)):
+            count_up(C, 3).reset(Bool("RiseR", external=True))
+    plc = PLC(logic)
+    plc.patch({Btn.name: True})
+    plc.run(cycles=3)
+    _reached_by_replay(plc, C.Done)
+
+
+def test_counter_fed_by_timer_laps_holds_the_timer_enable():
+    """A self-restarting timer makes the counter's edges itself: its enable is
+    a hold, never pulsed (a pulsed enable would restart the timer forever)."""
+    En = Bool("LapEn", external=True)
+    T = Timer.clone("LapT")
+    C = Counter.clone("LapC")
+    with Program() as logic:
+        with rung(En, ~T.Done):
+            on_delay(T, 50)
+        with rung(T.Done):
+            count_up(C, 3).reset(Bool("LapR", external=True))
+    _reached_by_replay(PLC(logic, dt=0.010), C.Done)
+
+
+def test_counter_char_driver_alternates_with_another_char():
+    Ch = Char("DriveCh", default="A", external=True)
+    C = Counter.clone("CharC")
+    with Program() as logic:
+        with rung(Ch == "A"):
+            count_up(C, 3).reset(Bool("CharR", external=True))
+    plc = PLC(logic)
+    plc.run(cycles=2)
+    _reached_by_replay(plc, C.Done)
+
+
+def test_counter_accumulator_threshold_is_reached_by_edges():
+    """``how(C.Acc >= 2)`` needs the same rising edges as ``how(C.Done)``:
+    a counter's accumulator never moves under a coast."""
+    Btn = Bool("AccBtn", external=True)
+    Y = Bool("AccY")
+    C = Counter.clone("AccC")
+    with Program() as logic:
+        with rung(Btn):
+            out(Y)
+        with rung(Y):
+            count_up(C, 5).reset(Bool("AccR", external=True))
+    plc = PLC(logic)
+    plc.patch({Btn.name: True})
+    plc.run(cycles=3)
+    plan = plc.how(C.Acc >= 2)
+    assert plan.status.name == "REACHED", plan.reason
+    assert plan.replay().state.tags[C.Acc.name] >= 2
 
 
 def test_prerequisite_action_carries_nearest_advance_frontier():

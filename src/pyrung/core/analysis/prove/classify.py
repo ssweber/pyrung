@@ -6,6 +6,8 @@ Tags partition into three roles:
   BFS visited set.
 - **Nondeterministic** — external inputs; enumerated at each BFS state.
 - **Combinational** — OTE-only writes with no cross-scan readers; ignored.
+  A read above the first write (the scan-entry version in the def-use
+  chain) is a cross-scan reader.
 
 ``run_function`` / ``run_enabled_function`` outputs are classified as
 stateful writes, but the function body is opaque.  Domain inference
@@ -2309,6 +2311,17 @@ def _is_self_referencing_ote(
     return False
 
 
+def _reads_scan_entry_value(tag_name: str, graph: ProgramGraph) -> bool:
+    """True if a read of *tag_name* comes before its first write in scan order.
+
+    Such a read sees the value the tag ended the previous scan with, so the
+    tag carries state across the scan boundary even when every writer is an
+    unconditional OTE: ``Rung(Y2): out(Y3)`` above ``Rung(Y1): out(Y2)``.
+    """
+    chain = graph.def_use_chains.get(tag_name)
+    return bool(chain) and bool(chain[0].read_by)
+
+
 def _uses_prior_snapshot(program: Program, node: RungNode) -> bool:
     """Return whether a graph node belongs to a continued() top-level rung."""
     if node.scope == "main":
@@ -3047,6 +3060,7 @@ def _classify_dimensions_from_graph(
             and _is_ote_unconditionally_reachable(tag_name, graph)
             and not _is_self_referencing_ote(tag_name, graph)
             and not _has_same_rung_branch_reader(tag_name, graph)
+            and not _reads_scan_entry_value(tag_name, graph)
         ):
             combinational.add(tag_name)
             continue
