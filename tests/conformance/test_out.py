@@ -83,8 +83,8 @@ def prove_debounce_bounce_restarts_on_side(slot):
 
 def prove_flasher_restarts_with_on_phase(slot):
     # O4: 300 ms phases; the rung drops at 450-550 ms, 150 ms into the off
-    # phase.  Each check's window keeps clear of the phase edges and is wide
-    # enough that one long wall-clock scan doesn't step over it.
+    # phase.  Each check's window keeps clear of the phase edges and is 40 ms wide, enough
+    # that a slow wall-clock scan (20 ms or so) does not step over it.
     with Rung(slot.Cmd != 0):
         on_delay(ClickTimer(305), 2000)
     with Rung(slot.Cmd != 0, td[305] >= 450, td[305] < 550):
@@ -101,11 +101,11 @@ def prove_flasher_restarts_with_on_phase(slot):
     with Rung(slot.Cmd != 0, td[305] >= 480, td[305] < 520, td[307] >= 100, td[307] < 300):
         copy(2, slot.Result3, oneshot=True)
     # Does the off-side TD stand still while the rung is false?
-    with Rung(slot.Cmd != 0, td[305] >= 460, td[305] < 480):
+    with Rung(slot.Cmd != 0, td[305] >= 460, td[305] < 500):
         copy(td[307], slot.Scratch, oneshot=True)
-    with Rung(slot.Cmd != 0, td[305] >= 520, td[305] < 540, td[307] == slot.Scratch):
+    with Rung(slot.Cmd != 0, td[305] >= 510, td[305] < 550, td[307] == slot.Scratch):
         copy(1, slot.ErrorCode, oneshot=True)
-    with Rung(slot.Cmd != 0, td[305] >= 520, td[305] < 540, td[307] != slot.Scratch):
+    with Rung(slot.Cmd != 0, td[305] >= 510, td[305] < 550, td[307] != slot.Scratch):
         copy(2, slot.ErrorCode, oneshot=True)
     # After the restart at 550: a fresh on phase is on at 600-650 and 750-800;
     # resuming the off phase is off at 600-650, on at 750-800; a fresh off

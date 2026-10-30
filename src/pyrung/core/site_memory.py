@@ -147,13 +147,15 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
     """
     from pyrung.core.instruction.advanced import ShiftInstruction
     from pyrung.core.instruction.drums import EventDrumInstruction, _DrumBaseInstruction
-    from pyrung.core.instruction.out_variants import ToggleInstruction
+    from pyrung.core.instruction.out_variants import FlasherInstruction, ToggleInstruction
 
     slots: list[tuple[str, Any]] = []
     if getattr(instr, "_oneshot", False):
         slots.append(("_oneshot", False))
     if isinstance(instr, ToggleInstruction):
         slots.append(("_toggle", False))
+    if isinstance(instr, FlasherInstruction):
+        slots.append(("_flash_idle", True))
     if isinstance(instr, ShiftInstruction):
         slots.append(("_shift_prev_clock", False))
     if isinstance(instr, _DrumBaseInstruction):

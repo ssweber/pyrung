@@ -237,7 +237,7 @@ class FlasherInstruction(Instruction):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         on_frac = f"_frac:{self.on_acc.name}"
         off_frac = f"_frac:{self.off_acc.name}"
-        idle_key = f"_flash_idle:{self.on_acc.name}"
+        idle_key = self.memory_key("_flash_idle")
         if not enabled:
             # Both accumulators (and their remainders) freeze where they are.
             ctx.set_memory(idle_key, True)

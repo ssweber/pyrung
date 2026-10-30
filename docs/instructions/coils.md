@@ -55,7 +55,7 @@ with rung(CallButton):
     timed(Lamp, Timer[6], 3, "sec", maintained=True)   # at least 3 s, then follows the rung
 ```
 
-A rung edge starts the on time, and the on time runs out whatever the rung does; an edge during it does not restart it. Not maintained, the next pulse needs the rung to go false and true again. The coil has timed out while its `Acc` holds at or past the preset, and the `Acc` clears once the rung is false.
+A rung edge starts the on time, and the on time runs out whatever the rung does; an edge during it does not restart it. Not maintained, the next pulse needs the rung to go false and true again. The coil has timed out while its `Acc` holds at or past the preset, and the `Acc` clears once the rung is false. The timed-out state is read from `Acc >= preset` each scan, so lowering a register preset below a running `Acc` reads as timed out on the next scan.
 
 The first phase counts the rung's first scan, as `on_delay` does, and every phase shows for at least one scan, so an on time shorter than a scan still pulses once. None of the variants writes a Timer's `Done`, `EN` or `TT` (a CLICK Out coil never turns `T<n>` on, so a contact on that `Done` is always off), and none takes `immediate(...)` except `toggle`. A timer used by a variant belongs to it: `on_delay` on the same timer is a conflicting-output finding, as CLICK reports it.
 

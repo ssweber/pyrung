@@ -363,7 +363,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] debounce TD keeps counting past its preset while steady (O2); a bounce restarts the timing side (O3) (`out/debounce_td_keeps_counting`, `out/debounce_bounce_restarts_on_side`)
 - [x] flasher with its rung false: TDs cleared, kept or frozen, and the restart's phase (O4, probe; `out/flasher_restarts_with_on_phase`)
 - [x] timed (not maintained) needs a fresh edge after timing out (O5) (`out/timed_needs_fresh_edge`)
-- [x] Out coil variants never set the phase timer's T bit (O6) (`out/out_coil_sets_timer_done`, pending OUT)
+- [x] Out coil variants never set the phase timer's T bit (O6) (`out/out_coil_sets_timer_done`)
 - [x] TON auto-reset, drops Acc and Done together when rung goes false (`timers/ton_auto_reset`)
 - [x] TON enable: the enabling scan's dt counts and Done is judged on that scan, so a 0 ms preset is done on the scan its rung goes true (hardware-verified per `tests/core/test_timers.py`; `timers/ton_done_on_enabling_scan`)
 - [x] RTON holds Acc and Done across rung-false (`timers/rton_holds_across_rung_false`)

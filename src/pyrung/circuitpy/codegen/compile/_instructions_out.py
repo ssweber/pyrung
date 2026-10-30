@@ -168,7 +168,7 @@ def _compile_flasher_instruction(
     sp8 = " " * (indent + 8)
     on_frac = f"_frac:{instr.on_acc.name}"
     off_frac = f"_frac:{instr.off_acc.name}"
-    idle_key = f"_flash_idle:{instr.on_acc.name}"
+    idle_key = f"_flash_idle:{ctx.state_key_for(instr)}"
     return [
         f"{sp}if not bool({enabled_expr}):",
         f'{sp4}_mem["{idle_key}"] = True',
