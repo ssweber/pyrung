@@ -105,6 +105,11 @@ class RungNode:
     calls: tuple[str, ...]
     source_file: str | None
     source_line: int | None
+    # The node's own condition reads, before ``_augment_return_early_guards``
+    # folds return-guard reads into ``condition_reads``.  It is not
+    # ``condition_reads - guard_reads``: a tag the node's own contacts read can
+    # be a guard read too.
+    own_condition_reads: frozenset[str]
     guard_reads: frozenset[str] = frozenset()
 
     @property
@@ -416,7 +421,10 @@ class ProgramGraph:
         that is unconditional in its own right but guarded by a preceding
         ``return_early()`` is treated as unconditional, because all
         subsequent reads in the same subroutine share the same guard and
-        guards grow monotonically down the subroutine.
+        guards grow monotonically down the subroutine.  Only (A) survives a
+        guard: a reader outside the subroutine runs after the return and
+        reads the value the skipped write left standing, however the
+        subroutine is called.
         """
         chain = self.def_use_chains.get(tag_name)
         if not chain:
@@ -431,15 +439,14 @@ class ProgramGraph:
             return False
         node = self.rung_nodes[first_write.defined_at]
         # Strip return_early guards: both the write and all subsequent reads
-        # share the same monotonically-accumulated guard, so if the write is
-        # skipped (guard fired), every read is also skipped.
-        own_conditions = node.condition_reads - node.guard_reads
-        if own_conditions:
+        # in the subroutine share the same monotonically-accumulated guard, so
+        # if the write is skipped (guard fired), every such read is skipped.
+        if node.own_condition_reads:
             return False
         if node.scope == "main":
             return True
         sub = node.subroutine
-        if sub in _always_run_subroutines(self):
+        if not node.guard_reads and sub in _always_run_subroutines(self):
             return True
         return all(
             self.rung_nodes[ri].subroutine == sub
@@ -1243,6 +1250,7 @@ def _extract_rung_node(
         calls=tuple(calls),
         source_file=getattr(rung, "source_file", None),
         source_line=getattr(rung, "source_line", None),
+        own_condition_reads=frozenset(condition_reads),
     )
 
 
@@ -1544,63 +1552,155 @@ def _augment_return_early_guards(
     nodes: list[RungNode],
     program: Program,
     tag_refs: dict[str, Tag],
+    node_index_by_rung: dict[int, int],
 ) -> None:
-    """Propagate return_early guard condition_reads to subsequent write nodes.
+    """Propagate return_early guard condition_reads to the nodes it can skip.
 
-    When a subroutine rung fires return_early(), all subsequent rungs only
-    execute if the guard condition was False.  Their writes therefore depend
-    on the guard's condition_reads — make that visible in the graph so
-    upstream_slice discovers the dependency.
+    When a subroutine rung fires return_early(), the rest of the subroutine
+    is skipped: the later rungs, and the items of the same rung that follow
+    the return in execution order, branches included (a return in a branch
+    leaves the subroutine, not just the branch).  Their writes, and the
+    subroutines they call, therefore depend on the guard's condition_reads,
+    and an ``out()`` among them holds its value instead of following its
+    contacts — make that visible in the graph (``guard_reads``) so
+    upstream_slice discovers the dependency.  The node's own reads stay in
+    ``own_condition_reads``.
     """
     for sub_name in sorted(program.subroutines):
-        sub_rungs = program.subroutines[sub_name]
-        sub_indices = [
-            i for i, n in enumerate(nodes) if n.subroutine == sub_name and n.branch_path == ()
-        ]
-        if len(sub_indices) != len(sub_rungs):
-            continue
-
         guard_reads: frozenset[str] = frozenset()
-        for node_idx, rung in zip(sub_indices, sub_rungs, strict=True):
-            node = nodes[node_idx]
-            if guard_reads and node.writes:
-                nodes[node_idx] = _dc_replace(
-                    node,
-                    condition_reads=node.condition_reads | guard_reads,
-                    guard_reads=guard_reads,
-                )
-            if _rung_has_return(rung):
-                guard_reads = guard_reads | _rung_return_condition_reads(rung, tag_refs)
+        for rung in program.subroutines[sub_name]:
+            return_reads = _rung_return_condition_reads(rung, tag_refs)
+            same_rung = (
+                _nodes_after_first_return(rung, node_index_by_rung)
+                if return_reads is not None
+                else frozenset()
+            )
+            for node_idx in _rung_tree_node_indices(rung, node_index_by_rung):
+                node = nodes[node_idx]
+                if not (node.all_writes or node.calls):
+                    continue
+                reads = guard_reads
+                if node_idx in same_rung:
+                    assert return_reads is not None
+                    reads = reads | return_reads
+                if reads:
+                    nodes[node_idx] = _dc_replace(
+                        node,
+                        condition_reads=node.condition_reads | reads,
+                        guard_reads=node.guard_reads | reads,
+                    )
+            if return_reads is not None:
+                guard_reads = guard_reads | return_reads
+
+
+def _rung_tree_node_indices(rung: Rung, node_index_by_rung: dict[int, int]) -> list[int]:
+    """PDG node indices of a top-level rung and its branches, at any depth."""
+    out = [node_index_by_rung[id(rung)]]
+    for branch in rung._branches:
+        out.extend(_rung_tree_node_indices(branch, node_index_by_rung))
+    return out
+
+
+def _nodes_after_first_return(rung: Rung, node_index_by_rung: dict[int, int]) -> frozenset[int]:
+    """Nodes of *rung*'s tree with an item a return earlier in the rung can skip.
+
+    The rung's items run in source order, a branch's in place (its contacts
+    were read up front, with the rung's).  Everything after the first item
+    that holds a return is skipped when it fires; a loop holding one can also
+    skip its own body's later iterations, so the loop counts as after it.
+    """
+    from pyrung.core.rung import Rung as RungClass
+
+    order: list[tuple[int, Any]] = []
+
+    def walk(current: Rung) -> None:
+        for item in current._execution_items:
+            if isinstance(item, RungClass):
+                walk(item)
+            else:
+                order.append((node_index_by_rung[id(current)], item))
+
+    walk(rung)
+    skipped: set[int] = set()
+    seen_return = False
+    for node_idx, item in order:
+        holds = _items_hold_return((item,))
+        if seen_return or (holds and isinstance(item, ForLoopInstruction)):
+            skipped.add(node_idx)
+        seen_return = seen_return or holds
+    return frozenset(skipped)
+
+
+def _items_hold_return(items: Any) -> bool:
+    """Whether a return sits among *items*, in a rung among them or in a loop body."""
+    from pyrung.core.instruction.control import ReturnInstruction
+    from pyrung.core.rung import Rung as RungClass
+
+    for item in items:
+        if isinstance(item, ReturnInstruction):
+            return True
+        if isinstance(item, RungClass):
+            if _items_hold_return(item._execution_items):
+                return True
+        elif isinstance(item, ForLoopInstruction) and _items_hold_return(item.body):
+            return True
+    return False
 
 
 def _rung_has_return(rung: Rung) -> bool:
-    """Whether ``return_early()`` sits in the rung's own items or its loop bodies."""
+    """Whether ``return_early()`` sits anywhere in the rung: its own items,
+    its branches (at any depth), or a loop body in either."""
+    return _rung_return_condition_reads(rung, {}) is not None
+
+
+def _rung_return_condition_reads(rung: Rung, tag_refs: dict[str, Tag]) -> frozenset[str] | None:
+    """Reads that decide whether a ``return_early()`` in this rung fires.
+
+    ``None`` when the rung holds no return.  A return can sit in the rung's
+    own items, in a branch at any depth, or in a loop body (a bare item or a
+    body rung) in either; the reads are the conditions on the path to each
+    one.  A branch's conditions hold its parents' first, so its full reads
+    are its path.  A loop holding a return adds its count (a count of 0 runs
+    no iteration) and every body rung's contacts (a ``break_loop()`` or
+    ``continue_loop()`` in one can skip the return).
+    """
     from pyrung.core.instruction.control import ReturnInstruction
+    from pyrung.core.rung import Rung as RungClass
 
-    def _in(instructions: list[Any]) -> bool:
-        for instr in instructions:
-            if isinstance(instr, ReturnInstruction):
-                return True
-            if isinstance(instr, ForLoopInstruction) and _in(instr.instructions):
-                return True
-        return False
+    reads: set[str] = set()
 
-    return _in(rung._instructions)
+    def visit_items(items: Any) -> bool:
+        found = False
+        for item in items:
+            if isinstance(item, ReturnInstruction):
+                found = True
+            elif isinstance(item, ForLoopInstruction):
+                found = visit_loop(item) or found
+        return found
 
+    def visit_loop(loop: ForLoopInstruction) -> bool:
+        found = False
+        for item in loop.body:
+            if isinstance(item, RungClass):
+                found = visit_rung(item) or found
+            else:
+                found = visit_items((item,)) or found
+        if found:
+            for body_rung in loop.body_rungs:
+                reads.update(_rung_condition_reads(body_rung, tag_refs))
+            reads.update(_extract_tag_names(loop.count, tag_refs))
+        return found
 
-def _rung_return_condition_reads(rung: Rung, tag_refs: dict[str, Tag]) -> frozenset[str]:
-    """Reads that decide whether a ``return_early()`` in this rung fires."""
-    reads = set(_rung_condition_reads(rung, tag_refs))
+    def visit_rung(current: Rung) -> bool:
+        found = visit_items(current._instructions)
+        for branch in current._branches:
+            found = visit_rung(branch) or found
+        if found:
+            reads.update(_rung_condition_reads(current, tag_refs))
+        return found
 
-    def _loop_reads(instructions: list[Any]) -> None:
-        for instr in instructions:
-            if isinstance(instr, ForLoopInstruction):
-                for body_rung in instr.body_rungs:
-                    reads.update(_rung_condition_reads(body_rung, tag_refs, local_only=True))
-                reads.update(_extract_tag_names(instr.count, tag_refs))
-                _loop_reads(instr.instructions)
-
-    _loop_reads(rung._instructions)
+    if not visit_rung(rung):
+        return None
     return frozenset(reads)
 
 
@@ -1842,7 +1942,7 @@ def _build_program_graph(
                 writers_of_mut[tag_name].add(node_index)
     access_events = _build_access_sequence(program, node_index_by_rung, tag_refs, fault_writes)
 
-    _augment_return_early_guards(rung_nodes, program, tag_refs)
+    _augment_return_early_guards(rung_nodes, program, tag_refs, node_index_by_rung)
     frozen_nodes = tuple(rung_nodes)
     pointer_tags, pointer_uses, opaque_index_blocks, index_tags = _collect_pointer_uses(program)
 
