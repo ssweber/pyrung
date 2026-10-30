@@ -4,11 +4,12 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
-The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as two
+The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as three
 projects, one part each (``PARTS``)::
 
     make conformance-export PART=A OUT=path/to/a
     make conformance-export PART=B OUT=path/to/b
+    make conformance-export PART=C OUT=path/to/c
 
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
@@ -86,25 +87,29 @@ ALL_GROUPS = [
 #: Once pyrung keeps running they join ``ALL_GROUPS`` and this list goes away.
 STOP_GROUPS = [test_math_error.group]
 
-#: Group names per CLICK project, split by subroutine name (A: ``Conf_Block``..
-#: ``Conf_Numeric``, B: ``Conf_Out``..``Conf_Timers``) to keep each part under
-#: CLICK's 8000 steps.  Every group is in exactly one part.  The registers are
-#: the manifest's either way, so a group's subroutine is the same in its part
-#: as in the whole project.
+#: Group names per CLICK project, split by topic to keep each part under
+#: ``PART_STEP_BUDGET``: A and B the instructions, C how a rung is solved
+#: (solve order, edges, loops), so the part that asks it reloads on its own.
+#: Every group is in exactly one part.  The registers are the manifest's
+#: either way, so a group's subroutine is the same in its part as in the
+#: whole project.
 PARTS: dict[str, tuple[str, ...]] = {
     "A": (
         "block",
-        "call_twice",
-        "coils",
         "counters",
         "drum",
-        "loop",
         "math",
         *(g.name for g in STOP_GROUPS),
         "numeric",
     ),
-    "B": ("out", "rungs", "search", "shift", "solve_order", "system", "text", "timers"),
+    "B": ("out", "search", "shift", "system", "text", "timers"),
+    "C": ("call_twice", "coils", "loop", "rungs", "solve_order"),
 }
+
+#: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
+#: less a margin for the estimate's error and the instructions it has not
+#: measured.
+PART_STEP_BUDGET = 7500
 
 
 def wire_groups(build: ConformanceProgram, endpoint: Endpoint | None) -> list[Group]:
@@ -150,7 +155,7 @@ def build_for(endpoint: Endpoint | None) -> ConformanceProgram:
         known.append(f"{part or 'whole'} {candidate.program_hash}")
     raise BuildMismatchError(
         f"{endpoint} runs program layout {found}; the suite is layout {', '.join(known)}. "
-        "Export the part again (make conformance-export PART=A or PART=B) and load it."
+        f"Export the part again (make conformance-export PART={'|'.join(PARTS)}) and load it."
     )
 
 

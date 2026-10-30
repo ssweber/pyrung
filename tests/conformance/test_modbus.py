@@ -180,7 +180,7 @@ def test_the_loaded_part_is_read_from_ds1() -> None:
     other = build_program([_alpha(), _beta()], _TWO_GROUPS)
     with SimServer(other) as sim:
         assert sim.endpoint is not None
-        with pytest.raises(BuildMismatchError, match="PART=A or PART=B"):
+        with pytest.raises(BuildMismatchError, match="make conformance-export PART="):
             suite.build_for(sim.endpoint)
 
 

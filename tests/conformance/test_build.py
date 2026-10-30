@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pyrung.click import ClickBlocks
+from pyrung.click.ladder import estimate_steps, pyrung_to_ladder
 from pyrung.conformance import (
     Case,
     Group,
@@ -103,6 +104,16 @@ def test_parts_split_the_suite_into_projects_with_their_own_layout() -> None:
     assert len(hashes) == 1 + len(suite.PARTS)
     # The system group still runs first in its part (see test_system.py).
     assert suite.groups("B")[0].name == "system"
+
+
+@pytest.mark.parametrize("part", sorted(suite.PARTS))
+def test_each_part_fits_a_click_project(part: str) -> None:
+    build = suite.build(part)
+    estimate = estimate_steps(pyrung_to_ladder(build.program, build.tag_map, validate=False))
+    assert estimate.total <= suite.PART_STEP_BUDGET, (
+        f"part {part} estimates {estimate.total} steps, over {suite.PART_STEP_BUDGET}: "
+        "move a group to another part"
+    )
 
 
 def test_groups_live_at_fixed_ds_registers() -> None:
