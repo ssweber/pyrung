@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Counter, Int, Program, Rung, Timer, calc, count_up, on_delay, out
+from pyrung import Bool, Counter, Dint, Int, Program, Rung, Timer, calc, count_up, on_delay, out
 from pyrung.core import fall, rise, system
 from pyrung.core.runner import PLC
 
@@ -1601,16 +1601,17 @@ def _rtc_latch_program() -> tuple[Program, Bool]:
 
 
 def _rtc_gated_counter_program() -> Program:
-    """A counter that counts every scan while the RTC second is below 30.
+    """A count that adds one every scan while the RTC second is below 30.
 
-    Its accumulator is a fold coordinate, so a window whose scans read a
-    different second than the probe did would patch the wrong per-scan delta.
+    Its value is a fold coordinate, so a window whose scans read a different
+    second than the probe did would patch the wrong per-scan delta.  (A
+    ``calc``: a counter counts edges, so it would add one a minute.)
     """
-    Ctr = Counter.clone("Ctr")
+    N = Dint("N")
     Tmr = Timer.clone("Tmr")
     with Program(strict=False) as prog:
         with Rung(system.rtc.second < 30):
-            count_up(Ctr, 1_000_000).reset(Bool("CtrReset"))
+            calc(N + 1, N)
         with Rung():
             on_delay(Tmr, 60_000)
     return prog
@@ -2525,17 +2526,28 @@ class TestClockEdgeProbe:
     extrapolated from the other phase."""
 
     @staticmethod
-    def _level_gated_counter() -> Program:
-        C = Counter.clone("C")
-        with Program(strict=False) as prog:
-            with Rung(system.sys.clock_1s):
-                count_up(C, 100_000).reset(Bool("CR"))
-        return prog
+    def _level_gated(work: str) -> Callable[[], Program]:
+        def build() -> Program:
+            with Program(strict=False) as prog:
+                with Rung(system.sys.clock_1s):
+                    if work == "calc":
+                        calc(Dint("C_Acc") + 1, Dint("C_Acc"))
+                    else:
+                        # Counts the level's rises: once a second.
+                        count_up(Counter.clone("C"), 100_000).reset(Bool("CR"))
+            return prog
 
+        return build
+
+    @pytest.mark.parametrize("work", ["calc", "counter"])
     @pytest.mark.parametrize("dt", [0.01, 0.03, 0.07])
-    def test_level_gated_counter_counts_every_high_scan(self, dt: float) -> None:
-        folded = _assert_fold_is_exact(self._level_gated_counter, _scans(int(10 / dt)), dt=dt)
-        assert folded.state.tags["C_Acc"] > 0
+    def test_level_gated_work_counts_every_high_scan(self, dt: float, work: str) -> None:
+        folded = _assert_fold_is_exact(self._level_gated(work), _scans(int(10 / dt)), dt=dt)
+        acc = folded.state.tags["C_Acc"]
+        if work == "calc":
+            assert acc > 10
+        else:
+            assert acc == 10
 
     @staticmethod
     def _edge_pulses() -> Program:
@@ -3079,7 +3091,7 @@ class TestFoldedHistoryReplays:
         with Program(strict=False) as prog:
             with Rung():
                 calc(T + 3, T)
-            with Rung(Bool("En")):
+            with Rung(Bool("En"), system.sys.clock_100ms):  # counts the clock's rises
                 count_up(C, 1_000).reset(Bool("CR"))
             with Rung():
                 on_delay(Tmr, 7_000)
@@ -3110,11 +3122,15 @@ def _plain_tags_of(state: Any) -> dict[str, Any]:
 
 
 def _scan_stamp_program(source: Callable[[], None], reader: Any, above: bool) -> Program:
-    """*reader* gates ``L``; a rise of ``L`` stamps the scan counter ``SC``."""
-    SC = Counter.clone("SC")
+    """*reader* gates ``L``; a rise of ``L`` stamps the scan counter ``SC``.
+
+    ``SC`` adds one every scan (a ``calc``: a counter counts edges, so on an
+    always-true rung it would stop at 1 and stamp nothing).
+    """
+    SC = Dint("SC")
     with Program(strict=False) as prog:
         with Rung():
-            count_up(SC, 2_000_000_000).reset(Bool("SCR"))
+            calc(SC + 1, SC)
         if not above:
             source()
         with Rung(reader()):
@@ -3122,7 +3138,7 @@ def _scan_stamp_program(source: Callable[[], None], reader: Any, above: bool) ->
         with Rung(rise(Bool("L"))):
             from pyrung import copy
 
-            copy(SC.Acc, Int("Stamp"))
+            copy(SC, Int("Stamp"))
         if above:
             source()
     return prog
@@ -3135,23 +3151,25 @@ class TestReadAboveTheSource:
 
     @staticmethod
     def _shape(kind: str, above: bool) -> Callable[[], Program]:
-        T, S, M = Timer.clone("T"), Int("S"), Int("M")
+        T, C, S, M = Timer.clone("T"), Counter.clone("C"), Int("S"), Int("M")
         sources = {
             "timer": (lambda: on_delay(T, 2_000), lambda: T.Acc >= 500),
             "timer_gt": (lambda: on_delay(T, 2_000), lambda: T.Acc > 500),
+            # A counter counts edges: the 100 ms clock's rises, one in ten scans.
+            "counter": (lambda: count_up(C, 2_000).reset(Bool("CR")), lambda: C.Acc >= 12),
             "selfcalc": (lambda: calc(S + 1, S), lambda: S >= 50),
             "modwrap": (lambda: calc((M + 1) % 1_000, M), lambda: M >= 50),
         }
         body, reader = sources[kind]
+        gate = (system.sys.clock_100ms,) if kind == "counter" else ()
 
         def source() -> None:
-            with Rung():
+            with Rung(*gate):
                 body()
 
         return lambda: _scan_stamp_program(source, reader, above)
 
-    # A counter counts edges, so it is no per-scan source to read above.
-    @pytest.mark.parametrize("kind", ["timer", "timer_gt", "selfcalc", "modwrap"])
+    @pytest.mark.parametrize("kind", ["timer", "timer_gt", "counter", "selfcalc", "modwrap"])
     @pytest.mark.parametrize("above", [True, False])
     def test_flip_scan_matches_stepping(self, kind: str, above: bool) -> None:
         folded = _assert_fold_is_exact(self._shape(kind, above), _scans(300))
@@ -3200,7 +3218,7 @@ class TestResetPulseInProbe:
                     if kind == "up":
                         count_up(Counter.clone("C"), 5_000).reset(pulse)
                     elif kind == "down":
-                        count_down(Counter.clone("C"), 5_000).reset(pulse)
+                        count_down(Counter.clone("C"), -5_000).reset(pulse)
                     else:
                         on_delay(Timer.clone("C"), 50_000).reset(pulse)
             return prog
@@ -3269,11 +3287,12 @@ class TestReadsOutsideTheCrossings:
             if shape in ("operand", "stateful", "copied", "expr_timer", "preset"):
                 with Rung():
                     on_delay(Tmr, P if shape == "preset" else 20_000)
+            # A counter counts edges: these count the 100 ms clock's rises.
             if shape == "counter_preset":
-                with Rung():
+                with Rung(system.sys.clock_100ms):
                     count_up(C, P).reset(Bool("CR"))
             if shape == "reset_cond":
-                with Rung():
+                with Rung(system.sys.clock_100ms):
                     count_up(C, 1_000).reset(Bool("CR"))
                 with Rung():
                     on_delay(Tmr, 2_000).reset(C.Acc == 100)
@@ -3383,10 +3402,10 @@ class TestReadsOutsideTheCrossings:
     def _folding_kept(shape: str) -> Program:
         from pyrung import copy
 
-        Tmr, C = Timer.clone("Tmr"), Counter.clone("C")
+        Tmr, N = Timer.clone("Tmr"), Dint("N")
         with Program(strict=False) as prog:
             with Rung():
-                count_up(C, 100_000).reset(Bool("CR"))
+                calc(N + 1, N)  # per-scan work (a counter would count once)
             with Rung():
                 on_delay(Tmr, 20_000)
             if shape == "display":
@@ -3396,7 +3415,7 @@ class TestReadsOutsideTheCrossings:
             else:
                 # A snapshot gated by an edge never fires inside a window.
                 with Rung(rise(Bool("X"))):
-                    copy(C.Acc, Int("Snap"))
+                    copy(N, Int("Snap"))
                 with Rung(Int("Snap") > 5):
                     out(Bool("Big"))
         return prog
@@ -3503,7 +3522,7 @@ class TestFoldedHistoryQueries:
         with Program(strict=False) as prog:
             with Rung():
                 calc(T + 3, T)
-            with Rung(Bool("En")):
+            with Rung(Bool("En"), system.sys.clock_100ms):  # counts the clock's rises
                 count_up(C, 1_000).reset(Bool("CR"))
             with Rung():
                 on_delay(Tmr, 7_000)

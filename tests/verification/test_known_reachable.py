@@ -319,7 +319,7 @@ def test_known_reachable_countdown_with_acc_truthy_condition() -> None:
 
     with Program(strict=False) as logic:
         with Rung(rise(pulse)):
-            count_down(counter, preset=3).reset(never_reset)
+            count_down(counter, preset=-3).reset(never_reset)
         with Rung(counter.Acc):
             out(active)
 

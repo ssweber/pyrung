@@ -329,21 +329,24 @@ class TestThresholdAbsorptionConditionalResets:
         _assert_trace_replays(logic, result, "BelowAfterAbove")
 
     def test_count_down_self_reset_done_reachable(self):
-        """count_down(C, 5).reset(C.Done) — same cycle for count-down."""
+        """count_down(C, -5).reset(C.Done) — same cycle for count-down."""
         enable = Bool("Enable", external=True)
         c = Counter.clone("SelfRstDn")
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                count_down(c, preset=5).reset(c.Done)
+                # Done at Acc <= preset: a negative preset takes five counts.
+                count_down(c, preset=-5).reset(c.Done)
             with Rung(c.Done):
                 latch(alarm)
 
         plc = PLC(logic, dt=0.010)
-        plc.force("Enable", True)
-        for _ in range(10):
+        for scan in range(12):  # a counter counts rising edges: pulse Enable
+            plc.force("Enable", scan % 2 == 0)
             plc.step()
+            if scan < 8:
+                assert plc.current_state.tags["Alarm"] is False
         assert plc.current_state.tags["Alarm"] is True
 
         result = always(logic, ~alarm, depth_budget=20)

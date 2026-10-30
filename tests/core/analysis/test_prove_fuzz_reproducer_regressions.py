@@ -254,6 +254,46 @@ def test_fuzz_counter_reset_from_oneshot_does_not_poison_hidden_event_cache():
     assert frozenset({("B0", False), ("C0_Done", True)}) in states
 
 
+def test_fuzz_counter_on_a_held_rung_counts_once():
+    """The reproducer's counter as it was written, on an always-true rung: it
+    counts the rung's one rising edge (the first scan) and never reaches 3."""
+    B0 = Bool("B0")
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            count_up(C0, 3).reset(B0)
+        with Rung():
+            with forloop(Int("N0", min=-27, max=6)):
+                out(B0, oneshot=True)
+
+    plc = PLC(logic, dt=0.010)
+    plc.run(cycles=10)
+    assert plc.current_state.tags["C0_Acc"] == 1
+
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert not any(("C0_Done", True) in state for state in states)
+
+
+def test_fuzz_timer_reset_from_oneshot_does_not_poison_hidden_event_cache():
+    """The hidden-event shape of the counter reproducer above, on a timer
+    (counters are no hidden-event source now that they count edges)."""
+    B0 = Bool("B0")
+    T0 = Timer.clone("T0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            on_delay(T0, 30).reset(B0)
+        with Rung():
+            with forloop(Int("N0", min=-27, max=6)):
+                out(B0, oneshot=True)
+
+    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("T0_Done", True)}) in states
+
+
 @pytest.mark.parametrize("decrement", [10, 100])
 def test_fuzz_timer_preset_overwritten_after_owner_scan_reaches_done(decrement: int):
     """on_delay reads a tag preset before a later write mutates that tag."""
@@ -355,9 +395,18 @@ def test_fuzz_count_down_reset_reachability():
         with Rung(C1.Done):
             out(B0)
         with Rung(In0):
-            count_down(C0, 5).reset(B0)
+            # Done at Acc <= preset, on In0's 4th rise; C1 is done on its 5th,
+            # which resets C0 through B0 on the same scan.
+            count_down(C0, -4).reset(B0)
         with Rung(C0.Acc <= -3):
             out(B0)
+
+    plc = PLC(logic, dt=0.010)
+    for scan in range(8):
+        plc.patch({"In0": scan % 2 == 0})
+        plc.step()
+    tags = plc.current_state.tags
+    assert (tags["B0"], tags["C0_Done"], tags["C1_Done"]) == (True, True, False)
 
     states = reachable_states(
         logic, project=["B0", "C0_Done", "C1_Done"], max_states=10_000, depth_budget=20
@@ -383,7 +432,7 @@ def test_fuzz_internal_edge_prev_keeps_counter_gate_stateful():
         with Rung():
             out(B0, oneshot=True)
         with Rung(N0 != 0, fall(B0)):
-            count_down(C0, 1).reset(B0)
+            count_down(C0, -1).reset(B0)
         with Rung(In0):
             calc(N0 + 1, N0)
         with Rung():
@@ -681,6 +730,46 @@ def test_fuzz_oneshot_out_elision_with_bidirectional_counter():
     assert frozenset({("B0", False), ("B1", False), ("C0_Done", True)}) in states
 
 
+def test_fuzz_oneshot_out_with_held_bidirectional_counter_never_done():
+    """The reproducer above as it was written, on an always-true rung: the up
+    input rises once (first scan) and the one-shot B0 counts it back down on
+    the next, so C0 never reaches 10."""
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            count_up(C0, 10).down(B0).reset(B1)
+        with Rung():
+            out(B0, oneshot=True)
+
+    states = reachable_states(
+        logic, project=["B0", "B1", "C0_Done"], max_states=10_000, depth_budget=20
+    )
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("B1", False), ("C0_Done", False)}) in states
+    assert not any(("C0_Done", True) in state for state in states)
+
+
+def test_fuzz_oneshot_out_elision_with_timer_reset():
+    """Oneshot out(B0) resetting a timer: B0's elision must keep the
+    Done=True state the hidden-event jump reaches with B0 off."""
+    B0 = Bool("B0")
+    T1 = Timer.clone("T1")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            on_delay(T1, 100).reset(B0)
+        with Rung():
+            out(B0, oneshot=True)
+
+    states = reachable_states(logic, project=["B0", "T1_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("T1_Done", False)}) in states
+    assert frozenset({("B0", False), ("T1_Done", True)}) in states
+
+
 def test_fuzz_same_rung_branch_reader_not_combinational():
     """out(B0) + branch(B0): out(B1) — B0 must not be classified as
     combinational because the branch reads the rung-entry snapshot, not
@@ -852,11 +941,14 @@ def test_fuzz_counter_acc_count_down_not_elided():
     """
     ExtN0 = Int("ExtN0", external=True, choices={1: "A", 2: "B"})
     B0 = Bool("B0")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
     C0 = Counter.clone("C0")
 
     with Program(strict=False) as logic:
-        with Rung():
-            count_down(C0, 5).reset(B0)
+        with Rung(Tick):
+            count_down(C0, -5).reset(B0)
         with Rung(C0.Acc <= -3):
             out(B0)
         with Rung(ExtN0 <= 0):
@@ -986,7 +1078,7 @@ def test_fuzz_counter_acc_elided_when_done_projected():
         with Rung():
             out(B0, oneshot=True)
         with Rung(Tick):
-            count_down(C0, 5).reset(B0)
+            count_down(C0, -5).reset(B0)
         with Rung(C0.Acc <= -3):
             out(B0)
 

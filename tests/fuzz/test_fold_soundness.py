@@ -362,6 +362,9 @@ def _build_composite(spec: dict):
                 _reader_body(j, r, _cmp(accs[r["src"]], r["form"], r["k"] * r["d"]))
         for i, kind in enumerate(spec["sources"]):
             gate = () if spec["gate"] == "none" or i > 0 else (getattr(system.sys, spec["gate"]),)
+            if kind.startswith("counter"):
+                # A counter counts rising edges: the 100 ms clock ramps it.
+                gate = (*gate, system.sys.clock_100ms)
             with Rung(*gate):
                 if kind.startswith("timer"):
                     unit = "s" if kind == "timer_s" else "ms"

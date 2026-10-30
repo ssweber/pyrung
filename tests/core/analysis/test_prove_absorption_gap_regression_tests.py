@@ -155,7 +155,7 @@ class TestCountDownAbsorptionGaps:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                count_down(counter, preset=5).reset(rst)
+                count_down(counter, preset=-5).reset(rst)
             with Rung(counter.Done):
                 out(alarm)
 
@@ -172,7 +172,7 @@ class TestCountDownAbsorptionGaps:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                count_down(counter, preset=5).reset(rst)
+                count_down(counter, preset=-5).reset(rst)
             with Rung(counter.Acc <= -3):
                 out(warning)
             with Rung(counter.Done):
@@ -191,7 +191,7 @@ class TestCountDownAbsorptionGaps:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                count_down(counter, preset=5).reset(reset_from_threshold)
+                count_down(counter, preset=-5).reset(reset_from_threshold)
             with Rung(counter.Acc <= -3):
                 out(reset_from_threshold)
 
@@ -209,7 +209,7 @@ class TestCountDownAbsorptionGaps:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                count_down(counter, preset=5).reset(reset_helper)
+                count_down(counter, preset=-5).reset(reset_helper)
             with Rung():
                 copy(counter.Acc, acc_mirror)
             with Rung(acc_mirror <= -3):
@@ -234,7 +234,7 @@ class TestCountDownAbsorptionGaps:
             with Rung(counter_a.Done):
                 out(helper)
             with Rung(gate):
-                count_down(counter_b, preset=5).reset(helper)
+                count_down(counter_b, preset=-5).reset(helper)
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
@@ -251,7 +251,7 @@ class TestCountDownAbsorptionGaps:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                count_down(counter, preset=10).reset(rst)
+                count_down(counter, preset=-10).reset(rst)
             with Rung(counter.Acc < -3):
                 out(midway)
 

@@ -10,12 +10,15 @@ import pytest
 
 from pyrung import (
     Bool,
+    Counter,
     Dint,
     Int,
     Program,
     Rung,
     Timer,
     calc,
+    count_up,
+    latch,
     on_delay,
     out,
     time_drum,
@@ -541,6 +544,78 @@ class TestCycleFoldBitEqual:
         assert folded.state.tags[Step.name] == 2
         assert stats.get("sterile_cycle", 0) == 0
         assert stats["macro_folds"] >= 1
+
+
+def _oscillation_fed_counter(
+    preset: int, *, read_above: bool = False, with_clock: bool = False, period3: bool = False
+) -> tuple[Program, Counter]:
+    """A counter counting the rising edges of a free-running oscillation.
+
+    Each rise is one count, so the counter is a monotone coordinate of the
+    oscillation's cycle (one count a period) and the cycle fold jumps it,
+    where the ordinary fold declines a counter that moves on its probe scan.
+    A watchdog reset by the oscillation keeps a timer in the window.
+    """
+    Osc, A = Bool("Osc"), Bool("A")
+    C = Counter.clone("CfC")
+    WD = Timer.clone("CfWD")
+    with Program(strict=False) as prog:
+        if read_above:
+            with Rung(C.Acc >= preset - 3):
+                latch(Bool("Hit"))
+        if period3:
+            # On one scan in three.
+            with Rung(~Osc, ~A):
+                out(A)
+            with Rung(A):
+                out(Osc)
+        else:
+            with Rung(~Osc):
+                out(Osc)
+        with Rung(Osc):
+            count_up(C, preset).reset(Bool("CfRst", external=True))
+        with Rung():
+            on_delay(WD, 200, "ms").reset(Osc)
+        if with_clock:
+            with Rung(system.sys.clock_1s):
+                out(Bool("Blink"))
+    return prog, C
+
+
+class TestCycleFoldEdgeCounter:
+    """A counter counts the rises of its input: under an oscillation it moves
+    one count a period, and a cycle jump lands it where stepping does."""
+
+    @pytest.mark.parametrize(
+        ("preset", "kw"),
+        [
+            (2000, {}),
+            (2001, {}),
+            (2000, {"read_above": True}),
+            (2000, {"with_clock": True}),
+            (1500, {"period3": True}),
+        ],
+    )
+    def test_cycle_jump_matches_stepping(self, preset: int, kw: dict[str, bool]) -> None:
+        prog, counter = _oscillation_fed_counter(preset, **kw)
+        done = counter.Done.name
+        folded = PLC(prog)
+        advances: list[tuple[str, object]] = []
+        assert cycle_fold_until(
+            folded, lambda s: s.tags.get(done) is True, budget=50_000, advances=advances
+        )
+        prog, _ = _oscillation_fed_counter(preset, **kw)
+        stepped = PLC(prog)
+        while stepped.state.tags.get(done) is not True:
+            stepped.step()
+
+        assert any(name == counter.Acc.name for name, _value in advances)
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert dict(folded.state.tags) == dict(stepped.state.tags)
+        memory = {k: v for k, v in folded.state.memory.items() if not k.startswith("_frac")}
+        assert memory == {
+            k: v for k, v in stepped.state.memory.items() if not k.startswith("_frac")
+        }
 
 
 def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
