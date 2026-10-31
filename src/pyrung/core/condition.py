@@ -160,8 +160,7 @@ def _resolve_value(value: Any, ctx: ScanContext | ConditionView) -> Any:
     if isinstance(value, Tag):
         return ctx.get_tag(value.name, value.default)
     if isinstance(value, (IndirectRef, IndirectExprRef)):
-        resolved_tag = value.resolve_ctx(ctx)
-        return ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        return value.read_ctx(ctx)
     return value
 
 
@@ -171,8 +170,7 @@ def _resolve_classified(value: Any, kind: int, ctx: ScanContext | ConditionView)
     if kind == _VALUE_TAG:
         return ctx.get_tag(value.name, value.default)
     if kind == _VALUE_INDIRECT:
-        resolved_tag = value.resolve_ctx(ctx)
-        return ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        return value.read_ctx(ctx)
     return value
 
 
@@ -330,7 +328,8 @@ class FallingEdgeCondition(_EdgeCondition):
 #
 # The left operand is a block element addressed at scan time: an IndirectRef
 # (``block[pointer_tag]``) or an IndirectExprRef (``block[expr]``).  Both
-# resolve through ``resolve_ctx``.
+# read through ``read_ctx``: an address outside the block reads as 0, with no
+# fault flag.
 
 
 class IndirectCompareEq(Condition):
@@ -344,8 +343,7 @@ class IndirectCompareEq(Condition):
         self._value_is_tag = isinstance(value, _Tag)
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
-        resolved_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        resolved_value = self.indirect_ref.read_ctx(ctx)
         if self._value_is_tag:
             other_value = ctx.get_tag(self.value.name, self.value.default)
         else:
@@ -364,8 +362,7 @@ class IndirectCompareNe(Condition):
         self._value_is_tag = isinstance(value, _Tag)
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
-        resolved_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        resolved_value = self.indirect_ref.read_ctx(ctx)
         if self._value_is_tag:
             other_value = ctx.get_tag(self.value.name, self.value.default)
         else:
@@ -381,8 +378,7 @@ class IndirectCompareLt(Condition):
         self.value = value
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
-        tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        tag_value = self.indirect_ref.read_ctx(ctx)
         return tag_value < _resolve_value(self.value, ctx)
 
 
@@ -394,8 +390,7 @@ class IndirectCompareLe(Condition):
         self.value = value
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
-        tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        tag_value = self.indirect_ref.read_ctx(ctx)
         return tag_value <= _resolve_value(self.value, ctx)
 
 
@@ -407,8 +402,7 @@ class IndirectCompareGt(Condition):
         self.value = value
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
-        tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        tag_value = self.indirect_ref.read_ctx(ctx)
         return tag_value > _resolve_value(self.value, ctx)
 
 
@@ -420,8 +414,7 @@ class IndirectCompareGe(Condition):
         self.value = value
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
-        tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        tag_value = self.indirect_ref.read_ctx(ctx)
         return tag_value >= _resolve_value(self.value, ctx)
 
 

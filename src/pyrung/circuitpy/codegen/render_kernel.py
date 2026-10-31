@@ -15,7 +15,11 @@ from pyrung.circuitpy.codegen._constants import (
     _STORE_TYPE_HELPERS,
     _TYPE_DEFAULTS,
 )
-from pyrung.circuitpy.codegen._helpers import _render_helper_defs, _with_helper_deps
+from pyrung.circuitpy.codegen._helpers import (
+    _render_condition_index_helper,
+    _render_helper_defs,
+    _with_helper_deps,
+)
 from pyrung.circuitpy.codegen._util import (
     _first_defined_name,
     _global_line,
@@ -336,6 +340,12 @@ def _render_indirect_helpers(ctx: CodegenContext) -> list[str]:
             )
         lines.append(f"    return int(addr) - {binding.start}")
         lines.append("")
+        if binding.block_id in ctx.used_condition_index_blocks:
+            lines.extend(
+                _render_condition_index_helper(
+                    ctx.condition_index_helper_name(binding.block_id), binding
+                )
+            )
     return lines
 
 

@@ -1067,24 +1067,51 @@ def _compile_address_expr(
     raise TypeError(f"Unsupported indirect address expression type: {type(addr).__name__}")
 
 
+def _compile_condition_element_read(
+    block: Any,
+    binding: Any,
+    addr_expr: str,
+    ctx: CodegenContext,
+    block_snapshots: dict[int, str] | None,
+) -> str:
+    """A rung condition's read of ``block[addr]``: outside the block it reads 0, no flag."""
+    block_id = id(block)
+    index_expr = f"{ctx.use_condition_index_block(binding.block_id)}(int({addr_expr}))"
+    default = _TYPE_DEFAULTS[binding.tag_type]
+    if block_snapshots is not None and block_id in block_snapshots:
+        ctx.mark_helper("_cond_elem")
+        return f"_cond_elem({block_snapshots[block_id]}, {index_expr}, {default!r})"
+    if ctx.blockless:
+        ctx.mark_helper("_cond_tag_elem")
+        names = ctx.block_name_tuple_symbol(binding.block_id)
+        return f"_cond_tag_elem(tags, {names}, {index_expr}, {default!r})"
+    ctx.mark_helper("_cond_elem")
+    return f"_cond_elem({ctx.symbol_for_block(block)}, {index_expr}, {default!r})"
+
+
 def _compile_indirect_value(
     indirect_ref: IndirectRef,
     ctx: CodegenContext,
     *,
     scalar_snapshots: dict[str, str] | None = None,
     block_snapshots: dict[int, str] | None = None,
+    condition: bool = False,
 ) -> str:
     block_id = id(indirect_ref.block)
     binding = ctx.block_bindings.get(block_id)
     if binding is None:
         raise RuntimeError(f"Missing block binding for indirect ref {indirect_ref.block.name!r}")
-    helper = ctx.use_indirect_block(binding.block_id)
     ptr = _compile_value(
         indirect_ref.pointer,
         ctx,
         scalar_snapshots=scalar_snapshots,
         block_snapshots=block_snapshots,
     )
+    if condition:
+        return _compile_condition_element_read(
+            indirect_ref.block, binding, ptr, ctx, block_snapshots
+        )
+    helper = ctx.use_indirect_block(binding.block_id)
     index_expr = f"{helper}(int({ptr}))"
     if block_snapshots is not None and block_id in block_snapshots:
         block_symbol = block_snapshots[block_id]
@@ -1104,8 +1131,13 @@ def _compile_value(
     scalar_snapshots: dict[str, str] | None = None,
     block_snapshots: dict[int, str] | None = None,
     strict: bool = False,
+    condition: bool = False,
 ) -> str:
-    """*value* as a Python expression; *strict* for calc (see _compile_expression_impl)."""
+    """*value* as a Python expression; *strict* for calc (see _compile_expression_impl).
+
+    *condition* for a rung condition's operand: an indexed element outside its
+    block reads as 0, with no fault flag.
+    """
     if isinstance(value, Tag):
         return _snapshot_tag_symbol(
             value,
@@ -1119,6 +1151,7 @@ def _compile_value(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            condition=condition,
         )
     if isinstance(value, IndirectExprRef):
         block_id = id(value.block)
@@ -1127,7 +1160,6 @@ def _compile_value(
             raise RuntimeError(
                 f"Missing block binding for indirect expression ref {value.block.name!r}"
             )
-        helper = ctx.use_indirect_block(binding.block_id)
         expr = _compile_expression_impl(
             value.expr,
             ctx,
@@ -1135,6 +1167,9 @@ def _compile_value(
             block_snapshots=block_snapshots,
             strict=strict,
         )
+        if condition:
+            return _compile_condition_element_read(value.block, binding, expr, ctx, block_snapshots)
+        helper = ctx.use_indirect_block(binding.block_id)
         index_expr = f"{helper}(int({expr}))"
         if block_snapshots is not None and block_id in block_snapshots:
             block_symbol = block_snapshots[block_id]
