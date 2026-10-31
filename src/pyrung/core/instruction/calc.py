@@ -230,7 +230,10 @@ class CalcInstruction(OneShotMixin, Instruction):
     CLICK's float32 Math does.  An Inf operand follows IEEE 754 (``Inf / 2`` is
     Inf, ``Inf - Inf`` is NaN); a REAL result that is not finite sets the flag
     too.  Into an INT, DINT or WORD, a result that is not finite stores 0 and
-    sets the flag.
+    sets the flag; so does a bitwise or shift operation on an Inf or NaN
+    operand, whatever the destination.  The range is checked on the stored
+    result only: a step of the formula is a 64-bit float (``**`` past it is
+    +/-Inf) or an exact integer.
 
     **Math domain error** (``sqrt`` of a negative, ``log``/``log10`` of 0 or a
     negative, ``asin``/``acos`` outside -1..1): Result is forced to 0 and the

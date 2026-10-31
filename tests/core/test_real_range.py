@@ -27,7 +27,11 @@ from pyrung.core import (
     calc,
     copy,
     fill,
+    lro,
+    lsh,
     out,
+    rro,
+    rsh,
     sin,
     sqrt,
     system,
@@ -235,6 +239,56 @@ def test_an_inf_operand_follows_ieee(runner_factory):
     assert tags["Half"] == INF
     assert math.isnan(tags["NaN"])
     assert math.isnan(tags["Sine"])
+    assert tags[SC43.name] is True
+    assert tags[SC40.name] is False
+
+
+@pytest.mark.parametrize(
+    ("base", "exponent", "stored"),
+    [(3.0e38, 2, INF), (-3.0e38, 3, -INF), (-3.0e38, 2, INF), (10.0, 400.0, INF)],
+)
+def test_a_power_past_the_range_is_inf(runner_factory, base, exponent, stored):
+    """``**`` overflows to +/-Inf with SC43, as ``*`` does (Python raises instead)."""
+    b = Real("B", default=base)
+    dest = Real("Dest")
+    with Program() as program:
+        with Rung():
+            calc(b**exponent, dest)
+    plc = runner_factory(program)
+    plc.step()
+    tags = plc.current_state.tags
+    assert tags["Dest"] == stored
+    assert tags[SC43.name] is True
+    assert tags[SC40.name] is False
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda r: r & 1,
+        lambda r: r | 1,
+        lambda r: r ^ 1,
+        lambda r: r << 1,
+        lambda r: 1 >> r,
+        lambda r: ~r,
+        lambda r: lsh(r, 1),
+        lambda r: rsh(1, r),
+        lambda r: lro(r, 1),
+        lambda r: rro(1, r),
+    ],
+)
+@pytest.mark.parametrize("value", [math.nan, INF, -INF])
+def test_a_non_finite_bitwise_operand_is_zero_and_sc43(runner_factory, make, value):
+    r = Real("R")
+    dest = Int("Dest", default=7)
+    with Program() as program:
+        with Rung():
+            calc(make(r), dest)
+    plc = runner_factory(program)
+    plc.patch({r: value})
+    plc.step()
+    tags = plc.current_state.tags
+    assert tags["Dest"] == 0
     assert tags[SC43.name] is True
     assert tags[SC40.name] is False
 

@@ -135,7 +135,14 @@ def _compile_expression_impl(
             block_snapshots=block_snapshots,
         )
         if expr.symbol in _BITWISE_SYMBOLS:
-            return f"(int({left}) {expr.symbol} int({right}))"
+            left_int = _bit_int_expr(expr.left, left, ctx)
+            right_int = _bit_int_expr(expr.right, right, ctx)
+            return f"({left_int} {expr.symbol} {right_int})"
+        if expr.symbol == "**" and (_may_be_float(expr.left) or _may_be_float(expr.right)):
+            # _pow gives +/-Inf for a float overflow, as the core's _op_pow; an
+            # integer power is exact and never overflows.
+            ctx.mark_helper("_pow")
+            return f"_pow({left}, {right})"
         return f"({left} {expr.symbol} {right})"
 
     if isinstance(expr, UnaryExpr):
@@ -148,7 +155,7 @@ def _compile_expression_impl(
         if expr.symbol == "abs":
             return f"abs({inner})"
         if expr.symbol == "~":
-            return f"(~int({inner}))"
+            return f"(~{_bit_int_expr(expr.operand, inner, ctx)})"
         return f"({expr.symbol}({inner}))"
 
     if isinstance(expr, MathFuncExpr):
@@ -176,19 +183,21 @@ def _compile_expression_impl(
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
         )
+        value_int = _bit_int_expr(expr.value, value, ctx)
+        count_int = _bit_int_expr(expr.count, count, ctx)
         if expr.name == "lsh":
-            return f"(int({value}) << int({count}))"
+            return f"({value_int} << {count_int})"
         if expr.name == "rsh":
-            return f"(int({value}) >> int({count}))"
+            return f"({value_int} >> {count_int})"
         if expr.name == "lro":
             return (
-                f"((((int({value}) & 0xFFFF) << (int({count}) % 16)) | "
-                f"((int({value}) & 0xFFFF) >> (16 - (int({count}) % 16)))) & 0xFFFF)"
+                f"(((({value_int} & 0xFFFF) << ({count_int} % 16)) | "
+                f"(({value_int} & 0xFFFF) >> (16 - ({count_int} % 16)))) & 0xFFFF)"
             )
         if expr.name == "rro":
             return (
-                f"((((int({value}) & 0xFFFF) >> (int({count}) % 16)) | "
-                f"((int({value}) & 0xFFFF) << (16 - (int({count}) % 16)))) & 0xFFFF)"
+                f"(((({value_int} & 0xFFFF) >> ({count_int} % 16)) | "
+                f"(({value_int} & 0xFFFF) << (16 - ({count_int} % 16)))) & 0xFFFF)"
             )
         raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
 
@@ -269,6 +278,48 @@ def _compile_range_aggregate(expr: RangeAggregateExpr, terms: list[str]) -> str:
 
 
 _BITWISE_SYMBOLS = frozenset({"&", "|", "^", "<<", ">>"})
+
+#: Tag types whose value is always an integer (never Inf or NaN).
+_INTEGER_TAG_TYPES = frozenset({"BOOL", "INT", "DINT", "WORD"})
+
+
+def _may_be_float(expr: Any) -> bool:
+    """False only when *expr* is integer-valued: never a float, so never Inf or NaN.
+
+    A REAL operand, a float constant, a ``/``, a ``**`` or a math function
+    can make a float, which can be Inf or NaN (``Inf - Inf``).  Anything not
+    recognised counts as one.
+    """
+    if isinstance(expr, TagExpr):
+        tag = expr.tag.tag if isinstance(expr.tag, ImmediateRef) else expr.tag
+        return tag.type.name not in _INTEGER_TAG_TYPES
+    if isinstance(expr, LiteralExpr):
+        return isinstance(expr.value, float)
+    if isinstance(expr, BinaryExpr):
+        return expr.symbol in ("/", "**") or _may_be_float(expr.left) or _may_be_float(expr.right)
+    if isinstance(expr, UnaryExpr):
+        return expr.symbol != "~" and _may_be_float(expr.operand)
+    if isinstance(expr, (ShiftFuncExpr, RandIntExpr)):
+        return False
+    if isinstance(expr, (SumExpr, RangeAggregateExpr)):
+        block = getattr(expr.block_range, "block", None)
+        return getattr(getattr(block, "type", None), "name", None) not in _INTEGER_TAG_TYPES
+    return True
+
+
+def _bit_int_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
+    """``int(compiled)`` for a bitwise or shift operand.
+
+    An operand that may be NaN goes through ``_bit_int``, which raises
+    ``OverflowError`` for NaN as ``int()`` does for Inf, so the calc stores 0
+    with the out-of-range flag (as the core's ``bit_operand``), instead of
+    the ``ValueError`` of ``int(nan)`` stopping the scan.
+    """
+    if _may_be_float(expr):
+        ctx.mark_helper("_bit_int")
+        return f"_bit_int({compiled})"
+    return f"int({compiled})"
+
 
 _ALLOWED_MATH_FUNCS = frozenset(
     {

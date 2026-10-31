@@ -19,10 +19,12 @@ from pyrung.circuitpy.codegen import (
 )
 from pyrung.click import ClickBlocks, TagMap
 from pyrung.core import (
+    PLC,
     And,
     Block,
     Bool,
     Char,
+    CompiledPLC,
     Counter,
     Dint,
     InputBlock,
@@ -46,6 +48,7 @@ from pyrung.core import (
     flasher,
     forloop,
     lro,
+    lsh,
     named_array,
     off_delay,
     on_delay,
@@ -55,6 +58,8 @@ from pyrung.core import (
     pack_words,
     reset,
     return_early,
+    rro,
+    rsh,
     run_enabled_function,
     run_function,
     search,
@@ -1101,6 +1106,36 @@ class TestPersistenceWatchdogAndDiagnostics:
             loaded = float(json.loads(json.dumps(entry, allow_nan=False))["value"])
             assert loaded == value or (math.isnan(value) and math.isnan(loaded))
 
+    def test_auto_save_dirty_check_treats_a_saved_nan_real_as_clean(self):
+        """NaN != NaN: a REAL saved as NaN and NaN still must not resave every interval."""
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        level = Real("Level")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(1.5, level)
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        symbol = _context_for_program(prog, hw).symbol_for_tag(level)
+        lines = source_code.splitlines()
+        at = next(i for i, ln in enumerate(lines) if "_RET_AUTO_SAVE_NS:" in ln)
+        dirty_line = lines[at + 1].strip()
+        assert dirty_line.startswith("if ") and dirty_line.endswith(":")
+        dirty_expr = dirty_line[3:-1]
+
+        def dirty(now: float, saved: float | None) -> bool:
+            return eval(dirty_expr, {}, {symbol: now, "_ret_snapshot": {"Level": saved}})  # noqa: S307
+
+        nan = math.nan
+        assert not dirty(nan, nan)
+        assert not dirty(math.inf, math.inf)
+        assert not dirty(1.5, 1.5)
+        assert dirty(nan, 1.5)
+        assert dirty(1.5, nan)
+        assert dirty(nan, None)
+        assert dirty(2.5, 1.5)
+
     def test_save_memory_updates_snapshot(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
@@ -1376,11 +1411,16 @@ class TestBoardPeripheralsAndRunStop:
         low = Real("Low")
         dint = Dint("Huge", default=2147483647)
         copied = Real("Copied")
+        square = Real("Square")
+        cube = Real("Cube")
+        neg = Real("Neg", default=-3.0e38)
         with Program(strict=False) as prog:
             with Rung():
                 calc(big * 10, dest)
                 calc(big * -10, low)
                 copy(dint, copied)
+                calc(big**2, square)
+                calc(neg**3, cube)
 
         result = generate_circuitpy(
             prog,
@@ -1415,7 +1455,93 @@ class TestBoardPeripheralsAndRunStop:
         assert namespace[ctx.symbol_for_tag(dest)] == math.inf
         assert namespace[ctx.symbol_for_tag(low)] == -math.inf
         assert namespace[ctx.symbol_for_tag(copied)] == 2147483647.0
+        assert namespace[ctx.symbol_for_tag(square)] == math.inf
+        assert namespace[ctx.symbol_for_tag(cube)] == -math.inf
         assert namespace[ctx.symbol_for_tag(system.fault.out_of_range)] is True
+
+    @pytest.mark.parametrize(
+        ("label", "make"),
+        [
+            ("and", lambda r: r & 1),
+            ("or", lambda r: 1 | r),
+            ("xor", lambda r: r ^ 3),
+            ("lshift", lambda r: r << 1),
+            ("rshift", lambda r: 8 >> r),
+            ("invert", lambda r: ~r),
+            ("lsh", lambda r: lsh(r, 1)),
+            ("rsh", lambda r: rsh(4, r)),
+            ("lro", lambda r: lro(r, 1)),
+            ("rro", lambda r: rro(1, r)),
+            ("pow_then_and", lambda r: (r**2) & 1),
+        ],
+    )
+    @pytest.mark.parametrize("operand", ["nan", "inf"])
+    def test_non_finite_bitwise_operand_is_zero_and_sc43_on_every_backend(
+        self, monkeypatch, label, make, operand
+    ):
+        """A NaN or Inf REAL in a bitwise or shift op stores 0 with SC43, and the
+        scan runs on: core interpreter, compiled kernel and generated CircuitPython."""
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        big = Real("Big", default=3.0e38)
+        inf = Real("InfR")
+        odd = Real("OddR")
+        dest = Int("Dest", default=7)
+        after = Int("After")
+        with Program(strict=False) as prog:
+            # Scan 0 builds the operand (setting SC43); scan 1 starts with SC43
+            # off, so the flag on scan 1 is the bitwise op's.
+            with Rung(system.sys.first_scan):
+                calc(big * 10, inf)
+                calc(inf - inf if operand == "nan" else inf + 0, odd)
+            with Rung(~system.sys.first_scan):
+                calc(make(odd), dest)
+                copy(5, after)
+
+        results = {}
+        for name, cls in (("interpreted", PLC), ("compiled", CompiledPLC)):
+            plc = cls(prog)
+            plc.step()
+            plc.step()
+            tags = plc.current_state.tags
+            results[name] = (tags["Dest"], tags[system.fault.out_of_range.name], tags["After"])
+
+        result = generate_circuitpy(
+            prog,
+            hw,
+            target_scan_ms=10.0,
+            runstop=RunStopConfig(debounce_ms=0, run_when_high=False),
+        )
+
+        class StubBase:
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+            def writeDiscrete(self, value, slot):
+                return None
+
+            def readAnalog(self, slot, ch):
+                return 0
+
+            def writeAnalog(self, value, slot, ch):
+                return None
+
+            def readTemperature(self, slot, ch):
+                return 0.0
+
+        namespace = _run_single_scan_source(
+            result.code, monkeypatch, StubBase(), runtime_source=result.runtime, scans=2
+        )
+        ctx = _context_for_program(prog, hw)
+        results["circuitpy"] = (
+            namespace[ctx.symbol_for_tag(dest)],
+            namespace[ctx.symbol_for_tag(system.fault.out_of_range)],
+            namespace[ctx.symbol_for_tag(after)],
+        )
+        assert results == {name: (0, True, 5) for name in results}, label
 
     def test_text_literal_copy_fans_out_one_char_per_register(self, monkeypatch):
         hw = P1AM()

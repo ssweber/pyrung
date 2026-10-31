@@ -48,28 +48,59 @@ def _op_div(a: Numeric, b: Numeric) -> Numeric:
     return a / b
 
 
+def _op_pow(a: Numeric, b: Numeric) -> Numeric:
+    """``a ** b``; a float result past the float range is +/-Inf (IEEE 754).
+
+    Python raises ``OverflowError`` where ``*`` would give Inf, so a ``calc``
+    of ``Big ** 2`` would store 0, not the Inf a ``Big * Big`` stores.  The
+    sign is the IEEE one: negative only for a negative base and an odd
+    integer exponent.
+    """
+    try:
+        return a**b
+    except OverflowError:
+        if not (isinstance(a, float) or isinstance(b, float)):
+            raise  # an int too large for a float: calc stores 0 with SC43
+        odd = b % 2 == 1 if isinstance(b, int) else b.is_integer() and int(b) % 2 == 1
+        negative = a < 0 and odd
+        return -math.inf if negative else math.inf
+
+
+def bit_operand(value: Numeric) -> int:
+    """``int(value)`` for an operand of a bitwise or shift operation.
+
+    An Inf raises ``OverflowError`` in ``int()``, and so does a NaN here
+    (``int(nan)`` raises ``ValueError``): ``calc`` stores 0 and sets the
+    out-of-range flag for either.  The compiled kernel and generated
+    CircuitPython use the ``_bit_int`` helper, which does the same.
+    """
+    if value != value:  # NaN
+        raise OverflowError("cannot convert float NaN to integer")
+    return int(value)
+
+
 def _op_and(a: Numeric, b: Numeric) -> int:
-    return int(a) & int(b)
+    return bit_operand(a) & bit_operand(b)
 
 
 def _op_or(a: Numeric, b: Numeric) -> int:
-    return int(a) | int(b)
+    return bit_operand(a) | bit_operand(b)
 
 
 def _op_xor(a: Numeric, b: Numeric) -> int:
-    return int(a) ^ int(b)
+    return bit_operand(a) ^ bit_operand(b)
 
 
 def _op_lshift(a: Numeric, b: Numeric) -> int:
-    return int(a) << int(b)
+    return bit_operand(a) << bit_operand(b)
 
 
 def _op_rshift(a: Numeric, b: Numeric) -> int:
-    return int(a) >> int(b)
+    return bit_operand(a) >> bit_operand(b)
 
 
 def _op_invert(a: Numeric) -> int:
-    return ~int(a)
+    return ~bit_operand(a)
 
 
 # =============================================================================
@@ -138,10 +169,10 @@ class Expression(ABC):
         return BinaryExpr(_wrap(other), _wrap(self), operator.mod, "%")
 
     def __pow__(self, other: Expression | Numeric) -> BinaryExpr:
-        return BinaryExpr(_wrap(self), _wrap(other), operator.pow, "**")
+        return BinaryExpr(_wrap(self), _wrap(other), _op_pow, "**")
 
     def __rpow__(self, other: Numeric) -> BinaryExpr:
-        return BinaryExpr(_wrap(other), _wrap(self), operator.pow, "**")
+        return BinaryExpr(_wrap(other), _wrap(self), _op_pow, "**")
 
     def __neg__(self) -> UnaryExpr:
         return UnaryExpr(_wrap(self), operator.neg, "-")
@@ -467,8 +498,8 @@ class ShiftFuncExpr(Expression):
         self.name = name
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> int:
-        val = int(self.value.evaluate(ctx))
-        cnt = int(self.count.evaluate(ctx))
+        val = bit_operand(self.value.evaluate(ctx))
+        cnt = bit_operand(self.count.evaluate(ctx))
         return self.func(val, cnt)
 
     def __repr__(self) -> str:
