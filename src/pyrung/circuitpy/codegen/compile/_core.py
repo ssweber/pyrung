@@ -501,8 +501,13 @@ def compile_expression(
     ctx: CodegenContext,
     *,
     condition_snapshot: _ConditionSnapshotBindings | None = None,
+    strict: bool = False,
 ) -> str:
-    """Return a Python expression string with explicit parentheses."""
+    """Return a Python expression string with explicit parentheses.
+
+    *strict* for calc's expression, which raises on a math error; anywhere
+    else an operation that can raise gives 0 instead (permissive).
+    """
     scalar_snapshots = None
     block_snapshots = None
     if condition_snapshot is not None:
@@ -513,6 +518,7 @@ def compile_expression(
         ctx,
         scalar_snapshots=scalar_snapshots,
         block_snapshots=block_snapshots,
+        strict=strict,
     )
 
 
@@ -826,7 +832,8 @@ def _calc_range_condition(value_var: str, dest_type: str, mode: str) -> str | No
     if dest_type == "WORD":
         return f"int({value_var}) < 0 or int({value_var}) > 65535"
     if dest_type == "REAL":
-        return f"{value_var} > {REAL_MAX!r} or {value_var} < {-REAL_MAX!r}"
+        # Also true for NaN: a REAL result that is not finite sets the flag.
+        return f"not ({-REAL_MAX!r} <= {value_var} <= {REAL_MAX!r})"
     return None
 
 
@@ -838,7 +845,7 @@ def _compile_calc_instruction(
 ) -> list[str]:
     ctx.mark_helper("_calc_math_isfinite")
     div_err = ctx.symbol_if_referenced(_FAULT_DIVISION_ERROR_TAG)
-    value_expr = _compile_value(instr.expression, ctx)
+    value_expr = _compile_value(instr.expression, ctx, strict=True)
     store_expr = _calc_store_expr("_calc_value", instr.dest.type.name, instr.mode, ctx)
     zero_store_expr = _calc_store_expr("0", instr.dest.type.name, instr.mode, ctx)
     div_err_line = f"    {div_err} = True" if div_err else "    pass"
@@ -862,18 +869,29 @@ def _compile_calc_instruction(
                 "    _calc_value = 0",
             ]
         )
-    enabled_body += [
-        "if isinstance(_calc_value, float) and not math.isfinite(_calc_value):",
-        div_err_line,
-        "    _calc_value = 0",
-    ]
-    range_cond = _calc_range_condition("_calc_value", instr.dest.type.name, instr.mode)
-    if range_cond and instr.dest.type.name == "REAL":
-        # A REAL saturates at CLICK's range, with the out-of-range flag.
+    dest_type = instr.dest.type.name
+    range_cond = _calc_range_condition("_calc_value", dest_type, instr.mode)
+    if dest_type == "REAL" and instr.mode != "hex":
+        # Past CLICK's REAL range the result is +/-Inf, with the out-of-range
+        # flag, as a float32 Math stores it; NaN is kept and flagged too.
         enabled_body.append(f"if {range_cond}:")
         enabled_body.extend(f"    {line}" for line in out_of_range_body if line != "pass")
-        enabled_body.append(f"    _calc_value = {REAL_MAX!r} if _calc_value > 0 else {-REAL_MAX!r}")
-    elif range_cond and out_of_range_body != ["pass"]:
+        enabled_body += [
+            f"    if _calc_value > {REAL_MAX!r}:",
+            '        _calc_value = float("inf")',
+            f"    elif _calc_value < {-REAL_MAX!r}:",
+            '        _calc_value = float("-inf")',
+        ]
+        range_cond = None
+    else:
+        # An Inf or NaN result (from an Inf or NaN operand) stores 0; into an
+        # integer register it sets the out-of-range flag.
+        flags_non_finite = range_cond is not None and out_of_range_body != ["pass"]
+        enabled_body.append("if isinstance(_calc_value, float) and not math.isfinite(_calc_value):")
+        if flags_non_finite:
+            enabled_body.extend(f"    {line}" for line in out_of_range_body)
+        enabled_body.append("    _calc_value = 0")
+    if range_cond and out_of_range_body != ["pass"]:
         enabled_body.append(f"if {range_cond}:")
         enabled_body.extend(f"    {line}" for line in out_of_range_body)
     enabled_body.append("try:")
@@ -976,11 +994,26 @@ def _compile_for_loop_instruction(
         ctx._for_loop_depth = depth
     # CLICK reads the count as unsigned 16-bit; a count of 0 runs
     # FOR_ZERO_COUNT_ITERATIONS iterations (an open hardware question).
+    non_finite = "fault.out_of_range" in instr._fault_writes
+    if non_finite:
+        # A REAL count holding Inf or NaN runs no iteration and sets SC43
+        # (ForLoopInstruction.iterations); _bit_int turns NaN into OverflowError.
+        ctx.mark_helper("_bit_int")
+        count_expr = f"_bit_int({count_expr})"
     iterations_expr = f"int({count_expr}) & 0xFFFF"
     if control.FOR_ZERO_COUNT_ITERATIONS:
         iterations_expr = f"({iterations_expr}) or {int(control.FOR_ZERO_COUNT_ITERATIONS)}"
+    iterations_lines = [f"{iterations_var} = {iterations_expr}"]
+    if non_finite:
+        iterations_lines = [
+            "try:",
+            *_indent_body(iterations_lines, 4),
+            "except OverflowError:",
+            f"    {iterations_var} = 0",
+            *_indent_body(_compile_set_out_of_range_fault_body(ctx), 4),
+        ]
     body = [
-        f"{iterations_var} = {iterations_expr}",
+        *iterations_lines,
         f"for {index_var} in range({iterations_var}):",
         *_indent_body(_compile_assignment_lines(instr.idx_tag, index_var, ctx, indent=0), 4),
         *_indent_body(children, 4),

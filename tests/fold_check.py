@@ -65,9 +65,14 @@ def _twin(plc: Any) -> Any:
 
 
 def _image(state: Any) -> dict[str, Any]:
-    out = {k: v for k, v in state.tags.items() if k not in _IGNORED_TAGS}
-    out.update({f"mem:{k}": v for k, v in state.memory.items()})
+    out = {k: _nan_free(v) for k, v in state.tags.items() if k not in _IGNORED_TAGS}
+    out.update({f"mem:{k}": _nan_free(v) for k, v in state.memory.items()})
     return out
+
+
+def _nan_free(value: Any) -> Any:
+    """A REAL may hold NaN, which equals nothing; spell it so two NaNs compare equal."""
+    return "<NaN>" if isinstance(value, float) and value != value else value
 
 
 # Stepping adds dt once per scan and drifts in floating point (4508.20000002

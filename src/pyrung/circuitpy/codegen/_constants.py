@@ -43,6 +43,14 @@ _HELPER_ORDER = (
     "_store_real",
     "_store_bool",
     "_math_func",
+    "_permissive_math",
+    "_bit_int",
+    "_shift_count",
+    "_rand_checked",
+    "_rand_or_zero",
+    "_rand_permissive",
+    "_pow",
+    "_permissive_op",
 )
 
 _STORE_TYPE_HELPERS: dict[str, str] = {

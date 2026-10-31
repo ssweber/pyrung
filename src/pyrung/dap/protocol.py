@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import MutableMapping
 from typing import Any, BinaryIO
 
@@ -45,9 +46,29 @@ def read_message(stream: BinaryIO) -> dict[str, Any] | None:
     return json.loads(payload.decode("utf-8"))
 
 
+def _finite_json(value: Any) -> Any:
+    """*value* with every Inf or NaN float as its repr (``"inf"``, ``"nan"``).
+
+    A REAL can hold +/-Inf or NaN (a Math overflow stores Inf); JSON has no
+    such number, and ``json.dumps`` would write ``Infinity``, which a DAP
+    client's JSON parser refuses.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else repr(value)
+    if isinstance(value, dict):
+        return {key: _finite_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_json(item) for item in value]
+    return value
+
+
 def write_message(stream: BinaryIO, message: MutableMapping[str, Any]) -> None:
     """Write one DAP message to a binary stream."""
-    payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    try:
+        text = json.dumps(message, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    except ValueError:  # an Inf or NaN float somewhere in the message
+        text = json.dumps(_finite_json(message), separators=(",", ":"), ensure_ascii=False)
+    payload = text.encode("utf-8")
     header = f"Content-Length: {len(payload)}\r\n\r\n".encode("ascii")
     stream.write(header)
     stream.write(payload)

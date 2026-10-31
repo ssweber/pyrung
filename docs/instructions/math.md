@@ -26,9 +26,27 @@ A CLICK Math whose destination is an INT keeps every whole-number constant in it
 
 ## REAL range and precision
 
-A `Real` never leaves CLICK's range, ±3.4028235E+38. A `calc()` result past it saturates at the limit and sets `system.fault.out_of_range`; `copy()` saturates the same way. A default, literal, `patch()` or `force()` past it raises `ValueError`.
+A CLICK REAL is a 32-bit IEEE 754 float, so a finite `Real` never leaves ±3.4028235E+38. A `calc()` result past it is +Inf or −Inf, as a CLICK stores it, and sets `system.fault.out_of_range` (SC43); a `copy()` past it is ±Inf too. A default or literal must be finite and in range, and a `patch()` or `force()` of a finite value past it raises `ValueError`; a `patch()` or `force()` may set ±Inf or NaN.
+
+```python
+calc(Big * 10, Result)      # Big = 3.0E+38: Result = +Inf, out_of_range on
+calc(Result / 2, Half)      # Half = +Inf: Inf stays Inf
+```
+
+An Inf or NaN operand follows IEEE 754: `Inf / 2` is Inf, `Inf − Inf` and `sin(Inf)` are NaN, `Inf > 1.0E+38` is true and NaN compares false with everything (`R == R` is false for a NaN). A `calc()` whose result is Inf or NaN sets `out_of_range`.
+
+Where Inf or NaN meets an integer, pyrung makes a choice of its own, not yet measured on a CLICK:
+
+- A `calc()` result that is Inf or NaN stores 0 into an `Int`, `Dint` or `Word`.
+- A `copy()` of ±Inf into an `Int` or `Dint` clamps to its limit; NaN, or anything not finite into a `Word`, stores 0.
+- A bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand, or a shift (`<<`, `>>`, `lsh`, `rsh`) by a negative count, makes the `calc()` store 0 and set `out_of_range`.
+- A [`randint()`](#randint) bound that is Inf or NaN makes the `calc()` store 0 and set `out_of_range`.
+- A [`forloop()`](program-control.md) whose `Real` count is Inf or NaN runs no iteration and sets `out_of_range`.
+- `unpack_to_words()` of an Inf or NaN `Real` writes its bit pattern: +Inf is 0x7F800000, and a NaN keeps the bits of the operation that made it (`Inf − Inf` on a PC gives 0xFFC00000, a high word of 65472).
 
 Inside the range pyrung keeps a `Real` at Python's 64-bit precision, where a CLICK REAL is a 32-bit float: `16777216.0 + 1` is 16777217 in pyrung and 16777216 on a CLICK. Compare a `Real` with a tolerance, not `==`, when the last digits matter.
+
+pyrung checks the range when `calc()` stores its result, not at each step of the formula. Inside one `calc()` a step is a 64-bit float (finite up to about ±1.8E+308, then ±Inf; `**` too) or an exact integer, so `calc(Big * 10 / 100, Result)` with `Big` = 3.0E+38 stores 3.0E+37 with no flag, where a CLICK computing in 32 bits would reach Inf at `Big * 10` and store Inf (not yet measured on a CLICK). Split such a formula across two `calc()`s when that intermediate Inf matters. An integer step is exact however large it grows (`2 ** E` with `E` = 1100), until it meets a float: past about 1.8E+308 that step (`* 0.5`, `/`, `sin`) makes the `calc()` store 0 and set `out_of_range`.
 
 ## Division
 
@@ -43,7 +61,15 @@ calc(sqrt(Level), Root)     # Level = -4.0
 
 A math function given an operand outside its domain — `sqrt` of a negative, `log`/`log10` of 0 or a negative, `asin`/`acos` outside −1..1 — stores 0 in the destination and sets `system.fault.math_operation_error` (CLICK's SC46). The rest of the scan runs, so a later rung can see the flag; the next scan starts with it off, like the other fault flags. The PLC stays in RUN. That is what a CLICK does, though its help for SC46 says "SC50 is turned to ON, the PLC is put in Stop Mode": on the hardware, SC50 stays off and the PLC keeps scanning.
 
-An operand that is already infinite (from a division by zero earlier in the expression) is not a domain error: the result is not finite, so it is 0 with `division_error`.
+A division by zero earlier in the expression wins: `sqrt(X / 0)` is 0 with `division_error`, not a domain error. An infinite operand outside the domain is one: `sqrt` of −Inf and `asin` of Inf are 0 with `math_operation_error`; `sqrt` and `log` of +Inf are +Inf.
+
+A negative base to a fractional power (`(-8.0) ** 0.5`, or `N ** H` with `H` = 0.5) has no real value, so pyrung treats it as a math error, as it does `sqrt(-1)`: the `calc()` stores 0 and sets `math_operation_error`. This is pyrung's choice, not yet measured on a CLICK.
+
+## Math outside `calc()`
+
+An expression evaluated anywhere but `calc()` (a rung condition, a `copy()` source, a `forloop()` count, an index expression such as `DS[I + 1]`) is permissive: an operation that hits a math error gives 0, sets no fault flag and never stops the scan. That covers a division by zero (`/`, `//` or `%`, where `calc()` sets `division_error`), a math function outside its domain, a negative base to a fractional power, a bitwise or shift operation on Inf or NaN or with a negative count, an integer too large for a float meeting a float (`(2 ** E) * 0.5` with `E` = 1100), and a `randint()` bound holding Inf or NaN. A result that IEEE 754 defines passes through: `Big * 10 > 1.0E+38` is true when the product is +Inf. This is pyrung's own rule; a CLICK has no expressions outside Math, and the CLICK validator flags them. Use `calc()` when the flag matters.
+
+When a value stored as Inf or NaN reaches an instruction's own integer conversion, that instruction's rule applies: a `forloop()` over a `Real` count holding Inf runs no iteration and sets `out_of_range`.
 
 ## Mode inference
 
@@ -64,7 +90,7 @@ For CLICK portability, do not mix WORD and non-WORD math in the same `calc()` ex
 | `calc()` | Wraps (modular arithmetic) |
 | Timer accumulator | Clamps at 32,767 |
 | Counter accumulator | Clamps at DINT min/max |
-| REAL past ±3.4028235E+38 | Saturates; `calc()` sets `system.fault.out_of_range` |
+| REAL past ±3.4028235E+38 | ±Inf; `calc()` sets `system.fault.out_of_range` |
 | Division by zero | Result = 0, `system.fault.division_error` set |
 | Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | Result = 0, `system.fault.math_operation_error` set for the scan |
 
@@ -109,7 +135,7 @@ calc(randint(1, 6), Die)                 # 1..6 inclusive, a new draw every scan
 calc(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan starts
 ```
 
-`randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them.
+`randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them. A `Real` bound is cut toward zero; one holding Inf or NaN makes the `calc()` store 0 and set `system.fault.out_of_range` (SC43), pyrung's choice, not yet measured on a CLICK. Outside `calc()` such a draw is 0 with no flag ([Math outside `calc()`](#math-outside-calc)).
 
 Draws are deterministic, so the simulation stays replayable. Each `randint` call in the program is one site, and its value is a fixed function of the site and the scan number. Two runs of the same program draw the same sequence; replay, `history.at()`, seek and `fork()` see the values the original run saw; and a fork draws what its parent would have. Restarting (STOP -> RUN, `reboot()`) resets the scan number, so the sequence starts over.
 
