@@ -655,7 +655,7 @@ class _PassContext:
                     )
                 )
             ),
-            opaque_atom_deps=_opaque_indirect_atom_deps(
+            opaque_atom_deps=_opaque_atom_deps(
                 self.program, self.graph, self.stateful_dims, self.nondeterministic_dims
             ),
             exclusive_input_groups=exclusive_input_groups,
@@ -1240,27 +1240,34 @@ def _opaque_observer_nd_names(
     return live
 
 
-def _opaque_indirect_atom_deps(
+def _opaque_atom_deps(
     program: Program,
     graph: ProgramGraph | None,
     stateful_dims: dict[str, tuple[Any, ...]] | None,
     nd_dims: dict[str, tuple[Any, ...]] | None,
 ) -> dict[str, frozenset[str]]:
-    """Nondeterministic inputs behind each opaque indirect-comparison atom.
+    """Nondeterministic inputs behind each opaque condition atom.
 
-    ``DS[P] != 0`` lowers to ``Atom("indirect(IndirectCompareNe)")``, which
-    names neither ``P`` nor the elements it can pick, so live-input pruning
-    would drop them.  The atom never folds to a constant, and while one stands
-    in a residual expression every input such a comparison (of that class, in
-    any rung, branch, loop body or count: the name does not say which one) may
-    read stays live: the pointer and the reachable elements, and for a read
-    that is no tracked dimension the inputs upstream of it.  A forloop's
-    indirect count reaches liveness as an ``IndirectCompareNe`` (caller map).
+    ``DS[P] != 0`` lowers to ``Atom("indirect(IndirectCompareNe)")``, and a
+    condition the lowering does not understand (``(DQ + 0) != 0``, an
+    ``ExprCompare``) to ``Atom("ExprCompare", unsupported=...)``.  Neither
+    names the tags the condition reads (the pointer and the elements it can
+    pick, the operands of the expression), so live-input pruning would drop
+    them.  Such an atom never folds to a constant, and while one stands in a
+    residual expression every input a condition of that kind (in any rung,
+    branch, loop body, count or instruction condition: the name does not say
+    which one) may read stays live: the tags it reads, and for a read that is
+    no tracked dimension the inputs upstream of it.  A forloop's indirect
+    count reaches liveness as an ``IndirectCompareNe`` (caller map).
     """
     from collections import defaultdict
 
     from pyrung.core.analysis.pdg import _extract_tag_names
-    from pyrung.core.analysis.simplified import _INDIRECT_COMPARE_FORMS
+    from pyrung.core.analysis.simplified import (
+        _INDIRECT_COMPARE_FORMS,
+        Atom,
+        _condition_to_expr,
+    )
     from pyrung.core.condition import AllCondition, AnyCondition, Condition
     from pyrung.core.instruction.control import ForLoopInstruction
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
@@ -1278,6 +1285,10 @@ def _opaque_indirect_atom_deps(
         name = type(condition).__name__
         if name in _INDIRECT_COMPARE_FORMS:
             reads[f"indirect({name})"].update(_extract_tag_names(condition, tag_refs))
+            return
+        atom = _condition_to_expr(condition)
+        if isinstance(atom, Atom) and atom.unsupported is not None:
+            reads[atom.tag].update(_extract_tag_names(condition, tag_refs))
 
     def visit_instructions(instructions: Any) -> None:
         for instr in instructions:

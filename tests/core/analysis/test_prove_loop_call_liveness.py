@@ -12,9 +12,13 @@ reaches it: scan 1 runs the call with ``Btn`` on, scan 2 skips it with ``Btn``
 off, and ``Y2`` holds.
 
 The shared caller map keeps only conditions that hold on every scan that runs
-the call; where they do not decide it (a body rung's contacts, a oneshot loop,
-a ``break_loop()``) the subroutine is marked inexact and the validators and
-pilot guards do not claim anything from them.
+the call: a body rung's contacts count only where no iteration can change them.
+Where the conditions do not decide the call (a body-rung contact an iteration
+can change, a oneshot loop, a ``break_loop()``) the subroutine is marked
+inexact and the validators and pilot guards do not claim anything from them.
+
+A condition the lowering does not understand (``(DQ + 0) != 0``) becomes an
+opaque atom too, and the inputs it reads stay live the same way.
 
 Each shape is checked under the default, the all-off and the sound-baseline
 configurations against an exhaustive concrete search over its inputs, and
@@ -45,7 +49,9 @@ from pyrung.core import (
     continue_loop,
     copy,
     forloop,
+    latch,
     out,
+    reset,
     return_early,
     subroutine,
 )
@@ -598,7 +604,7 @@ def test_body_rung_contacts_are_no_call_condition() -> None:
 
 
 @pytest.mark.parametrize(
-    "shape_name", ["oneshot_loop", "break_before_call", "continue_before_call", "body_rung_call"]
+    "shape_name", ["oneshot_loop", "break_before_call", "continue_before_call"]
 )
 def test_undecided_loop_calls_are_inexact(shape_name: str) -> None:
     shapes = {**_SHAPES, **_UNMODELED_SHAPES}
@@ -689,3 +695,207 @@ def test_duplicate_out_body_rung_calls_are_not_exclusive() -> None:
                 out(Y2)
     findings = validate_conflicting_outputs(logic).findings
     assert [f.target_name for f in findings] == ["Y2"]
+
+
+# -- Body-rung contacts no iteration can change --------------------------------
+
+M = Bool("M")
+S = Bool("S", external=True)
+
+
+def _a_b_out_y2(*, a_resets_m: bool = False) -> None:
+    with subroutine("a"):
+        with Rung(A1):
+            out(Y2)
+        if a_resets_m:
+            with Rung():
+                reset(M)
+    with subroutine("b"):
+        with Rung(B1):
+            out(Y2)
+
+
+def _split_on_m(*, a_resets_m: bool = False) -> Program:
+    with Program(strict=False) as logic:
+        with Rung(S):
+            latch(M)
+        with Rung(~S):
+            reset(M)
+        with Rung():
+            with forloop(1):
+                with Rung(M):
+                    call("a")
+                with Rung(~M):
+                    call("b")
+        _a_b_out_y2(a_resets_m=a_resets_m)
+    return logic
+
+
+def _plain_split_on_m() -> Program:
+    with Program(strict=False) as logic:
+        with Rung(S):
+            latch(M)
+        with Rung(~S):
+            reset(M)
+        with Rung(M):
+            call("a")
+        with Rung(~M):
+            call("b")
+        _a_b_out_y2()
+    return logic
+
+
+def _y2_after_scan(logic: Program, **inputs: bool) -> bool:
+    plc = PLC(logic, dt=0.010)
+    plc.patch(inputs)
+    plc.step()
+    return plc.current_state.tags["Y2"]
+
+
+@pytest.mark.parametrize("build", [_split_on_m, _plain_split_on_m])
+def test_duplicate_out_invariant_body_contacts_stay_exclusive(build: Callable[[], Program]) -> None:
+    # M holds through the loop: a and b never both run in one scan.
+    logic = build()
+    assert _y2_after_scan(logic, S=True, A1=True, B1=False)
+    assert not _y2_after_scan(logic, S=False, A1=True, B1=False)
+    assert not validate_conflicting_outputs(logic).findings
+    assert not validate_stuck_bits(logic).findings
+    assert [c.tag.name for c in _build_caller_map(logic)["a"][0][4]] == ["M"]
+    assert not _inexact_entry_subroutines(logic)
+
+
+def test_duplicate_out_body_contact_a_callee_writes_is_no_condition() -> None:
+    # a resets M: ~M then holds on the next body rung, and b runs after a.
+    logic = _split_on_m(a_resets_m=True)
+    assert not _y2_after_scan(logic, S=True, A1=True, B1=False)
+    findings = validate_conflicting_outputs(logic).findings
+    assert [f.target_name for f in findings] == ["Y2"]
+    assert _build_caller_map(logic)["a"][0][4] == ()
+    assert _inexact_entry_subroutines(logic) == {"a", "b"}
+
+
+def test_invariant_body_contact_call_is_exact() -> None:
+    logic, _space = _body_rung_call()
+    (entry,) = _build_caller_map(logic)["work"]
+    assert [condition.tag.name for condition in entry[4]] == ["G"]
+    assert not _inexact_entry_subroutines(logic)
+    plain = _plain_guarded_call()
+    assert repr(_build_guard_ctx(logic).caller_guards["work"]) == repr(
+        _build_guard_ctx(plain).caller_guards["work"]
+    )
+    assert repr(_producer_caller_scope(logic, "work")) == repr(
+        _producer_caller_scope(plain, "work")
+    )
+    (chain,) = _scope_reach_chains(logic)["work"]
+    assert [condition.tag.name for condition in chain] == ["G"]
+
+
+def test_body_contact_written_earlier_in_the_rung_is_kept_but_inexact() -> None:
+    # The body rung reads M after the copy, not with the rung's own contacts.
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(G, M)
+            with forloop(1):
+                with Rung(M):
+                    call("work")
+        _out_z_work()
+    (entry,) = _build_caller_map(logic)["work"]
+    assert [condition.tag.name for condition in entry[4]] == ["M"]
+    assert _inexact_entry_subroutines(logic) == {"work"}
+
+
+DSB = Block("DSB", TagType.INT, 1, 3)
+
+
+def test_body_contact_on_an_element_the_body_writes_indirectly_is_no_condition() -> None:
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(2) as loop:
+                copy(1, DSB[loop.idx + 1])
+                with Rung(DSB[1] == 0):
+                    call("work")
+        _out_z_work()
+    (entry,) = _build_caller_map(logic)["work"]
+    assert entry[4] == ()
+    assert _inexact_entry_subroutines(logic) == {"work"}
+
+
+def test_indirect_body_contact_on_a_block_the_body_writes_is_no_condition() -> None:
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(1):
+                copy(1, DSB[2])
+                with Rung(DSB[P] == 0):
+                    call("work")
+        _out_z_work()
+    (entry,) = _build_caller_map(logic)["work"]
+    assert entry[4] == ()
+    assert _inexact_entry_subroutines(logic) == {"work"}
+
+
+def test_body_contact_on_an_unwritten_element_is_kept() -> None:
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(1):
+                copy(1, DSB[2])
+                with Rung(DSB[1] == 0):
+                    call("work")
+        _out_z_work()
+    (entry,) = _build_caller_map(logic)["work"]
+    assert [condition.tag.name for condition in entry[4]] == ["DSB1"]
+    assert not _inexact_entry_subroutines(logic)
+
+
+# -- Unsupported conditions keep their inputs live -----------------------------
+
+B = Bool("B", external=True)
+Y = Bool("Y")
+DIn = Int("DIn", external=True, min=0, max=1)
+Mid = Int("Mid")
+
+
+def _expr_compare_coil():
+    with Program(strict=False) as logic:
+        with Rung((DQ + 0) != 0, B):
+            out(Y)
+    return logic, {"B": _BOOL, "DQ": (0, 1)}
+
+
+def _expr_compare_internal():
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(DIn, Mid)
+        with Rung((Mid + 0) != 0, B):
+            out(Y)
+    return logic, {"B": _BOOL, "DIn": (0, 1)}
+
+
+def _expr_compare_call():
+    with Program(strict=False) as logic:
+        with Rung((DQ + 0) != 0, B):
+            call("set_y")
+        with subroutine("set_y"):
+            with Rung():
+                out(Y)
+    return logic, {"B": _BOOL, "DQ": (0, 1)}
+
+
+_EXPR_SHAPES = {
+    "expr_compare_coil": _expr_compare_coil,
+    "expr_compare_internal": _expr_compare_internal,
+    "expr_compare_call": _expr_compare_call,
+}
+
+
+def _y_on(tags: Any) -> bool:
+    return bool(tags["Y"])
+
+
+@pytest.mark.parametrize("config_name", sorted(_CONFIGS))
+@pytest.mark.parametrize("shape_name", sorted(_EXPR_SHAPES))
+def test_unsupported_condition_inputs_stay_live(shape_name: str, config_name: str) -> None:
+    logic, space = _EXPR_SHAPES[shape_name]()
+    assert _concrete_reaches(logic, space, _y_on)
+    result = never(logic, Y, _opt_config=_CONFIGS[config_name])
+    assert isinstance(result, Counterexample), (shape_name, config_name, result)
+    assert _replays(logic, result, _y_on)

@@ -483,8 +483,9 @@ def _producer_caller_scope(program: Any, subroutine: str) -> tuple[Any | None, b
     from pyrung.core.validation._common import _build_caller_map, _inexact_entry_subroutines
 
     caller_map = _build_caller_map(program)
-    # A call its conditions do not decide (a forloop body rung, a oneshot loop,
-    # a break_loop()) is unknown call structure too.
+    # A call its conditions do not decide (a forloop body-rung contact an
+    # iteration can change, a oneshot loop, a break_loop()) is unknown call
+    # structure too.
     inexact = _inexact_entry_subroutines(program)
     memo: dict[str, tuple[Any | None, bool, bool]] = {}
     visiting: set[str] = set()

@@ -582,8 +582,9 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
     domains = _domain_map(tag_map)
     reach_chains = _scope_reach_chains(program)
     # A subroutine entered through a call its conditions do not decide (a
-    # forloop body rung's contacts, a oneshot loop, a break_loop()) may run on
-    # every scan or not: nothing can be claimed, so its coils are not reported.
+    # forloop body-rung contact an iteration can change, a oneshot loop, a
+    # break_loop()) may run on every scan or not: nothing can be claimed, so
+    # its coils are not reported.
     for sub_name in _inexact_entry_subroutines(program):
         reach_chains[sub_name] = ((),)
     return_rungs = _return_rungs(program)
