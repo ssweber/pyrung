@@ -10,6 +10,7 @@ from pyrung.core import (
     PLC,
     Block,
     Bool,
+    CompiledPLC,
     Counter,
     Int,
     Program,
@@ -24,6 +25,7 @@ from pyrung.core import (
     comment,
     continue_loop,
     count_up,
+    event_drum,
     forloop,
     latch,
     out,
@@ -185,6 +187,32 @@ def test_bare_body_helper_leg_reads_the_body_rows_above_it(runner_factory):
     runner.step()
     assert runner.current_state.tags["CtrA_Acc"] == 0
     _assert_paths_agree(logic, {"Enable": True}, CtrA_Acc=0, Rst=True)
+
+
+@pytest.mark.parametrize("backend", [PLC, CompiledPLC], ids=["interpreted", "compiled"])
+def test_bare_body_drum_reads_its_pins_before_it_corrects_the_step(backend):
+    """A bare body box reads its legs as its row starts, before its own writes:
+    the jump leg sees the uncorrected step 7, not the 1 the drum writes."""
+    step = Int("Step")
+    with Program(strict=False) as logic:
+        with Rung(Enable):
+            with forloop(1):
+                event_drum(
+                    outputs=[Bool("Y1"), Bool("Y2"), Bool("Y3")],
+                    events=[Bool("E1"), Bool("E2"), Bool("E3")],
+                    pattern=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                    current_step=step,
+                    completion_flag=Bool("Done"),
+                ).reset(Rst).jump(Bool("Go"), step == 7, step=3)
+
+    runner = backend(logic)
+    runner.patch({"Step": 7})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 7  # the loop rung is off
+    runner.patch({"Enable": True, "Go": True})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 3
+    _assert_paths_agree(logic, {"Enable": True, "Go": True, "Step": 7}, Step=3)
 
 
 def test_loop_rung_false_leaves_body_rung_outs_alone(runner_factory):

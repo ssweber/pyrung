@@ -143,14 +143,58 @@ def _compile_edge_row(
     return lines
 
 
+def _box_helper_conditions(item: Any) -> list[tuple[Any, str, Any]]:
+    """The helper legs (pins) of one instruction box, in the order its compiler reads them.
+
+    Returns (instruction, field_name, condition) tuples; empty for a box
+    without legs.
+    """
+    result: list[tuple[Any, str, Any]] = []
+    if isinstance(item, OnDelayInstruction):
+        if item.reset_condition is not None:
+            result.append((item, "reset_condition", item.reset_condition))
+    elif isinstance(item, CountUpInstruction):
+        if item.reset_condition is not None:
+            result.append((item, "reset_condition", item.reset_condition))
+        if item.down_condition is not None:
+            result.append((item, "down_condition", item.down_condition))
+    elif isinstance(item, CountDownInstruction):
+        if item.reset_condition is not None:
+            result.append((item, "reset_condition", item.reset_condition))
+    elif isinstance(item, ShiftInstruction):
+        result.append((item, "clock_condition", item.clock_condition))
+        result.append((item, "reset_condition", item.reset_condition))
+    elif isinstance(item, EventDrumInstruction):
+        result.append((item, "reset_condition", item.reset_condition))
+        if item.jump_condition is not None:
+            result.append((item, "jump_condition", item.jump_condition))
+        if item.jog_condition is not None:
+            result.append((item, "jog_condition", item.jog_condition))
+        for i, cond in enumerate(item.events):
+            result.append((item, f"events[{i}]", cond))
+    elif isinstance(item, (TimeDrumInstruction, TimeEventDrumInstruction)):
+        result.append((item, "reset_condition", item.reset_condition))
+        if item.jump_condition is not None:
+            result.append((item, "jump_condition", item.jump_condition))
+        if item.jog_condition is not None:
+            result.append((item, "jog_condition", item.jog_condition))
+        if isinstance(item, TimeEventDrumInstruction):
+            # Only the steps that have an event; the compiler reads them in order.
+            for i, cond in enumerate(item.events):
+                if cond is not None:
+                    result.append((item, f"events[{i}]", cond))
+    return result
+
+
 def _collect_helper_conditions(
     rung: LogicRung,
 ) -> list[tuple[Any, str, Any]]:
-    """Walk a rung tree and collect instruction-internal conditions.
+    """Walk a rung tree and collect its boxes' helper legs, in solve order.
 
-    Returns (instruction, field_name, condition) tuples for conditions that
-    must be evaluated at rung entry (before any instructions execute) to match
-    the core engine's ``instruction_condition_view`` snapshot semantics.
+    Returns (instruction, field_name, condition) tuples, as
+    ``_box_helper_conditions`` gives them for each box of the rung and its
+    branches.  A For body is not walked: its boxes bind their own legs as
+    they run (``_compile_loop_body``).
     """
     result: list[tuple[Any, str, Any]] = []
 
@@ -159,42 +203,50 @@ def _collect_helper_conditions(
             if isinstance(item, LogicRung):
                 _walk(item)
                 continue
-            if isinstance(item, OnDelayInstruction):
-                if item.reset_condition is not None:
-                    result.append((item, "reset_condition", item.reset_condition))
-            elif isinstance(item, CountUpInstruction):
-                if item.reset_condition is not None:
-                    result.append((item, "reset_condition", item.reset_condition))
-                if item.down_condition is not None:
-                    result.append((item, "down_condition", item.down_condition))
-            elif isinstance(item, CountDownInstruction):
-                if item.reset_condition is not None:
-                    result.append((item, "reset_condition", item.reset_condition))
-            elif isinstance(item, ShiftInstruction):
-                result.append((item, "clock_condition", item.clock_condition))
-                result.append((item, "reset_condition", item.reset_condition))
-            elif isinstance(item, EventDrumInstruction):
-                result.append((item, "reset_condition", item.reset_condition))
-                if item.jump_condition is not None:
-                    result.append((item, "jump_condition", item.jump_condition))
-                if item.jog_condition is not None:
-                    result.append((item, "jog_condition", item.jog_condition))
-                for i, cond in enumerate(item.events):
-                    result.append((item, f"events[{i}]", cond))
-            elif isinstance(item, (TimeDrumInstruction, TimeEventDrumInstruction)):
-                result.append((item, "reset_condition", item.reset_condition))
-                if item.jump_condition is not None:
-                    result.append((item, "jump_condition", item.jump_condition))
-                if item.jog_condition is not None:
-                    result.append((item, "jog_condition", item.jog_condition))
-                if isinstance(item, TimeEventDrumInstruction):
-                    # Only the steps that have an event; the compiler reads them in order.
-                    for i, cond in enumerate(item.events):
-                        if cond is not None:
-                            result.append((item, f"events[{i}]", cond))
+            result.extend(_box_helper_conditions(item))
 
     _walk(rung)
     return result
+
+
+def _bind_helper_legs(
+    helpers: list[tuple[Any, str, Any]],
+    prefix: str,
+    ctx: CodegenContext,
+    *,
+    condition_snapshot: _ConditionSnapshotBindings | None = None,
+) -> dict[int, list[str]]:
+    """Compile helper legs into ``_{prefix}_snap_K`` locals, per box.
+
+    Returns the binding lines (unindented) for each box, by ``id(instr)``.
+    The caller emits a box's lines immediately before the box's code, so the
+    box reads its pins where it sits; the box compilers find the locals via
+    ``_get_condition_snapshot``.  The legs compile against
+    *condition_snapshot*: while a rung's contacts read the rung-entry
+    snapshot locals, a leg bound at the box reads what it read at rung entry.
+    """
+    lines_by_box: dict[int, list[str]] = {}
+    for snap_idx, (instr, field_name, condition) in enumerate(helpers):
+        snap_var = f"_{prefix}_snap_{snap_idx}"
+        expr = compile_condition(condition, ctx, condition_snapshot=condition_snapshot)
+        instr_id = id(instr)
+        lines_by_box.setdefault(instr_id, []).append(f"{snap_var} = {expr}")
+        entry = ctx._helper_condition_snapshots.setdefault(instr_id, {})
+        if field_name.startswith("events["):
+            event_list = entry.setdefault("events", [])
+            assert isinstance(event_list, list)
+            event_list.append(snap_var)
+        else:
+            entry[field_name] = snap_var
+    return lines_by_box
+
+
+def _emit_box_legs(lines_by_box: dict[int, list[str]] | None, item: Any, indent: int) -> list[str]:
+    """The binding lines of *item*'s helper legs, indented, or none."""
+    if not lines_by_box:
+        return []
+    sp = " " * indent
+    return [f"{sp}{line}" for line in lines_by_box.get(id(item), ())]
 
 
 @dataclass(frozen=True)
@@ -705,26 +757,19 @@ def compile_rung(
         lines = _compile_edge_row(rung, ctx, indent, condition_snapshot=condition_snapshot)
         lines.append(f"{' ' * indent}{enabled_var} = {cond_expr}")
 
-        helpers = _collect_helper_conditions(rung)
-        if helpers:
-            snap_idx = 0
-            for instr, field_name, condition in helpers:
-                snap_var = f"_{rung_id}_snap_{snap_idx}"
-                snap_idx += 1
-                expr = compile_condition(
-                    condition,
-                    ctx,
-                    condition_snapshot=condition_snapshot,
-                )
-                lines.append(f"{' ' * indent}{snap_var} = {expr}")
-                instr_id = id(instr)
-                entry = ctx._helper_condition_snapshots.setdefault(instr_id, {})
-                if field_name.startswith("events["):
-                    event_list = entry.setdefault("events", [])
-                    assert isinstance(event_list, list)
-                    event_list.append(snap_var)
-                else:
-                    entry[field_name] = snap_var
+        box_legs = _bind_helper_legs(
+            _collect_helper_conditions(rung),
+            rung_id,
+            ctx,
+            condition_snapshot=condition_snapshot,
+        )
+        if local_conditions:
+            # A For-body rung has no snapshot locals: its contacts and legs
+            # read the tags live, so its legs stay bound as it starts, where
+            # the interpreter's body-rung view freezes them.
+            for box_lines in box_legs.values():
+                lines.extend(f"{' ' * indent}{line}" for line in box_lines)
+            box_legs = {}
 
         lines.extend(
             _compile_rung_items(
@@ -734,6 +779,7 @@ def compile_rung(
                 indent=indent,
                 scope_key=rung_id,
                 condition_snapshot=condition_snapshot,
+                box_legs=box_legs,
             )
         )
         return lines
@@ -750,7 +796,13 @@ def _compile_rung_items(
     scope_key: str,
     *,
     condition_snapshot: _ConditionSnapshotBindings | None = None,
+    box_legs: dict[int, list[str]] | None = None,
 ) -> list[str]:
+    """Compile a rung's items: branch powers first, then each item in solve order.
+
+    *box_legs* holds the binding lines of each box's helper legs
+    (``_bind_helper_legs``), emitted just before the box.
+    """
     lines: list[str] = []
     branch_vars: dict[int, str] = {}
     branch_idx = 0
@@ -786,9 +838,11 @@ def _compile_rung_items(
                     indent=indent,
                     scope_key=child_scope,
                     condition_snapshot=condition_snapshot,
+                    box_legs=box_legs,
                 )
             )
             continue
+        lines.extend(_emit_box_legs(box_legs, item, indent))
         lines.extend(compile_instruction(item, enabled_expr, ctx, indent))
     return lines
 
@@ -1053,9 +1107,20 @@ def _compile_loop_body(
     for item in instr.body:
         if not isinstance(item, LogicRung):
             # A bare body instruction is a row of its own: its edge legs scan
-            # on every iteration.
+            # on every iteration, and its legs read the tags as the row
+            # starts, before the box writes (the interpreter's row view).
             lines.extend(_compile_edge_row(item, ctx, 0))
-            lines.extend(compile_instruction(item, "True", ctx, 0))
+            helpers = _box_helper_conditions(item)
+            if not helpers:
+                lines.extend(compile_instruction(item, "True", ctx, 0))
+                continue
+            saved_snapshots = dict(ctx._helper_condition_snapshots)
+            try:
+                box_legs = _bind_helper_legs(helpers, ctx.next_name("box"), ctx)
+                lines.extend(_emit_box_legs(box_legs, item, 0))
+                lines.extend(compile_instruction(item, "True", ctx, 0))
+            finally:
+                ctx._helper_condition_snapshots = saved_snapshots
         else:
             # A body rung reads live tags: its contacts are evaluated afresh
             # on every iteration, as a rung of its own.

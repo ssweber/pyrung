@@ -204,6 +204,8 @@ class CodegenContext:
     has_io_gaps: bool = False
     modbus_client_specs: list[ModbusClientJobSpec] = field(default_factory=list)
     modbus_client_specs_by_instruction: dict[int, ModbusClientJobSpec] = field(default_factory=dict)
+    # The locals holding each box's helper legs, by ``id(instr)`` then field,
+    # bound just before the box's code (see compile._core._bind_helper_legs).
     _helper_condition_snapshots: dict[int, dict[str, str | list[str]]] = field(default_factory=dict)
     # ``(memory key, edge condition)`` per scan point (top-level rung, For-body
     # rung or bare For-body instruction), by ``id``, for the rows being compiled
