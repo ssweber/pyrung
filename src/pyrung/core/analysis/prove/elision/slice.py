@@ -418,6 +418,13 @@ class _SliceElision:
         self.oneshot_written_tags: frozenset[str] = frozenset(
             tag for _key, targets in self.oneshot_key_writes for tag in targets
         )
+        # Tags an instruction reads back before writing (a timer's or
+        # counter's accumulator, a drum's step).  Def-use chains leave these
+        # exclusive reads out, so the fast path would take a timer's
+        # accumulator, which its own tick reads every scan, for scan-local.
+        self.self_read_tags: frozenset[str] = frozenset().union(
+            *(node.exclusive_reads for node in graph.rung_nodes)
+        )
         self.edge_tags = _collect_edge_tags(program)
         self.caller_condition_reads = _collect_caller_condition_reads(graph)
 
@@ -441,9 +448,11 @@ class _SliceElision:
         never eligible because the oneshot write fires only on first
         activation, but def-use chains optimistically record it as a normal
         write, so a later read could observe the entry value on subsequent
-        scans.  Such tags fall through to the full slice check.
+        scans.  Nor is a tag an instruction reads back before writing it
+        (``self_read_tags``), which def-use chains do not record as a read.
+        Such tags fall through to the full slice check.
         """
-        if candidate in self.oneshot_written_tags:
+        if candidate in self.oneshot_written_tags or candidate in self.self_read_tags:
             return False
         return self.graph.unconditional_write_before_read(candidate)
 

@@ -653,6 +653,36 @@ class TestReviewRound2:
         _assert_replays(logic, result, done.name)
 
 
+class TestElision:
+    def test_a_timer_accumulator_its_tick_reads_is_not_elided(self):
+        """The tick reads the accumulator every scan the timer runs; the
+        program graph's def-use chains leave that read out.  Elided, the key
+        merges a done timer with a running one, and the state first reached
+        with the timer done hides the hit the running one reaches."""
+        x, z = Bool("BbElX", external=True), Bool("BbElZ", external=True)
+        timer, n, bad = Timer.clone("BbElT"), Int("BbElN"), Bool("BbElBad")
+        with Program(strict=False) as logic:
+            with Rung():
+                on_delay(timer, 50)
+            with Rung(n == 2, ~timer.Done, z):
+                latch(bad)
+            with Rung(rise(x)):
+                calc(n + 1, n)
+            with Rung(timer.Done, rise(x)):
+                calc(n + 1, n)
+        seq = [
+            ({"BbElX": True}, 1),
+            ({"BbElX": False}, 1),
+            ({"BbElX": True}, 1),
+            ({"BbElZ": True}, 1),
+        ]
+        assert _first_hit(logic, seq, bad.name) == 4
+        for config in (BLACKBOX, _OptConfig.all_off().subset(["traced_elision"])):
+            result = never(logic, bad, _opt_config=config, _debug=True)
+            _assert_replays(logic, result, bad.name)
+            assert "BbElT_Acc" not in result._debug_context.elided_tags
+
+
 class TestKnownHoles:
     def test_delay_line_of_coils_is_state(self):
         btn = Bool("BbDlBtn", external=True)
