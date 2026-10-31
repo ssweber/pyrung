@@ -50,16 +50,18 @@ def _guard_surface_program():
     return program, pending, entry, edge
 
 
-def _captured_projection():
+def _captured_projection(*, pulse: bool = True):
     program, pending, entry, edge = _guard_surface_program()
     plc = PLC(program)
     plc.step()
-    # Pulse the edge once so its contact's memory is written (an entry read,
-    # not the unwritten default) when the captured scan sees it rise again.
-    plc.patch({edge.name: True})
-    plc.step()
-    plc.patch({edge.name: False})
-    plc.step()
+    if pulse:
+        # Pulse the edge once so its contact's memory is written (an entry
+        # read, not the unwritten default) when the captured scan sees it rise
+        # again.
+        plc.patch({edge.name: True})
+        plc.step()
+        plc.patch({edge.name: False})
+        plc.step()
     plc.patch({edge.name: True})
     captures: dict[int, ConditionViewCapture] = {}
     plc._run_single_scan(
@@ -202,6 +204,28 @@ def test_compact_views_preserve_guard_cursor_and_derivation() -> None:
     assert anchor.view._memory == {memory_read.occurrence.name: memory_read.occurrence.value}
     assert "CompactMissing" not in anchor.view._tags
     assert capture not in gc.get_referents(projection)
+
+
+def test_compaction_keeps_guards_when_the_edge_memory_read_is_a_default() -> None:
+    # The edge's memory is unwritten: its read is a default, which compaction
+    # keeps as an absence.  The guards must judge the same after it.
+    _plc, _capture, projection, _pending, _entry, _edge = _captured_projection(pulse=False)
+    anchor = next(run for run in projection.runs if len(run.rung._conditions) == 5)
+    memory_read = next(
+        read
+        for read in projection.reads
+        if read.instruction is None
+        and read.run.view is anchor.view
+        and read.occurrence.domain == "memory"
+    )
+    assert memory_read.occurrence.source == "default"
+    selected_runs = tuple(run for run in projection.runs if run.rung._conditions)
+    before = tuple(_evaluate_run_guard(run, projection) for run in selected_runs)
+
+    compact_projection_condition_views(projection)
+
+    after = tuple(_evaluate_run_guard(run, projection) for run in selected_runs)
+    assert after == before
 
 
 def test_write_enabling_read_closure_includes_only_its_dynamic_ancestors() -> None:
