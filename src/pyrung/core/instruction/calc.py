@@ -28,6 +28,7 @@ from .conversions import (
     _truncate_to_tag_type,
 )
 from .resolvers import (
+    _set_fault_address_error,
     _set_fault_division_error,
     _set_fault_math_operation_error,
     _set_fault_out_of_range,
@@ -122,6 +123,23 @@ def has_domain_limited_func(value: Any, seen: set[int] | None = None) -> bool:
         return any(has_domain_limited_func(child, seen) for child in vars(value).values())
     if isinstance(value, (list, tuple)):
         return any(has_domain_limited_func(item, seen) for item in value)
+    return False
+
+
+def reads_indexed_element(value: Any, seen: set[int] | None = None) -> bool:
+    """True when *value* (a calc expression) reads a block element addressed
+    at scan time (``Tbl[P]``, ``Tbl[Q + 1]``), which can fall outside the block."""
+    if seen is None:
+        seen = set()
+    if id(value) in seen:
+        return False
+    seen.add(id(value))
+    if isinstance(value, (IndirectRef, IndirectExprRef)):
+        return True
+    if isinstance(value, Expression):
+        return any(reads_indexed_element(child, seen) for child in vars(value).values())
+    if isinstance(value, (list, tuple)):
+        return any(reads_indexed_element(item, seen) for item in value)
     return False
 
 
@@ -289,10 +307,16 @@ class CalcInstruction(OneShotMixin, Instruction):
         if self.mode == "decimal" and _dest_type(dest) == TagType.INT:
             expression = cut_int_constants(expression)
         self.expression = expression
+        fault_writes = CalcInstruction._fault_writes
         if has_domain_limited_func(expression):
             # Only a calc that can hit a domain error sets SC46: the analyses
             # (PDG, prover) see the flag written where it can be.
-            self._fault_writes = (*CalcInstruction._fault_writes, "fault.math_operation_error")
+            fault_writes = (*fault_writes, "fault.math_operation_error")
+        if reads_indexed_element(expression):
+            # An indexed source outside its block sets SC44 (address error).
+            fault_writes = (*fault_writes, "fault.address_error")
+        if fault_writes is not CalcInstruction._fault_writes:
+            self._fault_writes = fault_writes
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -311,6 +335,11 @@ class CalcInstruction(OneShotMixin, Instruction):
         except MathDomainError:
             _set_fault_math_operation_error(ctx)
             value = 0
+        except IndexError:
+            # An indexed source outside its block: the address-error flag,
+            # nothing written (as copy(), the kernel and CircuitPython do).
+            _set_fault_address_error(ctx)
+            return
         finally:
             STRICT_DIVISION.reset(token)
 
