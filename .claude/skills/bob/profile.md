@@ -30,6 +30,16 @@ Repo-specific rules for the /bob skill. Another repo replaces this file.
 - pyrung-authored terminal/log/exception text is ASCII only; "pyrung" is always lowercase.
 - Docs + CHANGELOG (Unreleased) move with behaviour changes.
 
+## Debugger follow-along review
+
+A branch that changes how rungs evaluate (rung/condition evaluation, executor, scan order,
+edge or site memory, instruction semantics the debugger steps through) gets a second, focused
+`bob-reviewer` alongside the general one (user, 2026-10-31): scope only the debugger, DAP
+server (`src/pyrung/dap/`) and VS Code extension (`editors/vscode/pyrung-debug/`) still
+following evaluation (stepping, condition trace, state panes, time travel, reload, recorded
+sessions). Brief it with `editors/vscode/pyrung-debug/AGENTS.md` and
+`docs/internal/debug-spec.md`.
+
 ## Models
 
 - Builders: Opus for prover / fold / kernel / executor / rung evaluation / multi-layer
