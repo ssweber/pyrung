@@ -18,6 +18,7 @@ import pytest
 
 from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.circuitpy.codegen import compile_kernel
+from pyrung.click import ClickBlocks, TagMap
 from pyrung.core import (
     PLC,
     Block,
@@ -39,6 +40,7 @@ from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ScanContext
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.state import SystemState
+from pyrung.core.storage import BLANK_CHAR
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
 
 _OPS: dict[str, Callable[[Any, Any], Any]] = {
@@ -50,7 +52,16 @@ _OPS: dict[str, Callable[[Any, Any], Any]] = {
     "ge": operator.ge,
 }
 
-_ENGINES = ["interpreted", "compiled", "kernel_legacy", "kernel_blockless", "circuitpy"]
+# ``circuitpy_rt`` splits the generated code into ``code.py`` and ``pyrung_rt.py``,
+# which ``code.py`` imports its helpers from.
+_ENGINES = [
+    "interpreted",
+    "compiled",
+    "kernel_legacy",
+    "kernel_blockless",
+    "circuitpy",
+    "circuitpy_rt",
+]
 
 _IN_RANGE = 3  # Tbl[3] == 30
 
@@ -93,7 +104,9 @@ def _first_scan(prog: Program, engine: str, tags: dict[str, Any], monkeypatch) -
         return {name: kernel.tags[name] for name in tags}
     hw = P1AM()
     hw.slot(1, "P1-08SIM")
-    result = generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop=None)
+    split = engine == "circuitpy_rt"
+    result = generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop=None, force_runtime=split)
+    assert bool(result.runtime) is split
     namespace = _run_single_scan_source(
         result.code, monkeypatch, _StubBase(), runtime_source=result.runtime
     )
@@ -173,15 +186,17 @@ def test_out_of_range_element_in_condition_reads_zero(
 
 
 @pytest.mark.parametrize("engine", _ENGINES)
-def test_sparse_gap_and_real_block_read_zero(engine: str, monkeypatch) -> None:
+def test_sparse_gap_and_real_and_char_blocks_read_zero(engine: str, monkeypatch) -> None:
     Sparse = Block("Sp", TagType.INT, 1, 10, valid_ranges=((1, 3), (7, 10)))
     Reals = Block("Rl", TagType.REAL, 1, 4)
+    Chars = Block("Ch", TagType.CHAR, 1, 4)
     G = Int("G")  # 5: a gap in Sp
-    H = Int("H")  # 9: past the end of Rl
+    H = Int("H")  # 9: past the end of Rl and Ch
     InGap = Bool("InGap")
     GapNonzero = Bool("GapNonzero")
     RealZero = Bool("RealZero")
     RealBelow = Bool("RealBelow")
+    CharBlank = Bool("CharBlank")
     Tail = Bool("Tail")
 
     with Program(strict=False) as prog:
@@ -189,6 +204,7 @@ def test_sparse_gap_and_real_block_read_zero(engine: str, monkeypatch) -> None:
             copy(11, Sparse[1])
             copy(77, Sparse[7])
             copy(1.5, Reals[1])
+            copy("x", Chars[1])
             copy(5, G)
             copy(9, H)
         with Rung(Sparse[G] == 0):
@@ -199,12 +215,22 @@ def test_sparse_gap_and_real_block_read_zero(engine: str, monkeypatch) -> None:
             out(RealZero)
         with Rung(Reals[H + 0] < 0.5):
             out(RealBelow)
+        with Rung(Chars[H] == BLANK_CHAR):  # a blank Char
+            out(CharBlank)
         with Rung():
             out(Tail)
 
     tags = {
         tag.name: tag
-        for tag in (InGap, GapNonzero, RealZero, RealBelow, Tail, Bool("fault.address_error"))
+        for tag in (
+            InGap,
+            GapNonzero,
+            RealZero,
+            RealBelow,
+            CharBlank,
+            Tail,
+            Bool("fault.address_error"),
+        )
     }
     actual = _first_scan(prog, engine, tags, monkeypatch)
     assert {name: bool(value) for name, value in actual.items()} == {
@@ -212,9 +238,112 @@ def test_sparse_gap_and_real_block_read_zero(engine: str, monkeypatch) -> None:
         "GapNonzero": False,
         "RealZero": True,
         "RealBelow": True,
+        "CharBlank": True,
         "Tail": True,
         "fault.address_error": False,
     }
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_zero_based_block_reads_zero_below_its_start(engine: str, monkeypatch) -> None:
+    Zb = Block("Zb", TagType.INT, 0, 4)
+    Flags = Block("Fl", TagType.BOOL, 0, 3)
+    M = Int("M")  # -1: below address 0
+    K = Int("K")  # 0: the first element
+    Below = Bool("Below")
+    BelowExpr = Bool("BelowExpr")
+    First = Bool("First")
+    BoolBelow = Bool("BoolBelow")
+    Tail = Bool("Tail")
+
+    with Program(strict=False) as prog:
+        with Rung():
+            for i in range(0, 5):
+                copy(i + 1, Zb[i])
+            latch(Flags[0])
+            copy(-1, M)
+            copy(0, K)
+        with Rung(Zb[M] == 0):
+            out(Below)
+        with Rung(Zb[K - 1] < Zb[K]):
+            out(BelowExpr)
+        with Rung(Zb[K] == 1):
+            out(First)
+        with Rung(Flags[M] == False):  # noqa: E712 - builds a condition
+            out(BoolBelow)
+        with Rung():
+            out(Tail)
+
+    tags = {
+        tag.name: tag
+        for tag in (Below, BelowExpr, First, BoolBelow, Tail, Bool("fault.address_error"))
+    }
+    actual = _first_scan(prog, engine, tags, monkeypatch)
+    assert {name: bool(value) for name, value in actual.items()} == {
+        "Below": True,
+        "BelowExpr": True,
+        "First": True,
+        "BoolBelow": True,
+        "Tail": True,
+        "fault.address_error": False,
+    }
+
+
+@pytest.mark.parametrize("via", ["window", "bank"])
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_bank_aliased_block_reads_zero_outside_range(
+    engine: str, via: str, monkeypatch, request
+) -> None:
+    # Tl is a named window onto DS101..DS105, one register per tag. The
+    # compiled code indexes one memory through one of the two, never both.
+    ds = ClickBlocks().ds
+    Tl = Block("Tl", TagType.INT, 1, 5)
+    TagMap({Tl: ds.select(101, 105)}, include_system=False)
+    P = Int("P")
+    Q = Int("Q")
+    coils = {name: Bool(name) for name in ("Past", "In", "ExprPast", "Tail")}
+
+    with Program(strict=False) as prog:
+        with Rung():
+            for i in range(1, 6):
+                copy(i * 10, Tl[i])
+            copy(10, ds[106])
+            if via == "window":
+                copy(6, P)  # past Tl's end; DS106 is in DS, not in Tl
+                copy(3, Q)  # Tl3 is DS103
+            else:
+                copy(4600, P)  # past DS's end
+                copy(103, Q)
+        if via == "window":
+            past, inside, expr_past = Tl[P] == 0, Tl[Q] == 30, Tl[Q + 3] == 0
+        else:
+            past, inside, expr_past = ds[P] == 0, ds[Q] == 30, ds[P - 1] == 0
+        with Rung(past):
+            out(coils["Past"])
+        with Rung(inside):
+            out(coils["In"])
+        with Rung(expr_past):
+            out(coils["ExprPast"])
+        with Rung():
+            out(coils["Tail"])
+
+    if engine == "kernel_blockless" and via == "window":
+        # Pre-existing, on the base too: the blockless kernel refuses any
+        # indirect access through a bank-aliased window (an instruction's as
+        # well), as if the bank were indexed too.
+        request.applymarker(
+            pytest.mark.xfail(
+                raises=ValueError,
+                strict=True,
+                reason="blockless kernel refuses indexing a bank-aliased window",
+            )
+        )
+    tags: dict[str, Any] = dict(coils)
+    tags["fault.address_error"] = Bool("fault.address_error")
+    actual = _first_scan(prog, engine, tags, monkeypatch)
+    expected = dict.fromkeys(coils, True)
+    expected["fault.address_error"] = False
+    assert {name: bool(value) for name, value in actual.items()} == expected
 
 
 def _build_reads() -> tuple[Program, dict[str, Any]]:
