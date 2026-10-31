@@ -28,7 +28,7 @@ def test_idle_scan_reuses_memory_pmap() -> None:
     runner = _idle_runner()
 
     # Prime: first two scans materialize `_dt`, scan-stat bindings,
-    # `_prev:*` for every tag, and system-point defaults.  From scan 3+
+    # edge-contact memory, and system-point defaults.  From scan 3+
     # the memory PMap should settle.
     for _ in range(3):
         runner.step()

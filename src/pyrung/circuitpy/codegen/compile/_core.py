@@ -137,7 +137,10 @@ def _compile_edge_row(
         )
         lines.append(f"{sp}{now} = bool({tag_expr})")
         lines.append(f"{sp}{was} = _mem.get({key!r}, False)")
-        lines.append(f"{sp}_mem[{key!r}] = {now}")
+        # Stored only when it changes: an unwritten memory reads off, as in
+        # the interpreter, whose state holds no entry until a contact sees on.
+        lines.append(f"{sp}if {now} != {was}:")
+        lines.append(f"{sp}    _mem[{key!r}] = {now}")
     return lines
 
 

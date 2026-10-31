@@ -487,8 +487,8 @@ class TestEdgeSiteMemory:
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         # One memory per contact, stored when its row is scanned.
-        assert source_code.count("_mem['_edge:e1'] = ") == 1
-        assert source_code.count("_mem['_edge:e2'] = ") == 1
+        assert source_code.count("    _mem['_edge:e1'] = ") == 1
+        assert source_code.count("    _mem['_edge:e2'] = ") == 1
         assert "_edge:e3" not in source_code
         assert "_prev" not in source_code
 

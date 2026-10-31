@@ -18,6 +18,7 @@ from pyrung.core.context import ScanContext
 from pyrung.core.expression import randint_sites
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
+from pyrung.core.site_memory import migrate_legacy_edge_memory, site_table_of
 from pyrung.core.state import SystemState
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
@@ -264,6 +265,8 @@ class CompiledPLC:
             if name not in SYSTEM_TAGS_BY_NAME
         }
         self._state = initial_state if initial_state is not None else SystemState()
+        # A state saved before edge memory was per contact (``_prev:X``).
+        self._state = migrate_legacy_edge_memory(self._state, site_table_of(program))
         self._extra_commit_tag_names: set[str] = set()
         seed = {
             t.name: t.default

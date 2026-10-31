@@ -48,6 +48,7 @@ from pyrung.core.kernel import CompiledKernel
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
 from pyrung.core.rung_firings import RungFiringTimelines
 from pyrung.core.scan_log import LifecycleEvent, LifecycleKind, ScanLog, ScanLogSnapshot
+from pyrung.core.site_memory import bind_logic_list, migrate_legacy_edge_memory
 from pyrung.core.state import SystemState
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
@@ -89,7 +90,7 @@ _EPOCH_REFERENCE_VALUES = count(1)
 _HISTORY_BUDGET_BYTES_DEFAULT = 100 * 1024 * 1024  # 100 MB
 
 # Floor: never evict below this many entries regardless of byte budget.
-# Monitor ``previous_value`` / ``_prev:*`` reads assume N-1 is always
+# Monitor ``previous_value`` reads assume N-1 is always
 # present; the recent-state cache floor must not regress under budget pressure.
 _RECENT_STATE_CACHE_MIN_ENTRIES = 20
 
@@ -1227,6 +1228,10 @@ class PLC:
         self._site_table = self._bind_logic_sites()
 
         self._state = initial_state if initial_state is not None else SystemState()
+        if _tag_index is None:
+            # A state saved before edge memory was per contact (``_prev:X``).
+            # Forks start from this runner's own (already migrated) states.
+            self._state = migrate_legacy_edge_memory(self._state, self._site_table)
         # Mutable read mirror for ordinary interpreted scans.  The committed
         # state remains an immutable PMap; this avoids repeated HAMT bucket
         # walks while a scan reads its unchanged input image.  Capturing/debug
@@ -2572,7 +2577,6 @@ class PLC:
 
     def _bind_logic_sites(self) -> Any:
         """The site table of the logic this runner scans (binding it if never bound)."""
-        from pyrung.core.site_memory import bind_logic_list
 
         program = self._program
         if program is not None:

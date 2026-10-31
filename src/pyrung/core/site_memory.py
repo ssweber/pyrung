@@ -850,8 +850,9 @@ def remap_site_memory(
     Memory of a site of *old* moves to the site of *new* that
     :func:`_match_sites` pairs it with, or is dropped.  Memory of overlay
     sites (``plant:`` / ``pilot:``) is dropped too: the overlays are rebuilt
-    for the new program.  Other memory (edge history by tag, timer fractions,
-    system memory) is kept as is.  Returns ``(memory, dropped keys)``.
+    for the new program.  Edge memory (``_edge:e{N}``) is site memory like any
+    other.  Other memory (timer fractions, system memory) is kept as is.
+    Returns ``(memory, dropped keys)``.
     """
     owned: dict[str, tuple[str, str]] = {}
     if old is not None:
@@ -880,6 +881,37 @@ def remap_site_memory(
             continue
         out[new_name] = value
     return out, tuple(dropped)
+
+
+LEGACY_EDGE_PREFIX = "_prev:"
+
+
+def migrate_legacy_edge_memory(state: Any, table: SiteTable | None) -> Any:
+    """*state* with pyrung's old per-tag edge history moved to edge sites.
+
+    Before edge memory was kept per contact, ``_prev:X`` held X at the end of
+    the previous scan, one entry per tag.  Each such entry seeds the memory of
+    every edge site reading X (``_edge:e{N}``) that *state* does not already
+    hold, and is dropped; with no site reading X it is just dropped.  A state
+    without ``_prev:`` entries is returned as is.
+    """
+    memory = state.memory
+    legacy = [
+        name for name in memory if isinstance(name, str) and name.startswith(LEGACY_EDGE_PREFIX)
+    ]
+    if not legacy:
+        return state
+    updated = memory.evolver()
+    for name in legacy:
+        value = memory[name]
+        del updated[name]
+        if table is None:
+            continue
+        for site in table.sites_reading(name[len(LEGACY_EDGE_PREFIX) :]):
+            for key, _default in site.memory:
+                if key not in memory:
+                    updated[key] = bool(value)
+    return state.set(memory=updated.persistent())
 
 
 def program_memory_defaults(program: Any) -> dict[str, Any]:
@@ -1043,3 +1075,32 @@ def begin_bare_body_row(ctx: Any, instr: Any) -> tuple[Any] | None:
     ctx._condition_snapshot = view
     scan_edge_frame(ctx, view, frame)
     return (outer,)
+
+
+def edge_memory_seeding(logic: Any, values: Mapping[str, Any]) -> dict[str, bool]:
+    """Edge memory that makes every edge contact on a tag of *values* remember it.
+
+    *logic* is a ``Program`` or a list of rungs.  For each tag name in
+    *values*, every edge site reading the tag gets ``bool(value)``: a
+    hypothetical scan then sees the tag move from that value at each of them,
+    as if the previous scan had ended on it.
+    """
+    out: dict[str, bool] = {}
+    table = site_table_of(logic)
+    if table is not None:
+        for name, value in values.items():
+            for site in table.sites_reading(name):
+                for key, _default in site.memory:
+                    out[key] = bool(value)
+        return out
+    from pyrung.core.rung import Rung as RungLogic
+
+    for rung in logic:
+        if not isinstance(rung, RungLogic):
+            continue
+        for row in edge_rows(rung).values():
+            for key, edge in row:
+                name = edge._resolved_tag.name
+                if name in values:
+                    out[key] = bool(values[name])
+    return out

@@ -99,15 +99,15 @@ def _reload_locked(
             tags_to_drop.add(name)
 
     patched_tags = {k: v for k, v in old_state.tags.items() if k not in tags_to_drop}
-    # Instruction memory (one-shots, drum and shift edges) is keyed by site, and
-    # site keys are ordinal: carry each site's memory to the site of the new
-    # program with the same fingerprint, drop what no longer matches.
+    # Site memory (one-shots, drum and shift edges, edge contacts) is keyed by
+    # site, and site keys are ordinal: carry each site's memory to the site of
+    # the new program with the same fingerprint, drop what no longer matches.
     patched_memory, dropped_memory = remap_site_memory(
         old_state.memory, old_runner._site_table, new_runner._site_table
     )
     if dropped_memory:
         warnings.append(
-            f"  {len(dropped_memory)} instruction memory value(s) had no matching site "
+            f"  {len(dropped_memory)} site memory value(s) had no matching site "
             "in the new program, reset: " + ", ".join(sorted(dropped_memory))
         )
     patched_state = SystemState(

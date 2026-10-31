@@ -560,7 +560,7 @@ class ScanContext:
         """Access to the original (unmodified) state.
 
         Useful for operations that need to read original values,
-        such as computing _prev:* for edge detection.
+        such as the value a tag held when the scan began.
         """
         return self._state
 

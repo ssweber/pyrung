@@ -14,7 +14,21 @@ from dataclasses import replace
 
 import pytest
 
-from pyrung.core import PLC, And, Bool, Int, Or, Program, Rung, calc, copy, latch, out, reset
+from pyrung.core import (
+    PLC,
+    And,
+    Bool,
+    Int,
+    Or,
+    Program,
+    Rung,
+    calc,
+    copy,
+    latch,
+    out,
+    reset,
+    rise,
+)
 from pyrung.core.analysis.causal.projected import projected_cause
 from pyrung.core.analysis.pdg import build_program_graph
 
@@ -776,6 +790,30 @@ class TestProjectedEffect:
         effect_tags = [s.transition.tag_name for s in chain.steps]
         assert "X" in effect_tags
         assert "Y" not in effect_tags
+
+    def test_edge_contacts_see_the_hypothetical_transition(self) -> None:
+        """rise() contacts on the trigger and on its effect fire in the projection,
+        whatever their memory held."""
+        from pyrung.core.state import SystemState
+
+        Button = Bool("Button")
+        Pulse = Bool("Pulse")
+        Latched = Bool("Latched")
+
+        with Program() as logic:
+            with Rung(rise(Button)):
+                out(Pulse)
+            with Rung(rise(Pulse)):
+                latch(Latched)
+
+        # Both contacts' memory on (as a contact left unscanned keeps it).
+        state = SystemState().with_memory({"_edge:e1": True, "_edge:e2": True})
+        runner = PLC(logic, initial_state=state)
+
+        chain = runner.effect("Button", from_=False)
+        assert chain.mode == "projected"
+        effect_tags = [s.transition.tag_name for s in chain.steps]
+        assert effect_tags == ["Pulse", "Latched"]
 
 
 class TestProjectedEffectEdgeCases:

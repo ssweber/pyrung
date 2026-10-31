@@ -16,6 +16,7 @@ from pyrung.core.analysis.sp_values import (
 )
 from pyrung.core.context import ScanContext
 from pyrung.core.crossing import CrossingContext, Eq, eq_target
+from pyrung.core.site_memory import edge_memory_seeding
 
 from .history import _find_last_transition_scan
 from .models import (
@@ -334,7 +335,8 @@ def _simulate_scan(
 
     The caller is responsible for all state preparation:
 
-    * Injecting ``_prev:{tag}`` memory entries for edge-sensitive triggers.
+    * Seeding edge memory (``_edge:e{N}``) for edge-sensitive triggers
+      (:func:`~pyrung.core.site_memory.edge_memory_seeding`).
     * Setting ``_dt`` in memory if timer behaviour matters (default is
       whatever the state already carries; hypothetical scans typically
       inherit ``_dt=0.0``).
@@ -1099,9 +1101,10 @@ def projected_effect(
     seen_effects: set[str] = {tag_name}
     frontier: dict[str, Transition] = {tag_name: cause_transition}
 
-    # Build hypothetical state: inject trigger + _prev: for edge detection
+    # Build hypothetical state: inject the trigger, and seed the memory of every
+    # edge contact on it with the value it moves from.
     hyp_state = base_state.with_tags({tag_name: to_value}).with_memory(
-        {f"_prev:{tag_name}": from_value}
+        edge_memory_seeding(use_logic, {tag_name: from_value})
     )
 
     changed = True
@@ -1181,11 +1184,13 @@ def projected_effect(
 
         # Update hypothetical state with newly discovered effects
         new_tags: dict[str, Any] = {}
-        new_memory: dict[str, Any] = {}
+        from_values: dict[str, Any] = {}
         for ft_name, ft_trans in frontier.items():
             new_tags[ft_name] = ft_trans.to_value
-            new_memory[f"_prev:{ft_name}"] = ft_trans.from_value
-        hyp_state = base_state.with_tags(new_tags).with_memory(new_memory)
+            from_values[ft_name] = ft_trans.from_value
+        hyp_state = base_state.with_tags(new_tags).with_memory(
+            edge_memory_seeding(use_logic, from_values)
+        )
 
     return CausalChain(
         effect=cause_transition,

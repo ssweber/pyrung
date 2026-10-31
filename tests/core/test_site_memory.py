@@ -28,6 +28,8 @@ from pyrung.core.site_memory import (
     PLANT_NAMESPACE,
     SITE_EDGE,
     bind_sites,
+    edge_memory_seeding,
+    migrate_legacy_edge_memory,
     remap_site_memory,
     site_table_of,
 )
@@ -329,14 +331,14 @@ class TestRemap:
     def test_memory_follows_the_site_after_an_insert(self):
         old = _counter_program(insert_rung=False)
         new = _counter_program(insert_rung=True)
-        memory = {"_oneshot:i1": True, "_oneshot:i2": False, "_prev:A": True, "_dt": 0.01}
+        memory = {"_oneshot:i1": True, "_oneshot:i2": False, "_sys.mode.run": True, "_dt": 0.01}
         remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(new))
         # P's one-shot was i1 and is now i2; Q's was i2, now i3.  The new
         # rung's one-shot (i1) starts unwritten.  Non-site memory is kept.
         assert remapped == {
             "_oneshot:i2": True,
             "_oneshot:i3": False,
-            "_prev:A": True,
+            "_sys.mode.run": True,
             "_dt": 0.01,
         }
         assert dropped == ()
@@ -396,9 +398,9 @@ class TestRemap:
 
     def test_overlay_memory_is_dropped(self):
         old = _counter_program(insert_rung=False)
-        memory = {"_oneshot:pilot:i1": True, "_toggle:plant:i2": True, "_prev:A": True}
+        memory = {"_oneshot:pilot:i1": True, "_toggle:plant:i2": True, "_dt": 0.01}
         remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(old))
-        assert remapped == {"_prev:A": True}
+        assert remapped == {"_dt": 0.01}
         assert sorted(dropped) == ["_oneshot:pilot:i1", "_toggle:plant:i2"]
 
     def test_edge_sites_match_after_a_line_shift(self):
@@ -430,3 +432,90 @@ class TestRemap:
         matched = _match_sites(old_table.sites, new_table.sites)
         assert matched[old_edge.key] == new_edge.key == "e1"
         assert matched["i1"] == "i2"
+
+    def test_edge_memory_follows_its_contact_after_an_insert(self):
+        A = Bool("A")
+        P = Bool("P")
+        Q = Bool("Q")
+        with Program(strict=False) as old:
+            with Rung(rise(A)):
+                out(P)
+            with Rung(fall(A)):
+                out(Q)
+        with Program(strict=False) as new:
+            with Rung(rise(Bool("B"))):
+                out(Bool("Extra"))
+            with Rung(rise(A)):
+                out(P)
+            with Rung(fall(A)):
+                out(Q)
+        memory = {"_edge:e1": True, "_edge:e2": False}
+        remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(new))
+        assert remapped == {"_edge:e2": True, "_edge:e3": False}
+        assert dropped == ()
+
+
+def _two_contacts_on_a() -> Program:
+    A = Bool("A")
+    with Program(strict=False) as prog:
+        with Rung(rise(A)):
+            out(Bool("P"))
+        with Rung(fall(A)):
+            out(Bool("Q"))
+        with Rung(rise(Bool("B"))):
+            out(Bool("R"))
+    return prog
+
+
+class TestLegacyEdgeMemory:
+    """States saved when edge memory was one ``_prev:X`` per tag."""
+
+    def test_prev_seeds_every_site_reading_the_tag(self):
+        from pyrung.core.state import SystemState
+
+        prog = _two_contacts_on_a()
+        state = SystemState().with_memory({"_prev:A": True, "_prev:Gone": True, "_dt": 0.01})
+        migrated = migrate_legacy_edge_memory(state, site_table_of(prog))
+        assert dict(migrated.memory) == {"_edge:e1": True, "_edge:e2": True, "_dt": 0.01}
+
+    def test_site_memory_already_present_wins(self):
+        from pyrung.core.state import SystemState
+
+        prog = _two_contacts_on_a()
+        state = SystemState().with_memory({"_prev:A": True, "_edge:e2": False})
+        migrated = migrate_legacy_edge_memory(state, site_table_of(prog))
+        assert dict(migrated.memory) == {"_edge:e1": True, "_edge:e2": False}
+
+    def test_state_without_legacy_memory_is_returned_as_is(self):
+        from pyrung.core.state import SystemState
+
+        state = SystemState().with_memory({"_edge:e1": True})
+        assert migrate_legacy_edge_memory(state, None) is state
+
+    @pytest.mark.parametrize("backend", ["interpreted", "compiled"])
+    def test_runner_migrates_its_initial_state(self, backend):
+        from pyrung.core.compiled_plc import CompiledPLC
+        from pyrung.core.state import SystemState
+
+        prog = _two_contacts_on_a()
+        # Saved after a scan that ended with A on: no rise on the next scan.
+        state = SystemState().with_tags({"A": True}).with_memory({"_prev:A": True})
+        runner = (
+            PLC(prog, initial_state=state)
+            if backend == "interpreted"
+            else (CompiledPLC(prog, initial_state=state))
+        )
+        assert "_prev:A" not in runner.current_state.memory
+        assert runner.current_state.memory["_edge:e1"] is True
+        runner.step()
+        assert runner.current_state.tags["P"] is False
+        runner.patch({"A": False})
+        runner.step()
+        assert runner.current_state.tags["Q"] is True
+
+
+def test_edge_memory_seeding_covers_every_contact_on_the_tag():
+    prog = _two_contacts_on_a()
+    assert edge_memory_seeding(prog, {"A": 1}) == {"_edge:e1": True, "_edge:e2": True}
+    rungs = list(prog.rungs)
+    assert edge_memory_seeding(rungs, {"B": False}) == {"_edge:e3": False}
