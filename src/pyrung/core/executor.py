@@ -28,7 +28,6 @@ from pyrung.core.instruction.base import (
     _EXECUTOR_RETURN,
 )
 from pyrung.core.rung import Rung
-from pyrung.core.site_memory import begin_bare_body_row
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -1113,15 +1112,26 @@ def _execute_rung_natural(
     rung: Rung,
     *,
     parent_enabled: bool = True,
-    condition_view: ConditionView | None = None,
+    row: bool = False,
+    solved: bool | None = None,
 ) -> None:
-    if condition_view is None:
-        condition_view = _resolve_condition_view(ctx, rung)
-        enabled = rung._evaluate_conditions(condition_view)
-    else:
-        ctx._condition_snapshot = condition_view
-        enabled = parent_enabled and rung._evaluate_local_conditions(condition_view)
+    """Solve *rung* row by row.
 
+    The rung's trunk -- or, for a *row* (a branch or a For-body rung), its own
+    contacts -- reads live as the solve reaches it, so it sees the writes of
+    every row above it.  *solved* is a branch's power already solved at its
+    parent's entry (a synthesis bracket, ``Rung._rows_read_at_entry``).
+    """
+    if solved is not None:
+        enabled = solved
+    elif row:
+        condition_view = rung._new_row_view(ctx, live=True)
+        enabled = parent_enabled and rung._evaluate_local_conditions(condition_view)
+    else:
+        condition_view = rung._new_row_view(ctx, live=True)
+        enabled = rung._evaluate_conditions(condition_view)
+
+    powers = rung._solve_rows_at_entry(ctx, enabled) if rung._rows_read_at_entry else None
     for item_kind, item in rung._execution_plan:
         if item_kind == _EXECUTOR_BRANCH:
             _execute_rung_natural(
@@ -1130,7 +1140,8 @@ def _execute_rung_natural(
                 rung_index,
                 item,  # ty: ignore[invalid-argument-type]
                 parent_enabled=enabled,
-                condition_view=condition_view,
+                row=True,
+                solved=None if powers is None else powers[id(item)],
             )
         else:
             _execute_instruction_natural(
@@ -1188,9 +1199,7 @@ def _execute_call_natural(
 
     subroutine_plan = _resolve_subroutine_plan(instruction)
 
-    saved_snapshot = ctx._condition_snapshot
     saved_scope_token = ctx._condition_scope_token
-    ctx._condition_snapshot = None
     ctx._condition_scope_token = instruction._executor_scope_token
     try:
         for rung_id, sub_rung in subroutine_plan:
@@ -1202,7 +1211,6 @@ def _execute_call_natural(
     except SubroutineReturnSignal:
         pass
     finally:
-        ctx._condition_snapshot = saved_snapshot
         ctx._condition_scope_token = saved_scope_token
 
 
@@ -1228,47 +1236,24 @@ def _execute_for_loop_natural(
         try:
             for child in instruction.body:
                 if isinstance(child, Instruction):
-                    row = begin_bare_body_row(ctx, child)
-                    try:
-                        _execute_instruction_natural(
-                            program,
-                            ctx,
-                            rung_index,
-                            rung,
-                            child,
-                            True,
-                            item_kind=child._executor_kind,
-                        )
-                    finally:
-                        if row is not None:
-                            ctx._condition_snapshot = row[0]
+                    # A bare body box is a row of its own: it reads its pins
+                    # as it starts (instruction_condition_view).
+                    _execute_instruction_natural(
+                        program,
+                        ctx,
+                        rung_index,
+                        rung,
+                        child,
+                        True,
+                        item_kind=child._executor_kind,
+                    )
                 else:
-                    _execute_body_rung_natural(program, ctx, rung_index, child)
+                    # A body rung is solved as a rung of its own each pass.
+                    _execute_rung_natural(program, ctx, rung_index, child, row=True)
         except LoopContinueSignal:
             continue
         except LoopBreakSignal:
             break
-
-
-def _execute_body_rung_natural(
-    program: Program,
-    ctx: ScanContext,
-    rung_index: int,
-    body_rung: Rung,
-) -> None:
-    """Run one forloop body rung, restoring the loop's snapshot afterwards."""
-    outer_view = ctx._condition_snapshot
-    try:
-        _execute_rung_natural(
-            program,
-            ctx,
-            rung_index,
-            body_rung,
-            parent_enabled=True,
-            condition_view=body_rung._new_row_view(ctx),
-        )
-    finally:
-        ctx._condition_snapshot = outer_view
 
 
 def _resolve_subroutine_plan(
@@ -1303,11 +1288,6 @@ def _forced_enabled(mode: ExecutionMode, natural_enabled: bool) -> bool:
     return natural_enabled
 
 
-def _resolve_condition_view(ctx: ScanContext, rung: Rung) -> ConditionView:
-    """The row's condition view (the prior one for ``.continued()``), edge sites scanned."""
-    return rung._resolve_condition_view(ctx)
-
-
 def _execute_rung(
     program: Program,
     ctx: ScanContext,
@@ -1321,18 +1301,16 @@ def _execute_rung(
     parent_enabled: bool,
     subroutine_name: str | None,
     call_stack: tuple[str, ...],
-    condition_view: ConditionView | None = None,
+    entry_view: ConditionView | None = None,
 ) -> None:
     observer.begin_rung(ctx, rung_index, rung, kind, depth, subroutine_name, call_stack)
-    if kind == "branch" or (kind == "loop_body" and not parent_enabled):
-        if condition_view is None:
-            raise RuntimeError(f"Internal executor error: {kind} missing parent condition view")
-        ctx._condition_snapshot = condition_view
-    elif kind == "loop_body":
-        condition_view = rung._new_row_view(ctx)
-        ctx._condition_snapshot = condition_view
-    else:
-        condition_view = _resolve_condition_view(ctx, rung)
+    # Each row gets its own view as the solve reaches it (rows above it have
+    # written).  It is frozen so an observer can re-read the row after the
+    # scan; ``_condition_snapshot`` hands it to ``begin_condition``.  A
+    # branch of a synthesis bracket (``Rung._rows_read_at_entry``) brings the
+    # *entry_view* its parent took at its entry.
+    condition_view = entry_view if entry_view is not None else rung._new_row_view(ctx)
+    ctx._condition_snapshot = condition_view
     observer.begin_condition(ctx, rung_index, rung, kind, depth, subroutine_name, call_stack)
 
     if kind == "branch" or kind == "loop_body":
@@ -1352,7 +1330,6 @@ def _execute_rung(
             rung_index,
             rung,
             enabled,
-            condition_view,
             mode=mode,
             observer=observer,
             depth=depth,
@@ -1378,7 +1355,6 @@ def _execute_rung_body(
     rung_index: int,
     rung: Rung,
     enabled: bool,
-    condition_view: ConditionView,
     *,
     mode: ExecutionMode,
     observer: ExecutionObserver,
@@ -1386,8 +1362,15 @@ def _execute_rung_body(
     subroutine_name: str | None,
     call_stack: tuple[str, ...],
 ) -> None:
-    ctx._condition_snapshot = condition_view
-
+    entry_views = (
+        {
+            id(item): item._new_row_view(ctx)  # ty: ignore[unresolved-attribute]
+            for item_kind, item in rung._execution_plan
+            if item_kind == _EXECUTOR_BRANCH
+        }
+        if rung._rows_read_at_entry
+        else None
+    )
     for item_kind, item in rung._execution_plan:
         if item_kind == _EXECUTOR_BRANCH:
             _execute_rung(
@@ -1402,7 +1385,7 @@ def _execute_rung_body(
                 parent_enabled=enabled,
                 subroutine_name=subroutine_name,
                 call_stack=call_stack,
-                condition_view=condition_view,
+                entry_view=None if entry_views is None else entry_views[id(item)],
             )
         else:
             _execute_instruction(
@@ -1503,9 +1486,7 @@ def _execute_call_instruction(
 
     observer.begin_subroutine_call(ctx, rung_index, instruction, depth, call_stack)
     next_stack = (*call_stack, instruction.subroutine_name)
-    saved_snapshot = ctx._condition_snapshot
     saved_scope_token = ctx._condition_scope_token
-    ctx._condition_snapshot = None
     ctx._condition_scope_token = instruction._executor_scope_token
     try:
         for rung_id, sub_rung in subroutine_plan:
@@ -1536,7 +1517,6 @@ def _execute_call_instruction(
     except SubroutineReturnSignal:
         pass
     finally:
-        ctx._condition_snapshot = saved_snapshot
         ctx._condition_scope_token = saved_scope_token
 
 
@@ -1556,24 +1536,19 @@ def _execute_for_loop_instruction(
     subroutine_name = call_stack[-1] if call_stack else None
 
     def _run_body_rung(body_rung: Rung) -> None:
-        outer_view = ctx._condition_snapshot
-        try:
-            _execute_rung(
-                program,
-                ctx,
-                rung_index,
-                body_rung,
-                mode=mode,
-                observer=observer,
-                kind="loop_body",
-                depth=depth + 1,
-                parent_enabled=True,
-                subroutine_name=subroutine_name,
-                call_stack=call_stack,
-                condition_view=outer_view,
-            )
-        finally:
-            ctx._condition_snapshot = outer_view
+        _execute_rung(
+            program,
+            ctx,
+            rung_index,
+            body_rung,
+            mode=mode,
+            observer=observer,
+            kind="loop_body",
+            depth=depth + 1,
+            parent_enabled=True,
+            subroutine_name=subroutine_name,
+            call_stack=call_stack,
+        )
 
     if not enabled:
         # A false For rung skips its body (CLICK): only the For's one-shot re-arms.
@@ -1591,24 +1566,19 @@ def _execute_for_loop_instruction(
             ctx.set_tag(instruction.idx_tag.name, i)
             for child in instruction.body:
                 if isinstance(child, Instruction):
-                    row = begin_bare_body_row(ctx, child)
-                    try:
-                        _execute_instruction(
-                            program,
-                            ctx,
-                            rung_index,
-                            rung,
-                            child,
-                            True,
-                            mode=mode,
-                            observer=observer,
-                            depth=depth + 1,
-                            call_stack=call_stack,
-                            item_kind=child._executor_kind,
-                        )
-                    finally:
-                        if row is not None:
-                            ctx._condition_snapshot = row[0]
+                    _execute_instruction(
+                        program,
+                        ctx,
+                        rung_index,
+                        rung,
+                        child,
+                        True,
+                        mode=mode,
+                        observer=observer,
+                        depth=depth + 1,
+                        call_stack=call_stack,
+                        item_kind=child._executor_kind,
+                    )
                 else:
                     _run_body_rung(child)
         except LoopContinueSignal:

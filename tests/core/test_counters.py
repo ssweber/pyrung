@@ -228,8 +228,8 @@ class TestCountUpInstruction:
         runner.step()
         assert runner.current_state.tags["Counter_Acc"] == 0
 
-    def test_count_up_reset_condition_uses_rung_entry_snapshot(self, runner_factory):
-        """Same-rung writes do not fire reset() until the next snapshot."""
+    def test_count_up_reset_reads_at_box_entry(self, runner_factory):
+        """reset() reads at box entry, so it sees a write a row above on the same scan."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
 
@@ -243,14 +243,11 @@ class TestCountUpInstruction:
 
         runner.step()
         assert runner.current_state.tags["ResetBtn"] is True
-        assert runner.current_state.tags["Counter_Acc"] == 1
-
-        runner.step()
-        assert runner.current_state.tags["Counter_Acc"] == 0
+        assert runner.current_state.tags["Counter_Acc"] == 0  # reset wins
         assert runner.current_state.tags["Counter_Done"] is False
 
-    def test_count_up_down_condition_uses_rung_entry_snapshot(self, runner_factory):
-        """Same-rung writes do not affect bidirectional down() until next scan."""
+    def test_count_up_down_reads_at_box_entry(self, runner_factory):
+        """down() reads at box entry, so it sees a write a row above on the same scan."""
         Enable = Bool("Enable")
         Down = Bool("Down")
         ResetBtn = Bool("ResetBtn")
@@ -265,7 +262,8 @@ class TestCountUpInstruction:
 
         runner.step()
         assert runner.current_state.tags["Down"] is True
-        assert runner.current_state.tags["Counter_Acc"] == 1
+        # The up and down edges land on the same scan and cancel.
+        assert runner.current_state.tags["Counter_Acc"] == 0
 
 
 class TestCountDownInstruction:

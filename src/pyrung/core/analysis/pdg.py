@@ -1343,7 +1343,7 @@ def _rung_condition_reads(
     """Extract rung condition reads.
 
     Branch rungs store inherited parent conditions first; ``local_only=True``
-    returns just the branch-local slice used during the branch prepass.
+    returns just the branch-local slice, read when the solve reaches the branch.
     """
     conditions = (
         rung._conditions[rung._branch_condition_start :] if local_only else rung._conditions
@@ -1372,31 +1372,15 @@ def _build_access_sequence(
     events: list[_AccessEvent] = []
     active_calls: set[str] = set()
 
-    def emit_condition_prepass(rung: Rung, *, emit_own_conditions: bool) -> None:
-        node_index = node_index_by_rung[id(rung)]
-
-        if emit_own_conditions:
-            own_condition_reads = _rung_condition_reads(rung, tag_refs)
-            if own_condition_reads:
-                events.append(
-                    _AccessEvent(node_index=node_index, condition_reads=own_condition_reads)
+    def emit_rung_conditions(rung: Rung) -> None:
+        # A top-level rung's trunk is read once, as the rung starts.
+        own_condition_reads = _rung_condition_reads(rung, tag_refs)
+        if own_condition_reads:
+            events.append(
+                _AccessEvent(
+                    node_index=node_index_by_rung[id(rung)], condition_reads=own_condition_reads
                 )
-
-        # All branch local conditions conceptually read the same rung-entry
-        # snapshot, so we emit the whole branch tree's condition prepass before
-        # any instruction events in this rung execute.
-        for item in rung._execution_items:
-            if not isinstance(item, RungClass):
-                continue
-            local_condition_reads = _rung_condition_reads(item, tag_refs, local_only=True)
-            if local_condition_reads:
-                events.append(
-                    _AccessEvent(
-                        node_index=node_index_by_rung[id(item)],
-                        condition_reads=local_condition_reads,
-                    )
-                )
-            emit_condition_prepass(item, emit_own_conditions=False)
+            )
 
     def inline_subroutine(name: str) -> None:
         if name in active_calls:
@@ -1406,7 +1390,7 @@ def _build_access_sequence(
             return
         active_calls.add(name)
         for sub_rung in sub_rungs:
-            emit_condition_prepass(sub_rung, emit_own_conditions=True)
+            emit_rung_conditions(sub_rung)
             walk_execution(sub_rung)
         active_calls.discard(name)
 
@@ -1438,14 +1422,36 @@ def _build_access_sequence(
 
     def walk_execution(rung: Rung) -> None:
         node_index = node_index_by_rung[id(rung)]
+
+        def emit_branch_conditions(branch: Rung) -> None:
+            local_condition_reads = _rung_condition_reads(branch, tag_refs, local_only=True)
+            if local_condition_reads:
+                events.append(
+                    _AccessEvent(
+                        node_index=node_index_by_rung[id(branch)],
+                        condition_reads=local_condition_reads,
+                    )
+                )
+
+        # A synthesis bracket solves every direct branch's contacts at its
+        # entry, before any row writes (``Rung._rows_read_at_entry``).
+        at_entry = rung._rows_read_at_entry
+        if at_entry:
+            for item in rung._execution_items:
+                if isinstance(item, RungClass):
+                    emit_branch_conditions(item)
         for item in rung._execution_items:
             if isinstance(item, RungClass):
+                # A branch reads its own contacts when the solve reaches it,
+                # after the rows above it have run (the live row solve).
+                if not at_entry:
+                    emit_branch_conditions(item)
                 walk_execution(item)
                 continue
             walk_instruction(item, node_index)
 
     for rung in program.rungs:
-        emit_condition_prepass(rung, emit_own_conditions=True)
+        emit_rung_conditions(rung)
         walk_execution(rung)
 
     return tuple(events)

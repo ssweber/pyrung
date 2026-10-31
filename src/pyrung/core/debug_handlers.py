@@ -13,7 +13,6 @@ from pyrung.core.instruction import (
     LoopContinueSignal,
     SubroutineReturnSignal,
 )
-from pyrung.core.site_memory import begin_bare_body_row
 
 if TYPE_CHECKING:
     from pyrung.core.debugger import DebugInstructionState, PLCDebugger
@@ -52,6 +51,10 @@ class GenericInstructionDebugHandler:
         )
         debug_substeps = getattr(instruction, "debug_substeps", None)
         if debug_substeps:
+            # A box reads its pins at one moment, as it starts (before any
+            # write of its own): the substeps trace a view taken here, the
+            # values the box will read.
+            pin_view = execution.ctx._new_condition_view()
             for substep in debug_substeps:
                 substep_span = debugger._resolve_location(
                     substep,
@@ -61,7 +64,7 @@ class GenericInstructionDebugHandler:
                 substep_condition_trace = debugger._instruction_substep_condition_trace(
                     runner=execution.runner,
                     substep=substep,
-                    condition_view=execution.condition_view,
+                    condition_view=pin_view,
                     enabled=execution.enabled,
                     enabled_state=execution.enabled_state,
                     source_file=substep_span.source_file,
@@ -129,13 +132,11 @@ class CallInstructionDebugHandler:
         )
 
         next_stack = (*execution.call_stack, instruction.subroutine_name)
-        saved_snapshot = execution.ctx._condition_snapshot
         saved_scope_token = execution.ctx._condition_scope_token
-        execution.ctx._condition_snapshot = None
         execution.ctx._condition_scope_token = object()
         try:
             for sub_rung in instruction._program.subroutines[instruction.subroutine_name]:
-                sub_condition_view = sub_rung._resolve_condition_view(execution.ctx)
+                sub_condition_view = sub_rung._new_row_view(execution.ctx)
                 sub_enabled, sub_condition_traces = debugger._evaluate_conditions_with_trace(
                     execution.runner,
                     sub_rung._conditions,
@@ -165,7 +166,6 @@ class CallInstructionDebugHandler:
         except SubroutineReturnSignal:
             return
         finally:
-            execution.ctx._condition_snapshot = saved_snapshot
             execution.ctx._condition_scope_token = saved_scope_token
 
 
@@ -198,58 +198,42 @@ class ForLoopInstructionDebugHandler:
             try:
                 for child in instruction.body:
                     if isinstance(child, Instruction):
-                        row = begin_bare_body_row(ctx, child)
-                        # A row of its own reads the fresh view the engine scans
-                        # its helper legs against, not the loop rung's entry view.
-                        row_execution = (
-                            child_execution
-                            if row is None
-                            else child_execution.with_overrides(
-                                condition_view=ctx._condition_snapshot
+                        # A bare body box is a row of its own; it reads its
+                        # pins as it starts (the substeps trace that view).
+                        yield from debugger._iter_instruction_steps(
+                            debugger._make_instruction_state(
+                                execution=child_execution,
+                                rung=instruction_state.rung,
+                                instruction=child,
+                                step_trace=instruction_state.step_trace,
                             )
                         )
-                        try:
-                            yield from debugger._iter_instruction_steps(
-                                debugger._make_instruction_state(
-                                    execution=row_execution,
-                                    rung=instruction_state.rung,
-                                    instruction=child,
-                                    step_trace=instruction_state.step_trace,
-                                )
-                            )
-                        finally:
-                            if row is not None:
-                                ctx._condition_snapshot = row[0]
                         continue
-                    outer_view = ctx._condition_snapshot
-                    try:
-                        body_view = child._new_row_view(ctx)
-                        ctx._condition_snapshot = body_view
-                        local = child._conditions[child._branch_condition_start :]
-                        body_enabled, body_traces = debugger._evaluate_conditions_with_trace(
-                            execution.runner, local, body_view
-                        )
-                        body_execution = execution.with_overrides(
+                    # A body rung is solved as a rung of its own each pass.
+                    body_view = child._new_row_view(ctx)
+                    local = child._conditions[child._branch_condition_start :]
+                    body_enabled, body_traces = debugger._evaluate_conditions_with_trace(
+                        execution.runner, local, body_view
+                    )
+                    body_execution = execution.with_overrides(
+                        kind="loop_body",
+                        depth=execution.depth + 1,
+                        enabled=body_enabled,
+                        parent_enabled=True,
+                        enabled_state=debugger._enabled_state_for(
                             kind="loop_body",
-                            depth=execution.depth + 1,
                             enabled=body_enabled,
                             parent_enabled=True,
-                            enabled_state=debugger._enabled_state_for(
-                                kind="loop_body",
-                                enabled=body_enabled,
-                                parent_enabled=True,
-                            ),
-                            condition_view=body_view,
+                        ),
+                        condition_view=body_view,
+                    )
+                    yield from debugger._iter_rung_steps(
+                        debugger._make_rung_state(
+                            execution=body_execution,
+                            rung=child,
+                            rung_condition_traces=body_traces,
                         )
-                        yield from debugger._iter_rung_steps(
-                            debugger._make_rung_state(
-                                execution=body_execution,
-                                rung=child,
-                                rung_condition_traces=body_traces,
-                            )
-                        )
-                    finally:
-                        ctx._condition_snapshot = outer_view
+                    )
             except LoopContinueSignal:
                 continue
             except LoopBreakSignal:

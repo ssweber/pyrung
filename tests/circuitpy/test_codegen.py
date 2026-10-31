@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import sys
 import types
 from typing import cast
@@ -1019,8 +1020,9 @@ class TestInstructionCoverage:
         assert "\n    else:\n    _cond_snap_" not in compiled.source
 
     def test_helper_legs_bind_at_their_box(self):
-        """A box's helper legs bind just before its code, reading the rung's
-        entry snapshot; a bare For-body box binds them as its row starts."""
+        """A box's helper legs bind just before its code, as the box starts:
+        they read live, so they see the writes of the rows above the box; a
+        bare For-body box binds them the same way on each pass."""
         a, b, d, e = Bool("A"), Bool("B"), Bool("D"), Bool("E")
         c1, c2, c3 = Counter.clone("C1"), Counter.clone("C2"), Counter.clone("C3")
         with Program(strict=False) as prog:
@@ -1039,13 +1041,15 @@ class TestInstructionCoverage:
         def at(prefix: str) -> int:
             return next(i for i, line in enumerate(lines) if line.startswith(prefix))
 
-        leg_c1, leg_c2 = at("_rung_1_snap_0 = "), at("_rung_1_snap_1 = ")
+        legs = [i for i, line in enumerate(lines) if re.match(r"_box_\d+_snap_0 = ", line)]
+        assert len(legs) == 3
+        leg_c1, leg_c2, leg_c3 = legs
         assert at("_t_B = True") < leg_c1 < at("_t_C1_Acc = _acc") < leg_c2 < at("_t_C2_Acc = _acc")
-        # The leg on B reads B's snapshot, not the B the out() above wrote.
-        assert lines[leg_c2].startswith("_rung_1_snap_1 = bool(_cond_snap_")
-        leg_c3 = at("_box_1_snap_0 = ")
+        # The leg on B reads the B the out() above wrote: the box reads its pins
+        # as it starts.
+        assert lines[leg_c2].endswith(" = bool(_t_B)")
         assert at("_t_D = True") < leg_c3 < at("_t_C3_Acc = _acc")
-        assert lines[leg_c3] == "_box_1_snap_0 = bool(_t_D)"
+        assert lines[leg_c3].endswith(" = bool(_t_D)")
 
     def test_function_call_subroutine_and_return_emit(self):
         hw = P1AM()
@@ -1330,7 +1334,7 @@ class TestIOMappingAndBranching:
         assert "base.writeAnalog(" in source_code
         assert "base.readDiscrete(5)" in source_code
 
-    def test_branch_precompute_and_source_order(self):
+    def test_branch_solved_where_it_sits_in_source_order(self):
         enable = Bool("Enable")
         branch_enable = Bool("BranchEnable")
         a = Bool("A")
@@ -1354,7 +1358,8 @@ class TestIOMappingAndBranching:
         a_idx = next(i for i, line in enumerate(lines) if f"{a_sym} = True" in line)
         b_idx = next(i for i, line in enumerate(lines) if f"{b_sym} = True" in line)
         c_idx = next(i for i, line in enumerate(lines) if f"{c_sym} = True" in line)
-        assert branch_idx < a_idx < b_idx < c_idx
+        # The branch is solved when the solve reaches it, after the row above.
+        assert a_idx < branch_idx < b_idx < c_idx
 
     @pytest.mark.parametrize(
         ("target", "expected"),

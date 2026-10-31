@@ -2070,10 +2070,11 @@ class TestSoftRtcTicks:
         assert _plain_tags(seek) == _plain_tags(ref)
 
 
-def _continued_branch_program(cont: bool) -> Program:
-    """A branch whose condition reads ``X == 0``.  Continued, it evaluates on the
-    previous rung's snapshot (where X is still 0), so it is live although X is 1
-    at its own position."""
+def _branch_position_program(shape: str) -> Program:
+    """A branch whose condition reads ``X == 0``, where X is 0 at rung entry and
+    1 at the end of the scan.  The branch reads X when the solve reaches it: above
+    the write of 1 (``above``) it is live; below it, in its own rung (``below``)
+    or as a continued rung (``continued``), it is dead."""
     from pyrung import branch, copy, latch
 
     Sec, X, Snap, Half, Seen = Int("Sec"), Int("X"), Bool("Snap"), Int("Half"), Bool("Seen")
@@ -2085,11 +2086,20 @@ def _continued_branch_program(cont: bool) -> Program:
             copy(0, X)
         with Rung(X == 0):
             out(Snap)
-        with Rung():
-            copy(1, X)
-        with Rung().continued() if cont else Rung():
-            with branch(X == 0):
-                calc(Sec // 30, Half)
+        if shape == "continued":
+            with Rung():
+                copy(1, X)
+            with Rung().continued():
+                with branch(X == 0):
+                    calc(Sec // 30, Half)
+        else:
+            with Rung():
+                if shape == "below":
+                    copy(1, X)
+                with branch(X == 0):
+                    calc(Sec // 30, Half)
+                if shape == "above":
+                    copy(1, X)
         with Rung(Half == 1):
             latch(Seen)
         with Rung():
@@ -2252,10 +2262,10 @@ class TestSoftRtcRefusals:
         assert tm is not None and "Tot" not in tm.names
         assert not _time_mirrors_off(tm, (plc.state.tags,))
 
-    def test_continued_branch_is_not_judged_at_its_own_position(self) -> None:
+    def test_branch_is_judged_at_its_own_position(self) -> None:
         from pyrung.core.fold import _time_mirrors_off
 
-        plc = _rtc_plc(_continued_branch_program(True), dt=1.0, start=self._START)
+        plc = _rtc_plc(_branch_position_program("above"), dt=1.0, start=self._START)
         for _ in range(30):
             plc.step()
         tm = plc._ensure_fold_context(frozenset({"Hit"})).time_mirrors
@@ -2263,16 +2273,16 @@ class TestSoftRtcRefusals:
         assert plc.state.tags["Half"] == 1  # the branch is live
         assert not _time_mirrors_off(tm, (plc.state.tags,))
 
-    @pytest.mark.parametrize("cont", [True, False], ids=["continued", "plain"])
+    @pytest.mark.parametrize("shape", ["above", "below", "continued"])
     @pytest.mark.parametrize("dt", [1.0, 0.05])
-    def test_continued_branch_folded_matches_stepped(self, cont: bool, dt: float) -> None:
+    def test_branch_position_folded_matches_stepped(self, shape: str, dt: float) -> None:
         folded, stepped = _folded_and_stepped(
-            lambda: _continued_branch_program(cont),
+            lambda: _branch_position_program(shape),
             _until_hit(int(70 / dt)),
             dt=dt,
             start=self._START,
         )
-        assert stepped.state.tags["Seen"] is cont
+        assert stepped.state.tags["Seen"] is (shape == "above")
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
 

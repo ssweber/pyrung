@@ -61,18 +61,25 @@ def to_condition(obj: Any) -> Any:
     )
 
 
-def instruction_condition_view(ctx: ScanContext) -> ConditionView:
-    """Return the frozen condition snapshot visible to instruction helper inputs.
+def instruction_condition_view(ctx: ScanContext, instr: Any) -> ConditionView:
+    """The condition view box *instr* reads its helper pins from, taken at box entry.
 
-    Helper conditions such as ``.reset(...)`` and ``.jump(...)`` should read from
-    the active rung snapshot when one exists. Direct instruction unit tests may
-    execute outside a rung, so we fall back to a one-off frozen snapshot taken at
-    instruction entry.
+    A box reads its enable and all its pins at one moment, as it starts and
+    before any write of its own, whether or not it is enabled: the view is
+    frozen there, so no pin sees the box's own Done/Acc/step writes, and it
+    sees every write of the rows above the box.  The box's edge pins are
+    scanned (their memory stored) as the view is taken.  Call it before the
+    box writes anything.
     """
-    snapshot = ctx._condition_snapshot
-    if snapshot is not None:
-        return snapshot
-    return ctx._new_condition_view()
+    from pyrung.core.site_memory import build_box_frame, scan_edge_frame
+
+    view = ctx._new_condition_view()
+    frame = instr._edge_frame
+    if frame is None:
+        frame = build_box_frame(instr)
+    if frame:
+        scan_edge_frame(ctx, view, frame)
+    return view
 
 
 def resolve_preset_ctx(preset: Tag | int, ctx: ScanContext) -> int:

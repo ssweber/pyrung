@@ -4304,16 +4304,12 @@ class PLC:
         """Evaluate synthesis bracket rungs in their own condition scope.
 
         The brackets are scanned like a subroutine body: a fresh condition
-        scope (so a user rung's ``.continued()`` can't reach across into a
-        bracket, and vice-versa), writes batched into the same ctx/commit as the
-        user rungs.  Each entry records under a synthetic ``RungId`` in the
+        scope, writes batched into the same ctx/commit as the user rungs.  Each entry records under a synthetic ``RungId`` in the
         node timeline, leaving the public integer main-rung timeline unchanged.
         """
         if not rungs:
             return
-        saved_snapshot = ctx._condition_snapshot
         saved_scope = ctx._condition_scope_token
-        ctx._condition_snapshot = None
         ctx._condition_scope_token = object()
         try:
             for rung_index, rung in enumerate(rungs):
@@ -4331,7 +4327,6 @@ class PLC:
                     else:
                         rung.evaluate(ctx)
         finally:
-            ctx._condition_snapshot = saved_snapshot
             ctx._condition_scope_token = saved_scope
 
     def _commit_scan(

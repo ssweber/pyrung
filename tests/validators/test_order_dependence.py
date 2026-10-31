@@ -3,8 +3,8 @@
 The solve-order table (``tests/conformance/test_solve_order.py``,
 ``ORDER_DEPENDENT``) is the check's ground truth: it records, for every
 conformance case on solve order, whether its answer differs between the live
-row solve (a CLICK) and pyrung's rung-entry snapshot.  The check must flag
-exactly those cases.
+row solve (a CLICK, and pyrung since S4) and a rung-entry snapshot (pyrung
+before S4).  The check must flag exactly those cases.
 """
 
 from __future__ import annotations
@@ -104,7 +104,11 @@ def test_shared_reads_are_re_read_by_every_row():
 def _cases() -> list[tuple[str, Case]]:
     return [
         (group.name, c)
-        for group in (test_solve_order.group, test_rung_semantics.group)
+        for group in (
+            test_solve_order.group,
+            test_rung_semantics.group,
+            *(m.group for m in test_solve_order.ANNOTATED_MODULES),
+        )
         for c in group.cases
     ]
 

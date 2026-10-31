@@ -207,9 +207,9 @@ class CodegenContext:
     # The locals holding each box's helper legs, by ``id(instr)`` then field,
     # bound just before the box's code (see compile._core._bind_helper_legs).
     _helper_condition_snapshots: dict[int, dict[str, str | list[str]]] = field(default_factory=dict)
-    # ``(memory key, edge condition)`` per scan point (top-level rung, For-body
-    # rung or bare For-body instruction), by ``id``, for the rows being compiled
-    # (see site_memory.edge_scan_rows).
+    # ``(memory key, edge condition)`` per row (a rung's trunk, branch or box,
+    # a For-body rung or bare For-body box), by ``id``, for the rows being
+    # compiled (see site_memory.edge_rows).
     _edge_rows: dict[int, tuple[tuple[str, Any], ...]] = field(default_factory=dict)
     compact_block_map: dict[int, dict[int, int]] = field(default_factory=dict)
     _static_range_layouts: dict[int, StaticRangeLayout] = field(default_factory=dict)

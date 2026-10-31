@@ -728,10 +728,11 @@ def compact_projection_condition_views(projection: ScanRungWriteProjection) -> N
     The projection's exact direct guard-read occurrences are authoritative.
     This function deliberately never rereads a live view's tag or memory maps:
     the runner may already have updated its fast-read cache during commit.
-    Views shared by a parent/branch or continued rung are compacted once from
-    the union of all their direct condition reads.
+    Each row (a rung, a branch, a For-body rung) has a view of its own, taken
+    as the solve reached it; a view is compacted once from the union of all
+    its direct condition reads.
 
-    Raises ``ValueError`` when one shared view cannot represent its recorded
+    Raises ``ValueError`` when one view cannot represent its recorded
     reads with a single frozen value/source surface. The session owner treats
     that as an all-or-nothing capture-stream failure and falls back to exact
     historical replay.
@@ -828,6 +829,8 @@ def compact_projection_condition_views(projection: ScanRungWriteProjection) -> N
         view._resolver = _RecordedResolver(resolved_tags) if resolved_tags else None
         view._scope_token = scope_token
         view._read_sink = None
+        view._live = False
+        view._edge_prior = None
         view._tag_source_snapshot = tag_sources or None
         view._memory_source_snapshot = memory_sources or None
 

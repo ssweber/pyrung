@@ -7,12 +7,14 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Generator
+from dataclasses import replace
 from typing import Any, BinaryIO, ClassVar, TypeVar
 
 ParsedArgs = TypeVar("ParsedArgs")
 
 from pyrung.core import PLC
 from pyrung.core.context import ScanContext
+from pyrung.core.debug_trace import RungTraceEvent, SourceSpan, TraceEvent, TraceRegion
 from pyrung.core.rung import Rung
 from pyrung.core.runner import ScanStep
 from pyrung.core.state import SystemState
@@ -49,6 +51,32 @@ class DAPAdapterError(Exception):
 
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
+
+
+def _settled_rung_event(events: tuple[RungTraceEvent, ...]) -> RungTraceEvent:
+    """The rung's first event (its own step) with its regions as the scan left them.
+
+    The first event holds a region for the rung and each of its branches.  The
+    rung is solved row by row, so a branch's region there is final only once
+    the solve has reached the branch; a later event carrying the same region
+    (the branch's own step, or a later step of the rung) has its solved state.
+    Each region of the first event is taken from the last event carrying it.
+    """
+    first = events[0]
+    if first.trace is None or len(events) == 1:
+        return first
+    latest: dict[tuple[str, SourceSpan], TraceRegion] = {
+        (region.kind, region.source): region for region in first.trace.regions
+    }
+    for event in events[1:]:
+        if event.trace is None:
+            continue
+        for region in event.trace.regions:
+            key = (region.kind, region.source)
+            if key in latest:
+                latest[key] = region
+    regions = [latest[(region.kind, region.source)] for region in first.trace.regions]
+    return replace(first, trace=TraceEvent(regions=regions))
 
 
 class DAPAdapter:
@@ -710,11 +738,8 @@ class DAPAdapter:
                 continue
             if not trace.events:
                 continue
-            # Use the first event (parent rung step) which contains regions
-            # for the rung itself and all its branches.  The later events are
-            # individual branch steps that duplicate subsets of the same regions.
             body = self._formatter.current_trace_body(
-                event_result=(scan_id, rung_id, trace.events[0]),
+                event_result=(scan_id, rung_id, _settled_rung_event(trace.events)),
                 current_scan_id=scan_id,
                 trace_version=self.TRACE_VERSION,
                 canonical_path=self._canonical_path,

@@ -167,7 +167,8 @@ def test_compact_views_preserve_guard_cursor_and_derivation() -> None:
         if run.kind == "rung" and run is not anchor and run.rung._use_prior_snapshot
     )
     branch_run = next(run for run in projection.runs if run.kind == "branch")
-    assert anchor.view is continued.view is branch_run.view
+    # Each row has a view of its own, taken as the solve reached it.
+    assert len({id(anchor.view), id(continued.view), id(branch_run.view)}) == 3
 
     guard_reads = tuple(
         read

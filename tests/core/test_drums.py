@@ -9,6 +9,7 @@ from pyrung.core import (
     Int,
     Program,
     Rung,
+    branch,
     event_drum,
     latch,
     out,
@@ -191,9 +192,11 @@ def test_event_drum_event_must_see_new_rising_edge_after_step_entry(runner_facto
     assert runner.current_state.tags["Step"] == 3
 
 
-def test_event_drum_events_use_rung_entry_snapshot(runner_factory) -> None:
+def test_event_drum_events_read_at_box_entry(runner_factory) -> None:
+    """An event latched a row above the drum steps it on the same scan."""
     enable = Bool("Enable")
     reset = Bool("Reset")
+    go = Bool("Go")
     event = Bool("Event")
     step = Int("Step")
     done = Bool("Done")
@@ -202,7 +205,8 @@ def test_event_drum_events_use_rung_entry_snapshot(runner_factory) -> None:
 
     with Program() as logic:
         with Rung(enable):
-            latch(event)
+            with branch(go):
+                latch(event)
             event_drum(
                 outputs=[y1, y2],
                 events=[event, event],
@@ -212,13 +216,14 @@ def test_event_drum_events_use_rung_entry_snapshot(runner_factory) -> None:
             ).reset(reset)
 
     runner = runner_factory(logic)
-    runner.patch({"Enable": True, "Reset": False, "Event": False})
+    runner.patch({"Enable": True, "Reset": False, "Go": False, "Event": False})
 
     runner.step()
-    assert runner.current_state.tags["Event"] is True
     assert runner.current_state.tags["Step"] == 1
 
+    runner.patch({"Go": True})
     runner.step()
+    assert runner.current_state.tags["Event"] is True
     assert runner.current_state.tags["Step"] == 2
 
 
@@ -360,7 +365,8 @@ def test_event_drum_advance_after_a_jump_ends_completion(runner_factory) -> None
     assert runner.current_state.tags["Y2"] is True
 
 
-def test_time_drum_jump_uses_rung_entry_snapshot(runner_factory) -> None:
+def test_time_drum_jump_reads_at_box_entry(runner_factory) -> None:
+    """A jump latched a row above the drum takes it on the same scan."""
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump = Bool("Jump")
@@ -387,9 +393,6 @@ def test_time_drum_jump_uses_rung_entry_snapshot(runner_factory) -> None:
 
     runner.step()
     assert runner.current_state.tags["Jump"] is True
-    assert runner.current_state.tags["Step"] == 1
-
-    runner.step()
     assert runner.current_state.tags["Step"] == 2
 
 
@@ -523,7 +526,8 @@ def _time_event_drum_program(
     with Program(strict=False) as logic:
         with Rung(Bool("Enable")):
             if latch_event is not None:
-                latch(latch_event)
+                with branch(Bool("Go")):
+                    latch(latch_event)
             time_event_drum(
                 outputs=[Bool(f"Y{i + 1}") for i in range(len(presets))],
                 presets=presets,
@@ -689,7 +693,8 @@ def test_time_event_drum_outputs_stay_off_after_completion_until_a_jog(
     assert runner.current_state.tags["Y2"] is True
 
 
-def test_time_event_drum_events_use_rung_entry_snapshot(runner_factory) -> None:
+def test_time_event_drum_events_read_at_box_entry(runner_factory) -> None:
+    """An event latched a row above the drum steps it on the same scan."""
     event = Bool("E1")
     runner = runner_factory(
         _time_event_drum_program([None, 100], [event, None], latch_event=event), dt=0.010
@@ -697,10 +702,11 @@ def test_time_event_drum_events_use_rung_entry_snapshot(runner_factory) -> None:
     runner.patch({"Enable": True})
 
     runner.step()
-    assert runner.current_state.tags["E1"] is True
     assert runner.current_state.tags["Step"] == 1
 
+    runner.patch({"Go": True})
     runner.step()
+    assert runner.current_state.tags["E1"] is True
     assert runner.current_state.tags["Step"] == 2
 
 
@@ -833,15 +839,11 @@ def test_event_drum_completes_pauses_and_resets_over_long_runs() -> None:
 
 
 @pytest.mark.parametrize("kind", ["event", "time", "time_event"])
-def test_drum_reads_its_pins_before_it_corrects_an_invalid_step(kind: str, monkeypatch) -> None:
+def test_drum_reads_its_pins_before_it_corrects_an_invalid_step(kind: str) -> None:
     """A box reads its pins before any write of its own (the live row solve's order).
 
-    Under the rung-entry snapshot the order cannot show, so the box's view is
-    made live here: a jump pin keyed on the uncorrected step must see it.
+    A jump pin keyed on the uncorrected step must see it.
     """
-    from pyrung.core.instruction import drums
-
-    monkeypatch.setattr(drums, "instruction_condition_view", lambda ctx: ctx)
     step = Int("Step")
     builder_args = {
         "outputs": [Bool("Y1"), Bool("Y2"), Bool("Y3")],

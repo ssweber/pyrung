@@ -946,14 +946,17 @@ class _TimeMirrors:
     dead_nodes: tuple[int, ...]
     # Dead nodes whose clock reads are all one-shot copies/calcs of a main rung.
     oneshot_nodes: frozenset[int]
-    # Per PDG node: the enable conditions, or ``None`` when they cannot be
-    # judged at the node's own position (a ``continued()`` rung, or a branch of
-    # one, evaluates them on an earlier rung's snapshot).
+    # Per PDG node: the enable conditions, or ``None`` when they are not judged
+    # (a ``continued()`` rung, or a branch of one: a rung of its own since the
+    # live row solve, kept unjudged until its positions are modelled).
     conditions: tuple[tuple[Any, ...] | None, ...]
     # Per PDG node: (first, last) main-scan position, or ``None`` if never run.
     spans: tuple[tuple[int, int] | None, ...]
-    # Per PDG node: conditions are evaluated at rung entry of a main rung, so
-    # every write at the same position happens after them.
+    # Per PDG node: conditions are evaluated as a main rung starts (its trunk),
+    # so every write at the same position happens after them.  A branch reads
+    # its own contacts when the solve reaches it, after some of its rung's
+    # writes, so it is False there: a write at the branch's position may land
+    # on either side and the judgement declines.
     main_entry: tuple[bool, ...]
     node_sub: tuple[str | None, ...]
     callers: dict[str, tuple[int, ...]]
@@ -1461,7 +1464,7 @@ def _time_mirror_analysis(
             for rung, top in zip(rungs, tops, strict=True)
         ),
         spans=tuple((min(p), max(p)) if p else None for p in pos),
-        main_entry=tuple(node.scope == "main" for node in nodes),
+        main_entry=tuple(node.scope == "main" and not node.branch_path for node in nodes),
         node_sub=tuple(node.subroutine for node in nodes),
         callers={sub: tuple(sites) for sub, sites in callers.items()},
         writers={tag: tuple(sorted(idx)) for tag, idx in writers.items()},
@@ -1615,7 +1618,7 @@ class _OffJudge:
             if hi < here[0]:
                 before = True
             elif lo > here[1] or (tm.main_entry[node] and lo >= here[0]):
-                # Main-rung conditions are judged at rung entry: every write at
+                # A main rung's trunk is read as the rung starts: every write at
                 # the same position (the rung, its branches, its callees) is later.
                 after = True
             else:

@@ -394,7 +394,8 @@ def test_replay_capture_orders_multiple_instructions_and_their_events() -> None:
     assert run.writes == ((source.name, 1), (result.name, 1))
 
 
-def test_replay_capture_freezes_entry_definition_for_continued_view() -> None:
+def test_replay_capture_sources_a_continued_read_from_the_write_above() -> None:
+    """A continued rung reads live, so its read comes from the last write above it."""
     state = Int("State")
     observed = Bool("Observed")
 
@@ -409,13 +410,15 @@ def test_replay_capture_freezes_entry_definition_for_continued_view() -> None:
     plc.step()
     first, continued = plc._replay_rung_runs_at(plc.state.scan_id)
 
-    assert [write.after for write in first.write_occurrences if write.name == state.name] == [1, 0]
+    state_writes = [write for write in first.write_occurrences if write.name == state.name]
+    assert [write.after for write in state_writes] == [1, 0]
     state_read = next(read for read in continued.direct_read_occurrences if read.name == state.name)
     assert state_read.value == 0
-    assert state_read.source == "entry"
+    assert state_read.source is state_writes[-1]
 
 
-def test_replay_capture_freezes_pending_definition_for_continued_view() -> None:
+def test_replay_capture_sources_a_continued_read_from_the_rung_above() -> None:
+    """The continued read comes from the rung above's last write, not an earlier one."""
     state = Int("State")
     observed = Bool("Observed")
 
@@ -433,15 +436,14 @@ def test_replay_capture_freezes_pending_definition_for_continued_view() -> None:
     source_run, mutating_run, continued = plc._replay_rung_runs_at(plc.state.scan_id)
 
     source_write = next(write for write in source_run.write_occurrences if write.name == state.name)
-    assert [
-        write.after for write in mutating_run.write_occurrences if write.name == state.name
-    ] == [
-        6,
-        5,
+    mutating_writes = [
+        write for write in mutating_run.write_occurrences if write.name == state.name
     ]
+    assert [write.after for write in mutating_writes] == [6, 5]
     state_read = next(read for read in continued.direct_read_occurrences if read.name == state.name)
     assert state_read.value == 5
-    assert state_read.source is source_write
+    assert state_read.source is mutating_writes[-1]
+    assert state_read.source is not source_write
 
 
 def test_replay_capture_links_memory_read_to_exact_memory_write() -> None:

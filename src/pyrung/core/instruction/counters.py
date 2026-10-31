@@ -112,7 +112,7 @@ class CountUpInstruction(Instruction):
         return tags
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        condition_view = instruction_condition_view(ctx)
+        condition_view = instruction_condition_view(ctx, self)
 
         reset_active = self.reset_condition is not None and self.reset_condition.evaluate(
             condition_view
@@ -231,7 +231,7 @@ class CountDownInstruction(Instruction):
         return tags
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        condition_view = instruction_condition_view(ctx)
+        condition_view = instruction_condition_view(ctx, self)
 
         reset_active = self.reset_condition is not None and self.reset_condition.evaluate(
             condition_view

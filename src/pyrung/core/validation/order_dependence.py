@@ -1,15 +1,15 @@
 """Intra-rung order dependence: rows that read a tag an earlier row wrote.
 
-A CLICK solves a rung row by row, top to bottom (hardware rounds 1 and 2).  The
-trunk's contacts are read once and its power is held for every row below it;
-each branch reads its own contacts when the solve reaches it, after the rows
-above it have run; a ``.continued()`` rung is one more row of the same CLICK
-rung, from the rail; and a box reads its legs (reset, jump, ...) at box entry.
-pyrung reads every one of those against a snapshot taken at rung entry, so a
+A CLICK solves a rung row by row, top to bottom (hardware rounds 1 and 2), and
+so does pyrung since the live row solve.  The trunk's contacts are read once
+and its power is held for every row below it; each branch reads its own
+contacts when the solve reaches it, after the rows above it have run; a
+``.continued()`` rung is one more row of the same CLICK rung, from the rail;
+and a box reads its legs (reset, jump, ...) at box entry.  Earlier pyrung
+releases read every one of those against a snapshot taken at rung entry, so a
 row that reads a tag written by an earlier row of the same rung (or chain of
-continued rungs) sees the old value in pyrung and the new one on a CLICK.  The
-live row solve will make pyrung read it the CLICK way, and such a rung's result
-changes.
+continued rungs) reads a new value now where it read the old one before, and
+its result depends on the order of the rows.
 
 Two layers:
 
@@ -572,9 +572,10 @@ def _display(
     if reader.body is not None:
         lead = lead[0].lower() + lead[1:]
     problem = (
-        f"{where}{lead} {names} after {_ABOVE_TEXT[reader.kind]} writes {noun}. "
-        f"pyrung reads {noun} as at rung entry; a CLICK reads the new value, "
-        "and so will pyrung once the live row solve lands."
+        f"{where}{lead} {names} after {_ABOVE_TEXT[reader.kind]} writes {noun}, "
+        "so it reads the new value: pyrung solves a rung row by row, as a CLICK does. "
+        f"pyrung releases before the live row solve read {noun} as at rung entry, "
+        "so this result differs from theirs."
     )
     lines = _reader_lines(reader, tags, bank_of)
     return FindingDisplay(

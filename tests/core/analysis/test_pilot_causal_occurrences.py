@@ -394,7 +394,8 @@ def test_cause_scopes_data_reads_to_the_selected_writer_instruction() -> None:
     assert earlier_source.name not in causal_tags
 
 
-def test_cause_does_not_follow_write_hidden_by_continued_view() -> None:
+def test_cause_follows_the_write_a_continued_rung_reads() -> None:
+    """A continued rung reads live, so its read of State comes from the write above."""
     state = Int("State")
     observed = Bool("Observed")
 
@@ -410,4 +411,4 @@ def test_cause_does_not_follow_write_hidden_by_continued_view() -> None:
 
     cause = plc.cause(observed, scan=plc.state.scan_id, deep=True)
     assert cause is not None
-    assert all(trigger.tag_name != state.name for step in cause.steps for trigger in step.triggers)
+    assert any(trigger.tag_name == state.name for step in cause.steps for trigger in step.triggers)

@@ -64,9 +64,10 @@ class _TrackedList:
 
     def __iter__(self) -> Any:
         # Without this, ``list(tracked)`` falls back to the sequence
-        # protocol — one Python ``__getitem__`` call per element. The
-        # generated kernel snapshots whole blocks at rung entry, so
-        # that fallback dominated compiled-replay scan time.
+        # protocol — one Python ``__getitem__`` call per element.  When the
+        # generated kernel snapshotted whole blocks at rung entry, that
+        # fallback dominated compiled-replay scan time; any whole-block copy
+        # still pays it.
         return iter(self.data)
 
 

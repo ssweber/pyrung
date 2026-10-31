@@ -138,7 +138,7 @@ def test_unmatched_counterfactual_boundary_is_explicitly_not_a_witness() -> None
     assert not receipt.applied_exactly_once(patch)
 
 
-def test_counterfactual_patch_targets_one_exact_sibling_branch_snapshot() -> None:
+def test_counterfactual_patch_targets_one_exact_sibling_branch_view() -> None:
     link = Bool("BranchLink", default=True)
     step = Int("BranchStep", default=40)
 
@@ -173,5 +173,7 @@ def test_counterfactual_patch_targets_one_exact_sibling_branch_snapshot() -> Non
 
     branches = tuple(run for run in capture.runs if run.kind == "branch")
     assert receipt.applied_exactly_once(patch)
-    assert tuple(run.view.get_tag(step.name) for run in branches) == (98, 98)
-    assert result.tags[step.name] == 10
+    # Only the first sibling's view is patched; the second reads live, after
+    # the first's copy (the live row solve), so it sees 10 and fires too.
+    assert tuple(run.view.get_tag(step.name) for run in branches) == (98, 10)
+    assert result.tags[step.name] == 94

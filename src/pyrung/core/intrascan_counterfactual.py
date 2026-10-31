@@ -205,20 +205,10 @@ class _CounterfactualPatchObserver:
         for patch, enabled in zip(matching, active, strict=True):
             if enabled:
                 before = ctx._get_tag_internal(patch.dest)
+                # Written before the row's view is taken (the executor opens
+                # the rung scope first), so the row -- a rung or a branch --
+                # reads the hypothetical value like any write above it.
                 ctx.set_tag(patch.dest, patch.value)
-                # A branch reuses its outer rung's frozen ConditionView. Keep
-                # that disposable snapshot aligned with the hypothetical write
-                # so this exact branch read—and only analysis—observes it.
-                condition_view = ctx._condition_snapshot
-                if kind == "branch" and condition_view is not None:
-                    condition_view._tags_snapshot[patch.dest] = ctx._get_tag_internal(patch.dest)
-                    if (
-                        condition_view._tag_source_snapshot is not None
-                        and ctx._tag_write_sources is not None
-                    ):
-                        condition_view._tag_source_snapshot[patch.dest] = (
-                            ctx._tag_write_sources.get(patch.dest)
-                        )
                 self.applications.append(
                     CounterfactualPatchApplication(
                         patch=patch,

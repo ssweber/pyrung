@@ -13,9 +13,10 @@ round 1, 2026-10-29, part B, two identical passes; CLICK manual ch. 1,
 - When two rungs drive the same ``out`` coil, the lower one decides how the
   scan leaves it.
 
-pyrung freezes a snapshot of memory on rung entry and reads every contact of
-the rung, branches and continued wires included, against it.  The cases where
-that shows are ``pending="S4"`` until the live row solve lands.
+pyrung solves a rung the same way since S4 (the live row solve).  Before it,
+pyrung froze a snapshot of memory on rung entry and read every contact of the
+rung, branches and continued wires included, against it; what the live-read
+cases read under that model is ``test_solve_order.RUNGS_SNAPSHOT``.
 
 The bits are C bits; the cases own C1601..C1700 and counters CT151..CT160 (unused since
 ``box_leg_reads_rows_above`` retired)
@@ -223,7 +224,6 @@ group = Group(
             ladder=prove_branch_sees_rung_entry,
             init=init_branch_sees_rung_entry,
             expect={"Result1": 0, "Result2": 1},
-            pending="S4",
         ),
         case(
             "Nested branches read live too: inner branches that need off the bits set "
@@ -231,7 +231,6 @@ group = Group(
             ladder=prove_nested_branches_see_rung_entry,
             init=init_nested_branches_see_rung_entry,
             expect={"Result1": 0, "Result2": 0},
-            pending="S4",
         ),
         case(
             "A branch runs only when its parent's contacts and its own pass, and a "
@@ -258,7 +257,6 @@ group = Group(
             ladder=prove_continued_shares_snapshot,
             init=init_continued_shares_snapshot,
             expect={"Result1": 0, "Result2": 0},
-            pending="S4",
         ),
         case(
             "Continued wires and normal rungs read alike: after a chain (Result1 = 0), a "
@@ -268,7 +266,6 @@ group = Group(
             ladder=prove_continued_chain_breaks,
             init=init_continued_chain_breaks,
             expect={"Result1": 0, "Result2": 0, "Result3": 1},
-            pending="S4",
         ),
     ],
 )

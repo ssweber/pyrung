@@ -266,7 +266,7 @@ def test_scan_steps_debug_emits_branch_then_subroutine_then_rung():
     assert runner.current_state.tags["SubLight"] is True
 
 
-def test_scan_steps_debug_uses_precomputed_branch_enable():
+def test_scan_steps_debug_solves_a_branch_when_it_reaches_it():
     enable = Bool("Enable")
     mode = Bool("Mode")
     branch_out = Bool("BranchOut")
@@ -281,11 +281,11 @@ def test_scan_steps_debug_uses_precomputed_branch_enable():
     runner.patch({"Enable": True, "Mode": False, "BranchOut": False})
     steps = list(runner.debug.scan_steps_debug())
 
-    # Branch remains unpowered for this scan despite Mode being written before branch item.
+    # The branch reads Mode after the latch above it, so it is powered this scan.
     kinds = [step.kind for step in steps]
-    assert [kind for kind in kinds if kind != "instruction"] == ["rung"]
+    assert [kind for kind in kinds if kind != "instruction"] == ["rung", "branch"]
     assert runner.current_state.tags["Mode"] is True
-    assert runner.current_state.tags["BranchOut"] is False
+    assert runner.current_state.tags["BranchOut"] is True
 
 
 def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace():
@@ -389,7 +389,7 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
         assert isinstance(condition.expression, str) and condition.expression
 
 
-def test_scan_steps_debug_instruction_helper_trace_uses_rung_snapshot():
+def test_scan_steps_debug_instruction_helper_trace_reads_at_box_entry():
     enable = Bool("Enable")
     reset = Bool("Reset")
 
@@ -409,8 +409,9 @@ def test_scan_steps_debug_instruction_helper_trace_uses_rung_snapshot():
     assert len(reset_steps) == 1
     reset_step = reset_steps[0]
     assert reset_step.trace is not None
+    # The reset pin reads at box entry, after the latch above it.
     condition = reset_step.trace.regions[0].conditions[0]
-    assert condition.status == "false"
-    assert condition.value is False
+    assert condition.status == "true"
+    assert condition.value is True
     assert runner.current_state.tags["Reset"] is True
-    assert runner.current_state.tags["Timer_Acc"] == 10
+    assert runner.current_state.tags["Timer_Acc"] == 0

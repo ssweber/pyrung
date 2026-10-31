@@ -772,8 +772,8 @@ def test_compiled_plc_matches_plc_for_rtc_apply_and_system_points() -> None:
     _assert_states_equivalent(plc, compiled)
 
 
-def test_intra_rung_write_not_visible_to_timer_reset_in_compiled_kernel() -> None:
-    """Regression: compiled kernel must snapshot helper conditions at rung entry."""
+def test_intra_rung_write_visible_to_timer_reset_in_compiled_kernel() -> None:
+    """The compiled kernel reads a box's pins at box entry, after the rows above."""
     Enable = Bool("Enable")
     ResetBtn = Bool("ResetBtn")
 
@@ -792,7 +792,7 @@ def test_intra_rung_write_not_visible_to_timer_reset_in_compiled_kernel() -> Non
     compiled.step()
     _assert_states_equivalent(plc, compiled)
     assert compiled.current_state.tags["ResetBtn"] is True
-    assert compiled.current_state.tags["Timer_Acc"] == 10
+    assert compiled.current_state.tags["Timer_Acc"] == 0
 
     plc.step()
     compiled.step()
@@ -800,8 +800,8 @@ def test_intra_rung_write_not_visible_to_timer_reset_in_compiled_kernel() -> Non
     assert compiled.current_state.tags["Timer_Acc"] == 0
 
 
-def test_compiled_plc_matches_plc_for_continued_snapshot_chain() -> None:
-    """Regression: compiled kernel must reuse the anchor snapshot for continued()."""
+def test_compiled_plc_matches_plc_for_continued_chain() -> None:
+    """The compiled kernel reads a continued() rung live, after the rung above."""
     Enable = Bool("Enable")
     Latched = Bool("Latched")
     Output = Bool("Output")
@@ -822,7 +822,7 @@ def test_compiled_plc_matches_plc_for_continued_snapshot_chain() -> None:
     compiled.step()
     _assert_states_equivalent(plc, compiled)
     assert compiled.current_state.tags["Latched"] is True
-    assert compiled.current_state.tags["Output"] is False
+    assert compiled.current_state.tags["Output"] is True
 
     plc.patch({"Enable": False})
     compiled.patch({"Enable": False})
@@ -831,7 +831,7 @@ def test_compiled_plc_matches_plc_for_continued_snapshot_chain() -> None:
     compiled.step()
     _assert_states_equivalent(plc, compiled)
     assert compiled.current_state.tags["Latched"] is False
-    assert compiled.current_state.tags["Output"] is True
+    assert compiled.current_state.tags["Output"] is False
 
 
 def test_replay_to_prefers_compiled_path_when_supported() -> None:

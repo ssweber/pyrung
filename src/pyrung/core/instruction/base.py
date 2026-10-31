@@ -50,12 +50,9 @@ class Instruction(ABC):
     # The binding that stamped ``_state_key`` (see ``Condition._site_owner``).
     _site_owner: object | None = None
     # Edge sites this instruction's helper legs hold (``(memory key, tag)``
-    # pairs; a bare For-body instruction scans them each iteration), stamped by
-    # ``site_memory.build_edge_frames``.
+    # pairs), stamped by ``site_memory.build_edge_frames``; the box scans them
+    # as it reads its pins (``utils.instruction_condition_view``).
     _edge_frame: tuple[tuple[str, str], ...] | None = None
-    # Whether a bare For-body instruction has a helper leg (reset, jump, ...):
-    # it is then a row of its own whose legs read the tags as that row starts.
-    _body_row_legs: bool = False
     ALWAYS_EXECUTES: bool = False
     INERT_WHEN_DISABLED: bool = True
     _reads: tuple[str, ...] = ()

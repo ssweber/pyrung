@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.instruction import Instruction
 
-_EMPTY_BRANCH_MAP: dict[int, bool] = {}
 _ANALYSIS_CACHE_MISS = object()
 
 
@@ -64,13 +63,18 @@ class Rung:
         # Branch rungs may include inherited parent conditions first.
         # This index marks where this rung's own local branch conditions begin.
         self._branch_condition_start = 0
+        # Set by ``.continued()``: the rung is drawn as a further wire of the
+        # rung above it (CLICK round-trip).  It is solved as a rung of its own.
         self._use_prior_snapshot = False
+        # Set only by pyrung's own synthesis brackets (core/synthesis.py), never
+        # by the DSL: every direct branch's contacts are solved at rung entry,
+        # before any row writes, so the rules of a guarded hold read one image
+        # and stay exclusive.  User rungs are solved row by row.
+        self._rows_read_at_entry = False
         # ``(memory key, tag)`` of the edge sites this rung's own contacts hold
-        # (its row), and of those its condition view scans (its row and every
-        # branch and box inside it); built on first scan
-        # (pyrung.core.site_memory.build_edge_frames).
+        # (its row), scanned when the solve reaches the row; built on first
+        # scan (pyrung.core.site_memory.build_edge_frames).
         self._edge_frame: tuple[tuple[str, str], ...] | None = None
-        self._scan_frame: tuple[tuple[str, str], ...] | None = None
         self.source_file = source_file
         self.source_line = source_line
         self.end_line = end_line
@@ -134,7 +138,6 @@ class Rung:
         self._written_value_cache = None
         self._sp_tree_cache = _ANALYSIS_CACHE_MISS
         self._edge_frame = None
-        self._scan_frame = None
 
     def _get_combined_condition(self) -> Condition | None:
         """Get a single condition representing all rung conditions ANDed together.
@@ -153,63 +156,42 @@ class Rung:
     def evaluate(self, ctx: ScanContext) -> None:
         """Evaluate this rung within a ScanContext.
 
-        Writes are batched in the context and committed at scan end.
-        A ConditionView is frozen at rung entry so that all rung conditions,
-        branch conditions, and instruction helper conditions evaluate against
-        the same snapshot.
-
-        If ``_use_prior_snapshot`` is set (via ``.continued()``), the
-        ConditionView from the previous rung is reused instead of creating
-        a fresh one — all conditions evaluate against the same pre-instruction
-        state as that earlier rung, but only within the same execution scope.
+        Writes are batched in the context and committed at scan end.  The rung
+        is solved row by row: its trunk's contacts are read once, as the rung
+        starts, and that power is held for every row under it; each branch's
+        own contacts are read when the solve reaches the branch, so they see
+        the writes of the rows above it.  A ``.continued()`` rung is a rung of
+        its own, its contacts read live like any other's.
 
         Args:
             ctx: ScanContext for reading/writing with batched updates.
         """
-        condition_view = self._resolve_condition_view(ctx)
+        condition_view = self._new_row_view(ctx, live=True)
         conditions_true = self._evaluate_conditions(condition_view)
-        self.execute(ctx, conditions_true, condition_view=condition_view)
+        self.execute(ctx, conditions_true)
 
-    def _resolve_condition_view(self, ctx: ScanContext) -> ConditionView:
-        """Resolve the frozen snapshot this rung should use for conditions."""
-        if self._use_prior_snapshot:
-            condition_view = ctx._condition_snapshot
-            if (
-                condition_view is None
-                or condition_view.scope_token is not ctx._condition_scope_token
-            ):
-                raise RuntimeError(
-                    "Rung.continued() used but no prior condition snapshot exists in the "
-                    "same execution scope. continued() cannot be used on the first rung in "
-                    "a program or subroutine, and cannot cross into or out of a subroutine."
-                )
-        else:
-            condition_view = ctx._new_condition_view()
+    def _new_row_view(self, ctx: ScanContext, *, live: bool = False) -> ConditionView:
+        """A condition view for this rung's own row (its trunk, or a branch's
+        local contacts), taken as the solve reaches it, with the row's edge
+        sites scanned.
 
-        ctx._condition_snapshot = condition_view
-        self._scan_edges(ctx, condition_view)
-        return condition_view
-
-    def _scan_edges(self, ctx: ScanContext, condition_view: ConditionView) -> None:
-        """Store the bit each edge site this rung's view scans sees (powered or not)."""
-        frame = self._scan_frame
+        *live* views read the pending writes directly and are only good for
+        evaluating the row at once; a frozen one (the default) may be kept and
+        re-read later (observers, the debugger).
+        """
+        frame = self._edge_frame
         if frame is None:
             frame = build_edge_frames(self)
+        condition_view = ctx._new_condition_view(live=live)
         if frame:
             scan_edge_frame(ctx, condition_view, frame)
-
-    def _new_row_view(self, ctx: ScanContext) -> ConditionView:
-        """A fresh condition view for this rung as a row of its own (a For-body
-        rung on one iteration), with its edge sites scanned."""
-        condition_view = ctx._new_condition_view()
-        self._scan_edges(ctx, condition_view)
         return condition_view
 
     def _evaluate_conditions(self, ctx: ScanContext | ConditionView) -> bool:
         """Evaluate all conditions (AND logic).
 
         Returns True if all conditions are true, or if there are no conditions.
-        Accepts either a live ScanContext or a frozen ConditionView.
+        Accepts either a live ScanContext or a ConditionView.
         """
         if not self._conditions:
             return True
@@ -234,64 +216,51 @@ class Rung:
                 return False
         return True
 
+    def _solve_row(self, ctx: ScanContext, parent_enabled: bool) -> bool:
+        """Solve this branch (or For-body rung) as the solve reaches it: its
+        own contacts, read live, under the power held from the row above."""
+        condition_view = self._new_row_view(ctx, live=True)
+        return parent_enabled and self._evaluate_local_conditions(condition_view)
+
     def _execute_in_loop(self, ctx: ScanContext) -> None:
         """Execute this rung as a forloop body rung, on one iteration.
 
-        A body rung is a rung of its own: on each iteration it takes a fresh
-        condition snapshot and evaluates only its local contacts (the loop
-        rung's contacts held at loop entry).  The loop's snapshot is restored
-        afterwards for the bare body instructions that follow.  A loop whose
-        rung is false does not run its body at all.
+        A body rung is a rung of its own: on each iteration it reads its local
+        contacts live (the loop rung's contacts held at loop entry).  A loop
+        whose rung is false does not run its body at all.
         """
-        outer_view = ctx._condition_snapshot
-        try:
-            condition_view = self._new_row_view(ctx)
-            enabled = self._evaluate_local_conditions(condition_view)
-            self.execute(ctx, enabled, condition_view=condition_view)
-        finally:
-            ctx._condition_snapshot = outer_view
+        self.execute(ctx, self._solve_row(ctx, True))
 
-    def _compute_branch_enable_map(
-        self,
-        condition_view: ConditionView,
-        parent_enabled: bool,
-    ) -> dict[int, bool]:
-        """Compute direct branch enable states using the rung-entry snapshot."""
-        if not self._branches:
-            return _EMPTY_BRANCH_MAP
-        branch_enable_map: dict[int, bool] = {}
-        for item in self._execution_items:
-            if isinstance(item, Rung):
-                branch_enable_map[id(item)] = parent_enabled and item._evaluate_local_conditions(
-                    condition_view
-                )
-        return branch_enable_map
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        """Execute this rung's rows in solve order with the provided power state.
 
-    def execute(
-        self,
-        ctx: ScanContext,
-        enabled: bool,
-        *,
-        condition_view: ConditionView | None = None,
-    ) -> None:
-        """Execute this rung with the provided power state.
+        Each branch is solved when the loop reaches it (``_solve_row``): its
+        own contacts read live, under *enabled*, the power held for the rows
+        under this one.
 
         Args:
             ctx: Live ScanContext for instruction read-after-write.
             enabled: Whether this rung/branch is powered.
-            condition_view: Frozen snapshot from rung entry for condition evaluation.
-                If None, a fresh snapshot is created (top-level entry via evaluate()).
         """
-        if condition_view is None:
-            condition_view = self._resolve_condition_view(ctx)
-        else:
-            ctx._condition_snapshot = condition_view
-
-        branch_enable_map = self._compute_branch_enable_map(condition_view, parent_enabled=enabled)
-
+        if self._rows_read_at_entry:
+            powers = self._solve_rows_at_entry(ctx, enabled)
+            for item in self._execution_items:
+                if isinstance(item, Rung):
+                    item.execute(ctx, powers[id(item)])
+                else:
+                    item.execute(ctx, enabled)
+            return
         for item in self._execution_items:
             if isinstance(item, Rung):
-                branch_power = branch_enable_map.get(id(item), False)
-                item.execute(ctx, branch_power, condition_view=condition_view)
+                item.execute(ctx, item._solve_row(ctx, enabled))
             else:
                 item.execute(ctx, enabled)
+
+    def _solve_rows_at_entry(self, ctx: ScanContext, enabled: bool) -> dict[int, bool]:
+        """Solve every direct branch's own contacts now, before any row runs
+        (a synthesis bracket, ``_rows_read_at_entry``), by ``id(branch)``."""
+        return {
+            id(item): item._solve_row(ctx, enabled)
+            for item in self._execution_items
+            if isinstance(item, Rung)
+        }

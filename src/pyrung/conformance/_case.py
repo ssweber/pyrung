@@ -28,7 +28,6 @@ _GROUP_NAME = re.compile(r"[a-z][a-z0-9]*(_[a-z0-9]+)*")
 PENDING_STEPS: Mapping[str, str] = {
     "S2": "counters count edges of their inputs",
     "S3": "edge contacts keep per-contact memory",
-    "S4": "rungs solve row by row, live",
     "DRUM": "drum ordering (jump/jog/reset/pause/completion)",
     "INF": "REAL overflow stores +/-Inf",
     "TEXT": "text, pack, NUL, search cursor and MDN fixes",

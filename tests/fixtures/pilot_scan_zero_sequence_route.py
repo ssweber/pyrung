@@ -7,6 +7,14 @@ watchdogs, the terminal settling timer, the active-low interruption rung,
 the late error writers, the reconnect repair followed by its adjacent-scan
 status overwrite, and the unconditional reporting copy which observes the
 structural sequence channel without becoming another route.
+
+pyrung solves a rung row by row, as a CLICK does, so a branch sees the writes
+of the rows above it.  The pilot contracts over this fixture were recorded
+when pyrung read every branch at rung entry, so each branch here sits above
+the rows whose writes it must not see, which keeps that behaviour: the
+transition-delay and dwell branches above their timers, and the interruption
+and status branches above the sibling step writes.  The topology is otherwise
+the field program's.
 """
 
 from pyrung import (
@@ -90,7 +98,8 @@ with Program() as logic:
     ):
         copy(40, SequenceStep, oneshot=True)
 
-    # R17-R23: same order and branch structure as the field program.
+    # R17-R23: the field program's branch structure; each Done branch sits
+    # above its timer so it sees the timer's Done of the scan before.
     with rung(
         Or(
             And(SequenceStep >= 40, SequenceStep < 50),
@@ -105,28 +114,28 @@ with Program() as logic:
         on_delay(FirstWatchdog, FirstWatchdogPresetMs)
 
     with rung(SequenceStep == 41):
-        on_delay(FirstTransitionDelay, FirstTransitionDelayMs)
         with branch(FirstTransitionDelay.Done):
             copy(50, SequenceStep, oneshot=True)
+        on_delay(FirstTransitionDelay, FirstTransitionDelayMs)
 
     with rung(SequenceStep == 50):
-        on_delay(FirstDwell, FirstDwellSeconds, "sec")
         with branch(FirstDwell.Done):
             copy(60, SequenceStep, oneshot=True)
+        on_delay(FirstDwell, FirstDwellSeconds, "sec")
 
     with rung(SequenceStep == 60):
         copy(61, SequenceStep, oneshot=True)
         on_delay(SecondWatchdog, SecondWatchdogPresetMs)
 
     with rung(SequenceStep == 61):
-        on_delay(SecondTransitionDelay, SecondTransitionDelayMs)
         with branch(SecondTransitionDelay.Done):
             copy(70, SequenceStep, oneshot=True)
+        on_delay(SecondTransitionDelay, SecondTransitionDelayMs)
 
     with rung(SequenceStep == 70):
-        on_delay(SecondDwell, SecondDwellSeconds, "sec")
         with branch(SecondDwell.Done):
             copy(80, SequenceStep, oneshot=True)
+        on_delay(SecondDwell, SecondDwellSeconds, "sec")
 
     # R24-R27: terminal approach and settling receipt.
     with rung(Or(SequenceStep == 80, And(SequenceStep >= 90, ~SettleDelay.Done))):
@@ -158,8 +167,6 @@ with Program() as logic:
     # scan executes it once while false; preserving that spent state is part of
     # the adjacent-scan route receipt.
     with rung(~InterruptionInput):
-        with branch(BaseSensor):
-            copy(10, SequenceStep, oneshot=True)
         with branch(
             Or(
                 And(SequenceStep == 50, FirstDwell.Acc < 10),
@@ -172,6 +179,8 @@ with Program() as logic:
             copy(2, LocalSequenceStep)
             copy(80, SequenceStep, oneshot=True)
             copy(1, SequenceInterrupted, oneshot=True)
+        with branch(BaseSensor):
+            copy(10, SequenceStep, oneshot=True)
 
     # The relevant late error writers retain their original ordering.
     with rung(FirstWatchdog.Done):
@@ -184,18 +193,18 @@ with Program() as logic:
         copy(98, SequenceStep, oneshot=True)
 
     # A durable reconnect first repairs the disconnected state. The sibling
-    # status branch does not see that newly written value until the following
-    # scan, where it can replace the productive 10 unless the program has
+    # status branch, above it, does not see that newly written value until the
+    # following scan, where it can replace the productive 10 unless the program has
     # advanced beyond the local handoff or one of the program-owned status
     # alternatives changed. This is the neutral 98 -> 10 -> 94 mechanism.
     with rung(NetworkAvailable):
-        with branch(SequenceStep == 98):
-            copy(10, SequenceStep, oneshot=True)
         with branch(SequenceStep <= 20):
             with branch(RecoveryCounter.Done):
                 copy(97, SequenceStep, oneshot=True)
             with branch(~RecoveryCounter.Done, ServiceStatus == 0):
                 copy(94, SequenceStep, oneshot=True)
+        with branch(SequenceStep == 98):
+            copy(10, SequenceStep, oneshot=True)
 
     with rung(~SafetyPermit):
         copy(99, SequenceStep, oneshot=True)

@@ -94,7 +94,7 @@ class Program:
             )
             raise RuntimeError(
                 f"Rung.continued() cannot be the first rung in a {scope}. "
-                "It can only reuse the prior rung snapshot in the same execution scope."
+                "It continues the rung above it, in the same execution scope."
             )
         target.append(rung)
         self._invalidate_graph_cache()
@@ -157,9 +157,7 @@ class Program:
         """Execute a subroutine by name within a ScanContext."""
         if name not in self.subroutines:
             raise KeyError(f"Subroutine '{name}' not defined")
-        saved_snapshot = ctx._condition_snapshot
         saved_scope_token = ctx._condition_scope_token
-        ctx._condition_snapshot = None
         ctx._condition_scope_token = object()
         try:
             for rung in self.subroutines[name]:
@@ -167,7 +165,6 @@ class Program:
         except SubroutineReturnSignal:
             pass
         finally:
-            ctx._condition_snapshot = saved_snapshot
             ctx._condition_scope_token = saved_scope_token
 
     @classmethod

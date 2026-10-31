@@ -214,7 +214,8 @@ def test_execution_items_preserve_instruction_branch_interleaving() -> None:
     )
 
 
-def test_branch_local_conditions_are_precomputed_before_sibling_instructions() -> None:
+def test_branch_local_conditions_read_after_the_rows_above() -> None:
+    """A branch reads its contacts when the solve reaches it (the live row solve)."""
     gate = Bool("Gate")
     light = Bool("Light")
 
@@ -227,12 +228,12 @@ def test_branch_local_conditions_are_precomputed_before_sibling_instructions() -
     graph = build_program_graph(prog)
 
     assert graph.def_use_chains["Gate"] == (
-        TagVersion(tag="Gate", defined_at=None, read_by=frozenset({1})),
-        TagVersion(tag="Gate", defined_at=0, read_by=frozenset()),
+        TagVersion(tag="Gate", defined_at=None, read_by=frozenset()),
+        TagVersion(tag="Gate", defined_at=0, read_by=frozenset({1})),
     )
 
 
-def test_nested_branch_conditions_also_read_preinstruction_snapshot() -> None:
+def test_nested_branch_conditions_read_after_the_rows_above() -> None:
     gate = Bool("Gate")
     middle = Bool("Middle")
     light = Bool("Light")
@@ -248,9 +249,27 @@ def test_nested_branch_conditions_also_read_preinstruction_snapshot() -> None:
     graph = build_program_graph(prog)
 
     assert graph.def_use_chains["Gate"] == (
-        TagVersion(tag="Gate", defined_at=None, read_by=frozenset({2})),
-        TagVersion(tag="Gate", defined_at=0, read_by=frozenset()),
+        TagVersion(tag="Gate", defined_at=None, read_by=frozenset()),
+        TagVersion(tag="Gate", defined_at=0, read_by=frozenset({2})),
     )
+
+
+def test_synthesis_bracket_branches_read_at_rung_entry() -> None:
+    """A synthesis bracket solves its branches' contacts before any row writes."""
+    from pyrung.core.synthesis import guarded_copy_rung
+
+    gate = Bool("Gate")
+    light = Bool("Light")
+    rung = guarded_copy_rung([(gate, True, ~light), (light, True, gate)])
+    prog = Program()
+    prog.rungs.append(rung)
+
+    graph = build_program_graph(prog)
+
+    gate_versions = graph.def_use_chains["Gate"]
+    assert gate_versions[0].defined_at is None
+    assert gate_versions[0].read_by
+    assert all(not version.read_by for version in gate_versions[1:])
 
 
 def test_isolated_role_prefers_same_rung_read_write_cycles() -> None:

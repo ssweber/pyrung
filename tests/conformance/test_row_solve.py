@@ -13,11 +13,12 @@ The models, as in ``test_solve_order.py``:
   row, so they see the writes of the rows above; a box reads its enable and
   pins before it writes; a continued wire is a wire of its own from the rail,
   read live.  Each case's ``expect`` is L's reading.
-- **S** (snapshot, pyrung today): every contact of the rung, its branches and
-  its continued wires reads the memory the rung was entered with, and S3's edge
-  frame samples every edge contact of the rung there too.  ``SOLVE_ORDER``
-  records what pyrung reads in-process (measured, not derived), and
-  ``test_solve_order.test_annotation_matches_readings`` checks it.
+- **S** (snapshot, pyrung before S4): every contact of the rung, its branches
+  and its continued wires reads the memory the rung was entered with, and S3's
+  edge frame samples every edge contact of the rung there too.  ``SOLVE_ORDER``
+  records what pyrung read in-process before S4 (measured, not derived);
+  ``test_solve_order.test_annotation_matches_readings`` checks it against each
+  case's ``expect``, which pyrung now reads.
 
 The cases, what each model reads, and the other models they tell apart:
 
@@ -79,8 +80,8 @@ from tests.conformance.scans import WINDOW, count_scans, done, firings, scans_fo
 GROUP = "row_solve"
 SCANS = scans_for()
 
-#: Case id -> (does the answer depend on solve order?, what pyrung reads in-process
-#: today under S).  ``test_solve_order`` folds these into ``ORDER_DEPENDENT``.
+#: Case id -> (does the answer depend on solve order?, what pyrung read in-process
+#: under S, before S4).  ``test_solve_order`` folds these into ``ORDER_DEPENDENT``.
 SOLVE_ORDER: Mapping[str, tuple[bool, Mapping[str, int]]] = {
     "edge_on_branch_reads_row_above": (
         True,
@@ -157,7 +158,6 @@ group = Group(
             ladder=prove_edge_on_branch_reads_row_above,
             expect={"Result1": 3, "Result2": 6, "Result3": 3, "Result4": 6},
             scans=SCANS,
-            pending="S4",
             probe="edge contact on a branch sees a row above",
         ),
         case(
@@ -179,7 +179,6 @@ group = Group(
             ladder=prove_continued_after_box_rereads_trunk,
             expect={"Result1": 0, "Result2": 1},
             scans=SCANS,
-            pending="S4",
             probe="continued wire re-reads the trunk after a box",
         ),
     ],

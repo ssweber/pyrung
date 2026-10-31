@@ -400,7 +400,7 @@ class EventDrumInstruction(_DrumBaseInstruction):
         forward again, by its event or a jog.  A jump moves the step but
         leaves a completed drum's outputs off.
         """
-        condition_view = instruction_condition_view(ctx)
+        condition_view = instruction_condition_view(ctx, self)
         step = _read_step_tag_value(ctx, self.current_step)
         step_changed = False
         invalid = not self._step_is_valid(step)
@@ -596,7 +596,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
         Completion turns every output off (``_drum_done``) until the drum
         steps forward again, by its time or a jog; a jump does not end it.
         """
-        condition_view = instruction_condition_view(ctx)
+        condition_view = instruction_condition_view(ctx, self)
         step = _read_step_tag_value(ctx, self.current_step)
         step_changed = False
         reset_step_data = False
@@ -837,7 +837,7 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
         drum, until the drum steps forward again (its time and event, or a
         jog) or resets; a jump does not end it.
         """
-        condition_view = instruction_condition_view(ctx)
+        condition_view = instruction_condition_view(ctx, self)
         step = _read_step_tag_value(ctx, self.current_step)
         step_changed = False
         reset_step_data = False

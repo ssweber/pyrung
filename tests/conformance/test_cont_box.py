@@ -12,11 +12,11 @@ run).
 
 The models, as in ``test_solve_order.py``: **L** (live, adopted by S4) reads a
 continued wire's contacts, and a box's enable and pins, when the solve reaches
-them, so they see the wire above; **S** (pyrung today) reads the whole CLICK
-rung, continued wires and box pins included, against the memory the rung was
-entered with.  ``SOLVE_ORDER`` records what pyrung reads in-process
-(measured), and ``test_solve_order.test_annotation_matches_readings`` checks
-it.
+them, so they see the wire above; **S** (pyrung before S4) reads the whole
+CLICK rung, continued wires and box pins included, against the memory the rung
+was entered with.  ``SOLVE_ORDER`` records what pyrung read in-process before
+S4 (measured), and ``test_solve_order.test_annotation_matches_readings``
+checks it against each case's ``expect``, which pyrung now reads.
 
 - ``box_pin_on_continued_wire`` (+, probe): the counter counts on scan 2; its
   reset pin is ``Or(Cmd == 0, P)`` and the wire above latches P on scan 4 (the
@@ -45,8 +45,8 @@ from tests.conformance.scans import count_scans, done, scans_for
 GROUP = "cont_box"
 SCANS = scans_for()
 
-#: Case id -> (does the answer depend on solve order?, what pyrung reads in-process
-#: today under S).  ``test_solve_order`` folds these into ``ORDER_DEPENDENT``.
+#: Case id -> (does the answer depend on solve order?, what pyrung read in-process
+#: under S, before S4).  ``test_solve_order`` folds these into ``ORDER_DEPENDENT``.
 SOLVE_ORDER: Mapping[str, tuple[bool, Mapping[str, int]]] = {
     "box_pin_on_continued_wire": (True, {"Result1": 1, "Result2": 1}),
     "box_enable_on_continued_wire": (True, {"Result1": 0}),
@@ -94,7 +94,6 @@ group = Group(
             ladder=prove_box_pin_on_continued_wire,
             expect={"Result1": 0, "Result2": 1},
             scans=SCANS,
-            pending="S4",
             probe="box on a continued wire: pins see the wire above",
         ),
         case(
@@ -103,7 +102,6 @@ group = Group(
             ladder=prove_box_enable_on_continued_wire,
             expect={"Result1": 1},
             scans=SCANS,
-            pending="S4",
             probe="box on a continued wire: enable sees the wire above",
         ),
     ],

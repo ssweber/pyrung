@@ -798,8 +798,8 @@ def test_edge_memory_seeding_covers_every_contact_on_the_tag():
 
 
 class TestEdgeFrames:
-    """Each trunk, branch and box is a row with an edge frame of its own; a
-    rung's view scans its rows' frames in solve order (the rung-entry snapshot)."""
+    """Each trunk, branch and box is a row with an edge frame of its own,
+    scanned when the solve reaches the row."""
 
     @staticmethod
     def _program() -> Program:
@@ -849,31 +849,39 @@ class TestEdgeFrames:
         assert tags(body_box) == ["A"]
         assert outer._edge_frame is not None
         assert [name for _key, name in outer._edge_frame] == ["B"]
-        assert body_box._body_row_legs is True
 
-    def test_a_rungs_view_scans_its_rows_in_solve_order(self):
-        from pyrung.core.site_memory import build_edge_frames, edge_scan_rows
+    def test_rows_are_listed_in_solve_order(self):
+        from pyrung.core.site_memory import build_edge_frames, edge_rows
 
         logic = self._program()
         rung, loop_rung = logic.rungs
         loop = loop_rung._instructions[0]
         body_rung, body_box = loop.body
-        scan = build_edge_frames(rung)
+        # The trunk's own frame holds only its contacts; the rows below scan
+        # their own frames as the solve reaches them.
+        assert [name for _key, name in build_edge_frames(rung)] == ["A"]
+        rows = edge_rows(rung)
         # The trunk, the nested branches, then the box.
-        assert [name for _key, name in scan] == ["A", "B", "C", "D"]
-        # Not the For body rows: they scan with views of their own.
+        assert [edge._resolved_tag.name for row in rows.values() for _k, edge in row] == [
+            "A",
+            "B",
+            "C",
+            "D",
+        ]
         assert build_edge_frames(loop_rung) == ()
-        assert [name for _key, name in body_rung._scan_frame] == ["E", "F"]
-        scans = edge_scan_rows(loop_rung)
-        assert set(scans) == {id(loop_rung), id(body_rung), id(body_box)}
+        assert body_rung._edge_frame is not None
+        assert [name for _key, name in body_rung._edge_frame] == ["E", "F"]
+        scans = edge_rows(loop_rung)
+        body_coil = body_rung._instructions[0]
+        assert set(scans) == {id(row) for row in (loop_rung, loop, body_rung, body_coil, body_box)}
         assert [edge._resolved_tag.name for _k, edge in scans[id(body_box)]] == ["A"]
 
     def test_keys_and_seeding_are_unchanged(self):
         logic = self._program()
         rung = logic.rungs[0]
-        from pyrung.core.site_memory import build_edge_frames
+        from pyrung.core.site_memory import edge_rows
 
-        keys = [key for key, _name in build_edge_frames(rung)]
+        keys = [key for row in edge_rows(rung).values() for key, _edge in row]
         assert keys == ["_edge:e1", "_edge:e2", "_edge:e3", "_edge:e4"]
         assert edge_memory_seeding(logic, {"A": True}) == {"_edge:e1": True, "_edge:e7": True}
         assert edge_memory_seeding(list(logic.rungs), {"A": True}) == {

@@ -47,12 +47,14 @@ def task_logic() -> None:
     with rung(Task.Active == 1):
         on_delay(StepTimer, 9999, "sec")
 
-        # Step 1: open valve for 5 seconds then advance.
+        # Step 1: open the valve.
         with branch(Task.Step == 1):
             out(Valve1)
 
-        with branch(Task.Step == 1, StepTimer.Acc >= 5):
-            copy(1, Task.Advance)
+    # Step 1 ends after 5 seconds.  A rung of its own reads the timer after the
+    # rung above has run it, whatever order that rung's rows are in.
+    with rung(Task.Active == 1, Task.Step == 1, StepTimer.Acc >= 5):
+        copy(1, Task.Advance)
 
     # Reset all task state when call is cleared.
     with rung(Task.Call == 0):

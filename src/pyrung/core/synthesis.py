@@ -260,18 +260,21 @@ def conditional_hold_rung(
 ) -> Rung:
     """Build a multi-branch hold: one parallel branch per ``(value, guard)`` rule.
 
-    Each branch drives ``value`` into ``dest`` while its ``guard`` holds.  Because
-    every branch's guard evaluates against the **rung-entry snapshot** (the frozen
-    ``ConditionView``), mutually-exclusive rules — a liveness oscillator's "drive
-    True while ``dest != True``" + "drive False while ``dest != False``" — stay
-    exclusive with no mid-scan chaining (branch 1's write is invisible to branch
-    2's guard).  It is an ordinary ladder rung, so it compiles natively (no
+    Each branch drives ``value`` into ``dest`` while its ``guard`` holds.  The
+    rung is a synthesis bracket (``Rung._rows_read_at_entry``): every branch's
+    guard is solved at **rung entry**, before any row writes, where a user rung
+    is solved row by row.  So mutually-exclusive rules — a liveness
+    oscillator's "drive True while ``dest != True``" + "drive False while
+    ``dest != False``" — stay exclusive with no mid-scan chaining (branch 1's
+    write is invisible to branch 2's guard).  Every backend (interpreter,
+    debugger, compiled kernel) honours the flag, so it compiles natively (no
     io-gap) and folds like any other.
 
     A single rule is better expressed by :func:`copy_hold_rung`; this is for the
     multi-rule (oscillating) case.
     """
     outer = Rung()
+    outer._rows_read_at_entry = True
     for value, guard in rules:
         outer.add_branch(copy_hold_rung(value=value, dest=dest, guard=guard))
     return outer
@@ -285,10 +288,12 @@ def guarded_copy_rung(
     Each simulated Boolean destination first returns to ``False``; guarded
     branches then overwrite it in proposal order. Non-Boolean destinations keep
     their prior/plant-supplied value when no branch is active. Disabled branches
-    are inert, so the last *active* write wins. All guards read the same rung-entry
-    snapshot, including when a rule reads the destination it drives.
+    are inert, so the last *active* write wins. The rung is a synthesis bracket
+    (``Rung._rows_read_at_entry``): all guards are solved at rung entry, before
+    any row writes, including when a rule reads the destination it drives.
     """
     outer = Rung()
+    outer._rows_read_at_entry = True
     from pyrung.core.tag import TagType
 
     seen: set[str] = set()

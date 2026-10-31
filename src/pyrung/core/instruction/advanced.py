@@ -319,7 +319,7 @@ class ShiftInstruction(Instruction):
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         tags = self._resolve_tags(ctx)
-        condition_view = instruction_condition_view(ctx)
+        condition_view = instruction_condition_view(ctx, self)
 
         clock_curr = bool(self.clock_condition.evaluate(condition_view))
         clock_prev = bool(ctx.get_memory(self.memory_key("_shift_prev_clock"), False))

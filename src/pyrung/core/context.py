@@ -62,11 +62,22 @@ class RungId(NamedTuple):
 
 
 class ConditionView:
-    """Frozen read-only view of tag/memory state for condition evaluation.
+    """Read-only view of tag/memory state for one row's condition evaluation.
 
-    Created at rung entry so that all branch conditions — at every nesting
-    depth — evaluate against the same snapshot, regardless of mutations made
-    by instructions that execute between branch evaluations.
+    A row (a rung's trunk, a branch, a continued rung, a For-body rung) reads
+    its contacts when the solve reaches it, so they see the writes of the rows
+    above it; a row reads its contacts before its outputs write.
+
+    A *live* view (``live=True``) reads the context's pending writes directly:
+    the interpreter's natural path takes one per row and drops it once the row
+    is evaluated.  Its edge contacts still compare against the memory as it
+    was before the row (``_hold_memory``: the row's scan stores each edge
+    site's new bit, and the view keeps the old one).
+
+    A *frozen* view copies the pending writes when it is taken.  A box reads
+    its enable and pins through one taken at box entry, so no pin sees the
+    box's own writes; observers hold frozen views to re-evaluate a row after
+    the scan.
     """
 
     __slots__ = (
@@ -80,23 +91,62 @@ class ConditionView:
         "_read_sink",
         "_tag_source_snapshot",
         "_memory_source_snapshot",
+        "_edge_prior",
+        "_live",
     )
 
-    def __init__(self, ctx: ScanContext) -> None:
+    def __init__(self, ctx: ScanContext, *, live: bool = False) -> None:
         self._state: SystemState = ctx._state
         self._tags: Mapping[str, Any] = ctx._state_tags_read
         self._memory: PMap = ctx._state_memory
-        self._tags_snapshot: dict[str, Any] = ctx._tags_pending.copy()
-        self._memory_snapshot: dict[str, Any] = ctx._memory_pending.copy()
         self._resolver = ctx._resolver
         self._scope_token = ctx._condition_scope_token
         self._read_sink = ctx._read_sink
+        # Edge memory as it was before this view's row was scanned, by key, with
+        # the origin and definition its read had (live views only).
+        self._edge_prior: dict[str, tuple[Any, ReadOccurrenceOrigin, Any]] | None = None
+        self._live = live
+        if live:
+            self._tags_snapshot: dict[str, Any] = ctx._tags_pending
+            self._memory_snapshot: dict[str, Any] = ctx._memory_pending
+            self._tag_source_snapshot = ctx._tag_write_sources
+            self._memory_source_snapshot = ctx._memory_write_sources
+            return
+        self._tags_snapshot = ctx._tags_pending.copy()
+        self._memory_snapshot = ctx._memory_pending.copy()
         self._tag_source_snapshot = (
             ctx._tag_write_sources.copy() if ctx._tag_write_sources is not None else None
         )
         self._memory_source_snapshot = (
             ctx._memory_write_sources.copy() if ctx._memory_write_sources is not None else None
         )
+
+    @property
+    def live(self) -> bool:
+        """Whether this view reads the context's pending writes as they happen."""
+        return self._live
+
+    def _hold_memory(self, key: str) -> None:
+        """Keep *key*'s memory as this view sees it now, before its row stores
+        a new value there (a live view's edge sites; a frozen view holds it
+        already)."""
+        if not self._live:
+            return
+        held = self._edge_prior
+        if held is None:
+            held = self._edge_prior = {}
+        elif key in held:
+            return
+        snap = self._memory_snapshot
+        value = snap.get(key, _MISSING)
+        if value is not _MISSING:
+            sources = self._memory_source_snapshot
+            held[key] = (value, "pending", sources.get(key) if sources is not None else None)
+            return
+        try:
+            held[key] = (self._memory[key], "entry", None)
+        except KeyError:
+            held[key] = (_MISSING, "default", None)
 
     def get_tag(self, name: str, default: Any = None) -> Any:
         snap = self._tags_snapshot
@@ -127,6 +177,15 @@ class ConditionView:
         return value
 
     def get_memory(self, key: str, default: Any = None) -> Any:
+        held = self._edge_prior
+        if held is not None and key in held:
+            value, origin, source = held[key]
+            if value is _MISSING:
+                value = default
+            sink = self._read_sink
+            if sink is not None:
+                sink("memory", key, value, origin, source)
+            return value
         snap = self._memory_snapshot
         value = snap.get(key, _MISSING)
         source = None
@@ -160,6 +219,10 @@ class ConditionView:
         return name in self._tags_snapshot or name in self._tags
 
     def _get_memory_internal(self, key: str, default: Any = None) -> Any:
+        held = self._edge_prior
+        if held is not None and key in held:
+            value = held[key][0]
+            return default if value is _MISSING else value
         snap = self._memory_snapshot
         value = snap.get(key, _MISSING)
         if value is not _MISSING:
@@ -170,6 +233,9 @@ class ConditionView:
             return default
 
     def _has_memory_internal(self, key: str) -> bool:
+        held = self._edge_prior
+        if held is not None and key in held:
+            return held[key][0] is not _MISSING
         return key in self._memory_snapshot or key in self._memory
 
     @property
@@ -564,9 +630,10 @@ class ScanContext:
         """
         return self._state
 
-    def _new_condition_view(self) -> ConditionView:
-        """Create the rung-entry view, with an override point for analysis contexts."""
-        return ConditionView(self)
+    def _new_condition_view(self, *, live: bool = False) -> ConditionView:
+        """Create a row's condition view (see :class:`ConditionView`), frozen
+        unless *live*, with an override point for analysis contexts."""
+        return ConditionView(self, live=live)
 
     # =========================================================================
     # Rung-scoped firing capture

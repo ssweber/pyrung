@@ -199,8 +199,8 @@ class _WriteBeforeReadContext(ScanContext):
         self._watched = watched
         self.entry_read_seen = False
 
-    def _new_condition_view(self) -> _WBRConditionView:
-        return _WBRConditionView(self)
+    def _new_condition_view(self, *, live: bool = False) -> _WBRConditionView:
+        return _WBRConditionView(self, live=live)
 
     def get_tag(self, name: str, default: Any = None) -> Any:
         if name == self._watched and name not in self._tags_pending:
@@ -209,12 +209,17 @@ class _WriteBeforeReadContext(ScanContext):
 
 
 class _WBRConditionView(ConditionView):
-    """Condition snapshot view that reports watched-tag entry reads."""
+    """Condition view that reports watched-tag entry reads.
+
+    A row's view is taken as the solve reaches it, so a read is an entry read
+    when no write to the tag came before the view (a live view's pending map
+    is the context's own, so it sees every write up to the read).
+    """
 
     __slots__ = ("_wbr_ctx",)
 
-    def __init__(self, ctx: _WriteBeforeReadContext) -> None:
-        super().__init__(ctx)
+    def __init__(self, ctx: _WriteBeforeReadContext, *, live: bool = False) -> None:
+        super().__init__(ctx, live=live)
         self._wbr_ctx = ctx
 
     def get_tag(self, name: str, default: Any = None) -> Any:

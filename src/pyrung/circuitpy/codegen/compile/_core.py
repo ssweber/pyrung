@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from pyrung.circuitpy.codegen._constants import (
@@ -85,12 +84,9 @@ from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
     ModbusSendInstruction,
 )
-from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.rung import Rung as LogicRung
-from pyrung.core.site_memory import edge_memory_key, edge_scan_rows
+from pyrung.core.site_memory import edge_memory_key, edge_rows
 from pyrung.core.storage import REAL_MAX
-from pyrung.core.tag import ImmediateRef, Tag
-from pyrung.core.validation.walker import _condition_children
 
 from ._primitives import (
     _calc_store_expr,
@@ -109,31 +105,22 @@ def _edge_locals(memory_key: str) -> tuple[str, str]:
     return f"{base}_now", f"{base}_was"
 
 
-def _compile_edge_row(
-    row: Any,
-    ctx: CodegenContext,
-    indent: int,
-    *,
-    condition_snapshot: _ConditionSnapshotBindings | None = None,
-) -> list[str]:
-    """Scan the edge sites of one row: read each memory, then store the bit seen.
+def _compile_edge_row(row: Any, ctx: CodegenContext, indent: int) -> list[str]:
+    """Scan the edge sites of one row where the solve reaches it: read each
+    memory, then store the bit seen.
 
     Every edge contact in the row stores the bit it sees whether or not power
     reaches it (CLICK updates an edge contact's memory whenever it is scanned),
     and compares against the memory as it was before the row: the row's edge
-    expressions read the ``_was`` locals.
+    expressions read the ``_was`` locals.  The bit is read live, so it sees
+    the writes of the rows above.
     """
     sites = ctx._edge_rows.get(id(row), ())
     sp = " " * indent
     lines: list[str] = []
     for key, edge in sites:
         now, was = _edge_locals(key)
-        tag_expr = _snapshot_tag_symbol(
-            edge.tag,
-            ctx,
-            scalar_snapshots=condition_snapshot.scalar_symbols if condition_snapshot else None,
-            block_snapshots=condition_snapshot.block_symbols if condition_snapshot else None,
-        )
+        tag_expr = _snapshot_tag_symbol(edge.tag, ctx)
         lines.append(f"{sp}{now} = bool({tag_expr})")
         lines.append(f"{sp}{was} = _mem.get({key!r}, False)")
         # Stored only when it changes: an unwritten memory reads off, as in
@@ -186,341 +173,104 @@ def _box_helper_conditions(item: Any) -> list[tuple[Any, str, Any]]:
     return result
 
 
-def _collect_helper_conditions(
-    rung: LogicRung,
-) -> list[tuple[Any, str, Any]]:
-    """Walk a rung tree and collect its boxes' helper legs, in solve order.
-
-    Returns (instruction, field_name, condition) tuples, as
-    ``_box_helper_conditions`` gives them for each box of the rung and its
-    branches.  A For body is not walked: its boxes bind their own legs as
-    they run (``_compile_loop_body``).
-    """
-    result: list[tuple[Any, str, Any]] = []
-
-    def _walk(r: LogicRung) -> None:
-        for item in r._execution_items:
-            if isinstance(item, LogicRung):
-                _walk(item)
-                continue
-            result.extend(_box_helper_conditions(item))
-
-    _walk(rung)
-    return result
-
-
 def _bind_helper_legs(
     helpers: list[tuple[Any, str, Any]],
     prefix: str,
     ctx: CodegenContext,
-    *,
-    condition_snapshot: _ConditionSnapshotBindings | None = None,
-) -> dict[int, list[str]]:
-    """Compile helper legs into ``_{prefix}_snap_K`` locals, per box.
+) -> list[str]:
+    """Compile one box's helper legs into ``_{prefix}_snap_K`` locals.
 
-    Returns the binding lines (unindented) for each box, by ``id(instr)``.
-    The caller emits a box's lines immediately before the box's code, so the
-    box reads its pins where it sits; the box compilers find the locals via
-    ``_get_condition_snapshot``.  The legs compile against
-    *condition_snapshot*: while a rung's contacts read the rung-entry
-    snapshot locals, a leg bound at the box reads what it read at rung entry.
+    Returns the binding lines (unindented).  The caller emits them just
+    before the box's code, so the box reads all its pins at one moment, as it
+    starts and before any write of its own (the interpreter's
+    ``instruction_condition_view``); the box compilers find the locals via
+    ``_get_condition_snapshot``.
     """
-    lines_by_box: dict[int, list[str]] = {}
+    lines: list[str] = []
     for snap_idx, (instr, field_name, condition) in enumerate(helpers):
         snap_var = f"_{prefix}_snap_{snap_idx}"
-        expr = compile_condition(condition, ctx, condition_snapshot=condition_snapshot)
-        instr_id = id(instr)
-        lines_by_box.setdefault(instr_id, []).append(f"{snap_var} = {expr}")
-        entry = ctx._helper_condition_snapshots.setdefault(instr_id, {})
+        lines.append(f"{snap_var} = {compile_condition(condition, ctx)}")
+        entry = ctx._helper_condition_snapshots.setdefault(id(instr), {})
         if field_name.startswith("events["):
             event_list = entry.setdefault("events", [])
             assert isinstance(event_list, list)
             event_list.append(snap_var)
         else:
             entry[field_name] = snap_var
-    return lines_by_box
+    return lines
 
 
-def _emit_box_legs(lines_by_box: dict[int, list[str]] | None, item: Any, indent: int) -> list[str]:
-    """The binding lines of *item*'s helper legs, indented, or none."""
-    if not lines_by_box:
-        return []
+def _compile_box(item: Any, enabled_expr: str, ctx: CodegenContext, indent: int) -> list[str]:
+    """Compile one box where the solve reaches it.
+
+    A box with helper legs (pins) reads them all as it starts, enabled or
+    not and before any write of its own: its edge pins scan there and its
+    legs bind to locals just before its code, as the interpreter's
+    ``instruction_condition_view`` does.
+    """
+    helpers = _box_helper_conditions(item)
+    if not helpers:
+        return compile_instruction(item, enabled_expr, ctx, indent)
     sp = " " * indent
-    return [f"{sp}{line}" for line in lines_by_box.get(id(item), ())]
+    lines = _compile_edge_row(item, ctx, indent)
+    saved_snapshots = dict(ctx._helper_condition_snapshots)
+    try:
+        legs = _bind_helper_legs(helpers, ctx.next_name("box"), ctx)
+        lines.extend(f"{sp}{line}" for line in legs)
+        lines.extend(compile_instruction(item, enabled_expr, ctx, indent))
+    finally:
+        ctx._helper_condition_snapshots = saved_snapshots
+    return lines
 
 
-@dataclass(frozen=True)
-class _ConditionSnapshotBindings:
-    scalar_symbols: dict[str, str]
-    block_symbols: dict[int, str]
+def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
+    """Return a Python boolean expression string.
 
-
-def _collect_snapshot_refs(
-    value: Any,
-    ctx: CodegenContext,
-    *,
-    scalar_tags: set[str],
-    block_ids: set[int],
-    seen: set[int],
-) -> None:
-    if value is None or isinstance(value, (bool, int, float, str, bytes, bytearray)):
-        return
-
-    value_id = id(value)
-    if value_id in seen:
-        return
-    seen.add(value_id)
-
-    if isinstance(value, ImmediateRef):
-        _collect_snapshot_refs(
-            value.value,
-            ctx,
-            scalar_tags=scalar_tags,
-            block_ids=block_ids,
-            seen=seen,
-        )
-        return
-
-    if isinstance(value, Tag):
-        # A direct tag needs only one rung-entry value even when map_to() makes
-        # it the canonical occupant of a block address.  ``_snapshot_tag_symbol``
-        # reads that scalar snapshot from the live block slot for array-backed
-        # kernels and from ``tags`` for blockless kernels.  Treating the alias as
-        # a block reference copies the entire bank and makes generated code
-        # depend on whether a prior compilation materialized Block._tag_cache.
-        scalar_tags.add(value.name)
-        return
-
-    if isinstance(value, IndirectRef):
-        block_ids.add(id(value.block))
-        _collect_snapshot_refs(
-            value.pointer,
-            ctx,
-            scalar_tags=scalar_tags,
-            block_ids=block_ids,
-            seen=seen,
-        )
-        return
-
-    if isinstance(value, IndirectExprRef):
-        block_ids.add(id(value.block))
-        _collect_snapshot_refs(
-            value.expr,
-            ctx,
-            scalar_tags=scalar_tags,
-            block_ids=block_ids,
-            seen=seen,
-        )
-        return
-
-    if isinstance(value, BlockRange):
-        block_ids.add(id(value.block))
-        return
-
-    if isinstance(value, IndirectBlockRange):
-        block_ids.add(id(value.block))
-        _collect_snapshot_refs(
-            value.start_expr,
-            ctx,
-            scalar_tags=scalar_tags,
-            block_ids=block_ids,
-            seen=seen,
-        )
-        _collect_snapshot_refs(
-            value.end_expr,
-            ctx,
-            scalar_tags=scalar_tags,
-            block_ids=block_ids,
-            seen=seen,
-        )
-        return
-
-    if isinstance(value, Condition):
-        for _, child in _condition_children(value):
-            _collect_snapshot_refs(
-                child,
-                ctx,
-                scalar_tags=scalar_tags,
-                block_ids=block_ids,
-                seen=seen,
-            )
-        return
-
-    if isinstance(value, Expression):
-        for key in sorted(vars(value)):
-            if key.startswith("_"):
-                continue
-            _collect_snapshot_refs(
-                getattr(value, key),
-                ctx,
-                scalar_tags=scalar_tags,
-                block_ids=block_ids,
-                seen=seen,
-            )
-        return
-
-    if isinstance(value, dict):
-        for key in sorted(value, key=repr):
-            _collect_snapshot_refs(
-                value[key],
-                ctx,
-                scalar_tags=scalar_tags,
-                block_ids=block_ids,
-                seen=seen,
-            )
-        return
-
-    if isinstance(value, (list, tuple, set, frozenset)):
-        for item in value:
-            _collect_snapshot_refs(
-                item,
-                ctx,
-                scalar_tags=scalar_tags,
-                block_ids=block_ids,
-                seen=seen,
-            )
-
-
-def _collect_rung_snapshot_bindings(
-    rungs: list[LogicRung],
-    ctx: CodegenContext,
-    *,
-    indent: int,
-) -> tuple[list[str], _ConditionSnapshotBindings]:
-    scalar_tags: set[str] = set()
-    block_ids: set[int] = set()
-    seen: set[int] = set()
-
-    def _walk_rung(rung: LogicRung) -> None:
-        for condition in rung._conditions:
-            _collect_snapshot_refs(
-                condition,
-                ctx,
-                scalar_tags=scalar_tags,
-                block_ids=block_ids,
-                seen=seen,
-            )
-        for item in rung._execution_items:
-            if isinstance(item, LogicRung):
-                _walk_rung(item)
-
-    for rung in rungs:
-        _walk_rung(rung)
-        for _instr, _field_name, condition in _collect_helper_conditions(rung):
-            _collect_snapshot_refs(
-                condition,
-                ctx,
-                scalar_tags=scalar_tags,
-                block_ids=block_ids,
-                seen=seen,
-            )
-
-    lines: list[str] = []
-    scalar_symbols: dict[str, str] = {}
-    block_symbols: dict[int, str] = {}
-    sp = " " * indent
-
-    for tag_name in sorted(scalar_tags):
-        tag = ctx.referenced_tags.get(tag_name)
-        if tag is None:
-            continue
-        snap_var = f"_{ctx.next_name('cond_snap')}"
-        scalar_symbols[tag_name] = snap_var
-        lines.append(f"{sp}{snap_var} = {_snapshot_tag_symbol(tag, ctx)}")
-
-    for block_id in sorted(block_ids, key=lambda bid: ctx.block_symbols.get(bid, "")):
-        binding = ctx.block_bindings.get(block_id)
-        if binding is None:
-            continue
-        snap_var = f"_{ctx.next_name('cond_block_snap')}"
-        block_symbols[block_id] = snap_var
-        if ctx.blockless:
-            name_symbol = ctx.block_name_tuple_symbol(block_id)
-            default = binding.block._get_tag(binding.start).default
-            lines.append(
-                f"{sp}{snap_var} = [tags.get(_name, {default!r}) for _name in {name_symbol}]"
-            )
-        else:
-            lines.append(f"{sp}{snap_var} = list({ctx.symbol_for_block(binding.block)})")
-
-    return lines, _ConditionSnapshotBindings(
-        scalar_symbols=scalar_symbols,
-        block_symbols=block_symbols,
-    )
-
-
-def compile_condition(
-    cond: Condition,
-    ctx: CodegenContext,
-    *,
-    condition_snapshot: _ConditionSnapshotBindings | None = None,
-) -> str:
-    """Return a Python boolean expression string."""
-    scalar_snapshots = None
-    block_snapshots = None
-    if condition_snapshot is not None:
-        scalar_snapshots = condition_snapshot.scalar_symbols
-        block_snapshots = condition_snapshot.block_symbols
+    Contacts read the tags live: a row's contacts are compiled where the
+    solve reaches the row, so they see the writes of the rows above it.
+    """
 
     if isinstance(cond, BitCondition):
-        return (
-            "bool("
-            f"{_snapshot_tag_symbol(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            ")"
-        )
+        return f"bool({_snapshot_tag_symbol(cond.tag, ctx)})"
     if isinstance(cond, NormallyClosedCondition):
-        return (
-            "(not bool("
-            f"{_snapshot_tag_symbol(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            "))"
-        )
+        return f"(not bool({_snapshot_tag_symbol(cond.tag, ctx)}))"
     if isinstance(cond, IntTruthyCondition):
-        return (
-            "(int("
-            f"{_snapshot_tag_symbol(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            ") != 0)"
-        )
+        return f"(int({_snapshot_tag_symbol(cond.tag, ctx)}) != 0)"
     if isinstance(cond, CompareEq):
         return (
-            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
-            f" == {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
+            f"({_compile_value(cond.tag, ctx, condition=True)}"
+            f" == {_compile_value(cond.value, ctx, condition=True)})"
         )
     if isinstance(cond, CompareNe):
         return (
-            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
-            f" != {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
+            f"({_compile_value(cond.tag, ctx, condition=True)}"
+            f" != {_compile_value(cond.value, ctx, condition=True)})"
         )
     if isinstance(cond, CompareLt):
         return (
-            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
-            f" < {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
+            f"({_compile_value(cond.tag, ctx, condition=True)}"
+            f" < {_compile_value(cond.value, ctx, condition=True)})"
         )
     if isinstance(cond, CompareLe):
         return (
-            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
-            f" <= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
+            f"({_compile_value(cond.tag, ctx, condition=True)}"
+            f" <= {_compile_value(cond.value, ctx, condition=True)})"
         )
     if isinstance(cond, CompareGt):
         return (
-            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
-            f" > {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
+            f"({_compile_value(cond.tag, ctx, condition=True)}"
+            f" > {_compile_value(cond.value, ctx, condition=True)})"
         )
     if isinstance(cond, CompareGe):
         return (
-            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
-            f" >= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
+            f"({_compile_value(cond.tag, ctx, condition=True)}"
+            f" >= {_compile_value(cond.value, ctx, condition=True)})"
         )
     if isinstance(cond, AllCondition):
-        parts = [
-            compile_condition(child, ctx, condition_snapshot=condition_snapshot)
-            for child in cond.conditions
-        ]
+        parts = [compile_condition(child, ctx) for child in cond.conditions]
         return "(" + " and ".join(parts) + ")" if parts else "True"
     if isinstance(cond, AnyCondition):
-        parts = [
-            compile_condition(child, ctx, condition_snapshot=condition_snapshot)
-            for child in cond.conditions
-        ]
+        parts = [compile_condition(child, ctx) for child in cond.conditions]
         return "(" + " or ".join(parts) + ")" if parts else "False"
     if isinstance(cond, RisingEdgeCondition):
         now, was = _edge_locals(edge_memory_key(cond))
@@ -530,38 +280,38 @@ def compile_condition(
         return f"({was} and not {now})"
     if isinstance(cond, IndirectCompareEq):
         return (
-            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
-            f" == {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
+            f"({_compile_value(cond.indirect_ref, ctx, condition=True)}"
+            f" == {_compile_value(cond.value, ctx, condition=True)})"
         )
     if isinstance(cond, IndirectCompareNe):
         return (
-            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
-            f" != {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
+            f"({_compile_value(cond.indirect_ref, ctx, condition=True)}"
+            f" != {_compile_value(cond.value, ctx, condition=True)})"
         )
     if isinstance(cond, IndirectCompareLt):
         return (
-            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
-            f" < {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
+            f"({_compile_value(cond.indirect_ref, ctx, condition=True)}"
+            f" < {_compile_value(cond.value, ctx, condition=True)})"
         )
     if isinstance(cond, IndirectCompareLe):
         return (
-            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
-            f" <= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
+            f"({_compile_value(cond.indirect_ref, ctx, condition=True)}"
+            f" <= {_compile_value(cond.value, ctx, condition=True)})"
         )
     if isinstance(cond, IndirectCompareGt):
         return (
-            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
-            f" > {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
+            f"({_compile_value(cond.indirect_ref, ctx, condition=True)}"
+            f" > {_compile_value(cond.value, ctx, condition=True)})"
         )
     if isinstance(cond, IndirectCompareGe):
         return (
-            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
-            f" >= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
+            f"({_compile_value(cond.indirect_ref, ctx, condition=True)}"
+            f" >= {_compile_value(cond.value, ctx, condition=True)})"
         )
     if isinstance(cond, ExprCompare):
         return (
-            f"({compile_expression(cond.left, ctx, condition_snapshot=condition_snapshot)} "
-            f"{cond.symbol} {compile_expression(cond.right, ctx, condition_snapshot=condition_snapshot)})"
+            f"({compile_expression(cond.left, ctx)} "
+            f"{cond.symbol} {compile_expression(cond.right, ctx)})"
         )
 
     raise NotImplementedError(f"Unsupported condition type: {type(cond).__name__}")
@@ -571,7 +321,6 @@ def compile_expression(
     expr: Expression,
     ctx: CodegenContext,
     *,
-    condition_snapshot: _ConditionSnapshotBindings | None = None,
     strict: bool = False,
 ) -> str:
     """Return a Python expression string with explicit parentheses.
@@ -579,22 +328,11 @@ def compile_expression(
     *strict* for calc's expression, which raises on a math error; anywhere
     else an operation that can raise gives 0 instead (permissive).
     """
-    scalar_snapshots = None
-    block_snapshots = None
-    if condition_snapshot is not None:
-        scalar_snapshots = condition_snapshot.scalar_symbols
-        block_snapshots = condition_snapshot.block_symbols
-    return _compile_expression_impl(
-        expr,
-        ctx,
-        scalar_snapshots=scalar_snapshots,
-        block_snapshots=block_snapshots,
-        strict=strict,
-    )
+    return _compile_expression_impl(expr, ctx, strict=strict)
 
 
 def _get_condition_snapshot(instr: Any, field_name: str, ctx: CodegenContext) -> str | None:
-    """Return the rung-entry snapshot variable for a helper condition, if available."""
+    """Return the local a box's helper leg is bound to at box entry, if any."""
     entry = ctx._helper_condition_snapshots.get(id(instr))
     if entry is not None:
         snap = entry.get(field_name)
@@ -726,17 +464,18 @@ def compile_rung(
     ctx: CodegenContext,
     indent: int = 0,
     *,
-    condition_snapshot: _ConditionSnapshotBindings | None = None,
     local_conditions: bool = False,
 ) -> list[str]:
-    """Compile one rung into Python source lines.
+    """Compile one rung into Python source lines, row by row.
 
+    The trunk's contacts are read once, as the rung starts; each branch's own
+    contacts are read where the solve reaches the branch (after the writes of
+    the rows above it), and each box reads its pins as it starts.
     ``local_conditions`` compiles only the rung's own contacts (a forloop body
     rung, whose inherited loop-rung contacts are already true).
     """
     previous = ctx._current_function
     ctx.set_current_function(fn_name)
-    saved_snapshots = dict(ctx._helper_condition_snapshots)
     try:
         rung_id = ctx.next_name("rung")
         enabled_var = f"_{rung_id}_enabled"
@@ -745,32 +484,9 @@ def compile_rung(
             if local_conditions
             else rung._conditions
         )
-        cond_expr = (
-            "True"
-            if ctx.force_rung_enable
-            else _compile_condition_group(
-                conditions,
-                ctx,
-                condition_snapshot=condition_snapshot,
-            )
-        )
-        lines = _compile_edge_row(rung, ctx, indent, condition_snapshot=condition_snapshot)
+        cond_expr = "True" if ctx.force_rung_enable else _compile_condition_group(conditions, ctx)
+        lines = _compile_edge_row(rung, ctx, indent)
         lines.append(f"{' ' * indent}{enabled_var} = {cond_expr}")
-
-        box_legs = _bind_helper_legs(
-            _collect_helper_conditions(rung),
-            rung_id,
-            ctx,
-            condition_snapshot=condition_snapshot,
-        )
-        if local_conditions:
-            # A For-body rung has no snapshot locals: its contacts and legs
-            # read the tags live, so its legs stay bound as it starts, where
-            # the interpreter's body-rung view freezes them.
-            for box_lines in box_legs.values():
-                lines.extend(f"{' ' * indent}{line}" for line in box_lines)
-            box_legs = {}
-
         lines.extend(
             _compile_rung_items(
                 rung=rung,
@@ -778,13 +494,10 @@ def compile_rung(
                 ctx=ctx,
                 indent=indent,
                 scope_key=rung_id,
-                condition_snapshot=condition_snapshot,
-                box_legs=box_legs,
             )
         )
         return lines
     finally:
-        ctx._helper_condition_snapshots = saved_snapshots
         ctx.set_current_function(previous)
 
 
@@ -794,42 +507,43 @@ def _compile_rung_items(
     ctx: CodegenContext,
     indent: int,
     scope_key: str,
-    *,
-    condition_snapshot: _ConditionSnapshotBindings | None = None,
-    box_legs: dict[int, list[str]] | None = None,
 ) -> list[str]:
-    """Compile a rung's items: branch powers first, then each item in solve order.
+    """Compile a rung's items in solve order.
 
-    *box_legs* holds the binding lines of each box's helper legs
-    (``_bind_helper_legs``), emitted just before the box.
+    A branch is solved where it sits: its edge sites scan and its own
+    contacts are read there, under *enabled_expr* (the power of the row it
+    hangs from), then its items follow.
     """
     lines: list[str] = []
-    branch_vars: dict[int, str] = {}
-    branch_idx = 0
-    for item in rung._execution_items:
-        if not isinstance(item, LogicRung):
-            continue
+    sp = " " * indent
+
+    def _solve(item: LogicRung, branch_var: str) -> list[str]:
         local_conditions = item._conditions[item._branch_condition_start :]
         local_expr = (
-            "True"
-            if ctx.force_rung_enable
-            else _compile_condition_group(
-                local_conditions,
-                ctx,
-                condition_snapshot=condition_snapshot,
-            )
+            "True" if ctx.force_rung_enable else _compile_condition_group(local_conditions, ctx)
         )
-        branch_var = f"_{scope_key}_branch_{branch_idx}"
-        branch_idx += 1
-        branch_vars[id(item)] = branch_var
-        lines.append(f"{' ' * indent}{branch_var} = ({enabled_expr} and ({local_expr}))")
+        return [
+            *_compile_edge_row(item, ctx, indent),
+            f"{sp}{branch_var} = ({enabled_expr} and ({local_expr}))",
+        ]
 
-    branch_scope_idx = 0
+    # A synthesis bracket (``_rows_read_at_entry``) solves every direct
+    # branch's contacts here, before any row writes.
+    at_entry = rung._rows_read_at_entry
+    if at_entry:
+        entry_idx = 0
+        for item in rung._execution_items:
+            if isinstance(item, LogicRung):
+                lines.extend(_solve(item, f"_{scope_key}_branch_{entry_idx}"))
+                entry_idx += 1
+    branch_idx = 0
     for item in rung._execution_items:
         if isinstance(item, LogicRung):
-            branch_var = branch_vars[id(item)]
-            child_scope = f"{scope_key}_b{branch_scope_idx}"
-            branch_scope_idx += 1
+            branch_var = f"_{scope_key}_branch_{branch_idx}"
+            child_scope = f"{scope_key}_b{branch_idx}"
+            branch_idx += 1
+            if not at_entry:
+                lines.extend(_solve(item, branch_var))
             lines.extend(
                 _compile_rung_items(
                     rung=item,
@@ -837,13 +551,10 @@ def _compile_rung_items(
                     ctx=ctx,
                     indent=indent,
                     scope_key=child_scope,
-                    condition_snapshot=condition_snapshot,
-                    box_legs=box_legs,
                 )
             )
             continue
-        lines.extend(_emit_box_legs(box_legs, item, indent))
-        lines.extend(compile_instruction(item, enabled_expr, ctx, indent))
+        lines.extend(_compile_box(item, enabled_expr, ctx, indent))
     return lines
 
 
@@ -853,49 +564,22 @@ def compile_rungs(
     ctx: CodegenContext,
     indent: int = 0,
 ) -> list[str]:
-    """Compile a sequence of top-level rungs, preserving continued() chains."""
-    lines: list[str] = []
-    i = 0
-    while i < len(rungs):
-        chain = [rungs[i]]
-        i += 1
-        while i < len(rungs) and rungs[i]._use_prior_snapshot:
-            chain.append(rungs[i])
-            i += 1
+    """Compile a sequence of top-level rungs.
 
-        snapshot_lines, snapshot = _collect_rung_snapshot_bindings(
-            chain,
-            ctx,
-            indent=indent,
-        )
-        lines.extend(snapshot_lines)
-        for rung in chain:
-            ctx._edge_rows.update(edge_scan_rows(rung))
-        for rung in chain:
-            lines.extend(
-                compile_rung(
-                    rung,
-                    fn_name,
-                    ctx,
-                    indent=indent,
-                    condition_snapshot=snapshot,
-                )
-            )
+    A ``.continued()`` rung is a rung of its own: it is only drawn as a
+    further wire of the rung above it.
+    """
+    lines: list[str] = []
+    for rung in rungs:
+        ctx._edge_rows.update(edge_rows(rung))
+        lines.extend(compile_rung(rung, fn_name, ctx, indent=indent))
     return lines
 
 
-def _compile_condition_group(
-    conditions: list[Condition],
-    ctx: CodegenContext,
-    *,
-    condition_snapshot: _ConditionSnapshotBindings | None = None,
-) -> str:
+def _compile_condition_group(conditions: list[Condition], ctx: CodegenContext) -> str:
     if not conditions:
         return "True"
-    parts = [
-        compile_condition(cond, ctx, condition_snapshot=condition_snapshot) for cond in conditions
-    ]
-    return " and ".join(parts)
+    return " and ".join(compile_condition(cond, ctx) for cond in conditions)
 
 
 def _calc_range_condition(value_var: str, dest_type: str, mode: str) -> str | None:
@@ -1106,21 +790,9 @@ def _compile_loop_body(
     lines: list[str] = []
     for item in instr.body:
         if not isinstance(item, LogicRung):
-            # A bare body instruction is a row of its own: its edge legs scan
-            # on every iteration, and its legs read the tags as the row
-            # starts, before the box writes (the interpreter's row view).
-            lines.extend(_compile_edge_row(item, ctx, 0))
-            helpers = _box_helper_conditions(item)
-            if not helpers:
-                lines.extend(compile_instruction(item, "True", ctx, 0))
-                continue
-            saved_snapshots = dict(ctx._helper_condition_snapshots)
-            try:
-                box_legs = _bind_helper_legs(helpers, ctx.next_name("box"), ctx)
-                lines.extend(_emit_box_legs(box_legs, item, 0))
-                lines.extend(compile_instruction(item, "True", ctx, 0))
-            finally:
-                ctx._helper_condition_snapshots = saved_snapshots
+            # A bare body box is a row of its own: on every iteration it reads
+            # its pins as it starts, before it writes (``_compile_box``).
+            lines.extend(_compile_box(item, "True", ctx, 0))
         else:
             # A body rung reads live tags: its contacts are evaluated afresh
             # on every iteration, as a rung of its own.

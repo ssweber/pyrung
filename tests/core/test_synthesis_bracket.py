@@ -152,3 +152,74 @@ def test_holds_bracket_steers_input_before_program_reads_it() -> None:
     assert plc.state.tags["Enable"] is True
     plc.step()
     assert plc.state.tags["Fb"] is True
+
+
+def _bracket_as_program_rung() -> Program:
+    """A two-rule liveness bracket compiled as an ordinary rung of a program."""
+    from pyrung.core.condition import CompareNe
+
+    W = Bool("W")
+    prog = Program()
+    prog.rungs.append(
+        conditional_hold_rung(
+            dest=W, rules=[(True, CompareNe(W, True)), (False, CompareNe(W, False))]
+        )
+    )
+    return prog
+
+
+def test_bracket_branches_read_at_rung_entry_on_every_backend() -> None:
+    # A synthesis bracket solves every branch's contacts at its entry, before
+    # any row writes, unlike a user rung (solved row by row).  The interpreter,
+    # the observed executor path, the debugger and the compiled kernel agree.
+    from pyrung.core import CompiledPLC
+    from pyrung.core.executor import _NoopExecutionObserver, execute_program
+
+    expected = [True, False, True, False]
+
+    def run(plc: PLC | CompiledPLC) -> list[bool]:
+        seq = []
+        for _ in range(4):
+            plc.step()
+            seq.append(plc.current_state.tags["W"])
+        return seq
+
+    assert run(PLC(_bracket_as_program_rung())) == expected
+    assert run(CompiledPLC(_bracket_as_program_rung())) == expected
+
+    program = _bracket_as_program_rung()
+    observed = PLC(program)
+    seq = []
+    for _ in range(4):
+        ctx, dt = observed.debug.prepare_scan()
+        execute_program(program, ctx, observer=_NoopExecutionObserver())
+        observed.debug.commit_scan(ctx, dt)
+        seq.append(observed.current_state.tags["W"])
+    assert seq == expected
+
+    debugged = PLC(_bracket_as_program_rung())
+    seq = []
+    for _ in range(4):
+        list(debugged.debug.scan_steps_debug())
+        seq.append(debugged.current_state.tags["W"])
+    assert seq == expected
+
+
+def test_a_user_rung_of_the_same_shape_solves_row_by_row() -> None:
+    # The same two rules as user branches: the second reads the first's write,
+    # so they cancel and W stays False (a CLICK does the same).
+    from pyrung import branch, latch, reset
+
+    W = Bool("W")
+    with Program() as prog:
+        with Rung():
+            with branch(~W):
+                latch(W)
+            with branch(W):
+                reset(W)
+    plc = PLC(prog)
+    seq = []
+    for _ in range(3):
+        plc.step()
+        seq.append(plc.current_state.tags["W"])
+    assert seq == [False, False, False]

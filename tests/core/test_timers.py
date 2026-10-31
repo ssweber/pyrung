@@ -301,8 +301,8 @@ class TestOnDelayRTON:
         assert runner.current_state.tags["Timer_Acc"] == 0
         assert runner.current_state.tags["Timer_Done"] is False
 
-    def test_rton_reset_condition_uses_rung_entry_snapshot(self, runner_factory):
-        """Same-rung writes do not trip the helper reset until the next snapshot."""
+    def test_rton_reset_reads_at_box_entry(self, runner_factory):
+        """reset() reads at box entry, so it sees a write a row above on the same scan."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
 
@@ -316,9 +316,6 @@ class TestOnDelayRTON:
 
         runner.step()
         assert runner.current_state.tags["ResetBtn"] is True
-        assert runner.current_state.tags["Timer_Acc"] == 10
-
-        runner.step()
         assert runner.current_state.tags["Timer_Acc"] == 0
         assert runner.current_state.tags["Timer_Done"] is False
 

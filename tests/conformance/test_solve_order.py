@@ -2,19 +2,21 @@
 
 Every topology where an earlier part of a rung writes a tag a later part
 reads, asked on a CLICK in hardware round 2.  Each case records whether its
-answer depends on the order the rung is solved in.  The table is the spec of
-the live row solve (``pending="S4"``) and of the check that will warn on
-intra-rung order dependence, and it is that check's test data.
+answer depends on the order the rung is solved in.  The table was the spec of
+the live row solve (S4) and is the test data of the check that warns on
+intra-rung order dependence (``RUNG_ORDER_DEPENDENT``).
 
 Two models of a rung:
 
-- **L** (live, CLICK's model since hardware round 1): each contact and each
-  box leg is read when the solve reaches its row.  The power at a shared node
-  is computed once and held for every row below it.  Each case's ``expect`` is
-  L's reading.
-- **S** (snapshot, pyrung today): every contact and leg is read at rung entry;
-  instructions still run in source order, with live operands.  Each case's
-  ``snapshot`` is pyrung's in-process reading, measured, not derived.
+- **L** (live, CLICK's model since hardware round 1, pyrung's since S4): each
+  contact and each box leg is read when the solve reaches its row.  The power
+  at a shared node is computed once and held for every row below it.  Each
+  case's ``expect`` is L's reading, and pyrung's.
+- **S** (snapshot, pyrung before S4): every contact and leg is read at rung
+  entry; instructions still run in source order, with live operands.  Each
+  case's ``snapshot`` is what pyrung read in-process before S4 landed
+  (measured, not derived); it is kept as the reading a solve that ignores
+  order would give, the ground truth of the order-dependence check.
 
 ``order_dependent`` is ``snapshot != expect``, declared on each case through
 ``solve_case()`` and checked by ``test_annotation_matches_readings``.  The four
@@ -51,7 +53,7 @@ as AGENTS.md asks.  The models named below, and what each reads:
 The cases own C501..C700, timer T151..T160 and counters CT161..CT170
 (``memory.OWNED``), ten C bits per case (case N takes C<491+10N>..).
 
-+ = order-dependent (pending S4), - = a control.  R1..R4 = Result1..Result4.
++ = order-dependent, - = a control.  R1..R4 = Result1..Result4.
 
 - ``row_series_reads_rows_above`` (+): rows 1 and 2 latch A and B; row 3
   needs both on, row 4 both off.  L {1, 0}; S {0, 1}.
@@ -81,8 +83,8 @@ The cases own C501..C700, timer T151..T160 and counters CT161..CT170
   4.  L = S {1}; R and F {0}.  A box's legs take the rows under it, so what
   sits below a box in one CLICK rung is a continued wire.
 - ``for_body_rung_reads_body_rung_above`` (-, measured): body rung 1 latches
-  A, body rungs 2 and 3 need it on and off.  pyrung takes a fresh snapshot
-  per body rung, so it reads L {1, 0}; V {0, 1}.
+  A, body rungs 2 and 3 need it on and off.  pyrung took a fresh snapshot
+  per body rung even before S4, so it read L {1, 0}; V {0, 1}.
 
 CLICK does not allow a box below another output on one wire: all inputs
 (pins) of a box must start from the same branch (error C000A), so a box's input wire is its own, from the rail.  No leg can read a
@@ -129,7 +131,7 @@ SCANS = scans_for()
 #: ``"group/id"`` -> does the case's answer depend on solve order?
 ORDER_DEPENDENT: dict[str, bool] = {}
 #: ``"group/id"`` -> what the case reads when every contact and leg is read at
-#: rung entry (S): pyrung's reading in-process, measured.
+#: rung entry (S): pyrung's reading in-process before S4, measured.
 SNAPSHOT: dict[str, dict[str, int]] = {}
 
 #: The ``rungs`` group's live-read cases, and what each reads under S.
@@ -371,7 +373,6 @@ group = Group(
             ladder=prove_row_series_reads_rows_above,
             init=init_row_series_reads_rows_above,
             expect={"Result1": 1, "Result2": 0},
-            pending="S4",
             order_dependent=True,
             snapshot={"Result1": 0, "Result2": 1},
         ),
@@ -393,7 +394,6 @@ group = Group(
             ladder=prove_sibling_branch_reads_sibling_above,
             init=init_sibling_branch_reads_sibling_above,
             expect={"Result1": 1, "Result2": 0, "Result3": 1, "Result4": 1},
-            pending="S4",
             order_dependent=True,
             snapshot={"Result1": 0, "Result2": 1, "Result3": 1, "Result4": 1},
         ),
@@ -404,7 +404,6 @@ group = Group(
             ladder=prove_outer_row_reads_inner_branch_write,
             init=init_outer_row_reads_inner_branch_write,
             expect={"Result1": 1, "Result2": 0, "Result3": 1},
-            pending="S4",
             order_dependent=True,
             snapshot={"Result1": 0, "Result2": 1, "Result3": 1},
         ),
@@ -423,7 +422,6 @@ group = Group(
             ladder=prove_branch_or_reads_row_above,
             init=init_branch_or_reads_row_above,
             expect={"Result1": 1, "Result2": 0},
-            pending="S4",
             order_dependent=True,
             snapshot={"Result1": 0, "Result2": 1},
         ),
@@ -501,11 +499,6 @@ def test_every_case_is_annotated():
         assert set(module.SOLVE_ORDER) == {x.id for x in module.group.cases}
 
 
-def test_only_s4_pending():
-    for x in group.cases:
-        assert x.pending in (None, "S4"), f"{GROUP}/{x.id} is pending {x.pending}"
-
-
 def test_annotation_matches_readings(results: dict[str, CaseResult]):
     problems: list[str] = []
     for key, dependent in ORDER_DEPENDENT.items():
@@ -516,10 +509,6 @@ def test_annotation_matches_readings(results: dict[str, CaseResult]):
                 f"{key}: order_dependent={dependent}, but snapshot {snapshot} "
                 f"{'==' if snapshot == r.case.expect else '!='} expect {r.case.expect}"
             )
-        wanted = snapshot if r.case.pending == "S4" else r.case.expect
-        if r.actual != wanted:
-            problems.append(
-                f"{key}: pyrung reads {r.actual}, expected {wanted} "
-                f"({'snapshot, pending S4' if r.case.pending == 'S4' else 'expect'})"
-            )
+        if r.actual != r.case.expect:
+            problems.append(f"{key}: pyrung reads {r.actual}, expected {r.case.expect}")
     assert not problems, "\n".join(problems)
