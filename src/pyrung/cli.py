@@ -280,7 +280,7 @@ def main() -> None:
         "--depth-budget",
         type=int,
         default=50,
-        help="Abstract BFS depth budget; hidden-event acceleration may cover more concrete scans",
+        help="BFS depth budget: the longest scan sequence explored",
     )
     lock_p.add_argument("--max-states", type=int, default=100_000)
     lock_p.add_argument(

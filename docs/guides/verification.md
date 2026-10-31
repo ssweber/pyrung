@@ -20,7 +20,7 @@ result = never(logic, Running, ~EstopOK)
 assert isinstance(result, Proven)
 ```
 
-`never()` proves a bad state is unreachable — `never(logic, Running, ~EstopOK)` means "the motor is never running without the e-stop being OK." It exhaustively explores every reachable state via BFS over the compiled replay kernel. If the property holds everywhere, you get `Proven`. If not, `Counterexample` with a trace you can replay on a real PLC.
+`never()` proves a bad state is unreachable — `never(logic, Running, ~EstopOK)` means "the motor is never running without the e-stop being OK." It exhaustively explores every reachable state via BFS over the compiled replay kernel. If the property holds everywhere, you get `Proven`. If not, `Counterexample` with a trace you can replay on a real PLC: the verifier has already replayed it on the concrete PLC before reporting it.
 
 `always()` is the general form — `always(logic, Or(~Running, EstopOK))` is equivalent but reads less naturally for safety properties. Use `always()` when the property isn't a "bad state" pattern (e.g., `always(logic, lambda s: s["X"] + s["Y"] < 100)`).
 
@@ -62,9 +62,14 @@ elif isinstance(result, Intractable):
         print(hint)       # "Pressure: 65536 values (Int, no choices/min/max)"
 ```
 
-`Intractable` means the state space is too large. The `hints` list describes the largest dimensions — which tags are blowing up the state space and why. The fix is usually adding `choices` or `min`/`max` metadata to the unbounded tags — the same metadata you'd declare anyway for Data View dropdowns and static validation.
+`Intractable` means the verifier could not decide. `result.kind` says why:
 
-Some accumulators have no exact model yet, and a program that has one is `Intractable` for every query, whatever it reads: a `time_event_drum`, a `debounce`, `flasher` or `timed` coil, and a `time_drum` that can time a step while its completion flag is on (one with a jump, a flag that starts on, or another writer of its step register or flag). The hint names the accumulator and why; cover that logic with tests.
+- `"search"` — the state space is too large. The `hints` list describes the largest dimensions — which tags are blowing up the state space and why. The fix is usually adding `choices` or `min`/`max` metadata to the unbounded tags — the same metadata you'd declare anyway for Data View dropdowns and static validation.
+- `"timing"` — unconfirmed. The search found a violation, but replaying its trace on the concrete PLC (at the verifier's fixed `dt`, 10 ms) did not reach it: the violation needs a timer to finish on a scan the PLC's timing does not give, like a 30 ms timer done before a 1000 ms one started with it. `result.tags` names the timers, `result.trace` keeps the search's trace (each step's `timers` lists the ticks it moved) and `result.diverged_at` is the step where the replay left it. Whether it can happen depends on timer timing, which the verifier does not model (see [How it works](#how-it-works)): check it with a `run_for()` test.
+- `"timers"` — so many timers run at once that the ways they can finish on one scan pass the verifier's cap. Narrowing `choices`/`min`/`max` does not help; prove a property whose scope reaches fewer of them, or test the timing with `run_for()`.
+- `"property"` — the property's own `rise()`/`fall()`, which the search counts as possibly true on every scan, gave a counterexample the concrete PLC did not reproduce. Latch or one-shot the edge in the program and name that coil in the property instead.
+
+Every `Counterexample` is confirmed the same way before it is reported: its trace is the one the concrete PLC followed to the violation, waits folded into multi-scan steps. The one exception is a trace that only drives free system tags (see [System tags](#system-tags)), which keeps its caveat instead.
 
 ### Scoping
 
@@ -100,21 +105,23 @@ result = Int("Result", min=0, max=100)
 run_function(my_func, outs={"r": result})
 ```
 
-Timer and counter Done bits use a three-valued abstraction: `False`, `Pending` (accumulating), and `True` (done). The verifier fast-forwards through accumulation rather than stepping one tick at a time.
+Timers are black boxes. A timer's Done may change on any scan its instruction allows: an enabled `on_delay` may finish on any scan and then stays done, a disabled `off_delay` may drop on any scan, a running `time_drum` or `time_event_drum` step may end on any scan, and the Out family's `debounce`, `flasher` and `timed` coils time the same way. Enable, reset and preset logic stay exact, and a tag preset is simply read. That covers everything a real timer can do under any scan time and any preset value, so a `Proven` holds whatever the timing. An accumulator the program compares takes the values its comparisons split at; one read as a value (copied, computed with, read by a callable property) may take any value. Counters count rising edges and are tracked exactly: counting is not time.
 
-By default, `always()` checks predicates on every reachable state, including transient states where a timer is still accumulating. For timer-gated alarm properties, pass `settled=True` to evaluate predicates only after pending timers/counters have settled:
+The search therefore also finds violations only impossible timing reaches. That is why every counterexample is replayed on the concrete PLC first, and why one that does not replay comes back as an `Intractable` of kind `"timing"` rather than a `Counterexample` (see [Result types](#result-types)).
+
+By default, `always()` checks predicates on every reachable state, including transient states where a timer is still running. For timer-gated alarm properties, pass `settled=True` to evaluate predicates only in states where no timer's Done is still open: every enabled on-delay done, every disabled off-delay off, every running drum step finished:
 
 ```python
 # Without settled: Counterexample from the transient state before the timer fires
 result = never(logic, Cmd, ~Fb, ~Alarm)
 assert isinstance(result, Counterexample)
 
-# With settled: evaluates after timers fire — the alarm is reachable
+# With settled: judged only once the fault timer is done — the alarm has latched
 result = never(logic, Cmd, ~Fb, ~Alarm, settled=True)
 assert isinstance(result, Proven)
 ```
 
-`settled=True` only suppresses transient violations where settlement produces an alternate state. If the property is violated in a non-timer state, or if settlement diverges, the violation is still reported.
+`settled=True` only skips states where a timer could still finish. A violation in a state where no timer is running is still reported, and its replay is accepted only in a state the PLC has settled the same way.
 
 ### System tags
 
@@ -124,14 +131,14 @@ The clocks, `sys.scan_counter`, `sys.scan_clock_toggle` and the RTC fields depen
 
 ### Debugging with journals
 
-Pass `journal=True` to get a per-tag decision trail showing how the verifier classified, absorbed, or elided each tag:
+Pass `journal=True` to get a per-tag decision trail showing how the verifier classified or elided each tag:
 
 ```python
 result = always(logic, condition, journal=True)
 print(result.journal)
 ```
 
-The `Journal` object is a mapping from tag name to `TagEntry`. Each entry records the tag's final `outcome` (e.g. `"stateful"`, `"elided:concrete"`, `"excluded:comparison_only"`), its `domain`, and the chain of `Decision` objects from each pass that touched it. Useful for diagnosing why the verifier returned an unexpected result — especially when optimized and unoptimized runs disagree.
+The `Journal` object is a mapping from tag name to `TagEntry`. Each entry records the tag's final `outcome` (e.g. `"stateful"`, `"elided:concrete"`, `"excluded:readonly"`), its `domain`, and the chain of `Decision` objects from each pass that touched it. Useful for diagnosing why the verifier returned an unexpected result — especially when optimized and unoptimized runs disagree.
 
 Available on all three result types (`Proven`, `Counterexample`, `Intractable`). When `journal=False` (default), `result.journal` is `None` and there is no overhead.
 
@@ -199,7 +206,7 @@ for coupling, result in zip(couplings, results):
 
 Each condition reads: "in every reachable state, either the enable is off, the feedback is healthy, or the alarm caught it." A `Counterexample` means there exists a reachable state where the feedback has failed and no alarm fired — a structural detection gap. `settled=True` suppresses transient violations during timer accumulation — see [How it works](#how-it-works) above.
 
-`always()` uses a three-valued timer abstraction (`False`/`Pending`/`True`) that collapses accumulator state to make BFS tractable. But it's timing-blind by design — it answers "can the alarm fire?" not "does it fire in time?"
+`always()` treats every timer as a black box that may finish on any scan, which keeps BFS tractable and makes a `Proven` hold under any timing. It's timing-blind by design — it answers "can the alarm fire?" not "does it fire in time?" A property that holds only because one timer finishes before another is not `Proven`: it comes back unconfirmed (`Intractable` of kind `"timing"`), which is the cue for the timing test below.
 
 **Timing coverage** — does the fault timer trip fast enough under real timing? Force-based tests answer this:
 
@@ -236,6 +243,8 @@ pyrung lock my_program --project Running MotorOut StatusLight
 ```
 
 Tags with `choices=` metadata get their labels in the lock file instead of raw integers — `"FAST"` instead of `2`. Tags with `band=` metadata collapse numeric values into categorical labels — see [Bands](#bands-collapsing-numeric-values-into-categories) below.
+
+Timers are black boxes here too (see [How it works](#how-it-works)), so a lock can include rows that only impossible timing reaches: a 2 s watchdog done before the 1 s timer started with it. The lock over-approximates the program's behavior; it never misses a reachable row.
 
 ### `__lock__` — per-module projection override
 
@@ -390,7 +399,7 @@ assert diff is None  # None means no change
 pyrung lock <module>              # write pyrung.lock
 pyrung lock <module> -o out.lock  # custom output path
 pyrung lock <module> --project Running MotorOut  # explicit projection
-pyrung lock <module> --depth-budget 100          # allow more abstract BFS work
+pyrung lock <module> --depth-budget 100          # explore longer scan sequences
 pyrung lock <module> --profile out.prof          # write cProfile stats
 
 pyrung lock <module> --check                  # diff against pyrung.lock, exit 1 on change
@@ -399,7 +408,7 @@ pyrung lock <module> --check --profile out.prof  # write cProfile stats
 ```
 
 `--profile` dumps cProfile stats even on `KeyboardInterrupt`. Analyze with `pstats.Stats("out.prof")` or `uvx snakeviz out.prof`.
-`--depth-budget` is an abstract BFS work budget, not a concrete scan cap. Hidden-event acceleration can cover more concrete PLC scans than the budget value.
+`--depth-budget` is the BFS depth: the longest sequence of scans explored. A timer may finish on any scan, so waiting for one costs no depth, but a counter or a `calc` count advances one step per scan, so a count past the budget is not reached. A `Proven` cut short by the budget says so in a caveat.
 
 The `<module>` argument is a Python module path (e.g., `my_program` or `examples.conveyor`). The module must contain a `Program` instance.
 
