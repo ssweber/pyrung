@@ -4,7 +4,7 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
-The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as five
+The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as six
 projects, one part each (``PARTS``)::
 
     make conformance-export PART=A OUT=path/to/a
@@ -12,6 +12,7 @@ projects, one part each (``PARTS``)::
     make conformance-export PART=C OUT=path/to/c
     make conformance-export PART=D OUT=path/to/d
     make conformance-export PART=E OUT=path/to/e
+    make conformance-export PART=F OUT=path/to/f
 
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
@@ -40,6 +41,7 @@ from tests.conformance import (
     test_block,
     test_call_twice,
     test_coils,
+    test_cont_box,
     test_counters,
     test_drum,
     test_loop,
@@ -49,6 +51,7 @@ from tests.conformance import (
     test_numeric,
     test_out,
     test_ret_branch,
+    test_row_solve,
     test_rung_semantics,
     test_search,
     test_shift,
@@ -86,6 +89,8 @@ ALL_GROUPS = [
     test_call_twice.group,
     test_ret_branch.group,
     test_loop_call.group,
+    test_row_solve.group,
+    test_cont_box.group,
     # Last, so no other group's rung reads SC46 on a scan a Math error raised it.
     test_math_error.group,
 ]
@@ -106,13 +111,16 @@ PARTS: dict[str, tuple[str, ...]] = {
         "numeric",
     ),
     "B": ("out", "search", "shift", "system", "text", "timers"),
-    "C": ("call_twice", "coils", "loop", "rungs", "solve_order"),
+    "C": ("call_twice", "coils", "loop", "row_solve", "rungs", "solve_order"),
     # Probes CLICK may refuse outright (paste or transfer): a project of their
     # own, so a refusal costs only this one.
     "D": ("ret_branch",),
     # A Call between For and Next, in main: a project of its own, so a refusal
     # of either probe cannot hide the other's answer.
     "E": ("loop_call",),
+    # A box on a continued wire of the rung above, a drawing no CLICK has taken
+    # yet: a project of its own, so a refusal costs only this one.
+    "F": ("cont_box",),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

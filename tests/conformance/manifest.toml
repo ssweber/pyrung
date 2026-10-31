@@ -371,3 +371,20 @@ slots = 3
 call_inside_loop = 1
 body_contact_after_call = 2
 loop_in_called_subroutine = 3
+
+[groups.row_solve]
+base = 3501 # Conf_RowSolve: DS3501..DS3600; part C
+slots = 9
+
+[groups.row_solve.cases]
+edge_on_branch_reads_row_above = 1
+edge_under_unpowered_branch = 2
+continued_after_box_rereads_trunk = 3
+
+[groups.cont_box]
+base = 3601 # Conf_ContBox: DS3601..DS3650; part F, a drawing CLICK may refuse
+slots = 4
+
+[groups.cont_box.cases]
+box_pin_on_continued_wire = 1
+box_enable_on_continued_wire = 2
