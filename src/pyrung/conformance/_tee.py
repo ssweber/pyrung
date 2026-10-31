@@ -92,14 +92,5 @@ def _tee_cell(cell: str, where: str) -> str:
     return f"T:{cell}"
 
 
-def _tee_cell(cell: str, where: str) -> str:
-    """*cell* with the bus running down its left side: a wire becomes ``T``, a contact ``T:``."""
-    if cell == "-":
-        return "T"
-    if _is_wire(cell) or cell.startswith("T:"):
-        raise ValueError(f"{where} is {cell!r}: nothing to hang a tee on")
-    return f"T:{cell}"
-
-
 def _is_wire(cell: str) -> bool:
     return cell in ("", "-", "T", "|")
