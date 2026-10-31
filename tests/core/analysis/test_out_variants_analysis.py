@@ -29,7 +29,7 @@ from pyrung import (
     toggle,
 )
 from pyrung.core.analysis.pilot import pilot_how
-from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always
+from pyrung.core.analysis.prove import Counterexample, Proven, always
 from pyrung.core.runner import PLC
 
 T = Timer.clone("AT", count=4)
@@ -46,6 +46,17 @@ def _coil(verb: str, target: Bool) -> None:
         timed(target, T[1], 30)
     else:
         timed(target, T[1], 30, maintained=True)
+
+
+def _assert_replays(program: Program, result: Any, tag: str) -> None:
+    """Two oracles: the search found it, the concrete PLC reaches it."""
+    assert isinstance(result, Counterexample), result
+    plc = PLC(program, dt=0.010)
+    for step in result.trace:
+        plc.patch(step.inputs)
+        for _ in range(step.scans):
+            plc.step()
+    assert plc.current_state.tags[tag] is True
 
 
 def _program(verb: str) -> Program:
@@ -184,17 +195,17 @@ class TestProver:
         assert isinstance(always(logic, ~hit), Proven)
 
     @pytest.mark.parametrize("verb", ["debounce", "flasher", "timed", "maintained"])
-    def test_timed_variants_are_intractable_naming_the_verb(self, verb: str) -> None:
-        result = always(_program(verb), ~Bool("Z"))
-        assert isinstance(result, Intractable)
-        assert "AT1_Acc" in result.tags
-        name = "timed" if verb == "maintained" else verb
-        assert any(f"{name} accumulator" in hint for hint in result.hints)
+    def test_timed_variants_are_black_box_timers(self, verb: str) -> None:
+        """Their internal timer ticks by choice like any timer's: the search
+        reaches Z and the concrete PLC replays the trace."""
+        logic = _program(verb)
+        result = always(logic, ~Bool("Z"))
+        _assert_replays(logic, result, "Z")
 
-    def test_declared_accumulator_domain_stays_unmodeled(self) -> None:
-        """Its ``_frac:`` carry is in no state key, so a declared domain must not
-        let the search track the accumulator as plain state: the seconds-unit
-        pulse that ends would never be seen."""
+    def test_declared_accumulator_domain_still_reaches_the_end(self) -> None:
+        """A declared domain on the accumulator does not hide the end of the
+        seconds-unit pulse: the tick that ends it is a choice, and the PLC
+        replays it."""
         from pyrung import Field, Int, udt
 
         @udt()
@@ -209,8 +220,7 @@ class TestProver:
             with Rung(Bool("DomTimer_Done")):
                 out(hit)
         result = always(logic, ~hit)
-        assert isinstance(result, Intractable)
-        assert any("timed accumulator" in hint for hint in result.hints)
+        _assert_replays(logic, result, "H")
 
     @pytest.mark.parametrize("verb", VERBS)
     def test_how_keeps_its_prover_context(self, verb: str) -> None:

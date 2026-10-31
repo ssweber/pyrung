@@ -24,7 +24,6 @@ from pyrung.core import (
     rise,
 )
 from pyrung.core.analysis.prove import (
-    PENDING,
     Counterexample,
     Intractable,
     Proven,
@@ -80,7 +79,7 @@ class TestConsumedAccumulator:
     """Item 15: accumulator consumed in a condition stays as separate dimension."""
 
     def test_consumed_acc_kept_as_dimension(self):
-        """Timer accumulator used as data flow is not threshold-abstracted."""
+        """Timer accumulator used as data flow is state; its Done is a plain Bool."""
         enable = Bool("Enable", external=True)
         t = Timer.clone("T1")
         saved = Int("SavedAcc")
@@ -95,7 +94,7 @@ class TestConsumedAccumulator:
         assert not isinstance(result, Intractable)
         stateful, *_ = result
         assert "T1_Acc" in stateful
-        assert "T1_Done" not in stateful
+        assert stateful["T1_Done"] == (False, True)
 
 
 class TestTimerFastForward:
@@ -134,8 +133,9 @@ class TestTimerFastForward:
         _s, _n, _c, _d, done_presets, _done_kinds = result
         assert done_presets["T1_Done"] == 5000
 
-    def test_large_counter_reaches_done(self):
-        """Count-up with a large preset still reaches Done=True via event jump."""
+    def test_counter_reaches_done_edge_by_edge(self):
+        """A counter counts concretely, one rising edge every two scans: a preset
+        within the depth budget is reached (no hidden-event jump covers a large one)."""
         enable = Bool("Enable", external=True)
         reset_btn = Bool("Reset", external=True)
         counter = Counter.clone("C1")
@@ -143,11 +143,11 @@ class TestTimerFastForward:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                count_up(counter, preset=500).reset(reset_btn)
+                count_up(counter, preset=5).reset(reset_btn)
             with Rung(counter.Done):
                 out(output)
 
-        states = reachable_states(logic, project=["Output", "C1_Done"], depth_budget=10)
+        states = reachable_states(logic, project=["Output", "C1_Done"], depth_budget=20)
         assert not isinstance(states, Intractable)
         done_values = {dict(s).get("C1_Done") for s in states}
         assert True in done_values
@@ -287,7 +287,10 @@ class TestTimerUnitsCoarserThanTheScan:
         truth = _first_hit_scan(logic, hit.name, {clear.name: False}, 40_000)
         _assert_hit_replays(logic, always(logic, ~hit), hit.name, truth)
 
-    def test_timer_on_a_toggling_bit_never_finishes(self):
+    def test_timer_on_a_toggling_bit_is_unconfirmed(self):
+        """Enabled every other scan, the timer restarts before 1 s on the PLC.
+        That is timing: the search lets it finish on an enabled scan, replay
+        does not reach the hit, and the result is unconfirmed, not Proven."""
         toggle = Bool("CoarseNeverTog")
         timer = Timer.clone("CoarseNever")
         hit = Bool("CoarseNeverHit")
@@ -298,7 +301,11 @@ class TestTimerUnitsCoarserThanTheScan:
                 on_delay(timer, preset=1, unit="sec")
             with Rung(timer.Done):
                 out(hit)
-        assert isinstance(always(logic, ~hit), Proven)
+        result = always(logic, ~hit)
+        assert isinstance(result, Intractable)
+        assert result.kind == "timing"
+        assert "CoarseNever_Done" in result.tags
+        assert result.trace
 
 
 class TestDynamicPresetDoneEvent:
@@ -372,11 +379,13 @@ class TestDynamicPresetDoneEvent:
         assert isinstance(result, Counterexample)
 
 
-class TestRedundantTimerAccumulatorAbstraction:
-    """Dynamic timer presets whose Acc comparisons collapse to Done state."""
+class TestTimerAccumulatorAgainstItsPreset:
+    """A timer whose Acc is compared with its own dynamic preset: the search
+    tracks the accumulator (black-box timers absorb nothing) and the tick that
+    reaches the preset sets Done on the same scan."""
 
-    def test_final_preset_redundant_acc_comparison_is_absorbed(self):
-        """A ladder-owned dynamic preset can be absorbed with its redundant Acc check."""
+    def test_final_preset_acc_comparison_follows_done(self):
+        """A ladder-owned dynamic preset: Acc >= preset never holds without Done."""
         enable = Bool("Enable", external=True)
         active_preset = Int("ActivePreset", final=True)
         t = Timer.clone("DynT")
@@ -395,18 +404,15 @@ class TestRedundantTimerAccumulatorAbstraction:
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
-        stateful, nd, _comb, _done_acc, done_presets, _done_kinds = result
-        assert stateful["DynT_Done"] == (False, PENDING, True)
-        assert "DynT_Acc" not in stateful
-        assert "ActivePreset" not in stateful
-        assert "ActivePreset" not in nd
-        assert done_presets["DynT_Done"] == 1
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert stateful["DynT_Done"] == (False, True)
+        assert "DynT_Acc" in stateful
 
         proved = never(logic, output, ~t.Done, depth_budget=5)
         assert isinstance(proved, Proven)
 
-    def test_literal_write_preset_redundant_acc_comparison_is_absorbed(self):
-        """Literal-written presets absorb without readonly/final annotations."""
+    def test_literal_write_preset_acc_comparison_follows_done(self):
+        """Literal-written presets need no readonly/final annotation."""
         enable = Bool("Enable", external=True)
         active_preset = Int("ActivePreset")
         t = Timer.clone("DynT")
@@ -425,47 +431,44 @@ class TestRedundantTimerAccumulatorAbstraction:
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
-        stateful, nd, _comb, _done_acc, done_presets, _done_kinds = result
-        assert stateful["DynT_Done"] == (False, PENDING, True)
-        assert "DynT_Acc" not in stateful
-        assert "ActivePreset" not in stateful
-        assert "ActivePreset" not in nd
-        assert done_presets["DynT_Done"] == 1
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert stateful["DynT_Done"] == (False, True)
+        assert "DynT_Acc" in stateful
 
         proved = never(logic, output, ~t.Done, depth_budget=5)
         assert isinstance(proved, Proven)
 
-    def test_external_preset_redundant_acc_comparison_is_absorbed(self):
-        """External presets still absorb when their value is threshold-only."""
+    def test_external_preset_needs_a_domain(self):
+        """An HMI preset compared with the accumulator is a value the search
+        must enumerate: without min/max it is Intractable naming it; bounded,
+        Acc >= preset still never holds without Done."""
         enable = Bool("Enable", external=True)
-        hmi_preset = Int("HmiPreset", external=True, default=1)
         t = Timer.clone("DynT")
         output = Bool("Output")
-        done_output = Bool("DoneOutput")
 
-        with Program(strict=False) as logic:
-            with Rung(enable):
-                on_delay(t, preset=hmi_preset)
-            with Rung(t.Acc >= hmi_preset):
-                out(output)
-            with Rung(t.Done):
-                out(done_output)
+        def program(hmi_preset: Int) -> Program:
+            with Program(strict=False) as logic:
+                with Rung(enable):
+                    on_delay(t, preset=hmi_preset)
+                with Rung(t.Acc >= hmi_preset):
+                    out(output)
+                with Rung(t.Done):
+                    out(Bool("DoneOutput"))
+            return logic
 
-        result = _classify_dimensions(logic)
-        assert not isinstance(result, Intractable)
-        stateful, nd, _comb, _done_acc, done_presets, _done_kinds = result
-        assert stateful["DynT_Done"] == (False, PENDING, True)
-        assert "DynT_Acc" not in stateful
-        assert "HmiPreset" not in stateful
-        assert "HmiPreset" not in nd
-        assert done_presets["DynT_Done"] == 1
+        unbounded = never(
+            program(Int("HmiPreset", external=True, default=1)), output, ~t.Done, depth_budget=5
+        )
+        assert isinstance(unbounded, Intractable)
+        assert unbounded.kind == "search"
+        assert "HmiPreset" in unbounded.tags
 
-        proved = never(logic, output, ~t.Done, depth_budget=5)
-        assert isinstance(proved, Proven)
+        bounded = program(Int("HmiPreset", external=True, default=1, min=1, max=5))
+        assert isinstance(never(bounded, output, ~t.Done, depth_budget=5), Proven)
 
-    def test_zero_default_preset_blocks_absorption(self):
-        """External preset with default=0 must not absorb — the comparison
-        Acc >= 0 is trivially true at initialization."""
+    def test_zero_default_preset_reaches_output_without_done(self):
+        """External preset with default=0: Acc >= 0 holds at power-on, before
+        the timer's Done."""
         enable = Bool("Enable", external=True)
         hmi_preset = Int("HmiPreset", external=True, min=0, max=3)
         t = Timer.clone("DynT")
@@ -482,13 +485,13 @@ class TestRedundantTimerAccumulatorAbstraction:
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable), result
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert "DynT_Acc" in stateful, "Acc must not be absorbed with preset default=0"
+        assert "DynT_Acc" in stateful
 
         result = never(logic, output, ~t.Done, depth_budget=5)
         assert isinstance(result, Counterexample)
 
-    def test_non_redundant_acc_comparison_is_not_absorbed(self):
-        """Strictly greater-than is absorbed by Layer 2 threshold events."""
+    def test_acc_past_the_preset_is_reached(self):
+        """Strictly greater than the preset: the tick may land past it."""
         enable = Bool("Enable", external=True)
         active_preset = Int("ActivePreset", final=True)
         t = Timer.clone("DynT")
@@ -504,10 +507,8 @@ class TestRedundantTimerAccumulatorAbstraction:
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
-        stateful, nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert "DynT_Acc" not in stateful
-        assert "ActivePreset" not in stateful
-        assert "ActivePreset" not in nd
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "DynT_Acc" in stateful
 
         states = reachable_states(logic, project=["Output", "DynT_Done"], depth_budget=5)
         assert not isinstance(states, Intractable)
@@ -539,8 +540,11 @@ class TestRedundantTimerAccumulatorAbstraction:
         assert done_presets == {}
 
 
-class TestThresholdEventAbstraction:
-    """Layer 2: progress threshold events for hidden accumulators."""
+class TestAccumulatorThresholds:
+    """An accumulator compared against thresholds.  A timer's tick may land on
+    any value a comparison splits at, so a threshold far past the budget's
+    scans is still crossed; a counter or a calc accumulator steps concretely,
+    so its thresholds must lie within depth_budget."""
 
     def test_timer_threshold_event_becomes_tractable(self):
         enable = Bool("Enable", external=True)
@@ -673,7 +677,7 @@ class TestThresholdEventAbstraction:
             in states
         )
 
-    def test_count_up_counter_threshold_event_becomes_tractable(self):
+    def test_count_up_counter_threshold_is_counted_to(self):
         enable = Bool("Enable", external=True)
         reset_btn = Bool("Reset", external=True)
         active_threshold = Int("CounterThreshold", final=True)
@@ -682,17 +686,17 @@ class TestThresholdEventAbstraction:
 
         with Program(strict=False) as logic:
             with Rung():
-                copy(500, active_threshold)
+                copy(5, active_threshold)
             with Rung(enable):
-                count_up(counter, preset=1000).reset(reset_btn)
+                count_up(counter, preset=10).reset(reset_btn)
             with Rung(counter.Acc >= active_threshold):
                 out(alarm)
 
-        states = reachable_states(logic, project=["CounterAlarm"], depth_budget=5)
+        states = reachable_states(logic, project=["CounterAlarm"], depth_budget=20)
         assert not isinstance(states, Intractable)
         assert frozenset({("CounterAlarm", True)}) in states
 
-    def test_count_up_counter_threshold_event_allows_direct_zero_acc_reset(self):
+    def test_count_up_counter_threshold_allows_direct_zero_acc_reset(self):
         enable = Bool("ResettableCounterEnable", external=True)
         reset_btn = Bool("ResettableCounterReset", external=True)
         counter_reset = Bool("ResettableCounterOwnerReset", external=True)
@@ -702,15 +706,15 @@ class TestThresholdEventAbstraction:
 
         with Program(strict=False) as logic:
             with Rung():
-                copy(500, active_threshold)
+                copy(5, active_threshold)
             with Rung(reset_btn):
                 copy(0, counter.Acc)
             with Rung(enable):
-                count_up(counter, preset=1000).reset(counter_reset)
+                count_up(counter, preset=10).reset(counter_reset)
             with Rung(counter.Acc >= active_threshold):
                 out(alarm)
 
-        states = reachable_states(logic, project=["ResettableCounterAlarm"], depth_budget=5)
+        states = reachable_states(logic, project=["ResettableCounterAlarm"], depth_budget=20)
         assert not isinstance(states, Intractable)
         assert frozenset({("ResettableCounterAlarm", True)}) in states
 
@@ -742,7 +746,7 @@ class TestThresholdEventAbstraction:
         assert isinstance(optimized, Counterexample)
         assert type(optimized) is type(unoptimized)
 
-    def test_internal_int_step_ticks_threshold_event_becomes_tractable(self):
+    def test_internal_int_step_ticks_threshold_is_counted_to(self):
         enable = Bool("Enable", external=True)
         reset_btn = Bool("Reset", external=True)
         ticks = Int("StepTicks")
@@ -751,7 +755,7 @@ class TestThresholdEventAbstraction:
 
         with Program(strict=False) as logic:
             with Rung():
-                copy(500, threshold)
+                copy(5, threshold)
             with Rung(reset_btn):
                 copy(0, ticks)
             with Rung(enable):
@@ -759,11 +763,11 @@ class TestThresholdEventAbstraction:
             with Rung(ticks > threshold):
                 out(alarm)
 
-        states = reachable_states(logic, project=["TickAlarm"], depth_budget=5)
+        states = reachable_states(logic, project=["TickAlarm"], depth_budget=10)
         assert not isinstance(states, Intractable)
         assert frozenset({("TickAlarm", True)}) in states
 
-    def test_constant_stride_tag_int_progress_becomes_tractable(self):
+    def test_constant_stride_tag_int_progress_is_counted_to(self):
         enable = Bool("Enable", external=True)
         ticks = Int("VariableStepTicks")
         stride = Int("Stride")
@@ -773,19 +777,19 @@ class TestThresholdEventAbstraction:
         with Program(strict=False) as logic:
             with Rung():
                 copy(1, stride)
-                copy(500, threshold)
+                copy(5, threshold)
             with Rung(enable):
                 calc(ticks + stride, ticks)
             with Rung(ticks > threshold):
                 out(alarm)
 
-        states = reachable_states(logic, project=["VariableTickAlarm"], depth_budget=5)
+        states = reachable_states(logic, project=["VariableTickAlarm"], depth_budget=10)
         assert not isinstance(states, Intractable)
         assert frozenset({("VariableTickAlarm", True)}) in states
 
-    def test_constant_stride_tag_int_progress_down_becomes_tractable(self):
+    def test_constant_stride_tag_int_progress_down_is_counted_to(self):
         enable = Bool("Enable", external=True)
-        ticks = Int("DescendingStepTicks", default=1000)
+        ticks = Int("DescendingStepTicks", default=10)
         stride = Int("DescendingStride")
         alarm = Bool("DescendingTickAlarm")
 
@@ -794,10 +798,10 @@ class TestThresholdEventAbstraction:
                 copy(1, stride)
             with Rung(enable):
                 calc(ticks - stride, ticks)
-            with Rung(ticks <= 500):
+            with Rung(ticks <= 5):
                 out(alarm)
 
-        states = reachable_states(logic, project=["DescendingTickAlarm"], depth_budget=5)
+        states = reachable_states(logic, project=["DescendingTickAlarm"], depth_budget=10)
         assert not isinstance(states, Intractable)
         assert frozenset({("DescendingTickAlarm", True)}) in states
 
@@ -868,7 +872,7 @@ class TestThresholdEventAbstraction:
         assert frozenset({("Running", True)}) in states
         assert frozenset({("Running", False)}) in states
 
-    def test_int_progress_eq_and_gt_mixed_becomes_tractable(self):
+    def test_int_progress_eq_and_gt_mixed(self):
         """Progress tag with both == and > comparisons on the same accumulator."""
         enable = Bool("Enable", external=True)
         reset_btn = Bool("Reset", external=True)
@@ -889,15 +893,45 @@ class TestThresholdEventAbstraction:
             with Rung(step > threshold):
                 out(past_threshold)
 
-        states = reachable_states(logic, project=["AtStep3", "PastThreshold"], depth_budget=5)
+        states = reachable_states(logic, project=["AtStep3", "PastThreshold"], depth_budget=15)
         assert not isinstance(states, Intractable)
         assert frozenset({("AtStep3", True), ("PastThreshold", False)}) in states
         assert frozenset({("AtStep3", False), ("PastThreshold", True)}) in states
         assert frozenset({("AtStep3", True), ("PastThreshold", True)}) not in states
 
-    def test_raw_external_threshold_is_absorbed_when_threshold_only(self):
+    @pytest.mark.parametrize(
+        "threshold",
+        [
+            Int("HmiThreshold", external=True, default=1000),
+            Int("ImplicitThreshold"),
+            Int("PublicThreshold", public=True, default=1000),
+        ],
+        ids=["external", "unwritten", "public"],
+    )
+    def test_threshold_tag_without_a_domain_is_intractable_naming_it(self, threshold):
+        """A threshold tag nothing in the program bounds (an HMI value, an
+        unwritten or public tag) is a value the search must enumerate: it is
+        no longer absorbed, so it needs choices= or min=/max=."""
         enable = Bool("Enable", external=True)
-        hmi_threshold = Int("HmiThreshold", external=True, default=1000)
+        t = Timer.clone("ThresholdTmr")
+        alarm = Bool("ThresholdAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["ThresholdAlarm"], depth_budget=5)
+        assert isinstance(states, Intractable)
+        assert states.kind == "search"
+        assert threshold.name in states.tags
+
+    def test_bounded_external_threshold_is_crossed(self):
+        enable = Bool("Enable", external=True)
+        hmi_threshold = Int(
+            "HmiThreshold", external=True, default=1000, choices={500: "Half", 1000: "Full"}
+        )
         t = Timer.clone("ExternalThresholdTmr")
         alarm = Bool("ExternalThresholdAlarm")
 
@@ -911,22 +945,6 @@ class TestThresholdEventAbstraction:
         assert not isinstance(states, Intractable)
         assert frozenset({("ExternalThresholdAlarm", False)}) in states
         assert frozenset({("ExternalThresholdAlarm", True)}) in states
-
-    def test_unwritten_internal_threshold_is_absorbed_as_constant(self):
-        enable = Bool("Enable", external=True)
-        threshold = Int("ImplicitThreshold")
-        t = Timer.clone("ImplicitThresholdTmr")
-        alarm = Bool("ImplicitThresholdAlarm")
-
-        with Program(strict=False) as logic:
-            with Rung(enable):
-                on_delay(t, preset=1000)
-            with Rung(t.Acc > threshold):
-                out(alarm)
-
-        states = reachable_states(logic, project=["ImplicitThresholdAlarm"], depth_budget=5)
-        assert not isinstance(states, Intractable)
-        assert frozenset({("ImplicitThresholdAlarm", True)}) in states
 
     def test_projected_public_threshold_is_discovered(self):
         enable = Bool("Enable", external=True)
@@ -950,43 +968,6 @@ class TestThresholdEventAbstraction:
         assert not isinstance(states, Intractable)
         threshold_vals = {dict(row)["ProjectedThreshold"] for row in states}
         assert 500 in threshold_vals
-
-    def test_public_threshold_is_absorbed_when_not_projected(self):
-        enable = Bool("Enable", external=True)
-        public_threshold = Int("PublicThreshold", public=True, default=1000)
-        t = Timer.clone("PublicThresholdTmr")
-        alarm = Bool("PublicThresholdAlarm")
-
-        with Program(strict=False) as logic:
-            with Rung(enable):
-                on_delay(t, preset=1000)
-            with Rung(t.Acc > public_threshold):
-                out(alarm)
-
-        states = reachable_states(logic, project=["PublicThresholdAlarm"], depth_budget=5)
-        assert not isinstance(states, Intractable)
-        assert frozenset({("PublicThresholdAlarm", False)}) in states
-        assert frozenset({("PublicThresholdAlarm", True)}) in states
-
-    def test_exact_and_abstract_threshold_events_both_branch(self):
-        enable = Bool("Enable", external=True)
-        hmi_threshold = Int("HmiThreshold", external=True, default=1000)
-        t = Timer.clone("MixedThresholdTmr")
-        exact_alarm = Bool("ExactAlarm")
-        hmi_alarm = Bool("HmiAlarm")
-
-        with Program(strict=False) as logic:
-            with Rung(enable):
-                on_delay(t, preset=1000)
-            with Rung(t.Acc > 500):
-                out(exact_alarm)
-            with Rung(t.Acc > hmi_threshold):
-                out(hmi_alarm)
-
-        states = reachable_states(logic, project=["ExactAlarm", "HmiAlarm"], depth_budget=5)
-        assert not isinstance(states, Intractable)
-        assert frozenset({("ExactAlarm", True), ("HmiAlarm", False)}) in states
-        assert frozenset({("ExactAlarm", False), ("HmiAlarm", True)}) in states
 
     def test_non_threshold_accumulator_read_stays_explicit(self):
         enable = Bool("Enable", external=True)
@@ -1053,14 +1034,13 @@ class TestThresholdEventAbstraction:
         assert frozenset({("Warning", True), ("NearestTmr_Done", False)}) in states
 
 
-def test_co_pending_timers_do_not_inflate_visited_set():
-    """Two timers PENDING simultaneously should not bloat the BFS visited set.
+def test_co_running_timers_do_not_inflate_visited_set():
+    """Two timers running at once keep the visited set small.
 
-    When both T1 and T2 are PENDING, the hidden-event phase key embeds
-    per-tick accumulator snapshots into the state key, creating a unique
-    visited entry every scan.  With enough nondeterministic inputs the
-    inflated set exceeds max_states even though the abstract state space
-    is only ~11 states.
+    Both start with In0 (T1 500 ms, T2 700 ms).  Each Done is a choice, so
+    besides the 11 rows exact timing reaches the search also keeps the two
+    where T2 finished first (any timing could do it: the over-approximation
+    the black-box model makes), and nothing else.
     """
     In0 = Bool("In0", external=True)
     In1 = Bool("In1", external=True)
@@ -1090,15 +1070,17 @@ def test_co_pending_timers_do_not_inflate_visited_set():
         max_states=50,
         depth_budget=50,
     )
-    assert not isinstance(states, Intractable), (
-        f"visited set inflated to {states.estimated_space}; abstract state space is ~11"
-    )
-    assert len(states) == 11
+    assert not isinstance(states, Intractable), f"visited set inflated to {states.estimated_space}"
+    rows = [dict(row) for row in states]
+    t2_first = [row for row in rows if row["T2_Done"] and not row["T1_Done"]]
+    assert len(states) == 13
+    assert {row["B1"] for row in t2_first} == {False, True}
+    assert len(t2_first) == 2
 
 
 class TestTimeEventDrum:
-    """The prover has no model of a time & event drum's timing yet: a program
-    using one is Intractable, named, never a wrong Proven, and how() keeps its
+    """A time & event drum's timed steps are black-box ticks like any timer's:
+    the search finds the step-3 hit, the PLC replays it, and how() keeps its
     prover context."""
 
     @staticmethod
@@ -1122,18 +1104,17 @@ class TestTimeEventDrum:
         return logic
 
     @pytest.mark.parametrize("hit_reads_y3", [False, True])
-    def test_is_intractable_naming_the_drum(self, hit_reads_y3: bool) -> None:
-        result = always(self._program(hit_reads_y3), ~Bool("H"))
-        assert isinstance(result, Intractable)
-        assert "Acc" in result.tags
-        assert any("time_event_drum" in hint for hint in result.hints)
+    def test_counterexample_replays(self, hit_reads_y3: bool) -> None:
+        logic = self._program(hit_reads_y3)
+        result = always(logic, ~Bool("H"))
+        _assert_hit_replays(logic, result, "H")
 
     @pytest.mark.parametrize(
         "acc", [Int("Acc", min=0, max=5), Int("Acc", choices={0: "a", 1: "b", 2: "c"})]
     )
-    def test_declared_acc_domain_is_still_intractable(self, acc: Int) -> None:
-        """A declared domain must not make Acc plain state: its seconds carry
-        is in no state key, so the step-1 timeout would never be seen."""
+    def test_declared_acc_domain_still_reaches_the_timeout(self, acc: Int) -> None:
+        """A declared domain on Acc does not hide the step-1 timeout: the tick
+        that finishes the 1 s step is a choice, and the PLC replays it."""
         from pyrung.core import time_event_drum
 
         with Program(strict=False) as logic:
@@ -1151,8 +1132,7 @@ class TestTimeEventDrum:
             with Rung(Bool("Y2")):
                 out(Bool("H"))
         result = always(logic, ~Bool("H"))
-        assert isinstance(result, Intractable)
-        assert any("time_event_drum" in hint for hint in result.hints)
+        _assert_hit_replays(logic, result, "H")
 
     def test_how_keeps_its_prover_context(self) -> None:
         from pyrung.core.analysis.pilot.drive_setup import build_prover_context
@@ -1170,7 +1150,8 @@ class TestDrumCompletion:
     """A completed drum turns its outputs off and keeps its flag on through a
     jump (only a reset clears it); a jog or its own step forward brings the
     outputs back.  A time drum with a jump times its steps again under that
-    flag, so the Done/Acc tri-state (flag on = settled) cannot stand for it."""
+    flag; its ticks are black boxes, so the search finds those steps and the
+    PLC replays them."""
 
     @staticmethod
     def _time_drum(*, jump: bool) -> Program:
@@ -1191,7 +1172,7 @@ class TestDrumCompletion:
                     drum.jump(Bool("Jump"), step=1)
         return logic
 
-    def test_jumping_time_drum_is_intractable_naming_the_drum(self) -> None:
+    def test_jumping_time_drum_times_its_steps_again(self) -> None:
         logic = self._time_drum(jump=True)
         # Reachable: complete, jump to step 1, time steps 1 and 2 again.
         plc = PLC(logic, dt=0.010)
@@ -1206,15 +1187,13 @@ class TestDrumCompletion:
         assert (tags["Done"], tags["Step"], tags["Y3"]) == (True, 3, True)
 
         result = never(logic, Bool("Done"), Int("Step") == 3, Bool("Y3"))
-        assert isinstance(result, Intractable)
-        assert "Acc" in result.tags
-        assert any(
-            "time_drum (its jump keeps the completion flag on)" in hint for hint in result.hints
-        )
+        assert isinstance(result, Counterexample)
+        tags = _replay_trace(logic, result.trace).current_state.tags
+        assert (tags["Done"], tags["Step"], tags["Y3"]) == (True, 3, True)
 
-    def test_flag_that_starts_on_is_intractable_naming_it(self) -> None:
+    def test_flag_that_starts_on_reaches_step_two(self) -> None:
         """No jump, but the flag is on from the start, while the drum times
-        steps 1 and 2: the tri-state read it as settled and missed step 2."""
+        steps 1 and 2: step 2 under the flag is reachable."""
         from pyrung.core import time_drum
 
         with Program(strict=False) as logic:
@@ -1235,10 +1214,11 @@ class TestDrumCompletion:
         assert (tags["Done"], tags["Step"], tags["Y2"]) == (True, 2, True)
 
         result = never(logic, Bool("Done"), Int("Step") == 2, Bool("Y2"))
-        assert isinstance(result, Intractable)
-        assert any("its completion flag Done starts on" in hint for hint in result.hints)
+        assert isinstance(result, Counterexample)
+        tags = _replay_trace(logic, result.trace).current_state.tags
+        assert (tags["Done"], tags["Step"], tags["Y2"]) == (True, 2, True)
 
-    def test_another_step_writer_is_intractable_naming_it(self) -> None:
+    def test_another_step_writer_reaches_step_two_under_the_flag(self) -> None:
         from pyrung.core import time_drum
 
         with Program(strict=False) as logic:
@@ -1255,10 +1235,11 @@ class TestDrumCompletion:
             with Rung(Bool("Back")):
                 copy(1, Int("Step"), oneshot=True)
         result = never(logic, Bool("Done"), Int("Step") == 2, Bool("Y2"))
-        assert isinstance(result, Intractable)
-        assert any("its step register Step has another writer" in hint for hint in result.hints)
+        assert isinstance(result, Counterexample)
+        tags = _replay_trace(logic, result.trace).current_state.tags
+        assert (tags["Done"], tags["Step"], tags["Y2"]) == (True, 2, True)
 
-    def test_time_drum_without_a_jump_keeps_its_abstraction(self) -> None:
+    def test_time_drum_without_a_jump(self) -> None:
         logic = self._time_drum(jump=False)
         assert isinstance(never(logic, Bool("Y1"), Bool("Y2")), Proven)
         # Completed: every output off under the flag.
@@ -1268,11 +1249,9 @@ class TestDrumCompletion:
         tags = _replay_trace(logic, result.trace).current_state.tags
         assert (tags["Done"], tags["Step"], tags["Y3"]) == (True, 3, False)
 
-    def test_fast_forwarded_completion_turns_the_outputs_off(self) -> None:
-        """The hidden-event jump to the drum's last crossing writes what the
-        drum's own completing scan does: flag and ``_drum_done`` on, every
-        output off.  A jump that left the last step's output on would show a
-        completed drum still driving it."""
+    def test_completion_turns_the_outputs_off(self) -> None:
+        """The drum's completing scan sets the flag and ``_drum_done`` and turns
+        every output off: a completed drum never drives the last output."""
         from pyrung.core import time_drum
 
         En, Rst = Bool("En", external=True), Bool("Rst", external=True)

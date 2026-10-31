@@ -5,108 +5,75 @@ whether they preserve the property each result guarantees.
 
 ---
 
-## 1. Exclusivity principle (absorb.py northstar docstring)
+## 1. Black-box timers (blackbox.py)
 
-**Claim**: The concrete value of a threshold tag is irrelevant to
-reachability if the tag is only used in threshold comparisons.
+**Claim**: a `Proven` from the search holds on the PLC under every scan
+timing and every preset value.
 
-**Formal backing**: Two results compose.
+**Formal backing**: **Existential abstraction preserves safety**
+(Clarke, Grumberg, Long, 1994 — "Model Checking and Abstraction"). The
+abstract kernel replaces each timed tick with a nondeterministic choice
+(`_bb_tick`, `_TimerOracle`): hold, or move to the limit, to a value a
+comparison splits at, or (for an accumulator read as a value) to any value
+in between.  Every concrete scan of length `dt >= 0` moves the accumulator
+forward by some amount, and every such move is matched by one choice, so
+the abstract system simulates the concrete one: every concrete run is an
+abstract run, and an unreachable abstract bad state is concretely
+unreachable.  Enable, reset and preset logic are the runtime's (the same
+`compile_kernel` codegen path), so only the time step is abstracted.
 
-- **Data independence** (Wolper, 1986 — "Expressing Interesting
-  Properties of Programs in Propositional Temporal Logic"): if a
-  variable is only tested for ordering/equality against constants and
-  never used to derive new values, the program's control-flow behavior
-  is independent of its concrete value. The exclusivity check
-  (`_has_non_timer_data_read` at absorb.py:314) is the syntactic
-  sufficient condition.
+Counters count rising edges, not time: they stay concrete, and a counter
+nothing else reads is keyed no further than its preset (`count_clamps`),
+an exact quotient (past the preset, one-way counting behaves alike until a
+reset).
 
-- **Time-abstracting bisimulation** (Tripakis & Yovine, 2001 —
-  "Analysis of Timed Systems Using Time-Abstracting Bisimulations"):
-  for reachability (safety) properties, the concrete timing of state
-  transitions is irrelevant — only whether transitions are reachable.
-  This justifies replacing any positive threshold with synthetic
-  preset=1 in redundant absorption (`_find_redundant_acc_absorptions`
-  at absorb.py:350).
-
-**Together**: the exclusivity check ensures the threshold value doesn't
-influence reachability through data-flow. Time-abstracting bisimulation
-ensures it doesn't influence reachability through timing. B2 phase 1 is
-provably sound.
-
-**What would break it**: adding a code path where an absorbed threshold
-tag's value flows into a copy/calc target (breaks data independence) or
-where the BFS checks a time-sensitive property like "timer fires within
-N scans" (breaks time-abstract semantics).
+**What would break it**: a tick whose candidates omit a value the program
+can tell apart (an accumulator compared with a tag whose value set is not
+complete must be swept, `accumulator_reads`); a reduction that drops a
+ticking accumulator from the key (the elision fast path must not take an
+instruction's own read-back for write-before-read, `self_read_tags`); a
+timed instruction compiled without the oracle.
 
 ---
 
-## 2. Event scheduler acceleration (events.py:65–92, 143–173)
+## 2. Counterexample confirmation (blackbox.confirm)
 
-**Claim**: `_scans_until_done_event` computes the number of scans to
-skip and `_advance_hidden_progress` applies them in one step, without
-visiting intermediate states.
+**Claim**: every `Counterexample` is a concrete PLC run to a violation.
 
-**Formal backing**: **Flat acceleration for linear counter automata**
-(Leroux & Sutre, 2005 — "Flat Counter Automata Almost Everywhere!").
-Acceleration computes the transitive closure of a self-loop with a
-linear update. For affine updates (Acc += constant delta), flat
-acceleration is exact — not an approximation.
+**Formal backing**: the confirmation step of **counterexample-guided
+abstraction refinement** (Clarke, Grumberg, Jha, Lu, Veith, 2000 —
+"Counterexample-Guided Abstraction Refinement"), without the refinement:
+an abstract trace is replayed on the concrete PLC at the search's fixed
+`dt`, waits folded, input changes slid to the scan the state changes on.
+A trace the PLC follows is reported with the concrete steps; one it does
+not is spurious *or* needs a timing the fixed `dt` does not give, and is
+reported as unconfirmed (`Intractable` of kind `"timing"` or
+`"property"`), never as a counterexample.
 
-The `visited`-state check in `_maybe_jump_hidden_event` (events.py:275)
-detects the self-loop. The acceleration is sound when the enabling
-condition depends only on the discrete state (the visited-set key), not
-on other hidden accumulators. When hidden timers are interdependent,
-`_settle_pending` resolves cascades (see §3).
-
-**What would break it**: a timer whose per-scan delta depends on another
-hidden accumulator's concrete value (not just its crossed/uncrossed
-status). Currently safe because timer instructions use a fixed dt or
-count-by-1.
+**What would break it**: accepting a replay that lands on a different
+state than the one the property judged (under `settled=True`, a transient
+state; `_Replay.accepts`).
 
 ---
 
-## 3. Settle-pending termination (events.py:242–263)
+## 3. How()'s domain prior: Done/Acc and threshold vectors (absorb.py)
 
-**Claim**: `_settle_pending` iterates at most `event_count + 1` times
-to resolve all pending threshold crossings.
-
-**Formal backing**: **Region construction** (Alur & Dill, 1994 — "A
-Theory of Timed Automata"). The number of distinct timing regions is
-bounded by the number of clock comparison constants. Each iteration
-resolves at least one crossing, crossings are monotone (accumulators
-don't decrement during settling), so the bound is tight.
-
-**What would break it**: counters that can both increment and decrement
-within a single settling sequence.
+Not a soundness claim: PILOT replays every route it plans.  Its world key
+projects a timer's `(Done, Acc)` onto `{False, PENDING, True}`
+(`_done_acc_state`) and a progress accumulator onto threshold-crossing bits
+(`_ThresholdVectorSpec`).  These are the canonical partitions of a single
+counter by its comparison points (the zone/region view of Dill, 1989), and
+the exclusivity check (`_has_forbidden_data_read`, data independence after
+Wolper, 1986) decides which accumulators and thresholds the prior may
+hide.  The search uses none of it.
 
 ---
 
-## 4. Done-bit three-valued abstraction (absorb.py:107–118)
+## 4. Plain BFS depth
 
-**Claim**: collapsing timer Acc to `{False, PENDING, True}` preserves
-reachability.
-
-**Formal backing**: **Zone abstraction / Difference-Bound Matrices**
-(Dill, 1989; Miné, 2001). The three values represent regions of a
-single counter relative to a threshold boundary — the canonical
-partition induced by the constraint `Acc >= Preset` plus the zero
-boundary. This is the same structure as clock zones in UPPAAL, restricted
-to monotone counters with known comparison points.
-
-The threshold vector path (`_threshold_vector_key` at kernel.py:227)
-generalizes this to a product of boolean predicates — one per threshold
-comparison. This is a point in the product lattice of zone predicates.
-
-Self-resetting counters/timers (e.g. ``count_up(C, 10).reset(C.Done)``)
-do not violate this abstraction.  The threshold vector is re-extracted
-from the concrete kernel state after every BFS step
-(``_threshold_vector_key``), so when a reset drops the accumulator
-below a threshold boundary the vector correctly reflects the
-un-crossing.  No monotonicity assumption exists in the extraction path.
-
-**Not** (0,1,∞) counter abstraction (Pnueli/Xu/Zuck), which tracks
-cardinality of identical processes rather than regions of a single
-counter.
+With no hidden-event acceleration, `depth_budget` is the BFS depth: the
+longest scan sequence explored.  A search cut short by it reports a
+caveat on its `Proven`; it never reports a silent one.
 
 ---
 
@@ -153,22 +120,16 @@ this is not a practical concern.
 
 ---
 
-## 7. Scope filtering + absorption ordering (classify.py:85–117)
+## 7. Scope filtering
 
 **Subtlety**: `_collect_all_exprs` scope-filters expressions before
-they're passed to threshold absorption. Absorption decisions are made
-on the scoped expression set, not the full program.
+classification; domains are inferred on the scoped expression set, not
+the full program.
 
 **Why this is sound**: **Cone-of-influence reduction and abstraction
-commute for safety properties** (Clarke, Grumberg, Long, 1992 — "Model
-Checking and Abstraction"). Data-flow reads of a threshold tag outside
-the cone are irrelevant to the property regardless. Absorbing within the
-cone is sound because the cone contains all expressions that could
-affect the property.
-
-**Conservative alternative**: run the exclusivity check on the full
-expression list (before scoping). This only makes absorption more
-conservative — blocking some absorptions that are actually safe.
+commute for safety properties** (Clarke, Grumberg, Long, 1994 — "Model
+Checking and Abstraction"). Comparisons outside the cone are irrelevant
+to the property regardless.
 
 ---
 
@@ -190,13 +151,10 @@ miss reachable values — rather than a fallback for domain discovery.
 
 ## Papers referenced
 
-1. Alur & Dill. "A Theory of Timed Automata." TCS, 1994.
-2. Ball, Podelski, Rajamani. "Boolean and Cartesian Abstraction for Model Checking C Programs." TACAS, 2001.
+1. Ball, Podelski, Rajamani. "Boolean and Cartesian Abstraction for Model Checking C Programs." TACAS, 2001.
+2. Clarke, Grumberg, Jha, Lu, Veith. "Counterexample-Guided Abstraction Refinement." CAV, 2000.
 3. Clarke, Grumberg, Long. "Model Checking and Abstraction." TOPLAS, 1994.
 4. Cousot & Cousot. "Abstract Interpretation." POPL, 1977.
 5. Dill. "Timing Assumptions and Verification of Finite-State Concurrent Systems." CAV, 1989.
-6. Leroux & Sutre. "Flat Counter Automata Almost Everywhere!" ATVA, 2005.
-7. Miné. "A New Numerical Abstract Domain Based on Difference-Bound Matrices." PADO, 2001.
-8. Rival & Mauborgne. "Trace Partitioning in Abstract Interpretation Based Static Analyzers." ESOP, 2005.
-9. Tripakis & Yovine. "Analysis of Timed Systems Using Time-Abstracting Bisimulations." FMSD, 2001.
-10. Wolper. "Expressing Interesting Properties of Programs in Propositional Temporal Logic." POPL, 1986.
+6. Rival & Mauborgne. "Trace Partitioning in Abstract Interpretation Based Static Analyzers." ESOP, 2005.
+7. Wolper. "Expressing Interesting Properties of Programs in Propositional Temporal Logic." POPL, 1986.

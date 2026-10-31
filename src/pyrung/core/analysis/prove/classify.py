@@ -2112,6 +2112,41 @@ def _extract_value_domain(
     return tuple(sorted(partitioned))
 
 
+def _abstract_acc_domains(program: Program, graph: ProgramGraph) -> dict[str, tuple[Any, ...]]:
+    """Value domains of every accumulator under black-box timers.
+
+    The domain only sizes the search (hints, estimates): the kernel holds the
+    values.  A timer's untracked accumulator takes the values its tick
+    chooses (``blackbox._TimerOracle``): its default, its presets, and 1
+    for progress below a preset already reached.  A counter counts
+    concretely, up to its preset.
+    """
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    from .blackbox import timed_sites
+
+    values: dict[str, set[int]] = {}
+    for site in timed_sites(program).values():
+        values.setdefault(site.acc_name, {0, 1}).update(site.literal_presets)
+    for instr in walk_instructions(program):
+        if not isinstance(instr, (CountUpInstruction, CountDownInstruction)):
+            continue
+        preset = instr.preset if isinstance(instr.preset, int) else None
+        if preset is not None and abs(preset) <= 1000:
+            span = set(range(min(0, preset), max(0, preset) + 1))
+        else:
+            span = {0, 1} if preset is None else {0, preset}
+        values.setdefault(instr.accumulator.name, set()).update(span)
+    result: dict[str, tuple[Any, ...]] = {}
+    for name, vals in values.items():
+        tag = graph.tags.get(name)
+        if tag is not None:
+            vals = vals | {int(tag.default or 0)}
+        result[name] = tuple(sorted(vals))
+    return result
+
+
 def _with_done_boundary(
     domain: tuple[Any, ...],
     tag: Tag,
@@ -2452,8 +2487,8 @@ def _build_infeasible_hints(
         blocker = blockers.get(name)
         if name in unmodeled:
             hints.append(
-                f"  {name}: {unmodeled[name]} accumulator; the prover does not model"
-                f" its timing yet; cover it with tests"
+                f"  {name}: {unmodeled[name]} accumulator; how()'s domain prior does"
+                f" not model its timing"
             )
             continue
         if blocker is not None:
@@ -2540,15 +2575,25 @@ def _classify_dimensions_from_graph(
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
     structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
-    _skip_absorptions: bool = False,
     exclusions: dict[str, str] | None = None,
     unclassified: set[str] | None = None,
     stepping_tags_out: set[str] | None = None,
     threshold_absorptions_out: list[_ThresholdAbsorptions] | None = None,
     model_system_points: bool = False,
     observe_everything: bool = False,
+    abstract_timers: bool,
+    _skip_absorptions: bool,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context.
+
+    *abstract_timers* classifies for the black-box timer kernel
+    (``blackbox.py``): a Done bit is a plain Bool, and every accumulator
+    (timer, counter, drum, Out timing) is state the search tracks itself.
+    *_skip_absorptions* skips the accumulator absorptions.  The search
+    passes True for both; only how()'s domain prior (``domains_only``)
+    passes False, for the absorbing classification its world key reads
+    (``absorb.py``).  Both are required so no caller gets the prior's
+    classification by default.
 
     *model_system_points* applies the BFS system-point model
     (:mod:`.system_points`): ``sys.first_scan`` becomes a stateful bit and
@@ -2728,7 +2773,10 @@ def _classify_dimensions_from_graph(
         if profile:
             profile_last = _classify_profile_mark(timings, "absorption_merge", profile_last)
 
-    _expand_consumed_accs_for_reset_timing(program, graph, done_acc_info, consumed_accs)
+    if not abstract_timers:
+        # Exact-timing only: under black-box timers a reset's timing is a
+        # choice like any other, and the accumulator is tracked anyway.
+        _expand_consumed_accs_for_reset_timing(program, graph, done_acc_info, consumed_accs)
     if profile:
         profile_last = _classify_profile_mark(timings, "reset_timing_expansion", profile_last)
     if threshold_absorptions_out is not None:
@@ -2771,6 +2819,15 @@ def _classify_dimensions_from_graph(
         else frozenset()
     )
 
+    unread_timer_accs = frozenset(done_acc[name] for name in unread_timers if name in done_acc)
+    abstract_acc_domains = _abstract_acc_domains(program, graph) if abstract_timers else {}
+    if abstract_timers:
+        from .blackbox import timer_held_tags
+
+        timer_held = timer_held_tags(program)
+    else:
+        timer_held = frozenset()
+
     free_system = (
         free_system_tags(graph.tags, graph.writers_of) if model_system_points else frozenset()
     )
@@ -2787,6 +2844,9 @@ def _classify_dimensions_from_graph(
             continue
 
         if tag_name in unconsumed_accs:
+            if abstract_timers and tag_name not in unread_timer_accs:
+                stateful[tag_name] = abstract_acc_domains.get(tag_name, (0, 1))
+                continue
             if exclusions is not None:
                 exclusions[tag_name] = "unconsumed_acc"
             continue
@@ -2893,6 +2953,18 @@ def _classify_dimensions_from_graph(
                 exclusions[tag_name] = "unwritten_internal"
             continue
 
+        if abstract_timers and tag_name in timer_held and is_written:
+            # A drum's completion flag, an Out timing coil's target: held by
+            # the instruction from scan to scan.
+            stateful[tag_name] = (False, True)
+            continue
+
+        if abstract_timers and tag_name in done_acc_info.pairs and tag_name not in done_acc:
+            # A Done whose accumulator is compared: still state (a retentive
+            # or off-delay timer reads it back, a timer not run holds it).
+            stateful[tag_name] = (False, True)
+            continue
+
         if tag_name in done_acc:
             if tag_name in unread_timers:
                 # Nothing reads its Done, accumulator or status bits, and
@@ -2902,7 +2974,7 @@ def _classify_dimensions_from_graph(
                 if exclusions is not None:
                     exclusions[tag_name] = "unread_timer"
                 continue
-            stateful[tag_name] = (False, PENDING, True)
+            stateful[tag_name] = (False, True) if abstract_timers else (False, PENDING, True)
             continue
 
         if tag_name in done_acc_info.pairs.values() and tag_name in consumed_accs:
@@ -2995,6 +3067,10 @@ def _classify_dimensions_from_graph(
                     infeasible_tags.append(tag_name)
             continue
 
+        if tag_name in unmodeled_accs and abstract_timers:
+            # A black-box timer like the others: its tick is a choice.
+            stateful[tag_name] = abstract_acc_domains.get(tag_name, (0, 1))
+            continue
         if tag_name in unmodeled_accs:
             # Its timing is not modeled: the carry (``_frac:``) is in no state
             # key, so even a declared domain must not let the search track it
@@ -3114,8 +3190,13 @@ def _classify_dimensions_from_graph(
     if infeasible_tags:
         total_dims = len(stateful) + len(nondeterministic) + len(infeasible_tags)
         blocker_map = {b.acc_name: b for b in threshold_absorptions.blockers}
+        # Under black-box timers every such accumulator is state (above); only
+        # how()'s domain prior leaves one infeasible.
         hints = _build_infeasible_hints(
-            sorted(infeasible_tags), graph, blocker_map, _unmodeled_accumulators(program)
+            sorted(infeasible_tags),
+            graph,
+            blocker_map,
+            None if abstract_timers else _unmodeled_accumulators(program),
         )
         done_presets_partial = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
         done_presets_partial.update(
@@ -3216,10 +3297,10 @@ def _classify_dimensions(
 
     Returns ``(stateful_dims, nondeterministic_dims, combinational_tags,
     done_acc_pairs, done_presets, done_kinds)`` where each dim dict maps
-    tag name to its value domain.
-    Timer/counter Done bits get a three-valued domain ``(False, PENDING, True)``
-    and their Acc tags are excluded from the state space.
-    Returns ``Intractable`` when a domain cannot be bounded.
+    tag name to its value domain.  Timers are classified as the search sees
+    them (black boxes): a Done bit is a plain Bool and an accumulator
+    something reads is state.  Returns ``Intractable`` when a domain cannot be
+    bounded.
     """
     from pyrung.core.analysis.prove.passes import _collect_receive_dest_names
 
@@ -3231,6 +3312,8 @@ def _classify_dimensions(
         all_exprs,
         scope=scope,
         receive_dest_names=frozenset(_collect_receive_dest_names(program)),
+        abstract_timers=True,
+        _skip_absorptions=True,
     )
 
 

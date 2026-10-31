@@ -410,11 +410,23 @@ class TestAdversarialDepthTruncation:
             with Rung(c >= 55):
                 latch(target)
 
-        result = always(logic, ~target, depth_budget=50)
+        # C counts one per scan: 55 scans to the threshold.  The budget is
+        # a plain BFS depth, so a shorter one says so in a caveat.
+        short = always(logic, ~target, depth_budget=50)
+        assert isinstance(short, Proven)
+        assert any("depth_budget=50" in caveat for caveat in short.caveats)
+
+        result = always(logic, ~target, depth_budget=60)
         assert isinstance(result, Counterexample), (
             f"C should reach the threshold with Enable=True, but prove returned "
             f"{type(result).__name__} with caveats={getattr(result, 'caveats', '?')}"
         )
+        plc = PLC(logic, dt=0.010)
+        for step in result.trace:
+            plc.patch(step.inputs)
+            for _ in range(step.scans):
+                plc.step()
+        assert plc.current_state.tags["Target"] is True
 
     def test_depth_truncation_emits_caveat(self):
         """When the BFS hits depth_budget, Proven.caveats should warn the user."""
@@ -464,8 +476,6 @@ class TestAdversarialDepthTruncation:
             bfs_config=_BFSConfig(
                 live_input_pruning=False,
                 edge_compression=False,
-                hidden_event_jumping=False,
-                pending_settlement=False,
             ),
         )[0]
         assert isinstance(result, Proven)
