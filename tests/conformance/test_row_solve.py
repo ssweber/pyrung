@@ -7,7 +7,7 @@ a continued wire below it).  Part C, beside ``rungs`` and ``solve_order``.
 
 The models, as in ``test_solve_order.py``:
 
-- **L** (live, CLICK's model since round 2, adopted by S4): the trunk's power
+- **L** (live, CLICK's model since hardware round 1, adopted by S4): the trunk's power
   is computed once and held for every row under it; each row's own contacts,
   edge contacts included, are read when the solve reaches the row, so they see
   the writes of the rows above; a box reads its enable and pins before it
@@ -26,16 +26,19 @@ The cases, what each model reads, and the other models they tell apart:
   ``fall(X)`` branch.  L: the rise fires on scan 3 and the fall on 6 (R1 = 3,
   R2 = 6), the scans X changes.  S, or any model that samples a rung's edge
   contacts when the rung is entered (an edge frame per rung, not per row): a
-  scan late, 4 and 7.  An edge contact whose memory is the bit at the end of
-  the previous scan never fires (0, 0): the rail rise and fall below the rung
-  (R3 = 3, R4 = 6 in every model) rule that out on their own.
+  scan late, 4 and 7.  The rail rise and fall below the rung (R3 = 3, R4 = 6
+  in every model) are controls: the bit moved on the scans it was meant to.
+  An edge whose memory is the bit at the end of the previous scan, read live,
+  also fires on 3 and 6, so this case does not tell it from L;
+  ``coils/edge_sees_previous_scan_end`` rules that model out.
 - ``edge_under_unpowered_branch`` (-, probe): the trunk is powered every scan;
-  a parent branch whose only contact (the gate) is open while a bit rises
+  a parent branch whose only contact (the gate) is off while a bit rises
   (scan 3) and falls (scan 7) holds a ``rise`` and a ``fall`` branch; the gate
-  is on for scans 5 and 8 only.  An edge contact under an unpowered parent is
-  still solved and its memory updated ("scanned", adopted: S3 frames every
-  contact of the rung, and S4 reaches every row, unpowered or not): R1 = 0, R2
-  = 0.  Updated only when power reaches it, or a solve that skips the rows of
+  is on for scans 5 and 8 only, written by one rung (two ``out`` rungs would
+  leave it as the lower one writes it, off on scan 5).  An edge contact under
+  an unpowered parent is still solved and its memory updated ("scanned",
+  adopted: S3 frames every contact of the rung, and S4 reaches every row,
+  unpowered or not): R1 = 0, R2 = 0.  Updated only when power reaches it, or a solve that skips the rows of
   an unpowered branch: the rise fires on scan 5 and the fall on 8 (5, 8).  The
   rail rise and fall below (R3 = 3, R4 = 7) are the bit's own edges under
   both.  ``coils/edge_in_false_rung_branch`` answered this for a rung whose
@@ -68,7 +71,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, branch, calc, copy, count_up, fall, out, rise
+from pyrung.core import Or, Rung, branch, calc, copy, count_up, fall, out, rise
 from tests.conformance.memory import ClickCounter, c
 from tests.conformance.scans import WINDOW, count_scans, done, firings, scans_for
 
@@ -107,15 +110,14 @@ def prove_edge_on_branch_reads_row_above(slot):
 
 
 def prove_edge_under_unpowered_branch(slot):
-    # The bit C411 is on for scans 3..6; the gate C412 on scans 5 and 8 only.
-    # C413 is the trunk's own output, there so the gate stays a branch.
+    # The bit C411 is on for scans 3..6; the gate C412 on scans 5 and 8 only,
+    # from one rung (a second out() rung would write it off on scan 5).  C413
+    # is the trunk's own output, there so the gate stays a branch.
     bit, gate = c[411], c[412]
     count_scans(slot)
     with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 6):
         out(bit)
-    with Rung(slot.Cmd != 0, slot.Scratch == 5):
-        out(gate)
-    with Rung(slot.Cmd != 0, slot.Scratch == 8):
+    with Rung(slot.Cmd != 0, Or(slot.Scratch == 5, slot.Scratch == 8)):
         out(gate)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
         out(c[413])
@@ -159,9 +161,9 @@ group = Group(
         ),
         case(
             "An edge contact under an unpowered branch still tracks its bit: with the "
-            "trunk powered and the parent branch's gate open while a bit rises (scan "
+            "trunk powered and the parent branch's gate off while a bit rises (scan "
             "3) and falls (scan 7), the rise and fall branches under it do not fire "
-            "when the gate closes on scans 5 and 8 (Result1 = 0, Result2 = 0); the "
+            "when the gate comes on, on scans 5 and 8 (Result1 = 0, Result2 = 0); the "
             "rail rise and fall see scans 3 (Result3) and 7 (Result4)",
             ladder=prove_edge_under_unpowered_branch,
             expect={"Result1": 0, "Result2": 0, "Result3": 3, "Result4": 7},
