@@ -1269,6 +1269,10 @@ class IndirectBlockRange:
     end_expr: int | Tag | Any
     reverse_order: bool = False
 
+    def __post_init__(self) -> None:
+        _check_range_bound(self.block, self.start_expr, "start")
+        _check_range_bound(self.block, self.end_expr, "end")
+
     def resolve_ctx(self, ctx: ScanContext | ConditionView) -> BlockRange:
         """Resolve expressions to concrete BlockRange using ScanContext."""
         start = self._resolve_one(self.start_expr, ctx)
@@ -1357,16 +1361,38 @@ def _check_pointer_tag(block: Block, pointer: Any) -> None:
     )
 
 
-def _check_pointer_expression(block: Block, expr: Any) -> None:
-    """Refuse an index expression that may be a float (``DS[R + 1]``, ``DS[I / 2]``)."""
-    from pyrung.core.expression import format_expr, may_be_float
+def _check_pointer_expression(block: Block, expr: Any, what: str = "Index expression") -> None:
+    """Refuse an index expression that is not integer-valued (``DS[R + 1]``, ``DS[I / 2]``)."""
+    from pyrung.core.expression import format_expr, is_integer_index
 
-    if not may_be_float(expr):
+    if is_integer_index(expr):
         return
     raise TypeError(
-        f"Index expression {format_expr(expr)!r} into block {block.name!r} may be a "
-        "float (a Real operand, a float constant, '/', '**' or a math function); "
-        "an index expression must be integer-valued: use Int or Dint operands and '//'."
+        f"{what} {format_expr(expr)!r} into block {block.name!r} is not integer-valued; "
+        "an index expression may use only Int or Dint tags, integer constants and "
+        "integer operators ('//', not '/'; no '**' or math function)."
+    )
+
+
+def _check_range_bound(block: Block, bound: Any, which: str) -> None:
+    """Refuse a ``select()`` bound that is not an int, an Int/Dint tag or an index expression."""
+    from pyrung.core.expression import Expression
+
+    if isinstance(bound, int):
+        return
+    if isinstance(bound, Expression):
+        _check_pointer_expression(block, bound, f"select() {which} bound")
+        return
+    if isinstance(bound, Tag):
+        if bound.type in POINTER_TAG_TYPES:
+            return
+        raise TypeError(
+            f"select() {which} bound {bound.name!r} into block {block.name!r} is "
+            f"{bound.type.name}; a bound must be an int or an Int or Dint tag."
+        )
+    raise TypeError(
+        f"select() {which} bound into block {block.name!r} is a {type(bound).__name__}; "
+        "a bound must be an int, an Int or Dint tag or an integer index expression."
     )
 
 

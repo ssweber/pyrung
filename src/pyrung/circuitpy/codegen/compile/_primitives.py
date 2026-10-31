@@ -145,15 +145,21 @@ def _compile_expression_impl(
             block_snapshots=block_snapshots,
             strict=strict,
         )
-        if not strict and _binary_may_raise(expr):
+        if not strict and (
+            _binary_may_raise(expr) or _may_be_huge(expr.left) or _may_be_huge(expr.right)
+        ):
             return _permissive_op(expr.symbol, left, right, ctx)
         if expr.symbol in _BITWISE_SYMBOLS:
             left_int = _bit_int_expr(expr.left, left, ctx)
             right_int = _bit_int_expr(expr.right, right, ctx)
+            if expr.symbol in ("<<", ">>"):
+                right_int = _shift_count_expr(expr.right, right_int, ctx)
             return f"({left_int} {expr.symbol} {right_int})"
         if expr.symbol == "**" and (_may_be_float(expr.left) or _may_be_float(expr.right)):
-            # _pow gives +/-Inf for a float overflow, as the core's _op_pow; an
-            # integer power is exact and never overflows.
+            # _pow gives +/-Inf for a float overflow, as the core's _op_pow, and
+            # raises _MathDomainError for a complex result; an integer power is
+            # exact and never overflows.
+            ctx.mark_helper("_math_func")
             ctx.mark_helper("_pow")
             return f"_pow({left}, {right})"
         return f"({left} {expr.symbol} {right})"
@@ -179,10 +185,11 @@ def _compile_expression_impl(
             raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
         # _math_func passes a non-finite operand through and raises
         # _MathDomainError for a domain error, as MathFuncExpr.evaluate does;
-        # outside calc _permissive_math gives 0 for it instead.
+        # outside calc _permissive_math gives 0 for it instead, and for an
+        # integer too large for a float (OverflowError).
         ctx.mark_helper("_math_func")
         helper = "_math_func"
-        if not strict and expr.name in DOMAIN_LIMITED_MATH_FUNCS:
+        if not strict and (expr.name in DOMAIN_LIMITED_MATH_FUNCS or _may_be_huge(expr.operand)):
             ctx.mark_helper("_permissive_math")
             helper = "_permissive_math"
         return (
@@ -214,6 +221,8 @@ def _compile_expression_impl(
             return _permissive_op(expr.name, value, count, ctx)
         value_int = _bit_int_expr(expr.value, value, ctx)
         count_int = _bit_int_expr(expr.count, count, ctx)
+        if expr.name in ("lsh", "rsh"):
+            count_int = _shift_count_expr(expr.count, count_int, ctx)
         if expr.name == "lsh":
             return f"({value_int} << {count_int})"
         if expr.name == "rsh":
@@ -343,18 +352,26 @@ def _non_negative_literal(expr: Any) -> bool:
     return isinstance(expr, LiteralExpr) and expr.value >= 0
 
 
+def _non_negative_int_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and isinstance(expr.value, int) and expr.value >= 0
+
+
 def _binary_may_raise(expr: BinaryExpr) -> bool:
     """Whether *expr* can raise on a math error (and so, outside calc, give 0).
 
-    A division by a non-zero constant, a power with a non-negative constant
-    exponent, a bitwise operation on integers and a shift by a non-negative
-    constant cannot; ``+``, ``-`` and ``*`` never do (a float overflow is Inf).
+    A division by a non-zero constant, a power with a non-negative integer
+    constant exponent, a bitwise operation on integers and a shift by a
+    non-negative constant cannot; ``+``, ``-`` and ``*`` never do (a float
+    overflow is Inf).  Each of them can raise when an operand is an integer too
+    large for a float (:func:`_may_be_huge`), which the caller checks.
     """
     symbol = expr.symbol
     if symbol in ("/", "//", "%"):
         return not _non_zero_literal(expr.right)
     if symbol == "**":
-        return not _non_negative_literal(expr.right)
+        # A negative exponent of 0 divides by zero; a fractional one of a
+        # negative base is complex (a math error).
+        return not _non_negative_int_literal(expr.right)
     if symbol in ("&", "|", "^"):
         return _may_be_float(expr.left) or _may_be_float(expr.right)
     if symbol in ("<<", ">>"):
@@ -366,6 +383,42 @@ def _binary_may_raise(expr: BinaryExpr) -> bool:
     return False
 
 
+def _may_be_huge(expr: Any) -> bool:
+    """Whether *expr* may be an integer too large for a float (past 2 ** 1024).
+
+    A ``**`` makes one from tags (``2 ** E``, ``BD ** 40``), and so can a left
+    shift by more than a literal 64.  Such an integer is exact, but an operation
+    that turns it into a float (``* 0.5``, ``/``, ``sin``) raises
+    ``OverflowError``.  ``+``, ``-``, ``*`` of tags alone stay far below it.
+    """
+    if isinstance(expr, BinaryExpr):
+        if expr.symbol == "**":
+            return True
+        if expr.symbol == "<<" and not _small_shift_literal(expr.right):
+            return True
+        return _may_be_huge(expr.left) or _may_be_huge(expr.right)
+    if isinstance(expr, ShiftFuncExpr):
+        if expr.name == "lsh" and not _small_shift_literal(expr.count):
+            return True
+        return _may_be_huge(expr.value) or _may_be_huge(expr.count)
+    if isinstance(expr, UnaryExpr):
+        return _may_be_huge(expr.operand)
+    return False
+
+
+def _small_shift_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and isinstance(expr.value, int) and expr.value <= 64
+
+
+def _shift_count_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
+    """A shift count; a negative one raises OverflowError (core ``shift_count``)."""
+    if _non_negative_literal(expr):
+        return compiled
+    ctx.mark_helper("_bit_int")
+    ctx.mark_helper("_shift_count")
+    return f"_shift_count({compiled})"
+
+
 def _permissive_op(op: str, left: str, right: str, ctx: CodegenContext) -> str:
     """``_permissive_op(op, left, right)``: the operation, or 0 for a math error.
 
@@ -373,6 +426,7 @@ def _permissive_op(op: str, left: str, right: str, ctx: CodegenContext) -> str:
     (``_permissive`` in pyrung.core.expression).
     """
     ctx.mark_helper("_bit_int")
+    ctx.mark_helper("_math_func")
     ctx.mark_helper("_pow")
     ctx.mark_helper("_permissive_op")
     return f"_permissive_op({op!r}, {left}, {right})"

@@ -39,14 +39,14 @@ Where Inf or NaN meets an integer, pyrung makes a choice of its own, not yet mea
 
 - A `calc()` result that is Inf or NaN stores 0 into an `Int`, `Dint` or `Word`.
 - A `copy()` of ±Inf into an `Int` or `Dint` clamps to its limit; NaN, or anything not finite into a `Word`, stores 0.
-- A bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand makes the `calc()` store 0 and set `out_of_range`.
+- A bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand, or a shift (`<<`, `>>`, `lsh`, `rsh`) by a negative count, makes the `calc()` store 0 and set `out_of_range`.
 - A [`randint()`](#randint) bound that is Inf or NaN makes the `calc()` store 0 and set `out_of_range`.
 - A [`forloop()`](program-control.md) whose `Real` count is Inf or NaN runs no iteration and sets `out_of_range`.
 - `unpack_to_words()` of an Inf or NaN `Real` writes its bit pattern: +Inf is 0x7F800000, and a NaN keeps the bits of the operation that made it (`Inf − Inf` on a PC gives 0xFFC00000, a high word of 65472).
 
 Inside the range pyrung keeps a `Real` at Python's 64-bit precision, where a CLICK REAL is a 32-bit float: `16777216.0 + 1` is 16777217 in pyrung and 16777216 on a CLICK. Compare a `Real` with a tolerance, not `==`, when the last digits matter.
 
-pyrung checks the range when `calc()` stores its result, not at each step of the formula. Inside one `calc()` a step is a 64-bit float (finite up to about ±1.8E+308, then ±Inf; `**` too) or an exact integer, so `calc(Big * 10 / 100, Result)` with `Big` = 3.0E+38 stores 3.0E+37 with no flag, where a CLICK computing in 32 bits would reach Inf at `Big * 10` and store Inf (not yet measured on a CLICK). Split such a formula across two `calc()`s when that intermediate Inf matters.
+pyrung checks the range when `calc()` stores its result, not at each step of the formula. Inside one `calc()` a step is a 64-bit float (finite up to about ±1.8E+308, then ±Inf; `**` too) or an exact integer, so `calc(Big * 10 / 100, Result)` with `Big` = 3.0E+38 stores 3.0E+37 with no flag, where a CLICK computing in 32 bits would reach Inf at `Big * 10` and store Inf (not yet measured on a CLICK). Split such a formula across two `calc()`s when that intermediate Inf matters. An integer step is exact however large it grows (`2 ** E` with `E` = 1100), until it meets a float: past about 1.8E+308 that step (`* 0.5`, `/`, `sin`) makes the `calc()` store 0 and set `out_of_range`.
 
 ## Division
 
@@ -63,9 +63,11 @@ A math function given an operand outside its domain — `sqrt` of a negative, `l
 
 A division by zero earlier in the expression wins: `sqrt(X / 0)` is 0 with `division_error`, not a domain error. An infinite operand outside the domain is one: `sqrt` of −Inf and `asin` of Inf are 0 with `math_operation_error`; `sqrt` and `log` of +Inf are +Inf.
 
+A negative base to a fractional power (`(-8.0) ** 0.5`, or `N ** H` with `H` = 0.5) has no real value, so pyrung treats it as a math error, as it does `sqrt(-1)`: the `calc()` stores 0 and sets `math_operation_error`. This is pyrung's choice, not yet measured on a CLICK.
+
 ## Math outside `calc()`
 
-An expression evaluated anywhere but `calc()` (a rung condition, a `copy()` source, a `forloop()` count, an index expression such as `DS[I + 1]`) is permissive: an operation that hits a math error gives 0, sets no fault flag and never stops the scan. That covers a division by zero (`/`, `//` or `%`, where `calc()` sets `division_error`), a math function outside its domain, a bitwise or shift operation on Inf or NaN or with a negative count, and a `randint()` bound holding Inf or NaN. A result that IEEE 754 defines passes through: `Big * 10 > 1.0E+38` is true when the product is +Inf. This is pyrung's own rule; a CLICK has no expressions outside Math, and the CLICK validator flags them. Use `calc()` when the flag matters.
+An expression evaluated anywhere but `calc()` (a rung condition, a `copy()` source, a `forloop()` count, an index expression such as `DS[I + 1]`) is permissive: an operation that hits a math error gives 0, sets no fault flag and never stops the scan. That covers a division by zero (`/`, `//` or `%`, where `calc()` sets `division_error`), a math function outside its domain, a negative base to a fractional power, a bitwise or shift operation on Inf or NaN or with a negative count, an integer too large for a float meeting a float (`(2 ** E) * 0.5` with `E` = 1100), and a `randint()` bound holding Inf or NaN. A result that IEEE 754 defines passes through: `Big * 10 > 1.0E+38` is true when the product is +Inf. This is pyrung's own rule; a CLICK has no expressions outside Math, and the CLICK validator flags them. Use `calc()` when the flag matters.
 
 When a value stored as Inf or NaN reaches an instruction's own integer conversion, that instruction's rule applies: a `forloop()` over a `Real` count holding Inf runs no iteration and sets `out_of_range`.
 

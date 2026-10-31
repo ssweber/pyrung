@@ -16,6 +16,7 @@ from pyrung.core.expression import (
     RandIntExpr,
     ShiftFuncExpr,
     UnaryExpr,
+    may_be_float,
 )
 from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.storage import check_real_value
@@ -104,14 +105,18 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
 
 
 def has_domain_limited_func(value: Any, seen: set[int] | None = None) -> bool:
-    """True when *value* (a calc expression) calls a math function that can raise
-    :class:`~pyrung.core.expression.MathDomainError` (``sqrt``, ``log``, ...)."""
+    """True when *value* (a calc expression) can raise
+    :class:`~pyrung.core.expression.MathDomainError`: a math function with a
+    domain (``sqrt``, ``log``, ...) or a ``**`` whose exponent may be fractional
+    (``(-8.0) ** 0.5`` has no real value)."""
     if seen is None:
         seen = set()
     if id(value) in seen:
         return False
     seen.add(id(value))
     if isinstance(value, MathFuncExpr) and value.name in DOMAIN_LIMITED_MATH_FUNCS:
+        return True
+    if isinstance(value, BinaryExpr) and value.symbol == "**" and may_be_float(value.right):
         return True
     if isinstance(value, Expression):
         return any(has_domain_limited_func(child, seen) for child in vars(value).values())

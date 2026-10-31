@@ -35,6 +35,8 @@ from pyrung.core import (
     Rung,
     TagType,
     Timer,
+    Word,
+    atan,
     blockcopy,
     branch,
     calc,
@@ -64,6 +66,7 @@ from pyrung.core import (
     run_function,
     search,
     shift,
+    sin,
     sqrt,
     subroutine,
     time_drum,
@@ -1739,6 +1742,106 @@ class TestBoardPeripheralsAndRunStop:
 
         results = _on_every_backend(prog, monkeypatch, (got, *self._FAULTS), scans=1)
         assert results == {name: (11, False, False, False) for name in results}
+
+    _HUGE = [
+        ("pow_tag_exponent_times_float", lambda e, bd: (2**e) * 0.5),
+        ("pow_times_float", lambda e, bd: (bd**40) * 1.5),
+        ("pow_divided", lambda e, bd: (bd**40) / 2),
+        ("pow_plus_float", lambda e, bd: (bd**40) + 0.5),
+        ("sin_of_pow", lambda e, bd: sin(bd**40)),
+        ("sqrt_of_pow", lambda e, bd: sqrt(bd**40)),
+        ("atan_of_pow", lambda e, bd: atan(bd**40)),
+        ("lsh_tag_count_times_float", lambda e, bd: lsh(1, e) * 0.5),
+    ]
+
+    @pytest.mark.parametrize(("label", "make"), _HUGE, ids=[label for label, _ in _HUGE])
+    def test_an_integer_too_large_for_a_float_is_zero_outside_calc_on_every_backend(
+        self, monkeypatch, label, make
+    ):
+        """An exact integer power is fine until it meets a float; outside calc
+        that operation gives 0 with no flag."""
+        e = Int("E", default=1100)
+        bd = Dint("BD", default=2_000_000_000)
+        expr = make(e, bd)
+        hit = Bool("Hit")
+        copied = Real("Copied", default=7.0)
+        with Program(strict=False) as prog:
+            with Rung(expr == 0):
+                out(hit)
+            with Rung():
+                copy(expr, copied)
+
+        results = _on_every_backend(prog, monkeypatch, (hit, copied, *self._FAULTS), scans=1)
+        assert results == {name: (True, 0.0, False, False, False) for name in results}, label
+
+    @pytest.mark.parametrize(("label", "make"), _HUGE, ids=[label for label, _ in _HUGE])
+    def test_an_integer_too_large_for_a_float_in_calc_is_zero_and_sc43_on_every_backend(
+        self, monkeypatch, label, make
+    ):
+        e = Int("E", default=1100)
+        bd = Dint("BD", default=2_000_000_000)
+        dest = Real("Dest", default=7.0)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(make(e, bd), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        assert results == {name: (0.0, False, True, False) for name in results}, label
+
+    _COMPLEX = [
+        ("literal_exponent", lambda n, h: n**0.5),
+        ("tag_exponent", lambda n, h: n**h),
+        ("int_base", lambda n, h: (0 - 8) ** h),
+    ]
+
+    @pytest.mark.parametrize(("label", "make"), _COMPLEX, ids=[label for label, _ in _COMPLEX])
+    def test_a_complex_power_is_a_math_error_on_every_backend(self, monkeypatch, label, make):
+        """pyrung's choice: a negative base to a fractional power has no real
+        value, so it is a math error, as sqrt(-1) is: 0 with no flag outside
+        calc, 0 with math_operation_error (SC46) in calc."""
+        n = Real("N", default=-8.0)
+        h = Real("H", default=0.5)
+        hit = Bool("Hit")
+        copied = Real("Copied", default=7.0)
+        dest = Real("Dest", default=7.0)
+        with Program(strict=False) as prog:
+            with Rung(make(n, h) == 0):
+                out(hit)
+            with Rung():
+                copy(make(n, h), copied)
+            with Rung():
+                calc(make(n, h), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (hit, copied, dest, *self._FAULTS), scans=1)
+        assert results == {name: (True, 0.0, 0.0, False, False, True) for name in results}, label
+
+    _NEGATIVE_SHIFTS = [
+        ("lsh", lambda w, c: lsh(w, c)),
+        ("rsh", lambda w, c: rsh(w, c)),
+        ("left_shift", lambda w, c: w << c),
+        ("right_shift", lambda w, c: w >> c),
+    ]
+
+    @pytest.mark.parametrize(
+        ("label", "make"), _NEGATIVE_SHIFTS, ids=[label for label, _ in _NEGATIVE_SHIFTS]
+    )
+    def test_a_negative_shift_count_in_calc_is_zero_and_sc43_on_every_backend(
+        self, monkeypatch, label, make
+    ):
+        """pyrung's choice: a shift by a negative count stores 0 and sets
+        out_of_range (SC43), as a bitwise operation on Inf does."""
+        w = Word("W", default=0x00F0)
+        c = Int("C", default=-1)
+        dest = Word("Dest", default=7)
+        hit = Bool("Hit")
+        with Program(strict=False) as prog:
+            with Rung(make(w, c) == 0):
+                out(hit)
+            with Rung():
+                calc(make(w, c), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (hit, dest, *self._FAULTS), scans=1)
+        assert results == {name: (True, 0, False, True, False) for name in results}, label
 
     def test_text_literal_copy_fans_out_one_char_per_register(self, monkeypatch):
         hw = P1AM()

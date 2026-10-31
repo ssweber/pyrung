@@ -73,13 +73,18 @@ def _op_pow(a: Numeric, b: Numeric) -> Numeric:
     integer exponent.
     """
     try:
-        return a**b
+        result = a**b
     except OverflowError:
         if not (isinstance(a, float) or isinstance(b, float)):
             raise  # an int too large for a float: calc stores 0 with SC43
         odd = b % 2 == 1 if isinstance(b, int) else b.is_integer() and int(b) % 2 == 1
         negative = a < 0 and odd
         return -math.inf if negative else math.inf
+    if isinstance(result, complex):
+        # A negative base to a fractional power (``(-8.0) ** 0.5``) has no real
+        # value: a math error, as ``sqrt(-1)`` is (calc sets SC46).
+        raise MathDomainError(f"({a!r}) ** {b!r}: math domain error")
+    return result
 
 
 def bit_operand(value: Numeric) -> int:
@@ -107,12 +112,25 @@ def _op_xor(a: Numeric, b: Numeric) -> int:
     return bit_operand(a) ^ bit_operand(b)
 
 
+def shift_count(value: Numeric) -> int:
+    """``bit_operand(value)`` for a shift count, which must not be negative.
+
+    A negative count raises ``OverflowError`` (Python raises ``ValueError``), so
+    ``calc`` stores 0 and sets the out-of-range flag, pyrung's choice.  The
+    compiled kernel and generated CircuitPython use ``_shift_count``.
+    """
+    count = bit_operand(value)
+    if count < 0:
+        raise OverflowError("negative shift count")
+    return count
+
+
 def _op_lshift(a: Numeric, b: Numeric) -> int:
-    return bit_operand(a) << bit_operand(b)
+    return bit_operand(a) << shift_count(b)
 
 
 def _op_rshift(a: Numeric, b: Numeric) -> int:
-    return bit_operand(a) >> bit_operand(b)
+    return bit_operand(a) >> shift_count(b)
 
 
 def _op_invert(a: Numeric) -> int:
@@ -540,12 +558,12 @@ class ShiftFuncExpr(Expression):
 
 def lsh(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
     """Left shift function: lsh(value, count)."""
-    return ShiftFuncExpr(_wrap(x), _wrap(n), lambda v, c: v << c, "lsh")
+    return ShiftFuncExpr(_wrap(x), _wrap(n), lambda v, c: v << shift_count(c), "lsh")
 
 
 def rsh(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
     """Right shift function: rsh(value, count)."""
-    return ShiftFuncExpr(_wrap(x), _wrap(n), lambda v, c: v >> c, "rsh")
+    return ShiftFuncExpr(_wrap(x), _wrap(n), lambda v, c: v >> shift_count(c), "rsh")
 
 
 def _rotate_left_16(value: int, count: int) -> int:
@@ -847,6 +865,46 @@ def may_be_float(expr: Any) -> bool:
         block = getattr(expr.block_range, "block", None)
         return getattr(getattr(block, "type", None), "name", None) not in INTEGER_TAG_TYPE_NAMES
     return True
+
+
+#: Tag type names an index may be built from: a pointer holds an address.
+INDEX_TAG_TYPE_NAMES = frozenset({"INT", "DINT"})
+
+
+def is_integer_index(expr: Any) -> bool:
+    """True when *expr* may index a block: built only from Int and Dint tags,
+    integer constants and integer operations.
+
+    ``/``, ``**`` and the math functions can make a float, a ``Real``,
+    ``Word``, ``Bool`` or ``Char`` operand is not an address, and ``mean`` and
+    ``median`` of a block range can be fractional.  Anything not recognised
+    counts as not an index.
+    """
+    from pyrung.core.tag import ImmediateRef
+
+    if isinstance(expr, TagExpr):
+        tag = expr.tag.tag if isinstance(expr.tag, ImmediateRef) else expr.tag
+        return getattr(getattr(tag, "type", None), "name", None) in INDEX_TAG_TYPE_NAMES
+    if isinstance(expr, LiteralExpr):
+        return isinstance(expr.value, int)
+    if isinstance(expr, BinaryExpr):
+        return (
+            expr.symbol not in ("/", "**")
+            and is_integer_index(expr.left)
+            and is_integer_index(expr.right)
+        )
+    if isinstance(expr, UnaryExpr):
+        return is_integer_index(expr.operand)
+    if isinstance(expr, ShiftFuncExpr):
+        return is_integer_index(expr.value) and is_integer_index(expr.count)
+    if isinstance(expr, RandIntExpr):
+        return is_integer_index(expr.lo) and is_integer_index(expr.hi)
+    if isinstance(expr, SumExpr) or (
+        isinstance(expr, RangeAggregateExpr) and expr.kind in ("max", "min")
+    ):
+        block = getattr(expr.block_range, "block", None)
+        return getattr(getattr(block, "type", None), "name", None) in INDEX_TAG_TYPE_NAMES
+    return False
 
 
 # =============================================================================
