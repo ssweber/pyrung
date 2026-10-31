@@ -34,11 +34,11 @@ DEFAULT_PORT = 502
 _CHUNK = 100
 #: Wall-clock seconds per scan the settle time assumes (pyrung's nominal dt).
 NOMINAL_SCAN_S = 0.010
-#: Most seconds of PLC time one sim scan advances (5 nominal scans).  A longer
+#: Most seconds of PLC time one sim scan advances (4 nominal scans).  A longer
 #: wall-clock gap between scans is this machine stalling (other processes, the
 #: GC), which a CLICK scanning in milliseconds never sees, so the sim's PLC does
 #: not see it either.
-MAX_SCAN_DT_S = 0.050
+MAX_SCAN_DT_S = 0.040
 #: Seconds between polls while waiting on the header, the zeroing, or ``Fired``.
 POLL_S = 0.02
 #: Seconds between the two final reads; both must meet the expectation.

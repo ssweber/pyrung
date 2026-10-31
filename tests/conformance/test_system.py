@@ -75,9 +75,10 @@ and 2; for a quarter period 40 and 8.  The edges are ``rise()`` contacts, first
 on their rungs.  Over the wire the window is wall clock
 and its ends fall between scans, so each count may be one off.  A scan longer
 than 40 ms (SD10, pyrung's time since the previous scan) could hide a whole
-half period of SC5, and the local sim does stall that long on a loaded
-machine, so such a scan starts the window again; the case fires after the
-first 2 s without one.  SC4 (10 ms) is left out: at pyrung's nominal 10 ms scan
+half period of SC5, and a target run on a loaded machine does stall that
+long (pyrung's own sim advances a scan at most 40 ms, ``MAX_SCAN_DT_S``, but
+the P1AM-200 code times itself), so such a scan starts the window again; the
+case fires after the first 2 s without one.  SC4 (10 ms) is left out: at pyrung's nominal 10 ms scan
 it aliases (in-process it never reads on).  So is SC7 (1 s): over 2 s a
 half-period SC7 also reads 1 or 2, so it would tell nothing SC6 doesn't.
 

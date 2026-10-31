@@ -32,9 +32,9 @@ alone, so a contact on that T<n> is always off (pyrung matches).  Round 2
   and on (1), the off phase's last 150 ms then a new on phase.  A fresh off
   phase reads Result2 = 0, Result4 = 0.  The case's windows are wider than in
   round 2 since the local sim's 30-40 ms scans stepped over the narrow ones
-  now and then; they hold for any scan up to 50 ms (the sim's
-  ``MAX_SCAN_DT_S``), and ErrorCode needs two scans in the 100 ms window to
-  tell a counting TD apart.
+  now and then.  They hold for any scan up to 50 ms (the sim's scans
+  advance at most 40, its ``MAX_SCAN_DT_S``), and ErrorCode needs two scans
+  in the 100 ms window to tell a counting TD apart.
 """
 
 from __future__ import annotations
