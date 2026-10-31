@@ -523,6 +523,8 @@ server = ClickServer(provider, port=502)
 
 Reads return the current committed state. Writes queue a `runner.patch()` for the next scan.
 
+A DF holding ±Inf or NaN (a Math overflow stores Inf, as on a CLICK) reads as that float32. A Modbus write of Inf or NaN to a DF is refused: `pyclickplc` accepts only a finite float32.
+
 If another device on the LAN can't reach the soft PLC, check the Windows Firewall: both the TCP port (default 502) and the Python interpreter need to be allowed through.
 
 ### Word-image (XD / YD) addressing

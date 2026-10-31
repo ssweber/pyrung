@@ -22,7 +22,14 @@ calc(DH[1] | DH[2], DH[3])              # WORD-only math infers hex mode
 
 ## REAL range and precision
 
-A `Real` never leaves CLICK's range, ±3.4028235E+38. A `calc()` result past it saturates at the limit and sets `system.fault.out_of_range`; `copy()` saturates the same way. A default, literal, `patch()` or `force()` past it raises `ValueError`.
+A CLICK REAL is a 32-bit IEEE 754 float, so a finite `Real` never leaves ±3.4028235E+38. A `calc()` result past it is +Inf or −Inf, as a CLICK stores it, and sets `system.fault.out_of_range` (SC43); a `copy()` past it is ±Inf too. A default or literal must be finite and in range, and a `patch()` or `force()` of a finite value past it raises `ValueError`; a `patch()` or `force()` may set ±Inf or NaN.
+
+```python
+calc(Big * 10, Result)      # Big = 3.0E+38: Result = +Inf, out_of_range on
+calc(Result / 2, Half)      # Half = +Inf: Inf stays Inf
+```
+
+An Inf or NaN operand follows IEEE 754: `Inf / 2` is Inf, `Inf − Inf` and `sin(Inf)` are NaN, `Inf > 1.0E+38` is true and NaN compares false with everything (`R == R` is false for a NaN). A `calc()` whose result is Inf or NaN sets `out_of_range`; into an `Int`, `Dint` or `Word` it stores 0. A `copy()` of ±Inf into an `Int` or `Dint` clamps to its limit; NaN, or anything not finite into a `Word`, stores 0.
 
 Inside the range pyrung keeps a `Real` at Python's 64-bit precision, where a CLICK REAL is a 32-bit float: `16777216.0 + 1` is 16777217 in pyrung and 16777216 on a CLICK. Compare a `Real` with a tolerance, not `==`, when the last digits matter.
 
@@ -39,7 +46,7 @@ calc(sqrt(Level), Root)     # Level = -4.0
 
 A math function given an operand outside its domain — `sqrt` of a negative, `log`/`log10` of 0 or a negative, `asin`/`acos` outside −1..1 — stores 0 in the destination and sets `system.fault.math_operation_error` (CLICK's SC46). The rest of the scan runs, so a later rung can see the flag; the next scan starts with it off, like the other fault flags. The PLC stays in RUN. That is what a CLICK does, though its help for SC46 says "SC50 is turned to ON, the PLC is put in Stop Mode": on the hardware, SC50 stays off and the PLC keeps scanning.
 
-An operand that is already infinite (from a division by zero earlier in the expression) is not a domain error: the result is not finite, so it is 0 with `division_error`.
+A division by zero earlier in the expression wins: `sqrt(X / 0)` is 0 with `division_error`, not a domain error. An infinite operand outside the domain is one: `sqrt` of −Inf and `asin` of Inf are 0 with `math_operation_error`; `sqrt` and `log` of +Inf are +Inf.
 
 ## Mode inference
 
@@ -60,7 +67,7 @@ For CLICK portability, do not mix WORD and non-WORD math in the same `calc()` ex
 | `calc()` | Wraps (modular arithmetic) |
 | Timer accumulator | Clamps at 32,767 |
 | Counter accumulator | Clamps at DINT min/max |
-| REAL past ±3.4028235E+38 | Saturates; `calc()` sets `system.fault.out_of_range` |
+| REAL past ±3.4028235E+38 | ±Inf; `calc()` sets `system.fault.out_of_range` |
 | Division by zero | Result = 0, `system.fault.division_error` set |
 | Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | Result = 0, `system.fault.math_operation_error` set for the scan |
 
