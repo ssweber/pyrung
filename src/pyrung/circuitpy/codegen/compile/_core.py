@@ -395,33 +395,33 @@ def compile_condition(
         )
     if isinstance(cond, CompareEq):
         return (
-            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            f" == {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
+            f" == {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
         )
     if isinstance(cond, CompareNe):
         return (
-            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            f" != {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
+            f" != {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
         )
     if isinstance(cond, CompareLt):
         return (
-            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            f" < {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
+            f" < {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
         )
     if isinstance(cond, CompareLe):
         return (
-            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            f" <= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
+            f" <= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
         )
     if isinstance(cond, CompareGt):
         return (
-            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            f" > {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
+            f" > {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
         )
     if isinstance(cond, CompareGe):
         return (
-            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            f" >= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
+            f" >= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
         )
     if isinstance(cond, AllCondition):
         parts = [
@@ -459,33 +459,33 @@ def compile_condition(
         return f'_fall(bool({tag_expr}), bool(_prev.get("{_contact_tag_name(cond.tag)}", False)))'
     if isinstance(cond, IndirectCompareEq):
         return (
-            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            f" == {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
+            f" == {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
         )
     if isinstance(cond, IndirectCompareNe):
         return (
-            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            f" != {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
+            f" != {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
         )
     if isinstance(cond, IndirectCompareLt):
         return (
-            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            f" < {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
+            f" < {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
         )
     if isinstance(cond, IndirectCompareLe):
         return (
-            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            f" <= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
+            f" <= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
         )
     if isinstance(cond, IndirectCompareGt):
         return (
-            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            f" > {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
+            f" > {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
         )
     if isinstance(cond, IndirectCompareGe):
         return (
-            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            f" >= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+            f"({_compile_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)}"
+            f" >= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, condition=True)})"
         )
     if isinstance(cond, ExprCompare):
         return (

@@ -185,6 +185,9 @@ class CodegenContext:
     block_symbols: dict[int, str] = field(default_factory=dict)
     tag_block_addresses: dict[str, tuple[int, int]] = field(default_factory=dict)
     used_indirect_blocks: set[int] = field(default_factory=set)
+    # Blocks a rung condition indexes: their ``_cond_index_*`` helper reads an
+    # address outside the block as 0 rather than raising.
+    used_condition_index_blocks: set[int] = field(default_factory=set)
     # logical block id -> (bank block id, {logical addr: bank addr}). An aliased
     # block is a named window onto the bank's array, not storage of its own.
     block_alias: dict[int, tuple[int, dict[int, int]]] = field(default_factory=dict)
@@ -657,6 +660,15 @@ class CodegenContext:
     def use_indirect_block(self, block_id: int) -> str:
         self.used_indirect_blocks.add(block_id)
         return self.index_helper_name(block_id)
+
+    def condition_index_helper_name(self, block_id: int) -> str:
+        return self.index_helper_name(block_id).replace("_resolve_index_", "_cond_index_", 1)
+
+    def use_condition_index_block(self, block_id: int) -> str:
+        """The helper a condition indexes *block_id* through: -1 when out of range."""
+        self.used_indirect_blocks.add(block_id)
+        self.used_condition_index_blocks.add(block_id)
+        return self.condition_index_helper_name(block_id)
 
     def symbol_if_referenced(self, tag_name: str) -> str | None:
         tag = self.referenced_tags.get(tag_name)
