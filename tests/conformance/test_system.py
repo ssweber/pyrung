@@ -46,6 +46,8 @@ Result1 is the control, a probe right after the fault with nothing between
   field.  Hardware round 2 (2026-10-31): SC44 reads 346 in every field, so a
   coil, an open rung, a TON and a CTU all leave it as it is (only a Copy or a
   Math clears it, ``address_flag_clears_each_scan``), and pyrung matches.
+  Since then the case records scans 3, 4 and 6 only, which leaves that
+  reading as it was and keeps the other SC44 cases' faults out of it.
   SC43 reads 0 in every field, the control too: a Dint Math that wraps does
   not raise SC43 on a CLICK (an Int Math overflow does,
   ``out_of_range_flag_clears_each_scan``), so the case asks nothing about
@@ -58,7 +60,8 @@ Result1 is the control, a probe right after the fault with nothing between
   that does raise SC43 on a CLICK, an Int Math overflow (Scratch + 32767 into
   Result4, as ``out_of_range_flag_clears_each_scan`` faults), and the same
   steps on their own bits.  The fault writes a slot field, so the scans are
-  recorded in DD961..DD965 and copied into the fields once the window ends.
+  recorded in DD961..DD965, on scans 3, 4 and 6 only, and copied into the
+  fields once the window ends.
   Adopted, as SC44 read: only a Copy or a Math clears it, 346 in every field
   (pyrung reads the same).  Every instruction that executes clears it: 346, 0,
   346, 0, 0; and so on, as above.
@@ -228,13 +231,16 @@ def prove_address_flag_clears_each_scan(slot):
 _REFAULT_FIELDS = ("Result1", "Result2", "Result3", "Result4", "ErrorCode")
 
 
-def _refault_case(slot, flag, base, fault, steps, records=None):
+def _refault_case(slot, flag, base, fault, steps, records=None, fault_scans_only=False):
     """The fault again before each step, the step, then a probe coil C<base+i>.
 
     The first step is the control: nothing.  Records as in :func:`_fault_case`,
     or, given *records* (one register per step), into them over the window and
     then into the slot fields on the scan that raises ``Fired``, so the fault
-    may write a slot field while the window runs.
+    may write a slot field while the window runs.  *fault_scans_only* records
+    the fault's own scans (3, 4 and 6) only, so a field that reads 346 cannot
+    pick up another case's fault: on the wire the cases start on different
+    scans, and pyrung holds a flag to the end of the scan.
     """
     probes = [c[base + i] for i in range(len(steps))]
     count_scans(slot)
@@ -247,7 +253,10 @@ def _refault_case(slot, flag, base, fault, steps, records=None):
             out(probe)
     fields = [getattr(slot, name) for name in _REFAULT_FIELDS]
     for into, probe in zip(records or fields, probes, strict=False):
-        _record(slot, into, probe)
+        if fault_scans_only:
+            _record(slot, into, probe, _on_fault_scans(slot)[1])
+        else:
+            _record(slot, into, probe)
     if records is not None:
         with Rung(slot.Cmd != 0, slot.Scratch > WINDOW):
             for field, into in zip(fields, records, strict=False):
@@ -298,6 +307,7 @@ def prove_address_flag_vs_other_instructions(slot):
         941,
         fault=lambda: copy(dd[slot.Fired], dd[941]),
         steps=_other_instructions(slot, 941, timer=141, counter=172),
+        fault_scans_only=True,
     )
 
 
@@ -311,6 +321,7 @@ def prove_out_of_range_int_vs_other_instructions(slot):
         fault=lambda: calc(slot.Scratch + 32767, slot.Result4),
         steps=_other_instructions(slot, 961, timer=112, counter=173),
         records=[dd[961 + i] for i in range(len(_REFAULT_FIELDS))],
+        fault_scans_only=True,
     )
 
 
