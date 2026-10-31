@@ -33,7 +33,14 @@ PENDING_STEPS: Mapping[str, str] = {
     "INF": "REAL overflow stores +/-Inf",
     "TEXT": "text, pack, NUL, search cursor and MDN fixes",
     "SYS": "the fault-flag model (SC40 follows the last Math, SC43/SC44 the last instruction)",
-    "MATH": "Math results CLICK stores differently (RAND bounds past an Int)",
+    "MATH": (
+        "Math results CLICK stores differently (RAND bounds past an Int or from a Real,"
+        " non-finite function results)"
+    ),
+    "SC43": (
+        "which stores raise SC43 (a Math result that does not fit a narrower destination,"
+        " a clamping Copy, a Copy of Inf or NaN into an integer; not a 32-bit wrap)"
+    ),
 }
 
 

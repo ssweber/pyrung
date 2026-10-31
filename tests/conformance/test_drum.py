@@ -132,16 +132,9 @@ What each case tells apart:
   reads Result4 = 0 here turns the outputs off on a correction scan of this
   shape whatever the jog does, which explains the reading above without a
   completion.
-- ``jump_to_own_step_register`` (probe): a 3-step drum whose jump step
-  register is its own current-step register (Result1).  Its event goes on on
-  scan 2 (step 2) and again on scan 4 with the jump, so on scan 4 the drum
-  advances and jumps on one scan.  An advance taken first and a jump to the
-  register as it reads after it (pyrung, adopted), or a jump to the step read
-  before the advance (2) followed by the advance, both leave step 3, entered
-  on scan 4 (Result3 = 4) with its output on from scan 4 (Result4 = 4).  A jump
-  that wins over the advance with the step read before it (2) reads Result1 =
-  2, Result3 = 0, Result4 = 0.  Result2 = 2 is step 2's entry scan.  A CLICK
-  that refuses the register at paste never fires.
+- ``jump_to_own_step_register``: moved to the ``paste_risk`` group (part I),
+  since a CLICK may refuse the drum's own step register as its jump step; its
+  C837..C840 stay unused here.
 - ``jog_on_last_step`` (probe): a jog on scan 2 takes a 2-step drum to step 2,
   its last; a second jog on scan 4 is a jog from the last step.  The adopted
   answer follows the reading of ``pins_read_before_step_fix``: a jog past the
@@ -573,28 +566,6 @@ def prove_correction_without_jog(slot):
     _pins_read_before_step_fix(slot, [c[841], c[842]], [c[843], c[844]], c[845], c[846], jog=False)
 
 
-def prove_jump_to_own_step_register(slot):
-    # The event (C838) of every step is on scans 2 and 4, the jump (C839) on
-    # scan 4.  The jump's step register is the drum's current-step register.
-    count_scans(slot)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 4)):
-        out(c[838])
-    with Rung(slot.Cmd != 0, slot.Scratch == 4):
-        out(c[839])
-    with Rung(slot.Cmd != 0):
-        event_drum(
-            outputs=[c[837]],
-            events=[c[838], c[838], c[838]],
-            pattern=[[0], [0], [1]],
-            current_step=slot.Result1,
-            completion_flag=c[840],
-        ).reset(slot.Cmd == 0).jump(c[839], step=slot.Result1)
-    entered(slot, 2, slot.Result2)
-    entered(slot, 3, slot.Result3)
-    first_on_from(slot, c[837], 1, slot.Result4)
-    done(slot)
-
-
 def prove_jog_on_last_step(slot):
     # Jog (C850) on scans 2 and 4; nothing drives the event, C849.
     count_scans(slot)
@@ -769,16 +740,6 @@ group = Group(
             ladder=prove_correction_without_jog,
             probe="does a correction scan turn the outputs off",
             expect={"Result1": 1, "Result2": 0, "Result3": 0, "Result4": 3},
-            scans=SCANS,
-        ),
-        case(
-            "A drum that advances and jumps on one scan to the step its own step register "
-            "holds keeps the advance: the event enters step 2 on scan 2 (Result2) and, "
-            "with the jump, step 3 on scan 4 (Result3), whose output is on from scan 4 "
-            "(Result4), and the drum ends on step 3 (Result1)",
-            ladder=prove_jump_to_own_step_register,
-            probe="jump to the drum's own step register on an advance scan",
-            expect={"Result1": 3, "Result2": 2, "Result3": 4, "Result4": 4},
             scans=SCANS,
         ),
         case(

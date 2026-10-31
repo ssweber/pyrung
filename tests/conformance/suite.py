@@ -4,7 +4,7 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
-The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as seven
+The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as eight
 projects, one part each (``PARTS``)::
 
     make conformance-export PART=A OUT=path/to/a
@@ -14,6 +14,7 @@ projects, one part each (``PARTS``)::
     make conformance-export PART=E OUT=path/to/e
     make conformance-export PART=G OUT=path/to/g
     make conformance-export PART=H OUT=path/to/h
+    make conformance-export PART=I OUT=path/to/i
 
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
@@ -52,6 +53,7 @@ from tests.conformance import (
     test_math_error,
     test_numeric,
     test_out,
+    test_paste_risk,
     test_ret_branch,
     test_rung_semantics,
     test_search,
@@ -94,6 +96,7 @@ ALL_GROUPS = [
     test_ret_branch.group,
     test_loop_call.group,
     test_for_count.group,
+    test_paste_risk.group,
     # Last, so no other group's rung reads SC46 on a scan a Math error raised it.
     test_math_error.group,
 ]
@@ -127,6 +130,9 @@ PARTS: dict[str, tuple[str, ...]] = {
     # A FOR over a non-finite Real count, which may loop until a CLICK's
     # watchdog stops it: a project of its own, so that costs only this one.
     "H": ("for_count",),
+    # Probes a CLICK may refuse at paste (an operand where it may not take
+    # one): a project of their own, so a refusal blocks nothing confirmed.
+    "I": ("paste_risk",),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

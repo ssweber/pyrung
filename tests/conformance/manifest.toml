@@ -60,7 +60,7 @@ reset_swallows_held_jog = 14
 pins_read_before_step_fix = 15
 pins_read_before_step_fix_tee = 16
 correction_without_jog = 17
-jump_to_own_step_register = 18
+jump_to_own_step_register = 18 # retired: moved to paste_risk (part I) before any CLICK ran it
 jog_on_last_step = 19
 
 [groups.out]
@@ -263,7 +263,7 @@ mode_bits_on_in_run = 7
 rtc_seconds_advance = 8
 first_scan_counter_and_clock = 9
 scan_counter_wraps_to_zero = 10
-out_of_range_flag_vs_other_instructions = 11
+out_of_range_flag_vs_other_instructions = 11 # retired: a CLICK read 0 in every field (2026-10-31), a Dint wrap raises no SC43; out_of_range_int_vs_other_instructions and faults/math_store_out_of_range ask its questions
 address_flag_vs_other_instructions = 12
 division_flag_vs_hex_math = 13
 out_of_range_int_vs_other_instructions = 14
@@ -384,7 +384,7 @@ slots = 15
 math_store_out_of_range = 1
 copy_clamp_out_of_range = 2
 rand_wide_bounds_flags = 3
-rand_real_bounds = 4
+rand_real_bounds = 4 # retired: moved to paste_risk (part I) before any CLICK ran it
 pointer_past_bank = 5
 power_overflow_is_inf = 6
 real_intermediate_range = 7
@@ -400,3 +400,11 @@ slots = 1
 
 [groups.for_count.cases]
 non_finite_count = 1
+
+[groups.paste_risk]
+base = 3831 # Conf_PasteRisk: DS3831..DS3860; part I, probes a CLICK may refuse at paste
+slots = 2
+
+[groups.paste_risk.cases]
+jump_to_own_step_register = 1
+rand_real_bounds = 2

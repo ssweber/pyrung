@@ -111,6 +111,8 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     },
     # A FOR whose count is a Real (tests/conformance/test_for_count.py).
     "for_count": {"DD": range(601, 611), "DF": range(496, 501)},
+    # Probes a CLICK may refuse at paste (tests/conformance/test_paste_risk.py).
+    "paste_risk": {"C": range(751, 771), "DF": range(411, 421)},
 }
 
 

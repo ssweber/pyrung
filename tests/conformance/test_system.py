@@ -34,11 +34,13 @@ nothing else: a fault, the instruction, the probe coil, the next fault, ...
 Result1 is the control, a probe right after the fault with nothing between
 (346 on every model: a 0 means the fault did not raise the flag).
 
-- ``out_of_range_flag_vs_other_instructions`` (SC43, a Dint Math overflow)
-  and ``address_flag_vs_other_instructions`` (SC44, a copy through pointer
-  ``Fired``, 0 while the case runs): Result2 after an Out coil on a powered
-  rung, Result3 after a rung whose contact is open over a Set coil (contacts
-  only: no instruction executes), Result4 after a TON, ErrorCode after a CTU.
+- ``address_flag_vs_other_instructions`` (SC44, a copy through pointer
+  ``Fired``, 0 while the case runs), and the retired
+  ``out_of_range_flag_vs_other_instructions`` (SC43, a Dint Math overflow,
+  2147483647 + the scan number into a DD, C931.., DD931, T131, CT171):
+  Result2 after an Out coil on a powered rung, Result3 after a rung whose
+  contact is open over a Set coil (contacts only: no instruction executes),
+  Result4 after a TON, ErrorCode after a CTU.
   The models were: every instruction that executes clears the flag and an
   open rung does not: 346, 0, 346, 0, 0; only box instructions (Copy, Math,
   timer, counter) clear it: 346, 346, 346, 0, 0; coils too, even unexecuted:
@@ -48,17 +50,18 @@ Result1 is the control, a probe right after the fault with nothing between
   Math clears it, ``address_flag_clears_each_scan``), and pyrung matches.
   Since then the case records scans 3, 4 and 6 only, which leaves that
   reading as it was and keeps the other SC44 cases' faults out of it.
-  SC43 reads 0 in every field, the control too: a Dint Math that wraps does
-  not raise SC43 on a CLICK (an Int Math overflow does,
-  ``out_of_range_flag_clears_each_scan``), so the case asks nothing about
-  what clears it; pyrung raises SC43 on the Dint wrap and reads 346 in every
-  field (step SYS).  ``out_of_range_int_vs_other_instructions`` asks the
-  question again with an Int overflow, and the ``faults`` group asks which
-  stores raise SC43.
+  SC43 (hardware round 2, 2026-10-31) read 0 in every field, the control
+  too: a Dint Math that wraps does not raise SC43 on a CLICK (an Int Math
+  overflow does, ``out_of_range_flag_clears_each_scan``), so the case asked
+  nothing about what clears it (pyrung raised SC43 on the Dint wrap and read
+  346 in every field).  It is retired, its slot never reused:
+  ``out_of_range_int_vs_other_instructions`` asks its question with an Int
+  overflow, and ``faults/math_store_out_of_range`` (a) asks whether a Dint
+  wrap raises SC43.
 - ``out_of_range_int_vs_other_instructions`` (SC43, probe): the question
-  ``out_of_range_flag_vs_other_instructions`` could not ask, with a fault
-  that does raise SC43 on a CLICK, an Int Math overflow (Scratch + 32767 into
-  Result4, as ``out_of_range_flag_clears_each_scan`` faults), and the same
+  the retired Dint case could not ask, with a fault that does raise SC43 on a
+  CLICK, an Int Math overflow (Scratch + 32767 into Result4, as
+  ``out_of_range_flag_clears_each_scan`` faults), and the same
   steps on their own bits.  The fault writes a slot field, so the scans are
   recorded in DD961..DD965, on scans 3, 4 and 6 only, and copied into the
   fields once the window ends.
@@ -287,16 +290,6 @@ def _other_instructions(slot, base, timer, counter):
             count_up(ClickCounter(counter), 1000).reset(slot.Cmd == 0)
 
     return [None, coil, open_rung, ton, ctu]
-
-
-def prove_out_of_range_flag_vs_other_instructions(slot):
-    _refault_case(
-        slot,
-        system.fault.out_of_range,
-        931,
-        fault=lambda: calc(slot.Scratch + 2147483647, dd[931]),
-        steps=_other_instructions(slot, 931, timer=131, counter=171),
-    )
 
 
 def prove_address_flag_vs_other_instructions(slot):
@@ -555,18 +548,6 @@ group = Group(
             "PLC has been in RUN for 32768 scans",
             ladder=prove_scan_counter_wraps_to_zero,
             expect={"Result1": 0},
-        ),
-        case(
-            "A Dint Math that wraps does not raise the out-of-range flag SC43: "
-            "2147483647 + the scan number into a DD on scans 3, 4 and 6 leaves SC43 off "
-            "right after it (Result1 = 0) and after an Out coil (Result2 = 0), a rung "
-            "whose open contact keeps its Set coil from executing (Result3 = 0), a TON "
-            "(Result4 = 0) and a CTU (ErrorCode = 0)",
-            ladder=prove_out_of_range_flag_vs_other_instructions,
-            init=_fault_init(931),
-            expect=dict.fromkeys(_REFAULT_FIELDS, 0),
-            scans=SCANS,
-            pending="SYS",
         ),
         case(
             "The address-error flag SC44 is left on by an instruction that is not a Copy "

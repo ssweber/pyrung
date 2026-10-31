@@ -14,10 +14,13 @@ of the scan, and over the wire the cases start on different scans.  So a
 probe runs its op on the first scan from 3 on which the flag it reads is off
 just before the op (:func:`_probe`): a bit (``now``) comes on on that scan
 only, and another (``taken``) latches so the op runs once.  An op whose flag
-an earlier op of the same scan left on waits for the next scan; on a CLICK
-the flag is off before every op (the rung before is a Copy or a Math that
-did not fault).  Two flags after one op are two probes, each running the op
-again: on a CLICK the Math that records the first would clear the second.
+an earlier op of the same scan left on waits for the next scan.  On a
+CLICK SC43 and SC44 follow the last instruction and SC40 the last Math, so
+they are mostly off already (each op starts with a Copy), but SC46 stays on
+to the end of the scan once a Math error raises it: there the gate is what
+makes a probe of SC46 read its own op.  Two flags after one op are two
+probes, each running the op again: on a CLICK the Math that records the
+first would clear the second.
 Inf and NaN are staged on scan 2 (``_stage_inf``), before any probe.
 Every case has a 40-scan window, more than every probe of the group needs
 when each waits for the one before (pyrung, in-process).
@@ -40,16 +43,17 @@ tells apart:
   (c) 2147483647 + 2147483647 + 7 into an Int: 4294967301, which wraps
   through 32 bits to 5 (ErrorCode) and fits.  Result1..3 are SC43 after (a),
   (b) and (c).  Adopted (the hypothesis from the help and the 2026-10-31
-  reading of ``system/out_of_range_flag_vs_other_instructions``, where a Dint
-  wrap raised nothing): a Math raises SC43 only when its result does not fit
-  a destination narrower than 32 bits, judged on the whole result: 0, 1, 1.
+  reading of the since retired ``system/out_of_range_flag_vs_other_instructions``,
+  where a Dint wrap raised nothing): a Math raises SC43 only when its result
+  does not fit a destination narrower than 32 bits, judged on the whole
+  result: 0, 1, 1.
   Judged on the result wrapped to 32 bits: 0, 1, 0.  Every wrap raises it
-  (pyrung, step SYS): 1, 1, 1.
+  (pyrung, step SC43): 1, 1, 1.
 - ``copy_clamp_out_of_range`` (probe): a Copy that clamps, 40000 and -40000
   from a DD and 1.0E+10 from a DF into an Int: 32767, -32768, 32767
   (Result1..3; ``numeric/copy_clamps_calc_wraps`` read the clamp), and SC43
   after each as bits 1, 2 and 4 of Result4.  Adopted (the help): 7.  pyrung
-  (step SYS) clamps without the flag: 0.
+  (step SC43) clamps without the flag: 0.
 - ``rand_wide_bounds_flags`` (probe): the flags of
   ``numeric/int_math_rand_wide_bounds``, which a CLICK read as 0 (2026-10-31).
   RAND ( 70000 , 70000 ) / 2 into an Int preset 99 (Result4), and SC40, SC43
@@ -58,13 +62,9 @@ tells apart:
   as a Math error writes 0 (``math_error``): 4, 0, 7, 0.  A store refused as
   out of range: 2.  No flag: 0.  pyrung (step MATH) wraps 35000 to -30536
   with SC43: 2, 0, 7, -30536.
-- ``rand_real_bounds`` (probe, a refused paste loses only it): RAND whose
-  bounds are DF registers.  3.0 and 3.0 into an Int preset 99 (Result1: 3);
-  +Inf and +Inf (Result2), with SC43 and SC46 after it as bits 1 and 2 of
-  Result3, and SC46 after the finite one (ErrorCode).  Adopted: a Math error
-  that writes 0: 3, 0, 2, 0.  pyrung (step MATH) writes 0 with SC43 instead:
-  3, 0, 1, 0.  A CLICK that refuses a DF bound at paste never fires the
-  case.
+- ``rand_real_bounds``: moved to the ``paste_risk`` group (part I), since
+  a CLICK may refuse a DF bound at paste; its C bits (C249..C264) and
+  DF461..DF462 stay unused here.
 - ``pointer_past_bank`` (probe): a Copy through a pointer past the DD bank
   (1001, Result1, preset 99) and below it (-1, Result3), SC43 and SC44 after
   each as bits 1 and 2 (Result2, ErrorCode).  ``system/address_flag...`` asks
@@ -89,8 +89,8 @@ tells apart:
   for NaN <> NaN; IEEE compares read 8.  SC43 and SC46 after Inf - Inf are
   bits 1 and 2 of Result4.  Adopted (pyrung): 1, 1, 8, 1.  A CLICK whose
   compares are not IEEE reads Result3 as something else; one that turns a
-  non-finite operand into a Math error writes 0 (Result1 = 0, Result3 = 1 or
-  6) with SC46.
+  non-finite operand into a Math error writes 0 (Result1 = 0; the 0 that
+  stands for NaN compares equal to itself, Result3 = 1) with SC46.
 - ``non_finite_math_into_int`` (probe): a Math of +Inf into an Int preset 99
   (Result1), of NaN into an Int (Result2), of +Inf into a DD preset 99
   (Result3: 1 for 0, 2 for 99, 3 for 2147483647, 4 for -2147483648, 5 for
@@ -100,7 +100,7 @@ tells apart:
 - ``copy_non_finite_to_int`` (probe): a Copy of +Inf, -Inf and NaN into an
   Int preset 99 (Result1..3), SC43 after each as bits 1, 2 and 4 of Result4.
   The help says a Copy that clamps raises SC43; adopted: +Inf and -Inf clamp
-  (32767, -32768) and NaN writes 0, each with SC43: 7.  pyrung (step SYS)
+  (32767, -32768) and NaN writes 0, each with SC43: 7.  pyrung (step SC43)
   converts the same without the flag: 32767, -32768, 0, 0.
 - ``copy_inf_to_text`` (probe): +Inf copied into TXT401 as text (Copy
   Option 4c), TXT401 seeded ``Z``: Result1 is TXT401's code, Result2 SC43.
@@ -275,25 +275,6 @@ def prove_rand_wide_bounds_flags(slot):
         probe(slot, wide, flag, slot.Result1, 1 << k)
     for k, flag in enumerate((SC40, SC43, SC46)):
         probe(slot, control, flag, slot.Result2, 1 << k)
-    done(slot, WINDOW)
-
-
-def prove_rand_real_bounds(slot):
-    probe = _Probes(3)
-    count_scans(slot, WINDOW)
-    _stage(slot, lambda: copy(3.0, df[461]), *_stage_inf(df[462]))
-
-    def finite():
-        copy(99, slot.Result1)
-        calc(randint(df[461], df[461]), slot.Result1)
-
-    def infinite():
-        copy(99, slot.Result2)
-        calc(randint(df[462], df[462]), slot.Result2)
-
-    probe(slot, finite, SC46, slot.ErrorCode)
-    for k, flag in enumerate((SC43, SC46)):
-        probe(slot, infinite, flag, slot.Result3, 1 << k)
     done(slot, WINDOW)
 
 
@@ -487,7 +468,7 @@ group = Group(
             init=_init(0, dds=[(501, 503)]),
             expect={"Result1": 0, "Result2": 1, "Result3": 1, "Result4": -25536, "ErrorCode": 5},
             scans=SCANS,
-            pending="SYS",
+            pending="SC43",
             probe="which Math stores raise SC43: Dint wrap, Int overflow, 32-bit wrap that fits",
         ),
         case(
@@ -498,7 +479,7 @@ group = Group(
             init=_init(1, dds=[(511, 512)], dfs=[(451, 451)]),
             expect={"Result1": 32767, "Result2": -32768, "Result3": 32767, "Result4": 7},
             scans=SCANS,
-            pending="SYS",
+            pending="SC43",
             probe="does a clamping Copy raise SC43",
         ),
         case(
@@ -511,17 +492,6 @@ group = Group(
             scans=SCANS,
             pending="MATH",
             probe="which flag RAND past an Int raises",
-        ),
-        case(
-            "RAND takes DF bounds: RAND ( 3.0 , 3.0 ) from two DFs writes 3 into an Int "
-            "(Result1) without SC46 (ErrorCode = 0), and RAND of +Inf and +Inf is a Math "
-            "error that writes 0 (Result2) with SC46 alone (Result3 = 2)",
-            ladder=prove_rand_real_bounds,
-            init=_init(3, dfs=[(461, 462)]),
-            expect={"Result1": 3, "Result2": 0, "Result3": 2, "ErrorCode": 0},
-            scans=SCANS,
-            probe="RAND with a DF bound, finite and +Inf",
-            pending="MATH",
         ),
         case(
             "A Copy through a pointer outside the DD bank is an address error that leaves "
@@ -582,7 +552,7 @@ group = Group(
             expect={"Result1": 32767, "Result2": -32768, "Result3": 0, "Result4": 7},
             scans=SCANS,
             probe="Copy of Inf or NaN into an Int",
-            pending="SYS",
+            pending="SC43",
         ),
         case(
             "A Copy of +Inf to text fails: TXT401 keeps its Z (Result1 = 90) and SC43 is "
