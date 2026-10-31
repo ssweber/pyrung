@@ -2286,10 +2286,12 @@ def _backward_propagate_comparison_boundaries(
                     continue
 
                 back_values: set[Any] = set()
+                split_points: set[Any] = set()
                 for boundary in boundaries:
                     raw = composed_invert(boundary)
                     if not isinstance(raw, (int, float)):
                         continue
+                    split_points.add(raw)
                     back_values.add(raw)
                     back_values.add(raw - 1)
                     back_values.add(raw + 1)
@@ -2305,9 +2307,12 @@ def _backward_propagate_comparison_boundaries(
                     if isinstance(own_boundary, (int, float)) and not isinstance(
                         own_boundary, bool
                     ):
+                        split_points.add(own_boundary)
                         back_values.add(own_boundary)
                         back_values.add(own_boundary - 1)
                         back_values.add(own_boundary + 1)
+                if source_tag.type == TagType.REAL:
+                    back_values |= _real_gap_points(split_points)
 
                 existing = set(known_domains.get(source_name, ()))
                 merged = existing | back_values
@@ -2442,7 +2447,10 @@ def _extract_value_domain(
     if base_domain is not None:
         # Merge comparison literals into the write domain — if the program
         # tests for a value, it belongs in the domain even if never written.
-        return tuple(sorted(set(base_domain) | literals))
+        merged = set(base_domain) | literals
+        if tag.type == TagType.REAL:
+            merged |= _real_gap_points(literals)
+        return tuple(sorted(merged))
 
     if tag.choices is not None:
         return tuple(sorted(tag.choices.keys()))
@@ -2472,6 +2480,8 @@ def _extract_value_domain(
         if isinstance(lit, (int, float)):
             partitioned.add(lit - 1)
             partitioned.add(lit + 1)
+    if tag.type == TagType.REAL:
+        partitioned |= _real_gap_points(literals)
     if isinstance(tag.default, (int, float)) and not isinstance(tag.default, bool):
         partitioned.add(tag.default)
     if tag.min is not None:
@@ -2479,6 +2489,20 @@ def _extract_value_domain(
     if tag.max is not None:
         partitioned = {v for v in partitioned if v <= tag.max}
     return tuple(sorted(partitioned))
+
+
+def _real_gap_points(points: Iterable[Any]) -> set[float]:
+    """Midpoints between split points at most 1 apart, for a REAL.
+
+    The partition stands for the values between two split points with
+    ``point + 1`` and ``point - 1``.  A REAL also takes the values between
+    split points closer than that (``In > 5, In < 6`` holds at 5.5 only), which
+    neither stands for.
+    """
+    numbers = sorted(
+        {float(p) for p in points if isinstance(p, (int, float)) and not isinstance(p, bool)}
+    )
+    return {(low + high) / 2 for low, high in itertools.pairwise(numbers) if high - low <= 1}
 
 
 def _with_done_boundary(

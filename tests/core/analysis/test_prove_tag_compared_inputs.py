@@ -409,3 +409,34 @@ def test_domains_only_prior_keeps_the_partition() -> None:
     ctx = _build_explore_context(logic, _opt_config=replace(_OptConfig(), domains_only=True))
     assert not isinstance(ctx, Intractable)
     assert len(ctx.nondeterministic_dims["KIn"]) < 20
+
+
+# -- a REAL between split points closer than 1 -------------------------------
+
+
+def _real_window(low: float, high: float, *, via_copy: bool) -> Program:
+    value = Real("KLevel", external=True, min=0.0, max=10.0)
+    stored = Real("KStored")
+    compared = stored if via_copy else value
+    with Program(strict=False) as logic:
+        if via_copy:
+            with Rung():
+                copy(value, stored)
+        with Rung(compared > low, compared < high):
+            latch(Bool("KBad"))
+    return logic
+
+
+@pytest.mark.parametrize("config", CONFIGS.values(), ids=CONFIGS.keys())
+@pytest.mark.parametrize("via_copy", [False, True], ids=["direct", "copied"])
+@pytest.mark.parametrize(
+    ("low", "high", "inside"),
+    [(5, 6, 5.5), (5.2, 5.6, 5.4), (5, 5, None)],
+    ids=["one_apart", "fractional", "empty"],
+)
+def test_real_input_between_close_split_points(config, via_copy, low, high, inside) -> None:
+    logic = _real_window(low, high, via_copy=via_copy)
+    reachable = inside is not None
+    if reachable:
+        assert _witness_hits(logic, [({"KLevel": inside}, 1)], "KBad")
+    _agree(logic, Bool("KBad"), reachable, config)
