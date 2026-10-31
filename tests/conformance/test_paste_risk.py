@@ -12,13 +12,16 @@ DF411..DF420.
 - ``jump_to_own_step_register`` (probe): a 3-step event drum whose jump step
   register is its own current-step register (Result1).  Its event (C752) goes
   on on scan 2 (step 2) and again on scan 4 with the jump (C753), so on scan 4
-  the drum advances and jumps on one scan.  An advance taken first and a jump
-  to the register as it reads after it (pyrung, adopted), or a jump to the
-  step read before the advance (2) followed by the advance, both leave step 3,
-  entered on scan 4 (Result3 = 4) with its output (C751) on from scan 4
-  (Result4 = 4).  A jump that wins over the advance with the step read before
-  it (2) reads Result1 = 2, Result3 = 0, Result4 = 0.  Result2 = 2 is step 2's
-  entry scan.  (Moved here from ``drum`` before any CLICK ran it.)
+  the drum advances and jumps on one scan.  Adopted (pyrung since the drum
+  reads its jump step with its pins, before it moves): the jump goes to the
+  step the register held when the scan reached the drum (2) and beats the
+  advance, so the drum ends on step 2 (Result1 = 2) and step 3 is never
+  entered (Result3 = 0, its output C751 never on, Result4 = 0).  A jump to
+  the register as it reads after the advance (3, pyrung before that change),
+  or a jump to 2 followed by the advance, both leave step 3, entered on scan
+  4 (Result3 = 4) with its output on from scan 4 (Result4 = 4): 3, 2, 4, 4.
+  Result2 = 2 is step 2's entry scan.  (Moved here from ``drum`` before any
+  CLICK ran it.)
 - ``rand_real_bounds`` (probe): RAND whose bounds are DF registers, probed as
   the ``faults`` group probes (``test_faults._probe``: the op once, on the
   first scan from 3 its flag is off just before it).  3.0 and 3.0 (DF411)
@@ -116,12 +119,13 @@ group = Group(
     [
         case(
             "A drum that advances and jumps on one scan to the step its own step register "
-            "holds keeps the advance: the event enters step 2 on scan 2 (Result2) and, "
-            "with the jump, step 3 on scan 4 (Result3), whose output is on from scan 4 "
-            "(Result4), and the drum ends on step 3 (Result1)",
+            "holds jumps to the step the register held before the advance: the event "
+            "enters step 2 on scan 2 (Result2), and on scan 4 the jump takes it back to "
+            "step 2 (Result1), so step 3 is never entered (Result3 = 0) and its output "
+            "never on (Result4 = 0)",
             ladder=prove_jump_to_own_step_register,
             probe="jump to the drum's own step register on an advance scan",
-            expect={"Result1": 3, "Result2": 2, "Result3": 4, "Result4": 4},
+            expect={"Result1": 2, "Result2": 2, "Result3": 0, "Result4": 0},
             scans=SCANS,
         ),
         case(
