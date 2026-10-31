@@ -326,6 +326,24 @@ def test_case_hash_follows_only_its_own_rows() -> None:
     assert after["constant"] != before["constant"]
 
 
+def test_case_hash_ignores_the_groups_closing_return() -> None:
+    def hashes(*cases: Case) -> dict[str, str]:
+        return build_program(Group("g", list(cases))).groups[0].case_hashes
+
+    a = _seven()
+    b = case("x", ladder=_prove_constant, expect={"Result1": 7})
+    c = case("y", ladder=_prove_other_constant, expect={"Result1": 8}, id="eight")
+    alone = hashes(a, b)
+    # Appending a case leaves the previous last case's hash alone.
+    appended = hashes(a, b, c)
+    assert appended["constant"] == alone["constant"]
+    assert appended["seven"] == alone["seven"]
+    # Editing a row of the last case changes its hash.
+    edited = hashes(a, b, case("y", ladder=_prove_constant, expect={"Result1": 8}, id="eight"))
+    assert edited["eight"] != appended["eight"]
+    assert edited["constant"] == appended["constant"]
+
+
 def test_a_click_run_records_passes_and_drops_failures(tmp_path) -> None:
     path = tmp_path / "confirmed.toml"
     one, two = _seven(), case("x", ladder=_prove_constant, expect={"Result1": 7})
@@ -526,3 +544,69 @@ def test_cases_that_share_memory_are_rejected() -> None:
         run(Group("g", [a, b]))
     with pytest.raises(ValueError, match="g/a and h/b share DS4000"):
         build_program([Group("g", [a]), Group("h", [b])])
+
+
+def _prove_calls_a_helper(slot):
+    from pyrung.core import call, forloop, subroutine
+
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        with forloop(3):
+            call("Conf_H_Inc")
+    with Rung(slot.Cmd != 0):
+        copy(1, slot.Fired)
+    with subroutine("Conf_H_Inc"):
+        with Rung():
+            calc(slot.Result1 + 1, slot.Result1)
+
+
+def test_an_in_main_group_runs_its_rungs_in_main_with_helper_subroutines(tmp_path) -> None:
+    c = case("c", ladder=_prove_calls_a_helper, expect={"Result1": 3}, id="seven")
+    plain = build_program(Group("g", [_seven()]))
+    group = Group("h", [c], in_main=True)
+    build = build_program(group)
+
+    assert "Conf_H" not in build.program.subroutines
+    assert "Conf_H_Inc" in build.program.subroutines
+    out = build.export(tmp_path)
+    main = (out / "main.csv").read_text(encoding="utf-8")
+    assert "#,Case h/seven" in main
+    assert "call(" in main and "Conf_H_Inc" in main
+    assert sorted(p.name for p in (out / "subroutines").iterdir()) == ["Conf_H_Inc.csv"]
+    assert_all_passed(run(group))
+    assert plain.program_hash != build.program_hash
+    assert build.groups[0].case_hashes["seven"]
+
+    with pytest.raises(ValueError, match="in_main"):
+        Group("h", [c], in_main=True, calls=2)
+
+
+def _in_main_case(id: str, helper_step: int):
+    from pyrung.core import call, forloop, subroutine
+
+    def ladder(slot):
+        with Rung(slot.Cmd != 0, slot.Fired == 0):
+            with forloop(2):
+                call(f"Conf_H_{id}")
+        with Rung(slot.Cmd != 0):
+            copy(1, slot.Fired)
+        with subroutine(f"Conf_H_{id}"):
+            with Rung():
+                calc(slot.Result1 + helper_step, slot.Result1)
+
+    return case("c", ladder=ladder, expect={"Result1": 2 * helper_step}, id=id)
+
+
+def test_an_in_main_helper_changes_only_the_hash_of_the_case_that_defines_it() -> None:
+    def hashes(step_one: int, step_two: int):
+        group = Group(
+            "h", [_in_main_case("one", step_one), _in_main_case("two", step_two)], in_main=True
+        )
+        return build_program(group).groups[0].case_hashes
+
+    base = hashes(1, 1)
+    edited_one = hashes(2, 1)
+    assert edited_one["one"] != base["one"]
+    assert edited_one["two"] == base["two"]
+    edited_two = hashes(1, 2)
+    assert edited_two["two"] != base["two"]
+    assert edited_two["one"] == base["one"]

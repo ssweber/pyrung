@@ -131,6 +131,9 @@ class CodegenContext:
     blockless: bool = False
     kernel_runtime: bool = False
     proof_metadata: bool = False
+    # Prover-only: every timed tick becomes a choice (see render_kernel
+    # ``_BB_TICK_HELPER``) instead of advancing by the scan's dt.
+    abstract_timers: bool = False
     modbus_server: ModbusServerConfig | None = None
     modbus_client: ModbusClientConfig | None = None
     tag_map: Any = None
@@ -143,6 +146,7 @@ class CodegenContext:
         force_rung_enable: bool = False,
         blockless: bool = False,
         proof_metadata: bool = False,
+        abstract_timers: bool = False,
     ) -> CodegenContext:
         """Create a hardware-free context for kernel compilation."""
         ctx = cls(
@@ -154,6 +158,7 @@ class CodegenContext:
             blockless=blockless,
             kernel_runtime=True,
             proof_metadata=proof_metadata,
+            abstract_timers=abstract_timers,
         )
         ctx.collect_program_references()
         ctx.resolve_block_aliases()

@@ -206,9 +206,15 @@ def _compile_on_delay_instruction(
     else:
         inner = indent
     isp = " " * inner
-    lines.extend(
-        [
-            f"{isp}if {enabled_expr}:",
+    if ctx.abstract_timers:
+        tick = [
+            f"{' ' * (inner + 4)}_preset = int({preset})",
+            f"{' ' * (inner + 4)}_acc = _bb_tick(_mem, {instr.accumulator.name!r},"
+            f" int({acc_read}), _preset)",
+            f"{' ' * (inner + 4)}_new_frac = 0.0",
+        ]
+    else:
+        tick = [
             f'{" " * (inner + 4)}_dt = float(_mem.get("_dt", 0.0))',
             f"{' ' * (inner + 4)}_acc = int({acc_read})",
             f"{' ' * (inner + 4)}_dt_units = {unit_expr}",
@@ -216,6 +222,11 @@ def _compile_on_delay_instruction(
             f"{' ' * (inner + 4)}_new_frac = _dt_units - _int_units",
             f"{' ' * (inner + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
             f"{' ' * (inner + 4)}_preset = int({preset})",
+        ]
+    lines.extend(
+        [
+            f"{isp}if {enabled_expr}:",
+            *tick,
             f'{" " * (inner + 4)}_mem["{frac_key}"] = _new_frac',
             f"{' ' * (inner + 4)}{done_write} = (_acc >= _preset)",
             f"{' ' * (inner + 4)}{acc_write} = _acc",
@@ -281,12 +292,22 @@ def _compile_off_delay_instruction(
         f"{sp}else:",
         f"{sp4}_acc = int({acc_read})",
         f"{sp4}if _tof_timing or {done_read} or _acc != 0:",
-        f'{sp8}_dt = float(_mem.get("_dt", 0.0))',
-        f"{sp8}_dt_units = {unit_expr}",
-        f"{sp8}_int_units = int(_dt_units)",
-        f"{sp8}_new_frac = _dt_units - _int_units",
-        f"{sp8}_acc = min(_acc + _int_units, {_INT_MAX})",
-        f"{sp8}_preset = int({preset})",
+        *(
+            [
+                f"{sp8}_preset = int({preset})",
+                f"{sp8}_acc = _bb_tick(_mem, {instr.accumulator.name!r}, _acc, _preset)",
+                f"{sp8}_new_frac = 0.0",
+            ]
+            if ctx.abstract_timers
+            else [
+                f'{sp8}_dt = float(_mem.get("_dt", 0.0))',
+                f"{sp8}_dt_units = {unit_expr}",
+                f"{sp8}_int_units = int(_dt_units)",
+                f"{sp8}_new_frac = _dt_units - _int_units",
+                f"{sp8}_acc = min(_acc + _int_units, {_INT_MAX})",
+                f"{sp8}_preset = int({preset})",
+            ]
+        ),
         f'{sp8}_mem["{frac_key}"] = _new_frac',
         f"{sp8}_tof_done = _acc < _preset",
         f"{sp8}{done_write} = _tof_done",

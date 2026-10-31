@@ -2380,7 +2380,7 @@ def _build_fold_context(
         pdg, program, watch | frozenset(m for m, _a, _scale, _offset in mirror_cands)
     )
 
-    # sys.scan_clock_toggle (scan_id % 2) and sys.scan_counter (scan_id %
+    # sys.scan_clock_toggle (scan_id even) and sys.scan_counter (scan_id %
     # 32768) are scan-id-derived — they change *every* scan and, like the
     # clocks, are resolved on read and never stored.  No periodic edge to land
     # on: if the program reads either, the fold cannot skip a single scan

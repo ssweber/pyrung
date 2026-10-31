@@ -27,7 +27,7 @@ case now uses data that does:
   an integer (adopted): 5, 50, 50, -5.  The middle value nearer zero: 2, 20,
   20, -2.  The lower middle value: 2, 20, 20, -9.  The mean floored: 5, 50,
   50, -6.  pyrung's exact mean: 5, 55, 55, -5.
-- ``mdn_real_range`` (probe): MDN of a DF range.  Exact in a Real (adopted):
+- ``mdn_real_range`` (answered as adopted): MDN of a DF range.  Exact in a Real (adopted):
   {9.0, 2.0, 10.0, 1.0} is 5.5 (read back x10 as 55, Result1) and {1.5, 2.5,
   0.5} is 1.5 (15, Result2).  An integer MDN, as for DS: 50 and 10; the
   middle value nearer zero: 20.
@@ -211,7 +211,6 @@ group = Group(
             ladder=prove_mdn_even_count,
             init=init_mdn_even_count,
             expect={"Result1": 5, "Result2": 50, "Result3": 50, "Result4": -5},
-            probe="MDN of an even count: truncated mean or middle value nearer zero",
         ),
         case(
             "MAX and MIN of the DH range {0x0001, 0xFFFF} (hex mode) treat WORD as unsigned: "
@@ -232,7 +231,6 @@ group = Group(
             ladder=prove_mdn_real_range,
             init=init_mdn_real_range,
             expect={"Result1": 55, "Result2": 15},
-            probe="MDN of a DF range: exact or integer",
         ),
     ],
 )

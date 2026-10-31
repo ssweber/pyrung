@@ -4,9 +4,11 @@ This file provides guidance to coding agents working in this subsystem.
 
 ## What this subsystem does
 
-`prove/` is an exhaustive state-space verifier for pyrung programs. It runs BFS over all reachable states using the compiled replay kernel as the execution oracle. Two uses of the BFS engine: `always(logic, condition)` checks a safety property (with `never()` as the dual), and `reachable_states(logic)` computes the full reachable set for lock files. Both use `depth_budget` as an abstract BFS work budget; hidden-event acceleration can cover more concrete scans than that number. `plc.how(*conditions)` is NOT this subsystem — it is PILOT (`../pilot/`, with its own AGENTS.md), which consumes this pipeline's `_ExploreContext` as a static prior.
+`prove/` is an exhaustive state-space verifier for pyrung programs. It runs BFS over all reachable states using the compiled replay kernel as the execution oracle. Two uses of the BFS engine: `always(logic, condition)` checks a safety property (with `never()` as the dual), and `reachable_states(logic)` computes the full reachable set for lock files. Both use `depth_budget` as a plain BFS depth (the longest scan sequence explored). `plc.how(*conditions)` is NOT this subsystem — it is PILOT (`../pilot/`, with its own AGENTS.md), which consumes this pipeline's `_ExploreContext` as a static prior.
 
 The verifier strives to be sound — no false negatives. It may over-approximate domains (include unreachable values), which can only produce false positives (Intractable, never a missed violation). The fuzzer and soundness matrix continuously validate this property.
+
+Timers are black boxes (`blackbox.py`): the search kernel is compiled with `abstract_timers=True`, and each timed tick (on-delay, off-delay, time drum step, Out debounce/flasher/timed internals) is a search choice instead of `+ dt`. Every counterexample is replayed on the concrete PLC before it is reported; one that does not replay is an `Intractable` of kind `"timing"` (or `"property"` for a property's own `rise()`/`fall()`). Nothing in the search re-models timer, counter or drum timing, so a conformance semantics change touches the runtime, codegen and fold, and here only the kernel flag's `_bb_tick` call sites. A `prove/` edit needed beyond that is a design miss to raise.
 
 ## Build and test
 
@@ -17,10 +19,10 @@ make lint          # codespell + ruff + ty
 
 ## Optimization glossary
 
-- **Elision** — Removes scan-local tags from tracked state. Risk: misclassifying a cross-scan tag as scan-local.
-- **Threshold absorption** — Replaces concrete accumulator values with crossed/uncrossed boolean vectors. Risk: missing boundaries, or assuming monotonicity when conditional resets exist.
-- **Fast-forward / tesseracting (hidden events)** — Skips held timer scans, branching at crossing events. Like the Wrinkle in Time tesseract: folds over intermediate ticks to land directly at the crossing. Counters are no event source: they count input edges (memory `_cu:`/`_cd:` in the key), so a held scan never moves one; their hidden progress is cycle pumping's. It also stops, as a plateau node at the same key, on and around each scan where a timer an input could start would tie a running one (`events._stop_point_outcome`): when a flip starts a timer decides which one crosses first (`B` pressed partway through `T1`); and, when the program has an edge-sensitive site (`_ExploreContext.edge_sensitive`: a counter, one-shot, drum/shift/toggle edge cell or `rise()`/`fall()`), on the two plateaus before each crossing, so an input changing on the crossing scan or the one before reaches it. An idle source it cannot time (no single quantum, an unresolved preset) stops it at every scan. Risk: missing input combinations that change mid-accumulation; a start more than `_STOP_START_DELAY` scans behind its input; an idle absorbed integer or real counter, which has no stop points; an edge whose effect takes more than one scan to reach a reader of the crossing (a one-shot feeding a chain of rungs written above their readers), since only the two plateaus before a crossing are edge stops; an edge the program builds by hand from a coil and its previous-scan copy, which is no edge-sensitive site and gets no edge stops; the edge stops are program-wide, so any edge site costs every crossing two more plateau nodes.
-- **Cycle pumping** — A revisit of a key with hidden accumulator progress the first state there lacks closes a cycle when it descends from a node with that key over links that replay by holding their inputs (single scans, or caveat-free hidden-event jumps such as a self-resetting timer's lap) with each advanced accumulator monotone (one that returns to the same progress is periodic and stays put); it is pumped to the last uncrossed value (trace repeats the cycle) and its successors inherit the progress. Timers are pumped and jumped on their exact carry recurrence. A revisit that closes no cycle is kept when a counter differs from the first state's (ahead or behind: the progress was made on another branch) or a time-like accumulator is behind it; it is dropped when covered (counters equal, and one number of held scans takes a kept node's time-like accumulators to the revisit's: stuttering advances them together, so one ahead on `T1` and level on `T2` is not covered). A timer that advanced on a cycle the tree does not show seeds the key once; the seed does not stand for a revisit that differs only on time-like accumulators (a different phase between running timers). A counter read only inside subroutines entered behind one guard (`Rung(Req != 0): call(run)`), and overwritten by every rung that can raise the guard, is dead where the key holds the guard false and does not count as differing there (`deadness.py`). Risk: treating a cycle with a reset as linear (pumping overshoots, a spurious counterexample); a timer whose value at a non-stuttering key depends on the branch is represented by the first state plus one seed (see `cycles.py`); a counter counting the laps of a fast self-resetting timer while a slower timer runs (a known false `Proven` on a lap count reached before the slower timer is done; its calc-counted twin is exact).
+- **Elision** — Removes scan-local tags from tracked state. Risk: misclassifying a cross-scan tag as scan-local. The slice fast path trusts def-use chains, which leave out an instruction's read of its own accumulator (`exclusive_reads`); `self_read_tags` sends those to the full check, or a timer's accumulator would leave the key. The full check runs a scan on the concrete runtime at a fixed 10 ms tick, where a timer short of its preset never reaches Done; under black-box timers it can, so a slice whose closure reads an on/off-delay's Done or Acc bails (`_collect_hidden_memory_info(black_box_timers=True)`, as drums and the Out coils always do). How()'s prior keeps the exact model and its `PENDING` guards.
+- **Black-box timers** — Each timed tick may hold or jump: to its limit (the preset), to a value a comparison of the accumulator splits at (`_TimerModel.reps`), or, for an accumulator read as a value (`_TimerModel.exact`, from `accumulator_reads`), to any value one unit at a time. `choice_runs` enumerates one scan's choices depth first (cap `_CHOICE_RUN_CAP` -> Intractable kind `"timers"`). A tick of a timer nothing reads never branches. `settled=True` skips a state whose scan left a tick below its limit (`_TimerOracle.open`). Risk: a value set taken as complete that is not (a compared tag's values must be every value it takes; an input's partition comes from its own literal comparisons, see `TestKnownHoles`); a reduction that drops a ticking accumulator from the key.
+- **Counterexample replay** — `blackbox.confirm` replays each trace on a `PLC` at the search's `dt`: plain steps as recorded, a step that moved a tick as a fold-backed wait until the compared state changes (`_fire_step`, input splits, `_slide_wait`). Unconfirmed traces become `Intractable(kind="timing")` with the abstract trace and `diverged_at`. Risk: accepting a replay state the search would not judge (settled, property edges).
+- **Count clamps** — A counter whose accumulator nothing but its own instruction reads, with a literal preset and one writer, is keyed no further than the preset (`count_clamps`). Counters otherwise count concretely, edge by edge. Risk: a read the walk in `accumulator_reads` misses.
 - **Backward propagation** — Traces comparisons backward through arithmetic/copies to seed input domains. Risk: can't invert all operations; may not follow chains far enough.
 - **Edge compression** — Removes dead rise/fall prev values from state keys. Risk: merging states that should be distinct.
 - **Edge inputs** — Enumerates rising/falling edge combinations via single-flip expansion. Risk: missing simultaneous edge combinations.
@@ -35,16 +37,14 @@ make lint          # codespell + ruff + ty
 Each module has a docstring with implementation details. This map is for navigation.
 
 - **`__init__.py`** — Public API (`always`, `never`, `reachable_states`) and re-exports. Property compilation, batch partitioning, progress reporters.
-- **`results.py`** — Result types: `Proven`, `Counterexample`, `Intractable`, `TraceStep`, `StateDiff`, `PENDING`. Journal framework: `Decision`, `TagEntry`, `Journal`.
-- **`bfs.py`** — BFS exploration loop and trace/projection helpers.
+- **`results.py`** — Result types: `Proven`, `Counterexample`, `Intractable` (with `kind`: `"search"`, `"timing"`, `"timers"`, `"property"`; `trace`, `diverged_at`), `TraceStep` (with `timers`), `StateDiff`, `PENDING` (how() prior only). Journal framework: `Decision`, `TagEntry`, `Journal`.
+- **`bfs.py`** — BFS exploration loop (with the tick-choice runs and factored free-input composition) and trace/projection helpers.
+- **`blackbox.py`** — Black-box timers: timed sites, `accumulator_reads`, the timer model and oracle, count clamps, and concrete replay (`confirm`). See its docstring.
 - **`lockfile.py`** — Lock-file I/O, choice/band label resolution, JSON serialization.
-- **`passes.py`** — Pre-BFS pass pipeline. 15 ordered passes building the `_ExploreContext`. `_JournalBuilder` accumulates per-tag Decision records; `freeze()` produces the immutable context for BFS.
-- **`classify.py`** — Dimension classification (stateful / nondeterministic / combinational) and domain inference. See docstring for the 7-level domain inference stack.
-- **`absorb.py`** — Accumulator absorption and threshold abstraction. Three paths: redundant Acc, threshold vector, comparison-only. All gated by the exclusivity check. See northstar docstring.
-- **`cycles.py`** — Hidden progress across multi-scan cycles: refined revisits, the time-like probe, cycle pumping with repeated traces.
-- **`deadness.py`** — Dead guards for hidden counters: the subroutine region every read is in, the guard on every call into it, the writes that raise the guard, and a value-set bound on indirect addresses (`../value_sets.py`, shared with the PDG's `unbounded_index_reads` graph, which `_pass_build_graph` builds for BFS so an index with no declared bounds reads the block elements that can change).
-- **`events.py`** — Hidden-event scheduling. Settles pending timers without stepping through every tick (counters are not event sources). See docstring for the settle cascade.
-- **`kernel.py`** — Kernel integration. Snapshot/restore, state key extraction, edge compression, live input caching. See docstring for state key composition.
+- **`passes.py`** — Pre-BFS pass pipeline building the `_ExploreContext`, `_OptConfig`/`_BFSConfig`. `_JournalBuilder` accumulates per-tag Decision records; `freeze()` produces the immutable context for BFS.
+- **`classify.py`** — Dimension classification (stateful / nondeterministic / combinational) and domain inference. See docstring for the 7-level domain inference stack. Two modes: the search's (`abstract_timers=True`, no absorption) and how()'s domain prior (absorbing, three-valued Done).
+- **`absorb.py`** — Done/Acc pairing, the data-read exclusivity check, and the absorptions of how()'s domain prior only (PILOT's world key: `_done_acc_state`, threshold vectors, `_StateKeyDoneSpec`). The search never absorbs.
+- **`kernel.py`** — Kernel integration. Snapshot/restore, state key extraction (with count clamps), edge compression, live input caching. See docstring for state key composition.
 - **`expr.py`** — Expression tree helpers. Partial evaluation, tag reference collection, atom indexing, edge-bearing input partition.
 - **`independence.py`** — Static independence relation (single-scan commutativity of input actions) and free-input factoring partition. Used by BFS for factored evaluation. Also provides `_find_bridge_tags` for Intractable hint generation.
 - **`system_points.py`** — System-tag model for the kernel: power-on constants, `first_scan` as a stateful bit, scan-start resets of fault/command bits, and which scan-, clock- and time-derived tags BFS explores as free inputs. System tags only the property, scope or projection names come in through a `build_program_graph(observed_system=...)` variant (`passes._observed_system_tags`), which also counts the implicit writers of observed fault flags; callable properties read through `guarded_state`, which refuses unexplored system tags.
@@ -58,19 +58,22 @@ Each module has a docstring with implementation details. This map is for navigat
 ```
 Program
   → _run_pre_bfs_pipeline (passes.py)
-    → classify → validate_declared_bounds → split_at → elide → compile → absorb → build events → freeze
+    → classify → validate_declared_bounds → split_at → elide → compile (abstract timers) → timer model → freeze
   → _ExploreContext (frozen, immutable)
-    → _bfs_explore (bfs.py)  [with factored free-input composition]
+    → _bfs_explore (bfs.py)  [tick choices; factored free-input composition]
+    → _confirm_results → blackbox.confirm  [concrete replay of every counterexample]
   → Proven | Counterexample | Intractable
 ```
 
-See `passes.py` for the full pass sequence with data flow. When `domains_only=True` (the `how()` path), BFS-specific passes (bounds validation, absorption, events, edge compression, memory keys) are skipped.
+See `passes.py` for the full pass sequence with data flow. When `domains_only=True` (the `how()` path), the search's passes (bounds validation, timer model, edge expressions, memory keys) are skipped; classification absorbs and `build_prior_key_specs` builds PILOT's world-key Done specs.
+
+`_OptConfig.all_off()` is a sound baseline: every remaining toggle is a reduction (`_REDUCTION_OPTIMIZATIONS`) the soundness fuzzer checks against plain BFS. `sound_baseline()` is `all_off()` with the declared-bounds check kept; `_skip_optimizations=True` selects it.
 
 ## Invariants to preserve
 
 - **Soundness goal**: every reachable state must be visited. Over-approximation (extra states) is safe; under-approximation is not. If you change domain inference or absorption, the new rule must be at least as conservative as the old one.
-- **Threshold absorption gate**: the exclusivity check (`_has_forbidden_data_read`) is the soundness gate. Stability checks are pragmatic implementation constraints, not soundness requirements.
-- **Settle-pending termination**: bounded by event count + 1. Accumulators must not decrement during settling.
+- **Black-box completeness**: every timed tick must offer every value the program can tell apart, and every Done sequence a real timer can produce must be a choice sequence. A timed instruction compiled for the search must call `_bb_tick`.
+- **Replay rule**: no `Counterexample` leaves `_always_compiled` unreplayed (except a free-system-input trace with no branching timer, which keeps its caveat). Tests follow the same two-oracle rule.
 - **Edge compression correctness**: dead edge prevs use a sentinel `_EDGE_DEAD`. An edge is dead only when partial eval proves all containing expressions constant — false negatives (marking a live edge dead) would lose states.
 - **State key completeness**: every tag whose cross-scan value affects reachability must appear in the state key. Missing a dimension silently merges distinguishable states.
 
@@ -85,14 +88,15 @@ Tests are in `tests/core/analysis/`, split thematically across `test_prove_*.py`
 - `test_prove_kernel_oracle.py` — kernel oracle soundness
 - `test_prove_lock_file.py` — lock file I/O and diffing
 - `test_prove_partitioning.py` — batch and reachable-state partitioning/slicing
-- `test_prove_timer_abstraction.py` — timer/counter absorption and threshold events
+- `test_prove_blackbox.py` — black-box timers: the model, replay, unconfirmed kinds, review regressions, known holes
+- `test_prove_timer_abstraction.py` — timers and counters under black-box timers: coarse units, tag presets, accumulator thresholds, drums
 - `test_prove_intractable_hints.py` — intractable tags and blocker hints
 - `test_prove_kernel_domains.py` — kernel domain discovery
-- `test_prove_settlement.py` — pending settlement chains
+- `test_prove_settlement.py` — `settled=True` over chained timers
 - `test_prove_coverage_misc.py` — edge conditions, scope, annotated functions, lock change
 - `test_prove_inputblock_tagmap_input_inference.py` — InputBlock/TagMap input inference
 - `test_prove_free_input_elision.py` — free input elision
-- `test_prove_absorption_gap_regression_tests.py` — absorption gap regressions
+- `test_prove_absorption_gap_regression_tests.py` — regressions from the deleted exact-timing layer, as black-box verdicts
 - `test_prove_simultaneous_edge_coverage_tests.py` — simultaneous edge coverage and adversarial elision
 - `test_prove_fuzz_reproducer_regressions.py` — fuzz reproducer regressions
 - `test_prove_paced_exploration.py` — paced exploration and journal integration
@@ -109,7 +113,7 @@ Tests are in `tests/core/analysis/`, split thematically across `test_prove_*.py`
 
 ## Performance
 
-BFS is the primary cost center. Run `make bench` on the PackML example.
+BFS is the primary cost center. Run `make bench` on the PackML example (`pyrung lock examples.packml_bench`: 505 states in about 80 s, 2026-10-30).
 
 ## Formal foundations
 

@@ -166,16 +166,22 @@ def test_known_reachable_ton_phase_graph() -> None:
     #
     # Because this is TON, dropping Enable resets immediately to Phase 0, so
     # there is no reachable (Enable=False, Phase=1) or (Enable=False, Phase=2).
+    #
+    # The prover's timers are black boxes: a tick may hold, as a scan of no
+    # length would, so it also keeps (Enable=True, Phase=0), which a PLC's
+    # first enabled scan (dt > 0) never shows.  That over-approximation is
+    # the only extra row.
+    exact = frozenset(
+        {
+            _state(Enable=False, Phase=0),
+            _state(Enable=True, Phase=1),
+            _state(Enable=True, Phase=2),
+        }
+    )
     _assert_exact_reachable(
         logic,
         project=["Enable", "Phase"],
-        expected=frozenset(
-            {
-                _state(Enable=False, Phase=0),
-                _state(Enable=True, Phase=1),
-                _state(Enable=True, Phase=2),
-            }
-        ),
+        expected=exact | {_state(Enable=True, Phase=0)},
         depth_budget=8,
     )
 

@@ -20,6 +20,10 @@ calc(DH[1] | DH[2], DH[3])              # WORD-only math infers hex mode
 | `50000 * 50000` | DINT (32-bit signed) | −1,794,967,296 (wraps) |
 | `40000` → `copy()` | INT | 32767 (clamped) |
 
+## Constants into an INT
+
+A CLICK Math whose destination is an INT keeps every whole-number constant in its formula in 16 bits, and pyrung does the same: a constant outside −32768..32767 is read as its low 16 bits, signed. `calc(DD[1] / 65536, DS[1])` divides by 0 (65536 is cut to 0), so it writes 0 and sets `system.fault.division_error`; the same 65536 read from a tag (`calc(DD[1] / DD[2], DS[1])`) divides as written, and a DINT or REAL destination keeps the constant whole. Stage a wide constant in a DINT, or write the result to a DINT, when it must stay wide. The CLICK export writes the formula as you wrote it. Measured on a CLICK for 65536; for a constant between 32768 and 65535, pyrung's signed reading (40000 is −25536) has not been checked on hardware.
+
 ## REAL range and precision
 
 A `Real` never leaves CLICK's range, ±3.4028235E+38. A `calc()` result past it saturates at the limit and sets `system.fault.out_of_range`; `copy()` saturates the same way. A default, literal, `patch()` or `force()` past it raises `ValueError`.

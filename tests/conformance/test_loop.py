@@ -29,7 +29,7 @@ tells which model apart, and what the other model reads:
   iterations (Result2 = -1, the Int wraps); "at least once" reads 1.  Round 1
   read -1.  In-process only: on a CLICK it makes a scan of about 1.1 s that
   every wall-clock case beside it would see.
-- ``edge_contact_inside_loop`` (F6, probe): C1721 latches on iteration 1
+- ``edge_contact_inside_loop`` (F6, answered as adopted): C1721 latches on iteration 1
   of 3 and stays on.  An edge with memory in the contact rises once
   (Result1 = 1, what CLICK's per-contact edge memory predicts, FINDINGS item
   2, which pyrung implements); one judged against the previous scan (pyrung
@@ -47,7 +47,7 @@ tells which model apart, and what the other model reads:
   2 of 4.  Skipped, the one-shot stays fired and Result1 = 1; a body run with
   power off re-arms it and it fires again on scan 3 (2).
 
-- ``edge_memory_across_iterations`` (F18, probe): is an edge
+- ``edge_memory_across_iterations`` (F18, answered as adopted): is an edge
   contact in a For body one place in the program, its memory carried from
   iteration to iteration like a contact in a subroutine called N times?
   C1741 is latched on scan 1 and, on scan 2, off/on/on/off over iterations
@@ -57,7 +57,7 @@ tells which model apart, and what the other model reads:
   scan's end (pyrung before) the bit was already on, so 0, 0; an edge
   that passes power whenever the bit is on reads 23, 2.  Result3 = 4 shows
   the loop ran.
-- ``skipped_body_holds_timer_and_counter`` (F19, probe): a TON (T211) and a
+- ``skipped_body_holds_timer_and_counter`` (F19, answered as adopted): a TON (T211) and a
   counter (CT211) in a For body; the timer times on scans 1..3, the counter
   counts once on scan 1, then the For rung is false on scans 4..6 while the
   counter's reset input is on.  Read on scan 6: Result1 = 1 if the timer's
@@ -399,7 +399,6 @@ group = Group(
             ladder=prove_edge_contact_inside_loop,
             init=init_edge_contact_inside_loop,
             expect={"Result1": 1},
-            probe="edge contact memory inside a For body",
         ),
         case(
             "A timer inside For 10 accumulates on every iteration: it runs more than "
@@ -414,7 +413,6 @@ group = Group(
             "iteration) or 1 (once a scan)",
             ladder=prove_counter_inside_loop,
             expect={"Result1": 2},
-            probe="counter edge memory across For iterations",
         ),
         case(
             "Break leaves only the innermost loop: the inner loop breaks on its second "
@@ -465,7 +463,6 @@ group = Group(
             "(1, 1) or 65536 (Result2 = 1)",
             ladder=prove_zero_count,
             expect={"Result1": 0, "Result2": 0},
-            probe="For count 0: no iteration or 65536",
         ),
         case(
             "A loop count of -1 is read as unsigned 16-bit: 65535 iterations wrap an "
@@ -493,7 +490,6 @@ group = Group(
             ladder=prove_edge_memory_across_iterations,
             expect={"Result1": 2, "Result2": 1, "Result3": 4},
             scans=scans_for(2),
-            probe="edge memory carried across For iterations",
         ),
         case(
             "A timer and a counter in a skipped For body hold: the timer keeps its "
@@ -502,7 +498,6 @@ group = Group(
             ladder=prove_skipped_body_holds_timer_and_counter,
             expect={"Result1": 1, "Result2": 1},
             scans=scans_for(7),
-            probe="timers and counters in a skipped For body",
         ),
     ],
 )

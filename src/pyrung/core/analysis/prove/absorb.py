@@ -1,36 +1,32 @@
-"""Accumulator absorption and threshold abstraction helpers.
+"""Done/Acc pairing, and the accumulator absorption of how()'s domain prior.
+
+The search does not absorb: its timers are black boxes (``blackbox.py``) and
+its counters count concretely, so every accumulator it tracks is plain state.
+What lives here is structural (Done/Acc pairs, write targets, the data-read
+exclusivity check ``_has_forbidden_data_read``, which classify and the
+black-box model share) plus the absorptions PILOT's ``how()`` prior is built
+from (``_OptConfig.domains_only``): its world key projects a timer's Done and
+Acc onto ``False``/``PENDING``/``True`` (``_done_acc_state``) and a progress
+accumulator onto threshold-crossing bits (``_ThresholdVectorSpec``), and its
+earned-work ordinal sources come from the same vectors.  PILOT replays every
+route it plans, so these are steering heuristics, not soundness claims.
 
 Threshold absorption principle
 ------------------------------
-The concrete value of a threshold is irrelevant to reachability.  A timer
-fires or it doesn't — prove explores both outcomes.  Whether the threshold
-is 100 or 4000 changes WHEN the crossing occurs, not WHETHER it's
-reachable.  The gate for absorption is **exclusivity** (the threshold tag
-is only used in threshold comparisons and as a timer/counter preset, never
-in copy/calc data-flow), not **stability** (the threshold doesn't change
-between scans).  If a tag passes the exclusivity check it can be absorbed
-regardless of how, when, or by whom it is written.
+The concrete value of a threshold is irrelevant to which side of it a
+progress accumulator is on.  The gate for absorption is **exclusivity** (the
+threshold tag is only used in threshold comparisons and as a timer/counter
+preset, never in copy/calc data-flow), not **stability**.
 
-Implementation status: this module has two absorption paths with different
-readiness for the exclusivity framing.
+*Redundant Acc absorption* (``_find_redundant_acc_absorptions``): an
+accumulator compared only at its own preset boundary is the Done bit.
 
-*Redundant Acc absorption* (``_find_redundant_acc_absorptions``): the
-threshold is already discarded (synthetic preset=1).  The stability check
-(``_is_stable_dynamic_preset``) is purely unnecessary — the exclusivity
-check (``_has_non_timer_data_read``) is the only gate that matters.
+*Threshold vector absorption* (``_find_threshold_absorptions``): a progress
+accumulator compared against thresholds becomes a vector of crossed bits.
 
-*Threshold vector absorption* (``_find_threshold_absorptions``): accepts
-both exact and abstract threshold atoms.  Exact atoms keep the current
-scan-distance scheduling.  Abstract atoms represent exclusive threshold-only
-tags whose concrete value is hidden from the state key; the BFS materializes
-representative crossed successors when needed instead of requiring a stable
-value up front.
-
-*Comparison-only absorption* (``_find_comparison_absorptions``): hides
- large or non-enumerable written tags whose value is never used in
- data-flow.  Their concrete state key slot is replaced with a vector of
- comparison outcomes, so only the Boolean partition visible to the program
- remains.
+*Comparison-only absorption* (``_find_comparison_absorptions``): a large
+written tag whose value is never used in data-flow becomes the vector of its
+comparison outcomes.
 """
 
 from __future__ import annotations
@@ -85,22 +81,11 @@ _INT_PROGRESS_RESET = object()
 
 
 @dataclass(frozen=True)
-class _DrumEventMeta:
-    step_name: str
-    step_count: int
-    output_names: tuple[str, ...]
-    pattern: tuple[tuple[bool, ...], ...]
-    #: The drum's ``_drum_done`` memory: completed, every output off.
-    done_memory_key: str
-
-
-@dataclass(frozen=True)
 class _DoneAccInfo:
     pairs: dict[str, str]
     presets: dict[str, int]
     preset_tags: dict[str, str]
     kinds: dict[str, str]
-    drum_meta: dict[str, _DrumEventMeta] = field(default_factory=dict)
 
 
 def _drum_times_under_its_flag(drum: Any, program: Program) -> str | None:
@@ -136,7 +121,7 @@ def _drum_times_under_its_flag(drum: Any, program: Program) -> str | None:
 def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     """Map Done tag names to their Acc tag names for timer/counter instructions.
 
-    Also captures constant presets and instruction kinds for event jumps.
+    Also captures constant presets and instruction kinds.
     """
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.drums import TimeDrumInstruction
@@ -148,7 +133,6 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     presets: dict[str, int] = {}
     preset_tags: dict[str, str] = {}
     kinds: dict[str, str] = {}
-    drum_meta: dict[str, _DrumEventMeta] = {}
 
     for instr in walk_instructions(program):
         if isinstance(instr, OnDelayInstruction):
@@ -167,13 +151,6 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
             pairs[done_name] = instr.accumulator.name
             kinds[done_name] = _DONE_KIND_TIME_DRUM
             preset_tags[done_name] = f"__drum_preset:{done_name}"
-            drum_meta[done_name] = _DrumEventMeta(
-                step_name=instr.current_step.name,
-                step_count=len(instr.pattern),
-                output_names=tuple(t.name for t in instr.outputs),
-                pattern=tuple(tuple(bool(cell) for cell in row) for row in instr.pattern),
-                done_memory_key=instr.memory_key("_drum_done"),
-            )
             continue
         else:
             continue
@@ -185,9 +162,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
         elif isinstance(instr.preset, (int, float)):
             presets[instr.done_bit.name] = int(instr.preset)
 
-    return _DoneAccInfo(
-        pairs=pairs, presets=presets, preset_tags=preset_tags, kinds=kinds, drum_meta=drum_meta
-    )
+    return _DoneAccInfo(pairs=pairs, presets=presets, preset_tags=preset_tags, kinds=kinds)
 
 
 def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:
@@ -221,6 +196,45 @@ def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:
     if acc_nonzero:
         return PENDING
     return False
+
+
+_TIMER_DELAY_KINDS = frozenset((_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM))
+
+
+@dataclass(frozen=True)
+class _StateKeyDoneSpec:
+    """One Done bit of the how() prior's world key, projected by ``_done_acc_state``."""
+
+    index: int
+    acc_name: str
+    kind: str
+    # ``_frac:<acc>`` memory key for timers: a timer in a unit coarser than
+    # the scan (``"sec"`` at 10 ms) runs for many scans on its fractional
+    # carry alone, with ``Acc`` still 0.
+    frac_key: str | None = None
+
+
+def _prior_key_done_specs(
+    stateful_names: tuple[str, ...],
+    done_acc: Mapping[str, str],
+    done_kinds: Mapping[str, str],
+) -> tuple[_StateKeyDoneSpec, ...]:
+    """The Done bits of the how() prior's world key: each with an absorbed accumulator."""
+    specs: list[_StateKeyDoneSpec] = []
+    for index, done_name in enumerate(stateful_names):
+        acc_name = done_acc.get(done_name)
+        if acc_name is None:
+            continue
+        kind = done_kinds[done_name]
+        specs.append(
+            _StateKeyDoneSpec(
+                index=index,
+                acc_name=acc_name,
+                kind=kind,
+                frac_key=f"_frac:{acc_name}" if kind in _TIMER_DELAY_KINDS else None,
+            )
+        )
+    return tuple(specs)
 
 
 def _all_write_targets(

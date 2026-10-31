@@ -11,7 +11,7 @@ call, so call 2k-1 and call 2k are the two calls of scan k.  The window is 9
 calls, so ``firings`` lists the calls an edge contact passed power on as one
 digit each.
 
-- ``rise_once_per_scan`` (probe): C701 is on for calls 5 and 6 (scan 3), its
+- ``rise_once_per_scan`` (answered as adopted): C701 is on for calls 5 and 6 (scan 3), its
   out rung between a rise and a fall contact above it and another pair below.
   Each contact keeps a memory of its own, updated on each call (adopted, the
   CLICK model of the coils group): above the writer the rise fires on call 6
@@ -56,7 +56,6 @@ group = Group(
             ladder=prove_rise_once_per_scan,
             expect={"Result1": 6, "Result2": 5, "Result3": 8, "Result4": 7},
             scans=scans_for(CALLS),
-            probe="rise() in a subroutine called twice in one scan",
         ),
     ],
     calls=2,

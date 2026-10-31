@@ -33,7 +33,7 @@ Each lists the scans its edge contacts passed power as digits (``firings``):
   pair above fires a scan late, rise on 4 and fall on 7; the pair below on 3
   and 6.  The end-of-scan history: the pair above never fires (0, 0).
 
-The open probes (round 2), with the answer the expectation adopts:
+The round 2 probes, each answered as the expectation adopts:
 
 - ``edge_behind_open_contact``: an edge contact behind an open series contact.
   Its memory is updated every scan the contact is solved ("scanned", adopted):
@@ -278,7 +278,6 @@ group = Group(
             ladder=prove_edge_behind_open_contact,
             expect={"Result1": 0, "Result2": 0, "Result3": 3, "Result4": 7},
             scans=SCANS,
-            probe="edge memory: updated when scanned or only when powered",
         ),
         case(
             "An edge contact in a branch of a false rung still tracks its bit: a bit "
@@ -288,7 +287,6 @@ group = Group(
             ladder=prove_edge_in_false_rung_branch,
             expect={"Result1": 0, "Result2": 0},
             scans=SCANS,
-            probe="edge memory in a branch of a false rung",
         ),
         case(
             "An edge contact's memory starts off when the PLC goes to RUN: a bit on "
@@ -297,7 +295,6 @@ group = Group(
             "case itself did not run on a first scan",
             ladder=prove_edge_on_first_scan,
             expect={"Result1": 1, "Result2": 0},
-            probe="edge memory at STOP->RUN",
         ),
     ],
 )

@@ -85,7 +85,7 @@ Access via `system.<namespace>.<point>`. Import: `from pyrung import system`.
 |-------|-----------|-------|
 | `system.sys.always_on` | SC1 | Constant True |
 | `system.sys.first_scan` | SC2 | True on scan 0 only |
-| `system.sys.scan_clock_toggle` | SC3 | Alternates each scan |
+| `system.sys.scan_clock_toggle` | SC3 | Alternates each scan; on when SD9 is even (on the first scan) |
 | `system.sys.mode_run` | SC11 | True in RUN mode |
 | `system.sys.scan_counter` | SD9 | Current scan count |
 | `system.sys.scan_time_current_ms` | SD10 | Current scan time |

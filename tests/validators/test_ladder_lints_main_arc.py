@@ -5,6 +5,7 @@ from __future__ import annotations
 from pyrung import (
     And,
     Bool,
+    Dint,
     Int,
     Or,
     Real,
@@ -261,6 +262,20 @@ def test_divisor_proved_zero_under_rung_guard() -> None:
             calc(numerator / divisor, result)
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
+
+
+def test_divisor_cut_to_zero_in_an_int_math_shows_the_constant_as_written() -> None:
+    wide = Dint("Wide", external=True)
+    result = Int("Out16")
+    with Program() as program:
+        with Rung():
+            calc(wide / 65536, result)
+
+    assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
+    (message,) = _messages(program, MATH_DIV_ZERO)
+    assert "(Wide / 65536)" in message
+    assert "65536 is cut to 0 in an Int Math" in message
+    assert "/ 0)" not in message
 
 
 def test_divisor_merely_may_be_zero_punts() -> None:

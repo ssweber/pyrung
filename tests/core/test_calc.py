@@ -54,6 +54,35 @@ class TestCalcInstruction:
         assert runner.current_state.tags["Result"] == 0
         assert runner.current_state.tags["fault.division_error"] is True
 
+    def test_int_destination_cuts_constants_to_16_bits(self, runner_factory):
+        """A Math into an Int keeps each constant in 16 bits, as a CLICK does:
+        -2147483648 / 65536 divides by 0; the same 65536 read from a Dint does
+        not, and a Dint destination keeps the constant whole."""
+        Enable = Bool("Enable")
+        Num = Dint("Num")
+        Den = Dint("Den")
+        ByConstant = Int("ByConstant")
+        ByTag = Int("ByTag")
+        IntoDint = Dint("IntoDint")
+        Low = Int("Low")
+
+        with Program() as logic:
+            with Rung(Enable):
+                calc(Num / 65536, ByConstant)
+                calc(Num / Den, ByTag)
+                calc(Num / 65536, IntoDint)
+                calc(Den * 0 + 65543, Low)
+
+        runner = runner_factory(logic)
+        runner.patch({"Enable": True, "Num": -2147483648, "Den": 65536, "ByConstant": 99})
+        runner.step()
+        tags = runner.current_state.tags
+        assert tags["ByConstant"] == 0
+        assert tags["fault.division_error"] is True
+        assert tags["ByTag"] == -32768
+        assert tags["IntoDint"] == -32768
+        assert tags["Low"] == 7
+
     def test_real_result(self, runner_factory):
         Enable = Bool("Enable")
         A = Real("A")
@@ -116,6 +145,46 @@ class TestCalcInstruction:
         runner.patch({"Enable": False, "A": 10, "Result": 0})
         runner.step()
         assert runner.current_state.tags["Result"] == 0
+
+
+class TestCutIntConstants:
+    def test_cuts_each_integer_constant_to_its_low_16_bits_signed(self):
+        from pyrung.core.expression import LiteralExpr, sqrt
+        from pyrung.core.instruction.calc import cut_int_constants
+
+        A = Int("A")
+        assert cut_int_constants(65536) == 0
+        assert cut_int_constants(-65536) == 0
+        assert cut_int_constants(65543) == 7
+        assert cut_int_constants(40000) == -25536
+        assert cut_int_constants(32767) == 32767
+        assert cut_int_constants(-32768) == -32768
+        assert cut_int_constants(1.5) == 1.5
+        assert cut_int_constants(True) is True
+        cut = cut_int_constants(sqrt(A + 65536) * 2)
+        assert repr(cut) == "(sqrt((TagExpr(A) + LiteralExpr(0))) * LiteralExpr(2))"
+        assert isinstance(cut.right, LiteralExpr)
+
+    def test_returns_the_expression_itself_when_no_constant_changes(self):
+        from pyrung.core.instruction.calc import CalcInstruction, cut_int_constants
+
+        A = Int("A")
+        expr = (A + 32767) * -32768
+        assert cut_int_constants(expr) is expr
+        instr = CalcInstruction(expr, Int("Dest"))
+        assert instr.expression is expr
+        assert instr.source_expression is expr
+
+    def test_only_an_int_destination_cuts(self):
+        from pyrung.core.instruction.calc import CalcInstruction
+
+        A = Dint("A")
+        expr = A / 65536
+        into_int = CalcInstruction(expr, Int("I"))
+        assert into_int.source_expression is expr
+        assert repr(into_int.expression) == "(TagExpr(A) / LiteralExpr(0))"
+        for dest in (Dint("D"), Real("R")):
+            assert CalcInstruction(expr, dest).expression is expr
 
 
 class TestCalcRangeAggregates:

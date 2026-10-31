@@ -73,12 +73,12 @@ What each case tells apart:
   jog on scan 8 brings step 2's back (ErrorCode = 8) (hardware round 2, 2026-10-30: the adopted
   answer was Result3 = 6, the jump turning step 1's output on).  pyrung
   before DRUM left step 2's output on until the jump (Result2 = 5).
-- ``paused_drum_jumps`` (probe): paused on step 1 for scans 3..5, a jump to
+- ``paused_drum_jumps`` (answered as adopted): paused on step 1 for scans 3..5, a jump to
   step 3 on scan 4.  A jump taken while paused (adopted) reads step 3 on scan
   4 (Result2) and at the end (Result1); step 1's output stays on until the
   rung comes back (last on scan 5, Result3) and step 3's comes on then
   (Result4 = 6).  A paused drum that ignores the jump reads 1, 1, 8, 0.
-- ``reset_swallows_held_jog`` (probe): a jog that rises on a reset scan (4)
+- ``reset_swallows_held_jog`` (answered as adopted): a jog that rises on a reset scan (4)
   and is held to scan 6.  Reset drops it and its edge is spent (adopted): the
   drum stays on step 1 (Result1 = 1) and never enters step 2 (Result2 = 0).
   An edge kept for the scan after the reset enters step 2 on scan 5; pyrung
@@ -588,7 +588,6 @@ group = Group(
             ladder=prove_paused_drum_jumps,
             expect={"Result1": 3, "Result2": 3, "Result3": 5, "Result4": 6},
             scans=SCANS,
-            probe="drum jump while paused",
         ),
         case(
             "A jog that rises on a reset scan is spent: reset on scan 4 with a jog held "
@@ -597,7 +596,6 @@ group = Group(
             ladder=prove_reset_swallows_held_jog,
             expect={"Result1": 1, "Result2": 0},
             scans=SCANS,
-            probe="reset swallowing a held jog edge",
         ),
     ],
 )

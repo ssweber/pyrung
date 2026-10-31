@@ -54,11 +54,12 @@ tells apart:
 - ``pack_text_int``: into an INT parses signed decimal ("0042" is 42, not
   hex 66), clamps 123456 to 32767 (Result3), and reads "12.5" as 12 (Result4).
   The clamp raises the fault (ErrorCode = 1; hardware round 2, 2026-10-30, where no fault
-  was adopted).  pyrung refuses both and leaves 5 and 9.
+  was adopted).  pyrung before step TEXT refused both and left 5 and 9.
 - ``pack_text_dint``: into a DINT parses signed decimal over 32 bits, and
   clamps 2147483648 to 2147483647 (Result3 = 1) with the fault (Result4 = 1;
-  hardware round 2, 2026-10-30).  pyrung refuses it (Result3 = 0, Result4 = 1).
-- ``pack_text_int_fraction`` (probe): "12.9" reads 12 if the parse stops at
+  hardware round 2, 2026-10-30).  pyrung before step TEXT refused it (Result3 = 0,
+  Result4 = 1).
+- ``pack_text_int_fraction``: "12.9" reads 12 if the parse stops at
   the point (adopted), 13 if it rounds, 99 (the preset) if refused (Result1);
   "12x" reads 12 if the parse stops at the first non-digit, 99 if refused
   (Result2).  Result3 and Result4 are SC43 after each.  A CLICK reads 12, 99,
@@ -498,7 +499,6 @@ group = Group(
             ladder=prove_to_binary,
             init=init_to_binary,
             expect={"Result1": 65, "Result2": 90, "Result3": 200, "Result4": 0},
-            probe="does Copy Binary of 200 set SC43",
         ),
         case(
             "Fill with empty text blanks a TXT to NUL, so ASCII Code Value of it writes 0 over "
@@ -523,7 +523,6 @@ group = Group(
             ladder=prove_pack_text_int_fraction,
             init=init_pack_text_int_fraction,
             expect={"Result1": 12, "Result2": 99, "Result3": 0, "Result4": 1},
-            probe='pack_text "12.9" -> 12 or 13; "12x" -> 12 or refused',
         ),
         # The cases that raise SC43 come last: every case fires on the same scan, so a
         # fault raised earlier in the subroutine would still be on at a later case's
@@ -536,7 +535,6 @@ group = Group(
             init=init_to_value_rejects,
             expect={"Result1": 77, "Result2": 1, "Result3": 0, "Result4": 0},
             pending="SYS",
-            probe="does Character Value of NUL set SC43",
         ),
         case(
             "Pack text into a WORD parses hex: 00FF is 255, 0010 is 16, ABCD is 0xABCD, and "
@@ -552,7 +550,6 @@ group = Group(
             ladder=prove_pack_text_whitespace,
             init=init_pack_text_whitespace,
             expect={"Result1": 99, "Result2": 1, "Result3": 12, "Result4": 12},
-            probe="does a refused pack_text set SC43",
         ),
         case(
             "Pack text into an Int parses signed decimal: -123 is -123 (Result1), 0042 is 42 "
@@ -567,7 +564,6 @@ group = Group(
                 "Result4": 12,
                 "ErrorCode": 1,
             },
-            probe="does a clamping pack_text set SC43",
         ),
         case(
             "Pack text into a Dint parses signed decimal over 32 bits (Result1 = 1, Result2 = "
@@ -575,7 +571,6 @@ group = Group(
             ladder=prove_pack_text_dint,
             init=init_pack_text_dint,
             expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1},
-            probe="does a clamping pack_text set SC43",
         ),
     ],
 )

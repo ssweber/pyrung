@@ -12,7 +12,7 @@ from pyrung.click.codegen.constants import _PIN_RE
 from pyrung.click.codegen.models import _AnalyzedRung, _PinInfo
 from pyrung.click.codegen.parser import _parse_rows
 from pyrung.click.codegen.shaping import emitted_logic_mismatch
-from pyrung.click.validation.findings import CLK_STEP_LIMIT
+from pyrung.click.validation.findings import CLK_NESTED_CALL, CLK_STEP_LIMIT
 from pyrung.core.condition import AllCondition, AnyCondition, Condition
 from pyrung.core.instruction import ForLoopInstruction
 from pyrung.core.rung import Rung
@@ -56,7 +56,8 @@ class _ValidationMixin:
                     f"{finding.code}: {finding.message} {finding.suggestion}",
                     stacklevel=5,
                 )
-        findings = [f for f in findings if f.code != CLK_STEP_LIMIT]
+        # A nested call is refused below, with its source location.
+        findings = [f for f in findings if f.code not in (CLK_STEP_LIMIT, CLK_NESTED_CALL)]
         if findings:
             issues: list[Issue] = []
             for finding in findings:

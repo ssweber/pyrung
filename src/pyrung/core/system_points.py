@@ -249,10 +249,12 @@ _DERIVED_TAG_NAMES = frozenset(
     }
 )
 
+# SC3 is on when SD9 is even, so on the first scan (SD9 = 0) too, as a CLICK
+# reads it; edge memory starts off at RUN, so it rises on the first scan.
 _DERIVED_EDGE_TAGS: dict[str, Callable[[int], tuple[bool, bool]]] = {
     system.sys.scan_clock_toggle.name: lambda scan_id: (
+        scan_id % 2 == 0,
         scan_id % 2 == 1,
-        scan_id > 0 and scan_id % 2 == 0,
     ),
 }
 
@@ -427,7 +429,7 @@ class SystemPointRuntime:
         if name == system.sys.scan_counter.name:
             return True, ctx_or_state.scan_id % 32768
         if name == system.sys.scan_clock_toggle.name:
-            return True, (ctx_or_state.scan_id % 2) == 1
+            return True, (ctx_or_state.scan_id % 2) == 0
 
         half_period = _CLOCK_HALF_PERIODS.get(name)
         if half_period is not None:

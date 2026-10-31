@@ -109,8 +109,9 @@ class TestKernelDomainDiscovery:
         result = always(logic, lambda s: True)
         assert isinstance(result, Proven)
 
-    def test_large_comparison_only_calc_tag_is_absorbed(self):
-        """Large written comparison-only tags use vector keying instead of exact state."""
+    def test_large_comparison_only_calc_tag_is_tracked(self):
+        """The search keys a large written comparison-only tag exactly (no
+        absorption) and still decides both outcomes of its comparison."""
         source = Int("Source", external=True, min=0, max=300)
         stored = Int("Stored")
         alarm = Bool("Alarm")
@@ -124,7 +125,7 @@ class TestKernelDomainDiscovery:
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert "Stored" not in stateful
+        assert "Stored" in stateful
 
         states = reachable_states(logic, project=["Alarm"], depth_budget=2)
         assert not isinstance(states, Intractable)
@@ -350,6 +351,8 @@ class TestKernelDomainDiscovery:
             graph,
             all_exprs,
             project=("Stored",),
+            abstract_timers=True,
+            _skip_absorptions=True,
         )
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
@@ -388,8 +391,9 @@ class TestKernelDomainDiscovery:
         result = always(logic, lambda s: True)
         assert isinstance(result, Proven)
 
-    def test_direct_self_feed_threshold_only_progress_becomes_tractable(self):
-        """Monotone self-feed is tractable when the only consumer is a threshold."""
+    def test_direct_self_feed_against_an_unbounded_threshold_is_intractable(self):
+        """Monotone self-feed compared with an HMI threshold: nothing absorbs
+        the progress any more, so both need a domain and the search names them."""
         from pyrung.core.analysis.pdg import build_program_graph
 
         trigger = Bool("Trigger", external=True)
@@ -407,9 +411,9 @@ class TestKernelDomainDiscovery:
         assert _has_data_feedback("Count", graph)
 
         states = reachable_states(logic, project=["Flag"], depth_budget=5)
-        assert not isinstance(states, Intractable)
-        assert frozenset({("Flag", False)}) in states
-        assert frozenset({("Flag", True)}) in states
+        assert isinstance(states, Intractable)
+        assert states.kind == "search"
+        assert {"Count", "Threshold"} <= set(states.tags)
 
     def test_transitive_feedback_remains_intractable(self):
         """Transitive feedback A→B→A remains intractable."""
