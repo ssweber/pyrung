@@ -277,9 +277,10 @@ Mapped to core engine phases:
 
 ### Force and edge detection
 
-- `rise()` / `fall()` evaluate whatever value is present when that condition is evaluated.
-- Since forced variables may diverge mid-cycle, edges can reflect IEC assignments during the scan.
-- Across scans, the committed post-force value is what carries into the next cycle.
+- Each `rise()` / `fall()` contact keeps its own memory (`_edge:e{N}` in `SystemState.memory`): the bit as that contact last saw it, updated every scan its row is solved, powered or not, and off at RUN and at STOP->RUN.
+- A contact compares the value present when its row is solved with that memory. Since forced variables may diverge mid-cycle, a contact below a rung that assigns a forced tag sees the assigned value; one above it sees the pre-logic force value.
+- So the memory a contact carries into the next scan is the value it read, not the committed post-force value: two contacts on one forced tag can remember different values.
+- Breakpoint and `run_until()` edges are no contact of the program: each keeps private memory, judged on the committed scan snapshot (see below).
 
 ---
 
@@ -290,6 +291,7 @@ Mapped to core engine phases:
 - `pause()` halts `run()`, `run_for()`, or `run_until()` after committing the triggering scan.
 - `snapshot(label)` tags the triggering scan and does not halt.
 - Each registration returns a handle with `remove()`, `enable()`, `disable()`, and `id`.
+- A `rise()` / `fall()` in a `when()` condition compares against the bit as that registration last judged it, armed from the current state when registered and again on `enable()`.
 - Multiple breakpoints can be active simultaneously.
 
 Label lookup:
