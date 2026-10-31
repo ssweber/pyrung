@@ -57,6 +57,7 @@ paused_drum_jogs_and_resets = 11
 completion_turns_outputs_off = 12
 paused_drum_jumps = 13
 reset_swallows_held_jog = 14
+pins_read_before_step_fix = 15
 
 [groups.out]
 base = 701 # Conf_Out: DS701..DS900
@@ -130,6 +131,7 @@ held_input_not_recounted = 10
 count_down_done_at_preset = 11
 edge_on_reset_scan = 12
 first_scan_input_already_on = 13
+pins_read_before_count = 14
 
 [groups.coils]
 base = 1501 # Conf_Coils: DS1501..DS1700

@@ -74,12 +74,25 @@ tells apart:
   first scan and latches a flag (Result1 = 1, adopted); memory seeded from the
   input, or carried over STOP, does not (Result1 = 0).  It reads the loaded
   program's first scan, whatever run reads it.
+- ``pins_read_before_count`` (probe, box atomicity): a box reads its enable and
+  every pin at one moment, before it executes.  The up rung and the ``.down()``
+  pin both share ~Done as their common condition (the shared contact copied
+  into the pin's row: the exporter's rail form, the only shape pyrung can
+  write).  Preset 2, up pulses on scans 1 and 3, a down pulse on scan 3: the
+  second count turns Done on during that very scan.  All inputs read before
+  the box writes (adopted, pyrung's model): up and down both see ~Done on scan
+  3 and cancel, Acc = 1 (Result1) and Done off (Result2 = 0).  A down pin read
+  after the box counted sees Done on, drops the down, and reads Acc = 2,
+  Done on (Result1 = 2, Result2 = 1).  The same shape drawn with the down pin
+  teeing off the up rung's input wire after ~Done is the other CLICK drawing
+  of the same logic; hardware round 3 should also load it by hand in CLICK
+  (it cannot be written in pyrung, whose exporter always copies the contacts).
 """
 
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, calc, copy, count_down, count_up, latch, out, rise, system
+from pyrung.core import And, Or, Rung, calc, copy, count_down, count_up, latch, out, rise, system
 from tests.conformance.memory import ClickCounter, c
 from tests.conformance.scans import WINDOW, count_scans, done, scans_for
 
@@ -319,6 +332,20 @@ def prove_first_scan_input_already_on(slot):
         copy(1, slot.Fired)
 
 
+def prove_pins_read_before_count(slot):
+    # Up pulses on scans 1 and 3, a down pulse on scan 3, preset 2; ~Done is
+    # the condition the up rung and the down pin share.
+    counter = ClickCounter(131)
+    count_scans(slot)
+    with Rung(slot.Cmd != 0, ~counter.Done, on(slot, 1, 3)):
+        count_up(counter, 2).down(And(~counter.Done, on(slot, 3))).reset(slot.Cmd == 0)
+    with Rung(slot.Cmd != 0):
+        copy(counter.Acc, slot.Result1)
+    with Rung(slot.Cmd != 0, counter.Done):
+        copy(1, slot.Result2)
+    done(slot)
+
+
 group = Group(
     "counters",
     [
@@ -421,6 +448,16 @@ group = Group(
             "5 (Result1); the input's next rise, on scan 7, counts 1 (Result2)",
             ladder=prove_edge_on_reset_scan,
             expect={"Result1": 0, "Result2": 1},
+            scans=SCANS,
+        ),
+        case(
+            "A counter reads its rung and its pins at one moment, before it counts: "
+            "~Done feeds the up rung and the down pin, and the second count turns Done "
+            "on during scan 3 while a down pulse arrives; both see ~Done, cancel, and "
+            "the counter reads Acc = 1 (Result1) with Done off (Result2 = 0)",
+            ladder=prove_pins_read_before_count,
+            probe="pins read before the box executes",
+            expect={"Result1": 1, "Result2": 0},
             scans=SCANS,
         ),
         case(

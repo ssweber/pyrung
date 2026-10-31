@@ -94,6 +94,19 @@ What each case tells apart:
   adds the scan's time reads a scan's worth (about 10 on the sim); one that
   carries a step's overshoot into the next step reads 5 in-process on the
   advance (Result4).
+- ``pins_read_before_step_fix`` (probe, box atomicity): a box reads its
+  enable and every pin at one moment, before it executes.  A step register
+  staged out of range (5 of 2) on scan 3 is the shared condition (Result1 > 2)
+  of the drum's rung and its ``.jog()`` pin (the shared contact copied into the
+  pin's row: the exporter's rail form), with a jog pulse on scan 3.  The drum
+  corrects the step to 1 as it runs.  Pins read before that write (adopted,
+  pyrung's model): the jog sees the shared condition on, jogs the corrected
+  step to 2 (Result1 = 2) and step 2's output comes on at scan 3 (Result3 = 3,
+  Result4 = 0).  A jog pin read after the correction sees step 1, the shared
+  condition off, and no jog: Result1 = 1, Result3 = 0, step 1's output first on
+  at scan 3 (Result4 = 3).  The pin drawn teeing off the enable wire is the
+  other CLICK drawing of the same logic; pyrung's exporter always copies the
+  contacts, so hardware round 3 loads the tee by hand.
 """
 
 from __future__ import annotations
@@ -102,6 +115,7 @@ from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
+    And,
     Or,
     Rung,
     calc,
@@ -477,6 +491,26 @@ def init_time_acc_clears_on_every_transition(slot):
     reset(c[1997])
 
 
+def prove_pins_read_before_step_fix(slot):
+    # Step 5 is written into the step register (Result1) on scan 3, above the
+    # drum.  Its rung and its jog pin share the condition Result1 > 2; the jog
+    # input is that and scan 3.
+    count_scans(slot)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+        copy(5, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Result1 > 2):
+        event_drum(
+            outputs=[c[1971], c[1972]],
+            events=[c[1973], c[1974]],
+            pattern=[[1, 0], [0, 1]],
+            current_step=slot.Result1,
+            completion_flag=c[1975],
+        ).reset(slot.Cmd == 0).jog(And(slot.Result1 > 2, slot.Scratch == 3))
+    first_on_from(slot, c[1972], 3, slot.Result3)
+    first_on_from(slot, c[1971], 3, slot.Result4)
+    done(slot)
+
+
 group = Group(
     "drum",
     [
@@ -595,6 +629,17 @@ group = Group(
             "2 (Result2 = 0)",
             ladder=prove_reset_swallows_held_jog,
             expect={"Result1": 1, "Result2": 0},
+            scans=SCANS,
+        ),
+        case(
+            "A drum reads its rung and its pins at one moment, before it runs: a step "
+            "register staged out of range on scan 3 is the condition its rung and its "
+            "jog pin share, and the jog sees it though the drum corrects the step to 1 "
+            "as it runs; the jog takes the corrected step to 2 (Result1), whose output "
+            "is on from scan 3 (Result3), and step 1's never comes on (Result4 = 0)",
+            ladder=prove_pins_read_before_step_fix,
+            probe="pins read before the box executes",
+            expect={"Result1": 2, "Result3": 3, "Result4": 0},
             scans=SCANS,
         ),
     ],
