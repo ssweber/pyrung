@@ -92,6 +92,7 @@ For CLICK portability, do not mix WORD and non-WORD math in the same `calc()` ex
 | Counter accumulator | Clamps at DINT min/max |
 | REAL past ±3.4028235E+38 | ±Inf; `calc()` sets `system.fault.out_of_range` |
 | Division by zero | Result = 0, `system.fault.division_error` set |
+| Indexed source outside its block (`calc(DS[Ptr], D)`) | Nothing written, `system.fault.address_error` set |
 | Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | Result = 0, `system.fault.math_operation_error` set for the scan |
 
 ## Range aggregates
