@@ -8,7 +8,7 @@ validation passes (conflicting outputs, stuck bits, etc.).
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -476,21 +476,28 @@ def _block_slot_names(block: Any) -> frozenset[str] | None:
     )
 
 
-def _tag_in_block(name: str, tag: Any, block: Any) -> bool:
+def _tag_in_block(
+    name: str, tag: Any, block: Any, slot_names: Callable[[Any], frozenset[str] | None]
+) -> bool:
     """Whether a write to some element of *block* can change the tag *name*.
 
     A block element carries its block (``_pyrung_block``); a tag that does not
     may still name one of its slots (mapped onto it, or a same-named tag), so
-    the block's current slot names are checked too.  Unknown is a meet.
+    the block's current slot names (*slot_names*, :func:`_block_slot_names`
+    or a memo of it) are checked too.  Unknown is a meet.
     """
     owner = getattr(tag, "_pyrung_block", None)
     if owner is not None and getattr(owner, "name", None) == block.name:
         return True
-    names = _block_slot_names(block)
+    names = slot_names(block)
     return names is None or name in names
 
 
-def _footprints_meet(reads: _Footprint, writes: _Footprint) -> bool:
+def _footprints_meet(
+    reads: _Footprint,
+    writes: _Footprint,
+    slot_names: Callable[[Any], frozenset[str] | None],
+) -> bool:
     """Whether a write in *writes* can change a tag *reads* reads."""
     if reads.opaque or writes.opaque:
         return True
@@ -499,13 +506,13 @@ def _footprints_meet(reads: _Footprint, writes: _Footprint) -> bool:
     if reads.blocks.keys() & writes.blocks.keys():
         return True
     if any(
-        _tag_in_block(name, tag, block)
+        _tag_in_block(name, tag, block, slot_names)
         for block in writes.blocks.values()
         for name, tag in reads.names.items()
     ):
         return True
     return any(
-        _tag_in_block(name, tag, block)
+        _tag_in_block(name, tag, block, slot_names)
         for block in reads.blocks.values()
         for name, tag in writes.names.items()
     )
@@ -579,6 +586,15 @@ class _ScanWrites:
         self._program = program
         self._subroutines: dict[str, tuple[_Footprint, frozenset[str]]] = {}
         self._memo: dict[int, _Footprint] = {}
+        self._slot_names: dict[int, tuple[Any, frozenset[str] | None]] = {}
+
+    def slot_names(self, block: Any) -> frozenset[str] | None:
+        """:func:`_block_slot_names`, once per block for this build."""
+        entry = self._slot_names.get(id(block))
+        if entry is None or entry[0] is not block:
+            entry = (block, _block_slot_names(block))
+            self._slot_names[id(block)] = entry
+        return entry[1]
 
     def _direct(self, items: Iterable[Any], writes: _Footprint, callees: set[str]) -> None:
         from pyrung.core.analysis.write_sites import (
@@ -691,11 +707,11 @@ def _iter_rung_calls(
         decides = True
         for condition in local:
             reads = _condition_footprint(condition)
-            if _footprints_meet(reads, loop_writes):
+            if _footprints_meet(reads, loop_writes, scan_writes.slot_names):
                 decides = False
                 continue
             kept.append(condition)
-            if _footprints_meet(reads, scan_writes.of(top_rung)):
+            if _footprints_meet(reads, scan_writes.of(top_rung), scan_writes.slot_names):
                 decides = False
         return tuple(kept), decides
 
