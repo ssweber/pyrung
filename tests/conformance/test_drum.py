@@ -132,7 +132,7 @@ What each case tells apart:
   reads Result4 = 0 here turns the outputs off on a correction scan of this
   shape whatever the jog does, which explains the reading above without a
   completion.
-- ``jump_to_own_step_register``: moved to the ``paste_risk`` group (part I),
+- ``jump_to_own_step_register``: moved to the ``paste_risk`` group (part C),
   since a CLICK may refuse the drum's own step register as its jump step; its
   C837..C840 stay unused here.
 - ``jog_on_last_step`` (probe): a jog on scan 2 takes a 2-step drum to step 2,

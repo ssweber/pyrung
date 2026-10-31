@@ -62,7 +62,7 @@ tells apart:
   as a Math error writes 0 (``math_error``): 4, 0, 7, 0.  A store refused as
   out of range: 2.  No flag: 0.  pyrung (step MATH) wraps 35000 to -30536
   with SC43: 2, 0, 7, -30536.
-- ``rand_real_bounds``: moved to the ``paste_risk`` group (part I), since
+- ``rand_real_bounds``: moved to the ``paste_risk`` group (part C), since
   a CLICK may refuse a DF bound at paste; its C bits (C249..C264) and
   DF461..DF462 stay unused here.
 - ``pointer_past_bank`` (probe): a Copy through a pointer past the DD bank
@@ -120,7 +120,7 @@ Receive whose Slave ID is out of range needs a second Modbus device on the
 CLICK's port; how a DF holding +Inf or NaN reads over Modbus (the harness
 reads slot DS only) or on the CLICK's display.  A Math with a pointer is not
 expressible: a CLICK has pointers in a Single Copy only.  FOR with a
-non-finite count is ``for_count``, part H, since a CLICK that loops for ever
+non-finite count is ``for_count``, part D, since a CLICK that loops for ever
 stops on its watchdog.
 """
 
