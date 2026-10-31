@@ -10,7 +10,7 @@ from pyrung.core.condition import AllCondition, AnyCondition, Condition
 from pyrung.core.rung import Rung
 
 from .instructions import _InstructionMixin
-from .layout import _HEADER, _LayoutMixin
+from .layout import _HEADER, _LayoutMixin, assert_no_column_a_vertical
 from .translator import _TranslatorMixin
 from .types import (
     ExportSummary,
@@ -157,6 +157,10 @@ class _LadderExporter(
             next_rung = rungs[rung_index + 1] if rung_index + 1 < len(rungs) else None
             self._check_nop_alone(rung, next_rung, path=base_path)
             rendered = self._render_rung(rung, path=base_path)
+            try:
+                assert_no_column_a_vertical(rendered)
+            except ValueError as exc:
+                self._raise_issue(path=base_path, message=str(exc), source=rung)
             rows.extend(rendered)
             source = LadderSourceSpan(
                 source_file=rung.source_file,

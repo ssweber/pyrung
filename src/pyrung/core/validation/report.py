@@ -158,6 +158,7 @@ def _validator_dispatch(
     from pyrung.core.validation.duplicate_out import validate_conflicting_outputs
     from pyrung.core.validation.final_writers import validate_final_writers
     from pyrung.core.validation.math_conditions import validate_math_conditions
+    from pyrung.core.validation.order_dependence import validate_order_dependence
     from pyrung.core.validation.physical_realism import validate_physical_realism
     from pyrung.core.validation.pointer_default import validate_pointer_defaults
     from pyrung.core.validation.readonly_write import validate_readonly_writes
@@ -181,6 +182,7 @@ def _validator_dispatch(
         "final": lambda: _as_findings(validate_final_writers(program).findings),
         "physical": lambda: _as_findings(validate_physical_realism(program, dt=dt).findings),
         "rung": lambda: _as_findings(validate_rung_conditions(program, _context=context).findings),
+        "order": lambda: _as_findings(validate_order_dependence(program).findings),
         "cmp": lambda: _as_findings(validate_cmp_conditions(program, _context=context).findings),
         "call": lambda: _as_findings(validate_call_graph(program, _context=context).findings),
         "math": lambda: _as_findings(validate_math_conditions(program, _context=context).findings),

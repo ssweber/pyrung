@@ -680,7 +680,23 @@ def _group_outputs(
 # --- Analyzer entry points --------------------------------------------------
 
 
-def _split_continued(rung: _AnalyzedRung) -> list[_AnalyzedRung]:
+def _has_wire_trunk(raw: _RawRung | None) -> bool:
+    """Whether the rung's first row is a wire in column A feeding a bus in column B.
+
+    That is the unconditional-trunk drawing (``R,-,T`` / ``R,-,T:C2``): a trunk
+    with no contact on it, then a split.  It reads as one rung with branches, as a
+    trunk contact would.  A row that starts from the rail in column B (nothing in
+    column A) is a separate rung wired to the rail, so it is not this.
+    """
+    if raw is None or not raw.rows:
+        return False
+    row = raw.rows[0]
+    if len(row) < 3 or row[1] != "-":
+        return False
+    return row[2] in {"T", "|"} or row[2].startswith("T:")
+
+
+def _split_continued(rung: _AnalyzedRung, raw: _RawRung | None = None) -> list[_AnalyzedRung]:
     """Split a rung with continued-style wires into primary + continued rungs.
 
     The motivating Click-only shape is a shared wire that feeds a terminal
@@ -700,6 +716,8 @@ def _split_continued(rung: _AnalyzedRung) -> list[_AnalyzedRung]:
     if len(rung.instructions) < 2:
         return [rung]
     if not all(instr.branch_tree is not None for instr in rung.instructions):
+        return [rung]
+    if _has_wire_trunk(raw):
         return [rung]
 
     # First instruction → primary rung
@@ -824,7 +842,7 @@ def _analyze_rungs(
         else:
             whole = analyze_one(i)
             source_outputs = whole.source_outputs
-            pieces = _split_continued(whole)
+            pieces = _split_continued(whole, raw_rungs[i])
             for piece in pieces:
                 piece.source_outputs = None
             pieces[0].source_outputs = source_outputs

@@ -397,6 +397,7 @@ def _compile_event_drum_instruction(
     lines: list[str] = [
         f"_enabled = bool({enabled_expr})",
         f"_step_raw = int({step_read})",
+        *_compile_drum_jump_target_lines(instr, ctx),
         "_step = _step_raw",
         "_step_changed = False",
         f"if (_step < 1) or (_step > {step_count}):",
@@ -549,11 +550,10 @@ def _compile_drum_jog_jump_lines(
             ]
         )
     if instr.jump_condition is not None and instr.jump_step is not None:
-        jump_step_expr = _compile_value(instr.jump_step, ctx)
         lines.extend(
             [
                 "if _jump_edge:",
-                f"    _target = int({jump_step_expr})",
+                "    _target = _jump_target",
                 f"    if 1 <= _target <= {step_count}:",
                 "        _step_changed = _step_changed or (_step != _target)",
                 "        _step = _target",
@@ -562,6 +562,16 @@ def _compile_drum_jog_jump_lines(
         )
     lines.extend(["if _taken:", f"    {step_write} = _step"])
     return lines
+
+
+def _compile_drum_jump_target_lines(
+    instr: EventDrumInstruction | TimeDrumInstruction | TimeEventDrumInstruction,
+    ctx: CodegenContext,
+) -> list[str]:
+    """Read the jump step with the pins, before the drum writes anything."""
+    if instr.jump_condition is None or instr.jump_step is None:
+        return []
+    return [f"_jump_target = int({_compile_value(instr.jump_step, ctx)})"]
 
 
 def _compile_drum_output_lines(output_symbols: list[str], pattern_literal: str) -> list[str]:
@@ -615,6 +625,7 @@ def _compile_time_drum_instruction(
     lines: list[str] = [
         f"_enabled = bool({enabled_expr})",
         f"_step_raw = int({step_read})",
+        *_compile_drum_jump_target_lines(instr, ctx),
         "_step = _step_raw",
         "_step_changed = False",
         "_reset_step_data = False",

@@ -4,7 +4,7 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
-The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as eight
+The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as nine
 projects, one part each (``PARTS``)::
 
     make conformance-export PART=A OUT=path/to/a
@@ -12,6 +12,7 @@ projects, one part each (``PARTS``)::
     make conformance-export PART=C OUT=path/to/c
     make conformance-export PART=D OUT=path/to/d
     make conformance-export PART=E OUT=path/to/e
+    make conformance-export PART=F OUT=path/to/f
     make conformance-export PART=G OUT=path/to/g
     make conformance-export PART=H OUT=path/to/h
     make conformance-export PART=I OUT=path/to/i
@@ -43,6 +44,7 @@ from tests.conformance import (
     test_block,
     test_call_twice,
     test_coils,
+    test_cont_box,
     test_counters,
     test_drum,
     test_faults,
@@ -55,6 +57,7 @@ from tests.conformance import (
     test_out,
     test_paste_risk,
     test_ret_branch,
+    test_row_solve,
     test_rung_semantics,
     test_search,
     test_shift,
@@ -95,6 +98,8 @@ ALL_GROUPS = [
     test_call_twice.group,
     test_ret_branch.group,
     test_loop_call.group,
+    test_row_solve.group,
+    test_cont_box.group,
     test_for_count.group,
     test_paste_risk.group,
     # Last, so no other group's rung reads SC46 on a scan a Math error raised it.
@@ -117,13 +122,16 @@ PARTS: dict[str, tuple[str, ...]] = {
         "numeric",
     ),
     "B": ("out", "search", "shift", "system", "text", "timers"),
-    "C": ("call_twice", "coils", "loop", "rungs", "solve_order"),
+    "C": ("call_twice", "coils", "loop", "row_solve", "rungs", "solve_order"),
     # Probes CLICK may refuse outright (paste or transfer): a project of their
     # own, so a refusal costs only this one.
     "D": ("ret_branch",),
     # A Call between For and Next, in main: a project of its own, so a refusal
     # of either probe cannot hide the other's answer.
     "E": ("loop_call",),
+    # A box on a continued wire of the rung above, a drawing no CLICK has taken
+    # yet: a project of its own, so a refusal costs only this one.
+    "F": ("cont_box",),
     # Which stores raise a fault flag: probes CLICK may answer as a group,
     # reloaded on their own.
     "G": ("faults",),

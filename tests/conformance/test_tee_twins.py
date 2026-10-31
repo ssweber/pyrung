@@ -129,3 +129,20 @@ def test_a_tee_case_without_its_subroutine_is_refused(part_a):
     )
     with pytest.raises(ValueError, match="no subroutine"):
         _draw_tees(gone, build.groups)
+
+
+def test_a_tee_in_column_a_is_refused():
+    with pytest.raises(ValueError, match="column A"):
+        TeeSpec("box(", (".p()",), after=0)
+
+
+@pytest.mark.parametrize("part", sorted(suite.PARTS))
+def test_no_exported_row_has_a_vertical_token_in_column_a(part):
+    """CLICK refuses T, | and T: in column A (the rail); true of the drawn export too."""
+    from pyrung.click.ladder.layout import assert_no_column_a_vertical
+
+    build = suite.build(part)
+    drawn = _draw_tees(pyrung_to_ladder(build.program, build.tag_map), build.groups)
+    assert_no_column_a_vertical(drawn.main_rows[1:])
+    for _name, rows in drawn.subroutine_rows:
+        assert_no_column_a_vertical(rows[1:])

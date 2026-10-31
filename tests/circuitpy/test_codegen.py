@@ -1018,6 +1018,35 @@ class TestInstructionCoverage:
         assert compiled.blockless is True
         assert "\n    else:\n    _cond_snap_" not in compiled.source
 
+    def test_helper_legs_bind_at_their_box(self):
+        """A box's helper legs bind just before its code, reading the rung's
+        entry snapshot; a bare For-body box binds them as its row starts."""
+        a, b, d, e = Bool("A"), Bool("B"), Bool("D"), Bool("E")
+        c1, c2, c3 = Counter.clone("C1"), Counter.clone("C2"), Counter.clone("C3")
+        with Program(strict=False) as prog:
+            with Rung(a):
+                out(b)
+                with branch(e):
+                    count_up(c1, 3).reset(d)
+                count_up(c2, 3).reset(b)
+            with Rung(a):
+                with forloop(2):
+                    out(d)
+                    count_up(c3, 3).reset(d)
+
+        lines = [line.strip() for line in compile_kernel(prog).source.splitlines()]
+
+        def at(prefix: str) -> int:
+            return next(i for i, line in enumerate(lines) if line.startswith(prefix))
+
+        leg_c1, leg_c2 = at("_rung_1_snap_0 = "), at("_rung_1_snap_1 = ")
+        assert at("_t_B = True") < leg_c1 < at("_t_C1_Acc = _acc") < leg_c2 < at("_t_C2_Acc = _acc")
+        # The leg on B reads B's snapshot, not the B the out() above wrote.
+        assert lines[leg_c2].startswith("_rung_1_snap_1 = bool(_cond_snap_")
+        leg_c3 = at("_box_1_snap_0 = ")
+        assert at("_t_D = True") < leg_c3 < at("_t_C3_Acc = _acc")
+        assert lines[leg_c3] == "_box_1_snap_0 = bool(_t_D)"
+
     def test_function_call_subroutine_and_return_emit(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")

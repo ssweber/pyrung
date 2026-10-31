@@ -37,6 +37,14 @@ class TeeSpec:
     pins: tuple[str, ...]
     after: int
 
+    def __post_init__(self) -> None:
+        if self.after < 1:
+            raise ValueError(
+                f"TeeSpec(after={self.after}): a tee needs at least one shared contact before "
+                "it; with after=0 it would sit in column A, the left power rail, where CLICK "
+                "rejects vertical tokens (draw the pins from the rail instead)"
+            )
+
 
 def draw_tees(rows: Sequence[Row], marker: str, spec: TeeSpec) -> tuple[Row, ...]:
     """*rows* with the pins of the case marked ``Case <marker>`` redrawn as tees.

@@ -49,8 +49,9 @@ class Instruction(ABC):
     _site_program_owned: bool = False
     # The binding that stamped ``_state_key`` (see ``Condition._site_owner``).
     _site_owner: object | None = None
-    # Edge sites a bare For-body instruction scans each iteration (``(memory key,
-    # tag)`` pairs), stamped by ``site_memory.build_edge_frames``.
+    # Edge sites this instruction's helper legs hold (``(memory key, tag)``
+    # pairs; a bare For-body instruction scans them each iteration), stamped by
+    # ``site_memory.build_edge_frames``.
     _edge_frame: tuple[tuple[str, str], ...] | None = None
     # Whether a bare For-body instruction has a helper leg (reset, jump, ...):
     # it is then a row of its own whose legs read the tags as that row starts.

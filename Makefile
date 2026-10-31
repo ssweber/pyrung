@@ -38,7 +38,7 @@ test-conformance:
 	uv run pytest -m conformance tests/conformance/ -q -rP $(if $(PLC),--conformance-plc=$(PLC)) $(if $(GROUP),--conformance-group=$(GROUP)) $(if $(TARGET),--conformance-target=$(TARGET))
 
 # Write the conformance CLICK project (main, one subroutine per group, nicknames).
-# PART=A, B, C, D, E, G, H or I writes one part: the whole suite is over CLICK's 8000 steps.
+# PART=A to I writes one part: the whole suite is over CLICK's 8000 steps.
 conformance-export:
 	uv run python -m tests.conformance.suite $(if $(PART),--part $(PART)) $(or $(OUT),build/conformance$(if $(PART),-$(PART)))
 
