@@ -33,7 +33,16 @@ calc(Big * 10, Result)      # Big = 3.0E+38: Result = +Inf, out_of_range on
 calc(Result / 2, Half)      # Half = +Inf: Inf stays Inf
 ```
 
-An Inf or NaN operand follows IEEE 754: `Inf / 2` is Inf, `Inf − Inf` and `sin(Inf)` are NaN, `Inf > 1.0E+38` is true and NaN compares false with everything (`R == R` is false for a NaN). A `calc()` whose result is Inf or NaN sets `out_of_range`; into an `Int`, `Dint` or `Word` it stores 0. A `copy()` of ±Inf into an `Int` or `Dint` clamps to its limit; NaN, or anything not finite into a `Word`, stores 0. A bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand makes the `calc()` store 0 and set `out_of_range`.
+An Inf or NaN operand follows IEEE 754: `Inf / 2` is Inf, `Inf − Inf` and `sin(Inf)` are NaN, `Inf > 1.0E+38` is true and NaN compares false with everything (`R == R` is false for a NaN). A `calc()` whose result is Inf or NaN sets `out_of_range`.
+
+Where Inf or NaN meets an integer, pyrung makes a choice of its own, not yet measured on a CLICK:
+
+- A `calc()` result that is Inf or NaN stores 0 into an `Int`, `Dint` or `Word`.
+- A `copy()` of ±Inf into an `Int` or `Dint` clamps to its limit; NaN, or anything not finite into a `Word`, stores 0.
+- A bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand makes the `calc()` store 0 and set `out_of_range`.
+- A [`randint()`](#randint) bound that is Inf or NaN makes the `calc()` store 0 and set `out_of_range`.
+- A [`forloop()`](program-control.md) whose `Real` count is Inf or NaN runs no iteration and sets `out_of_range`.
+- `unpack_to_words()` of an Inf or NaN `Real` writes its bit pattern: +Inf is 0x7F800000, and a NaN keeps the bits of the operation that made it (`Inf − Inf` on a PC gives 0xFFC00000, a high word of 65472).
 
 Inside the range pyrung keeps a `Real` at Python's 64-bit precision, where a CLICK REAL is a 32-bit float: `16777216.0 + 1` is 16777217 in pyrung and 16777216 on a CLICK. Compare a `Real` with a tolerance, not `==`, when the last digits matter.
 
@@ -118,7 +127,7 @@ calc(randint(1, 6), Die)                 # 1..6 inclusive, a new draw every scan
 calc(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan starts
 ```
 
-`randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them.
+`randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them. A `Real` bound is cut toward zero; one holding Inf or NaN makes the `calc()` store 0 and set `system.fault.out_of_range` (SC43), pyrung's choice, not yet measured on a CLICK.
 
 Draws are deterministic, so the simulation stays replayable. Each `randint` call in the program is one site, and its value is a fixed function of the site and the scan number. Two runs of the same program draw the same sequence; replay, `history.at()`, seek and `fork()` see the values the original run saw; and a fork draws what its parent would have. Restarting (STOP -> RUN, `reboot()`) resets the scan number, so the sequence starts over.
 
