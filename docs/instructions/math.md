@@ -33,9 +33,11 @@ calc(Big * 10, Result)      # Big = 3.0E+38: Result = +Inf, out_of_range on
 calc(Result / 2, Half)      # Half = +Inf: Inf stays Inf
 ```
 
-An Inf or NaN operand follows IEEE 754: `Inf / 2` is Inf, `Inf − Inf` and `sin(Inf)` are NaN, `Inf > 1.0E+38` is true and NaN compares false with everything (`R == R` is false for a NaN). A `calc()` whose result is Inf or NaN sets `out_of_range`; into an `Int`, `Dint` or `Word` it stores 0. A `copy()` of ±Inf into an `Int` or `Dint` clamps to its limit; NaN, or anything not finite into a `Word`, stores 0.
+An Inf or NaN operand follows IEEE 754: `Inf / 2` is Inf, `Inf − Inf` and `sin(Inf)` are NaN, `Inf > 1.0E+38` is true and NaN compares false with everything (`R == R` is false for a NaN). A `calc()` whose result is Inf or NaN sets `out_of_range`; into an `Int`, `Dint` or `Word` it stores 0. A `copy()` of ±Inf into an `Int` or `Dint` clamps to its limit; NaN, or anything not finite into a `Word`, stores 0. A bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand makes the `calc()` store 0 and set `out_of_range`.
 
 Inside the range pyrung keeps a `Real` at Python's 64-bit precision, where a CLICK REAL is a 32-bit float: `16777216.0 + 1` is 16777217 in pyrung and 16777216 on a CLICK. Compare a `Real` with a tolerance, not `==`, when the last digits matter.
+
+pyrung checks the range when `calc()` stores its result, not at each step of the formula. Inside one `calc()` a step is a 64-bit float (finite up to about ±1.8E+308, then ±Inf; `**` too) or an exact integer, so `calc(Big * 10 / 100, Result)` with `Big` = 3.0E+38 stores 3.0E+37 with no flag, where a CLICK computing in 32 bits would reach Inf at `Big * 10` and store Inf (not yet measured on a CLICK). Split such a formula across two `calc()`s when that intermediate Inf matters.
 
 ## Division
 
