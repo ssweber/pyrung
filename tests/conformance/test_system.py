@@ -34,16 +34,40 @@ nothing else: a fault, the instruction, the probe coil, the next fault, ...
 Result1 is the control, a probe right after the fault with nothing between
 (346 on every model: a 0 means the fault did not raise the flag).
 
-- ``out_of_range_flag_vs_other_instructions`` (SC43, a Dint Math overflow)
-  and ``address_flag_vs_other_instructions`` (SC44, a copy through pointer
-  ``Fired``, 0 while the case runs): Result2 after an Out coil on a powered
-  rung, Result3 after a rung whose contact is open over a Set coil (contacts
-  only: no instruction executes), Result4 after a TON, ErrorCode after a CTU.
-  Adopted, every instruction that executes clears the flag and an open rung
-  does not: 346, 0, 346, 0, 0.  Only box instructions (Copy, Math, timer,
-  counter) clear it: 346, 346, 346, 0, 0.  Coils too, even unexecuted: 346,
-  0, 0, 0, 0.  pyrung keeps the flag to the end of the scan: 346 in every
-  field.
+- ``address_flag_vs_other_instructions`` (SC44, a copy through pointer
+  ``Fired``, 0 while the case runs), and the retired
+  ``out_of_range_flag_vs_other_instructions`` (SC43, a Dint Math overflow,
+  2147483647 + the scan number into a DD, C931.., DD931, T131, CT171):
+  Result2 after an Out coil on a powered rung, Result3 after a rung whose
+  contact is open over a Set coil (contacts only: no instruction executes),
+  Result4 after a TON, ErrorCode after a CTU.
+  The models were: every instruction that executes clears the flag and an
+  open rung does not: 346, 0, 346, 0, 0; only box instructions (Copy, Math,
+  timer, counter) clear it: 346, 346, 346, 0, 0; coils too, even unexecuted:
+  346, 0, 0, 0, 0; the flag on to the end of the scan (pyrung): 346 in every
+  field.  Hardware round 2 (2026-10-31): SC44 reads 346 in every field, so a
+  coil, an open rung, a TON and a CTU all leave it as it is (only a Copy or a
+  Math clears it, ``address_flag_clears_each_scan``), and pyrung matches.
+  Since then the case records scans 3, 4 and 6 only, which leaves that
+  reading as it was and keeps the other SC44 cases' faults out of it.
+  SC43 (hardware round 2, 2026-10-31) read 0 in every field, the control
+  too: a Dint Math that wraps does not raise SC43 on a CLICK (an Int Math
+  overflow does, ``out_of_range_flag_clears_each_scan``), so the case asked
+  nothing about what clears it (pyrung raised SC43 on the Dint wrap and read
+  346 in every field).  It is retired, its slot never reused:
+  ``out_of_range_int_vs_other_instructions`` asks its question with an Int
+  overflow, and ``faults/math_store_out_of_range`` (a) asks whether a Dint
+  wrap raises SC43.
+- ``out_of_range_int_vs_other_instructions`` (SC43, probe): the question
+  the retired Dint case could not ask, with a fault that does raise SC43 on a
+  CLICK, an Int Math overflow (Scratch + 32767 into Result4, as
+  ``out_of_range_flag_clears_each_scan`` faults), and the same
+  steps on their own bits.  The fault writes a slot field, so the scans are
+  recorded in DD961..DD965, on scans 3, 4 and 6 only, and copied into the
+  fields once the window ends.
+  Adopted, as SC44 read: only a Copy or a Math clears it, 346 in every field
+  (pyrung reads the same).  Every instruction that executes clears it: 346, 0,
+  346, 0, 0; and so on, as above.
 - ``division_flag_vs_hex_math`` (SC40, a division by ``Fired``): Result2 after
   a hex-mode Math (WORDs only, no division), Result3 after a Copy, Result4
   after a decimal Math.  Round 2 read Result3 = 346 and Result4 = 0.  Adopted,
@@ -206,17 +230,20 @@ def prove_address_flag_clears_each_scan(slot):
     )
 
 
-#: Adopted: every instruction that executes clears the flag; an open rung does not.
-_REFAULT_EXPECT = {"Result1": 346, "Result2": 0, "Result3": 346, "Result4": 0, "ErrorCode": 0}
-
 #: The fields a refault case records into: the control, then one per instruction.
 _REFAULT_FIELDS = ("Result1", "Result2", "Result3", "Result4", "ErrorCode")
 
 
-def _refault_case(slot, flag, base, fault, steps):
+def _refault_case(slot, flag, base, fault, steps, records=None, fault_scans_only=False):
     """The fault again before each step, the step, then a probe coil C<base+i>.
 
-    The first step is the control: nothing.  Records as in :func:`_fault_case`.
+    The first step is the control: nothing.  Records as in :func:`_fault_case`,
+    or, given *records* (one register per step), into them over the window and
+    then into the slot fields on the scan that raises ``Fired``, so the fault
+    may write a slot field while the window runs.  *fault_scans_only* records
+    the fault's own scans (3, 4 and 6) only, so a field that reads 346 cannot
+    pick up another case's fault: on the wire the cases start on different
+    scans, and pyrung holds a flag to the end of the scan.
     """
     probes = [c[base + i] for i in range(len(steps))]
     count_scans(slot)
@@ -227,8 +254,16 @@ def _refault_case(slot, flag, base, fault, steps):
             step()
         with Rung(*_in_window(slot), flag):
             out(probe)
-    for name, probe in zip(_REFAULT_FIELDS, probes, strict=False):
-        _record(slot, getattr(slot, name), probe)
+    fields = [getattr(slot, name) for name in _REFAULT_FIELDS]
+    for into, probe in zip(records or fields, probes, strict=False):
+        if fault_scans_only:
+            _record(slot, into, probe, _on_fault_scans(slot)[1])
+        else:
+            _record(slot, into, probe)
+    if records is not None:
+        with Rung(slot.Cmd != 0, slot.Scratch > WINDOW):
+            for field, into in zip(fields, records, strict=False):
+                copy(into, field)
     done(slot)
 
 
@@ -257,16 +292,6 @@ def _other_instructions(slot, base, timer, counter):
     return [None, coil, open_rung, ton, ctu]
 
 
-def prove_out_of_range_flag_vs_other_instructions(slot):
-    _refault_case(
-        slot,
-        system.fault.out_of_range,
-        931,
-        fault=lambda: calc(slot.Scratch + 2147483647, dd[931]),
-        steps=_other_instructions(slot, 931, timer=131, counter=171),
-    )
-
-
 def prove_address_flag_vs_other_instructions(slot):
     # Fired is 0 until the window is recorded: there is no DD0.
     _refault_case(
@@ -275,6 +300,21 @@ def prove_address_flag_vs_other_instructions(slot):
         941,
         fault=lambda: copy(dd[slot.Fired], dd[941]),
         steps=_other_instructions(slot, 941, timer=141, counter=172),
+        fault_scans_only=True,
+    )
+
+
+def prove_out_of_range_int_vs_other_instructions(slot):
+    # The fault writes Result4 while the window runs, so the scans are
+    # recorded in DD961..DD965 and copied into the fields at the end.
+    _refault_case(
+        slot,
+        system.fault.out_of_range,
+        961,
+        fault=lambda: calc(slot.Scratch + 32767, slot.Result4),
+        steps=_other_instructions(slot, 961, timer=112, counter=173),
+        records=[dd[961 + i] for i in range(len(_REFAULT_FIELDS))],
+        fault_scans_only=True,
     )
 
 
@@ -414,6 +454,10 @@ def _fault_init(base):
 _FAULT_EXPECT = {"Result1": 0, "Result2": 0, "Result3": 0}
 
 
+def init_out_of_range_int_vs_other_instructions(slot):
+    fill(0, dd.select(961, 965))
+
+
 def init_division_flag_vs_hex_math(slot):
     fill(0, dd.select(951, 959))
     fill(0, dh.select(401, 402))
@@ -506,29 +550,26 @@ group = Group(
             expect={"Result1": 0},
         ),
         case(
-            "The out-of-range flag SC43 is cleared by every instruction that executes: "
-            "raised again before each, it is on right after the fault (Result1 = 346, "
-            "scans 3, 4 and 6), off after an Out coil (Result2 = 0), a TON (Result4 = 0) "
-            "and a CTU (ErrorCode = 0), and still on after a rung whose open contact "
-            "keeps its Set coil from executing (Result3 = 346)",
-            ladder=prove_out_of_range_flag_vs_other_instructions,
-            init=_fault_init(931),
-            expect=_REFAULT_EXPECT,
+            "The address-error flag SC44 is left on by an instruction that is not a Copy "
+            "or a Math: raised again before each, it is on on scans 3, 4 and 6 right "
+            "after the fault (Result1 = 346), after an Out coil (Result2), a rung whose "
+            "open contact keeps its Set coil from executing (Result3), a TON (Result4) "
+            "and a CTU (ErrorCode)",
+            ladder=prove_address_flag_vs_other_instructions,
+            expect=dict.fromkeys(_REFAULT_FIELDS, 346),
             scans=SCANS,
-            pending="SYS",
-            probe="which instructions clear SC43: coil, open rung, timer, counter",
         ),
         case(
-            "The address-error flag SC44 is cleared by every instruction that executes: "
-            "raised again before each, it is on right after the fault (Result1 = 346, "
-            "scans 3, 4 and 6), off after an Out coil (Result2 = 0), a TON (Result4 = 0) "
-            "and a CTU (ErrorCode = 0), and still on after a rung whose open contact "
-            "keeps its Set coil from executing (Result3 = 346)",
-            ladder=prove_address_flag_vs_other_instructions,
-            expect=_REFAULT_EXPECT,
+            "The out-of-range flag SC43 is left on by an instruction that is not a Copy "
+            "or a Math: an Int Math overflow raised again before each, it is on on scans "
+            "3, 4 and 6 right after the fault (Result1 = 346), after an Out coil "
+            "(Result2), a rung whose open contact keeps its Set coil from executing "
+            "(Result3), a TON (Result4) and a CTU (ErrorCode)",
+            ladder=prove_out_of_range_int_vs_other_instructions,
+            init=init_out_of_range_int_vs_other_instructions,
+            expect=dict.fromkeys(_REFAULT_FIELDS, 346),
             scans=SCANS,
-            pending="SYS",
-            probe="which instructions clear SC44: coil, open rung, timer, counter",
+            probe="which instructions clear SC43: coil, open rung, timer, counter",
         ),
         case(
             "The division-by-zero flag SC40 is cleared by a hex-mode Math too: raised "

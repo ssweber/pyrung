@@ -106,6 +106,17 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "row_solve": {"C": range(401, 451), "CT": range(191, 201)},
     # A box on a continued wire (tests/conformance/test_cont_box.py).
     "cont_box": {"C": range(451, 501), "CT": range(181, 191)},
+    # Which stores raise a fault flag (tests/conformance/test_faults.py).
+    "faults": {
+        "C": range(201, 401),
+        "DD": range(501, 601),
+        "DF": range(451, 496),
+        "TXT": range(401, 501),
+    },
+    # A FOR whose count is a Real (tests/conformance/test_for_count.py).
+    "for_count": {"DD": range(601, 611), "DF": range(496, 501)},
+    # Probes a CLICK may refuse at paste (tests/conformance/test_paste_risk.py).
+    "paste_risk": {"C": range(751, 771), "DF": range(411, 421)},
 }
 
 

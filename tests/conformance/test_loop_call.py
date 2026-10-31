@@ -3,8 +3,8 @@
 CLICK has no nested subroutine calls, so a call has to start in the main
 program.  This group runs its case rungs in main (``Group(in_main=True)``) and
 each case defines the helper subroutine it calls (``Conf_LoopCall...``).  It is
-part E, a project of its own: whether CLICK takes a Call between For and Next
-is open, and a refusal at paste or transfer then costs only this project.  The
+part C: whether CLICK takes a Call between For and Next is open, and a
+refusal at paste or transfer then costs this group's helpers and main rungs.  The
 cases own no raw memory.
 
 CLICK's error C010D counts the loops of called subroutines toward the depth of

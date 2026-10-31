@@ -5,8 +5,9 @@ above, and do its enable and its pins see that wire's writes?  Each case is
 one CLICK rung of two wires from the rail: the first latches a bit P, the
 second is a counter whose enable or pin reads P, its pins drawn from the rail
 under it.  pyrung's exporter writes that drawing, but no CLICK has taken a box
-below another wire of its rung yet, so the group is part F, a project of its
-own: a CLICK that refuses the rung at paste or transfer costs only this one,
+below another wire of its rung yet, so the group is in part C, last with the
+other paste probes: a CLICK that refuses the rung at paste or transfer costs
+only this group's subroutine and call rung,
 and the refusal is the answer to "can a box sit there" (the cases then do not
 run).
 

@@ -1,7 +1,7 @@
 """Return on a branch: the ``ret_branch`` group (subroutine ``Conf_RetBranch``).
 
-A probe group in part D, a part of its own so that a CLICK that refuses the
-ladder (at paste or at transfer) takes down only this project, not A, B or C.
+A probe group in part C: a CLICK that refuses the ladder (at paste or at
+transfer) costs this group's subroutine and call rung.
 It owns no raw memory.
 
 - ``branch_return_stops_subroutine`` (probe): a subroutine rung whose main

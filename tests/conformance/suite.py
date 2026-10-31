@@ -4,15 +4,13 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
-The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as six
+The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as four
 projects, one part each (``PARTS``)::
 
     make conformance-export PART=A OUT=path/to/a
     make conformance-export PART=B OUT=path/to/b
     make conformance-export PART=C OUT=path/to/c
     make conformance-export PART=D OUT=path/to/d
-    make conformance-export PART=E OUT=path/to/e
-    make conformance-export PART=F OUT=path/to/f
 
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
@@ -44,12 +42,15 @@ from tests.conformance import (
     test_cont_box,
     test_counters,
     test_drum,
+    test_faults,
+    test_for_count,
     test_loop,
     test_loop_call,
     test_math,
     test_math_error,
     test_numeric,
     test_out,
+    test_paste_risk,
     test_ret_branch,
     test_row_solve,
     test_rung_semantics,
@@ -72,6 +73,9 @@ ALL_GROUPS = [
     # First, so its fault-flag cases read SC40/SC43/SC44 before any other
     # group can raise them on the same scan.
     test_system.group,
+    # Right after system: its probes read SC40/SC43/SC44/SC46 after its own
+    # instructions, so only system's can raise them first on a scan.
+    test_faults.group,
     test_rung_semantics.group,
     test_math.group,
     test_drum.group,
@@ -91,16 +95,18 @@ ALL_GROUPS = [
     test_loop_call.group,
     test_row_solve.group,
     test_cont_box.group,
+    test_for_count.group,
+    test_paste_risk.group,
     # Last, so no other group's rung reads SC46 on a scan a Math error raised it.
     test_math_error.group,
 ]
 
-#: Group names per CLICK project, split by topic to keep each part under
+#: Group names per CLICK project, split to keep each part under
 #: ``PART_STEP_BUDGET``: A and B the instructions, C how a rung is solved
-#: (solve order, edges, loops), so the part that asks it reloads on its own.
-#: Every group is in exactly one part.  The registers are the manifest's
-#: either way, so a group's subroutine is the same in its part as in the
-#: whole project.
+#: (solve order, edges, loops) with the fault-flag and paste probes, D a FOR
+#: that may stop the PLC.  Every group is in exactly one part.  The registers
+#: are the manifest's either way, so a group's subroutine is the same in its
+#: part as in the whole project.
 PARTS: dict[str, tuple[str, ...]] = {
     "A": (
         "block",
@@ -111,16 +117,27 @@ PARTS: dict[str, tuple[str, ...]] = {
         "numeric",
     ),
     "B": ("out", "search", "shift", "system", "text", "timers"),
-    "C": ("call_twice", "coils", "loop", "row_solve", "rungs", "solve_order"),
-    # Probes CLICK may refuse outright (paste or transfer): a project of their
-    # own, so a refusal costs only this one.
-    "D": ("ret_branch",),
-    # A Call between For and Next, in main: a project of its own, so a refusal
-    # of either probe cannot hide the other's answer.
-    "E": ("loop_call",),
-    # A box on a continued wire of the rung above, a drawing no CLICK has taken
-    # yet: a project of its own, so a refusal costs only this one.
-    "F": ("cont_box",),
+    # Groups run in ``ALL_GROUPS`` order, so main calls them in that order: the
+    # groups no CLICK has run yet and that it may refuse at paste (``cont_box``,
+    # a box on a continued wire; ``paste_risk``, operands it may not take) are
+    # last, so a refused group's subroutine and its call rung are the last to
+    # delete.  ``loop_call`` runs its rungs in main, after every call rung.
+    "C": (
+        "call_twice",
+        "coils",
+        "loop",
+        "row_solve",
+        "rungs",
+        "solve_order",
+        "ret_branch",
+        "loop_call",
+        "faults",
+        "cont_box",
+        "paste_risk",
+    ),
+    # A FOR over a non-finite Real count, which may loop until a CLICK's
+    # watchdog stops it: a project of its own, so that costs only this one.
+    "D": ("for_count",),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
