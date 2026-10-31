@@ -37,6 +37,7 @@ from .findings import (
     CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
+    CLK_NESTED_CALL,
     CLK_NICKNAME_TOO_LONG,
     CLK_OUT_UNIT_UNSUPPORTED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
@@ -77,6 +78,7 @@ from .portability import (
     _evaluate_forloop_structure,
     _evaluate_immediate_usage,
     _evaluate_instruction_portability,
+    _evaluate_nested_calls,
     _evaluate_range_aggregates,
     _evaluate_status_bit_usage,
 )
@@ -213,6 +215,7 @@ def validate_click_program(
     )
     findings.extend(_evaluate_status_bit_usage(program, mode))
     findings.extend(_evaluate_forloop_structure(program, mode))
+    findings.extend(_evaluate_nested_calls(program, mode))
     findings.extend(_evaluate_step_limit(program, tag_map, mode))
 
     for instruction, base_location in instruction_sites:
@@ -320,6 +323,7 @@ __all__ = [
     "CLK_FORLOOP_NESTING_DEPTH",
     "CLK_STEP_LIMIT",
     "CLK_FORLOOP_RETURN_INSIDE",
+    "CLK_NESTED_CALL",
     "CLK_STATUS_BIT_NOT_PORTABLE",
     "ClickFinding",
     "ClickValidationReport",

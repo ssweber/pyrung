@@ -351,3 +351,19 @@ drum_jog_leg = 16 # retired: CLICK does not allow it (C000A: all inputs (pins) o
 box_leg_reads_row_below = 17
 for_body_box_leg_reads_row_above = 18 # retired: CLICK does not allow it (C000A: all inputs (pins) of a box must start from the same branch)
 for_body_rung_reads_body_rung_above = 19
+
+[groups.ret_branch]
+base = 3441 # Conf_RetBranch: DS3441..DS3460; part D, a probe CLICK may refuse
+slots = 1
+
+[groups.ret_branch.cases]
+branch_return_stops_subroutine = 1
+
+[groups.loop_call]
+base = 3461 # Conf_LoopCall: DS3461..DS3500; part E, rungs in main
+slots = 3
+
+[groups.loop_call.cases]
+call_inside_loop = 1
+body_contact_after_call = 2
+loop_in_called_subroutine = 3

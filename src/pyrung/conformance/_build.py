@@ -231,25 +231,29 @@ def build_program(
     built: list[GroupBuild] = []
     for g, layout, cases, slot, hash_tag in staged:
         with Program(strict=False) as body:
-            with subroutine(g.subroutine):
+            if g.in_main:
                 _case_rungs(g.name, cases, slot)
+            else:
+                with subroutine(g.subroutine):
+                    _case_rungs(g.name, cases, slot)
         # Validated export: a case the CLICK exporter rejects fails here, before
         # any wire traffic.  Mark such a case ``in_process_only``.
         bundle = pyrung_to_ladder(body, tag_map)
-        group_hash = _fold(repr(bundle.subroutine_rows))
-        case_hashes = _case_hashes(g.name, bundle.subroutine_rows)
+        if g.in_main:
+            # The rungs are main's, and the helper subroutines they call.
+            rows = (("main", bundle.main_rows), *bundle.subroutine_rows)
+            group_hash = _fold(repr(rows))
+            case_hashes = _case_hashes(g.name, rows, _helper_owners(cases, slot))
+        else:
+            group_hash = _fold(repr(bundle.subroutine_rows))
+            case_hashes = _case_hashes(g.name, bundle.subroutine_rows)
         built.append(GroupBuild(g, layout, cases, slot, hash_tag, group_hash, case_hashes))
 
     program_hash = _fold(
         repr(
             (
                 LAYOUT_VERSION,
-                [
-                    (g.subroutine, g.base)
-                    if g.group.calls == 1
-                    else (g.subroutine, g.base, g.group.calls)
-                    for g in built
-                ],
+                [_layout_entry(g) for g in built],
             )
         )
     )
@@ -258,11 +262,21 @@ def build_program(
         with Rung():
             copy(program_hash, program_hash_tag)
         for gb in built:
+            if gb.group.in_main:
+                continue
             for _ in range(gb.group.calls):
                 with Rung():
                     call(gb.subroutine)
         for gb in built:
+            if gb.group.in_main:
+                continue
             with subroutine(gb.subroutine):
+                with Rung():
+                    copy(gb.group_hash, gb.hash_tag)
+                _case_rungs(gb.name, gb.cases, gb.slot)
+        # In-main groups last: their rungs follow every call rung of main.
+        for gb in built:
+            if gb.group.in_main:
                 with Rung():
                     copy(gb.group_hash, gb.hash_tag)
                 _case_rungs(gb.name, gb.cases, gb.slot)
@@ -275,6 +289,15 @@ def build_program(
         tag_map=tag_map,
         program_hash=program_hash,
     )
+
+
+def _layout_entry(g: GroupBuild) -> tuple[str | int, ...]:
+    """What the group adds to the layout hash (a plain group: name and base)."""
+    if g.group.in_main:
+        return (g.subroutine, g.base, "main")
+    if g.group.calls == 1:
+        return (g.subroutine, g.base)
+    return (g.subroutine, g.base, g.group.calls)
 
 
 def _case_rungs(group: str, cases: Sequence[tuple[int, Case]], slot: _NamedArrayRuntime) -> None:
@@ -292,10 +315,26 @@ def _check_nicknames(group: Group, hash_tag: Tag, slot: _NamedArrayRuntime, slot
             )
 
 
+def _helper_owners(cases: Sequence[tuple[int, Case]], slot: _NamedArrayRuntime) -> dict[str, str]:
+    """Helper subroutine name -> id of the case of an in-main group that defines it."""
+    owners: dict[str, str] = {}
+    for index, c in cases:
+        with Program(strict=False) as alone:
+            _case_rungs("", [(index, c)], slot)
+        for name in alone.subroutines:
+            owners[name] = c.id
+    return owners
+
+
 def _case_hashes(
-    group: str, subroutine_rows: Sequence[tuple[str, Sequence[Sequence[str]]]]
+    group: str,
+    subroutine_rows: Sequence[tuple[str, Sequence[Sequence[str]]]],
+    owners: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Case id -> SHA-256 (12 hex digits) of its rows, from its ``Case`` comment to the next.
+
+    *owners* (an in-main group) names the case that defines each helper
+    subroutine: its rows belong to that case, not to the one before them.
 
     The last case's span stops before the subroutine's closing tail: the exporter ends every
     subroutine with one unconditional ``return()`` rung (``_ensure_subroutine_return_tail``),
@@ -304,11 +343,13 @@ def _case_hashes(
     """
     marker = f"Case {group}/"
     spans: dict[str, list[Sequence[str]]] = {}
-    for _name, rows in subroutine_rows:
+    for name, rows in subroutine_rows:
         body = list(rows)
         if body and _is_return_tail(body[-1]):
             body.pop()
         current: list[Sequence[str]] | None = None
+        if owners is not None and name in owners:
+            current = spans.setdefault(owners[name], [])
         for row in body:
             text = row[1] if row and row[0] == "#" and len(row) > 1 else ""
             if text.startswith(marker):

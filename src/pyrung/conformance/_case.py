@@ -72,13 +72,23 @@ class Group:
     ``<Name>``.  Case ids must be unique within the group.  The main program
     calls the subroutine *calls* times a scan (one call rung each), so a group
     can ask what a subroutine called more than once in a scan does.
+
+    With ``in_main=True`` the cases' rungs run in the main program instead, so
+    a case can ``call()`` a subroutine it defines itself (CLICK has no nested
+    calls, so a call has to start in main): the case ladder opens
+    ``with subroutine("Conf_<Name>...")`` for the helper.  The group then has
+    no ``Conf_<Name>`` subroutine of its own, so it goes in a part of its own
+    and its rungs are re-pasted into main, not into a subroutine.
     """
 
     name: str
     cases: tuple[Case, ...]
     calls: int
+    in_main: bool
 
-    def __init__(self, name: str, cases: Iterable[Case], *, calls: int = 1) -> None:
+    def __init__(
+        self, name: str, cases: Iterable[Case], *, calls: int = 1, in_main: bool = False
+    ) -> None:
         if not _GROUP_NAME.fullmatch(name):
             raise ValueError(
                 f"Group name {name!r} must be snake_case: lowercase letters and digits, "
@@ -86,6 +96,8 @@ class Group:
             )
         if calls < 1:
             raise ValueError(f"Group {name!r}: calls must be >= 1, got {calls}")
+        if in_main and calls != 1:
+            raise ValueError(f"Group {name!r}: an in_main group has no subroutine to call")
         cases = tuple(cases)
         seen: set[str] = set()
         for c in cases:
@@ -95,6 +107,7 @@ class Group:
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "cases", cases)
         object.__setattr__(self, "calls", calls)
+        object.__setattr__(self, "in_main", in_main)
 
     @property
     def title(self) -> str:

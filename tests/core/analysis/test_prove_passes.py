@@ -1057,7 +1057,6 @@ class TestJournal:
             assert has_absorption
 
     def test_explain_threshold_absorption_blocked(self):
-
         inp = Bool("Inp", external=True)
         t = Timer.clone("T")
         out_tag = Bool("Out")
