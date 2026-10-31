@@ -4,7 +4,7 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
-The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as five
+The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as seven
 projects, one part each (``PARTS``)::
 
     make conformance-export PART=A OUT=path/to/a
@@ -12,6 +12,8 @@ projects, one part each (``PARTS``)::
     make conformance-export PART=C OUT=path/to/c
     make conformance-export PART=D OUT=path/to/d
     make conformance-export PART=E OUT=path/to/e
+    make conformance-export PART=G OUT=path/to/g
+    make conformance-export PART=H OUT=path/to/h
 
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
@@ -42,6 +44,8 @@ from tests.conformance import (
     test_coils,
     test_counters,
     test_drum,
+    test_faults,
+    test_for_count,
     test_loop,
     test_loop_call,
     test_math,
@@ -69,6 +73,9 @@ ALL_GROUPS = [
     # First, so its fault-flag cases read SC40/SC43/SC44 before any other
     # group can raise them on the same scan.
     test_system.group,
+    # Right after system: its probes read SC40/SC43/SC44/SC46 after its own
+    # instructions, so only system's can raise them first on a scan.
+    test_faults.group,
     test_rung_semantics.group,
     test_math.group,
     test_drum.group,
@@ -86,6 +93,7 @@ ALL_GROUPS = [
     test_call_twice.group,
     test_ret_branch.group,
     test_loop_call.group,
+    test_for_count.group,
     # Last, so no other group's rung reads SC46 on a scan a Math error raised it.
     test_math_error.group,
 ]
@@ -113,6 +121,12 @@ PARTS: dict[str, tuple[str, ...]] = {
     # A Call between For and Next, in main: a project of its own, so a refusal
     # of either probe cannot hide the other's answer.
     "E": ("loop_call",),
+    # Which stores raise a fault flag: probes CLICK may answer as a group,
+    # reloaded on their own.
+    "G": ("faults",),
+    # A FOR over a non-finite Real count, which may loop until a CLICK's
+    # watchdog stops it: a project of its own, so that costs only this one.
+    "H": ("for_count",),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

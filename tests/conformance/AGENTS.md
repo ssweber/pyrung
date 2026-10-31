@@ -249,7 +249,7 @@ The harness does not push ladder. CLICK takes it two ways: a whole program throu
 
 First load:
 
-1. `make conformance-export PART=A` (and `PART=B` to `PART=E`; `OUT=dir`, default `build/conformance-A`) writes one part as its own project: `main.csv`, `subroutines/Conf_<Group>.csv` per group, and `nicknames.csv`, and prints the layout hash and each group's hash and block. The whole suite (no `PART=`) is more than CLICK's 8000 steps, so a CLICK loads it as five projects (`suite.PARTS`, split by topic: A and B the instructions, C how a rung is solved -- `rungs`, `solve_order`, `call_twice`, `loop`, `coils`; D and E probes CLICK may refuse at paste or transfer, `ret_branch` and `loop_call`, each kept apart so a refusal costs only that project). `test_build.py` keeps each part's `estimate_steps()` under `suite.PART_STEP_BUDGET` (7500); a part that outgrows it moves a group to another part. The registers are the manifest's either way, so a group's subroutine is the same in its part as in the whole project; only main differs, writing its own part's layout hash to `DS1`.
+1. `make conformance-export PART=A` (and `PART=B` to `PART=E`, `PART=G` and `PART=H`; `OUT=dir`, default `build/conformance-A`) writes one part as its own project: `main.csv`, `subroutines/Conf_<Group>.csv` per group, and `nicknames.csv`, and prints the layout hash and each group's hash and block. The whole suite (no `PART=`) is more than CLICK's 8000 steps, so a CLICK loads it as seven projects (`suite.PARTS`, split by topic: A and B the instructions, C how a rung is solved -- `rungs`, `solve_order`, `call_twice`, `loop`, `coils`; D and E probes CLICK may refuse at paste or transfer, `ret_branch` and `loop_call`, each kept apart so a refusal costs only that project; G the fault-flag store probes, `faults`, reloaded on their own; H `for_count`, a FOR over a non-finite Real count that may run until the watchdog stops the PLC). `test_build.py` keeps each part's `estimate_steps()` under `suite.PART_STEP_BUDGET` (7500); a part that outgrows it moves a group to another part. The registers are the manifest's either way, so a group's subroutine is the same in its part as in the whole project; only main differs, writing its own part's layout hash to `DS1`.
 2. In a new CLICK project, ClickNick **Ladder > Open in Guided Paste...** on `dir`: it imports `nicknames.csv`, then walks through main and each subroutine.
 3. In ClickNick's Workspace controls, find an existing workspace and pick `tests/conformance/workspace/`. ClickNick asks a project without a PLC name for one: enter `PYRUNG_CONFORMANCE`. It refuses the folder if the project already has another name; rename the PLC in CLICK.
 4. Save in CLICK (ClickNick fills `src/plc/` and `csv/`), write to the PLC, put it in RUN.
@@ -260,7 +260,7 @@ A change to the header protocol (`LAYOUT_VERSION`, now 3 for the `Ready` field) 
 Then, per edit:
 
 1. Edit a group's cases (add a manifest line if `make test-conformance` asks for one).
-2. `make conformance-workspace` (or `WORKSPACE=dir` for another folder, `PART=A` to `E` for a part's project) rewrites the workspace's `src/plc/` from the suite: `pyrung_to_ladder` to temporary CSVs, then `ladder_to_pyrung_project` with ClickNick's arguments (`index=True`, the suite's nicknames), swapped in whole. It never touches `csv/`, which is CLICK's accepted snapshot and ClickNick's diff baseline.
+2. `make conformance-workspace` (or `WORKSPACE=dir` for another folder, `PART=A` to `H` for a part's project) rewrites the workspace's `src/plc/` from the suite: `pyrung_to_ladder` to temporary CSVs, then `ladder_to_pyrung_project` with ClickNick's arguments (`index=True`, the suite's nicknames), swapped in whole. It never touches `csv/`, which is CLICK's accepted snapshot and ClickNick's diff baseline.
 3. ClickNick **Preview Changes** shows only the changed rungs: the group's case rungs and its hash rung (R1 of `Conf_<Group>`). **Copy to Click**, paste in CLICK, save, write to the PLC.
 4. `make test-conformance PLC=... GROUP=<group>`.
 
@@ -277,7 +277,11 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [ ] patch applied before logic, on the same scan
 - [ ] forces persist across scans
 - [x] fault flags (SC40/SC43/SC44): which later instruction clears them (answered on hardware round 2: SC40 the next Math, SC43/SC44 the next instruction; pending SYS; `system/division_flag_clears_each_scan`, `system/out_of_range_flag_clears_each_scan`, `system/address_flag_clears_each_scan`)
-- [x] fault flags after a coil, an open rung, a timer, a counter (SC43/SC44), and after a hex-mode Math (SC40) (probes, pending SYS; `system/out_of_range_flag_vs_other_instructions`, `system/address_flag_vs_other_instructions`, `system/division_flag_vs_hex_math`)
+- [x] fault flags after a coil, an open rung, a timer, a counter (SC43/SC44), and after a hex-mode Math (SC40) (answered on hardware 2026-10-31 for SC44: none of the four clears it, `system/address_flag_vs_other_instructions`; a Dint Math wrap raises no SC43 on a CLICK, pending SYS, `system/out_of_range_flag_vs_other_instructions`, so the probe `system/out_of_range_int_vs_other_instructions` asks again with an Int overflow; `system/division_flag_vs_hex_math`)
+- [x] which stores raise SC43 (probes, part G): a Math whose result does not fit a narrower destination, not a 32-bit wrap (`faults/math_store_out_of_range`, pending SYS); a Copy that clamps (`faults/copy_clamp_out_of_range`, pending SYS); RAND past an Int and with Real bounds (`faults/rand_wide_bounds_flags`, `faults/rand_real_bounds`, pending MATH)
+- [x] a Copy through a pointer past either end of its bank: SC44, destination untouched (probe; `faults/pointer_past_bank`)
+- [x] Inf and NaN in a Real (probes, part G): ^ overflow (`faults/power_overflow_is_inf`), float32 intermediates (`faults/real_intermediate_range`), Inf/NaN arithmetic and NaN compares (`faults/inf_and_nan_arithmetic`), Math of Inf/NaN into an Int or a Dint (`faults/non_finite_math_into_int`), Copy of Inf/NaN into an Int (`faults/copy_non_finite_to_int`, pending SYS) and into text (`faults/copy_inf_to_text`), SIN(Inf) and SQRT(-Inf) (`faults/non_finite_functions`, pending MATH)
+- [ ] a Modbus Send/Receive Slave ID out of range (SC43): needs a second Modbus device; a DF holding Inf or NaN read over Modbus or on the display: the harness reads slot DS only
 - [x] first scan after STOP->RUN: SD9 = 0 with SC3 on (`system/first_scan_counter_and_clock`, answered on hardware round 2); SD9's wrap (answered on hardware; `system/scan_counter_wraps_to_zero`)
 - [x] edge and counter memory at STOP->RUN (answered on hardware; `coils/edge_on_first_scan`, `counters/first_scan_input_already_on`)
 - [ ] first_scan true once, on scan 0
@@ -316,6 +320,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] forloop runs N times in one scan (`loop/loop_runs_n_times`)
 - [x] forloop body sees its own prior-iteration writes (`loop/loop_runs_n_times`)
 - [ ] forloop loop.idx indirect addressing
+- [x] forloop over a Real count: 3.0, +Inf, NaN (probe, part H; `for_count/non_finite_count`)
 - [x] forloop dynamic count == 0: no iteration (answered on hardware; 65536 was the other reading) (`loop/zero_count`); -1 runs 65535 (unsigned 16-bit) (`loop/negative_count_reads_unsigned`, in-process only)
 - [x] forloop (`loop` group, F1-F14, F17-F19): a false For rung skips its body (F2); count read as unsigned 16-bit (F3); count read once (F4); body-rung contacts per iteration (F5); edges inside a loop (F6, answered, pending S3); timers accumulate per iteration (F7); counters count edges across iterations (F8, answered); Break leaves the innermost loop (F9) after the earlier body rungs (F10); Continue skips the rest of one iteration (F11, F12); a Break contact sees same-iteration writes (F13); a one-shot re-arms on an iteration its rung is false (F14); a body one-shot holds while its For rung is false (F17); an edge contact's memory across iterations of one scan (F18, answered, pending S3); a timer and a counter in a skipped body hold, reset unscanned (F19, answered)
 - [ ] forloop inner one-shot: does CLICK reject it (C0111) or ignore it (F15); a loop in a called subroutine counts toward depth 3 (F16, probe at depth exactly 3, `loop_call/loop_in_called_subroutine`; depth 4 is refused by the exporter, so CLICK's own C010D is not probed); body-rung contacts per iteration around a call (`loop_call/body_contact_after_call`)
@@ -339,7 +344,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] Real precision: pyrung keeps 64 bits, CLICK 32 (`numeric/real_is_64_bit_in_pyrung`, expected to fail on a CLICK: a documented deviation)
 - [x] Real range: an overflow stores +/-Inf with SC43 (`numeric/real_overflow_stays_finite`)
 - [x] a Dint quotient into an Int: a Math constant into an Int is cut to 16 bits (`numeric/dint_quotient_into_int`)
-- [x] an Int Math constant in 32768..65535 or below -32768, a float constant, and RAND bounds past 16 bits (probes; `numeric/int_math_wide_constant`, `numeric/int_math_rand_wide_bounds`, `numeric/int_math_real_operand_constant`)
+- [x] an Int Math constant in 32768..65535 or below -32768, a float constant, and RAND bounds past 16 bits (probes; `numeric/int_math_wide_constant`, `numeric/int_math_rand_wide_bounds` (answered on hardware 2026-10-31: 0, pending MATH), `numeric/int_math_real_operand_constant`)
 - [x] division by zero -> 0 + fault (`numeric/div_by_zero`)
 - [x] a REAL division by zero (1/0, -1/0, 0/0) -> 0 + SC40, not +/-Inf or NaN (`numeric/real_div_by_zero`)
 - [x] math domain error (sqrt, ln/log, asin/acos) -> 0 + SC46 for the rest of the scan, and the PLC stays in RUN (`math_error/math_errors_do_not_stop`)
@@ -418,6 +423,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] drum time accumulator resets on step transition (jump, jog, advance, reset) (`drum/time_acc_clears_on_every_transition`)
 - [x] drum event_ready re-evaluates on step change (`drum/events_are_edges`, `drum/te_level_event_already_on`)
 - [x] drum step auto-corrects to 1 if current_step tag holds an invalid value (`drum/invalid_step_corrects_to_1`)
+- [x] a jog on an invalid step: the drum completes, outputs off, at step 1 (answered on hardware 2026-10-31, pending DRUM; `drum/pins_read_before_step_fix`, its tee twin); the correction alone, a jump to the drum's own step register, a jog on the last step (probes; `drum/correction_without_jog`, `drum/jump_to_own_step_register`, `drum/jog_on_last_step`, the last pending DRUM)
 - [x] search hit / miss / continuous (`search/hit_returns_address`, `search/miss_writes_minus_one`, `search/continuous_walks`)
 - [x] search returns the register number of the match, -1 on miss (`search/hit_returns_address`, `search/miss_writes_minus_one`)
 - [x] search continuous resumes after an old result inside the range; result=0 restarts; anything else misses (`search/continuous_walks`, `search/continuous_zero_restarts`, `search/continuous_cursor_is_address`, answered: `search/continuous_cursor_outside_range`)

@@ -375,3 +375,28 @@ slots = 3
 call_inside_loop = 1
 body_contact_after_call = 2
 loop_in_called_subroutine = 3
+
+[groups.faults]
+base = 3651 # Conf_Faults: DS3651..DS3810; part G
+slots = 15
+
+[groups.faults.cases]
+math_store_out_of_range = 1
+copy_clamp_out_of_range = 2
+rand_wide_bounds_flags = 3
+rand_real_bounds = 4
+pointer_past_bank = 5
+power_overflow_is_inf = 6
+real_intermediate_range = 7
+inf_and_nan_arithmetic = 8
+non_finite_math_into_int = 9
+copy_non_finite_to_int = 10
+copy_inf_to_text = 11
+non_finite_functions = 12
+
+[groups.for_count]
+base = 3811 # Conf_ForCount: DS3811..DS3830; part H, a probe that may stop a CLICK
+slots = 1
+
+[groups.for_count.cases]
+non_finite_count = 1
