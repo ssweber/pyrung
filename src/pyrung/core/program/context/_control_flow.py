@@ -227,27 +227,36 @@ class ForLoop:
         self._parent_ctx._rung.add_instruction(instruction)
 
 
-def _contains_randint(value: Any, seen: set[int]) -> bool:
+def _contains_randint(value: Any, seen: set[int], seen_calls: set[str] | None = None) -> bool:
     """Whether a ``randint`` expression is reachable from *value*'s fields."""
     from pyrung.core.expression import RandIntExpr
     from pyrung.core.instruction.control import CallInstruction
 
+    if seen_calls is None:
+        seen_calls = set()
     if isinstance(value, RandIntExpr):
         return True
     if isinstance(value, CallInstruction):
-        # Its fields reach the whole Program, not the loop body.
-        return False
+        # Its fields reach the whole Program: scan the subroutines it calls, not
+        # every one, following calls from them in turn.
+        program = value._program
+        name = value.subroutine_name
+        if name in seen_calls or program is None:
+            return False
+        seen_calls.add(name)
+        rungs = getattr(program, "subroutines", {}).get(name, ())
+        return any(_contains_randint(r, seen, seen_calls) for r in rungs)
     if value is None or isinstance(value, (str, bytes, int, float, bool, Tag)):
         return False
     if id(value) in seen:
         return False
     seen.add(id(value))
     if isinstance(value, dict):
-        return any(_contains_randint(v, seen) for v in value.values())
+        return any(_contains_randint(v, seen, seen_calls) for v in value.values())
     if isinstance(value, (list, tuple, set, frozenset)):
-        return any(_contains_randint(v, seen) for v in value)
+        return any(_contains_randint(v, seen, seen_calls) for v in value)
     if hasattr(value, "__dict__"):
-        return any(_contains_randint(v, seen) for v in vars(value).values())
+        return any(_contains_randint(v, seen, seen_calls) for v in vars(value).values())
     return False
 
 

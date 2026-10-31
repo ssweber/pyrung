@@ -560,3 +560,35 @@ def test_an_in_main_group_runs_its_rungs_in_main_with_helper_subroutines(tmp_pat
 
     with pytest.raises(ValueError, match="in_main"):
         Group("h", [c], in_main=True, calls=2)
+
+
+def _in_main_case(id: str, helper_step: int):
+    from pyrung.core import call, forloop, subroutine
+
+    def ladder(slot):
+        with Rung(slot.Cmd != 0, slot.Fired == 0):
+            with forloop(2):
+                call(f"Conf_H_{id}")
+        with Rung(slot.Cmd != 0):
+            copy(1, slot.Fired)
+        with subroutine(f"Conf_H_{id}"):
+            with Rung():
+                calc(slot.Result1 + helper_step, slot.Result1)
+
+    return case("c", ladder=ladder, expect={"Result1": 2 * helper_step}, id=id)
+
+
+def test_an_in_main_helper_changes_only_the_hash_of_the_case_that_defines_it() -> None:
+    def hashes(step_one: int, step_two: int):
+        group = Group(
+            "h", [_in_main_case("one", step_one), _in_main_case("two", step_two)], in_main=True
+        )
+        return build_program(group).groups[0].case_hashes
+
+    base = hashes(1, 1)
+    edited_one = hashes(2, 1)
+    assert edited_one["one"] != base["one"]
+    assert edited_one["two"] == base["two"]
+    edited_two = hashes(1, 2)
+    assert edited_two["two"] != base["two"]
+    assert edited_two["one"] == base["one"]

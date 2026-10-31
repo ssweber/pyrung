@@ -252,7 +252,6 @@ def test_codegen_structure_owned_addresses_keep_structure_emission(tmp_path: Pat
 
 
 def test_to_nickname_file_emits_bank_slot_scalars(tmp_path: Path):
-
     ds.slot(42, name="CfgWord", default=7)
     tm = TagMap({}, include_system=False)
 

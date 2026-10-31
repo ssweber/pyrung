@@ -243,7 +243,7 @@ def build_program(
             # The rungs are main's, and the helper subroutines they call.
             rows = (("main", bundle.main_rows), *bundle.subroutine_rows)
             group_hash = _fold(repr(rows))
-            case_hashes = _case_hashes(g.name, rows)
+            case_hashes = _case_hashes(g.name, rows, _helper_owners(cases, slot))
         else:
             group_hash = _fold(repr(bundle.subroutine_rows))
             case_hashes = _case_hashes(g.name, bundle.subroutine_rows)
@@ -315,14 +315,33 @@ def _check_nicknames(group: Group, hash_tag: Tag, slot: _NamedArrayRuntime, slot
             )
 
 
+def _helper_owners(cases: Sequence[tuple[int, Case]], slot: _NamedArrayRuntime) -> dict[str, str]:
+    """Helper subroutine name -> id of the case of an in-main group that defines it."""
+    owners: dict[str, str] = {}
+    for index, c in cases:
+        with Program(strict=False) as alone:
+            _case_rungs("", [(index, c)], slot)
+        for name in alone.subroutines:
+            owners[name] = c.id
+    return owners
+
+
 def _case_hashes(
-    group: str, subroutine_rows: Sequence[tuple[str, Sequence[Sequence[str]]]]
+    group: str,
+    subroutine_rows: Sequence[tuple[str, Sequence[Sequence[str]]]],
+    owners: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Case id -> SHA-256 (12 hex digits) of its rows, from its ``Case`` comment to the next."""
+    """Case id -> SHA-256 (12 hex digits) of its rows, from its ``Case`` comment to the next.
+
+    *owners* (an in-main group) names the case that defines each helper
+    subroutine: its rows belong to that case, not to the one before them.
+    """
     marker = f"Case {group}/"
     spans: dict[str, list[Sequence[str]]] = {}
     current: list[Sequence[str]] | None = None
-    for _name, rows in subroutine_rows:
+    for name, rows in subroutine_rows:
+        if owners is not None and name in owners:
+            current = spans.setdefault(owners[name], [])
         for row in rows:
             text = row[1] if row and row[0] == "#" and len(row) > 1 else ""
             if text.startswith(marker):

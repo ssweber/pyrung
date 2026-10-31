@@ -254,3 +254,21 @@ with Program(strict=False) as p:
             call("work")
 """
     assert _nested_call_findings(source) == []
+
+
+def test_validation_flags_a_call_in_a_loop_body_rung_of_a_subroutine():
+    source = """
+with Program(strict=False) as p:
+    with subroutine("inner"):
+        with rung():
+            out(Y2)
+    with subroutine("outer"):
+        with rung():
+            with forloop(2):
+                with rung(X2):
+                    call("inner")
+    with rung():
+        call("outer")
+"""
+    (finding,) = _nested_call_findings(source)
+    assert finding.location == "subroutine 'outer' rung 1"
