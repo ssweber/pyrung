@@ -235,16 +235,23 @@ class _RowBuilder:
         self._indexed_blocks.setdefault(block.name, block)
         return block.name
 
-    def bank_of(self) -> dict[str, str]:
-        """The bank of every tag seen so far that sits in a bank something indexes."""
+    def bank_of(self, *, every_bank: bool = False) -> dict[str, str]:
+        """The bank of every tag seen so far that sits in a bank something indexes.
+
+        With *every_bank*, of every tag seen in any bank: a finding's display
+        needs it to find ``DS3`` in ``DS[PB]``, a bounded index.
+        """
         out: dict[str, str] = {}
+        blocks = dict(self._indexed_blocks)
         for name, tag in self._tag_refs.items():
             block = getattr(tag, "_pyrung_block", None)
-            if block is not None and block.name in self._indexed_blocks:
+            if block is not None and (every_bank or block.name in self._indexed_blocks):
                 out[name] = block.name
-        for name, block in self._indexed_blocks.items():
-            for tag in block._mapped_tags.values():
-                out.setdefault(tag.name, name)
+                blocks.setdefault(block.name, block)
+        for name, block in blocks.items():
+            if every_bank or name in self._indexed_blocks:
+                for tag in block._mapped_tags.values():
+                    out.setdefault(tag.name, name)
         return out
 
     @staticmethod
@@ -464,11 +471,26 @@ def _token_span(line: str, token: str) -> tuple[int, int] | None:
     return (index, len(token)) if index >= 0 else None
 
 
+def _tag_span(line: str, tag: str, banks: Mapping[str, str]) -> tuple[int, int] | None:
+    """Where *line* names *tag*, or else indexes the bank *tag* belongs to.
+
+    A bounded index (``DS[PB]``, ``PB`` in 2..4) reads or writes its elements by
+    name, but the code spells the index, not ``DS3``.
+    """
+    span = _token_span(line, tag)
+    bank = banks.get(tag)
+    if span is None and bank is not None and not tag.endswith(_INDEXED):
+        span = _token_span(line, bank + _INDEXED)
+    return span
+
+
 def _leg_name(field_name: str) -> str:
     return field_name.replace("_condition", "")
 
 
-def _reader_lines(placed: _Placed, tags: tuple[str, ...]) -> tuple[str, ...]:
+def _reader_lines(
+    placed: _Placed, tags: tuple[str, ...], banks: Mapping[str, str]
+) -> tuple[str, ...]:
     from pyrung.core.validation.render import render_condition, render_instruction, render_rung_args
 
     if placed.kind == _BRANCH:
@@ -480,16 +502,18 @@ def _reader_lines(placed: _Placed, tags: tuple[str, ...]) -> tuple[str, ...]:
     legs = []
     for name, cond in placed.legs:
         text = render_condition(cond)
-        if any(_token_span(text, tag) is not None for tag in tags):
+        if any(_tag_span(text, tag, banks) is not None for tag in tags):
             legs.append(f"    .{_leg_name(name)}({text})")
     return (code, *legs)
 
 
-def _caret(lines: tuple[str, ...], token: str) -> tuple[int, int, int] | None:
+def _caret(
+    lines: tuple[str, ...], tag: str, banks: Mapping[str, str]
+) -> tuple[int, int, int] | None:
     # A box's own line comes first; its legs (where the read is) below it.
     order = range(len(lines)) if len(lines) == 1 else range(1, len(lines))
     for index in order:
-        span = _token_span(lines[index], token)
+        span = _tag_span(lines[index], tag, banks)
         if span is not None:
             return index, span[0], span[1]
     return None
@@ -506,11 +530,18 @@ def _writer_code(instr: Any, tag: str) -> str:
     return render_instruction(instr, tag)[0]
 
 
-def _writer_frame(placed: _Placed, tag: str, bank: str | None) -> Frame:
+def _writer_frame(placed: _Placed, tag: str, banks: Mapping[str, str]) -> Frame:
     code = _writer_code(placed.instr, tag)
-    span = _token_span(code, tag)
-    if span is None and bank is not None:  # written through an index
-        span = _token_span(code, bank + _INDEXED)
+    span = None
+    if tag.endswith(_INDEXED):  # an indexed read meets a named write to its bank
+        bank = tag[: -len(_INDEXED)]
+        for name in sorted(placed.row.writes):
+            if banks.get(name) == bank:
+                span = _tag_span(code, name, banks)
+                if span is not None:
+                    break
+    if span is None:
+        span = _tag_span(code, tag, banks)
     return Frame(
         location=placed.location,
         lines=(code,),
@@ -545,13 +576,13 @@ def _display(
         f"pyrung reads {noun} as at rung entry; a CLICK reads the new value, "
         "and so will pyrung once the live row solve lands."
     )
-    lines = _reader_lines(reader, tags)
+    lines = _reader_lines(reader, tags, bank_of)
     return FindingDisplay(
         code=RUNG_ORDER_DEPENDENT,
         severity="warning",
         frames=(
-            Frame(location=reader.location, lines=lines, caret=_caret(lines, tags[0])),
-            _writer_frame(writer, tags[0], bank_of.get(tags[0])),
+            Frame(location=reader.location, lines=lines, caret=_caret(lines, tags[0], bank_of)),
+            _writer_frame(writer, tags[0], bank_of),
         ),
         problem=problem,
         hint=(
@@ -610,6 +641,7 @@ def validate_order_dependence(
         sequences.extend(builder.scope_sequences(program.subroutines[name], "subroutine", name))
 
     bank_of = builder.bank_of()
+    display_banks = builder.bank_of(every_bank=True)
     findings: list[OrderDependenceFinding] = []
     for sequence in sequences:
         placed = sequence.rows
@@ -625,7 +657,7 @@ def validate_order_dependence(
                 OrderDependenceFinding(
                     code=RUNG_ORDER_DEPENDENT,
                     target_name=reader.location,
-                    display=_display(reader, tags, writer, bank_of),
+                    display=_display(reader, tags, writer, display_banks),
                     severity="warning",
                     tags=tags,
                     reader=reader.kind,

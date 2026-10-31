@@ -402,6 +402,55 @@ def test_a_mapped_tag_is_an_element_of_its_bank():
     assert finding.tags == ("DS[...]",)
 
 
+def _underlined(frame) -> str:
+    line, col, length = frame.caret
+    return frame.lines[line][col : col + length]
+
+
+def test_carets_find_a_bank_member_and_an_indexed_access():
+    ds, p, pb = _bank(), Int("P"), Int("PB", min=2, max=4)
+    with Program() as program:
+        with Rung(Go):  # named write, unbounded read
+            copy(1, ds[3])
+            with branch(ds[p] == 1):
+                out(Y1)
+        with Rung(Go):  # named write, bounded read
+            copy(1, ds[3])
+            with branch(ds[pb] == 1):
+                out(Y1)
+        with Rung(Go):  # bounded write, named read
+            copy(1, ds[pb])
+            with branch(ds[3] == 1):
+                out(Y1)
+        with Rung(Go):  # named write, bounded read in a box leg
+            copy(1, ds[3])
+            count_up(Ct, preset=10).reset(ds[pb] == 2)
+    findings = _findings(program)
+    assert [f.tags for f in findings] == [("DS[...]",), ("DS3",), ("DS3",), ("DS3",)]
+    underlined = [tuple(_underlined(frame) for frame in f.display.frames) for f in findings]
+    assert underlined == [("DS", "DS3"), ("DS", "DS3"), ("DS3", "DS"), ("DS", "DS3")]
+    reader, writer = findings[0].display.frames
+    assert reader.lines == ("with branch(DS[P] == 1):",)
+    assert reader.caret == (0, len("with branch("), 2)
+    assert writer.lines == ("copy(1, DS3)",)
+    assert writer.caret == (0, len("copy(1, "), 3)
+    leg_reader = findings[3].display.frames[0]
+    assert leg_reader.lines[1] == "    .reset(DS[PB] == 2)"
+    assert leg_reader.caret == (1, len("    .reset("), 2)
+
+
+def test_caret_finds_a_mapped_writer():
+    ds, p, speed = _bank(), Int("P"), Int("Speed")
+    speed.map_to(ds[5])
+    with Program() as program:
+        with Rung(Go):
+            copy(1, speed)
+            with branch(ds[p] == 1):
+                out(Y1)
+    (finding,) = _findings(program)
+    assert [_underlined(frame) for frame in finding.display.frames] == ["DS", "Speed"]
+
+
 def test_default_check_reports_it():
     with Program() as program:
         with Rung(Go):
