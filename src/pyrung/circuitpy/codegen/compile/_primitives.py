@@ -214,22 +214,34 @@ def _compile_expression_impl(
         return f"({' + '.join(terms)})"
 
     if isinstance(expr, RandIntExpr):
+        lo = hi = ""
+        if expr.checks_bounds or not ctx.kernel_runtime:
+            lo = _compile_expression_impl(
+                expr.lo, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots
+            )
+            hi = _compile_expression_impl(
+                expr.hi, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots
+            )
         if ctx.kernel_runtime:
             # The runner's input drain wrote this scan's draw into the site tag.
-            return _snapshot_tag_symbol(
+            draw = _snapshot_tag_symbol(
                 expr.tag,
                 ctx,
                 scalar_snapshots=scalar_snapshots,
                 block_snapshots=block_snapshots,
             )
-        lo = _compile_expression_impl(
-            expr.lo, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots
-        )
-        hi = _compile_expression_impl(
-            expr.hi, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots
-        )
+            if not expr.checks_bounds:
+                return draw
+            # A bound holding Inf or NaN raises OverflowError: the calc stores
+            # 0 with SC43 (RandIntExpr.evaluate).
+            ctx.mark_helper("_bit_int")
+            ctx.mark_helper("_rand_checked")
+            return f"_rand_checked({draw}, {lo}, {hi})"
         ctx.uses_random = True
-        return f"random.randint(min(int({lo}), int({hi})), max(int({lo}), int({hi})))"
+        # A bound holding Inf or NaN raises OverflowError, so the calc stores
+        # 0 with SC43: int() of Inf raises it, _bit_int turns NaN into it.
+        lo, hi = _bit_int_expr(expr.lo, lo, ctx), _bit_int_expr(expr.hi, hi, ctx)
+        return f"random.randint(min({lo}, {hi}), max({lo}, {hi}))"
 
     if isinstance(expr, RangeAggregateExpr):
         return _compile_range_aggregate(

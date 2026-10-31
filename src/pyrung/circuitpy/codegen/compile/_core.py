@@ -989,11 +989,26 @@ def _compile_for_loop_instruction(
         ctx._for_loop_depth = depth
     # CLICK reads the count as unsigned 16-bit; a count of 0 runs
     # FOR_ZERO_COUNT_ITERATIONS iterations (an open hardware question).
+    non_finite = "fault.out_of_range" in instr._fault_writes
+    if non_finite:
+        # A REAL count holding Inf or NaN runs no iteration and sets SC43
+        # (ForLoopInstruction.iterations); _bit_int turns NaN into OverflowError.
+        ctx.mark_helper("_bit_int")
+        count_expr = f"_bit_int({count_expr})"
     iterations_expr = f"int({count_expr}) & 0xFFFF"
     if control.FOR_ZERO_COUNT_ITERATIONS:
         iterations_expr = f"({iterations_expr}) or {int(control.FOR_ZERO_COUNT_ITERATIONS)}"
+    iterations_lines = [f"{iterations_var} = {iterations_expr}"]
+    if non_finite:
+        iterations_lines = [
+            "try:",
+            *_indent_body(iterations_lines, 4),
+            "except OverflowError:",
+            f"    {iterations_var} = 0",
+            *_indent_body(_compile_set_out_of_range_fault_body(ctx), 4),
+        ]
     body = [
-        f"{iterations_var} = {iterations_expr}",
+        *iterations_lines,
         f"for {index_var} in range({iterations_var}):",
         *_indent_body(_compile_assignment_lines(instr.idx_tag, index_var, ctx, indent=0), 4),
         *_indent_body(children, 4),

@@ -142,6 +142,54 @@ def _namespace_list(namespace: dict[str, object], symbol: str) -> list[object]:
     return cast(list[object], value)
 
 
+class _IdleBase:
+    """A P1AM base whose inputs read 0 and whose writes go nowhere."""
+
+    def rollCall(self, modules):
+        return None
+
+    def readDiscrete(self, slot):
+        return 0
+
+    def writeDiscrete(self, value, slot):
+        return None
+
+    def readAnalog(self, slot, ch):
+        return 0
+
+    def writeAnalog(self, value, slot, ch):
+        return None
+
+    def readTemperature(self, slot, ch):
+        return 0.0
+
+
+def _on_every_backend(program: Program, monkeypatch, watch, *, scans: int) -> dict[str, tuple]:
+    """*watch*'s values after *scans* scans on the interpreter, the compiled
+    kernel and the generated CircuitPython, keyed by backend."""
+    results: dict[str, tuple] = {}
+    for name, cls in (("interpreted", PLC), ("compiled", CompiledPLC)):
+        plc = cls(program)
+        for _ in range(scans):
+            plc.step()
+        tags = plc.current_state.tags
+        results[name] = tuple(tags[tag.name] for tag in watch)
+    hw = P1AM()
+    hw.slot(1, "P1-08SIM")
+    result = generate_circuitpy(
+        program,
+        hw,
+        target_scan_ms=10.0,
+        runstop=RunStopConfig(debounce_ms=0, run_when_high=False),
+    )
+    namespace = _run_single_scan_source(
+        result.code, monkeypatch, _IdleBase(), runtime_source=result.runtime, scans=scans
+    )
+    ctx = _context_for_program(program, hw)
+    results["circuitpy"] = tuple(namespace[ctx.symbol_for_tag(tag)] for tag in watch)
+    return results
+
+
 def _run_single_scan_source(
     source: str,
     monkeypatch,
@@ -1481,8 +1529,6 @@ class TestBoardPeripheralsAndRunStop:
     ):
         """A NaN or Inf REAL in a bitwise or shift op stores 0 with SC43, and the
         scan runs on: core interpreter, compiled kernel and generated CircuitPython."""
-        hw = P1AM()
-        hw.slot(1, "P1-08SIM")
         big = Real("Big", default=3.0e38)
         inf = Real("InfR")
         odd = Real("OddR")
@@ -1498,50 +1544,77 @@ class TestBoardPeripheralsAndRunStop:
                 calc(make(odd), dest)
                 copy(5, after)
 
-        results = {}
-        for name, cls in (("interpreted", PLC), ("compiled", CompiledPLC)):
-            plc = cls(prog)
-            plc.step()
-            plc.step()
-            tags = plc.current_state.tags
-            results[name] = (tags["Dest"], tags[system.fault.out_of_range.name], tags["After"])
-
-        result = generate_circuitpy(
-            prog,
-            hw,
-            target_scan_ms=10.0,
-            runstop=RunStopConfig(debounce_ms=0, run_when_high=False),
-        )
-
-        class StubBase:
-            def rollCall(self, modules):
-                return None
-
-            def readDiscrete(self, slot):
-                return 0
-
-            def writeDiscrete(self, value, slot):
-                return None
-
-            def readAnalog(self, slot, ch):
-                return 0
-
-            def writeAnalog(self, value, slot, ch):
-                return None
-
-            def readTemperature(self, slot, ch):
-                return 0.0
-
-        namespace = _run_single_scan_source(
-            result.code, monkeypatch, StubBase(), runtime_source=result.runtime, scans=2
-        )
-        ctx = _context_for_program(prog, hw)
-        results["circuitpy"] = (
-            namespace[ctx.symbol_for_tag(dest)],
-            namespace[ctx.symbol_for_tag(system.fault.out_of_range)],
-            namespace[ctx.symbol_for_tag(after)],
+        results = _on_every_backend(
+            prog, monkeypatch, (dest, system.fault.out_of_range, after), scans=2
         )
         assert results == {name: (0, True, 5) for name in results}, label
+
+    @staticmethod
+    def _non_finite_real(operand: str) -> tuple[Real, list]:
+        """A Real that scan 0 sets to +Inf, -Inf or NaN (SC43 on scan 0 only),
+        and the calcs that set it; a REAL literal cannot be Inf or NaN."""
+        big = Real("Big", default=3.0e38)
+        inf = Real("InfR")
+        r = Real("R", default=3.0)
+        made = {"inf": inf + 0, "-inf": 0 - inf, "nan": inf - inf}[operand]
+        return r, [(big * 10, inf), (made, r)]
+
+    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
+    def test_non_finite_randint_bound_is_zero_and_sc43_on_every_backend(self, monkeypatch, operand):
+        """pyrung's choice: a randint() bound holding Inf or NaN makes the calc
+        store 0 with SC43, and the scan runs on, on all three backends."""
+        from pyrung.core import randint
+
+        r, setup = self._non_finite_real(operand)
+        dest = Dint("Dest", default=7)
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                calc(randint(0, r) + 5, dest)
+                copy(5, after)
+
+        results = _on_every_backend(
+            prog, monkeypatch, (dest, system.fault.out_of_range, after), scans=2
+        )
+        assert results == {name: (0, True, 5) for name in results}
+
+    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
+    def test_non_finite_forloop_count_runs_none_and_sc43_on_every_backend(
+        self, monkeypatch, operand
+    ):
+        """pyrung's choice: a forloop() whose REAL count holds Inf or NaN runs no
+        iteration and sets SC43, and the scan runs on, on all three backends."""
+        r, setup = self._non_finite_real(operand)
+        hits = Int("Hits")
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                with forloop(r):
+                    calc(hits + 1, hits)
+            with Rung(~system.sys.first_scan):
+                copy(5, after)
+
+        results = _on_every_backend(
+            prog, monkeypatch, (hits, system.fault.out_of_range, after), scans=2
+        )
+        assert results == {name: (0, True, 5) for name in results}
+
+    def test_finite_real_forloop_count_still_iterates_on_every_backend(self, monkeypatch):
+        r = Real("R", default=3.0)
+        hits = Int("Hits")
+        with Program(strict=False) as prog:
+            with Rung():
+                with forloop(r):
+                    calc(hits + 1, hits)
+
+        results = _on_every_backend(prog, monkeypatch, (hits, system.fault.out_of_range), scans=2)
+        assert results == {name: (6, False) for name in results}
 
     def test_text_literal_copy_fans_out_one_char_per_register(self, monkeypatch):
         hw = P1AM()

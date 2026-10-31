@@ -44,6 +44,7 @@ _HELPER_ORDER = (
     "_store_bool",
     "_math_func",
     "_bit_int",
+    "_rand_checked",
     "_pow",
 )
 

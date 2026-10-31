@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, call, forloop, out, subroutine
+from pyrung.core import PLC, Bool, Int, Program, Real, Rung, call, forloop, out, subroutine, system
 from pyrung.core.debug_handlers import (
     CallInstructionDebugHandler,
     ForLoopInstructionDebugHandler,
@@ -102,6 +102,26 @@ def test_forloop_handler_emits_nested_child_instruction_steps() -> None:
     assert len(instruction_steps) == 2
     assert all(step.instruction_kind == "OutInstruction" for step in instruction_steps)
     assert runner.current_state.tags["Pulse"] is True
+
+
+def test_forloop_handler_runs_no_iteration_for_a_non_finite_count() -> None:
+    """A REAL count holding Inf runs no iteration and sets SC43 when stepped
+    through the debugger, as in a plain scan."""
+    pulse = Bool("Pulse")
+    count = Real("Count")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(count):
+                out(pulse)
+
+    runner = PLC(logic)
+    runner.patch({count: float("inf")})
+    steps = list(runner.debug.scan_steps_debug())
+
+    assert not [step for step in steps if step.instruction_kind == "OutInstruction"]
+    assert runner.current_state.tags["Pulse"] is False
+    assert runner.current_state.tags[system.fault.out_of_range.name] is True
 
 
 def test_debugger_accepts_protocol_runner_wrapper_without_private_api() -> None:

@@ -275,6 +275,13 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return int(value)",
         "",
     ],
+    "_rand_checked": [
+        "def _rand_checked(draw, lo, hi):",
+        "    _bit_int(lo)",
+        "    _bit_int(hi)",
+        "    return draw",
+        "",
+    ],
     "_pow": [
         "def _pow(base, exp):",
         "    try:",

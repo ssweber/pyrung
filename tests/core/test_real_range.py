@@ -27,9 +27,11 @@ from pyrung.core import (
     calc,
     copy,
     fill,
+    forloop,
     lro,
     lsh,
     out,
+    randint,
     rro,
     rsh,
     sin,
@@ -291,6 +293,83 @@ def test_a_non_finite_bitwise_operand_is_zero_and_sc43(runner_factory, make, val
     assert tags["Dest"] == 0
     assert tags[SC43.name] is True
     assert tags[SC40.name] is False
+
+
+@pytest.mark.parametrize("value", [math.nan, INF, -INF])
+@pytest.mark.parametrize("which", ["lo", "hi"])
+def test_a_non_finite_randint_bound_is_zero_and_sc43(runner_factory, value, which):
+    """pyrung's choice (no CLICK reading): a draw needs integer bounds, so a
+    bound holding Inf or NaN makes the calc store 0 with SC43, and the scan
+    runs on."""
+    r = Real("R", default=3.0)
+    dest = Dint("Dest", default=7)
+    after = Int("After")
+    expr = randint(r, 9) if which == "lo" else randint(0, r)
+    with Program() as program:
+        with Rung():
+            calc(expr + 5, dest)
+            copy(1, after)
+    plc = runner_factory(program)
+    plc.patch({r: value})
+    plc.step()
+    tags = plc.current_state.tags
+    assert tags["Dest"] == 0
+    assert tags["After"] == 1
+    assert tags[SC43.name] is True
+    assert tags[SC40.name] is False
+    plc.step()  # the bound is still not finite on the next scan
+    assert plc.current_state.tags["Dest"] == 0
+
+
+def test_a_finite_real_randint_bound_draws_in_range(runner_factory):
+    r = Real("R", default=3.0)
+    dest = Dint("Dest", default=-1)
+    with Program() as program:
+        with Rung():
+            calc(randint(0, r), dest)
+    plc = runner_factory(program)
+    for _ in range(5):
+        plc.step()
+        tags = plc.current_state.tags
+        assert 0 <= tags["Dest"] <= 3
+        assert tags[SC43.name] is False
+
+
+@pytest.mark.parametrize("value", [math.nan, INF, -INF])
+def test_a_non_finite_forloop_count_runs_no_iteration_and_sc43(runner_factory, value):
+    """pyrung's choice (a CLICK For takes an integer count): a REAL count
+    holding Inf or NaN runs no iteration, sets SC43, and the scan runs on."""
+    r = Real("R", default=3.0)
+    hits = Int("Hits")
+    after = Int("After")
+    with Program() as program:
+        with Rung():
+            with forloop(r):
+                calc(hits + 1, hits)
+        with Rung():
+            copy(1, after)
+    plc = runner_factory(program)
+    plc.step()
+    assert plc.current_state.tags["Hits"] == 3
+    assert plc.current_state.tags[SC43.name] is False
+    plc.patch({r: value})
+    plc.step()
+    tags = plc.current_state.tags
+    assert tags["Hits"] == 3
+    assert tags["After"] == 1
+    assert tags[SC43.name] is True
+
+
+def test_only_a_real_forloop_count_declares_sc43():
+    """The PDG and prover see SC43 written only by a For that can set it."""
+    from pyrung.core.instruction.control import ForLoopInstruction, for_loop_iterations
+
+    assert for_loop_iterations(INF) == 0
+    assert for_loop_iterations(math.nan) == 0
+    assert for_loop_iterations(3.9) == 3
+    assert ForLoopInstruction(Real("R"), Int("I"))._fault_writes == ("fault.out_of_range",)
+    assert ForLoopInstruction(Int("N"), Int("I"))._fault_writes == ()
+    assert ForLoopInstruction(5, Int("I"))._fault_writes == ()
 
 
 def test_a_nan_result_sets_sc43(runner_factory):

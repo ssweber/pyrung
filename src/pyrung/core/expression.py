@@ -571,6 +571,21 @@ def randint_draw(site: int, scan_id: int, lo: int, hi: int) -> int:
     return lo + z % (hi - lo + 1)
 
 
+def _finite(value: Numeric) -> bool:
+    return not isinstance(value, float) or math.isfinite(value)
+
+
+def _integer_operand(operand: Expression) -> bool:
+    """Whether a ``randint`` bound is an integer literal or integer tag."""
+    from pyrung.core.tag import TagType
+
+    if isinstance(operand, LiteralExpr):
+        return not isinstance(operand.value, float)
+    if isinstance(operand, TagExpr):
+        return operand.tag.type != TagType.REAL
+    return False
+
+
 def _operand_span(operand: Expression) -> tuple[int, int] | None:
     """Lowest and highest integer a ``randint`` bound can take, if declared."""
     if isinstance(operand, LiteralExpr):
@@ -626,14 +641,29 @@ class RandIntExpr(Expression):
             **bounds,
         )
         _randint_sites[self.tag.name] = self
+        #: Whether a bound can be Inf or NaN (a REAL source): only then does
+        #: the calc reading the draw check the bounds (see :meth:`evaluate`).
+        self.checks_bounds = not (_integer_operand(lo) and _integer_operand(hi))
 
     def draw(self, ctx: ScanContext) -> int:
-        """This scan's draw, from the bounds as the scan starts."""
-        return randint_draw(
-            self.site, ctx.scan_id, int(self.lo.evaluate(ctx)), int(self.hi.evaluate(ctx))
-        )
+        """This scan's draw, from the bounds as the scan starts.
+
+        A bound that is Inf or NaN draws the tag's default; the calc reading
+        it stores 0 with SC43 instead (:meth:`evaluate`).
+        """
+        lo = self.lo.evaluate(ctx)
+        hi = self.hi.evaluate(ctx)
+        if not (_finite(lo) and _finite(hi)):
+            return self.tag.default
+        return randint_draw(self.site, ctx.scan_id, int(lo), int(hi))
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
+        if self.checks_bounds:
+            # A bound holding Inf or NaN has no integer range: the calc stores
+            # 0 with SC43 (pyrung's choice, not measured on CLICK).
+            for bound in (self.lo, self.hi):
+                if not _finite(bound.evaluate(ctx)):
+                    raise OverflowError("randint() bound is Inf or NaN")
         return ctx.get_tag(self.tag.name, self.tag.default)
 
     def __repr__(self) -> str:
