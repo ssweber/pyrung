@@ -102,6 +102,10 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "call_twice": {"C": range(701, 751)},
     # Solve order within a rung (tests/conformance/test_solve_order.py).
     "solve_order": {"C": range(501, 701), "T": range(151, 161), "CT": range(161, 171)},
+    # Row solve, round 3 (tests/conformance/test_row_solve.py).
+    "row_solve": {"C": range(401, 451), "CT": range(191, 201)},
+    # A box on a continued wire (tests/conformance/test_cont_box.py).
+    "cont_box": {"C": range(451, 501), "CT": range(181, 191)},
 }
 
 

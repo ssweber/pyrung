@@ -19,19 +19,23 @@ Two models of a rung:
 ``order_dependent`` is ``snapshot != expect``, declared on each case through
 ``solve_case()`` and checked by ``test_annotation_matches_readings``.  The four
 live-read cases of the ``rungs`` group join the same map (``RUNGS_SNAPSHOT``),
-so ``ORDER_DEPENDENT`` covers every case the suite has on solve order.  If
+and so do round 3's ``row_solve`` and ``cont_box`` groups, which annotate their
+own cases (``SOLVE_ORDER`` in each module), so ``ORDER_DEPENDENT`` covers every
+case the suite has on solve order.  If
 round 2 reads S for some topology, its ``expect`` becomes S's reading and its
 annotation flips to False.
 
-Every case keeps edge, counter and drum semantics out of the answer (no S2,
-S3 or DRUM): the bit a later part reads (P below) is latched by its writer row
-and cleared by the next rung (or, in a one-shot case whose rung never runs
-again, by ``init``), so it is never on when the rung that reads it is
-entered.  A part that reads P live sees it; one that reads the snapshot never
-does.  A pulsed edge fires once under L and never under S, and every counted or
-clocked input is a one-scan pulse, so level and edge counting agree.  The drum
-cases read only the step, never an output or the completion flag, and no scan
-has two drum controls on.  A box's reset leg is ``Cmd == 0`` (or that, or P).
+Every case of the ``solve_order`` group itself keeps edge, counter and drum
+semantics out of the answer (no S2, S3 or DRUM; the folded-in ``row_solve``
+and ``cont_box`` cases ask about edges and boxes on purpose): the bit a later
+part reads (P below) is latched by its writer row and cleared by the next rung
+(or, in a one-shot case whose rung never runs again, by ``init``), so it is
+never on when the rung that reads it is entered.  A part that reads P live
+sees it; one that reads the snapshot never does.  A pulsed edge fires once
+under L and never under S, and every counted or clocked input is a one-scan
+pulse, so level and edge counting agree.  The drum cases read only the step,
+never an output or the completion flag, and no scan has two drum controls on.
+A box's reset leg is ``Cmd == 0`` (or that, or P).
 
 A case where L and S agree (a control, -) must still tell some model apart,
 as AGENTS.md asks.  The models named below, and what each reads:
@@ -115,7 +119,7 @@ from pyrung.core import (
     pack_bits,
     reset,
 )
-from tests.conformance import test_rung_semantics
+from tests.conformance import test_cont_box, test_row_solve, test_rung_semantics
 from tests.conformance.memory import ClickCounter, c
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -139,6 +143,15 @@ RUNGS_SNAPSHOT: Mapping[str, Mapping[str, int]] = {
 for _id, _snapshot in RUNGS_SNAPSHOT.items():
     ORDER_DEPENDENT[f"rungs/{_id}"] = True
     SNAPSHOT[f"rungs/{_id}"] = dict(_snapshot)
+
+#: Round 3's solve-order groups, which annotate their own cases (``SOLVE_ORDER``:
+#: id -> (order dependent?, the S reading)).
+ANNOTATED_MODULES = (test_row_solve, test_cont_box)
+
+for _module in ANNOTATED_MODULES:
+    for _id, (_dependent, _snapshot) in _module.SOLVE_ORDER.items():
+        ORDER_DEPENDENT[f"{_module.group.name}/{_id}"] = _dependent
+        SNAPSHOT[f"{_module.group.name}/{_id}"] = dict(_snapshot)
 
 
 def solve_case(
@@ -469,7 +482,7 @@ group = Group(
 def results() -> dict[str, CaseResult]:
     """Every annotated case's in-process result, keyed ``"group/id"``."""
     out: dict[str, CaseResult] = {}
-    for g in (group, test_rung_semantics.group):
+    for g in (group, test_rung_semantics.group, *(m.group for m in ANNOTATED_MODULES)):
         for r in run(g):
             out[f"{g.name}/{r.case.id}"] = r
     return out
@@ -484,6 +497,8 @@ def test_every_case_is_annotated():
     assert set(ORDER_DEPENDENT) == set(SNAPSHOT)
     rungs_ids = {x.id for x in test_rung_semantics.group.cases}
     assert set(RUNGS_SNAPSHOT) <= rungs_ids
+    for module in ANNOTATED_MODULES:
+        assert set(module.SOLVE_ORDER) == {x.id for x in module.group.cases}
 
 
 def test_only_s4_pending():
