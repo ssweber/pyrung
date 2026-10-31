@@ -242,7 +242,8 @@ def render_instruction(
     elif itype == "FillInstruction":
         code = f"fill({operand_name(instr.value)}, {operand_name(instr.dest)})"
     elif itype == "CalcInstruction":
-        code = f"math({operand_name(instr.dest)}, {render_expr(instr.expression)})"
+        written = getattr(instr, "source_expression", instr.expression)
+        code = f"math({operand_name(instr.dest)}, {render_expr(written)})"
     elif itype in (
         "OnDelayInstruction",
         "OffDelayInstruction",

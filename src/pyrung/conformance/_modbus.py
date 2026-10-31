@@ -34,6 +34,11 @@ DEFAULT_PORT = 502
 _CHUNK = 100
 #: Wall-clock seconds per scan the settle time assumes (pyrung's nominal dt).
 NOMINAL_SCAN_S = 0.010
+#: Most seconds of PLC time one sim scan advances (4 nominal scans).  A longer
+#: wall-clock gap between scans is this machine stalling (other processes, the
+#: GC), which a CLICK scanning in milliseconds never sees, so the sim's PLC does
+#: not see it either.
+MAX_SCAN_DT_S = 0.040
 #: Seconds between polls while waiting on the header, the zeroing, or ``Fired``.
 POLL_S = 0.02
 #: Seconds between the two final reads; both must meet the expectation.
@@ -110,7 +115,11 @@ class SimServer:
 
     The PLC free-runs in ``realtime`` mode on its own thread, one scan every
     *scan_period* seconds of wall clock, so timers see wall-clock time as on a
-    CLICK.  Modbus writes become patches applied at the start of the next
+    CLICK, except that one scan advances them by at most *max_scan_dt*
+    seconds: a stall of this machine (the scan thread waiting longer than that
+    for the CPU) does not become a scan longer than any CLICK's, which would
+    step over a case's timing windows.  ``None`` lets the whole gap through.
+    Modbus writes become patches applied at the start of the next
     scan.  A PLC in STOP (SC50, the STOP command, stopped it) does not scan:
     the sim keeps serving Modbus and stays in STOP, as a CLICK does.  Use as a
     context manager; :attr:`endpoint` is where to connect.
@@ -123,11 +132,13 @@ class SimServer:
         host: str = "127.0.0.1",
         port: int = 0,
         scan_period: float = NOMINAL_SCAN_S,
+        max_scan_dt: float | None = MAX_SCAN_DT_S,
     ) -> None:
         self.build = build
         self._host = host
         self._port = port
         self._scan_period = scan_period
+        self._max_scan_dt = max_scan_dt
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._scan_thread: threading.Thread | None = None
@@ -208,13 +219,20 @@ class SimServer:
 
     def _scan_loop(self) -> None:
         period = self._scan_period
-        next_tick = time.perf_counter()
+        cap = self._max_scan_dt
+        last_scan = next_tick = time.perf_counter()
         while not self._stop.is_set():
             try:
                 with self._lock:
                     # step() would put a stopped PLC back in RUN; a CLICK in
                     # STOP stays there until someone switches it.
                     if self._plc.mode != "stop":
+                        if cap is not None:
+                            # The scan's dt, as realtime mode measures it (the
+                            # wall clock since the last scan), but capped.
+                            now = time.perf_counter()
+                            self._plc._dt_override_for_next_scan = min(now - last_scan, cap)
+                            last_scan = now
                         self._plc.step()
             except BaseException as exc:  # surfaced through raise_if_failed()
                 self.error = exc

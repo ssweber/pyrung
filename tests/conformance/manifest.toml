@@ -168,6 +168,9 @@ real_overflow_stays_finite = 13
 div_by_zero = 14
 real_div_by_zero = 15
 dint_quotient_into_int = 16
+int_math_wide_constant = 17
+int_math_rand_wide_bounds = 18
+int_math_real_operand_constant = 19
 
 [groups.text]
 base = 1901 # Conf_Text: DS1901..DS2100
@@ -253,6 +256,9 @@ mode_bits_on_in_run = 7
 rtc_seconds_advance = 8
 first_scan_counter_and_clock = 9
 scan_counter_wraps_to_zero = 10
+out_of_range_flag_vs_other_instructions = 11
+address_flag_vs_other_instructions = 12
+division_flag_vs_hex_math = 13
 
 # Retired groups: each stopped the PLC on one math error.  A CLICK keeps running
 # (hardware round 1), so the seven errors are one case of math_error.  The

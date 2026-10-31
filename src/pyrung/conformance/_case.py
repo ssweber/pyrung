@@ -31,8 +31,7 @@ PENDING_STEPS: Mapping[str, str] = {
     "DRUM": "drum ordering (jump/jog/reset/pause/completion)",
     "INF": "REAL overflow stores +/-Inf",
     "TEXT": "text, pack, NUL, search cursor and MDN fixes",
-    "SYS": "SC3/SD9 phase and the fault-flag model",
-    "CONST16": "a Math constant into an Int is cut to 16 bits",
+    "SYS": "the fault-flag model (SC40 follows the last Math, SC43/SC44 the last instruction)",
 }
 
 

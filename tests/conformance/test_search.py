@@ -40,7 +40,7 @@ Where a case detects an alternative model:
   strictly after the old result (4386, not 4385), also when the old result is
   not itself a match (4384 -> 4385), -1 past the last register, and -1 when
   the old result lies below the range (5; pyrung restarts there, 4383).
-- ``continuous_cursor_outside_range`` (probe): the edges of that rule, over
+- ``continuous_cursor_outside_range`` (answered as adopted): the edges of that rule, over
   DD411..DD416 = {7, 1, 7, 7, 2, 7}: an old result one below the range (410),
   one above it (417) and negative (-5) each miss, -1 (adopted); a search that
   restarts from below the range reads 411 for 410 (and for -5); the first
@@ -449,7 +449,6 @@ group = Group(
             ladder=prove_continuous_cursor_outside_range,
             init=init_continuous_cursor_outside_range,
             expect={"Result1": -1, "Result2": -1, "Result3": -1, "Result4": 413},
-            probe="continuous search cursor at the range edges (410, 417, -5)",
         ),
     ],
 )

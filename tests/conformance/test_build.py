@@ -326,6 +326,24 @@ def test_case_hash_follows_only_its_own_rows() -> None:
     assert after["constant"] != before["constant"]
 
 
+def test_case_hash_ignores_the_groups_closing_return() -> None:
+    def hashes(*cases: Case) -> dict[str, str]:
+        return build_program(Group("g", list(cases))).groups[0].case_hashes
+
+    a = _seven()
+    b = case("x", ladder=_prove_constant, expect={"Result1": 7})
+    c = case("y", ladder=_prove_other_constant, expect={"Result1": 8}, id="eight")
+    alone = hashes(a, b)
+    # Appending a case leaves the previous last case's hash alone.
+    appended = hashes(a, b, c)
+    assert appended["constant"] == alone["constant"]
+    assert appended["seven"] == alone["seven"]
+    # Editing a row of the last case changes its hash.
+    edited = hashes(a, b, case("y", ladder=_prove_constant, expect={"Result1": 8}, id="eight"))
+    assert edited["eight"] != appended["eight"]
+    assert edited["constant"] == appended["constant"]
+
+
 def test_a_click_run_records_passes_and_drops_failures(tmp_path) -> None:
     path = tmp_path / "confirmed.toml"
     one, two = _seven(), case("x", ladder=_prove_constant, expect={"Result1": 7})

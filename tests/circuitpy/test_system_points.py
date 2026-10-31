@@ -11,7 +11,7 @@ import time
 import pytest
 
 from pyrung.circuitpy import P1AM, RunStopConfig, generate_circuitpy
-from pyrung.core import Block, Bool, Int, Program, Real, Rung, TagType, calc, copy, out
+from pyrung.core import Block, Bool, Dint, Int, Program, Real, Rung, TagType, calc, copy, out
 from pyrung.core.expression import sqrt
 from pyrung.core.system_points import system
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
@@ -67,7 +67,8 @@ def _divide_by_zero():
 
 
 def _overflow():
-    calc(Zero + 40000, Sink)
+    # Two in-range constants: an Int destination cuts a constant past 16 bits.
+    calc(Zero + 32767 + 1, Sink)
 
 
 def _bad_pointer():
@@ -104,8 +105,33 @@ def test_fault_flag_set_by_instruction_and_cleared_at_next_scan_start(monkeypatc
     assert read(flag) is False
 
 
+Num = Dint("Num", default=-2147483648, retentive=False)
+Den = Dint("Den", default=65536, retentive=False)
+ByConstant = Int("ByConstant", default=99, retentive=False)
+ByTag = Int("ByTag", retentive=False)
+DivFlagAfterConstant = Bool("DivFlagAfterConstant", retentive=False)
+
+
+def test_calc_into_int_cuts_constants_to_16_bits(monkeypatch):
+    # As core (and a CLICK): 65536 into an Int's Math is 0, a division by zero
+    # (SC40); the same 65536 read from a Dint divides.
+    with Program(strict=False) as prog:
+        with Rung():
+            calc(Num / 65536, ByConstant)
+        with Rung(system.fault.division_error):
+            out(DivFlagAfterConstant)
+        with Rung():
+            calc(Num / Den, ByTag)
+
+    _code, read = _run(prog, monkeypatch, scans=1)
+
+    assert read(ByConstant) == 0
+    assert read(DivFlagAfterConstant) is True
+    assert read(ByTag) == -32768
+
+
 ScanCount = Int("ScanCount", retentive=False)
-OddScans = Int("OddScans", retentive=False)
+EvenScans = Int("EvenScans", retentive=False)
 ClockMismatch = Int("ClockMismatch", retentive=False)
 FirstScans = Int("FirstScans", retentive=False)
 
@@ -117,19 +143,19 @@ def test_scan_counter_steps_and_scan_clock_follows_its_parity(monkeypatch):
         with Rung():
             copy(counter, ScanCount)
         with Rung(clock):
-            calc(OddScans + 1, OddScans)
-        with Rung(clock, counter % 2 == 0):
+            calc(EvenScans + 1, EvenScans)
+        with Rung(clock, counter % 2 == 1):
             calc(ClockMismatch + 1, ClockMismatch)
-        with Rung(~clock, counter % 2 == 1):
+        with Rung(~clock, counter % 2 == 0):
             calc(ClockMismatch + 1, ClockMismatch)
         with Rung(system.sys.first_scan):
             calc(FirstScans + 1, FirstScans)
 
     _code, read = _run(prog, monkeypatch, scans=5)
 
-    # Core: SD9 = scan_id (0 on the first scan), SC3 = SD9 is odd.
+    # Core: SD9 = scan_id (0 on the first scan), SC3 = SD9 is even (as a CLICK has it).
     assert read(ScanCount) == 4
-    assert read(OddScans) == 2
+    assert read(EvenScans) == 3
     assert read(ClockMismatch) == 0
     assert read(FirstScans) == 1
 

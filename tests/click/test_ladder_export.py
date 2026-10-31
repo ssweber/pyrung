@@ -700,6 +700,21 @@ def test_calc_hex_token_uses_inferred_hex_mode():
     )
 
 
+def test_calc_into_int_exports_constants_as_written():
+    # pyrung runs the 65536 as 0 (a CLICK Math into an Int cuts its constants to
+    # 16 bits); the export writes the formula as written and CLICK cuts it itself.
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                calc(DD1 / 65536, DS1)
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,math(DD1 / 65536,DS1,mode=decimal)
+        """,
+    )
+
+
 def test_calc_token_uses_click_native_operators():
     """Calc expressions use Click-native operator syntax in CSV tokens."""
     from pyrung.core.expression import lsh, rsh, sqrt

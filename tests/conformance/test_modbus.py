@@ -10,6 +10,7 @@ real PLC may run one part of the suite (``suite.PARTS``); its ``DS1`` says which
 
 from __future__ import annotations
 
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import date
@@ -35,7 +36,7 @@ from pyrung.conformance import (
     run_modbus,
     wait_for_scan_counter_wrap,
 )
-from pyrung.conformance._modbus import scan_counter_wrapped
+from pyrung.conformance._modbus import MAX_SCAN_DT_S, scan_counter_wrapped
 from pyrung.core import Rung, calc, copy
 from tests.conformance import suite, test_system
 
@@ -233,6 +234,30 @@ def test_one_group_runs_alone() -> None:
         assert _slot_value(sim, build, "alpha", "Cmd") == 0
         assert _slot_value(sim, build, "alpha", "Fired") == 0
         assert _slot_value(sim, build, "beta", "Fired") == 1
+
+
+def _scans_past(sim: SimServer, scan_id: int) -> None:
+    deadline = time.monotonic() + 5.0
+    while sim.plc.current_state.scan_id <= scan_id:
+        assert time.monotonic() < deadline, "the sim stopped scanning"
+        time.sleep(0.005)
+
+
+@pytest.mark.parametrize("cap", [MAX_SCAN_DT_S, None])
+def test_a_stall_advances_the_sim_by_at_most_max_scan_dt(cap: float | None) -> None:
+    """A 300 ms host stall is one capped scan, not a 300 ms one (``None``: the whole gap)."""
+    build = build_program([_alpha(), _beta()], _TWO_GROUPS)
+    with SimServer(build, max_scan_dt=cap) as sim:
+        _scans_past(sim, 2)
+        with sim._lock:  # the scan thread waits for it, as for the CPU
+            before = sim.plc.current_state
+            time.sleep(0.3)
+        _scans_past(sim, before.scan_id)
+        dt = sim.plc.history.at(before.scan_id + 1).timestamp - before.timestamp
+    if cap is None:
+        assert dt >= 0.3
+    else:
+        assert dt == pytest.approx(cap)
 
 
 def test_circuitpy_target_runs_the_generated_code() -> None:

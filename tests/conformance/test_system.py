@@ -27,16 +27,39 @@ the three cases are ``pending="SYS"``.  hardware round 2, 2026-10-30: SC43 and S
 the last instruction (0, 0, 0); SC40 follows the last Math (346, 0, 0), so a
 Copy leaves it as it is.
 
+What else clears a flag (probes, ``pending="SYS"``).  Round 2 tried a Copy and a
+Math only.  Three more cases raise their fault again before each instruction
+under test, so each probe reads the flag right after one instruction and
+nothing else: a fault, the instruction, the probe coil, the next fault, ...
+Result1 is the control, a probe right after the fault with nothing between
+(346 on every model: a 0 means the fault did not raise the flag).
+
+- ``out_of_range_flag_vs_other_instructions`` (SC43, a Dint Math overflow)
+  and ``address_flag_vs_other_instructions`` (SC44, a copy through pointer
+  ``Fired``, 0 while the case runs): Result2 after an Out coil on a powered
+  rung, Result3 after a rung whose contact is open over a Set coil (contacts
+  only: no instruction executes), Result4 after a TON, ErrorCode after a CTU.
+  Adopted, every instruction that executes clears the flag and an open rung
+  does not: 346, 0, 346, 0, 0.  Only box instructions (Copy, Math, timer,
+  counter) clear it: 346, 346, 346, 0, 0.  Coils too, even unexecuted: 346,
+  0, 0, 0, 0.  pyrung keeps the flag to the end of the scan: 346 in every
+  field.
+- ``division_flag_vs_hex_math`` (SC40, a division by ``Fired``): Result2 after
+  a hex-mode Math (WORDs only, no division), Result3 after a Copy, Result4
+  after a decimal Math.  Round 2 read Result3 = 346 and Result4 = 0.  Adopted,
+  any Math clears it, hex or decimal: 346, 0, 346, 0; a decimal Math only:
+  346, 346, 346, 0.  pyrung: 346 in every field.
+
 Scan clock and counter.  ``scan_counter_steps_by_one`` shows SD9 counts every
 scan (7 steps of one over scans 1..8), and ``scan_clock_follows_counter`` that
 SC3 toggles every scan (8 edges over 8 scans) and is on exactly when SD9 is
-even, as round 1 read on a CLICK (``pending="SYS"``: pyrung's SC3 is on when
-SD9 is odd, and reads Result2 = 0).  ``first_scan_counter_and_clock`` pins
+even, as round 1 read on a CLICK (pyrung's SC3 was on when SD9 is odd, and
+read Result2 = 0, until hardware round 2).  ``first_scan_counter_and_clock`` pins
 which of the two is offset from pyrung's: rungs outside the ``Cmd`` gate copy
 SD9 and SC3 on the first scan (SC2) into DD981..DD983, which the reset leaves
 alone.  SD9 starts at 0 with SC3 on (Result1 = 0, Result3 = 1; hardware round 2, 2026-10-30,
-where SD9 starting at 1 with SC3 off was adopted); pyrung reads 0, 0, so its
-SD9 is right and its SC3 is a scan out of phase.  Result2 = 1 shows the capture ran.  ``scan_counter_wraps_to_zero`` keeps
+where SD9 starting at 1 with SC3 off was adopted); pyrung read 0, 0 before
+round 2: its SD9 was right and its SC3 a scan out of phase.  Result2 = 1 shows the capture ran.  ``scan_counter_wraps_to_zero`` keeps
 the least SD9 seen since the first scan in DD991: SD9 wrapping from 32767 to
 0 (adopted) reads Result1 = 0, one counting on into negative values (an
 unsigned 16-bit counter read as an Int) reads 1.  It only tells once the PLC
@@ -52,9 +75,10 @@ and 2; for a quarter period 40 and 8.  The edges are ``rise()`` contacts, first
 on their rungs.  Over the wire the window is wall clock
 and its ends fall between scans, so each count may be one off.  A scan longer
 than 40 ms (SD10, pyrung's time since the previous scan) could hide a whole
-half period of SC5, and the local sim does stall that long on a loaded
-machine, so such a scan starts the window again; the case fires after the
-first 2 s without one.  SC4 (10 ms) is left out: at pyrung's nominal 10 ms scan
+half period of SC5, and a target run on a loaded machine does stall that
+long (pyrung's own sim advances a scan at most 40 ms, ``MAX_SCAN_DT_S``, but
+the P1AM-200 code times itself), so such a scan starts the window again; the
+case fires after the first 2 s without one.  SC4 (10 ms) is left out: at pyrung's nominal 10 ms scan
 it aliases (in-process it never reads on).  So is SC7 (1 s): over 2 s a
 half-period SC7 also reads 1 or 2, so it would tell nothing SC6 doesn't.
 
@@ -73,9 +97,21 @@ each flag before any other group runs that scan.
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, calc, copy, fall, fill, on_delay, out, rise
+from pyrung.core import (
+    Or,
+    Rung,
+    calc,
+    copy,
+    count_up,
+    fall,
+    fill,
+    latch,
+    on_delay,
+    out,
+    rise,
+)
 from pyrung.core.system_points import system
-from tests.conformance.memory import ClickTimer, c, dd
+from tests.conformance.memory import ClickCounter, ClickTimer, c, dd, dh
 from tests.conformance.scans import WINDOW, count_scans, done, edges, scans_for
 
 SCANS = scans_for()
@@ -167,6 +203,101 @@ def prove_address_flag_clears_each_scan(slot):
         fault=fault,
         other_kind=lambda: calc(slot.Scratch + 1, dd[923]),
         same_kind=same_kind,
+    )
+
+
+#: Adopted: every instruction that executes clears the flag; an open rung does not.
+_REFAULT_EXPECT = {"Result1": 346, "Result2": 0, "Result3": 346, "Result4": 0, "ErrorCode": 0}
+
+#: The fields a refault case records into: the control, then one per instruction.
+_REFAULT_FIELDS = ("Result1", "Result2", "Result3", "Result4", "ErrorCode")
+
+
+def _refault_case(slot, flag, base, fault, steps):
+    """The fault again before each step, the step, then a probe coil C<base+i>.
+
+    The first step is the control: nothing.  Records as in :func:`_fault_case`.
+    """
+    probes = [c[base + i] for i in range(len(steps))]
+    count_scans(slot)
+    for step, probe in zip(steps, probes, strict=True):
+        with Rung(*_on_fault_scans(slot)):
+            fault()
+        if step is not None:
+            step()
+        with Rung(*_in_window(slot), flag):
+            out(probe)
+    for name, probe in zip(_REFAULT_FIELDS, probes, strict=False):
+        _record(slot, getattr(slot, name), probe)
+    done(slot)
+
+
+def _other_instructions(slot, base, timer, counter):
+    """An Out coil, an open rung over a Set coil, a TON and a CTU, each on its rung.
+
+    C<base+5> is the Out coil, C<base+6> a bit nothing sets, C<base+7> the Set coil.
+    """
+
+    def coil():
+        with Rung(*_in_window(slot)):
+            out(c[base + 5])
+
+    def open_rung():
+        with Rung(*_in_window(slot), c[base + 6]):
+            latch(c[base + 7])
+
+    def ton():
+        with Rung(*_in_window(slot)):
+            on_delay(ClickTimer(timer), 30000)
+
+    def ctu():
+        with Rung(*_in_window(slot)):
+            count_up(ClickCounter(counter), 1000).reset(slot.Cmd == 0)
+
+    return [None, coil, open_rung, ton, ctu]
+
+
+def prove_out_of_range_flag_vs_other_instructions(slot):
+    _refault_case(
+        slot,
+        system.fault.out_of_range,
+        931,
+        fault=lambda: calc(slot.Scratch + 2147483647, dd[931]),
+        steps=_other_instructions(slot, 931, timer=131, counter=171),
+    )
+
+
+def prove_address_flag_vs_other_instructions(slot):
+    # Fired is 0 until the window is recorded: there is no DD0.
+    _refault_case(
+        slot,
+        system.fault.address_error,
+        941,
+        fault=lambda: copy(dd[slot.Fired], dd[941]),
+        steps=_other_instructions(slot, 941, timer=141, counter=172),
+    )
+
+
+def prove_division_flag_vs_hex_math(slot):
+    # Fired is 0 until the window is recorded: the divisor.
+    def step(instruction):
+        def run():
+            with Rung(*_in_window(slot)):
+                instruction()
+
+        return run
+
+    _refault_case(
+        slot,
+        system.fault.division_error,
+        951,
+        fault=lambda: calc(slot.Scratch / slot.Fired, dd[951]),
+        steps=[
+            None,
+            step(lambda: calc(dh[401] + 1, dh[402])),
+            step(lambda: copy(slot.Scratch, dd[952])),
+            step(lambda: calc(slot.Scratch + 1, dd[953])),
+        ],
     )
 
 
@@ -279,9 +410,14 @@ def _fault_init(base):
     return init
 
 
-#: The adopted model: a flag follows the last instruction, so every probe reads it off.
+#: SC43 and SC44 follow the last instruction (hardware round 2), so every probe reads them off.
 _FAULT_EXPECT = {"Result1": 0, "Result2": 0, "Result3": 0}
-_FAULT_PROBE = "fault flags: which instruction clears them"
+
+
+def init_division_flag_vs_hex_math(slot):
+    fill(0, dd.select(951, 959))
+    fill(0, dh.select(401, 402))
+
 
 group = Group(
     "system",
@@ -296,7 +432,6 @@ group = Group(
             expect={"Result1": 346, "Result2": 0, "Result3": 0},
             scans=SCANS,
             pending="SYS",
-            probe=_FAULT_PROBE,
         ),
         case(
             "The out-of-range flag SC43 shows the last instruction: overflowing an Int on "
@@ -308,7 +443,6 @@ group = Group(
             expect=_FAULT_EXPECT,
             scans=SCANS,
             pending="SYS",
-            probe=_FAULT_PROBE,
         ),
         case(
             "The address-error flag SC44 shows the last instruction: copying through "
@@ -320,7 +454,6 @@ group = Group(
             expect=_FAULT_EXPECT,
             scans=SCANS,
             pending="SYS",
-            probe=_FAULT_PROBE,
         ),
         case(
             "The scan counter SD9 goes up by one every scan: over scans 1..8 it steps "
@@ -336,7 +469,6 @@ group = Group(
             ladder=prove_scan_clock_follows_counter,
             expect={"Result1": 8, "Result2": 8},
             scans=SCANS,
-            pending="SYS",
         ),
         case(
             "The 100 ms and 500 ms clocks SC5 and SC6 have the named time as their "
@@ -365,8 +497,6 @@ group = Group(
             "rung ran",
             ladder=prove_first_scan_counter_and_clock,
             expect={"Result1": 0, "Result2": 1, "Result3": 1},
-            pending="SYS",
-            probe="first scan: SD9 starts at 1, or SC3 starts on",
         ),
         case(
             "The scan counter SD9 wraps from 32767 to 0, never negative: the least value "
@@ -374,7 +504,43 @@ group = Group(
             "PLC has been in RUN for 32768 scans",
             ladder=prove_scan_counter_wraps_to_zero,
             expect={"Result1": 0},
-            probe="SD9 wrap value",
+        ),
+        case(
+            "The out-of-range flag SC43 is cleared by every instruction that executes: "
+            "raised again before each, it is on right after the fault (Result1 = 346, "
+            "scans 3, 4 and 6), off after an Out coil (Result2 = 0), a TON (Result4 = 0) "
+            "and a CTU (ErrorCode = 0), and still on after a rung whose open contact "
+            "keeps its Set coil from executing (Result3 = 346)",
+            ladder=prove_out_of_range_flag_vs_other_instructions,
+            init=_fault_init(931),
+            expect=_REFAULT_EXPECT,
+            scans=SCANS,
+            pending="SYS",
+            probe="which instructions clear SC43: coil, open rung, timer, counter",
+        ),
+        case(
+            "The address-error flag SC44 is cleared by every instruction that executes: "
+            "raised again before each, it is on right after the fault (Result1 = 346, "
+            "scans 3, 4 and 6), off after an Out coil (Result2 = 0), a TON (Result4 = 0) "
+            "and a CTU (ErrorCode = 0), and still on after a rung whose open contact "
+            "keeps its Set coil from executing (Result3 = 346)",
+            ladder=prove_address_flag_vs_other_instructions,
+            expect=_REFAULT_EXPECT,
+            scans=SCANS,
+            pending="SYS",
+            probe="which instructions clear SC44: coil, open rung, timer, counter",
+        ),
+        case(
+            "The division-by-zero flag SC40 is cleared by a hex-mode Math too: raised "
+            "again before each, it is on right after the fault (Result1 = 346, scans 3, "
+            "4 and 6), off after a WORD-only Math (Result2 = 0), still on after a Copy "
+            "(Result3 = 346) and off after a decimal Math (Result4 = 0)",
+            ladder=prove_division_flag_vs_hex_math,
+            init=init_division_flag_vs_hex_math,
+            expect={"Result1": 346, "Result2": 0, "Result3": 346, "Result4": 0},
+            scans=SCANS,
+            pending="SYS",
+            probe="does a hex-mode Math clear SC40",
         ),
     ],
 )

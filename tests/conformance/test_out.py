@@ -18,18 +18,23 @@ never sets its Timer's done bit T<n>; the coil's phases come from the TDs
 alone, so a contact on that T<n> is always off (pyrung matches).  Round 2
 (2026-10-30) read O4:
 
-- ``flasher_restarts_with_on_phase`` (probe): 300 ms phases, the rung false
+- ``flasher_restarts_with_on_phase``: 300 ms phases, the rung false
   from 450 to 550 ms, 150 ms into the off phase.  Round 1 read "not both TDs
   0" and the coil on somewhere in 600-800 ms.  The case reads, while the rung
   is false, the on-side TD (Result1: 1 = cleared, 2 = held at or past its
   preset) and the off-side TD (Result3: 1 = cleared, 2 = kept mid-phase), and
   whether the off-side TD stands still (ErrorCode: 1 = frozen or cleared,
-  2 = still counting); after the restart, the coil at 600-650 ms (Result2)
-  and at 750-800 ms (Result4).  Adopted, the flasher freezes and resumes:
-  2, 2, 1, then off (0) and on (1), the off phase's last 150 ms then a new on
-  phase.  A CLICK keeps both TDs, frozen, yet restarts with an on phase: 2, 1, 2, 1, 1
-  (hardware round 2, 2026-10-30).
-  A fresh off phase reads Result2 = 0, Result4 = 0.
+  2 = still counting); after the restart, the coil at 560-650 ms (Result2)
+  and at 720-800 ms (Result4).  A CLICK keeps both TDs, frozen, yet restarts
+  with an on phase: 2, 1, 2, 1, 1 (hardware round 2, 2026-10-30, with the TDs
+  read at 480-520 ms and the coil at 600-650 and 750-800 ms), and pyrung now
+  does too.  Before round 2 pyrung froze and resumed: 2, 2, 1, then off (0)
+  and on (1), the off phase's last 150 ms then a new on phase.  A fresh off
+  phase reads Result2 = 0, Result4 = 0.  The case's windows are wider than in
+  round 2 since the local sim's 30-40 ms scans stepped over the narrow ones
+  now and then.  They hold for any scan up to 50 ms (the sim's scans
+  advance at most 40, its ``MAX_SCAN_DT_S``), and ErrorCode needs two scans
+  in the 100 ms window to tell a counting TD apart.
 """
 
 from __future__ import annotations
@@ -82,37 +87,44 @@ def prove_debounce_bounce_restarts_on_side(slot):
 
 
 def prove_flasher_restarts_with_on_phase(slot):
-    # O4: 300 ms phases; the rung drops at 450-550 ms, 150 ms into the off
-    # phase.  Each check's window keeps clear of the phase edges and is 40 ms wide, enough
-    # that a slow wall-clock scan (20 ms or so) does not step over it.
+    # O4: 300 ms phases; the rung drops at 450-550 ms (C1832 on), 150 ms into
+    # the off phase.  The local sim scans the whole suite every 30-40 ms, so
+    # the TD checks read on every scan the rung is false instead of in a
+    # narrower window, and the coil checks' windows are 80-90 ms wide and keep
+    # clear of each candidate's phase edges even when each phase change lands
+    # a scan late.
     with Rung(slot.Cmd != 0):
         on_delay(ClickTimer(305), 2000)
     with Rung(slot.Cmd != 0, td[305] >= 450, td[305] < 550):
         out(c[1832])
     with Rung(slot.Cmd != 0, ~c[1832]):
         flasher(c[1831], on=(ClickTimer(306), 300), off=(ClickTimer(307), 300))
-    # While the rung is false: 1 = TD cleared, 2 = TD kept.
-    with Rung(slot.Cmd != 0, td[305] >= 480, td[305] < 520, td[306] == 0):
+    # While the rung is false: 1 = TD cleared, 2 = TD kept.  The off side froze
+    # somewhat under 150 ms in (less by up to two scans), so any value strictly
+    # between 0 and its preset is mid-phase.
+    with Rung(slot.Cmd != 0, c[1832], td[306] == 0):
         copy(1, slot.Result1, oneshot=True)
-    with Rung(slot.Cmd != 0, td[305] >= 480, td[305] < 520, td[306] >= 300):
+    with Rung(slot.Cmd != 0, c[1832], td[306] >= 300):
         copy(2, slot.Result1, oneshot=True)
-    with Rung(slot.Cmd != 0, td[305] >= 480, td[305] < 520, td[307] == 0):
+    with Rung(slot.Cmd != 0, c[1832], td[307] == 0):
         copy(1, slot.Result3, oneshot=True)
-    with Rung(slot.Cmd != 0, td[305] >= 480, td[305] < 520, td[307] >= 100, td[307] < 300):
+    with Rung(slot.Cmd != 0, c[1832], td[307] > 0, td[307] < 300):
         copy(2, slot.Result3, oneshot=True)
-    # Does the off-side TD stand still while the rung is false?
-    with Rung(slot.Cmd != 0, td[305] >= 460, td[305] < 500):
+    # Does the off-side TD stand still while the rung is false?  Its value on
+    # the first false scan; then 2 on any later false scan that reads it moved.
+    with Rung(slot.Cmd != 0, c[1832]):
         copy(td[307], slot.Scratch, oneshot=True)
-    with Rung(slot.Cmd != 0, td[305] >= 510, td[305] < 550, td[307] == slot.Scratch):
+    with Rung(slot.Cmd != 0, c[1832], td[307] == slot.Scratch):
         copy(1, slot.ErrorCode, oneshot=True)
-    with Rung(slot.Cmd != 0, td[305] >= 510, td[305] < 550, td[307] != slot.Scratch):
-        copy(2, slot.ErrorCode, oneshot=True)
-    # After the restart at 550: a fresh on phase is on at 600-650 and 750-800;
-    # resuming the off phase is off at 600-650, on at 750-800; a fresh off
-    # phase is off at both.
-    with Rung(slot.Cmd != 0, td[305] >= 600, td[305] < 650, c[1831]):
+    with Rung(slot.Cmd != 0, c[1832], td[307] != slot.Scratch):
+        copy(2, slot.ErrorCode)
+    # After the restart at 550: a fresh on phase is on from 550 to 850 (less a
+    # scan); resuming the off phase is off until 700 (less a scan), then on; a
+    # fresh off phase is off until 850.  So 560-650 is on only for a fresh on
+    # phase, and 720-800 on for a fresh on phase or a resumed off phase.
+    with Rung(slot.Cmd != 0, td[305] >= 560, td[305] < 650, c[1831]):
         copy(1, slot.Result2, oneshot=True)
-    with Rung(slot.Cmd != 0, td[305] >= 750, td[305] < 800, c[1831]):
+    with Rung(slot.Cmd != 0, td[305] >= 720, td[305] < 800, c[1831]):
         copy(1, slot.Result4, oneshot=True)
     with Rung(slot.Cmd != 0, td[305] >= 850):
         copy(1, slot.Fired, oneshot=True)
@@ -183,12 +195,11 @@ group = Group(
             "A flasher whose rung goes false freezes, then restarts with an on phase: 150 ms "
             "into its off phase, its on-side TD is kept (Result1 = 2) and its off-side TD "
             "kept (Result3 = 2) and standing still (ErrorCode = 1); back on, it is on at "
-            "600-650 ms (Result2 = 1) and at 750-800 ms (Result4 = 1)",
+            "560-650 ms (Result2 = 1) and at 720-800 ms (Result4 = 1)",
             ladder=prove_flasher_restarts_with_on_phase,
             expect={"Result1": 2, "Result2": 1, "Result3": 2, "Result4": 1, "ErrorCode": 1},
             keep=[t[306], td[306], t[307], td[307]],
             scans=100,
-            probe="flasher with its rung false: TDs cleared, kept or frozen; restart phase",
         ),
         case(
             "A timed coil (not maintained) pulses once with its rung held: on (Result1 = "
