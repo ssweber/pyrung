@@ -25,6 +25,7 @@ def test_core_defaults_and_report_execution_metadata():
         "PTR_MAY_ESCAPE_BLOCK",
         "RUNG_CONTRADICTION",
         "RUNG_TAUTOLOGY",
+        "RUNG_ORDER_DEPENDENT",
         "CMP_ALWAYS_FALSE",
         "CMP_EQ_ON_MONOTONE",
         "CALL_RECURSION",

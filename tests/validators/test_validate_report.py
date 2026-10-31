@@ -296,6 +296,7 @@ class TestValidationReport:
             "COIL_STUCK_HIGH",
             "COIL_STUCK_LOW",
             "RUNG_CONTRADICTION",
+            "RUNG_ORDER_DEPENDENT",
             "RUNG_REDUNDANT_TERM",
             "RUNG_TAUTOLOGY",
             "CMP_EQ_ON_MONOTONE",

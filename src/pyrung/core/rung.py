@@ -65,9 +65,12 @@ class Rung:
         # This index marks where this rung's own local branch conditions begin.
         self._branch_condition_start = 0
         self._use_prior_snapshot = False
-        # ``(memory key, tag)`` of the edge sites this rung's row scans; built
-        # on first scan (pyrung.core.site_memory.build_edge_frames).
+        # ``(memory key, tag)`` of the edge sites this rung's own contacts hold
+        # (its row), and of those its condition view scans (its row and every
+        # branch and box inside it); built on first scan
+        # (pyrung.core.site_memory.build_edge_frames).
         self._edge_frame: tuple[tuple[str, str], ...] | None = None
+        self._scan_frame: tuple[tuple[str, str], ...] | None = None
         self.source_file = source_file
         self.source_line = source_line
         self.end_line = end_line
@@ -131,6 +134,7 @@ class Rung:
         self._written_value_cache = None
         self._sp_tree_cache = _ANALYSIS_CACHE_MISS
         self._edge_frame = None
+        self._scan_frame = None
 
     def _get_combined_condition(self) -> Condition | None:
         """Get a single condition representing all rung conditions ANDed together.
@@ -187,8 +191,8 @@ class Rung:
         return condition_view
 
     def _scan_edges(self, ctx: ScanContext, condition_view: ConditionView) -> None:
-        """Store the bit each edge site of this rung's row sees (scanned, powered or not)."""
-        frame = self._edge_frame
+        """Store the bit each edge site this rung's view scans sees (powered or not)."""
+        frame = self._scan_frame
         if frame is None:
             frame = build_edge_frames(self)
         if frame:

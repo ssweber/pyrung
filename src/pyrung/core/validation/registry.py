@@ -98,6 +98,14 @@ _SPECS: tuple[RuleSpec, ...] = (
     ),
     RuleSpec("RUNG_TAUTOLOGY", "RUNG", "warning", "rung", "Or() Condition Is Always True", True),
     RuleSpec("RUNG_REDUNDANT_TERM", "RUNG", "info", "rung", "Redundant Rung Condition"),
+    RuleSpec(
+        "RUNG_ORDER_DEPENDENT",
+        "RUNG",
+        "warning",
+        "order",
+        "Row Reads a Tag Written Above It in the Rung",
+        True,
+    ),
     RuleSpec("CMP_ALWAYS_FALSE", "CMP", "warning", "cmp", "Comparison Always False", True),
     RuleSpec("CMP_ALWAYS_TRUE", "CMP", "info", "cmp", "Comparison Always True"),
     RuleSpec(
@@ -175,6 +183,7 @@ VALIDATOR_ORDER: tuple[str, ...] = (
     "final",
     "physical",
     "rung",
+    "order",
     "cmp",
     "call",
     "math",

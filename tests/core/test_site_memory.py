@@ -17,6 +17,7 @@ from pyrung.core import (
     count_down,
     count_up,
     fall,
+    forloop,
     out,
     rise,
     subroutine,
@@ -794,3 +795,88 @@ def test_edge_memory_seeding_covers_every_contact_on_the_tag():
     assert edge_memory_seeding(prog, {"A": 1}) == {"_edge:e1": True, "_edge:e2": True}
     rungs = list(prog.rungs)
     assert edge_memory_seeding(rungs, {"B": False}) == {"_edge:e3": False}
+
+
+class TestEdgeFrames:
+    """Each trunk, branch and box is a row with an edge frame of its own; a
+    rung's view scans its rows' frames in solve order (the rung-entry snapshot)."""
+
+    @staticmethod
+    def _program() -> Program:
+        A, B, C, D, E, F, G, H = (Bool(n) for n in "ABCDEFGH")
+        cnt = Counter.clone("FrameCnt")
+        body = Counter.clone("FrameBody")
+        with Program(strict=False) as logic:
+            with Rung(rise(A)):
+                out(G)
+                with branch(fall(B)):
+                    out(H)
+                    with branch(rise(C)):
+                        out(G)
+                count_up(cnt, preset=3).reset(rise(D))
+            with Rung():
+                with forloop(2):
+                    with Rung(fall(E), rise(F)):
+                        out(H)
+                    count_up(body, preset=3).reset(fall(A))
+        return logic
+
+    def test_rows_hold_only_their_own_sites(self):
+        from pyrung.core.instruction.control import ForLoopInstruction
+        from pyrung.core.site_memory import edge_rows
+
+        logic = self._program()
+        rung = logic.rungs[0]
+        rows = edge_rows(rung)
+
+        def tags(row: object) -> list[str]:
+            return [edge._resolved_tag.name for _key, edge in rows[id(row)]]
+
+        outer = rung._branches[0]
+        inner = outer._branches[0]
+        box = rung._instructions[1]
+        loop_rung = logic.rungs[1]
+        rows.update(edge_rows(loop_rung))
+        loop = loop_rung._instructions[0]
+        assert isinstance(loop, ForLoopInstruction)
+        body_rung, body_box = loop.body
+        assert tags(rung) == ["A"]
+        assert tags(outer) == ["B"]
+        assert tags(inner) == ["C"]
+        assert tags(box) == ["D"]
+        assert tags(loop) == []
+        assert tags(body_rung) == ["E", "F"]
+        assert tags(body_box) == ["A"]
+        assert outer._edge_frame is not None
+        assert [name for _key, name in outer._edge_frame] == ["B"]
+        assert body_box._body_row_legs is True
+
+    def test_a_rungs_view_scans_its_rows_in_solve_order(self):
+        from pyrung.core.site_memory import build_edge_frames, edge_scan_rows
+
+        logic = self._program()
+        rung, loop_rung = logic.rungs
+        loop = loop_rung._instructions[0]
+        body_rung, body_box = loop.body
+        scan = build_edge_frames(rung)
+        # The trunk, the nested branches, then the box.
+        assert [name for _key, name in scan] == ["A", "B", "C", "D"]
+        # Not the For body rows: they scan with views of their own.
+        assert build_edge_frames(loop_rung) == ()
+        assert [name for _key, name in body_rung._scan_frame] == ["E", "F"]
+        scans = edge_scan_rows(loop_rung)
+        assert set(scans) == {id(loop_rung), id(body_rung), id(body_box)}
+        assert [edge._resolved_tag.name for _k, edge in scans[id(body_box)]] == ["A"]
+
+    def test_keys_and_seeding_are_unchanged(self):
+        logic = self._program()
+        rung = logic.rungs[0]
+        from pyrung.core.site_memory import build_edge_frames
+
+        keys = [key for key, _name in build_edge_frames(rung)]
+        assert keys == ["_edge:e1", "_edge:e2", "_edge:e3", "_edge:e4"]
+        assert edge_memory_seeding(logic, {"A": True}) == {"_edge:e1": True, "_edge:e7": True}
+        assert edge_memory_seeding(list(logic.rungs), {"A": True}) == {
+            "_edge:e1": True,
+            "_edge:e7": True,
+        }
