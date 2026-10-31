@@ -846,6 +846,60 @@ def test_body_contact_on_an_unwritten_element_is_kept() -> None:
     assert not _inexact_entry_subroutines(logic)
 
 
+# Block membership comes from each element's own block and the block's slot
+# names, not from its tag cache (``Block.reset()`` and the test harness clear it).
+CBX = Block("CBX", TagType.BOOL, 1, 4)
+PX = Int("PX", external=True, min=2, max=3, default=2)
+YX = Bool("YX")
+ZX = Bool("ZX")
+
+
+def _indirect_write_split(contact: Any) -> Program:
+    # Iteration 0 runs a (contact on); copy(1, CBX[PX]) can turn it off, so
+    # iteration 1 runs b.  Both out(YX).
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(0, CBX[2])
+        with Rung():
+            with forloop(2):
+                with Rung(~contact):
+                    call("a")
+                with Rung(contact):
+                    call("b")
+                copy(1, CBX[PX])
+        with subroutine("a"):
+            with Rung(A1):
+                out(YX)
+        with subroutine("b"):
+            with Rung(A1):
+                out(YX)
+                out(ZX)
+    return logic
+
+
+def _assert_split_reported(logic: Program) -> None:
+    assert _build_caller_map(logic)["a"][0][4] == ()
+    assert _inexact_entry_subroutines(logic) == {"a", "b"}
+    findings = validate_conflicting_outputs(logic).findings
+    assert "YX" in [f.target_name for f in findings]
+
+
+def test_indirect_write_meets_an_element_contact_after_the_cache_is_cleared() -> None:
+    logic = _indirect_write_split(CBX[2])
+    CBX._tag_cache.clear()
+    _assert_split_reported(logic)
+
+
+def test_indirect_write_meets_a_tag_mapped_onto_the_block_after_the_build() -> None:
+    flag = Bool("CbFlag2")
+    logic = _indirect_write_split(flag)
+    try:
+        flag.map_to(CBX[2])
+        _assert_split_reported(logic)
+    finally:
+        CBX.reset()
+
+
 # -- Unsupported conditions keep their inputs live -----------------------------
 
 B = Bool("B", external=True)

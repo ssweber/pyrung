@@ -441,41 +441,74 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | No
 class _Footprint:
     """The tags a condition reads, or the tags a stretch of a scan can write.
 
-    *names* are tags named outright (a static range counts each element).
-    *blocks* are the blocks addressed through a dynamic address (an indirect
-    reference or range): any of their elements.  *opaque* is a destination
-    that is neither (it can be anything).
+    *names* are tags named outright (a static range counts each element),
+    each with its Tag (None for a fault flag).  *blocks* are the blocks
+    addressed through a dynamic address (an indirect reference or range): any
+    of their elements.  *opaque* is a destination that is neither (it can be
+    anything).
     """
 
-    names: set[str] = field(default_factory=set)
+    names: dict[str, Any] = field(default_factory=dict)
     blocks: dict[str, Any] = field(default_factory=dict)
     opaque: bool = False
 
     def update(self, other: _Footprint) -> None:
-        self.names |= other.names
+        self.names.update(other.names)
         self.blocks.update(other.blocks)
         self.opaque = self.opaque or other.opaque
 
 
-def _block_member_names(block: Any) -> frozenset[str]:
-    """Every element of *block* a program can name: the ones materialized by
-    indexing it, and the semantic tags mapped onto its slots."""
-    cache = getattr(block, "_tag_cache", None) or {}
+def _block_slot_names(block: Any) -> frozenset[str] | None:
+    """The name every address of *block* resolves to now: a renamed slot's,
+    a tag mapped onto it (``map_to``), or the block's own element name.
+
+    Read from the block's slot configuration and mapping registry, not its tag
+    cache, which ``Block.reset()`` clears.  A block whose names cannot be
+    listed gives None.
+    """
+    start, end = getattr(block, "start", None), getattr(block, "end", None)
+    slot_name = getattr(block, "_effective_slot_name", None)
+    if not isinstance(start, int) or not isinstance(end, int) or slot_name is None:
+        return None
     mapped = getattr(block, "_mapped_tags", None) or {}
-    return frozenset([tag.name for tag in cache.values()] + [tag.name for tag in mapped.values()])
+    return frozenset(
+        [slot_name(addr) for addr in range(start, end + 1)] + [tag.name for tag in mapped.values()]
+    )
+
+
+def _tag_in_block(name: str, tag: Any, block: Any) -> bool:
+    """Whether a write to some element of *block* can change the tag *name*.
+
+    A block element carries its block (``_pyrung_block``); a tag that does not
+    may still name one of its slots (mapped onto it, or a same-named tag), so
+    the block's current slot names are checked too.  Unknown is a meet.
+    """
+    owner = getattr(tag, "_pyrung_block", None)
+    if owner is not None and getattr(owner, "name", None) == block.name:
+        return True
+    names = _block_slot_names(block)
+    return names is None or name in names
 
 
 def _footprints_meet(reads: _Footprint, writes: _Footprint) -> bool:
     """Whether a write in *writes* can change a tag *reads* reads."""
     if reads.opaque or writes.opaque:
         return True
-    if reads.names & writes.names:
+    if reads.names.keys() & writes.names.keys():
         return True
     if reads.blocks.keys() & writes.blocks.keys():
         return True
-    if any(reads.names & _block_member_names(block) for block in writes.blocks.values()):
+    if any(
+        _tag_in_block(name, tag, block)
+        for block in writes.blocks.values()
+        for name, tag in reads.names.items()
+    ):
         return True
-    return any(writes.names & _block_member_names(block) for block in reads.blocks.values())
+    return any(
+        _tag_in_block(name, tag, block)
+        for block in reads.blocks.values()
+        for name, tag in writes.names.items()
+    )
 
 
 def _condition_footprint(condition: Any) -> _Footprint:
@@ -503,9 +536,9 @@ def _condition_footprint(condition: Any) -> _Footprint:
         if isinstance(current, ImmediateRef):
             walk(current.value)
         elif isinstance(current, Tag):
-            reads.names.add(current.name)
+            reads.names[current.name] = current
         elif isinstance(current, BlockRange):
-            reads.names.update(tag.name for tag in current.tags())
+            reads.names.update((tag.name, tag) for tag in current.tags())
         elif isinstance(current, IndirectRef):
             walk(current.pointer)
             reads.blocks[current.block.name] = current.block
@@ -572,14 +605,14 @@ class _ScanWrites:
                 if isinstance(target, ImmediateRef):
                     target = target.value
                 if isinstance(target, Tag):
-                    writes.names.add(target.name)
+                    writes.names[target.name] = target
                 elif isinstance(target, BlockRange):
-                    writes.names.update(tag.name for tag in target.tags())
+                    writes.names.update((tag.name, tag) for tag in target.tags())
                 elif isinstance(target, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
                     writes.blocks[target.block.name] = target.block
                 else:
                     writes.opaque = True
-            writes.names.update(instruction_fault_writes(item))
+            writes.names.update(dict.fromkeys(instruction_fault_writes(item)))
             if isinstance(item, ForLoopInstruction):
                 self._direct(item.body, writes, callees)
 
