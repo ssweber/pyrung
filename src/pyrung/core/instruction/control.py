@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.site_memory import begin_bare_body_row
-from pyrung.core.tag import Tag
+from pyrung.core.tag import Tag, TagType
 
 from .base import (
     _EXECUTOR_CALL,
@@ -24,6 +25,7 @@ from .conversions import (
 )
 from .resolvers import (
     _fn_name,
+    _set_fault_out_of_range,
     resolve_tag_ctx,
     resolve_tag_or_value_ctx,
 )
@@ -130,10 +132,33 @@ def for_loop_iterations(count_value: Any) -> int:
     """How many times a For runs its body for a resolved count, as on CLICK.
 
     The count is read as unsigned 16-bit (``count & 0xFFFF``); a count of 0
-    runs :data:`FOR_ZERO_COUNT_ITERATIONS` iterations.
+    runs :data:`FOR_ZERO_COUNT_ITERATIONS` iterations.  A REAL count holding
+    Inf or NaN runs none (pyrung's choice, not measured on CLICK, whose For
+    takes an integer count; :meth:`ForLoopInstruction.iterations` also sets
+    SC43 for it).
     """
+    if not _finite_count(count_value):
+        return 0
     iterations = int(count_value) & 0xFFFF
     return iterations if iterations else FOR_ZERO_COUNT_ITERATIONS
+
+
+def _finite_count(count_value: Any) -> bool:
+    return not isinstance(count_value, float) or math.isfinite(count_value)
+
+
+def _count_may_be_non_finite(count: Any) -> bool:
+    """Whether a For count can resolve to Inf or NaN (a REAL source)."""
+    from pyrung.core.expression import Expression
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    if isinstance(count, Tag):
+        return count.type == TagType.REAL
+    if isinstance(count, (IndirectRef, IndirectExprRef)):
+        return count.block.type == TagType.REAL
+    if isinstance(count, Expression):
+        return True
+    return isinstance(count, float) and not math.isfinite(count)
 
 
 class ForLoopInstruction(OneShotMixin, Instruction):
@@ -169,6 +194,10 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         OneShotMixin.__init__(self, oneshot)
         self.count = count
         self.idx_tag = idx_tag
+        if _count_may_be_non_finite(count):
+            # Only a For whose count can be Inf or NaN sets SC43: the analyses
+            # (PDG, prover) see the flag written where it can be.
+            self._fault_writes = ("fault.out_of_range",)
         self.body: tuple[Instruction | Rung, ...] = tuple(
             body if body is not None else (instructions or ())
         )
@@ -179,6 +208,21 @@ class ForLoopInstruction(OneShotMixin, Instruction):
             else:
                 flat.extend(item._instructions)
         self.instructions = flat
+
+    def iterations(self, ctx: ScanContext) -> int:
+        """How many times the body runs this scan, reading the count now.
+
+        A count that is Inf or NaN (a REAL source) runs no iteration and sets
+        SC43 (``system.fault.out_of_range``), pyrung's choice.
+        """
+        try:
+            count_value = resolve_tag_or_value_ctx(self.count, ctx)
+            if _finite_count(count_value):
+                return for_loop_iterations(count_value)
+        except OverflowError:  # an expression count hit Inf or NaN on the way
+            pass
+        _set_fault_out_of_range(ctx)
+        return 0
 
     @property
     def body_rungs(self) -> tuple[Rung, ...]:
@@ -208,7 +252,7 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         if not self._should_execute(ctx):
             return
 
-        iterations = for_loop_iterations(resolve_tag_or_value_ctx(self.count, ctx))
+        iterations = self.iterations(ctx)
 
         for i in range(iterations):
             # Keep loop index in tag space so indirect refs resolve via ctx.get_tag().

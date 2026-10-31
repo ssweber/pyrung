@@ -12,9 +12,7 @@ from pyrung.core.instruction import (
     LoopBreakSignal,
     LoopContinueSignal,
     SubroutineReturnSignal,
-    resolve_tag_or_value_ctx,
 )
-from pyrung.core.instruction.control import for_loop_iterations
 from pyrung.core.site_memory import begin_bare_body_row
 
 if TYPE_CHECKING:
@@ -191,7 +189,7 @@ class ForLoopInstructionDebugHandler:
         if not instruction._should_execute(execution.ctx):
             return
 
-        iterations = for_loop_iterations(resolve_tag_or_value_ctx(instruction.count, execution.ctx))
+        iterations = instruction.iterations(execution.ctx)
 
         ctx = execution.ctx
         child_execution = execution.with_overrides(enabled=True, enabled_state="enabled")

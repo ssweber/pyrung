@@ -84,6 +84,8 @@ def _check_one(
 ) -> BoundsViolation | None:
     if constraint.min is not None or constraint.max is not None:
         try:
+            if value != value:  # NaN compares false with any bound: never in range
+                return BoundsViolation(name, value, constraint, "range")
             if constraint.min is not None and value < constraint.min:
                 return BoundsViolation(name, value, constraint, "range")
             if constraint.max is not None and value > constraint.max:

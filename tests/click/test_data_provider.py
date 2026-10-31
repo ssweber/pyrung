@@ -305,3 +305,18 @@ def test_stop_command_calls_on_stop_hook_instead_of_runner_stop():
 
     assert calls == ["stop"]
     assert runner.mode == "run"
+
+
+def test_a_real_holding_inf_reads_as_inf_and_an_inf_write_is_refused():
+    import math
+
+    level = Tag("Level", TagType.REAL)
+    mapping = TagMap({level: df[1]})
+    runner = PLC(logic=[])
+    provider = ClickDataProvider(runner, mapping)
+    runner.patch({"Level": math.inf})
+    runner.step()
+
+    assert provider.read("DF1") == math.inf
+    with pytest.raises(ValueError, match="finite"):
+        provider.write("DF1", math.nan)

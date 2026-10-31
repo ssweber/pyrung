@@ -99,21 +99,21 @@ class TestCalcInstruction:
         assert runner.current_state.tags["Result"] == 10.0
 
     @pytest.mark.parametrize("runner_cls", [PLC, CompiledPLC])
-    def test_expression_overflow_sets_out_of_range_and_stores_zero(self, runner_cls):
+    def test_expression_overflow_sets_out_of_range_and_stores_inf(self, runner_cls):
         Enable = Bool("Enable")
         Source = Real("Source")
         Result = Real("Result")
 
         with Program() as logic:
             with Rung(Enable):
-                # 3.0E+38 ** 10 overflows a float: OverflowError, not a value.
+                # 3.0E+38 ** 10 overflows a float: +Inf, as 3.0E+38 * 3.0E+38 is.
                 calc(Source**10, Result)
 
         runner = runner_cls(logic)
         runner.patch({"Enable": True, "Source": 3.0e38, "Result": 123.0})
         runner.step()
 
-        assert runner.current_state.tags["Result"] == 0.0
+        assert runner.current_state.tags["Result"] == float("inf")
         assert runner.current_state.tags["fault.out_of_range"] is True
 
     def test_complex_expression(self, runner_factory):

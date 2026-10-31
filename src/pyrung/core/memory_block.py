@@ -1269,6 +1269,10 @@ class IndirectBlockRange:
     end_expr: int | Tag | Any
     reverse_order: bool = False
 
+    def __post_init__(self) -> None:
+        _check_range_bound(self.block, self.start_expr, "start")
+        _check_range_bound(self.block, self.end_expr, "end")
+
     def resolve_ctx(self, ctx: ScanContext | ConditionView) -> BlockRange:
         """Resolve expressions to concrete BlockRange using ScanContext."""
         start = self._resolve_one(self.start_expr, ctx)
@@ -1342,6 +1346,56 @@ class RangeComparison:
     value: Any
 
 
+#: Tag types a pointer may have: a pointer holds an address, an integer.
+POINTER_TAG_TYPES = frozenset({TagType.INT, TagType.DINT})
+
+
+def _check_pointer_tag(block: Block, pointer: Any) -> None:
+    """Refuse a pointer tag that is not an Int or Dint (``DS[R]`` with R a Real)."""
+    tag_type = getattr(pointer, "type", None)
+    if tag_type is None or tag_type in POINTER_TAG_TYPES:
+        return
+    raise TypeError(
+        f"Pointer {getattr(pointer, 'name', pointer)!r} into block {block.name!r} is "
+        f"{tag_type.name}; a pointer must be an Int or Dint tag."
+    )
+
+
+def _check_pointer_expression(block: Block, expr: Any, what: str = "Index expression") -> None:
+    """Refuse an index expression that is not integer-valued (``DS[R + 1]``, ``DS[I / 2]``)."""
+    from pyrung.core.expression import format_expr, is_integer_index
+
+    if is_integer_index(expr):
+        return
+    raise TypeError(
+        f"{what} {format_expr(expr)!r} into block {block.name!r} is not integer-valued; "
+        "an index expression may use only Int or Dint tags, integer constants and "
+        "integer operators ('//', not '/'; no '**' or math function)."
+    )
+
+
+def _check_range_bound(block: Block, bound: Any, which: str) -> None:
+    """Refuse a ``select()`` bound that is not an int, an Int/Dint tag or an index expression."""
+    from pyrung.core.expression import Expression
+
+    if isinstance(bound, int):
+        return
+    if isinstance(bound, Expression):
+        _check_pointer_expression(block, bound, f"select() {which} bound")
+        return
+    if isinstance(bound, Tag):
+        if bound.type in POINTER_TAG_TYPES:
+            return
+        raise TypeError(
+            f"select() {which} bound {bound.name!r} into block {block.name!r} is "
+            f"{bound.type.name}; a bound must be an int or an Int or Dint tag."
+        )
+    raise TypeError(
+        f"select() {which} bound into block {block.name!r} is a {type(bound).__name__}; "
+        "a bound must be an int, an Int or Dint tag or an integer index expression."
+    )
+
+
 @dataclass(frozen=True)
 class IndirectRef:
     """Tag with runtime-resolved address via pointer.
@@ -1356,6 +1410,9 @@ class IndirectRef:
 
     block: Block
     pointer: Tag
+
+    def __post_init__(self) -> None:
+        _check_pointer_tag(self.block, self.pointer)
 
     def resolve(self, state: SystemState) -> Tag:
         """Resolve pointer value to concrete Tag.
@@ -1449,6 +1506,9 @@ class IndirectExprRef:
     block: Block
     expr: Any  # Expression type - use Any to avoid circular import
 
+    def __post_init__(self) -> None:
+        _check_pointer_expression(self.block, self.expr)
+
     def resolve_ctx(self, ctx: ScanContext | ConditionView) -> Tag:
         """Resolve expression value to concrete Tag using ScanContext.
 
@@ -1464,6 +1524,46 @@ class IndirectExprRef:
         addr = int(self.expr.evaluate(ctx))
         self.block._validate_address(addr)
         return self.block._get_tag(addr)
+
+    # Comparisons build the same conditions as ``IndirectRef``'s.  Without
+    # them, ``DS[idx + 1] == 5`` fell back to the dataclass ``__eq__`` and
+    # produced a plain ``bool``.
+
+    def __eq__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
+        """Create equality comparison condition."""
+        from pyrung.core.condition import IndirectCompareEq
+
+        return IndirectCompareEq(self, other)
+
+    def __ne__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
+        """Create inequality comparison condition."""
+        from pyrung.core.condition import IndirectCompareNe
+
+        return IndirectCompareNe(self, other)
+
+    def __lt__(self, other: Any) -> IndirectCompareLt:
+        """Create less-than comparison condition."""
+        from pyrung.core.condition import IndirectCompareLt
+
+        return IndirectCompareLt(self, other)
+
+    def __le__(self, other: Any) -> IndirectCompareLe:
+        """Create less-than-or-equal comparison condition."""
+        from pyrung.core.condition import IndirectCompareLe
+
+        return IndirectCompareLe(self, other)
+
+    def __gt__(self, other: Any) -> IndirectCompareGt:
+        """Create greater-than comparison condition."""
+        from pyrung.core.condition import IndirectCompareGt
+
+        return IndirectCompareGt(self, other)
+
+    def __ge__(self, other: Any) -> IndirectCompareGe:
+        """Create greater-than-or-equal comparison condition."""
+        from pyrung.core.condition import IndirectCompareGe
+
+        return IndirectCompareGe(self, other)
 
     def __repr__(self) -> str:
         return f"IndirectExprRef({self.block.name}[{self.expr}])"

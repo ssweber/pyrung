@@ -30,6 +30,7 @@ from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.expression import (
     ExprCompare,
     Expression,
+    format_expr,
 )
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag
@@ -202,18 +203,20 @@ class ConditionTraceEngine:
     def _evaluate_indirect_compare(
         self, condition: Any, ctx: ScanContext
     ) -> tuple[bool, list[dict[str, Any]]]:
-        target = condition.indirect_ref.resolve_ctx(ctx)
+        indirect_ref = condition.indirect_ref
+        target = indirect_ref.resolve_ctx(ctx)
         left_label = target.name
         left_value = ctx.get_tag(target.name, target.default)
-        pointer_name = condition.indirect_ref.pointer.name
-        pointer_value = ctx.get_tag(pointer_name, condition.indirect_ref.pointer.default)
-        extra_details = [
-            self._detail(
-                "left_pointer_expr", f"{condition.indirect_ref.block.name}[{pointer_name}]"
-            ),
-            self._detail("left_pointer", pointer_name),
-            self._detail("left_pointer_value", pointer_value),
-        ]
+        extra_details = [self._detail("left_pointer_expr", self._value_text(indirect_ref))]
+        if isinstance(indirect_ref, IndirectRef):
+            pointer_name = indirect_ref.pointer.name
+            pointer_value = ctx.get_tag(pointer_name, indirect_ref.pointer.default)
+            extra_details.extend(
+                [
+                    self._detail("left_pointer", pointer_name),
+                    self._detail("left_pointer_value", pointer_value),
+                ]
+            )
         right_details = self._right_operand_details(condition.value, ctx)
         right_value = self._resolve_operand(condition.value, ctx)
         value = bool(condition.evaluate(ctx))
@@ -276,12 +279,8 @@ class ConditionTraceEngine:
         if isinstance(value, IndirectRef):
             return f"{value.block.name}[{value.pointer.name}]"
         if isinstance(value, IndirectExprRef):
-            return f"{value.block.name}[{value.expr!r}]"
+            return f"{value.block.name}[{format_expr(value.expr)}]"
         return repr(value)
-
-    @staticmethod
-    def _indirect_ref_text(value: IndirectRef) -> str:
-        return f"{value.block.name}[{value.pointer.name}]"
 
     def expression(self, condition: Any) -> str:
         """Render a stable, user-facing condition expression."""
@@ -330,8 +329,7 @@ class ConditionTraceEngine:
     def _expression_indirect_compare(self, condition: Any) -> str:
         op = _INDIRECT_COMPARE_OPERATOR_BY_CLASS_NAME[type(condition).__name__]
         return (
-            f"{self._indirect_ref_text(condition.indirect_ref)} "
-            f"{op} {self._value_text(condition.value)}"
+            f"{self._value_text(condition.indirect_ref)} {op} {self._value_text(condition.value)}"
         )
 
     @_expression.register(ExprCompare)

@@ -110,3 +110,5 @@ with rung((PressureA + PressureB) > 100):
 ```
 
 Inline expressions work in simulation. The CLICK dialect validator will flag them if targeting CLICK hardware — rewrite as `calc()` instructions instead.
+
+An inline expression is permissive: an operation that hits a math error (a division by zero, a math function outside its domain, a bitwise operation on Inf or NaN) gives 0 and sets no fault flag. See [Math outside `calc()`](math.md#math-outside-calc).

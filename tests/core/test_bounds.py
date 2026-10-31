@@ -8,6 +8,22 @@ from pyrung.core import PLC, Bool, Int, Program, Real, Rung, calc, copy
 
 
 class TestRangeViolation:
+    @pytest.mark.parametrize("value", [float("inf"), float("nan")])
+    def test_inf_and_nan_are_out_of_range(self, value):
+        P = Real("P", min=0, max=100)
+        Q = Real("Q")
+
+        with Program() as logic:
+            with Rung():
+                copy(Q, P)
+
+        plc = PLC(logic, dt=0.01)
+        plc.patch({"Q": value})
+        plc.step()
+
+        assert "P" in plc.bounds_violations
+        assert plc.bounds_violations["P"].kind == "range"
+
     def test_max_violation(self):
         Enable = Bool("Enable")
         P = Real("P", min=0, max=100)

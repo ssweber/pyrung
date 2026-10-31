@@ -715,10 +715,15 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
     )
     for name, tag in sorted(ctx.retentive_tags.items()):
         symbol = ctx.symbol_for_tag(tag)
+        value_expr = symbol
+        if tag.type.name == "REAL":
+            # JSON has no Inf or NaN: save one as its str ("inf", "nan"), which
+            # the load's float() parses back.  ``x - x == 0`` only when finite.
+            value_expr = f"({symbol} if {symbol} - {symbol} == 0 else str({symbol}))"
         lines.extend(
             [
                 f'    if {symbol} != _RET_DEFAULTS["{name}"]:',
-                f'        values["{name}"] = {{"type": "{tag.type.name}", "value": {symbol}}}',
+                f'        values["{name}"] = {{"type": "{tag.type.name}", "value": {value_expr}}}',
             ]
         )
     lines.extend(
@@ -1277,7 +1282,15 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
         dirty_parts = []
         for name, tag in sorted(ctx.retentive_tags.items()):
             symbol = ctx.symbol_for_tag(tag)
-            dirty_parts.append(f'{symbol} != _ret_snapshot.get("{name}")')
+            saved = f'_ret_snapshot.get("{name}")'
+            if tag.type.name == "REAL":
+                # NaN != NaN: a REAL that was NaN when saved and is NaN still
+                # is not dirty, or it would be resaved every interval.
+                dirty_parts.append(
+                    f"({symbol} != {saved} and ({symbol} == {symbol} or {saved} == {saved}))"
+                )
+            else:
+                dirty_parts.append(f"{symbol} != {saved}")
         dirty_check = " or ".join(dirty_parts)
         lines.extend(
             [

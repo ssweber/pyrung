@@ -22,6 +22,7 @@ from pyrung.circuitpy.codegen.context import (
     CodegenContext,
 )
 from pyrung.core.expression import (
+    DOMAIN_LIMITED_MATH_FUNCS,
     BinaryExpr,
     Expression,
     LiteralExpr,
@@ -32,6 +33,7 @@ from pyrung.core.expression import (
     SumExpr,
     TagExpr,
     UnaryExpr,
+    may_be_float,
 )
 from pyrung.core.memory_block import (
     BlockRange,
@@ -109,8 +111,15 @@ def _compile_expression_impl(
     *,
     scalar_snapshots: dict[str, str] | None = None,
     block_snapshots: dict[int, str] | None = None,
+    strict: bool = False,
 ) -> str:
-    """Return a Python expression string with explicit parentheses."""
+    """Return a Python expression string with explicit parentheses.
+
+    *strict* is for calc, whose expression raises on a math error (calc stores
+    0 and sets the flag).  Anywhere else an expression is permissive, as the
+    core's: an operation that can raise goes through ``_permissive_op`` /
+    ``_permissive_math``, which give 0 instead.
+    """
     if isinstance(expr, TagExpr):
         return _snapshot_tag_symbol(
             expr.tag,
@@ -127,15 +136,32 @@ def _compile_expression_impl(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
         right = _compile_expression_impl(
             expr.right,
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
+        if not strict and (
+            _binary_may_raise(expr) or _may_be_huge(expr.left) or _may_be_huge(expr.right)
+        ):
+            return _permissive_op(expr.symbol, left, right, ctx)
         if expr.symbol in _BITWISE_SYMBOLS:
-            return f"(int({left}) {expr.symbol} int({right}))"
+            left_int = _bit_int_expr(expr.left, left, ctx)
+            right_int = _bit_int_expr(expr.right, right, ctx)
+            if expr.symbol in ("<<", ">>"):
+                right_int = _shift_count_expr(expr.right, right_int, ctx)
+            return f"({left_int} {expr.symbol} {right_int})"
+        if expr.symbol == "**" and (_may_be_float(expr.left) or _may_be_float(expr.right)):
+            # _pow gives +/-Inf for a float overflow, as the core's _op_pow, and
+            # raises _MathDomainError for a complex result; an integer power is
+            # exact and never overflows.
+            ctx.mark_helper("_math_func")
+            ctx.mark_helper("_pow")
+            return f"_pow({left}, {right})"
         return f"({left} {expr.symbol} {right})"
 
     if isinstance(expr, UnaryExpr):
@@ -144,22 +170,31 @@ def _compile_expression_impl(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
         if expr.symbol == "abs":
             return f"abs({inner})"
         if expr.symbol == "~":
-            return f"(~int({inner}))"
+            if not strict and _may_be_float(expr.operand):
+                return _permissive_op("~", inner, "0", ctx)
+            return f"(~{_bit_int_expr(expr.operand, inner, ctx)})"
         return f"({expr.symbol}({inner}))"
 
     if isinstance(expr, MathFuncExpr):
         if expr.name not in _ALLOWED_MATH_FUNCS:
             raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
         # _math_func passes a non-finite operand through and raises
-        # _MathDomainError for a domain error, as MathFuncExpr.evaluate does.
+        # _MathDomainError for a domain error, as MathFuncExpr.evaluate does;
+        # outside calc _permissive_math gives 0 for it instead, and for an
+        # integer too large for a float (OverflowError).
         ctx.mark_helper("_math_func")
+        helper = "_math_func"
+        if not strict and (expr.name in DOMAIN_LIMITED_MATH_FUNCS or _may_be_huge(expr.operand)):
+            ctx.mark_helper("_permissive_math")
+            helper = "_permissive_math"
         return (
-            f"_math_func(math.{expr.name}, "
-            f"{_compile_expression_impl(expr.operand, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f"{helper}(math.{expr.name}, "
+            f"{_compile_expression_impl(expr.operand, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, strict=strict)}"
             ")"
         )
 
@@ -169,26 +204,38 @@ def _compile_expression_impl(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
         count = _compile_expression_impl(
             expr.count,
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
+        if not strict and (
+            _may_be_float(expr.value)
+            or _may_be_float(expr.count)
+            or (expr.name in ("lsh", "rsh") and not _non_negative_literal(expr.count))
+        ):
+            return _permissive_op(expr.name, value, count, ctx)
+        value_int = _bit_int_expr(expr.value, value, ctx)
+        count_int = _bit_int_expr(expr.count, count, ctx)
+        if expr.name in ("lsh", "rsh"):
+            count_int = _shift_count_expr(expr.count, count_int, ctx)
         if expr.name == "lsh":
-            return f"(int({value}) << int({count}))"
+            return f"({value_int} << {count_int})"
         if expr.name == "rsh":
-            return f"(int({value}) >> int({count}))"
+            return f"({value_int} >> {count_int})"
         if expr.name == "lro":
             return (
-                f"((((int({value}) & 0xFFFF) << (int({count}) % 16)) | "
-                f"((int({value}) & 0xFFFF) >> (16 - (int({count}) % 16)))) & 0xFFFF)"
+                f"(((({value_int} & 0xFFFF) << ({count_int} % 16)) | "
+                f"(({value_int} & 0xFFFF) >> (16 - ({count_int} % 16)))) & 0xFFFF)"
             )
         if expr.name == "rro":
             return (
-                f"((((int({value}) & 0xFFFF) >> (int({count}) % 16)) | "
-                f"((int({value}) & 0xFFFF) << (16 - (int({count}) % 16)))) & 0xFFFF)"
+                f"(((({value_int} & 0xFFFF) >> ({count_int} % 16)) | "
+                f"(({value_int} & 0xFFFF) << (16 - ({count_int} % 16)))) & 0xFFFF)"
             )
         raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
 
@@ -205,22 +252,48 @@ def _compile_expression_impl(
         return f"({' + '.join(terms)})"
 
     if isinstance(expr, RandIntExpr):
+        lo = hi = ""
+        if expr.checks_bounds or not ctx.kernel_runtime:
+            lo = _compile_expression_impl(
+                expr.lo,
+                ctx,
+                scalar_snapshots=scalar_snapshots,
+                block_snapshots=block_snapshots,
+                strict=strict,
+            )
+            hi = _compile_expression_impl(
+                expr.hi,
+                ctx,
+                scalar_snapshots=scalar_snapshots,
+                block_snapshots=block_snapshots,
+                strict=strict,
+            )
         if ctx.kernel_runtime:
             # The runner's input drain wrote this scan's draw into the site tag.
-            return _snapshot_tag_symbol(
+            draw = _snapshot_tag_symbol(
                 expr.tag,
                 ctx,
                 scalar_snapshots=scalar_snapshots,
                 block_snapshots=block_snapshots,
             )
-        lo = _compile_expression_impl(
-            expr.lo, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots
-        )
-        hi = _compile_expression_impl(
-            expr.hi, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots
-        )
+            if not expr.checks_bounds:
+                return draw
+            # A bound holding Inf or NaN raises OverflowError: the calc stores
+            # 0 with SC43 (RandIntExpr.evaluate).  Outside calc the draw
+            # reads as 0 instead.
+            ctx.mark_helper("_bit_int")
+            helper = "_rand_checked" if strict else "_rand_or_zero"
+            ctx.mark_helper(helper)
+            return f"{helper}({draw}, {lo}, {hi})"
         ctx.uses_random = True
-        return f"random.randint(min(int({lo}), int({hi})), max(int({lo}), int({hi})))"
+        if expr.checks_bounds and not strict:
+            ctx.mark_helper("_bit_int")
+            ctx.mark_helper("_rand_permissive")
+            return f"_rand_permissive({lo}, {hi})"
+        # A bound holding Inf or NaN raises OverflowError, so the calc stores
+        # 0 with SC43: int() of Inf raises it, _bit_int turns NaN into it.
+        lo, hi = _bit_int_expr(expr.lo, lo, ctx), _bit_int_expr(expr.hi, hi, ctx)
+        return f"random.randint(min({lo}, {hi}), max({lo}, {hi}))"
 
     if isinstance(expr, RangeAggregateExpr):
         return _compile_range_aggregate(
@@ -269,6 +342,112 @@ def _compile_range_aggregate(expr: RangeAggregateExpr, terms: list[str]) -> str:
 
 
 _BITWISE_SYMBOLS = frozenset({"&", "|", "^", "<<", ">>"})
+
+
+def _non_zero_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and expr.value != 0
+
+
+def _non_negative_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and expr.value >= 0
+
+
+def _non_negative_int_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and isinstance(expr.value, int) and expr.value >= 0
+
+
+def _binary_may_raise(expr: BinaryExpr) -> bool:
+    """Whether *expr* can raise on a math error (and so, outside calc, give 0).
+
+    A division by a non-zero constant, a power with a non-negative integer
+    constant exponent, a bitwise operation on integers and a shift by a
+    non-negative constant cannot; ``+``, ``-`` and ``*`` never do (a float
+    overflow is Inf).  Each of them can raise when an operand is an integer too
+    large for a float (:func:`_may_be_huge`), which the caller checks.
+    """
+    symbol = expr.symbol
+    if symbol in ("/", "//", "%"):
+        return not _non_zero_literal(expr.right)
+    if symbol == "**":
+        # A negative exponent of 0 divides by zero; a fractional one of a
+        # negative base is complex (a math error).
+        return not _non_negative_int_literal(expr.right)
+    if symbol in ("&", "|", "^"):
+        return _may_be_float(expr.left) or _may_be_float(expr.right)
+    if symbol in ("<<", ">>"):
+        return (
+            _may_be_float(expr.left)
+            or _may_be_float(expr.right)
+            or not _non_negative_literal(expr.right)
+        )
+    return False
+
+
+def _may_be_huge(expr: Any) -> bool:
+    """Whether *expr* may be an integer too large for a float (past 2 ** 1024).
+
+    A ``**`` makes one from tags (``2 ** E``, ``BD ** 40``), and so can a left
+    shift by more than a literal 64.  Such an integer is exact, but an operation
+    that turns it into a float (``* 0.5``, ``/``, ``sin``) raises
+    ``OverflowError``.  ``+``, ``-``, ``*`` of tags alone stay far below it.
+    """
+    if isinstance(expr, BinaryExpr):
+        if expr.symbol == "**":
+            return True
+        if expr.symbol == "<<" and not _small_shift_literal(expr.right):
+            return True
+        return _may_be_huge(expr.left) or _may_be_huge(expr.right)
+    if isinstance(expr, ShiftFuncExpr):
+        if expr.name == "lsh" and not _small_shift_literal(expr.count):
+            return True
+        return _may_be_huge(expr.value) or _may_be_huge(expr.count)
+    if isinstance(expr, UnaryExpr):
+        return _may_be_huge(expr.operand)
+    return False
+
+
+def _small_shift_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and isinstance(expr.value, int) and expr.value <= 64
+
+
+def _shift_count_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
+    """A shift count; a negative one raises OverflowError (core ``shift_count``)."""
+    if _non_negative_literal(expr):
+        return compiled
+    ctx.mark_helper("_bit_int")
+    ctx.mark_helper("_shift_count")
+    return f"_shift_count({compiled})"
+
+
+def _permissive_op(op: str, left: str, right: str, ctx: CodegenContext) -> str:
+    """``_permissive_op(op, left, right)``: the operation, or 0 for a math error.
+
+    The core's expressions outside calc give 0 where an operation raises
+    (``_permissive`` in pyrung.core.expression).
+    """
+    ctx.mark_helper("_bit_int")
+    ctx.mark_helper("_math_func")
+    ctx.mark_helper("_pow")
+    ctx.mark_helper("_permissive_op")
+    return f"_permissive_op({op!r}, {left}, {right})"
+
+
+_may_be_float = may_be_float
+
+
+def _bit_int_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
+    """``int(compiled)`` for a bitwise or shift operand.
+
+    An operand that may be NaN goes through ``_bit_int``, which raises
+    ``OverflowError`` for NaN as ``int()`` does for Inf, so the calc stores 0
+    with the out-of-range flag (as the core's ``bit_operand``), instead of
+    the ``ValueError`` of ``int(nan)`` stopping the scan.
+    """
+    if _may_be_float(expr):
+        ctx.mark_helper("_bit_int")
+        return f"_bit_int({compiled})"
+    return f"int({compiled})"
+
 
 _ALLOWED_MATH_FUNCS = frozenset(
     {
@@ -924,7 +1103,9 @@ def _compile_value(
     *,
     scalar_snapshots: dict[str, str] | None = None,
     block_snapshots: dict[int, str] | None = None,
+    strict: bool = False,
 ) -> str:
+    """*value* as a Python expression; *strict* for calc (see _compile_expression_impl)."""
     if isinstance(value, Tag):
         return _snapshot_tag_symbol(
             value,
@@ -952,6 +1133,7 @@ def _compile_value(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
         index_expr = f"{helper}(int({expr}))"
         if block_snapshots is not None and block_id in block_snapshots:
@@ -969,5 +1151,6 @@ def _compile_value(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
     return repr(value)

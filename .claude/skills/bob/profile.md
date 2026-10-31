@@ -5,7 +5,8 @@ Repo-specific rules for the /bob skill. Another repo replaces this file.
 ## Paths
 
 - Main checkout `C:/Users/Sam/Documents/GitHub/pyrung`, base branch `dev` (trunk; the user
-  squash-merges dev into main themselves; never touch main).
+  squash-merges dev into main themselves; never touch main). Push dev to origin after each
+  landing (user, 2026-10-30); never push bob/* branches or main.
 - Worktrees `../pyrung-wt/<name>` on `bob/<name>`; mergeq home `../pyrung-wt/buildbot`
   (queue, logs, results, `jobs/<id>/{HANDOFF,REVIEW,LEDGER}.md`).
 - Current arc doc: `scratchpad/conformance_review/BOB-HANDOFF.md` (FINDINGS.md, DESIGN.md,
@@ -16,9 +17,15 @@ Repo-specific rules for the /bob skill. Another repo replaces this file.
 - Match real CLICK behaviour; hardware-recorded expectations in `tests/conformance/` are
   authoritative. `pending="<STEP>"` cases are strict xfails; the fixer removes the marker in
   the commit that makes the case pass (`tests/conformance/AGENTS.md`).
-- Fold must equal stepping or decline. The prover is exact on common idioms or a named
-  Intractable, never a false Proven; any prover change needs a standalone justification.
-  Correctness before features, with perf measured and kept.
+- Fold must equal stepping or decline. The prover aims for exact on common idioms or a named
+  Intractable; any prover change needs a standalone justification. Correctness before
+  features, with perf measured and kept.
+- Prover bugs never block a branch or train (user, 2026-10-30). A false Proven or other
+  prover hole found in review or while building: fix it in the branch only if the fix is
+  straightforward; otherwise add a strict xfail test reproducing it, log it in the ledger
+  as a follow-up, and let the branch proceed. Reviewers report them as NON-BLOCKING unless
+  the branch itself introduced the hole. Arc priority (user, 2026-10-30): ship the
+  conformance arc (match CLICK) first; prover side-issues get a second sweep afterwards.
 - Core runtime, compiled kernel and CircuitPython codegen must agree.
 - pyrung-authored terminal/log/exception text is ASCII only; "pyrung" is always lowercase.
 - Docs + CHANGELOG (Unreleased) move with behaviour changes.

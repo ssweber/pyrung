@@ -16,7 +16,7 @@ from collections.abc import Collection, Iterable, Mapping
 from typing import Any
 
 from pyrung.core.condition import Condition
-from pyrung.core.expression import Expression
+from pyrung.core.expression import STRICT_DIVISION, Expression
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.conversions import _truncate_to_tag_type
 from pyrung.core.instruction.data_transfer import CopyInstruction
@@ -285,17 +285,24 @@ class _ValueSets:
     def _store(self, instr: Any, dest: Tag, values) -> frozenset[Any] | None:
         """Values *instr* stores into *dest*, given the current value sets."""
         if isinstance(instr, CalcInstruction):
-            raw = self._evaluate(instr.expression, values)
+            # As CalcInstruction.execute: a division by zero raises (and stores
+            # 0); an Inf result stays Inf in a REAL, 0 in an integer register.
+            token = STRICT_DIVISION.set(True)
+            try:
+                raw = self._evaluate(instr.expression, values)
+            finally:
+                STRICT_DIVISION.reset(token)
             if raw is None:
                 return None
             out: set[Any] = set()
             for value in raw:
-                if isinstance(value, float) and not math.isfinite(value):
-                    value = 0
                 try:
-                    out.add(_truncate_to_tag_type(value, dest, instr.mode))
+                    stored = _truncate_to_tag_type(value, dest, instr.mode)
                 except Exception:  # noqa: BLE001
                     return None
+                if isinstance(stored, float) and math.isnan(stored):
+                    return None  # NaN equals nothing: no set holds it
+                out.add(stored)
             return frozenset(out)
         if _is_plain_copy(instr):
             raw = self._evaluate(instr.source, values)
