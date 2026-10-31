@@ -94,14 +94,37 @@ What each case tells apart:
   adds the scan's time reads a scan's worth (about 10 on the sim); one that
   carries a step's overshoot into the next step reads 5 in-process on the
   advance (Result4).
+- ``pins_read_before_step_fix`` (probe, box atomicity): a box reads its
+  enable and every pin at one moment, before it executes.  A step register
+  staged out of range (5 of 2) on scan 3 makes Result1 != 1 true, and that
+  condition is shared by the drum's rung and its ``.reset()`` and ``.jog()``
+  pins (copied into each pin's row: the exporter's rail form; the reset pin
+  adds Cmd == 0, the jog pin a bit that is on at scan 3).  The condition is
+  also true while idle, at step 0, so the reset pin works.  The drum corrects
+  the step to 1 as it runs.  Pins read before that write (adopted, pyrung's
+  model): the jog sees the shared condition on, jogs the corrected step to 2
+  (Result1 = 2) and step 2's output comes on at scan 3 (Result3 = 3, Result4 =
+  0).  A jog pin read after the correction sees step 1, the shared condition
+  off, and no jog: Result1 = 1, Result3 = 0, step 1's output first on at scan 3
+  (Result4 = 3).
+- ``pins_read_before_step_fix_tee``: the same ladder on its own bits (the same
+  conditions, the same pins), with the ``.reset()`` and ``.jog()`` pins drawn
+  teeing off the drum's input wire after the shared contact (Result1 != 1)
+  instead of from the rail.  Same readings as above.  The reset pin is teed too
+  because a tee cannot cross a rail pin row and the pin order is fixed.
+  pyrung runs the same rungs in every target; the CLICK export redraws the
+  pins (``tee=``), and ``test_tee_twins.py`` imports the drawing and compares
+  it with the rail drawing.  A CLICK that reads the two drawings differently
+  is the answer.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from pyrung.conformance import Group, assert_all_passed, case, run
+from pyrung.conformance import Group, TeeSpec, assert_all_passed, case, run
 from pyrung.core import (
+    And,
     Or,
     Rung,
     calc,
@@ -477,6 +500,39 @@ def init_time_acc_clears_on_every_transition(slot):
     reset(c[1997])
 
 
+def _pins_read_before_step_fix(slot, outputs, events, flag, jog_bit):
+    # Step 5 is written into the step register (Result1) on scan 3, above the
+    # drum.  The drum's rung and its .reset() and .jog() pins share Result1 !=
+    # 1 (true while idle, at step 0, and on the bad step); the reset pin adds
+    # Cmd == 0 and the jog pin adds a bit that is on at scan 3.  The rail and
+    # tee cases are this ladder, on their own bits; only the CLICK drawing of
+    # the pins differs.
+    count_scans(slot)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+        copy(5, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+        out(jog_bit)
+    with Rung(slot.Result1 != 1):
+        event_drum(
+            outputs=outputs,
+            events=events,
+            pattern=[[1, 0], [0, 1]],
+            current_step=slot.Result1,
+            completion_flag=flag,
+        ).reset(And(slot.Result1 != 1, slot.Cmd == 0)).jog(And(slot.Result1 != 1, jog_bit))
+    first_on_from(slot, outputs[1], 3, slot.Result3)
+    first_on_from(slot, outputs[0], 3, slot.Result4)
+    done(slot)
+
+
+def prove_pins_read_before_step_fix(slot):
+    _pins_read_before_step_fix(slot, [c[1971], c[1972]], [c[1973], c[1974]], c[1975], c[1970])
+
+
+def prove_pins_read_before_step_fix_tee(slot):
+    _pins_read_before_step_fix(slot, [c[1976], c[1977]], [c[1978], c[1979]], c[1980], c[1998])
+
+
 group = Group(
     "drum",
     [
@@ -595,6 +651,30 @@ group = Group(
             "2 (Result2 = 0)",
             ladder=prove_reset_swallows_held_jog,
             expect={"Result1": 1, "Result2": 0},
+            scans=SCANS,
+        ),
+        case(
+            "A drum reads its rung and its pins at one moment, before it runs: a step "
+            "register staged out of range on scan 3 is the condition its rung and its "
+            "jog pin share, and the jog sees it though the drum corrects the step to 1 "
+            "as it runs; the jog takes the corrected step to 2 (Result1), whose output "
+            "is on from scan 3 (Result3), and step 1's never comes on (Result4 = 0)",
+            ladder=prove_pins_read_before_step_fix,
+            probe="pins read before the box executes",
+            expect={"Result1": 2, "Result3": 3, "Result4": 0},
+            scans=SCANS,
+        ),
+        case(
+            "The tee drawing of the same question: a drum whose reset and jog pins tee "
+            "off its input wire after Result1 != 1 reads its rung and pins at one "
+            "moment, before it runs; a step register staged out of range on scan 3 is "
+            "that condition, the jog sees it though the drum corrects the step to 1 as "
+            "it runs, and takes the corrected step to 2 (Result1), whose output is on "
+            "from scan 3 (Result3), and step 1's never comes on (Result4 = 0)",
+            ladder=prove_pins_read_before_step_fix_tee,
+            probe="pins read before the box executes",
+            tee=TeeSpec("event_drum(", (".reset()", ".jog()"), after=1),
+            expect={"Result1": 2, "Result3": 3, "Result4": 0},
             scans=SCANS,
         ),
     ],

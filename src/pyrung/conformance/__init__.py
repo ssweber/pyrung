@@ -29,6 +29,7 @@ from pyrung.conformance._modbus import (
     wait_for_scan_counter_wrap,
 )
 from pyrung.conformance._runner import assert_all_passed, format_report, run
+from pyrung.conformance._tee import TeeSpec
 
 __all__ = [
     "BuildMismatchError",
@@ -45,6 +46,7 @@ __all__ = [
     "Manifest",
     "ManifestError",
     "SimServer",
+    "TeeSpec",
     "assert_all_passed",
     "build_program",
     "case",
