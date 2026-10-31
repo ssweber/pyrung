@@ -15,6 +15,7 @@ from pyrung.conformance import Case
 from pyrung.conformance._ladder import emit_case
 from pyrung.conformance._slot import make_slot
 from pyrung.core import (
+    Block,
     Bool,
     Counter,
     Int,
@@ -32,6 +33,7 @@ from pyrung.core import (
     rise,
     subroutine,
 )
+from pyrung.core.tag import TagType
 from pyrung.core.validation import (
     RUNG_ORDER_DEPENDENT,
     ReadAfterWrite,
@@ -71,6 +73,21 @@ def test_a_row_does_not_see_its_own_write_or_a_later_one():
 def test_the_hit_names_the_latest_earlier_writer():
     rows = [_row(writes={"A"}), _row(writes={"A"}), _row(reads={"A"})]
     assert reads_after_write(rows) == (ReadAfterWrite(reader=2, tag="A", writer=1),)
+
+
+def test_an_indexed_access_meets_any_access_to_its_bank():
+    banks = {"DS3": "DS", "DS4": "DS"}
+    named_write = [_row(writes={"DS3"}), SolveRow(indexed_reads=frozenset({"DS"}))]
+    indexed_write = [SolveRow(indexed_writes=frozenset({"DS"})), _row(reads={"DS4"})]
+    both = [SolveRow(indexed_writes=frozenset({"DS"})), SolveRow(indexed_reads=frozenset({"DS"}))]
+    assert reads_after_write(named_write, bank_of=banks) == (
+        ReadAfterWrite(reader=1, tag="DS", writer=0, indexed=True),
+    )
+    assert reads_after_write(indexed_write, bank_of=banks) == (
+        ReadAfterWrite(reader=1, tag="DS4", writer=0),
+    )
+    assert reads_after_write(both) == (ReadAfterWrite(reader=1, tag="DS", writer=0, indexed=True),)
+    assert reads_after_write([_row(writes={"DS3"}), _row(reads={"DS4"})], bank_of=banks) == ()
 
 
 def test_shared_reads_are_re_read_by_every_row():
@@ -283,6 +300,106 @@ def test_branch_below_a_for_loop_sees_its_body_writes():
     (finding,) = _findings(program)
     assert finding.tags == ("A",)
     assert "forloop(1)" in finding.message
+
+
+# -- indexed rows -----------------------------------------------------------------
+#
+# A CLICK-sized bank is too large for the program graph to list, so an index no
+# declared range bounds stands for any element of its bank.
+
+
+def _bank() -> Block:
+    return Block("DS", TagType.INT, 1, 4500)
+
+
+def test_indexed_contact_below_a_named_write_is_flagged():
+    ds, p = _bank(), Int("P")
+    with Program() as program:
+        with Rung(Go):
+            copy(1, ds[3])
+            with branch(ds[p] == 1):
+                out(Y1)
+    (finding,) = _findings(program)
+    assert finding.tags == ("DS[...]",)
+    assert "with branch(DS[P] == 1):" in finding.message
+    assert finding.message.isascii()
+
+
+def test_indexed_contact_below_an_indexed_write_is_flagged():
+    ds, p, q = _bank(), Int("P"), Int("Q")
+    with Program() as program:
+        with Rung(Go):
+            copy(1, ds[q])
+            with branch(ds[p] == 1):
+                out(Y1)
+    (finding,) = _findings(program)
+    assert finding.tags == ("DS[...]",)
+    assert "copy(1, DS[Q])" in finding.message
+
+
+def test_named_contact_below_an_indexed_write_is_flagged():
+    ds, q = _bank(), Int("Q")
+    with Program() as program:
+        with Rung(Go):
+            copy(1, ds[q])
+            with branch(ds[3] == 1):
+                out(Y1)
+    (finding,) = _findings(program)
+    assert finding.tags == ("DS3",)
+
+
+def test_named_tags_of_one_bank_stay_apart():
+    ds = _bank()
+    with Program() as program:
+        with Rung(Go):
+            copy(1, ds[3])
+            with branch(ds[4] == 1):
+                out(Y1)
+    assert _findings(program) == ()
+
+
+def test_a_bounded_index_reads_only_its_range():
+    ds, p = _bank(), Int("P", min=10, max=12)
+    with Program() as program:
+        with Rung(Go):
+            copy(1, ds[3])
+            with branch(ds[p] == 1):
+                out(Y1)
+        with Rung(Go):
+            copy(1, ds[11])
+            with branch(ds[p] == 1):
+                out(Y2)
+    (finding,) = _findings(program)
+    assert finding.target_name == "Main:R2.0"
+    assert finding.tags == ("DS11",)
+
+
+def test_indexed_read_inside_an_expression_or_a_leg_is_flagged():
+    ds, p = _bank(), Int("P")
+    with Program() as program:
+        with Rung(Go):
+            copy(1, ds[3])
+            with branch(ds[p + 1] > 1):
+                out(Y1)
+        with Rung(Go):
+            copy(1, ds[3])
+            count_up(Ct, preset=10).reset(ds[p] == 2)
+    branch_finding, box_finding = _findings(program)
+    assert branch_finding.tags == box_finding.tags == ("DS[...]",)
+    assert box_finding.reader == "box"
+    assert ".reset(DS[P] == 2)" in box_finding.message
+
+
+def test_a_mapped_tag_is_an_element_of_its_bank():
+    ds, p, speed = _bank(), Int("P"), Int("Speed")
+    speed.map_to(ds[5])
+    with Program() as program:
+        with Rung(Go):
+            copy(1, speed)
+            with branch(ds[p] == 1):
+                out(Y1)
+    (finding,) = _findings(program)
+    assert finding.tags == ("DS[...]",)
 
 
 def test_default_check_reports_it():

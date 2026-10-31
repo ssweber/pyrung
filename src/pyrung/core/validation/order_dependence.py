@@ -29,13 +29,15 @@ everything a ``call()`` can write (transitively) and everything a For body can
 write.  A For body rung reads its contacts when it runs in pyrung too, so it
 starts a sequence of its own: only a box leg inside it can read an earlier body
 row's write.  Tags are the statically known ones; an indirect write is widened
-the way the program graph widens it.
+the way the program graph widens it, and an index no declared range bounds
+(``DS[P]`` with ``P`` unbounded) reads or writes any element of its bank, so it
+meets a write to, or a read of, any of the bank's tags.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -61,48 +63,84 @@ class SolveRow:
     """One row of a rung, as the solve reaches it: it reads, then it writes.
 
     Nothing writes within one row between its reads, so a row's own writes
-    never reach its own reads.
+    never reach its own reads.  *indexed_reads* and *indexed_writes* name the
+    banks the row reads or writes through an index no declared range bounds:
+    any element of the bank.
     """
 
     reads: frozenset[str] = frozenset()
     writes: frozenset[str] = frozenset()
+    indexed_reads: frozenset[str] = frozenset()
+    indexed_writes: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
 class ReadAfterWrite:
-    """Row *reader* reads *tag*, which row *writer* (the latest earlier one) wrote."""
+    """Row *reader* reads *tag*, which row *writer* (the latest earlier one) wrote.
+
+    With *indexed*, *tag* is a bank the reader reads through an unbounded index.
+    """
 
     reader: int
     tag: str
     writer: int
+    indexed: bool = False
+
+
+def _latest(*rows: int | None) -> int | None:
+    known = [row for row in rows if row is not None]
+    return max(known) if known else None
 
 
 def reads_after_write(
-    rows: Sequence[SolveRow], shared_reads: Iterable[str] = ()
+    rows: Sequence[SolveRow],
+    shared_reads: Iterable[str] = (),
+    bank_of: Mapping[str, str] | None = None,
 ) -> tuple[ReadAfterWrite, ...]:
     """Every read, in solve order, of a tag that an earlier row wrote.
 
     *rows* are in solve order.  *shared_reads* are tags every row re-reads on
-    top of its own (a path a split repeats on each CLICK rung it makes).  Each
-    hit names the reading row, the tag and the latest earlier row that wrote it.
-    Hits come in row order, then tag name order.
+    top of its own (a path a split repeats on each CLICK rung it makes).
+    *bank_of* names the bank of each tag, so that an indexed access to a bank
+    meets a named access to one of its tags; without it indexed accesses meet
+    only each other.  Each hit names the reading row, the tag (the bank, for an
+    indexed read) and the latest earlier row that wrote it.  Hits come in row
+    order, then name order.
     """
     shared = frozenset(shared_reads)
+    banks = bank_of or {}
     last_writer: dict[str, int] = {}
+    last_indexed: dict[str, int] = {}  # bank -> latest row writing it through an index
+    last_member: dict[str, int] = {}  # bank -> latest row writing one of its tags by name
     hits: list[ReadAfterWrite] = []
     for index, row in enumerate(rows):
-        for tag in sorted(row.reads | shared):
-            writer = last_writer.get(tag)
+        found: list[ReadAfterWrite] = []
+        for tag in row.reads | shared:
+            bank = banks.get(tag)
+            writer = _latest(last_writer.get(tag), None if bank is None else last_indexed.get(bank))
             if writer is not None:
-                hits.append(ReadAfterWrite(reader=index, tag=tag, writer=writer))
+                found.append(ReadAfterWrite(reader=index, tag=tag, writer=writer))
+        for bank in row.indexed_reads:
+            writer = _latest(last_indexed.get(bank), last_member.get(bank))
+            if writer is not None:
+                found.append(ReadAfterWrite(reader=index, tag=bank, writer=writer, indexed=True))
+        hits.extend(sorted(found, key=lambda hit: (hit.tag, hit.indexed)))
         for tag in row.writes:
             last_writer[tag] = index
+            bank = banks.get(tag)
+            if bank is not None:
+                last_member[bank] = index
+        for bank in row.indexed_writes:
+            last_indexed[bank] = index
     return tuple(hits)
 
 
 # ---------------------------------------------------------------------------
 # Rows of a program's rungs
 # ---------------------------------------------------------------------------
+
+_INDEXED = "[...]"
+"""Suffix naming a bank read through an index (``DS[...]``) in a finding."""
 
 _TRUNK = "trunk"
 _CONTINUED = "continued"
@@ -138,22 +176,76 @@ def _iter_conditions(value: Any) -> Iterable[Any]:
             yield item
 
 
+_Writes = tuple[frozenset[str], frozenset[str]]
+_NO_WRITES: _Writes = (frozenset(), frozenset())
+
+
+def _merge(parts: Iterable[_Writes]) -> _Writes:
+    names: set[str] = set()
+    banks: set[str] = set()
+    for part_names, part_banks in parts:
+        names |= part_names
+        banks |= part_banks
+    return frozenset(names), frozenset(banks)
+
+
+def _is_unbounded(ref: Any) -> bool:
+    """Whether *ref* is an index that no declared pointer range bounds."""
+    from pyrung.core.analysis.pdg import _indirect_expr_tags, _indirect_ref_tags
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    if isinstance(ref, IndirectRef):
+        return _indirect_ref_tags(ref.block, ref.pointer) is None
+    if isinstance(ref, IndirectExprRef):
+        return _indirect_expr_tags(ref.block, ref.expr) is None
+    return False
+
+
 class _RowBuilder:
     def __init__(self, program: Program) -> None:
         self._program = program
         self._tag_refs: dict[str, Tag] = {}
-        self._sub_writes: dict[str, frozenset[str]] = {}
-        self._instr_writes_memo: dict[int, frozenset[str]] = {}
+        self._sub_writes: dict[str, _Writes] = {}
+        self._instr_writes_memo: dict[int, _Writes] = {}
+        self._indexed_blocks: dict[str, Any] = {}
 
     # -- reads -------------------------------------------------------------
 
-    def condition_reads(self, conditions: Iterable[Any]) -> frozenset[str]:
-        from pyrung.core.analysis.pdg import _extract_reads_from_condition
+    def condition_reads(self, conditions: Iterable[Any]) -> SolveRow:
+        """The reads of *conditions*: named tags, and banks read through an index."""
+        from pyrung.core.analysis.pdg import _extract_reads_from_condition, _visit_indirect_refs
 
         reads: set[str] = set()
+        banks: set[str] = set()
+        seen: set[int] = set()
+
+        def visit(ref: Any) -> None:
+            if _is_unbounded(ref):
+                banks.add(self._note_bank(ref.block))
+            expr = getattr(ref, "expr", None)
+            if expr is not None:  # an index that indexes: DS[DS[P] + 1]
+                _visit_indirect_refs(expr, visit, seen)
+
         for cond in conditions:
             reads |= _extract_reads_from_condition(cond, self._tag_refs)
-        return frozenset(reads)
+            _visit_indirect_refs(cond, visit, seen)
+        return SolveRow(reads=frozenset(reads), indexed_reads=frozenset(banks))
+
+    def _note_bank(self, block: Any) -> str:
+        self._indexed_blocks.setdefault(block.name, block)
+        return block.name
+
+    def bank_of(self) -> dict[str, str]:
+        """The bank of every tag seen so far that sits in a bank something indexes."""
+        out: dict[str, str] = {}
+        for name, tag in self._tag_refs.items():
+            block = getattr(tag, "_pyrung_block", None)
+            if block is not None and block.name in self._indexed_blocks:
+                out[name] = block.name
+        for name, block in self._indexed_blocks.items():
+            for tag in block._mapped_tags.values():
+                out.setdefault(tag.name, name)
+        return out
 
     @staticmethod
     def helper_legs(instr: Any) -> tuple[tuple[str, Any], ...]:
@@ -173,46 +265,54 @@ class _RowBuilder:
 
     # -- writes ------------------------------------------------------------
 
-    def instr_writes(self, instr: Any) -> frozenset[str]:
+    def instr_writes(self, instr: Any) -> _Writes:
+        """``(named tags, banks written through an index)`` that *instr* can write."""
         memo = self._instr_writes_memo.get(id(instr))
         if memo is not None:
             return memo
         from pyrung.core.analysis.pdg import _extract_instruction_writes, _extract_tag_names
+        from pyrung.core.analysis.write_sites import instruction_write_targets
         from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
+        from pyrung.core.tag import ImmediateRef
 
         writes, _target_reads, implicit = _extract_instruction_writes(instr, self._tag_refs)
         out = set(writes) | implicit
+        banks: set[str] = set()
+        for dest in instruction_write_targets(instr):
+            if isinstance(dest, ImmediateRef):
+                dest = dest.value
+            if _is_unbounded(dest):
+                banks.add(self._note_bank(dest.block))
+        children: list[_Writes] = []
         if isinstance(instr, ForLoopInstruction):
             out |= _extract_tag_names(getattr(instr, "idx_tag", None), self._tag_refs)
-            for child, _local in instr.iter_body():
-                out |= self.instr_writes(child)
+            children.extend(self.instr_writes(child) for child, _local in instr.iter_body())
         if isinstance(instr, CallInstruction):
-            out |= self.subroutine_writes(instr.subroutine_name)
-        result = frozenset(out)
+            children.append(self.subroutine_writes(instr.subroutine_name))
+        for names, child_banks in children:
+            out |= names
+            banks |= child_banks
+        result = (frozenset(out), frozenset(banks))
         self._instr_writes_memo[id(instr)] = result
         return result
 
-    def subroutine_writes(self, name: str) -> frozenset[str]:
+    def subroutine_writes(self, name: str) -> _Writes:
         known = self._sub_writes.get(name)
         if known is not None:
             return known
-        self._sub_writes[name] = frozenset()  # a recursive call adds nothing new
-        out: set[str] = set()
-        for rung in self._program.subroutines.get(name, ()):
-            out |= self.rung_writes(rung)
-        self._sub_writes[name] = frozenset(out)
+        self._sub_writes[name] = _NO_WRITES  # a recursive call adds nothing new
+        self._sub_writes[name] = _merge(
+            self.rung_writes(rung) for rung in self._program.subroutines.get(name, ())
+        )
         return self._sub_writes[name]
 
-    def rung_writes(self, rung: Any) -> frozenset[str]:
+    def rung_writes(self, rung: Any) -> _Writes:
         from pyrung.core.rung import Rung as RungLogic
 
-        out: set[str] = set()
-        for item in rung._execution_items:
-            if isinstance(item, RungLogic):
-                out |= self.rung_writes(item)
-            else:
-                out |= self.instr_writes(item)
-        return frozenset(out)
+        return _merge(
+            self.rung_writes(item) if isinstance(item, RungLogic) else self.instr_writes(item)
+            for item in rung._execution_items
+        )
 
     # -- sequences ---------------------------------------------------------
 
@@ -235,7 +335,7 @@ class _RowBuilder:
             assert current is not None
             current.rows.append(
                 _Placed(
-                    SolveRow(reads=self.condition_reads(rung._conditions)),
+                    self.condition_reads(rung._conditions),
                     _CONTINUED if continued else _TRUNK,
                     rung,
                     location,
@@ -250,7 +350,7 @@ class _RowBuilder:
                 local = body_rung._conditions[body_rung._branch_condition_start :]
                 body.rows.append(
                     _Placed(
-                        SolveRow(reads=self.condition_reads(local)),
+                        self.condition_reads(local),
                         _TRUNK,
                         body_rung,
                         location,
@@ -274,8 +374,14 @@ class _RowBuilder:
     def _instr_row(self, instr: Any, rung: Any, location: str, body: int | None = None) -> _Placed:
         legs = self.helper_legs(instr)
         reads = self.condition_reads(cond for _name, cond in legs)
+        writes, banks = self.instr_writes(instr)
         return _Placed(
-            SolveRow(reads=reads, writes=self.instr_writes(instr)),
+            SolveRow(
+                reads=reads.reads,
+                writes=writes,
+                indexed_reads=reads.indexed_reads,
+                indexed_writes=banks,
+            ),
             _BOX if legs else _OUTPUT,
             rung,
             location,
@@ -305,7 +411,7 @@ class _RowBuilder:
                 local = item._conditions[item._branch_condition_start :]
                 sequence.rows.append(
                     _Placed(
-                        SolveRow(reads=self.condition_reads(local)),
+                        self.condition_reads(local),
                         _BRANCH,
                         item,
                         compact_location(scope, subroutine, rung_index, sub_path),
@@ -341,9 +447,16 @@ class _RowBuilder:
 
 
 def _token_span(line: str, token: str) -> tuple[int, int] | None:
-    """``(start, length)`` of *token* in *line* as a whole name, else its first match."""
+    """``(start, length)`` of *token* in *line* as a whole name, else its first match.
+
+    An indexed token (``DS[...]``) matches its bank's name where it is indexed.
+    """
     if not token:
         return None
+    if token.endswith(_INDEXED):
+        bank = token[: -len(_INDEXED)]
+        match = re.search(rf"(?<![\w.]){re.escape(bank)}\[", line)
+        return (match.start(), len(bank)) if match is not None else None
     match = re.search(rf"(?<![\w.]){re.escape(token)}(?![\w\[])", line)
     if match is not None:
         return match.start(), len(token)
@@ -393,9 +506,11 @@ def _writer_code(instr: Any, tag: str) -> str:
     return render_instruction(instr, tag)[0]
 
 
-def _writer_frame(placed: _Placed, tag: str) -> Frame:
+def _writer_frame(placed: _Placed, tag: str, bank: str | None) -> Frame:
     code = _writer_code(placed.instr, tag)
     span = _token_span(code, tag)
+    if span is None and bank is not None:  # written through an index
+        span = _token_span(code, bank + _INDEXED)
     return Frame(
         location=placed.location,
         lines=(code,),
@@ -416,7 +531,9 @@ _ABOVE_TEXT = {
 }
 
 
-def _display(reader: _Placed, tags: tuple[str, ...], writer: _Placed) -> FindingDisplay:
+def _display(
+    reader: _Placed, tags: tuple[str, ...], writer: _Placed, bank_of: Mapping[str, str]
+) -> FindingDisplay:
     names = ", ".join(tags)
     noun = "it" if len(tags) == 1 else "them"
     where = f"In For body rung {reader.body}: " if reader.body is not None else ""
@@ -434,7 +551,7 @@ def _display(reader: _Placed, tags: tuple[str, ...], writer: _Placed) -> Finding
         severity="warning",
         frames=(
             Frame(location=reader.location, lines=lines, caret=_caret(lines, tags[0])),
-            _writer_frame(writer, tags[0]),
+            _writer_frame(writer, tags[0], bank_of.get(tags[0])),
         ),
         problem=problem,
         hint=(
@@ -458,6 +575,7 @@ class OrderDependenceFinding(_FindingTextMixin):
     display: FindingDisplay
     severity: Severity
     tags: tuple[str, ...] = ()
+    """The tags read; a bank read through an index is named ``DS[...]``."""
     reader: str = ""
     """``branch``, ``continued`` or ``box``."""
 
@@ -491,22 +609,23 @@ def validate_order_dependence(
     for name in sorted(program.subroutines):
         sequences.extend(builder.scope_sequences(program.subroutines[name], "subroutine", name))
 
+    bank_of = builder.bank_of()
     findings: list[OrderDependenceFinding] = []
     for sequence in sequences:
         placed = sequence.rows
-        hits = reads_after_write([p.row for p in placed])
+        hits = reads_after_write([p.row for p in placed], bank_of=bank_of)
         by_reader: dict[int, list[ReadAfterWrite]] = {}
         for hit in hits:
             by_reader.setdefault(hit.reader, []).append(hit)
         for reader_index, reader_hits in by_reader.items():
             reader = placed[reader_index]
-            tags = tuple(hit.tag for hit in reader_hits)
+            tags = tuple(hit.tag + _INDEXED if hit.indexed else hit.tag for hit in reader_hits)
             writer = placed[reader_hits[0].writer]
             findings.append(
                 OrderDependenceFinding(
                     code=RUNG_ORDER_DEPENDENT,
                     target_name=reader.location,
-                    display=_display(reader, tags, writer),
+                    display=_display(reader, tags, writer, bank_of),
                     severity="warning",
                     tags=tags,
                     reader=reader.kind,
