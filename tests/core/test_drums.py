@@ -5,6 +5,7 @@ import pytest
 from pyrung.core import (
     PLC,
     Bool,
+    CompiledPLC,
     Int,
     Program,
     Rung,
@@ -870,3 +871,42 @@ def test_drum_reads_its_pins_before_it_corrects_an_invalid_step(kind: str, monke
     plc.patch({"Enable": True, "Go": True})
     plc.step()
     assert plc.current_state.tags["Step"] == 3
+
+
+@pytest.mark.parametrize("backend", [PLC, CompiledPLC], ids=["interpreted", "compiled"])
+@pytest.mark.parametrize("kind", ["event", "time", "time_event"])
+def test_drum_reads_its_jump_step_before_it_moves(kind: str, backend) -> None:
+    """The jump step's value is read with the pins, before the drum writes.
+
+    Here the jump step is the drum's own step register: the step advances and
+    the jump on the same scan takes the drum to the step it read on entry.
+    """
+    step = Int("Step")
+    builder_args = {
+        "outputs": [Bool("Y1"), Bool("Y2"), Bool("Y3")],
+        "pattern": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        "current_step": step,
+        "completion_flag": Bool("Done"),
+    }
+    with Program(strict=False) as logic:
+        with Rung(Bool("Enable")):
+            if kind == "event":
+                drum = event_drum(events=[Bool("E1"), Bool("E2"), Bool("E3")], **builder_args)
+            elif kind == "time":
+                drum = time_drum(presets=[1000] * 3, accumulator=Int("Acc"), **builder_args)
+            else:
+                drum = time_event_drum(
+                    presets=[1000] * 3,
+                    events=[None] * 3,
+                    accumulator=Int("Acc"),
+                    **builder_args,
+                )
+            drum.reset(Bool("Reset")).jump(Bool("Go"), step=step)
+
+    plc = backend(logic)
+    plc.patch({"Enable": True})
+    plc.step()
+    assert plc.current_state.tags["Step"] == 1
+    plc.patch({"E1": True, "Acc": 1000, "Go": True})
+    plc.step()
+    assert plc.current_state.tags["Step"] == 1

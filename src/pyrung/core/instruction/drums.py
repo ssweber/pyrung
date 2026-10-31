@@ -273,11 +273,18 @@ class _DrumBaseInstruction(Instruction):
         )
 
     def _jog_then_jump(
-        self, ctx: ScanContext, step: int, *, jog_edge: bool, jump_edge: bool
+        self,
+        ctx: ScanContext,
+        step: int,
+        *,
+        jog_edge: bool,
+        jump_edge: bool,
+        jump_target: int | None,
     ) -> tuple[int, bool, bool, bool]:
         """Take a jog, then a jump, on their edges whether or not the drum is enabled.
 
-        The jump comes last, so it beats a jog on the same scan.  Returns
+        The jump comes last, so it beats a jog on the same scan; *jump_target*
+        is the jump step as the drum read it with its pins.  Returns
         ``(step, step_changed, jogged, taken)``: *jogged* when the jog moved
         the drum, which ends a completed drum's all-outputs-off state (a jump
         does not, on a CLICK); *taken* when either moved it (a jump to a valid
@@ -293,7 +300,7 @@ class _DrumBaseInstruction(Instruction):
             jogged = True
             taken = True
         if jump_edge:
-            target = _resolve_step_value(self.jump_step, ctx)
+            target = jump_target
             if target is not None and self._step_is_valid(target):
                 changed = changed or step != target
                 step = target
@@ -304,21 +311,23 @@ class _DrumBaseInstruction(Instruction):
 
     def _read_pins(
         self, ctx: ScanContext, condition_view: Any
-    ) -> tuple[bool, bool, bool, bool, bool]:
-        """``(jump_curr, jump_edge, jog_curr, jog_edge, reset_active)``.
+    ) -> tuple[bool, bool, bool, bool, bool, int | None]:
+        """``(jump_curr, jump_edge, jog_curr, jog_edge, reset_active, jump_target)``.
 
         A box reads its pins before its own writes, as the compiled kernel's
         helper legs do: each drum reads them (an event drum with its step's
-        event) before it corrects an invalid step.  A time-event drum reads its
-        step's event only once the step's time is up, from the box's condition
-        view.  The register parameters (accumulator, preset, jump step) are
-        read from the live scan where the drum uses them, as the compiled
-        kernel reads them.
+        event), and the jump step's value, before it corrects an invalid step
+        or moves.  A time-event drum reads its step's event only once the
+        step's time is up, from the box's condition view.  The accumulator and
+        the presets are read from the live scan where the drum uses them, as
+        the compiled kernel reads them.
         """
         jump_curr, jump_edge = self._resolve_jump_edge(ctx, condition_view)
         jog_curr, jog_edge = self._resolve_jog_edge(ctx, condition_view)
         reset_active = bool(self.reset_condition.evaluate(condition_view))
-        return jump_curr, jump_edge, jog_curr, jog_edge, reset_active
+        # The jump step is read on a jump edge, the only scan that uses it.
+        jump_target = _resolve_step_value(self.jump_step, ctx) if jump_edge else None
+        return jump_curr, jump_edge, jog_curr, jog_edge, reset_active, jump_target
 
     def _resolve_jump_edge(self, ctx: ScanContext, condition_view: Any) -> tuple[bool, bool]:
         if self.jump_condition is None:
@@ -399,7 +408,7 @@ class EventDrumInstruction(_DrumBaseInstruction):
             step = 1
 
         # Every pin is read before the drum writes anything (see _read_pins).
-        jump_curr, jump_edge, jog_curr, jog_edge, reset_active = self._read_pins(
+        jump_curr, jump_edge, jog_curr, jog_edge, reset_active, jump_target = self._read_pins(
             ctx, condition_view
         )
         done_key = self.memory_key("_drum_done")
@@ -441,7 +450,7 @@ class EventDrumInstruction(_DrumBaseInstruction):
                         done = True
 
             step, moved, jogged, _taken = self._jog_then_jump(
-                ctx, step, jog_edge=jog_edge, jump_edge=jump_edge
+                ctx, step, jog_edge=jog_edge, jump_edge=jump_edge, jump_target=jump_target
             )
             step_changed = step_changed or moved
             if jogged:
@@ -596,7 +605,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
             step = 1
 
         # Every pin is read before the drum writes anything (see _read_pins).
-        jump_curr, jump_edge, jog_curr, jog_edge, reset_active = self._read_pins(
+        jump_curr, jump_edge, jog_curr, jog_edge, reset_active, jump_target = self._read_pins(
             ctx, condition_view
         )
         done_key = self.memory_key("_drum_done")
@@ -637,7 +646,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
                         done = True
 
             step, moved, jogged, taken = self._jog_then_jump(
-                ctx, step, jog_edge=jog_edge, jump_edge=jump_edge
+                ctx, step, jog_edge=jog_edge, jump_edge=jump_edge, jump_target=jump_target
             )
             if taken:
                 step_changed = step_changed or moved
@@ -838,7 +847,7 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
 
         # Every pin but the step's event is read before the drum writes
         # anything (see _read_pins).
-        jump_curr, jump_edge, jog_curr, jog_edge, reset_active = self._read_pins(
+        jump_curr, jump_edge, jog_curr, jog_edge, reset_active, jump_target = self._read_pins(
             ctx, condition_view
         )
         done_key = self.memory_key("_drum_done")
@@ -878,7 +887,7 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
                         done = True
 
             step, moved, jogged, taken = self._jog_then_jump(
-                ctx, step, jog_edge=jog_edge, jump_edge=jump_edge
+                ctx, step, jog_edge=jog_edge, jump_edge=jump_edge, jump_target=jump_target
             )
             if taken:
                 step_changed = step_changed or moved
