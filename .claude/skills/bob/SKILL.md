@@ -69,7 +69,12 @@ moved), so N branches would cost N full gates in series. Instead:
    expects that the other's model changes). Anything beyond a mechanical resolution (test
    expectations changed, code added) gets a fresh reviewer on the integration commits; the
    train may gate meanwhile, but lands only once that review is clean.
-2. `M submit --id train<N> ... --stages train`, `M next` in the background.
+2. `M submit --id train<N> ... --stages train`, `M next` in the background. While a train
+   gates, commit nothing to the base (docs, skill edits included): `land` refuses once the base
+   moves, and the whole gate reruns. Hold such commits until the train lands.
+   A gate stops at its first failing stage. If that failure is a flake not attributable to the
+   train, resubmit only the stages that did not run (`--stages <rest>`) on the same base,
+   rather than the whole preset.
 3. Green: `M land --id train<N>` (fast-forwards the base to `refs/mergeq/train<N>`, the exact
    tested merge). Tell the user what landed. Then `M worktree rm <name>` for each landed branch.
 4. Red (Zuul's rule): name the branch the failing tests point to, drop it from the train, send
