@@ -72,7 +72,7 @@ The cases own C501..C700, timer T151..T160 and counters CT161..CT170
   {0, 0}.
 - ``continued_reads_later_wire`` (-): a wire needs on a bit its continued
   wire latches; the next rung reads it.  L = S {0, 1}; F {1, 1}.
-- ``box_leg_reads_row_below`` (-, probe): a counter counts on scan 2, with
+- ``box_leg_reads_row_below`` (-, answered as adopted): a counter counts on scan 2, with
   reset leg ``Or(Cmd == 0, P)``; a continued wire below it latches P on scan
   4.  L = S {1}; R and F {0}.  A box's legs take the rows under it, so what
   sits below a box in one CLICK rung is a continued wire.
@@ -348,8 +348,6 @@ def init_for_body_rung_reads_body_rung_above(slot):
     reset(c[681])
 
 
-BOX_PROBE = "a box leg vs a continued wire below the box"
-
 group = Group(
     GROUP,
     [
@@ -450,7 +448,6 @@ group = Group(
             ladder=prove_box_leg_reads_row_below,
             expect={"Result1": 1},
             scans=SCANS,
-            probe=BOX_PROBE,
             order_dependent=False,
             snapshot={"Result1": 1},
         ),

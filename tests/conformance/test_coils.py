@@ -280,7 +280,6 @@ group = Group(
             ladder=prove_edge_behind_open_contact,
             expect={"Result1": 0, "Result2": 0, "Result3": 3, "Result4": 7},
             scans=SCANS,
-            probe="edge memory: updated when scanned or only when powered",
         ),
         case(
             "An edge contact in a branch of a false rung still tracks its bit: a bit "
@@ -290,7 +289,6 @@ group = Group(
             ladder=prove_edge_in_false_rung_branch,
             expect={"Result1": 0, "Result2": 0},
             scans=SCANS,
-            probe="edge memory in a branch of a false rung",
         ),
         case(
             "An edge contact's memory starts off when the PLC goes to RUN: a bit on "
@@ -299,7 +297,6 @@ group = Group(
             "case itself did not run on a first scan",
             ladder=prove_edge_on_first_scan,
             expect={"Result1": 1, "Result2": 0},
-            probe="edge memory at STOP->RUN",
         ),
     ],
 )

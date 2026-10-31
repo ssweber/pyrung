@@ -60,6 +60,7 @@ from pyrung.core.validation._common import (
     _collect_write_sites,
     _domain_map,
     _flatten_and_conditions,
+    _inexact_entry_subroutines,
     _resolve_tag_names,
     _resolve_tag_objects,
     _scope_reach_chains,
@@ -580,6 +581,12 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
     tag_map = _build_tag_map(program)
     domains = _domain_map(tag_map)
     reach_chains = _scope_reach_chains(program)
+    # A subroutine entered through a call its conditions do not decide (a
+    # forloop body-rung contact an iteration can change, a oneshot loop, a
+    # break_loop()) may run on every scan or not: nothing can be claimed, so
+    # its coils are not reported.
+    for sub_name in _inexact_entry_subroutines(program):
+        reach_chains[sub_name] = ((),)
     return_rungs = _return_rungs(program)
 
     # Partition sites by target and instruction type
