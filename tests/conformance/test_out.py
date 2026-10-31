@@ -25,13 +25,16 @@ alone, so a contact on that T<n> is always off (pyrung matches).  Round 2
   preset) and the off-side TD (Result3: 1 = cleared, 2 = kept mid-phase), and
   whether the off-side TD stands still (ErrorCode: 1 = frozen or cleared,
   2 = still counting); after the restart, the coil at 560-650 ms (Result2)
-  and at 720-800 ms (Result4).  Adopted, the flasher freezes and resumes:
-  2, 2, 1, then off (0) and on (1), the off phase's last 150 ms then a new on
-  phase.  A CLICK keeps both TDs, frozen, yet restarts with an on phase: 2, 1, 2, 1, 1
-  (hardware round 2, 2026-10-30, with the TDs read at 480-520 ms and the coil
-  at 600-650 and 750-800 ms).  A fresh off phase reads Result2 = 0, Result4 = 0.
-  The case's windows are wider than in round 2 since the local sim's 30-40 ms
-  scans stepped over the narrow ones now and then.
+  and at 720-800 ms (Result4).  A CLICK keeps both TDs, frozen, yet restarts
+  with an on phase: 2, 1, 2, 1, 1 (hardware round 2, 2026-10-30, with the TDs
+  read at 480-520 ms and the coil at 600-650 and 750-800 ms), and pyrung now
+  does too.  Before round 2 pyrung froze and resumed: 2, 2, 1, then off (0)
+  and on (1), the off phase's last 150 ms then a new on phase.  A fresh off
+  phase reads Result2 = 0, Result4 = 0.  The case's windows are wider than in
+  round 2 since the local sim's 30-40 ms scans stepped over the narrow ones
+  now and then; they hold for any scan up to 50 ms (the sim's
+  ``MAX_SCAN_DT_S``), and ErrorCode needs two scans in the 100 ms window to
+  tell a counting TD apart.
 """
 
 from __future__ import annotations
