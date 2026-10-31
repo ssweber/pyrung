@@ -492,8 +492,9 @@ async def _drive(
             if group_hash == g.group_hash:
                 live.append(g)
                 continue
+            where = "main and its helper subroutines" if g.group.in_main else g.subroutine
             note = (
-                f"{g.subroutine} is stale: repush (DS{g.hash_register} reads {group_hash}, "
+                f"{where} is stale: repush (DS{g.hash_register} reads {group_hash}, "
                 f"this build writes {g.group_hash})"
             )
             results[g.name] = [

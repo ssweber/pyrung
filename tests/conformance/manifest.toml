@@ -352,3 +352,12 @@ slots = 1
 
 [groups.ret_branch.cases]
 branch_return_stops_subroutine = 1
+
+[groups.loop_call]
+base = 3461 # Conf_LoopCall: DS3461..DS3500; part E, rungs in main
+slots = 3
+
+[groups.loop_call.cases]
+call_inside_loop = 1
+body_contact_after_call = 2
+loop_in_called_subroutine = 3

@@ -65,6 +65,9 @@ def run(cases: Sequence[Case] | Group) -> list[CaseResult]:
         if group is None:
             for i, c in enumerate(case_list, start=1):
                 emit_case(group_name, c, slot, i)
+        elif group.in_main:
+            for i, c in enumerate(case_list, start=1):
+                emit_case(group_name, c, slot, i)
         else:
             for _ in range(group.calls):
                 with Rung():

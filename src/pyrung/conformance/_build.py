@@ -231,25 +231,29 @@ def build_program(
     built: list[GroupBuild] = []
     for g, layout, cases, slot, hash_tag in staged:
         with Program(strict=False) as body:
-            with subroutine(g.subroutine):
+            if g.in_main:
                 _case_rungs(g.name, cases, slot)
+            else:
+                with subroutine(g.subroutine):
+                    _case_rungs(g.name, cases, slot)
         # Validated export: a case the CLICK exporter rejects fails here, before
         # any wire traffic.  Mark such a case ``in_process_only``.
         bundle = pyrung_to_ladder(body, tag_map)
-        group_hash = _fold(repr(bundle.subroutine_rows))
-        case_hashes = _case_hashes(g.name, bundle.subroutine_rows)
+        if g.in_main:
+            # The rungs are main's, and the helper subroutines they call.
+            rows = (("main", bundle.main_rows), *bundle.subroutine_rows)
+            group_hash = _fold(repr(rows))
+            case_hashes = _case_hashes(g.name, rows)
+        else:
+            group_hash = _fold(repr(bundle.subroutine_rows))
+            case_hashes = _case_hashes(g.name, bundle.subroutine_rows)
         built.append(GroupBuild(g, layout, cases, slot, hash_tag, group_hash, case_hashes))
 
     program_hash = _fold(
         repr(
             (
                 LAYOUT_VERSION,
-                [
-                    (g.subroutine, g.base)
-                    if g.group.calls == 1
-                    else (g.subroutine, g.base, g.group.calls)
-                    for g in built
-                ],
+                [_layout_entry(g) for g in built],
             )
         )
     )
@@ -258,11 +262,21 @@ def build_program(
         with Rung():
             copy(program_hash, program_hash_tag)
         for gb in built:
+            if gb.group.in_main:
+                continue
             for _ in range(gb.group.calls):
                 with Rung():
                     call(gb.subroutine)
         for gb in built:
+            if gb.group.in_main:
+                continue
             with subroutine(gb.subroutine):
+                with Rung():
+                    copy(gb.group_hash, gb.hash_tag)
+                _case_rungs(gb.name, gb.cases, gb.slot)
+        # In-main groups last: their rungs follow every call rung of main.
+        for gb in built:
+            if gb.group.in_main:
                 with Rung():
                     copy(gb.group_hash, gb.hash_tag)
                 _case_rungs(gb.name, gb.cases, gb.slot)
@@ -275,6 +289,15 @@ def build_program(
         tag_map=tag_map,
         program_hash=program_hash,
     )
+
+
+def _layout_entry(g: GroupBuild) -> tuple[str | int, ...]:
+    """What the group adds to the layout hash (a plain group: name and base)."""
+    if g.group.in_main:
+        return (g.subroutine, g.base, "main")
+    if g.group.calls == 1:
+        return (g.subroutine, g.base)
+    return (g.subroutine, g.base, g.group.calls)
 
 
 def _case_rungs(group: str, cases: Sequence[tuple[int, Case]], slot: _NamedArrayRuntime) -> None:

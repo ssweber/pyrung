@@ -4,13 +4,14 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
-The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as four
+The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as five
 projects, one part each (``PARTS``)::
 
     make conformance-export PART=A OUT=path/to/a
     make conformance-export PART=B OUT=path/to/b
     make conformance-export PART=C OUT=path/to/c
     make conformance-export PART=D OUT=path/to/d
+    make conformance-export PART=E OUT=path/to/e
 
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
@@ -42,6 +43,7 @@ from tests.conformance import (
     test_counters,
     test_drum,
     test_loop,
+    test_loop_call,
     test_math,
     test_math_error,
     test_numeric,
@@ -83,6 +85,7 @@ ALL_GROUPS = [
     test_timers.group,
     test_call_twice.group,
     test_ret_branch.group,
+    test_loop_call.group,
     # Last, so no other group's rung reads SC46 on a scan a Math error raised it.
     test_math_error.group,
 ]
@@ -107,6 +110,9 @@ PARTS: dict[str, tuple[str, ...]] = {
     # Probes CLICK may refuse outright (paste or transfer): a project of their
     # own, so a refusal costs only this one.
     "D": ("ret_branch",),
+    # A Call between For and Next, in main: a project of its own, so a refusal
+    # of either probe cannot hide the other's answer.
+    "E": ("loop_call",),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

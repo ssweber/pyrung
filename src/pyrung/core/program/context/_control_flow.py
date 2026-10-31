@@ -230,9 +230,13 @@ class ForLoop:
 def _contains_randint(value: Any, seen: set[int]) -> bool:
     """Whether a ``randint`` expression is reachable from *value*'s fields."""
     from pyrung.core.expression import RandIntExpr
+    from pyrung.core.instruction.control import CallInstruction
 
     if isinstance(value, RandIntExpr):
         return True
+    if isinstance(value, CallInstruction):
+        # Its fields reach the whole Program, not the loop body.
+        return False
     if value is None or isinstance(value, (str, bytes, int, float, bool, Tag)):
         return False
     if id(value) in seen:

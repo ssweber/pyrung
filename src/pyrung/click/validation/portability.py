@@ -47,6 +47,7 @@ from .findings import (
     CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
+    CLK_NESTED_CALL,
     CLK_PTR_CONTEXT_ONLY_COPY,
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
@@ -969,6 +970,38 @@ def _evaluate_forloop_structure(program: Any, mode: ValidationMode) -> list[Clic
                             suggestion="Use break_loop() to leave the loop, then return after it.",
                         )
                     )
+    return findings
+
+
+def _evaluate_nested_calls(program: Any, mode: ValidationMode) -> list[ClickFinding]:
+    """CLICK has no nested subroutine calls: a ``call()`` may sit in main only."""
+    findings: list[ClickFinding] = []
+    for sub_name, rungs in program.subroutines.items():
+        for rung_index, rung in enumerate(rungs):
+            instructions: list[Any] = []
+            for instr in _rung_instructions(rung):
+                instructions.append(instr)
+                if isinstance(instr, ForLoopInstruction):
+                    instructions.extend(_flat_loop(instr))
+            for instr in instructions:
+                if not isinstance(instr, CallInstruction):
+                    continue
+                location = f"subroutine '{sub_name}' rung {rung_index + 1}"
+                findings.append(
+                    ClickFinding(
+                        code=CLK_NESTED_CALL,
+                        severity=_route_severity(CLK_NESTED_CALL, mode),
+                        message=(
+                            f"call('{instr.subroutine_name}') inside subroutine '{sub_name}' "
+                            f"at {location}; CLICK does not support nested subroutine calls."
+                        ),
+                        location=location,
+                        suggestion=(
+                            "Call both subroutines from the main program, or inline the "
+                            "called subroutine's rungs."
+                        ),
+                    )
+                )
     return findings
 
 

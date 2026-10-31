@@ -182,3 +182,75 @@ def test_validation_sees_body_rung_contacts():
         "main.rung[0].body_rung[0].condition[0].indirect_ref",
         "main.rung[0].body_rung[1].condition[0].indirect_ref",
     ]
+
+
+def _nested_call_findings(source: str, mode: str = "strict"):
+    from pyrung.click.validation import validate_click_program
+
+    logic, mapping = build_program(source)
+    report = validate_click_program(logic, mapping, mode=mode)
+    return [
+        f for f in (*report.errors, *report.warnings, *report.hints) if f.code == "CLK_NESTED_CALL"
+    ]
+
+
+_NESTED = """
+with Program(strict=False) as p:
+    with subroutine("inner"):
+        with rung():
+            out(Y2)
+    with subroutine("outer"):
+        with rung(X2):
+            call("inner")
+    with rung():
+        call("outer")
+"""
+
+
+def test_validation_flags_a_call_inside_a_subroutine():
+    (finding,) = _nested_call_findings(_NESTED)
+    assert finding.severity == "error"
+    assert finding.location == "subroutine 'outer' rung 1"
+    assert "nested subroutine calls" in finding.message
+    assert finding.suggestion
+    assert finding.message.isascii() and finding.suggestion.isascii()
+    (hint,) = _nested_call_findings(_NESTED, mode="warn")
+    assert hint.severity == "hint"
+
+
+def test_validation_flags_a_call_in_a_loop_or_branch_of_a_subroutine():
+    source = """
+with Program(strict=False) as p:
+    with subroutine("inner"):
+        with rung():
+            out(Y2)
+    with subroutine("outer"):
+        with rung(X2):
+            with forloop(2):
+                call("inner")
+        with rung(X3):
+            out(Y3)
+            with branch(X4):
+                call("inner")
+    with rung():
+        call("outer")
+"""
+    findings = _nested_call_findings(source)
+    assert [f.location for f in findings] == [
+        "subroutine 'outer' rung 1",
+        "subroutine 'outer' rung 2",
+    ]
+
+
+def test_validation_accepts_calls_from_main_only():
+    assert _nested_call_findings(_SOURCE) == []
+    source = """
+with Program(strict=False) as p:
+    with subroutine("work"):
+        with rung():
+            out(Y2)
+    with rung(X1):
+        with forloop(2):
+            call("work")
+"""
+    assert _nested_call_findings(source) == []

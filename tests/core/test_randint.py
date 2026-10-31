@@ -157,6 +157,18 @@ class TestBuild:
                     with forloop(3):
                         calc(randint(1, 6), result)
 
+    def test_call_inside_forloop_does_not_see_a_randint_elsewhere(self):
+        from pyrung.core import call, subroutine
+
+        result = Int("Result")
+        with Program(strict=False):
+            with subroutine("Work"):
+                with Rung():
+                    calc(randint(1, 6), result)
+            with Rung():
+                with forloop(3):
+                    call("Work")
+
     def test_hidden_tag_is_an_external_input_over_the_bounds(self):
         tag = randint(1, 6).tag
         assert tag.external

@@ -155,7 +155,7 @@ Each slot is a `named_array` instance with 9 Int fields:
 
 Cases cannot share memory, and the build checks it (see "Reset"). Anything a case touches outside its slot is raw CLICK memory its group owns (see "Raw memory"). `build_program(groups, manifest)` returns the program, its TagMap, the layout hash, and one `GroupBuild` per group (subroutine, block, slots, group hash). The build exports each group's subroutine through the validating CLICK exporter, so a case the exporter rejects fails at build time -- mark it in-process-only. Without a manifest, `build_program` packs the groups in order from DS11 (`Manifest.packed`): fine for harness tests and the local sim, never for a real CLICK, because adding a case moves registers.
 
-CLICK does not support nested subroutine calls (confirmed in the CLICK editor), so a case cannot `call()` a subroutine of its own: its rungs already run inside `Conf_<Group>`. A group whose subroutine main calls more than once a scan (`Group(..., calls=2)`, the `call_twice` group) is how a case asks what a subroutine called twice does; every rung of such a group runs twice a scan, so its cases count calls, not scans. Other subroutine tests (a call from a case, memory seen after the call) need a home called from main; that is not built yet.
+CLICK does not support nested subroutine calls (confirmed in the CLICK editor), so a case cannot `call()` a subroutine of its own: its rungs already run inside `Conf_<Group>`. A group whose subroutine main calls more than once a scan (`Group(..., calls=2)`, the `call_twice` group) is how a case asks what a subroutine called twice does; every rung of such a group runs twice a scan, so its cases count calls, not scans. A group built with `in_main=True` (`loop_call`, part E) is the subroutine home: its case rungs run in main, so a case can `call()` a helper subroutine it defines itself (`with subroutine("Conf_<Group>_<Name>")` in the case ladder), even from a `forloop()` body. It has no `Conf_<Group>` subroutine: its group hash covers main's case rungs and the helpers, so a changed case is re-pasted into main (Preview Changes) plus its helper subroutines, and it takes a part of its own.
 
 Unconditional rungs (an output wired straight to the rail, as in main's `copy`/`call` rungs and each group's hash rung) are valid in CLICK (confirmed).
 
@@ -245,7 +245,7 @@ The harness does not push ladder. CLICK takes it two ways: a whole program throu
 
 First load:
 
-1. `make conformance-export PART=A` (and `PART=B`, `PART=C`, `PART=D`; `OUT=dir`, default `build/conformance-A`) writes one part as its own project: `main.csv`, `subroutines/Conf_<Group>.csv` per group, and `nicknames.csv`, and prints the layout hash and each group's hash and block. The whole suite (no `PART=`) is more than CLICK's 8000 steps, so a CLICK loads it as four projects (`suite.PARTS`, split by topic: A and B the instructions, C how a rung is solved -- `rungs`, `solve_order`, `call_twice`, `loop`, `coils`; D probes CLICK may refuse at paste or transfer, `ret_branch`, kept apart so a refusal costs only that project). `test_build.py` keeps each part's `estimate_steps()` under `suite.PART_STEP_BUDGET` (7500); a part that outgrows it moves a group to another part. The registers are the manifest's either way, so a group's subroutine is the same in its part as in the whole project; only main differs, writing its own part's layout hash to `DS1`.
+1. `make conformance-export PART=A` (and `PART=B` to `PART=E`; `OUT=dir`, default `build/conformance-A`) writes one part as its own project: `main.csv`, `subroutines/Conf_<Group>.csv` per group, and `nicknames.csv`, and prints the layout hash and each group's hash and block. The whole suite (no `PART=`) is more than CLICK's 8000 steps, so a CLICK loads it as five projects (`suite.PARTS`, split by topic: A and B the instructions, C how a rung is solved -- `rungs`, `solve_order`, `call_twice`, `loop`, `coils`; D and E probes CLICK may refuse at paste or transfer, `ret_branch` and `loop_call`, each kept apart so a refusal costs only that project). `test_build.py` keeps each part's `estimate_steps()` under `suite.PART_STEP_BUDGET` (7500); a part that outgrows it moves a group to another part. The registers are the manifest's either way, so a group's subroutine is the same in its part as in the whole project; only main differs, writing its own part's layout hash to `DS1`.
 2. In a new CLICK project, ClickNick **Ladder > Open in Guided Paste...** on `dir`: it imports `nicknames.csv`, then walks through main and each subroutine.
 3. In ClickNick's Workspace controls, find an existing workspace and pick `tests/conformance/workspace/`. ClickNick asks a project without a PLC name for one: enter `PYRUNG_CONFORMANCE`. It refuses the folder if the project already has another name; rename the PLC in CLICK.
 4. Save in CLICK (ClickNick fills `src/plc/` and `csv/`), write to the PLC, put it in RUN.
@@ -256,7 +256,7 @@ A change to the header protocol (`LAYOUT_VERSION`, now 3 for the `Ready` field) 
 Then, per edit:
 
 1. Edit a group's cases (add a manifest line if `make test-conformance` asks for one).
-2. `make conformance-workspace` (or `WORKSPACE=dir` for another folder, `PART=A`, `B`, `C` or `D` for a part's project) rewrites the workspace's `src/plc/` from the suite: `pyrung_to_ladder` to temporary CSVs, then `ladder_to_pyrung_project` with ClickNick's arguments (`index=True`, the suite's nicknames), swapped in whole. It never touches `csv/`, which is CLICK's accepted snapshot and ClickNick's diff baseline.
+2. `make conformance-workspace` (or `WORKSPACE=dir` for another folder, `PART=A` to `E` for a part's project) rewrites the workspace's `src/plc/` from the suite: `pyrung_to_ladder` to temporary CSVs, then `ladder_to_pyrung_project` with ClickNick's arguments (`index=True`, the suite's nicknames), swapped in whole. It never touches `csv/`, which is CLICK's accepted snapshot and ClickNick's diff baseline.
 3. ClickNick **Preview Changes** shows only the changed rungs: the group's case rungs and its hash rung (R1 of `Conf_<Group>`). **Copy to Click**, paste in CLICK, save, write to the PLC.
 4. `make test-conformance PLC=... GROUP=<group>`.
 
@@ -302,18 +302,18 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] a wire does not see a later continued wire's write (`solve_order/continued_reads_later_wire`)
 - [x] a box leg does not see a continued wire below the box (probe; `solve_order/box_leg_reads_row_below`)
 - [x] For body: a body rung sees the body rung above it in the same pass (`solve_order/for_body_rung_reads_body_rung_above`)
-- [ ] solve order around a `call()` between the rows of one rung (needs the subroutine home called from main); a branch row in a For body rung (pyrung refuses `branch()` inside `forloop()`)
+- [ ] solve order around a `call()` between the rows of one rung (the home exists, `in_main=True`, but no such case yet); a branch row in a For body rung (pyrung refuses `branch()` inside `forloop()`)
 - [ ] empty rung (NOP): nothing to observe. CLICK refuses a contact before NOP and deletes a NOP row that shares its rung (so `rungs/nop_rung_takes_snapshot` is retired); the exporter refuses both, and a bare NOP round-trips (`tests/click/test_codegen.py`)
 - [x] subroutines: same rules (every case runs inside its group's subroutine)
 - [x] a subroutine called twice a scan: an edge contact fires once per edge (probe; `call_twice/rise_once_per_scan`, pending S3)
-- [ ] call into subroutine (not inside a group: CLICK has no nested calls)
+- [x] call into a subroutine from a For body (probe; `loop_call/call_inside_loop`; a call from a group's own subroutine is nested, which CLICK refuses and `CLK_NESTED_CALL` flags)
 - [ ] subroutine memory writes visible to the caller after the call
 - [x] forloop runs N times in one scan (`loop/loop_runs_n_times`)
 - [x] forloop body sees its own prior-iteration writes (`loop/loop_runs_n_times`)
 - [ ] forloop loop.idx indirect addressing
 - [x] forloop dynamic count == 0: no iteration (probe; 65536 is the other reading) (`loop/zero_count`); -1 runs 65535 (unsigned 16-bit) (`loop/negative_count_reads_unsigned`, in-process only)
 - [x] forloop (`loop` group, F1-F14, F17-F19): a false For rung skips its body (F2); count read as unsigned 16-bit (F3); count read once (F4); body-rung contacts per iteration (F5); edges inside a loop (F6, probe, pending S3); timers accumulate per iteration (F7); counters count edges across iterations (F8, probe, pending S2); Break leaves the innermost loop (F9) after the earlier body rungs (F10); Continue skips the rest of one iteration (F11, F12); a Break contact sees same-iteration writes (F13); a one-shot re-arms on an iteration its rung is false (F14); a body one-shot holds while its For rung is false (F17); an edge contact's memory across iterations of one scan (F18, probe, pending S3); a timer and a counter in a skipped body hold, reset unscanned (F19, probe)
-- [ ] forloop inner one-shot: does CLICK reject it (C0111) or ignore it (F15); a loop in a called subroutine counts toward depth 3 (F16, needs the subroutine home)
+- [ ] forloop inner one-shot: does CLICK reject it (C0111) or ignore it (F15); a loop in a called subroutine counts toward depth 3 (F16, probe at depth exactly 3, `loop_call/loop_in_called_subroutine`; depth 4 is refused by the exporter, so CLICK's own C010D is not probed); body-rung contacts per iteration around a call (`loop_call/body_contact_after_call`)
 
 ### Memory
 - [x] rung N+1 sees rung N's writes, same scan (`rungs/global_mutation`)

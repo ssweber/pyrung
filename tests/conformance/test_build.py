@@ -526,3 +526,37 @@ def test_cases_that_share_memory_are_rejected() -> None:
         run(Group("g", [a, b]))
     with pytest.raises(ValueError, match="g/a and h/b share DS4000"):
         build_program([Group("g", [a]), Group("h", [b])])
+
+
+def _prove_calls_a_helper(slot):
+    from pyrung.core import call, forloop, subroutine
+
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        with forloop(3):
+            call("Conf_H_Inc")
+    with Rung(slot.Cmd != 0):
+        copy(1, slot.Fired)
+    with subroutine("Conf_H_Inc"):
+        with Rung():
+            calc(slot.Result1 + 1, slot.Result1)
+
+
+def test_an_in_main_group_runs_its_rungs_in_main_with_helper_subroutines(tmp_path) -> None:
+    c = case("c", ladder=_prove_calls_a_helper, expect={"Result1": 3}, id="seven")
+    plain = build_program(Group("g", [_seven()]))
+    group = Group("h", [c], in_main=True)
+    build = build_program(group)
+
+    assert "Conf_H" not in build.program.subroutines
+    assert "Conf_H_Inc" in build.program.subroutines
+    out = build.export(tmp_path)
+    main = (out / "main.csv").read_text(encoding="utf-8")
+    assert "#,Case h/seven" in main
+    assert "call(" in main and "Conf_H_Inc" in main
+    assert sorted(p.name for p in (out / "subroutines").iterdir()) == ["Conf_H_Inc.csv"]
+    assert_all_passed(run(group))
+    assert plain.program_hash != build.program_hash
+    assert build.groups[0].case_hashes["seven"]
+
+    with pytest.raises(ValueError, match="in_main"):
+        Group("h", [c], in_main=True, calls=2)
