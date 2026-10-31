@@ -33,6 +33,7 @@ PENDING_STEPS: Mapping[str, str] = {
     "INF": "REAL overflow stores +/-Inf",
     "TEXT": "text, pack, NUL, search cursor and MDN fixes",
     "SYS": "the fault-flag model (SC40 follows the last Math, SC43/SC44 the last instruction)",
+    "MATH": "Math results CLICK stores differently (RAND bounds past an Int)",
 }
 
 

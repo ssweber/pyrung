@@ -52,11 +52,15 @@ could plausibly differ, these cases tell the models apart:
   range: 2 (/ 32767), 15, -2 (/ -32768).  Refused by the Math (the write
   skipped): 99 for Result1 and Result3.  A float constant cut to an integer
   reads Result2 = 10 (1) or 20 (2); kept, 15.  Paste refused: never fires.
-- ``int_math_rand_wide_bounds`` (probe, a case of its own so a refused paste
-  loses only it): RAND ( 70000 , 70000 ) / 2 into an Int, preset 99.  Bounds
-  kept whole (pyrung, adopted): 35000, which wraps to -30536 (Result1).  Bounds
-  cut to 16 bits, signed, like the other constants: 70000 is 4464, so 2232.
-  Clamped to 32767: 16383.  CLICK refusing the bounds at paste: never fires.
+- ``int_math_rand_wide_bounds`` (a case of its own so a refused paste loses
+  only it): RAND ( 70000 , 70000 ) / 2 into an Int, preset 99.  The
+  candidates were: bounds kept whole (pyrung): 35000, which wraps to -30536
+  (Result1); bounds cut to 16 bits, signed, like the other constants: 70000 is
+  4464, so 2232; clamped to 32767: 16383; CLICK refusing the bounds at paste:
+  never fires.  Hardware round 2 (2026-10-31): a CLICK reads 0, none of them,
+  so the Math wrote 0 (as a Math error does) and pyrung (step MATH) reads
+  -30536.  Which flag, if any, comes with it is
+  ``faults/rand_wide_bounds_flags``.
 - ``int_math_real_operand_constant`` (probe): the 16-bit cut when the other
   operand is a REAL.  DF141 = 0.25 is multiplied by the constant 100000 into
   an Int, preset 99 (Result1).  The constant cut to its low 16 bits, signed
@@ -549,11 +553,11 @@ group = Group(
             probe="Int Math constant 32768..65535 and float constant: cut, kept, clamped",
         ),
         case(
-            "RAND keeps its bounds whole in an Int Math: RAND ( 70000 , 70000 ) / 2 is "
-            "35000, which wraps to -30536 in the Int (Result1)",
+            "RAND with bounds past an Int writes 0 in an Int Math: RAND ( 70000 , 70000 ) "
+            "/ 2 over a preset 99 reads 0 (Result1)",
             ladder=prove_int_math_rand_wide_bounds,
-            expect={"Result1": -30536},
-            probe="RAND bounds past 16 bits in an Int Math",
+            expect={"Result1": 0},
+            pending="MATH",
         ),
         case(
             "A Math constant cut to 16 bits beside a REAL operand: DF * 100000 into an Int, "

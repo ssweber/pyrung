@@ -59,6 +59,9 @@ paused_drum_jumps = 13
 reset_swallows_held_jog = 14
 pins_read_before_step_fix = 15
 pins_read_before_step_fix_tee = 16
+correction_without_jog = 17
+jump_to_own_step_register = 18
+jog_on_last_step = 19
 
 [groups.out]
 base = 701 # Conf_Out: DS701..DS900
@@ -263,6 +266,7 @@ scan_counter_wraps_to_zero = 10
 out_of_range_flag_vs_other_instructions = 11
 address_flag_vs_other_instructions = 12
 division_flag_vs_hex_math = 13
+out_of_range_int_vs_other_instructions = 14
 
 # Retired groups: each stopped the PLC on one math error.  A CLICK keeps running
 # (hardware round 1), so the seven errors are one case of math_error.  The

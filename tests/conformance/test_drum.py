@@ -4,7 +4,7 @@ A drum's outputs, events, completion flag and control inputs are C bits and its
 accumulator a TD register, and no slot field is either, so each case uses raw
 registers it owns: C1901..C2000, C801..C850 and TD401..TD500
 (``memory.OWNED``), ten C bits per case (cases 11 on take theirs from
-C801..C850).  The current step is a slot field (DS), ``Result1`` in every
+C801..C850, and the last cases fewer, from what is left).  The current step is a slot field (DS), ``Result1`` in every
 case; a jump target is a slot field too (CLICK takes it from a DS).  Each
 drum's reset input is ``Cmd == 0``, so the reset puts it back on step 1 with
 its time cleared.  A case that also resets mid-run puts an ``Or`` of
@@ -100,22 +100,56 @@ What each case tells apart:
   condition is shared by the drum's rung and its ``.reset()`` and ``.jog()``
   pins (copied into each pin's row: the exporter's rail form; the reset pin
   adds Cmd == 0, the jog pin a bit that is on at scan 3).  The condition is
-  also true while idle, at step 0, so the reset pin works.  The drum corrects
-  the step to 1 as it runs.  Pins read before that write (adopted, pyrung's
-  model): the jog sees the shared condition on, jogs the corrected step to 2
-  (Result1 = 2) and step 2's output comes on at scan 3 (Result3 = 3, Result4 =
-  0).  A jog pin read after the correction sees step 1, the shared condition
-  off, and no jog: Result1 = 1, Result3 = 0, step 1's output first on at scan 3
-  (Result4 = 3).
+  also true while idle, at step 0, so the reset pin works.  From scan 4 on
+  the step reads 1, so the rung is false and the drum is paused: whatever its
+  outputs are after scan 3 they stay.  Hardware round 2 (2026-10-31): a CLICK
+  reads Result1 = 1 with neither output ever on (Result3 = 0, Result4 = 0), in
+  both drawings.  That was neither candidate: pins read before the correction
+  with the jog taken from the corrected step (pyrung) reads 2, 3, 0; a jog pin
+  read after the correction (no jog) reads 1, 0, 3, as
+  ``invalid_step_corrects_to_1`` shows a correction scan writes step 1's
+  outputs.  So the pins are read before the drum runs and the jog does
+  something to the bad step itself.  Adopted: the jog acts on step 5, past the
+  last step, so the drum completes (its flag on from scan 3, Result2 = 3) with
+  every output off, and is left on step 1.  A correction scan that turns the
+  outputs off for some other reason reads Result2 = 0.  pyrung (step DRUM)
+  reads Result1 = 2, Result2 = 0, Result3 = 3, Result4 = 0.
 - ``pins_read_before_step_fix_tee``: the same ladder on its own bits (the same
   conditions, the same pins), with the ``.reset()`` and ``.jog()`` pins drawn
   teeing off the drum's input wire after the shared contact (Result1 != 1)
-  instead of from the rail.  Same readings as above.  The reset pin is teed too
-  because a tee cannot cross a rail pin row and the pin order is fixed.
-  pyrung runs the same rungs in every target; the CLICK export redraws the
-  pins (``tee=``), and ``test_tee_twins.py`` imports the drawing and compares
-  it with the rail drawing.  A CLICK that reads the two drawings differently
-  is the answer.
+  instead of from the rail.  Same readings as above (a CLICK read the same 1,
+  0, 0 on 2026-10-31).  The reset pin is teed too because a tee cannot cross a
+  rail pin row and the pin order is fixed.  pyrung runs the same rungs in
+  every target; the CLICK export redraws the pins (``tee=``), and
+  ``test_tee_twins.py`` imports the drawing and compares it with the rail
+  drawing.
+- ``correction_without_jog`` (probe): the rail ladder of
+  ``pins_read_before_step_fix`` on its own bits with the jog bit never on, so
+  the drum's rung is true on scan 3 and nothing else happens.  Adopted (as
+  ``invalid_step_corrects_to_1`` read): the step goes to 1 (Result1) and step
+  1's output comes on at scan 3 (Result4 = 3), never complete (Result2 = 0),
+  step 2's output never on (Result3 = 0); pyrung reads the same.  A CLICK that
+  reads Result4 = 0 here turns the outputs off on a correction scan of this
+  shape whatever the jog does, which explains the reading above without a
+  completion.
+- ``jump_to_own_step_register`` (probe): a 3-step drum whose jump step
+  register is its own current-step register (Result1).  Its event goes on on
+  scan 2 (step 2) and again on scan 4 with the jump, so on scan 4 the drum
+  advances and jumps on one scan.  An advance taken first and a jump to the
+  register as it reads after it (pyrung, adopted), or a jump to the step read
+  before the advance (2) followed by the advance, both leave step 3, entered
+  on scan 4 (Result3 = 4) with its output on from scan 4 (Result4 = 4).  A jump
+  that wins over the advance with the step read before it (2) reads Result1 =
+  2, Result3 = 0, Result4 = 0.  Result2 = 2 is step 2's entry scan.  A CLICK
+  that refuses the register at paste never fires.
+- ``jog_on_last_step`` (probe): a jog on scan 2 takes a 2-step drum to step 2,
+  its last; a second jog on scan 4 is a jog from the last step.  The adopted
+  answer follows the reading of ``pins_read_before_step_fix``: a jog past the
+  last step completes the drum (flag first on at scan 4, Result2 = 4), turns
+  its outputs off (step 2's last on at scan 3, Result3 = 3, step 1's never,
+  Result4 = 0) and leaves step 1 (Result1 = 1).  Completing and staying on
+  step 2: 2, 4, 3, 0.  Wrapping to step 1 without completing: 1, 0, 3, 4.
+  pyrung (step DRUM) ignores a jog on the last step: 2, 0, 8, 0.
 """
 
 from __future__ import annotations
@@ -500,18 +534,19 @@ def init_time_acc_clears_on_every_transition(slot):
     reset(c[1997])
 
 
-def _pins_read_before_step_fix(slot, outputs, events, flag, jog_bit):
+def _pins_read_before_step_fix(slot, outputs, events, flag, jog_bit, *, jog=True):
     # Step 5 is written into the step register (Result1) on scan 3, above the
     # drum.  The drum's rung and its .reset() and .jog() pins share Result1 !=
     # 1 (true while idle, at step 0, and on the bad step); the reset pin adds
-    # Cmd == 0 and the jog pin adds a bit that is on at scan 3.  The rail and
-    # tee cases are this ladder, on their own bits; only the CLICK drawing of
-    # the pins differs.
+    # Cmd == 0 and the jog pin adds a bit that is on at scan 3 (never on
+    # without *jog*).  The rail and tee cases are this ladder, on their own
+    # bits; only the CLICK drawing of the pins differs.
     count_scans(slot)
     with Rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(5, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
-        out(jog_bit)
+    if jog:
+        with Rung(slot.Cmd != 0, slot.Scratch == 3):
+            out(jog_bit)
     with Rung(slot.Result1 != 1):
         event_drum(
             outputs=outputs,
@@ -520,6 +555,7 @@ def _pins_read_before_step_fix(slot, outputs, events, flag, jog_bit):
             current_step=slot.Result1,
             completion_flag=flag,
         ).reset(And(slot.Result1 != 1, slot.Cmd == 0)).jog(And(slot.Result1 != 1, jog_bit))
+    first_on_from(slot, flag, 3, slot.Result2)
     first_on_from(slot, outputs[1], 3, slot.Result3)
     first_on_from(slot, outputs[0], 3, slot.Result4)
     done(slot)
@@ -531,6 +567,51 @@ def prove_pins_read_before_step_fix(slot):
 
 def prove_pins_read_before_step_fix_tee(slot):
     _pins_read_before_step_fix(slot, [c[1976], c[1977]], [c[1978], c[1979]], c[1980], c[1998])
+
+
+def prove_correction_without_jog(slot):
+    _pins_read_before_step_fix(slot, [c[841], c[842]], [c[843], c[844]], c[845], c[846], jog=False)
+
+
+def prove_jump_to_own_step_register(slot):
+    # The event (C838) of every step is on scans 2 and 4, the jump (C839) on
+    # scan 4.  The jump's step register is the drum's current-step register.
+    count_scans(slot)
+    with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 4)):
+        out(c[838])
+    with Rung(slot.Cmd != 0, slot.Scratch == 4):
+        out(c[839])
+    with Rung(slot.Cmd != 0):
+        event_drum(
+            outputs=[c[837]],
+            events=[c[838], c[838], c[838]],
+            pattern=[[0], [0], [1]],
+            current_step=slot.Result1,
+            completion_flag=c[840],
+        ).reset(slot.Cmd == 0).jump(c[839], step=slot.Result1)
+    entered(slot, 2, slot.Result2)
+    entered(slot, 3, slot.Result3)
+    first_on_from(slot, c[837], 1, slot.Result4)
+    done(slot)
+
+
+def prove_jog_on_last_step(slot):
+    # Jog (C850) on scans 2 and 4; nothing drives the event, C849.
+    count_scans(slot)
+    with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 4)):
+        out(c[850])
+    with Rung(slot.Cmd != 0):
+        event_drum(
+            outputs=[c[847], c[848]],
+            events=[c[849], c[849]],
+            pattern=[[1, 0], [0, 1]],
+            current_step=slot.Result1,
+            completion_flag=c[1987],
+        ).reset(slot.Cmd == 0).jog(c[850])
+    first_on_from(slot, c[1987], 1, slot.Result2)
+    last_on(slot, c[848], slot.Result3)
+    first_on_from(slot, c[847], 3, slot.Result4)
+    done(slot)
 
 
 group = Group(
@@ -654,28 +735,62 @@ group = Group(
             scans=SCANS,
         ),
         case(
-            "A drum reads its rung and its pins at one moment, before it runs: a step "
-            "register staged out of range on scan 3 is the condition its rung and its "
-            "jog pin share, and the jog sees it though the drum corrects the step to 1 "
-            "as it runs; the jog takes the corrected step to 2 (Result1), whose output "
-            "is on from scan 3 (Result3), and step 1's never comes on (Result4 = 0)",
+            "A drum reads its rung and its pins at one moment, before it runs, and a "
+            "jog on a step it does not have completes it: a step register staged out of "
+            "range on scan 3 is the condition its rung and its jog pin share, the jog "
+            "sees it, and the drum completes (flag on from scan 3, Result2) with its "
+            "outputs off, so neither step's output comes on (Result3 = 0, Result4 = 0), "
+            "and is left on step 1 (Result1)",
             ladder=prove_pins_read_before_step_fix,
-            probe="pins read before the box executes",
-            expect={"Result1": 2, "Result3": 3, "Result4": 0},
+            probe="what a jog does on an out-of-range step",
+            expect={"Result1": 1, "Result2": 3, "Result3": 0, "Result4": 0},
             scans=SCANS,
+            pending="DRUM",
         ),
         case(
             "The tee drawing of the same question: a drum whose reset and jog pins tee "
             "off its input wire after Result1 != 1 reads its rung and pins at one "
             "moment, before it runs; a step register staged out of range on scan 3 is "
-            "that condition, the jog sees it though the drum corrects the step to 1 as "
-            "it runs, and takes the corrected step to 2 (Result1), whose output is on "
-            "from scan 3 (Result3), and step 1's never comes on (Result4 = 0)",
+            "that condition, the jog sees it, and the drum completes (flag on from "
+            "scan 3, Result2) with its outputs off (Result3 = 0, Result4 = 0) and is "
+            "left on step 1 (Result1)",
             ladder=prove_pins_read_before_step_fix_tee,
-            probe="pins read before the box executes",
+            probe="what a jog does on an out-of-range step",
             tee=TeeSpec("event_drum(", (".reset()", ".jog()"), after=1),
-            expect={"Result1": 2, "Result3": 3, "Result4": 0},
+            expect={"Result1": 1, "Result2": 3, "Result3": 0, "Result4": 0},
             scans=SCANS,
+            pending="DRUM",
+        ),
+        case(
+            "Without the jog, the same out-of-range step register only goes to step 1: "
+            "staged on scan 3, it reads 1 at the end (Result1), step 1's output comes "
+            "on at scan 3 (Result4 = 3), step 2's never (Result3 = 0), and the drum "
+            "never completes (Result2 = 0)",
+            ladder=prove_correction_without_jog,
+            probe="does a correction scan turn the outputs off",
+            expect={"Result1": 1, "Result2": 0, "Result3": 0, "Result4": 3},
+            scans=SCANS,
+        ),
+        case(
+            "A drum that advances and jumps on one scan to the step its own step register "
+            "holds keeps the advance: the event enters step 2 on scan 2 (Result2) and, "
+            "with the jump, step 3 on scan 4 (Result3), whose output is on from scan 4 "
+            "(Result4), and the drum ends on step 3 (Result1)",
+            ladder=prove_jump_to_own_step_register,
+            probe="jump to the drum's own step register on an advance scan",
+            expect={"Result1": 3, "Result2": 2, "Result3": 4, "Result4": 4},
+            scans=SCANS,
+        ),
+        case(
+            "A jog on a drum's last step completes it: jogged to step 2 of 2 on scan 2 "
+            "and again on scan 4, the drum's flag is on from scan 4 (Result2), step "
+            "2's output is last on on scan 3 (Result3), step 1's never comes on "
+            "(Result4 = 0), and the drum is left on step 1 (Result1)",
+            ladder=prove_jog_on_last_step,
+            probe="what a jog on the last step does",
+            expect={"Result1": 1, "Result2": 4, "Result3": 3, "Result4": 0},
+            scans=SCANS,
+            pending="DRUM",
         ),
     ],
 )
