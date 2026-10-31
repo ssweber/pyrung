@@ -305,3 +305,41 @@ def test_click_export_rejects_expression_index_in_comparison() -> None:
     mapping = TagMap({idx: ds[100], Light: y[1]}, include_system=False)
     with pytest.raises(LadderExportError, match="CLK_PTR_EXPR_NOT_ALLOWED"):
         pyrung_to_ladder(logic, mapping)
+
+
+def _plain_tbl() -> Block:
+    return Block("Tbl", TagType.INT, 1, 50)
+
+
+@pytest.mark.parametrize("elem_kind", ["ptr", "expr"])
+@pytest.mark.parametrize("side", ["expr_left", "expr_right"])
+def test_validate_accepts_eq_with_expression_operand(elem_kind: str, side: str) -> None:
+    Tbl = _plain_tbl()
+    Q = Int("Q")
+    S = Int("S")
+    A = Bool("A")
+    elem = Tbl[Q] if elem_kind == "ptr" else Tbl[Q + 1]
+    cond = S + 1 == elem if side == "expr_left" else elem == S + 1
+    with Program() as p:
+        with Rung(cond):
+            out(A)
+    p.validate()
+
+
+@pytest.mark.parametrize(
+    ("make", "expected"),
+    [
+        (lambda T, Q, S: T[Q] == S, "Tbl[Q] == S"),
+        (lambda T, Q, S: T[Q + 1] == S, "Tbl[(Q + 1)] == S"),
+        (lambda T, Q, S: T[Q + 1] != 5, "Tbl[(Q + 1)] != 5"),
+        (lambda T, Q, S: T[Q] < S, "Tbl[Q] < S"),
+        (lambda T, Q, S: T[Q + 1] <= 5, "Tbl[(Q + 1)] <= 5"),
+        (lambda T, Q, S: T[Q] > S + 1, "Tbl[Q] > (S + 1)"),
+        (lambda T, Q, S: T[Q + 1] >= S, "Tbl[(Q + 1)] >= S"),
+    ],
+)
+def test_render_condition_indirect_compare(make: Callable[..., Any], expected: str) -> None:
+    from pyrung.core.validation.render import render_condition
+
+    cond = make(_plain_tbl(), Int("Q"), Int("S"))
+    assert render_condition(cond) == expected
