@@ -104,7 +104,7 @@ Categories are the prefixes before the first underscore:
 
 The most specific matching selector wins; `ignore` wins a tie. Unknown selectors raise `ValueError`. `report.checked_rules` records the actual selection, including checks that produced no findings.
 
-The core set is `TAG_READONLY_WRITE`, `TAG_CHOICES_VIOLATION`, `TAG_RANGE_VIOLATION`, `TAG_FINAL_MULTIPLE_WRITERS`, `TAG_DEAD_WRITE`, `COIL_CONFLICTING_OUTPUT`, `PTR_DEFAULT_BEFORE_BLOCK_START`, `PTR_MAY_ESCAPE_BLOCK`, `RUNG_CONTRADICTION`, `RUNG_TAUTOLOGY`, `CMP_ALWAYS_FALSE`, `CMP_EQ_ON_MONOTONE`, `CALL_RECURSION`, and `MATH_DIV_ZERO`. Registry entries expose `default_on` for integrations.
+The core set is `TAG_READONLY_WRITE`, `TAG_CHOICES_VIOLATION`, `TAG_RANGE_VIOLATION`, `TAG_FINAL_MULTIPLE_WRITERS`, `TAG_DEAD_WRITE`, `COIL_CONFLICTING_OUTPUT`, `PTR_DEFAULT_BEFORE_BLOCK_START`, `PTR_MAY_ESCAPE_BLOCK`, `RUNG_CONTRADICTION`, `RUNG_TAUTOLOGY`, `RUNG_ORDER_DEPENDENT`, `CMP_ALWAYS_FALSE`, `CMP_EQ_ON_MONOTONE`, `CALL_RECURSION`, and `MATH_DIV_ZERO`. Registry entries expose `default_on` for integrations.
 
 ### Project settings
 
@@ -148,6 +148,9 @@ pyrung live check RUNG
 | `RUNG_CONTRADICTION` | Error | A rung condition conjunction that is provably unsatisfiable, so the rung can never fire. A bare `Rung()` is intentionally always on and is not reported. |
 | `RUNG_TAUTOLOGY` | Warning | A top-level `Or(...)` term that is provably always true and therefore gates nothing. The finding shows the residual condition that actually controls the rung. |
 | `RUNG_REDUNDANT_TERM` | Info | An exact duplicate or provably subsumed Boolean/range term. Contradictions and tautologies take precedence over this lower-severity finding. |
+| `RUNG_ORDER_DEPENDENT` | Warning | A branch, a `.continued()` rung, or a box's leg (`.reset()`, `.jump()`, `.jog()`, `.clock()`, `.down()`, a drum event) reads a tag that a row above it in the same rung, or chain of continued rungs, writes. pyrung reads it as it was at rung entry; a CLICK solves the rung row by row and reads the new value, and pyrung will too once it solves rows live. One finding per reading row, naming every such tag. |
+
+A row reads its own contacts: a rung's or continued rung's conditions, a branch's own conditions, or a box's legs. Instruction operands are not rows' reads (they see every write above them in both models), and neither is a box's enable (the power of its rung). A row's writes are its instructions' destinations and status fields (a timer's `Done`), the fault flags they can set, everything a `call()` can write and everything a `forloop()` body can write. A body rung of a `forloop()` reads its contacts when it runs, so only a box's leg inside one can be flagged, against the body rung's own rows above it. Move the read to a rung of its own below the write, or the write to a rung above, and the rung reads the same either way.
 
 ### Coils
 
