@@ -44,7 +44,9 @@ When a builder hands back:
   (one job per `next`; you are notified when it ends).
 - Spawn a fresh `bob-reviewer` (model per profile.md) with: branch, worktree, goal, and the
   spec documents it judges against (design/findings docs, ground-truth rules). Not the handoff.
-- Record the review with `M note --id <name> --kind review`.
+- Record the review with `M note --id <name> --kind review` as soon as it arrives, in full
+  (findings, file:line, failure scenarios), not as a ledger one-liner: a later fix round needs
+  it to brief a fresh builder and reviewer once the original agents have gone cold.
 
 Findings or a fast failure go back to the same builder via SendMessage when it is warm
 (< ~50 min since its last activity and context < ~300k tokens); otherwise a fresh builder with
@@ -62,7 +64,11 @@ moved), so N branches would cost N full gates in series. Instead:
 1. Dry-run the merge of all READY branches, in order, in a scratch detached worktree.
    Conflicts: resolve them in an integration branch (`<prefix>train<N>`: merge each branch,
    resolve, commit) and submit that one branch; otherwise submit the branches directly
-   (`--branch A --branch B ...`).
+   (`--branch A --branch B ...`). Run the targeted tests of every file the resolution touched
+   (two branches can merge cleanly and still disagree: a strict xfail one fixes, a test one
+   expects that the other's model changes). Anything beyond a mechanical resolution (test
+   expectations changed, code added) gets a fresh reviewer on the integration commits; the
+   train may gate meanwhile, but lands only once that review is clean.
 2. `M submit --id train<N> ... --stages train`, `M next` in the background.
 3. Green: `M land --id train<N>` (fast-forwards the base to `refs/mergeq/train<N>`, the exact
    tested merge). Tell the user what landed. Then `M worktree rm <name>` for each landed branch.
