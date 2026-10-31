@@ -4008,15 +4008,44 @@ class PLC:
             group_empty_error=f"{method}() condition group cannot be empty",
         )
 
-        def _predicate(state: SystemState) -> bool:
-            ctx = ScanContext(
+        def _context(state: SystemState) -> ScanContext:
+            return ScanContext(
                 state,
                 resolver=self._system_runtime.resolve,
                 read_only_tags=self._system_runtime.read_only_tags,
             )
-            return normalized.evaluate(ctx)
 
-        return _predicate
+        from pyrung.core.site_memory import private_edges
+
+        # An edge here is no contact of the program: it gets a key of its own
+        # and compares against the bit as this predicate last judged it (as of
+        # now, when armed), so rise(Y) holds on the first judgement after Y
+        # turns on.
+        condition, edges = private_edges(normalized, method)
+        if not edges:
+
+            def _predicate(state: SystemState) -> bool:
+                return normalized.evaluate(_context(state))
+
+            return _predicate
+
+        def _bits(ctx: ScanContext) -> dict[str, bool]:
+            return {
+                edge._memory_key: bool(ctx.get_tag(edge._resolved_tag.name, False))
+                for edge in edges
+            }
+
+        last_seen = _bits(_context(self._state))
+
+        def _edge_predicate(state: SystemState) -> bool:
+            ctx = _context(state)
+            for key, bit in last_seen.items():
+                ctx.set_memory(key, bit)
+            hit = bool(condition.evaluate(ctx))
+            last_seen.update(_bits(ctx))
+            return hit
+
+        return _edge_predicate
 
     def _normalize_tag_name(self, tag: str | Tag, *, method: str) -> str:
         from pyrung.core.tag import Tag as TagClass

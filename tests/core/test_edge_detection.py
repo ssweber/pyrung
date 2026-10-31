@@ -382,3 +382,82 @@ class TestEdgeCombinations:
         runner.patch({"Button": False})
         runner.step()
         assert runner.current_state.tags.get("Light") is False
+
+
+class TestEdgeOutsideProgram:
+    """An edge in ``run_until()``/``when()`` is no contact of the program.
+
+    It keeps its own memory, judged after each scan against the bit as the
+    predicate last saw it (from when it was armed).
+    """
+
+    @staticmethod
+    def _plc():
+        from pyrung.core import PLC
+
+        button = Bool("Button", external=True)
+        light = Bool("Light")
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(light)
+        return PLC(logic, dt=0.010), light
+
+    def test_run_until_rise_stops_on_the_scan_it_turns_on(self):
+        plc, light = self._plc()
+        plc.step()
+        plc.patch({"Button": True})
+        state = plc.run_until(rise(light), max_cycles=5)
+        assert state.scan_id == 2
+        assert state.tags["Light"] is True
+
+    def test_run_until_rise_waits_for_a_fresh_edge(self):
+        """Already on when armed: no edge until it goes off and on again."""
+        plc, light = self._plc()
+        plc.patch({"Button": True})
+        plc.step()
+        state = plc.run_until(rise(light), max_cycles=5)
+        assert state.scan_id == 6
+
+    def test_run_until_fall_without_fold(self):
+        plc, light = self._plc()
+        plc.patch({"Button": True})
+        plc.step()
+        plc.patch({"Button": False})
+        state = plc.run_until(fall(light), max_cycles=5, fold=False)
+        assert state.scan_id == 2
+        assert state.tags["Light"] is False
+
+    def test_when_rise_pauses_once(self):
+        plc, light = self._plc()
+        hits: list[int] = []
+        plc.when(rise(light)).do(lambda state: hits.append(state.scan_id))
+        plc.step()
+        plc.patch({"Button": True})
+        plc.step()
+        plc.step()
+        plc.patch({"Button": False})
+        plc.step()
+        plc.patch({"Button": True})
+        plc.step()
+        assert hits == [2, 5]
+
+    def test_program_edge_reused_in_run_until_keeps_its_own_memory(self):
+        """The predicate copies the contact: the program's site is untouched."""
+        from pyrung.core import PLC
+
+        button = Bool("Button", external=True)
+        light = Bool("Light")
+        edge = rise(button)
+        with Program(strict=False) as logic:
+            with Rung(edge):
+                latch(light)
+        plc = PLC(logic, dt=0.010)
+        key = edge._memory_key
+        assert key is not None
+        plc.step()
+        plc.patch({"Button": True})
+        state = plc.run_until(edge, max_cycles=5)
+        assert state.scan_id == 2
+        assert edge._memory_key == key
+        assert state.memory[key] is True
+        assert state.tags["Light"] is True

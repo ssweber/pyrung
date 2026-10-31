@@ -749,6 +749,27 @@ def copy_rungs(rungs: Sequence[Rung]) -> list[Rung]:
     return [_copy_rung(rung, memo) for rung in rungs]
 
 
+def private_edges(cond: Any, namespace: str) -> tuple[Any, tuple[Any, ...]]:
+    """*cond* with each edge contact copied and keyed ``{namespace}:e{N}``, and
+    those copies.
+
+    For a condition judged outside the scan (``run_until()``, ``when()``): its
+    edges are no program's contacts, so they get keys of their own, and the
+    caller keeps their memory.  *cond* and any program holding its edges are
+    left as they were.
+    """
+    copied = _copy_condition(cond, {})
+    edges: list[Any] = []
+    seen: set[int] = set()
+    for edge in _iter_edges(copied):
+        if id(edge) in seen:
+            continue
+        seen.add(id(edge))
+        edge._site_key = namespaced(namespace, f"e{len(edges) + 1}")
+        edges.append(edge)
+    return copied, tuple(edges)
+
+
 def bind_logic_list(rungs: Sequence[Any]) -> tuple[list[Any], SiteTable]:
     """Bind rungs handed to ``PLC`` as a bare list; return the rungs to scan and
     their table.
