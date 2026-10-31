@@ -13,6 +13,7 @@ small, else on a witness trace.
 from __future__ import annotations
 
 import itertools
+import warnings
 from dataclasses import replace
 from typing import Any
 
@@ -742,3 +743,109 @@ def test_unscoped_callable_property_reads_input() -> None:
             out(Bool("KWin"))
     result = never(logic, lambda state: state["KIn"] == 301)
     assert isinstance(result, Counterexample), result
+
+
+# -- an external tag the program writes (review 2, NB1 and N4) ---------------
+
+
+@pytest.mark.parametrize("config", CONFIGS.values(), ids=CONFIGS.keys())
+def test_input_compared_with_clamped_external_setpoint(config) -> None:
+    value = Int("KPV", external=True, min=0, max=4095)
+    setpoint = Int("KSP", external=True, min=0, max=4095)
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung(setpoint > 4000):
+            copy(4000, setpoint)
+        with Rung(value > setpoint):
+            latch(bad)
+    _assert_counterexample(logic, bad, config)
+
+
+@pytest.mark.parametrize("config", CONFIGS.values(), ids=CONFIGS.keys())
+def test_real_input_compared_with_clamped_external_setpoint(config) -> None:
+    value = Real("KPVR", external=True, min=0.0, max=100.0)
+    setpoint = Real("KSPR", external=True, min=0.0, max=100.0)
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung(setpoint > 90):
+            copy(90.0, setpoint)
+        with Rung(value > setpoint, value < 50):
+            latch(bad)
+    _assert_counterexample(logic, bad, config)
+
+
+@pytest.mark.parametrize("config", CONFIGS.values(), ids=CONFIGS.keys())
+@pytest.mark.parametrize("ext_max", [2000, 10], ids=["in_bounds", "written_past_max"])
+def test_input_equal_to_written_external(config, ext_max) -> None:
+    go = Bool("KGo", external=True)
+    value = Int("KIn", external=True, min=0, max=2000)
+    external = Int("KExt", external=True, min=0, max=ext_max)
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung(go):
+            copy(1037, external)
+        with Rung(value == external, value > 1030, value < 1040):
+            latch(bad)
+    with warnings.catch_warnings():
+        # 1037 is past max=10: the write still stores it.
+        warnings.simplefilter("ignore")
+        assert _witness_hits(logic, [({"KGo": True, "KIn": 1037}, 1)], "KBad")
+        _assert_counterexample(logic, bad, config)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "review N3 (base too): an index through calc (calc(Ptr + 0, P2); "
+        "copy(Tbl[P2], D); D == 370) keeps Ptr's own partition (1, 2, 49, 50): "
+        "the literal is not carried back through the table and the calc, so "
+        "Ptr = 37 is never tried: false Proven"
+    ),
+)
+def test_index_through_calc_of_element_compared_with_literal() -> None:
+    table = Block("KTbl", TagType.INT, 1, 50)
+    pointer = Int("KPtr", external=True, min=1, max=50, default=1)
+    index, loaded = Int("KP2"), Int("KD")
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung():
+            for i in range(1, 51):
+                copy(i * 10, table[i])
+        with Rung(pointer > 10, pointer < 45):
+            out(Bool("KY"))
+        with Rung():
+            calc(pointer + 0, index)
+        with Rung(index >= 1, index <= 50):
+            copy(table[index], loaded)
+        with Rung(loaded == 370):
+            latch(bad)
+    assert _witness_hits(logic, [({"KPtr": 37}, 1)], "KBad")
+    _assert_counterexample(logic, bad, _OptConfig())
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=TypeError,
+    reason=(
+        "review NB3 (base too): Rung(Tbl[Q + 0] == S, S > 365) raises "
+        "TypeError: unhashable type: 'BinaryExpr' in _extract_value_domain "
+        "(the IndirectExprRef operand is taken for a literal). Treating it as "
+        "non-literal yields a Counterexample at Q = 37 that does not replay: "
+        "the runtime evaluates S == Tbl[Q + 0] False where S == Tbl[Q] is True"
+    ),
+)
+def test_expression_index_compared_with_stepped_int() -> None:
+    en = Bool("KEn", external=True)
+    table = Block("KTbl", TagType.INT, 1, 50)
+    pointer = Int("KQ", external=True, min=1, max=50, default=1)
+    stepped = Int("KS")
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung():
+            for i in range(1, 51):
+                copy(i * 10, table[i])
+        with Rung(en, stepped < 400):
+            calc(stepped + 10, stepped)
+        with Rung(table[pointer + 0] == stepped, stepped > 365):
+            latch(bad)
+    _assert_counterexample(logic, bad, _OptConfig())

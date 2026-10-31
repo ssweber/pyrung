@@ -715,7 +715,8 @@ def _exact_value_sets(
     search holds at their default) holds its default, a Bool both values, and a free
     input (external, physical, a receive destination or unwritten) what its
     ``choices=`` or integer ``min=``/``max=`` allow.  A tag only the program
-    writes holds its power-on value and what its writers store: literals, and
+    writes (an ``external`` one too: the search changes a written tag through
+    its writers only) holds its power-on value and what its writers store: literals, and
     the values of exact tags copied in (``copy``/``fill``/``blockcopy``, with
     the copy's store conversion).  A tag with any other writer (``calc``, a
     timer, a function, ...) is not exact.  Sets are capped at
@@ -738,13 +739,21 @@ def _exact_value_sets(
             or graph.tag_roles.get(name) is TagRole.INPUT
         )
 
+    def program_driven(name: str) -> bool:
+        return (
+            name in graph.writers_of
+            and not graph.is_physical_input(name)
+            and name not in receive_dest_names
+            and graph.tag_roles.get(name) is not TagRole.INPUT
+        )
+
     exact: dict[str, frozenset[Any]] = {}
     for name, tag in graph.tags.items():
         if tag.readonly or name in constant_storage:
             exact[name] = frozenset({tag.default})
         elif tag.type == TagType.BOOL:
             exact[name] = frozenset({False, True})
-        elif is_free(name, tag):
+        elif is_free(name, tag) and not program_driven(name):
             values = _every_value_domain(tag)
             if values is not None:
                 exact[name] = frozenset(values)
@@ -783,10 +792,7 @@ def _exact_value_sets(
     written = {
         name: graph.tags[name]
         for name in feeds
-        if name not in opaque
-        and name in graph.tags
-        and name not in exact
-        and not is_free(name, graph.tags[name])
+        if name not in opaque and name in graph.tags and name not in exact and program_driven(name)
     }
     values: dict[str, set[Any]] = {name: {tag.default} for name, tag in written.items()}
     changed = True
