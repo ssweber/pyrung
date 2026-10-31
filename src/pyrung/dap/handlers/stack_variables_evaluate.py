@@ -123,13 +123,44 @@ def on_variables(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         values = dict(state.memory)
         if current_ctx is not None:
             values.update(getattr(current_ctx, "_memory_pending", {}))
-        return {"variables": adapter._as_dap_variables(values)}, []
+        variables = adapter._as_dap_variables(values)
+        _label_site_memory(variables, getattr(runner, "_site_table", None))
+        variables.sort(key=lambda item: _natural_key(item["name"]))
+        return {"variables": variables}, []
 
     if ref == adapter._monitor_scope_ref:
         variables = adapter._monitor_variables()
         return {"variables": variables}, []
 
     raise adapter.DAPAdapterError(f"Unknown variablesReference: {ref}")
+
+
+def _natural_key(name: str) -> list[Any]:
+    """Sort key putting ``_edge:e2`` before ``_edge:e10``."""
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name)]
+
+
+def _label_site_memory(variables: list[dict[str, Any]], table: Any) -> None:
+    """Suffix each site-memory value (``_edge:e3``, ``_oneshot:i7``) with the
+    site it belongs to, such as ``rise(Start) line 12``."""
+    from pyrung.core.site_memory import SiteTable
+
+    if not isinstance(table, SiteTable):
+        return
+    for item in variables:
+        _prefix, sep, key = item["name"].partition(":")
+        if not sep:
+            continue
+        try:
+            site = table.site(key)
+        except KeyError:
+            continue
+        if not any(name == item["name"] for name, _default in site.memory):
+            continue
+        label = f"{site.kind}({site.tag})" if site.tag is not None else site.kind
+        if site.source_line is not None:
+            label += f" line {site.source_line}"
+        item["value"] = f"{item['value']} ({label})"
 
 
 def on_evaluate(adapter: Any, args: dict[str, Any]) -> HandlerResult:

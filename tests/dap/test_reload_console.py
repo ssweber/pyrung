@@ -361,3 +361,25 @@ class TestAutoReload:
         adapter, out, script_path = _setup(tmp_path)
         resp, _ = _repl(adapter, out, "autoreload off", seq=10)
         assert "disabled" in resp["body"]["result"]
+
+
+class TestMemoryPaneLabels:
+    def test_site_memory_names_its_contact_and_sorts_by_number(self, tmp_path: Path):
+        rungs = "".join(
+            f"    with Rung(rise(button)):\n        out(Bool('Out{n}'))\n" for n in range(11)
+        )
+        adapter, out, _script_path = _setup(tmp_path, EDGE_SCRIPT.format(extra=rungs))
+        _repl(adapter, out, "force Button true", seq=10)
+        _repl(adapter, out, "step 1", seq=11)
+        messages = _send_request(
+            adapter,
+            out,
+            seq=12,
+            command="variables",
+            arguments={"variablesReference": adapter.MEMORY_SCOPE_REF},
+        )
+        variables = _single_response(messages)["body"]["variables"]
+        edges = [item for item in variables if item["name"].startswith("_edge:")]
+        assert [item["name"] for item in edges] == [f"_edge:e{n}" for n in range(1, 13)]
+        assert edges[0]["value"] == "True (rise(Button) line 8)"
+        assert edges[11]["value"] == "True (rise(Button) line 30)"
