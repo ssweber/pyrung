@@ -655,6 +655,9 @@ class _PassContext:
                     )
                 )
             ),
+            opaque_atom_deps=_opaque_atom_deps(
+                self.program, self.graph, self.stateful_dims, self.nondeterministic_dims
+            ),
             exclusive_input_groups=exclusive_input_groups,
             exclusive_input_group_by_member=_exclusive_input_group_membership(
                 exclusive_input_groups
@@ -1237,6 +1240,101 @@ def _opaque_observer_nd_names(
     return live
 
 
+def _opaque_atom_deps(
+    program: Program,
+    graph: ProgramGraph | None,
+    stateful_dims: dict[str, tuple[Any, ...]] | None,
+    nd_dims: dict[str, tuple[Any, ...]] | None,
+) -> dict[str, frozenset[str]]:
+    """Nondeterministic inputs behind each opaque condition atom.
+
+    ``DS[P] != 0`` lowers to ``Atom("indirect(IndirectCompareNe)")``, and a
+    condition the lowering does not understand (``(DQ + 0) != 0``, an
+    ``ExprCompare``) to ``Atom("ExprCompare", unsupported=...)``.  Neither
+    names the tags the condition reads (the pointer and the elements it can
+    pick, the operands of the expression), so live-input pruning would drop
+    them.  Such an atom never folds to a constant, and while one stands in a
+    residual expression every input a condition of that kind (in any rung,
+    branch, loop body, count or instruction condition: the name does not say
+    which one) may read stays live: the tags it reads, and for a read that is
+    no tracked dimension the inputs upstream of it.  A forloop's indirect
+    count reaches liveness as an ``IndirectCompareNe`` (caller map).
+    """
+    from collections import defaultdict
+
+    from pyrung.core.analysis.pdg import _extract_tag_names
+    from pyrung.core.analysis.simplified import (
+        _INDIRECT_COMPARE_FORMS,
+        Atom,
+        _condition_to_expr,
+    )
+    from pyrung.core.condition import AllCondition, AnyCondition, Condition
+    from pyrung.core.instruction.control import ForLoopInstruction
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    if graph is None or not nd_dims:
+        return {}
+    tag_refs = dict(graph.tags)
+    reads: dict[str, set[str]] = defaultdict(set)
+
+    def visit_condition(condition: Any) -> None:
+        if isinstance(condition, (AllCondition, AnyCondition)):
+            for child in condition.conditions:
+                visit_condition(child)
+            return
+        name = type(condition).__name__
+        if name in _INDIRECT_COMPARE_FORMS:
+            reads[f"indirect({name})"].update(_extract_tag_names(condition, tag_refs))
+            return
+        atom = _condition_to_expr(condition)
+        if isinstance(atom, Atom) and atom.unsupported is not None:
+            reads[atom.tag].update(_extract_tag_names(condition, tag_refs))
+
+    def visit_instructions(instructions: Any) -> None:
+        for instr in instructions:
+            for field_name in getattr(type(instr), "_conditions", ()):
+                value = getattr(instr, field_name, None)
+                values = value if isinstance(value, (list, tuple)) else (value,)
+                for item in values:
+                    if isinstance(item, Condition):
+                        visit_condition(item)
+            if isinstance(instr, ForLoopInstruction):
+                if isinstance(instr.count, (IndirectRef, IndirectExprRef)):
+                    reads["indirect(IndirectCompareNe)"].update(
+                        _extract_tag_names(instr.count, tag_refs)
+                    )
+                for item in instr.body:
+                    if isinstance(item, ForLoopInstruction) or not hasattr(item, "_branches"):
+                        visit_instructions((item,))
+                    else:
+                        visit_rung(item)
+
+    def visit_rung(rung: Any) -> None:
+        for condition in rung._conditions:
+            visit_condition(condition)
+        visit_instructions(rung._instructions)
+        for branch in rung._branches:
+            visit_rung(branch)
+
+    for rung in program.rungs:
+        visit_rung(rung)
+    for sub_rungs in program.subroutines.values():
+        for rung in sub_rungs:
+            visit_rung(rung)
+
+    stateful = stateful_dims or {}
+    deps: dict[str, frozenset[str]] = {}
+    for atom_name, names in reads.items():
+        live: set[str] = set()
+        for name in names:
+            if name in nd_dims:
+                live.add(name)
+            elif name not in stateful:
+                live.update(graph.upstream_slice(name, follow_calls=False) & nd_dims.keys())
+        deps[atom_name] = frozenset(live)
+    return deps
+
+
 def _collect_stateful_upstream_nd_names(
     graph: ProgramGraph | None,
     stateful_dims: dict[str, tuple[Any, ...]] | None,
@@ -1249,13 +1347,49 @@ def _collect_stateful_upstream_nd_names(
     reachable set from the seed union.  ``reached`` only collects tags
     that appear as a writer's read (≥1 edge from some seed), matching
     ``upstream_slice``'s exclusion of each seed from its own slice.
+
+    A writer in a subroutine runs only when the subroutine is called, so the
+    reads of every call rung on a path into it count too, as in
+    ``upstream_slice(follow_calls=True)``: their conditions, a forloop's count
+    and body-rung contacts, a return guard ahead of the call, and the pointer
+    and elements of an indirect contact.  No expression names some of these
+    (a body rung's contacts, an indirect contact's pointer), so liveness
+    would not see them otherwise.
     """
     if graph is None or not stateful_dims or not nd_dims:
         return set()
     reached: set[str] = set()
     visited_rungs: set[int] = set()
+    visited_subs: set[str] = set()
     expanded: set[str] = set()
     queue: list[str] = list(stateful_dims)
+    callers = graph._subroutine_caller_indices()
+
+    def _visit(rung_idx: int) -> None:
+        if rung_idx in visited_rungs:
+            return
+        visited_rungs.add(rung_idx)
+        node = graph.rung_nodes[rung_idx]
+        for read_tag in node.condition_reads | node.data_reads:
+            reached.add(read_tag)
+            if read_tag not in expanded:
+                queue.append(read_tag)
+
+    def _visit_callers(sub_name: str | None) -> None:
+        pending = [sub_name] if sub_name is not None else []
+        while pending:
+            name = pending.pop()
+            if name in visited_subs:
+                continue
+            visited_subs.add(name)
+            for caller_idx in callers.get(name, ()):
+                caller = graph.rung_nodes[caller_idx]
+                for read_tag in caller.condition_reads:
+                    reached.add(read_tag)
+                    if read_tag not in expanded:
+                        queue.append(read_tag)
+                if caller.subroutine is not None:
+                    pending.append(caller.subroutine)
 
     while queue:
         current = queue.pop()
@@ -1265,12 +1399,8 @@ def _collect_stateful_upstream_nd_names(
         for rung_idx in graph.writers_of.get(current, frozenset()):
             if rung_idx in visited_rungs:
                 continue
-            visited_rungs.add(rung_idx)
-            node = graph.rung_nodes[rung_idx]
-            for read_tag in node.condition_reads | node.data_reads:
-                reached.add(read_tag)
-                if read_tag not in expanded:
-                    queue.append(read_tag)
+            _visit(rung_idx)
+            _visit_callers(graph.rung_nodes[rung_idx].subroutine)
 
     return reached & nd_dims.keys()
 

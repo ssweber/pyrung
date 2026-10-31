@@ -453,13 +453,15 @@ class _GuardCtx:
     """
 
     caller_map: Any
-    caller_guards: dict[str, Expr]  # subroutine name -> call-guard Expr (True if unconditional)
+    # subroutine name -> call-guard Expr (True if unconditional, False if
+    # uncalled); absent when unknown
+    caller_guards: dict[str, Expr]
     exec_pos: dict[str, int]  # subroutine name -> approx execution position (caller rung index)
 
 
 def _build_guard_ctx(program: Program) -> _GuardCtx:
     """Compute per-subroutine call guards and execution positions."""
-    from pyrung.core.validation._common import _build_caller_map
+    from pyrung.core.validation._common import _build_caller_map, _inexact_entry_subroutines
 
     caller_map = _build_caller_map(program)
     guards: dict[str, Expr] = {}
@@ -488,6 +490,12 @@ def _build_guard_ctx(program: Program) -> _GuardCtx:
 
     for sub in program.subroutines:
         guard_for(sub)
+    # A call whose conditions do not decide it (a forloop body-rung contact an
+    # iteration can change, a oneshot loop, a ``break_loop()``) gets no guard:
+    # readers treat a missing guard as unknown, never as the conditions alone
+    # (``_expr_for_writers`` lets an unknown guard narrow nothing).
+    for sub in _inexact_entry_subroutines(program):
+        guards.pop(sub, None)
 
     exec_pos = {
         sub: min((ri for _s, _cs, ri, _bp, _c in callers), default=0)
@@ -580,7 +588,7 @@ def _expr_for_writers(
 
     # Per scope: combine its writers locally, then AND that scope's subroutine
     # call guard (so a mode-gated ``out`` carries ``S_ProductionMode`` etc.; the
-    # guard is ``True`` for main scope, so main-scope forms are unchanged).
+    # main scope has none, so main-scope forms are unchanged).
     # Then OR the scopes.  OR is exact for any program that passes conflicting-
     # output validation, which guarantees cross-scope writers of a tag are
     # mutually exclusive (a non-exclusive pair is a flagged conflict, not a
@@ -592,10 +600,13 @@ def _expr_for_writers(
         if res is None:
             continue
         local, eff = res
-        guard = Const(True) if sub is None else ctx.caller_guards.get(sub, Const(True))
+        guard = None if sub is None else ctx.caller_guards.get(sub)
         if guard == Const(False):
             continue  # uncalled subroutine never drives the tag
-        expr = local if guard == Const(True) else simplify(And((guard, local)))
+        # Main scope has no guard.  An unknown one (a subroutine whose call its
+        # conditions do not decide) narrows nothing either: the scope's own form
+        # stands, a superset of the scans it drives the tag on.
+        expr = local if guard is None or guard == Const(True) else simplify(And((guard, local)))
         pos = (
             min((graph.rung_nodes[ni].rung_index for ni in nodes), default=0)
             if sub is None
