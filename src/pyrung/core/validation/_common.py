@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pyrung.core.condition import (
     AllCondition,
@@ -100,6 +100,8 @@ def _resolve_tag_objects(target: Any) -> list[Tag]:
 
 def _build_tag_map(program: Program) -> dict[str, Tag]:
     """Build a name→Tag map from all tag references in a program."""
+    from pyrung.core.instruction.control import ForLoopInstruction
+
     tag_map: dict[str, Tag] = {}
 
     def _collect_from_rung(rung: Any) -> None:
@@ -122,8 +124,18 @@ def _build_tag_map(program: Program) -> dict[str, Tag]:
                 for tag_obj in _resolve_tag_objects(source):
                     if tag_obj.name not in tag_map:
                         tag_map[tag_obj.name] = tag_obj
+            _collect_loop_counts(instr)
         for branch in rung._branches:
             _collect_from_rung(branch)
+
+    def _collect_loop_counts(instr: Any) -> None:
+        # A loop's count gates the calls in its body (caller-map conditions).
+        if not isinstance(instr, ForLoopInstruction):
+            return
+        if isinstance(instr.count, Tag) and instr.count.name not in tag_map:
+            tag_map[instr.count.name] = instr.count
+        for child in instr.instructions:
+            _collect_loop_counts(child)
 
     for rung in program.rungs:
         _collect_from_rung(rung)
@@ -391,60 +403,94 @@ def _collect_write_sites(
     return sites
 
 
-def _loop_count_conditions(loop: Any) -> tuple[Condition, ...] | None:
-    """What a forloop's count adds to the conditions of its body, or None.
+# A count of one of these types is a 16-bit (or narrower) number, so it is 0
+# exactly when ``count & 0xFFFF`` is: ``count != 0`` decides the body.
+_EXACT_COUNT_TYPES = frozenset({"BOOL", "INT", "WORD"})
 
-    A count tag that reads 0 runs no iteration, so a body item also needs a
-    nonzero count (``count & 0xFFFF`` is the exact test, so ``!= 0`` is true
-    on a few counts that skip the body too: a superset, the safe direction).
-    A constant count that runs no iteration never runs the body (None).
+
+def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | None:
+    """What a forloop's count says about its body running, or None if it never does.
+
+    Returns ``(conditions, exact)``.  A count read from a tag or an element runs
+    no iteration when ``count & 0xFFFF`` is 0 (:func:`for_loop_iterations`), so
+    a body item needs ``count != 0``.  That is exact for a 16-bit count; a wider
+    one (a ``Dint`` holding 65536) can be nonzero and still skip the body, so
+    there it is only a necessary condition (``exact`` False).  While
+    ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero every count runs the body.  A
+    constant count that runs no iteration never runs it (None).
     """
     from pyrung.core.condition import IndirectCompareNe
-    from pyrung.core.instruction.control import for_loop_iterations
-    from pyrung.core.memory_block import IndirectRef
+    from pyrung.core.instruction.control import FOR_ZERO_COUNT_ITERATIONS, for_loop_iterations
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
     count = loop.count
-    if isinstance(count, Tag):
-        return (CompareNe(count, 0),)
-    if isinstance(count, IndirectRef):
-        return (IndirectCompareNe(count, 0),)
     if isinstance(count, (bool, int, float)):
-        return None if for_loop_iterations(count) == 0 else ()
-    return ()
+        return None if for_loop_iterations(count) == 0 else ((), True)
+    if FOR_ZERO_COUNT_ITERATIONS:
+        return ((), True)
+    if isinstance(count, Tag):
+        return (CompareNe(count, 0),), count.type.name in _EXACT_COUNT_TYPES
+    if isinstance(count, (IndirectRef, IndirectExprRef)):
+        block_type = getattr(count.block, "type", None)
+        exact = block_type is not None and block_type.name in _EXACT_COUNT_TYPES
+        return (IndirectCompareNe(cast(Any, count), 0),), exact
+    return (), False
 
 
-def _iter_rung_calls(rung: Rung) -> Iterable[tuple[str, tuple[Condition, ...]]]:
-    """Each call in *rung*'s own instructions, with the conditions it needs
-    beyond the rung's: a call in a forloop body (nested loops too) also needs
-    each enclosing loop's nonzero count and the contacts of the body rung it
-    sits in.  The rung's branches are not visited.
+def _iter_rung_calls(rung: Rung) -> Iterable[tuple[str, tuple[Condition, ...], bool]]:
+    """Each call in *rung*'s own instructions: ``(callee, extra, exact)``.
+
+    *extra* holds the conditions a call in a forloop body (nested loops too)
+    needs beyond the rung's: each enclosing loop's nonzero count.  They hold on
+    every scan that runs the call.  *exact* says they (with the rung's) also
+    decide it, which they do not when a body rung's contacts gate the call
+    (read afresh on every iteration, they are no condition on the scan), a
+    ``break_loop()`` or ``continue_loop()`` in an enclosing loop can skip it,
+    an enclosing loop is a oneshot (it runs on its rung's rising edge only), or
+    a count is wider than 16 bits.  The rung's branches are not visited.
     """
-    from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
+    from pyrung.core.instruction.control import (
+        BreakInstruction,
+        CallInstruction,
+        ContinueInstruction,
+        ForLoopInstruction,
+    )
+
+    def _has_exit(loop: ForLoopInstruction) -> bool:
+        return any(
+            isinstance(item, (BreakInstruction, ContinueInstruction))
+            or (isinstance(item, ForLoopInstruction) and _has_exit(item))
+            for item in loop.instructions
+        )
 
     def _walk(
-        items: Iterable[tuple[Any, tuple[Condition, ...]]],
-    ) -> Iterable[tuple[str, tuple[Condition, ...]]]:
-        for instr, extra in items:
+        items: Iterable[tuple[Any, tuple[Condition, ...], bool]],
+    ) -> Iterable[tuple[str, tuple[Condition, ...], bool]]:
+        for instr, extra, exact in items:
             if isinstance(instr, CallInstruction):
-                yield instr.subroutine_name, extra
+                yield instr.subroutine_name, extra, exact
             elif isinstance(instr, ForLoopInstruction):
-                count_conditions = _loop_count_conditions(instr)
-                if count_conditions is None:
+                count = _loop_count_conditions(instr)
+                if count is None:
                     continue
+                count_conditions, count_exact = count
+                loop_exact = exact and count_exact and not instr._oneshot and not _has_exit(instr)
                 yield from _walk(
-                    (child, extra + count_conditions + local) for child, local in instr.iter_body()
+                    (child, extra + count_conditions, loop_exact and not local)
+                    for child, local in instr.iter_body()
                 )
 
-    yield from _walk((instr, ()) for instr in rung._instructions)
+    yield from _walk((instr, (), True) for instr in rung._instructions)
 
 
-def _build_caller_map(program: Program) -> _CallerMap:
-    """Map subroutine name -> list of call sites with their conditions.
+# (scope, caller subroutine, rung index, branch path, rung, callee, extra, exact)
+_ProgramCall = tuple[
+    FactScope, str | None, int, tuple[int, ...], "Rung", str, tuple[Condition, ...], bool
+]
 
-    Calls in forloop bodies are call sites too, with the loop's count and
-    body-rung contacts among their conditions (:func:`_iter_rung_calls`).
-    """
-    caller_map: _CallerMap = defaultdict(list)
+
+def _iter_program_calls(program: Program) -> Iterable[_ProgramCall]:
+    """Every call in *program*: its place and rung, and :func:`_iter_rung_calls`'s data."""
 
     def _scan_rung(
         rung: Rung,
@@ -452,28 +498,66 @@ def _build_caller_map(program: Program) -> _CallerMap:
         subroutine: str | None,
         rung_index: int,
         branch_path: tuple[int, ...],
-    ) -> None:
-        conditions = tuple(rung._conditions)
-        for callee, extra in _iter_rung_calls(rung):
-            caller_map[callee].append(
-                (scope, subroutine, rung_index, branch_path, conditions + extra)
-            )
+    ) -> Iterable[_ProgramCall]:
+        for callee, extra, exact in _iter_rung_calls(rung):
+            yield scope, subroutine, rung_index, branch_path, rung, callee, extra, exact
         for branch_idx, branch_rung in enumerate(rung._branches):
-            _scan_rung(
-                branch_rung,
-                scope,
-                subroutine,
-                rung_index,
-                branch_path + (branch_idx,),
+            yield from _scan_rung(
+                branch_rung, scope, subroutine, rung_index, branch_path + (branch_idx,)
             )
 
     for rung_index, rung in enumerate(program.rungs):
-        _scan_rung(rung, "main", None, rung_index, ())
-
+        yield from _scan_rung(rung, "main", None, rung_index, ())
     for sub_name in sorted(program.subroutines):
         for rung_index, rung in enumerate(program.subroutines[sub_name]):
-            _scan_rung(rung, "subroutine", sub_name, rung_index, ())
+            yield from _scan_rung(rung, "subroutine", sub_name, rung_index, ())
 
+
+def _inexact_entry_subroutines(program: Program) -> frozenset[str]:
+    """Subroutines a call into is not decided by its caller-map conditions.
+
+    A subroutine with a call site :func:`_iter_rung_calls` marks inexact, and
+    every subroutine called (at any depth) from one, since its entry goes
+    through that call too.  Its caller-map conditions still hold on every scan
+    that runs it, but it may not run on a scan they hold.
+    """
+    calls: dict[str | None, set[str]] = defaultdict(set)
+    inexact: set[str] = set()
+    for _scope, caller, _ri, _bp, _rung, callee, _extra, exact in _iter_program_calls(program):
+        calls[caller].add(callee)
+        if not exact:
+            inexact.add(callee)
+    pending = list(inexact)
+    while pending:
+        for callee in calls.get(pending.pop(), ()):
+            if callee not in inexact:
+                inexact.add(callee)
+                pending.append(callee)
+    return frozenset(inexact)
+
+
+def _build_caller_map(program: Program) -> _CallerMap:
+    """Map subroutine name -> list of call sites with their conditions.
+
+    The conditions hold on every scan that runs the call.  A call in a forloop
+    body is a call site too, with each enclosing loop's nonzero count among
+    them; there they may not decide the call (a body rung's contacts, a oneshot
+    loop, a ``break_loop()``): see :func:`_inexact_entry_subroutines`.
+    """
+    caller_map: _CallerMap = defaultdict(list)
+    for (
+        scope,
+        subroutine,
+        rung_index,
+        branch_path,
+        rung,
+        callee,
+        extra,
+        _exact,
+    ) in _iter_program_calls(program):
+        caller_map[callee].append(
+            (scope, subroutine, rung_index, branch_path, tuple(rung._conditions) + extra)
+        )
     return dict(caller_map)
 
 
@@ -1099,7 +1183,7 @@ def _scope_reach_chains(program: Program) -> dict[str, tuple[tuple[Condition, ..
     def _scan(rung: Rung, subroutine: str | None, chain: tuple[Condition, ...]) -> None:
         # A branch is gated by its own conditions on top of its parent's.
         chain = chain + tuple(rung._conditions)
-        for callee, extra in _iter_rung_calls(rung):
+        for callee, extra, _exact in _iter_rung_calls(rung):
             calls[callee].append((subroutine, chain + extra))
         for branch in rung._branches:
             _scan(branch, subroutine, chain)

@@ -453,13 +453,14 @@ class _GuardCtx:
     """
 
     caller_map: Any
-    caller_guards: dict[str, Expr]  # subroutine name -> call-guard Expr (True if unconditional)
+    # subroutine name -> call-guard Expr (True if unconditional); absent when unknown
+    caller_guards: dict[str, Expr]
     exec_pos: dict[str, int]  # subroutine name -> approx execution position (caller rung index)
 
 
 def _build_guard_ctx(program: Program) -> _GuardCtx:
     """Compute per-subroutine call guards and execution positions."""
-    from pyrung.core.validation._common import _build_caller_map
+    from pyrung.core.validation._common import _build_caller_map, _inexact_entry_subroutines
 
     caller_map = _build_caller_map(program)
     guards: dict[str, Expr] = {}
@@ -488,6 +489,11 @@ def _build_guard_ctx(program: Program) -> _GuardCtx:
 
     for sub in program.subroutines:
         guard_for(sub)
+    # A call whose conditions do not decide it (a forloop body rung's
+    # contacts, a oneshot loop, a ``break_loop()``) gets no guard: readers
+    # treat a missing guard as unknown, never as the conditions alone.
+    for sub in _inexact_entry_subroutines(program):
+        guards.pop(sub, None)
 
     exec_pos = {
         sub: min((ri for _s, _cs, ri, _bp, _c in callers), default=0)

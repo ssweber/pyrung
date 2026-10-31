@@ -4,10 +4,17 @@ Whether a subroutine's writes happen at all is decided by the guard of every
 call on a path into it.  The caller map behind input-liveness pruning skipped
 calls in forloop bodies, and gave a write in a subroutine called from another
 subroutine only its own call site's conditions; the PDG's upstream slice
-likewise stopped one caller up.  The guard's inputs were then pruned as dead
-(or left out of scope), and ``never(And(Y3, ~Btn))`` came back Proven although
-a concrete PLC reaches it: scan 1 runs the call with ``Btn`` on, scan 2 skips
-it with ``Btn`` off, and ``Y2`` holds.
+likewise stopped one caller up.  An indirect comparison (``DS[P] != 0``, or a
+loop counting ``DS[P]``) lowers to an atom that names neither the pointer nor
+the elements.  The guard's inputs were then pruned as dead (or left out of
+scope), and ``never(And(Y3, ~Btn))`` came back Proven although a concrete PLC
+reaches it: scan 1 runs the call with ``Btn`` on, scan 2 skips it with ``Btn``
+off, and ``Y2`` holds.
+
+The shared caller map keeps only conditions that hold on every scan that runs
+the call; where they do not decide it (a body rung's contacts, a oneshot loop,
+a ``break_loop()``) the subroutine is marked inexact and the validators and
+pilot guards do not claim anything from them.
 
 Each shape is checked under the default, the all-off and the sound-baseline
 configurations against an exhaustive concrete search over its inputs, and
@@ -26,22 +33,39 @@ import pytest
 from pyrung.core import (
     PLC,
     And,
+    Block,
     Bool,
+    Dint,
     Int,
     Program,
     Rung,
     branch,
+    break_loop,
     call,
+    continue_loop,
     copy,
     forloop,
     out,
+    return_early,
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.prove import Counterexample, Proven, never
+from pyrung.core.analysis.pilot.corrections import _producer_caller_scope
+from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, never
 from pyrung.core.analysis.prove.passes import _OptConfig
+from pyrung.core.analysis.simplified import _build_guard_ctx
 from pyrung.core.condition import CompareNe
-from pyrung.core.validation._common import _build_caller_map, _scope_reach_chains
+from pyrung.core.instruction.control import ForLoopInstruction
+from pyrung.core.tag import TagType
+from pyrung.core.validation._common import (
+    _build_caller_map,
+    _build_tag_map,
+    _inexact_entry_subroutines,
+    _loop_count_conditions,
+    _scope_reach_chains,
+)
+from pyrung.core.validation.duplicate_out import validate_conflicting_outputs
+from pyrung.core.validation.stuck_bits import COIL_STUCK_HIGH, validate_stuck_bits
 
 _CONFIGS = {
     "default": _OptConfig(),
@@ -51,9 +75,13 @@ _CONFIGS = {
 
 Btn = Bool("Btn", external=True)
 G = Bool("G", external=True)
+R = Bool("R", external=True)
 DQ = Int("DQ", external=True, min=0, max=1)
+P = Int("P", external=True, min=1, max=2, default=1)
+N = Int("N")
 Y2 = Bool("Y2")
 Y3 = Bool("Y3")
+LDS = Block("LDS", TagType.INT, 1, 2)
 
 _BOOL = (False, True)
 _PROPERTY = And(Y3, ~Btn)
@@ -244,6 +272,193 @@ def _zero_count_loop():
     return logic, {"Btn": _BOOL, "G": _BOOL}
 
 
+def _return_in_outer():
+    # A return_early() ahead of the call in the calling subroutine skips it.
+    with Program(strict=False) as logic:
+        with Rung():
+            call("outer")
+        _read_y2()
+        with subroutine("outer"):
+            with Rung(R):
+                return_early()
+            with Rung():
+                call("work")
+        _coil_work()
+    return logic, {"Btn": _BOOL, "R": _BOOL}
+
+
+def _return_in_outer_loop():
+    with Program(strict=False) as logic:
+        with Rung():
+            call("outer")
+        _read_y2()
+        with subroutine("outer"):
+            with Rung(R):
+                return_early()
+            with Rung():
+                with forloop(1):
+                    call("work")
+        _coil_work()
+    return logic, {"Btn": _BOOL, "R": _BOOL}
+
+
+def _oneshot_loop():
+    # A oneshot loop runs on its rung's rising edge only.
+    with Program(strict=False) as logic:
+        with Rung(G):
+            with forloop(1, oneshot=True):
+                call("work")
+        _read_y2()
+        _coil_work()
+    return logic, {"Btn": _BOOL, "G": _BOOL}
+
+
+def _indirect_count():
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(DQ, LDS[1])
+        with Rung():
+            with forloop(LDS[P]):
+                call("work")
+        _read_y2()
+        _coil_work()
+    return logic, {"Btn": _BOOL, "DQ": (0, 1), "P": (1, 2)}
+
+
+def _indirect_count_pointer_only():
+    # LDS[1] = 1 and LDS[2] = 0: only the pointer decides the call.
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(1, LDS[1])
+        with Rung():
+            with forloop(LDS[P]):
+                call("work")
+        _read_y2()
+        _coil_work()
+    return logic, {"Btn": _BOOL, "P": (1, 2)}
+
+
+def _indirect_expr_count():
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(1, LDS[1])
+        with Rung():
+            with forloop(LDS[P - 0]):
+                call("work")
+        _read_y2()
+        _coil_work()
+    return logic, {"Btn": _BOOL, "P": (1, 2)}
+
+
+def _indirect_call_guard():
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(1, LDS[1])
+        with Rung(LDS[P] != 0):
+            call("work")
+        _read_y2()
+        _coil_work()
+    return logic, {"Btn": _BOOL, "P": (1, 2)}
+
+
+def _indirect_contact():
+    # No call at all: the pointer reaches liveness only through the atom.
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(1, LDS[2])
+        with Rung(LDS[P] != 0, ~Btn):
+            out(Y3)
+    return logic, {"Btn": _BOOL, "P": (1, 2)}
+
+
+def _internal_count():
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(DQ, N)
+        with Rung():
+            with forloop(N):
+                call("work")
+        _read_y2()
+        _coil_work()
+    return logic, {"Btn": _BOOL, "DQ": (0, 1)}
+
+
+def _two_sites():
+    with Program(strict=False) as logic:
+        with Rung(G):
+            call("work")
+        with Rung(R):
+            with forloop(1):
+                call("work")
+        _read_y2()
+        _coil_work()
+    return logic, {"Btn": _BOOL, "G": _BOOL, "R": _BOOL}
+
+
+def _branch_in_outer():
+    with Program(strict=False) as logic:
+        with Rung():
+            call("outer")
+        _read_y2()
+        with subroutine("outer"):
+            with Rung():
+                with branch(G):
+                    call("work")
+        _coil_work()
+    return logic, {"Btn": _BOOL, "G": _BOOL}
+
+
+def _three_levels():
+    with Program(strict=False) as logic:
+        with Rung(G):
+            call("a")
+        _read_y2()
+        with subroutine("a"):
+            with Rung():
+                call("b")
+        with subroutine("b"):
+            with Rung():
+                with forloop(1):
+                    call("work")
+        _coil_work()
+    return logic, {"Btn": _BOOL, "G": _BOOL}
+
+
+def _break_before_call():
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(1):
+                with Rung(R):
+                    break_loop()
+                call("work")
+        _read_y2()
+        _coil_work()
+    return logic, {"Btn": _BOOL, "R": _BOOL}
+
+
+def _continue_before_call():
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(1):
+                with Rung(R):
+                    continue_loop()
+                call("work")
+        _read_y2()
+        _coil_work()
+    return logic, {"Btn": _BOOL, "R": _BOOL}
+
+
+def _body_rung_call():
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(1):
+                with Rung(G):
+                    call("work")
+        _read_y2()
+        _coil_work()
+    return logic, {"Btn": _BOOL, "G": _BOOL}
+
+
 _SHAPES = {
     "loop_rung_guard": _loop_rung_guard,
     "loop_tag_count": _loop_tag_count,
@@ -255,6 +470,18 @@ _SHAPES = {
     "guarded_outer_copy": _guarded_outer_copy,
     "always_called_loop": _always_called_loop,
     "zero_count_loop": _zero_count_loop,
+    "return_in_outer": _return_in_outer,
+    "return_in_outer_loop": _return_in_outer_loop,
+    "oneshot_loop": _oneshot_loop,
+    "indirect_count": _indirect_count,
+    "indirect_count_pointer_only": _indirect_count_pointer_only,
+    "indirect_expr_count": _indirect_expr_count,
+    "indirect_call_guard": _indirect_call_guard,
+    "indirect_contact": _indirect_contact,
+    "internal_count": _internal_count,
+    "two_sites": _two_sites,
+    "branch_in_outer": _branch_in_outer,
+    "three_levels": _three_levels,
 }
 
 
@@ -315,3 +542,150 @@ def test_upstream_slice_climbs_every_caller(shape_name: str) -> None:
     graph = build_program_graph(logic)
     assert "G" in graph.upstream_slice("Y3")
     assert "G" not in graph.upstream_slice("Y3", follow_calls=False)
+
+
+# The prover does not model forloop body rungs, break_loop() or
+# continue_loop() yet: it must say so, never Proven.
+_UNMODELED_SHAPES = {
+    "break_before_call": _break_before_call,
+    "continue_before_call": _continue_before_call,
+    "body_rung_call": _body_rung_call,
+}
+
+
+@pytest.mark.parametrize("config_name", sorted(_CONFIGS))
+@pytest.mark.parametrize("shape_name", sorted(_UNMODELED_SHAPES))
+def test_unmodeled_loop_exits_are_never_proven(shape_name: str, config_name: str) -> None:
+    logic, space = _UNMODELED_SHAPES[shape_name]()
+    assert _concrete_reaches(logic, space, _violates)
+    result = never(logic, _PROPERTY, _opt_config=_CONFIGS[config_name])
+    assert isinstance(result, Intractable | Counterexample), (shape_name, result)
+    if isinstance(result, Counterexample):
+        assert _replays(logic, result, _violates)
+
+
+# -- The shared caller map: what holds on every scan that runs the call --------
+
+Z = Bool("Z")
+A1 = Bool("A1", external=True)
+B1 = Bool("B1", external=True)
+C = Int("C", external=True, min=1, max=5)
+Wide = Dint("Wide", external=True)
+
+
+def _out_z_work() -> None:
+    with subroutine("work"):
+        with Rung():
+            out(Z)
+
+
+def _idx_body_rung_call():
+    # Iteration 0 always runs, so work runs on every scan.
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(2) as loop:
+                with Rung(loop.idx == 0):
+                    call("work")
+        _out_z_work()
+    return logic
+
+
+def test_body_rung_contacts_are_no_call_condition() -> None:
+    logic = _idx_body_rung_call()
+    (entry,) = _build_caller_map(logic)["work"]
+    assert entry[4] == ()
+    assert _inexact_entry_subroutines(logic) == {"work"}
+
+
+@pytest.mark.parametrize(
+    "shape_name", ["oneshot_loop", "break_before_call", "continue_before_call", "body_rung_call"]
+)
+def test_undecided_loop_calls_are_inexact(shape_name: str) -> None:
+    shapes = {**_SHAPES, **_UNMODELED_SHAPES}
+    logic, _space = shapes[shape_name]()
+    assert _inexact_entry_subroutines(logic) == {"work"}
+    assert "work" not in _build_guard_ctx(logic).caller_guards
+    assert _producer_caller_scope(logic, "work") == (None, False, False)
+
+
+def test_inexact_entry_reaches_nested_callees() -> None:
+    with Program(strict=False) as logic:
+        with Rung(G):
+            with forloop(1, oneshot=True):
+                call("outer")
+        with subroutine("outer"):
+            with Rung():
+                call("work")
+        _out_z_work()
+    assert _inexact_entry_subroutines(logic) == {"outer", "work"}
+
+
+def test_exact_loop_call_guard() -> None:
+    logic, _space = _loop_rung_guard()
+    assert not _inexact_entry_subroutines(logic)
+    assert repr(_build_guard_ctx(logic).caller_guards["work"]) == repr(
+        _build_guard_ctx(_plain_guarded_call()).caller_guards["work"]
+    )
+
+
+def _plain_guarded_call():
+    with Program(strict=False) as logic:
+        with Rung(G):
+            call("work")
+        _coil_work()
+    return logic
+
+
+def test_wide_count_is_necessary_but_not_exact() -> None:
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(Wide):
+                call("work")
+        _out_z_work()
+    (entry,) = _build_caller_map(logic)["work"]
+    assert [condition.tag.name for condition in entry[4]] == ["Wide"]
+    assert _inexact_entry_subroutines(logic) == {"work"}
+
+
+def test_count_condition_follows_zero_count_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pyrung.core.instruction.control as control
+
+    loop = ForLoopInstruction(count=C, idx_tag=N, instructions=[])
+    conditions, exact = _loop_count_conditions(loop) or ((), False)
+    assert exact and len(conditions) == 1
+    monkeypatch.setattr(control, "FOR_ZERO_COUNT_ITERATIONS", 65536)
+    assert _loop_count_conditions(loop) == ((), True)
+
+
+def test_stuck_bits_body_rung_call_is_not_reported() -> None:
+    findings = validate_stuck_bits(_idx_body_rung_call()).findings
+    assert not [f for f in findings if f.code == COIL_STUCK_HIGH]
+
+
+def test_stuck_bits_count_tag_domain_covers_the_call() -> None:
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(C):
+                call("work")
+        _out_z_work()
+    assert "C" in _build_tag_map(logic)
+    assert not [f for f in validate_stuck_bits(logic).findings if f.code == COIL_STUCK_HIGH]
+
+
+def test_duplicate_out_body_rung_calls_are_not_exclusive() -> None:
+    # Both iterations run on every scan: b's out() overwrites a's.
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(2) as loop:
+                with Rung(loop.idx == 0):
+                    call("a")
+                with Rung(loop.idx == 1):
+                    call("b")
+        with subroutine("a"):
+            with Rung(A1):
+                out(Y2)
+        with subroutine("b"):
+            with Rung(B1):
+                out(Y2)
+    findings = validate_conflicting_outputs(logic).findings
+    assert [f.target_name for f in findings] == ["Y2"]

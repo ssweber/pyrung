@@ -67,6 +67,9 @@ class _ExploreContext:
     nondeterministic_names: tuple[str, ...] = ()
     free_input_names: frozenset[str] = field(default_factory=frozenset)
     always_live_input_names: tuple[str, ...] = ()
+    # Opaque indirect-comparison atom name (``indirect(IndirectCompareNe)``) ->
+    # the nondeterministic inputs such a comparison may read (_LiveInputCache).
+    opaque_atom_deps: dict[str, frozenset[str]] = field(default_factory=dict)
     exclusive_input_groups: tuple[_ExclusiveInputGroup, ...] = ()
     exclusive_input_group_by_member: dict[str, int] = field(default_factory=dict)
     joint_inputs: tuple[tuple[str, ...], ...] = ()

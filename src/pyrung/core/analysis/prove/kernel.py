@@ -452,6 +452,12 @@ class _LiveInputCache:
             )
             for tag_name in self._hidden_tags
         }
+        # An indirect comparison's atom names no tag the state holds, so it
+        # never folds away; while it stands, the inputs it may read are live.
+        for atom_name, deps in context.opaque_atom_deps.items():
+            self._hidden_input_deps[atom_name] = (
+                self._hidden_input_deps.get(atom_name, frozenset()) | deps
+            )
 
     def live_inputs(
         self,
