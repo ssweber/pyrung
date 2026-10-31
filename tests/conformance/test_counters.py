@@ -76,24 +76,21 @@ tells apart:
   program's first scan, whatever run reads it.
 - ``pins_read_before_count`` (probe, box atomicity): a box reads its enable and
   every pin at one moment, before it executes.  The up rung and the ``.down()``
-  pin both share ~Done as their common condition (the shared contact copied
-  into the pin's row: the exporter's rail form, the only shape pyrung can
-  write).  Preset 2, up pulses on scans 1 and 3, a down pulse on scan 3: the
-  second count turns Done on during that very scan.  All inputs read before
-  the box writes (adopted, pyrung's model): up and down both see ~Done on scan
-  3 and cancel, Acc = 1 (Result1) and Done off (Result2 = 0).  A down pin read
-  after the box counted sees Done on, drops the down, and reads Acc = 2,
-  Done on (Result1 = 2, Result2 = 1).  The same shape drawn with the down pin
-  teeing off the up rung's input wire after ~Done is the other CLICK drawing
-  of the same logic; hardware round 3 should also load it by hand in CLICK
-  (it cannot be written in pyrung, whose exporter always copies the contacts).
-- ``pins_read_before_count_tee``: the same question with the ``.down()`` pin
-  drawn teeing off the up rung's input wire after the two shared contacts
-  (Cmd != 0, ~Done), its own contact C1397 alone on the pin's row; the reset
-  pin stays drawn from the rail below it.  Same readings as above.  pyrung runs
-  the same rungs in every target; the CLICK export redraws the pin (``tee=``),
-  and ``test_tee_twins.py`` imports the drawing and compares it with the rail
-  drawing.  A CLICK that reads the two drawings differently is the answer.
+  pin share Cmd != 0 and ~Done (copied into the pin's row: the exporter's rail
+  form) and each adds a pulse bit of its own.  Preset 2, up pulses on scans 1
+  and 3, a down pulse on scan 3: the second count turns Done on during that
+  very scan.  All inputs read before the box writes (adopted, pyrung's model):
+  up and down both see ~Done on scan 3 and cancel, Acc = 1 (Result1) and Done
+  off (Result2 = 0).  A down pin read after the box counted sees Done on, drops
+  the down, and reads Acc = 2, Done on (Result1 = 2, Result2 = 1).
+- ``pins_read_before_count_tee``: the same ladder on its own counter and bits
+  (the same conditions, the same pins), with the ``.down()`` pin drawn teeing
+  off the up rung's input wire after the two shared contacts instead of from
+  the rail; the reset pin stays on the rail below it.  Same readings as above.
+  pyrung runs the same rungs in every target; the CLICK export redraws the pin
+  (``tee=``), and ``test_tee_twins.py`` imports the drawing and compares it
+  with the rail drawing.  A CLICK that reads the two drawings differently is
+  the answer.
 """
 
 from __future__ import annotations
@@ -339,36 +336,32 @@ def prove_first_scan_input_already_on(slot):
         copy(1, slot.Fired)
 
 
-def prove_pins_read_before_count(slot):
-    # Up pulses on scans 1 and 3, a down pulse on scan 3, preset 2; ~Done is
-    # the condition the up rung and the down pin share.
-    counter = ClickCounter(131)
+def _pins_read_before_count(slot, number: int, up_bit, down_bit):
+    # Preset 2, up pulses on scans 1 and 3, a down pulse on scan 3.  The up
+    # rung and the down pin share Cmd != 0 and ~Done; each adds one contact of
+    # its own, a pulse bit.  The rail and tee cases are this ladder, on their
+    # own counter and bits; only the CLICK drawing of the pin differs.
+    counter = ClickCounter(number)
     count_scans(slot)
-    with Rung(slot.Cmd != 0, ~counter.Done, on(slot, 1, 3)):
-        count_up(counter, 2).down(And(~counter.Done, on(slot, 3))).reset(slot.Cmd == 0)
+    with Rung(slot.Cmd != 0, on(slot, 1, 3)):
+        out(up_bit)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+        out(down_bit)
+    with Rung(slot.Cmd != 0, ~counter.Done, up_bit):
+        count_up(counter, 2).down(And(slot.Cmd != 0, ~counter.Done, down_bit)).reset(slot.Cmd == 0)
     with Rung(slot.Cmd != 0):
         copy(counter.Acc, slot.Result1)
     with Rung(slot.Cmd != 0, counter.Done):
         copy(1, slot.Result2)
     done(slot)
+
+
+def prove_pins_read_before_count(slot):
+    _pins_read_before_count(slot, 131, c[1394], c[1395])
 
 
 def prove_pins_read_before_count_tee(slot):
-    # As pins_read_before_count, with the pulses on bits so the up rung and the
-    # down pin each hold just the shared contacts and one of their own.
-    counter = ClickCounter(141)
-    count_scans(slot)
-    with Rung(slot.Cmd != 0, on(slot, 1, 3)):
-        out(c[1396])
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
-        out(c[1397])
-    with Rung(slot.Cmd != 0, ~counter.Done, c[1396]):
-        count_up(counter, 2).down(And(slot.Cmd != 0, ~counter.Done, c[1397])).reset(slot.Cmd == 0)
-    with Rung(slot.Cmd != 0):
-        copy(counter.Acc, slot.Result1)
-    with Rung(slot.Cmd != 0, counter.Done):
-        copy(1, slot.Result2)
-    done(slot)
+    _pins_read_before_count(slot, 141, c[1396], c[1397])
 
 
 group = Group(

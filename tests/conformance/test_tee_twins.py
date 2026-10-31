@@ -87,3 +87,37 @@ def test_draw_tees_refuses_a_rung_that_is_not_the_expected_rail_drawing(part_a):
         draw_tees(rows, marker, TeeSpec("count_up(", (".down()",), after=3))
     with pytest.raises(ValueError, match="not under the box row"):
         draw_tees(rows, marker, TeeSpec("count_up(", (".reset()",), after=2))
+
+
+def _rows(*cells_per_row):
+    return [("#", "Case g/x"), *cells_per_row]
+
+
+def _row(marker, cells, af):
+    row = [marker, *cells, *[""] * (31 - len(cells)), af]
+    return tuple(row)
+
+
+def test_draw_tees_refuses_cells_with_nothing_to_hang_a_tee_on():
+    spec = TeeSpec("box(", (".p()",), after=1)
+    pin = _row("", ["A", "-"], ".p()")
+    for bad in ("", "T", "T:B", "|"):
+        rows = _rows(_row("R", ["A", bad], "box()"), pin)
+        with pytest.raises(ValueError, match="nothing to hang a tee on"):
+            draw_tees(rows, "g/x", spec)
+    ok = draw_tees(_rows(_row("R", ["A", "-"], "box()"), pin), "g/x", spec)
+    assert ok[1][2] == "T"
+
+
+def test_a_tee_case_without_its_subroutine_is_refused(part_a):
+    from dataclasses import replace
+
+    build, rail, _drawn = part_a
+    gone = replace(
+        rail,
+        subroutine_rows=tuple(
+            (n, r) for n, r in rail.subroutine_rows if n != build.group("drum").subroutine
+        ),
+    )
+    with pytest.raises(ValueError, match="no subroutine"):
+        _draw_tees(gone, build.groups)

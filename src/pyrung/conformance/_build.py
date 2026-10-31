@@ -318,9 +318,12 @@ def _draw_tees(bundle, groups):
             if group.in_main:
                 main_rows = draw_tees(main_rows, marker, c.tee)
                 continue
-            for i, (name, rows) in enumerate(subroutines):
-                if name == group.subroutine:
-                    subroutines[i] = (name, draw_tees(rows, marker, c.tee))
+            at = next(
+                (i for i, (name, _) in enumerate(subroutines) if name == group.subroutine), None
+            )
+            if at is None:
+                raise ValueError(f"Case {marker} has tee= but no subroutine {group.subroutine}")
+            subroutines[at] = (group.subroutine, draw_tees(subroutines[at][1], marker, c.tee))
     return dataclasses.replace(bundle, main_rows=main_rows, subroutine_rows=tuple(subroutines))
 
 

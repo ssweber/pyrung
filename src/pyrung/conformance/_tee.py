@@ -59,9 +59,9 @@ def draw_tees(rows: Sequence[Row], marker: str, spec: TeeSpec) -> tuple[Row, ...
     if len(shared) < spec.after or any(_is_wire(c) for c in shared):
         raise ValueError(f"Case {marker}: the box row does not start with {spec.after} contacts")
     tee_col = 1 + spec.after
-    if not _is_wire(box[tee_col]) and not box[tee_col]:
-        raise ValueError(f"Case {marker}: no room for the tee after {spec.after} contacts")
-    box[tee_col] = "T" if box[tee_col] == "-" else f"T:{box[tee_col]}"
+    box[tee_col] = _tee_cell(
+        box[tee_col], f"Case {marker}: the box row after {spec.after} contacts"
+    )
     for n, label in enumerate(spec.pins):
         index = box_index + 1 + n
         row = list(out[index]) if index < len(out) else []
@@ -73,16 +73,32 @@ def draw_tees(rows: Sequence[Row], marker: str, spec: TeeSpec) -> tuple[Row, ...
                 f"shared contacts ({shared} vs {row[1 : 1 + spec.after]})"
             )
         row[1 : 1 + spec.after] = [""] * spec.after
-        if row[tee_col] == "-" or not row[tee_col]:
-            # Nothing of its own: the bus runs straight to the pin.
-            row[tee_col] = "-"
-        last = n == len(spec.pins) - 1
-        if not last:
+        if row[tee_col] not in ("-",) and _is_wire(row[tee_col]):
+            raise ValueError(f"Case {marker}: pin {label} has no wire or contact at the tee")
+        if n < len(spec.pins) - 1:
             # The bus continues down past this pin: a tee on its first cell.
-            row[tee_col] = "T" if row[tee_col] == "-" else f"T:{row[tee_col]}"
+            row[tee_col] = _tee_cell(row[tee_col], f"Case {marker}: pin {label}")
         out[index] = tuple(row)
     out[box_index] = tuple(box)
     return tuple(out)
+
+
+def _tee_cell(cell: str, where: str) -> str:
+    """*cell* with the bus running down its left side: a wire becomes ``T``, a contact ``T:``."""
+    if cell == "-":
+        return "T"
+    if _is_wire(cell) or cell.startswith("T:"):
+        raise ValueError(f"{where} is {cell!r}: nothing to hang a tee on")
+    return f"T:{cell}"
+
+
+def _tee_cell(cell: str, where: str) -> str:
+    """*cell* with the bus running down its left side: a wire becomes ``T``, a contact ``T:``."""
+    if cell == "-":
+        return "T"
+    if _is_wire(cell) or cell.startswith("T:"):
+        raise ValueError(f"{where} is {cell!r}: nothing to hang a tee on")
+    return f"T:{cell}"
 
 
 def _is_wire(cell: str) -> bool:
