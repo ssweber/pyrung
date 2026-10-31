@@ -302,6 +302,24 @@ class _DrumBaseInstruction(Instruction):
             ctx.set_tag(self.current_step.name, step)
         return step, changed, jogged, taken
 
+    def _read_pins(
+        self, ctx: ScanContext, condition_view: Any
+    ) -> tuple[bool, bool, bool, bool, bool]:
+        """``(jump_curr, jump_edge, jog_curr, jog_edge, reset_active)``.
+
+        A box reads its pins before its own writes, as the compiled kernel's
+        helper legs do: each drum reads them (an event drum with its step's
+        event) before it corrects an invalid step.  A time-event drum reads its
+        step's event only once the step's time is up, from the box's condition
+        view.  The register parameters (accumulator, preset, jump step) are
+        read from the live scan where the drum uses them, as the compiled
+        kernel reads them.
+        """
+        jump_curr, jump_edge = self._resolve_jump_edge(ctx, condition_view)
+        jog_curr, jog_edge = self._resolve_jog_edge(ctx, condition_view)
+        reset_active = bool(self.reset_condition.evaluate(condition_view))
+        return jump_curr, jump_edge, jog_curr, jog_edge, reset_active
+
     def _resolve_jump_edge(self, ctx: ScanContext, condition_view: Any) -> tuple[bool, bool]:
         if self.jump_condition is None:
             return False, False
@@ -376,19 +394,25 @@ class EventDrumInstruction(_DrumBaseInstruction):
         condition_view = instruction_condition_view(ctx)
         step = _read_step_tag_value(ctx, self.current_step)
         step_changed = False
-
-        if not self._step_is_valid(step):
+        invalid = not self._step_is_valid(step)
+        if invalid:
             step = 1
-            if enabled:
-                ctx.set_tag(self.current_step.name, 1)
-                step_changed = True
 
-        jump_curr, jump_edge = self._resolve_jump_edge(ctx, condition_view)
-        jog_curr, jog_edge = self._resolve_jog_edge(ctx, condition_view)
-
-        reset_active = bool(self.reset_condition.evaluate(condition_view))
+        # Every pin is read before the drum writes anything (see _read_pins).
+        jump_curr, jump_edge, jog_curr, jog_edge, reset_active = self._read_pins(
+            ctx, condition_view
+        )
         done_key = self.memory_key("_drum_done")
         done = bool(ctx.get_memory(done_key, False))
+        event_curr = (
+            bool(self.events[step - 1].evaluate(condition_view))
+            if enabled and not reset_active
+            else False
+        )
+
+        if invalid and enabled:
+            ctx.set_tag(self.current_step.name, 1)
+            step_changed = True
 
         if reset_active:
             step = 1
@@ -397,7 +421,6 @@ class EventDrumInstruction(_DrumBaseInstruction):
             self._apply_reset(ctx)
         else:
             if enabled:
-                event_curr = bool(self.events[step - 1].evaluate(condition_view))
                 last_step = int(ctx.get_memory(self.memory_key("_drum_last_step"), 0))
                 event_ready = bool(ctx.get_memory(self.memory_key("_drum_event_ready"), True))
                 event_prev = bool(ctx.get_memory(self.memory_key("_drum_event_prev"), False))
@@ -568,23 +591,25 @@ class TimeDrumInstruction(_DrumBaseInstruction):
         step = _read_step_tag_value(ctx, self.current_step)
         step_changed = False
         reset_step_data = False
-
-        if not self._step_is_valid(step):
+        invalid = not self._step_is_valid(step)
+        if invalid:
             step = 1
-            if enabled:
-                step_changed = True
-                reset_step_data = True
-                ctx.set_tag(self.current_step.name, 1)
+
+        # Every pin is read before the drum writes anything (see _read_pins).
+        jump_curr, jump_edge, jog_curr, jog_edge, reset_active = self._read_pins(
+            ctx, condition_view
+        )
+        done_key = self.memory_key("_drum_done")
+        done = bool(ctx.get_memory(done_key, False))
+
+        if invalid and enabled:
+            step_changed = True
+            reset_step_data = True
+            ctx.set_tag(self.current_step.name, 1)
 
         acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
         frac_key = f"_frac:{self.accumulator.name}"
         frac = float(ctx.get_memory(frac_key, 0.0))
-
-        jump_curr, jump_edge = self._resolve_jump_edge(ctx, condition_view)
-        jog_curr, jog_edge = self._resolve_jog_edge(ctx, condition_view)
-        reset_active = bool(self.reset_condition.evaluate(condition_view))
-        done_key = self.memory_key("_drum_done")
-        done = bool(ctx.get_memory(done_key, False))
 
         if reset_active:
             step = 1
@@ -807,23 +832,26 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
         step = _read_step_tag_value(ctx, self.current_step)
         step_changed = False
         reset_step_data = False
-
-        if not self._step_is_valid(step):
+        invalid = not self._step_is_valid(step)
+        if invalid:
             step = 1
-            if enabled:
-                step_changed = True
-                reset_step_data = True
-                ctx.set_tag(self.current_step.name, 1)
+
+        # Every pin but the step's event is read before the drum writes
+        # anything (see _read_pins).
+        jump_curr, jump_edge, jog_curr, jog_edge, reset_active = self._read_pins(
+            ctx, condition_view
+        )
+        done_key = self.memory_key("_drum_done")
+        done = bool(ctx.get_memory(done_key, False))
+
+        if invalid and enabled:
+            step_changed = True
+            reset_step_data = True
+            ctx.set_tag(self.current_step.name, 1)
 
         acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
         frac_key = f"_frac:{self.accumulator.name}"
         frac = float(ctx.get_memory(frac_key, 0.0))
-
-        jump_curr, jump_edge = self._resolve_jump_edge(ctx, condition_view)
-        jog_curr, jog_edge = self._resolve_jog_edge(ctx, condition_view)
-        reset_active = bool(self.reset_condition.evaluate(condition_view))
-        done_key = self.memory_key("_drum_done")
-        done = bool(ctx.get_memory(done_key, False))
 
         if reset_active:
             step = 1

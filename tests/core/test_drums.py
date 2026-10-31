@@ -829,3 +829,44 @@ def test_event_drum_completes_pauses_and_resets_over_long_runs() -> None:
     plc.run_for(0.5)
     plc.patch({"Reset": False})
     plc.run_for(0.5)
+
+
+@pytest.mark.parametrize("kind", ["event", "time", "time_event"])
+def test_drum_reads_its_pins_before_it_corrects_an_invalid_step(kind: str, monkeypatch) -> None:
+    """A box reads its pins before any write of its own (the live row solve's order).
+
+    Under the rung-entry snapshot the order cannot show, so the box's view is
+    made live here: a jump pin keyed on the uncorrected step must see it.
+    """
+    from pyrung.core.instruction import drums
+
+    monkeypatch.setattr(drums, "instruction_condition_view", lambda ctx: ctx)
+    step = Int("Step")
+    builder_args = {
+        "outputs": [Bool("Y1"), Bool("Y2"), Bool("Y3")],
+        "pattern": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        "current_step": step,
+        "completion_flag": Bool("Done"),
+    }
+    with Program(strict=False) as logic:
+        with Rung(Bool("Enable")):
+            if kind == "event":
+                drum = event_drum(events=[Bool("E1"), Bool("E2"), Bool("E3")], **builder_args)
+            elif kind == "time":
+                drum = time_drum(presets=[1000] * 3, accumulator=Int("Acc"), **builder_args)
+            else:
+                drum = time_event_drum(
+                    presets=[1000] * 3,
+                    events=[None] * 3,
+                    accumulator=Int("Acc"),
+                    **builder_args,
+                )
+            drum.reset(Bool("Reset")).jump(Bool("Go"), step == 7, step=3)
+
+    plc = PLC(logic)
+    plc.patch({"Step": 7})
+    plc.step()
+    assert plc.current_state.tags["Step"] == 7  # paused, no jump: nothing corrected
+    plc.patch({"Enable": True, "Go": True})
+    plc.step()
+    assert plc.current_state.tags["Step"] == 3
