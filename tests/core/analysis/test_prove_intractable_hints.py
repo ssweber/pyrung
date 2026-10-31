@@ -195,7 +195,7 @@ class TestIntractableHints:
 
 
 class TestThresholdBlockerHints:
-    """Intractable hints explain why threshold abstraction was blocked."""
+    """Threshold tags are bounded by what writes them; hints name the rest."""
 
     def test_literal_thresholds_are_structurally_bounded(self):
         """Literal-written thresholds no longer need readonly/final hints."""
@@ -220,9 +220,10 @@ class TestThresholdBlockerHints:
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert "CurStep_tmr_Acc" not in stateful
-        assert "PanWatchdog_Ts" not in stateful
-        assert "ShaftWatchdog_Ts" not in stateful
+        # Tracked, not absorbed, but bounded by their literal writes.
+        assert "CurStep_tmr_Acc" in stateful
+        assert set(stateful["PanWatchdog_Ts"]) == {0, 500}
+        assert set(stateful["ShaftWatchdog_Ts"]) == {0, 600}
 
     def test_literal_threshold_no_longer_suggests_readonly(self):
         """Literal-written thresholds are bounded without readonly hints."""
@@ -242,8 +243,8 @@ class TestThresholdBlockerHints:
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert "WdTmr_Acc" not in stateful
-        assert "WatchdogTs" not in stateful
+        assert "WdTmr_Acc" in stateful
+        assert set(stateful["WatchdogTs"]) == {0, 500}
 
     def test_shared_threshold_blocks_absorption(self):
         """One threshold shared across progress sources stays explicit."""

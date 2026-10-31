@@ -289,7 +289,7 @@ def test_fuzz_timer_reset_from_oneshot_does_not_poison_hidden_event_cache():
             with forloop(Int("N0", min=-27, max=6)):
                 out(B0, oneshot=True)
 
-    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=20)
+    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=10)
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", False), ("T0_Done", True)}) in states
 
@@ -361,7 +361,7 @@ def test_fuzz_unconditional_timer_and_output_initial_projected_state():
         with Rung():
             out(b0)
 
-    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=20)
+    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=10)
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", True), ("T0_Done", False)}) in states
 
@@ -723,8 +723,9 @@ def test_fuzz_oneshot_out_elision_with_bidirectional_counter():
         with Rung():
             out(B0, oneshot=True)
 
+    # Ten Tick edges, two scans each: the budget is a plain BFS depth.
     states = reachable_states(
-        logic, project=["B0", "B1", "C0_Done"], max_states=10_000, depth_budget=20
+        logic, project=["B0", "B1", "C0_Done"], max_states=10_000, depth_budget=40
     )
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", False), ("B1", False), ("C0_Done", True)}) in states
@@ -848,7 +849,12 @@ def test_fuzz_latch_target_not_classified_combinational():
 
 
 def test_fuzz_off_delay_completion_with_accumulating_condition():
-    """off_delay completion must be reachable when R0 accumulates past the enable threshold."""
+    """off_delay completion must be reachable when R0 accumulates past the enable threshold.
+
+    The reproducer's threshold was 76, ~40 scans of a Real counted concretely,
+    each scan against every ExtN1 preset; with no hidden-event jump the budget
+    must cover the climb, so it is 2 here.
+    """
     ExtN0 = Int("ExtN0", external=True, choices={1: "A", 2: "B"})
     ExtN1 = Int("ExtN1", external=True, min=-10, max=100)
     B0 = Bool("B0")
@@ -856,14 +862,14 @@ def test_fuzz_off_delay_completion_with_accumulating_condition():
     T0 = Timer.clone("T0")
 
     with Program(strict=False) as logic:
-        with Rung(R0 <= 76):
+        with Rung(R0 <= 2):
             off_delay(T0, ExtN1)
         with Rung():
             calc(R0 + ExtN0, R0)
         with Rung():
             out(B0)
 
-    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=20)
+    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=6)
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", True), ("T0_Done", False)}) in states
 
@@ -1841,16 +1847,13 @@ def test_return_early_guard_expr_keeps_projected_input_live():
 
 
 def test_fuzz_self_resetting_counter_threshold_absorption_unsound():
-    """Threshold absorption of self-resetting counter produces false counterexample.
+    """A self-resetting counter never passes its preset.
 
-    count_up(C1, 5).reset(C1.Done) cycles C1_Acc through 0-5.  The property
-    C1.Acc < 41 is trivially true.  But accumulator_absorption absorbed C1_Acc
-    with only the property boundary (>=41) in the threshold vector, missing the
-    preset boundary at 5.  The event scheduler projected 41 scans of unbounded
-    counting and reported a false counterexample.
-
-    Fix: block threshold absorption when the reset condition references the
-    counter's own Done bit (self-resetting cycle).
+    count_up(C1, 5).reset(C1.Done) cycles C1_Acc through 0-5, so the property
+    C1.Acc < 41 is true.  The exact-timing layer once absorbed C1_Acc with only
+    the property boundary (>=41) in a threshold vector, missed the preset at
+    5, and projected 41 scans of counting into a false counterexample.  The
+    search now counts concretely; the default and the baseline agree.
     Reproducer: soundness_subset_20260520_143926_000.
     """
     B0 = Bool("B0")
@@ -1869,8 +1872,7 @@ def test_fuzz_self_resetting_counter_threshold_absorption_unsound():
         with Rung(C1.Done):
             out(B0)
 
-    cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
-    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
+    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20)
     baseline = always(
         logic,
         C1.Acc < 41,
@@ -1883,12 +1885,7 @@ def test_fuzz_self_resetting_counter_threshold_absorption_unsound():
 
 
 def test_fuzz_self_resetting_counter_tag_preset_bounded():
-    """Tag preset with min/max, counter resets on own Done — absorption must not lose cycle.
-
-    Same structure as the constant-preset variant but with an external Int
-    preset.  The preset boundary atom must be injected into the threshold
-    vector (or absorption blocked) so the event scheduler sees the cycle.
-    """
+    """Tag preset with min/max, counter resets on own Done: the cycle is kept."""
     Preset = Int("Preset", external=True, min=1, max=10)
     B0 = Bool("B0")
     C0 = Counter.clone("C0")
@@ -1906,8 +1903,7 @@ def test_fuzz_self_resetting_counter_tag_preset_bounded():
         with Rung(C1.Done):
             out(B0)
 
-    cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
-    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
+    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20)
     baseline = always(
         logic,
         C1.Acc < 41,
@@ -1920,11 +1916,8 @@ def test_fuzz_self_resetting_counter_tag_preset_bounded():
 
 
 def test_fuzz_self_resetting_counter_tag_preset_unbounded():
-    """Tag preset with no domain, counter resets on own Done.
-
-    When the preset tag has no declared bounds, absorption must still
-    not produce a false counterexample for the bounded accumulator.
-    """
+    """Tag preset with a wide domain, counter resets on own Done: no false
+    counterexample for the bounded accumulator."""
     Preset = Int("Preset", external=True, min=0, max=100)
     B0 = Bool("B0")
     C0 = Counter.clone("C0")
@@ -1942,8 +1935,7 @@ def test_fuzz_self_resetting_counter_tag_preset_unbounded():
         with Rung(C1.Done):
             out(B0)
 
-    cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
-    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
+    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20)
     baseline = always(
         logic,
         C1.Acc < 41,

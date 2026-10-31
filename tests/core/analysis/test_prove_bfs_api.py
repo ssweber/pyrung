@@ -219,8 +219,9 @@ class TestProve:
         runner = _replay_trace(logic, result.trace)
         assert runner.current_state.tags.get("Alarm") is True
 
-    def test_abstract_threshold_counterexample_carries_nonreplayable_trace_caveat(self):
-        """Abstract threshold witnesses should be called out explicitly on counterexamples."""
+    def test_tag_threshold_counterexample_replays(self):
+        """A timer crossing an HMI threshold: the search tries each of the
+        threshold's values and the PLC replays the trace it found."""
         enable = Bool("Enable", external=True)
         hmi_threshold = Int(
             "HmiThreshold",
@@ -239,10 +240,10 @@ class TestProve:
 
         result = always(logic, ~alarm, depth_budget=5)
         assert isinstance(result, Counterexample)
-        assert any("abstract threshold witness" in caveat for caveat in result.caveats)
+        assert not result.caveats
 
         runner = _replay_trace(logic, result.trace)
-        assert runner.current_state.tags.get("Alarm") is not True
+        assert runner.current_state.tags.get("Alarm") is True
 
     def test_callable_predicate_fallback(self):
         """Callable predicate still works for complex properties."""
@@ -540,13 +541,17 @@ class TestReachableStates:
 
         states = reachable_states(logic, project=["TooSoon", "Perfect", "TooLate"], depth_budget=60)
         assert not isinstance(states, Intractable)
-        # Exactly four states: idle + one of three mutually exclusive outcomes
+        # Idle + one of three mutually exclusive outcomes, plus the one row
+        # only impossible timing reaches: the 2 s watchdog done before the
+        # 1 s timer, so one press latches TooSoon and TooLate together.
+        # Black-box timers over-approximate it (any Done sequence goes).
         assert states == frozenset(
             {
                 frozenset({("TooSoon", False), ("Perfect", False), ("TooLate", False)}),
                 frozenset({("TooSoon", True), ("Perfect", False), ("TooLate", False)}),
                 frozenset({("TooSoon", False), ("Perfect", True), ("TooLate", False)}),
                 frozenset({("TooSoon", False), ("Perfect", False), ("TooLate", True)}),
+                frozenset({("TooSoon", True), ("Perfect", False), ("TooLate", True)}),
             }
         )
 

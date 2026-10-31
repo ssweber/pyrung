@@ -33,7 +33,6 @@ from pyrung.core import (
     system,
 )
 from pyrung.core.analysis.prove import (
-    PENDING,
     Counterexample,
     Intractable,
     Proven,
@@ -183,8 +182,9 @@ class TestCountDownAbsorptionGaps:
             "count_down with consumed Acc: Done=True should be reachable"
         )
 
-    def test_count_down_reset_via_threshold_comparison_allows_absorption(self):
-        """Reset fed by a threshold comparison is threshold-mediated — absorption is safe."""
+    def test_count_down_reset_via_threshold_comparison_keeps_a_bounded_acc(self):
+        """Reset fed by a threshold comparison: the accumulator is state the
+        search counts concretely, bounded between the reset and the preset."""
         enable = Bool("Enable", external=True)
         reset_from_threshold = Bool("ResetFromThreshold")
         counter = Counter.clone("ResetFedCtd")
@@ -198,7 +198,7 @@ class TestCountDownAbsorptionGaps:
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert "ResetFedCtd_Acc" not in stateful
+        assert set(stateful["ResetFedCtd_Acc"]) <= set(range(-5, 1))
 
     def test_count_down_reset_via_data_copy_of_acc_blocks_absorption(self):
         """Reset fed by a data copy of the accumulator is NOT threshold-mediated."""
@@ -220,8 +220,8 @@ class TestCountDownAbsorptionGaps:
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
         assert "DataFedCtd_Acc" in stateful
 
-    def test_large_preset_consumed_acc_gets_boundary_compressed_domain(self):
-        """Consumed acc with preset > 32 uses boundary compression, not full range."""
+    def test_large_preset_counter_acc_is_bounded_by_its_preset(self):
+        """A counter reset by its own Done is counted concretely up to its preset."""
         enable = Bool("Enable", external=True)
         gate = Bool("Gate", external=True)
         counter_a = Counter.clone("CA")
@@ -240,7 +240,7 @@ class TestCountDownAbsorptionGaps:
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
         if "CA_Acc" in stateful:
-            assert len(stateful["CA_Acc"]) <= 32
+            assert max(stateful["CA_Acc"]) <= 100
 
     def test_count_down_intermediate_state_reachable(self):
         """count_down intermediate output (Acc-dependent) must be reachable."""
@@ -400,11 +400,12 @@ class TestCounterResetReachability:
         )
 
 
-class TestConstantPresetCounterAbsorption:
-    """Verify the e6a0d4f fix also applies to count_up counters."""
+class TestConstantPresetCounter:
+    """A count_up counter compared with its own constant preset."""
 
-    def test_count_up_constant_preset_acc_lt_absorbed(self):
-        """count_up with constant preset and Acc < Preset should absorb."""
+    def test_count_up_constant_preset_acc_lt_is_tracked(self):
+        """count_up with constant preset and Acc < Preset: Done is a plain Bool
+        and the accumulator is state (nothing is absorbed)."""
         enable = Bool("Enable", external=True)
         rst = Bool("ConstCtrReset", external=True)
         c = Counter.clone("ConstCtr")
@@ -422,15 +423,12 @@ class TestConstantPresetCounterAbsorption:
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert stateful.get("ConstCtr_Done") == (False, PENDING, True), (
-            "count_up with constant preset and Acc < Preset: Done should get 3-valued domain"
-        )
-        assert "ConstCtr_Acc" not in stateful, (
-            "count_up Acc should be absorbed (redundant with Done boundary)"
-        )
+        assert stateful.get("ConstCtr_Done") == (False, True)
+        assert "ConstCtr_Acc" in stateful
 
     def test_count_up_constant_preset_acc_le_not_same_boundary(self):
-        """Acc <= Preset is NOT the same boundary as Acc < Preset; threshold absorption handles it."""
+        """Acc <= Preset is NOT the same boundary as Acc < Preset; Done is still
+        reached (ten edges, two scans each, within the default budget)."""
         enable = Bool("Enable", external=True)
         rst = Bool("LeCtrReset", external=True)
         c = Counter.clone("LeCtr")
@@ -438,8 +436,8 @@ class TestConstantPresetCounterAbsorption:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                count_up(c, preset=1000).reset(rst)
-            with Rung(c.Acc <= 1000):
+                count_up(c, preset=10).reset(rst)
+            with Rung(c.Acc <= 10):
                 out(output)
 
         states = reachable_states(logic, project=["LeOutput", "LeCtr_Done"])
@@ -498,12 +496,10 @@ def _assert_replays_to(logic: Program, result, tag_name: str) -> None:
 
 
 class TestProgressAcrossCycles:
-    """Hidden accumulators that advance once per multi-scan cycle.
-
-    The state key hides an absorbed accumulator below its thresholds, and the
-    hidden-event jump only advances it on a self-loop.  A count per pulse or
-    per change, or a timer running beside a toggling bit, returns to a known
-    key with more progress; that progress must not be dropped.
+    """Accumulators that advance once per multi-scan cycle (a count per pulse
+    or per change, a timer beside a toggling bit).  The search keys them
+    concretely, so every count is a step: a threshold past depth_budget is a
+    caveated Proven, never a silent one.
     """
 
     def test_change_counter(self):
@@ -587,7 +583,9 @@ class TestProgressAcrossCycles:
                 out(hit)
         _assert_replays_to(logic, always(logic, ~hit), "OscHit")
 
-    def test_large_preset_is_pumped_with_a_faithful_trace(self):
+    def test_large_preset_past_the_budget_says_so(self):
+        """A thousand pulses are two thousand scans: past the budget, the
+        Proven carries the depth caveat."""
         pulse = Bool("PumpIn", external=True)
         count = Int("PumpCount")
         hit = Bool("PumpHit")
@@ -597,10 +595,8 @@ class TestProgressAcrossCycles:
             with Rung(count >= 1000):
                 out(hit)
         result = always(logic, ~hit)
-        _assert_replays_to(logic, result, "PumpHit")
-        assert isinstance(result, Counterexample)
-        assert len(result.trace) == 2000
-        assert result.caveats == ()
+        assert isinstance(result, Proven)
+        assert any("depth_budget=50" in caveat for caveat in result.caveats)
 
     def test_reachable_states_sees_the_pulsed_crossing(self):
         pulse = Bool("ReachIn", external=True)
@@ -629,7 +625,9 @@ class TestProgressAcrossCycles:
                 out(hit)
         assert isinstance(always(logic, ~hit), Proven)
 
-    def test_timer_reset_by_the_toggle_stays_proven(self):
+    def test_timer_reset_by_the_toggle_is_unconfirmed(self):
+        """Enabled every other scan, the timer restarts before 30 ms: that is
+        timing, unconfirmed (not Proven) under black-box timers."""
         toggle = Bool("TogToggle")
         timer = Timer.clone("TogTimer")
         hit = Bool("TogHit")
@@ -640,7 +638,10 @@ class TestProgressAcrossCycles:
                 on_delay(timer, preset=30)
             with Rung(timer.Done):
                 out(hit)
-        assert isinstance(always(logic, ~hit), Proven)
+        result = always(logic, ~hit)
+        assert isinstance(result, Intractable)
+        assert result.kind == "timing"
+        assert "TogTimer_Done" in result.tags
 
     def test_reset_inside_the_cycle_is_not_pumped(self):
         pulse = Bool("MaskIn", external=True)
@@ -708,22 +709,27 @@ class TestProgressAcrossCycles:
                 out(hit)
         return logic, hit
 
-    def test_pumping_carries_a_timer_running_beside_the_pulses(self):
-        """The timer advances on every lap the trace repeats: it is pumped too,
-        and its preset bounds the repeats (no unreplayable counterexample)."""
+    def test_pulses_racing_a_short_timer_are_unconfirmed(self):
+        """Three pulses need six scans; a 60 ms timer (100 ms for the counter)
+        finishes first on the PLC.  Only timing says so: unconfirmed, not
+        Proven, and the hit row is over-approximated into the reachable set."""
         logic, hit = self._counter_racing_a_timer(60, ctu=False, tag="RaceInt")
-        assert isinstance(always(logic, ~hit), Proven)
+        result = always(logic, ~hit)
+        assert isinstance(result, Intractable)
+        assert result.kind == "timing"
         assert reachable_states(logic, project=["RaceIntHit"]) == frozenset(
-            {frozenset({("RaceIntHit", False)})}
+            {frozenset({("RaceIntHit", False)}), frozenset({("RaceIntHit", True)})}
         )
         logic, hit = self._counter_racing_a_timer(100, ctu=True, tag="RaceCtu")
-        assert isinstance(always(logic, ~hit), Proven)
+        result = always(logic, ~hit)
+        assert isinstance(result, Intractable)
+        assert result.kind == "timing"
 
     def test_pulses_that_beat_the_timer_still_count(self):
         logic, hit = self._counter_racing_a_timer(70, ctu=False, tag="RaceWin")
         _assert_replays_to(logic, always(logic, ~hit), "RaceWinHit")
 
-    def test_huge_preset_trace_lists_the_cycle_once(self):
+    def test_huge_preset_past_the_budget_says_so(self):
         pulse = Bool("HugeIn", external=True)
         clear = Bool("HugeClear", external=True)
         counter = Counter.clone("HugeCtu")
@@ -734,17 +740,14 @@ class TestProgressAcrossCycles:
             with Rung(counter.Done):
                 out(hit)
         result = always(logic, ~hit)
-        assert isinstance(result, Counterexample)
-        assert len(result.trace) < 100
-        assert any("more times to replay it" in caveat for caveat in result.caveats)
+        assert isinstance(result, Proven)
+        assert any("depth_budget=50" in caveat for caveat in result.caveats)
 
 
 class TestSelfResettingTimerLaps:
-    """A timer reset by its own Done is a pulse generator: every lap jumps to
-    the Done (a hidden-event jump of several scans), resets, and returns to
-    the first key with the lap counter one ahead.  The lap is a cycle even
-    though one of its links spans many scans and the timer falls back inside
-    it."""
+    """A timer reset by its own Done is a pulse generator: every lap is a
+    timer choice (it may finish on any enabled scan), and the counters
+    counting laps count concretely; replay confirms what the search finds."""
 
     def _generator(self, tag: str, preset: int = 50, *, enable: Bool | None = None):
         timer = Timer.clone(tag + "Tmr")
@@ -801,7 +804,8 @@ class TestSelfResettingTimerLaps:
         _assert_replays_to(logic, always(logic, ~hit), "LapGateHit")
 
     def test_laps_racing_a_timer(self):
-        """Three 4-scan laps beat a 13-scan timer but not an 11-scan one."""
+        """Three 4-scan laps beat a 13-scan timer (a replaying counterexample);
+        against an 11-scan one only timing decides: unconfirmed, not Proven."""
         for preset, wins in ((130, True), (110, False)):
             tag = f"LapRace{preset}"
             clear = Bool(tag + "Clear", external=True)
@@ -820,7 +824,8 @@ class TestSelfResettingTimerLaps:
             if wins:
                 _assert_replays_to(logic, result, hit.name)
             else:
-                assert isinstance(result, Proven)
+                assert isinstance(result, Intractable)
+                assert result.kind == "timing"
 
     def test_lap_counter_reset_or_stopped_stays_proven(self):
         count = Int("LapResetCount")
@@ -853,8 +858,8 @@ class TestSelfResettingTimerLaps:
 
 class TestUnreadTimer:
     """A timer nothing reads (Done, accumulator, status bits) changes no other
-    tag: it is left out of the key.  One read only by another instruction's
-    condition is not unread."""
+    tag: it is left out of the key and its tick never branches.  One read
+    only by another instruction's condition is not unread."""
 
     def test_unread_timer_leaves_the_key(self):
         enable = Bool("SinkEn", external=True)
@@ -872,10 +877,17 @@ class TestUnreadTimer:
             with Rung(counter.Acc >= 7):
                 out(hit)
         result = always(logic, ~hit, _debug=True)
-        assert isinstance(result, Proven)
+        # Seven counts before the 50 ms reset is timing: unconfirmed, and it
+        # names the timer that is read, not the unread one.
+        assert isinstance(result, Intractable)
+        assert result.kind == "timing"
+        assert result.tags == ["SinkUsed_Done"]
         names = result._debug_context.stateful_names
         assert "SinkTmr_Done" not in names
-        assert "SinkUsed_Done" in names
+        assert "SinkTmr_Acc" not in names
+        assert "SinkUsed_Acc" in names
+        model = result._debug_context.timer_model
+        assert "SinkTmr_Acc" not in model.branch
 
 
 class TestProgressMadeOnAnotherBranch:
@@ -1040,12 +1052,13 @@ class TestProgressMadeOnAnotherBranch:
         _assert_replays_to(logic, always(logic, ~hit), tag + "H")
 
 
-class TestDeadCounterBehindAGuard:
-    """A counter read only behind ``Rung(Req != 0): call(run)`` and reset by
-    every rung that raises the request is dead while ``Req == 0`` (deadness.py):
-    its stale value there is never read, so revisits differing in it are not
-    kept.  Each refused shape below lets a stale count reach the next request,
-    and pretending the guard held there would prove a reachable hit away.
+class TestCounterRacingATimerBehindAGuard:
+    """A count of Y's rises read only behind ``Rung(Req != 0): call(run)``
+    races a timer the request starts: H latches if the count reaches 2 before
+    the timer is done.  With a 20 ms timer only timing decides, so no variant
+    is ever Proven: one the PLC reaches is a replaying counterexample, the
+    rest are unconfirmed.  (The exact-timing layer proved the guarded ones by
+    a dead-guard analysis that is gone.)
     """
 
     def _program(self, tag: str, variant: str, preset: int = 20) -> tuple[Program, Bool]:
@@ -1105,53 +1118,36 @@ class TestDeadCounterBehindAGuard:
                     copy(0, n)
         return logic, hit
 
-    @pytest.mark.parametrize("variant", ["plain", "indirect_safe"])
-    def test_guard_found(self, variant: str):
-        tag = "DgOk" if variant == "plain" else "DgSafe"
-        logic, hit = self._program(tag, variant)
-        result = always(logic, ~hit, _debug=True)
-        assert isinstance(result, Proven)
-        guard = result._debug_context.dead_guards[tag + "N"]
-        assert (guard.op, guard.value) == ("ne", 0)
-        logic, hit = self._program(tag + "Slow", variant, preset=40)
-        _assert_replays_to(logic, always(logic, ~hit), tag + "SlowH")
-
     @pytest.mark.parametrize(
         ("variant", "preset"),
-        [("no_reset", 20), ("reset_elsewhere", 30), ("indirect_hits", 20), ("unguarded", 20)],
+        [
+            ("plain", 20),
+            ("indirect_safe", 20),
+            ("no_reset", 20),
+            ("reset_elsewhere", 30),
+            ("indirect_hits", 20),
+            ("unguarded", 20),
+            ("in_branch", 20),
+            ("read_outside", 20),
+        ],
     )
-    def test_stale_count_reaches_the_next_request(self, variant: str, preset: int):
+    def test_race_with_a_short_timer_is_never_proven(self, variant: str, preset: int):
         tag = "Dg" + "".join(part.title() for part in variant.split("_"))
         logic, hit = self._program(tag, variant, preset)
-        result = always(logic, ~hit, _debug=True)
-        _assert_replays_to(logic, result, tag + "H")
-        assert tag + "N" not in result._debug_context.dead_guards
+        result = always(logic, ~hit)
+        assert not isinstance(result, Proven)
+        if isinstance(result, Counterexample):
+            _assert_replays_to(logic, result, tag + "H")
+        else:
+            assert isinstance(result, Intractable)
+            assert result.kind == "timing"
+            assert tag + "T_Done" in result.tags
 
-    @pytest.mark.parametrize("variant", ["in_branch", "read_outside"])
-    def test_guard_refused_conservatively(self, variant: str):
-        tag = "Dg" + "".join(part.title() for part in variant.split("_"))
-        logic, hit = self._program(tag, variant)
-        result = always(logic, ~hit, _debug=True)
-        assert isinstance(result, Proven)
-        assert tag + "N" not in result._debug_context.dead_guards
-
-    def test_packml_runaway_guard(self):
-        from pyrung.cli import _apply_lock_config, _default_projection_names
-
-        packml = importlib.import_module("examples.packml_bench")
-        projection, joint, excl, split = _apply_lock_config(
-            _default_projection_names(packml.logic), getattr(packml, "__lock__", None)
-        )
-        context = prove_module._build_reachable_context(
-            packml.logic,
-            scope=sorted(set(projection)),
-            project=tuple(projection),
-            joint_inputs=joint,
-            exclusive_inputs=excl,
-            split_at=split,
-        )
-        guard = context.dead_guards["LoopIndex"]
-        assert (guard.tag, guard.op, guard.value) == ("StateRequested", "ne", 0)
+    @pytest.mark.parametrize("variant", ["plain", "indirect_safe"])
+    def test_slow_timer_loses_the_race(self, variant: str):
+        tag = "DgSlow" + "".join(part.title() for part in variant.split("_"))
+        logic, hit = self._program(tag, variant, preset=40)
+        _assert_replays_to(logic, always(logic, ~hit), tag + "H")
 
 
 class TestEdgeInAnInstructionCondition:
@@ -1234,9 +1230,10 @@ class TestAccumulatorReadOutsideTheProgram:
 
 
 class TestTimerTowardADynamicPreset:
-    """A timer toward a tag preset, beside a toggling bit, still has exact
-    thresholds once the preset is crossed: its progress around the two-scan
-    cycle is followed, not left with the first node's."""
+    """A timer toward a tag preset (3, or 5 while X), beside a toggling bit,
+    compared past it (Acc >= 40) on X's rise.  The search lets the tick land
+    there; whether a scan sequence at a fixed dt reaches it with X rising is
+    timing the guided replay does not find: unconfirmed, never Proven."""
 
     def test_accumulator_threshold_past_a_crossed_tag_preset(self):
         x = Bool("DynX", external=True)
@@ -1260,4 +1257,10 @@ class TestTimerTowardADynamicPreset:
                 copy(5, preset)
             with Rung(rise(x), timer.Acc >= 40):
                 out(hit)
-        _assert_replays_to(logic, always(logic, ~hit), "DynHit")
+        result = always(logic, ~hit)
+        assert not isinstance(result, Proven)
+        if isinstance(result, Counterexample):
+            _assert_replays_to(logic, result, "DynHit")
+        else:
+            assert isinstance(result, Intractable)
+            assert result.kind == "timing"

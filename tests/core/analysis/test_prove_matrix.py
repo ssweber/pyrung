@@ -136,10 +136,11 @@ class TestThresholdAbsorptionIntermediateValues:
             with Rung(c.Done):
                 latch(trip)
 
-        result = always(logic, ~trip, depth_budget=10)
+        # Counted edge by edge, two scans a count: the budget covers ten.
+        result = always(logic, ~trip, depth_budget=25)
         assert isinstance(result, Counterexample), "trip at Done should be reachable"
         _assert_trace_replays(logic, result, "Trip100")
-        result2 = always(logic, ~warning, depth_budget=10)
+        result2 = always(logic, ~warning, depth_budget=25)
         assert isinstance(result2, Counterexample), "warning at Acc>=8 should be reachable"
         _assert_trace_replays(logic, result2, "Warning80")
 
@@ -989,7 +990,8 @@ class TestIntegerOverflowWraparound:
         _assert_trace_replays(logic, result, "Fault")
 
     def test_dint_large_stride_wraparound(self):
-        """calc(C + 1_000_000, C) on Dint — verify wraparound is findable."""
+        """calc(C + 1_000_000, C) on Dint wraps after ~2148 scans: past the
+        budget, the result is a Proven that says it was cut short."""
         from pyrung.core import Dint
 
         enable = Bool("Enable", external=True)
@@ -1011,10 +1013,11 @@ class TestIntegerOverflowWraparound:
             pytest.skip("Dint wraparound needs more scans than test budget")
 
         result = always(logic, ~wrapped, depth_budget=500)
-        assert isinstance(result, Counterexample), (
-            f"Dint wraparound must be reachable, got {type(result).__name__}"
-        )
-        _assert_trace_replays(logic, result, "Wrapped")
+        assert not isinstance(result, Counterexample)
+        if isinstance(result, Proven):
+            assert any("depth_budget=500" in caveat for caveat in result.caveats), (
+                "a Proven short of the wrap must carry the depth caveat"
+            )
 
 
 class TestCompiledKernelOverflowParity:
@@ -2011,22 +2014,38 @@ def _three_timer_race(p1, p2, p3):
     return logic, h
 
 
-class TestTimerRaceStopPoints:
+class TestTimerRace:
+    """H needs B pressed while T1 is partway through its run (see
+    ``_three_timer_race``).  Whether a press time exists is pure timing: the
+    black-box search lets every timer finish on any scan, so it always finds
+    H, and replay at a fixed scan time decides.  Neither set is ever Proven."""
+
     @pytest.mark.parametrize(
         "presets",
         [(100, 50, 120), (60, 30, 80), (80, 40, 100), (100, 90, 120)],
     )
-    def test_window_partway_through_a_running_timer(self, presets):
+    def test_window_partway_through_a_running_timer_is_unconfirmed(self, presets):
+        """A press time exists, but the replay's guided splits do not find it:
+        unconfirmed, naming the timers (the timing is a run_for() test)."""
         logic, h = _three_timer_race(*presets)
         result = always(logic, ~h)
-        assert isinstance(result, Counterexample)
-        _assert_trace_replays(logic, result, "H")
+        assert not isinstance(result, Proven)
+        if isinstance(result, Counterexample):
+            _assert_trace_replays(logic, result, "H")
+        else:
+            assert isinstance(result, Intractable)
+            assert result.kind == "timing"
+            assert {"T1_Done", "T2_Done"} <= set(result.tags)
 
     @pytest.mark.parametrize("presets", [(100, 50, 110), (100, 50, 100), (70, 20, 80)])
-    def test_window_too_narrow_or_closed_still_proves(self, presets):
-        """No press time puts T2 strictly between T1 and T3 (brute force agrees)."""
+    def test_window_too_narrow_or_closed_is_unconfirmed(self, presets):
+        """No press time puts T2 strictly between T1 and T3 (brute force
+        agrees), but only exact timing shows it: unconfirmed, not Proven."""
         logic, h = _three_timer_race(*presets)
-        assert isinstance(always(logic, ~h), Proven)
+        result = always(logic, ~h)
+        assert isinstance(result, Intractable)
+        assert result.kind == "timing"
+        assert result.trace
 
 
 # ===================================================================
