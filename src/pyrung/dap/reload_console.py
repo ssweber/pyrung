@@ -110,14 +110,15 @@ def _reload_locked(
             f"  {len(dropped_memory)} site memory value(s) had no matching site "
             "in the new program, reset: " + ", ".join(sorted(dropped_memory))
         )
-    # An edge contact that got no memory (new, or edited) starts from its tag's
-    # current value, so a held bit does not rise on the first scan after reload.
+    # An edge contact with no match in the old program (new, or edited) starts
+    # from its tag's current value, so a held bit does not rise on the first
+    # scan after reload.  A matched contact keeps its memory, written or not.
     patched_memory, seeded_edges = seed_new_edge_memory(
-        patched_memory, new_runner._site_table, patched_tags
+        patched_memory, old_runner._site_table, new_runner._site_table, patched_tags
     )
     if seeded_edges:
         warnings.append(
-            f"  {len(seeded_edges)} edge contact(s) new to the program start from "
+            f"  {len(seeded_edges)} edge contact(s) new or edited start from "
             "their tag's current value: "
             + ", ".join(
                 f"{site.kind}({site.tag})"

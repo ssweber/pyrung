@@ -594,17 +594,20 @@ class TestReloadEdgeMemory:
         assert dropped == ()
 
     def test_a_new_edge_site_starts_from_its_tags_value(self):
+        old = _a_program(extra=False)
         new = _a_program(extra=True)
         seeded_memory, seeded = seed_new_edge_memory(
-            {"_edge:e2": False, "_dt": 0.01}, site_table_of(new), {"A": True}
+            {"_edge:e2": False, "_dt": 0.01}, site_table_of(old), site_table_of(new), {"A": True}
         )
-        # e1 had no memory: seeded from A.  e2 carried its own: kept.
+        # e1 is new: seeded from A.  e2 matched the old contact: kept.
         assert seeded_memory == {"_edge:e1": True, "_edge:e2": False, "_dt": 0.01}
         assert [(site.key, site.tag) for site in seeded] == [("e1", "A")]
 
     def test_a_site_whose_tag_the_state_does_not_hold_is_left_to_its_default(self):
         new = _a_program(extra=True)
-        seeded_memory, seeded = seed_new_edge_memory({}, site_table_of(new), {"B": True})
+        seeded_memory, seeded = seed_new_edge_memory(
+            {}, site_table_of(_a_program(extra=False)), site_table_of(new), {"B": True}
+        )
         assert seeded_memory == {}
         assert seeded == ()
 
@@ -624,7 +627,9 @@ class TestReloadEdgeMemory:
         memory, _dropped = remap_site_memory(
             state.memory, site_table_of(old), site_table_of(new_logic)
         )
-        memory, _seeded = seed_new_edge_memory(memory, site_table_of(new_logic), state.tags)
+        memory, _seeded = seed_new_edge_memory(
+            memory, site_table_of(old), site_table_of(new_logic), state.tags
+        )
         reloaded = PLC(
             new_logic,
             initial_state=SystemState(
@@ -645,6 +650,84 @@ class TestReloadEdgeMemory:
         assert reloaded.current_state.tags["Y1"] is True
         if extra:
             assert reloaded.current_state.tags["Y0"] is True
+
+    @staticmethod
+    def _reloaded(plc: PLC, build) -> PLC:
+        """*plc*'s state carried onto a fresh build, as reload_console does."""
+        from pyrsistent import pmap
+
+        state = plc.current_state
+        logic = build()
+        memory, _dropped = remap_site_memory(state.memory, site_table_of(plc), site_table_of(logic))
+        memory, seeded = seed_new_edge_memory(
+            memory, site_table_of(plc), site_table_of(logic), state.tags
+        )
+        assert seeded == ()
+        return PLC(logic, initial_state=state.set(memory=pmap(memory)), dt=0.01)
+
+    @staticmethod
+    def _below_build():
+        """``rise(Z) -> Y1`` above the rung that writes Z (from A)."""
+        A = Bool("A", external=True)
+        Z = Bool("Z")
+        with Program(strict=False) as logic:
+            with Rung(rise(Z)):
+                out(Bool("Y1"))
+            with Rung(A):
+                out(Z)
+        return logic
+
+    @staticmethod
+    def _uncalled_build():
+        """``rise(Z) -> Y1`` in a subroutine called only while Go is on."""
+        Z = Bool("Z", external=True)
+        with Program(strict=False) as logic:
+            with Rung(Bool("Go", external=True)):
+                call("EdgeSub")
+            with subroutine("EdgeSub"):
+                with Rung(rise(Z)):
+                    out(Bool("Y1"))
+        return logic
+
+    @pytest.mark.parametrize("reload", [False, True], ids=["continued", "reloaded"])
+    def test_an_unchanged_contact_that_never_saw_its_tag_on_still_rises(self, reload):
+        plc = PLC(self._below_build(), dt=0.01)
+        plc.step()
+        plc.patch({"A": True})
+        plc.step()  # Z turns on below the contact; its memory is still unwritten
+        assert plc.current_state.tags["Z"] is True
+        assert not any(name.startswith("_edge:") for name in plc.current_state.memory)
+        if reload:
+            plc = self._reloaded(plc, self._below_build)
+        plc.patch({"A": True})
+        plc.step()
+        assert plc.current_state.tags["Y1"] is True
+
+    @pytest.mark.parametrize("reload", [False, True], ids=["continued", "reloaded"])
+    def test_an_edge_in_an_uncalled_subroutine_still_rises_when_first_called(self, reload):
+        plc = PLC(self._uncalled_build(), dt=0.01)
+        plc.patch({"Z": True})
+        plc.step()
+        if reload:
+            plc = self._reloaded(plc, self._uncalled_build)
+        plc.patch({"Z": True, "Go": True})
+        plc.step()
+        assert plc.current_state.tags["Y1"] is True
+
+    def test_an_idle_reload_of_an_unchanged_program_seeds_nothing(self):
+        old = PLC(self._below_build(), dt=0.01)
+        old.step()
+        old.step()  # Z never on: the contact's memory is never written
+        new = self._below_build()
+        memory, dropped = remap_site_memory(
+            old.current_state.memory, site_table_of(old), site_table_of(new)
+        )
+        seeded_memory, seeded = seed_new_edge_memory(
+            memory, site_table_of(old), site_table_of(new), {"Z": False, "A": False}
+        )
+        assert dropped == ()
+        assert seeded == ()
+        assert seeded_memory == memory
 
 
 def _two_contacts_on_a() -> Program:

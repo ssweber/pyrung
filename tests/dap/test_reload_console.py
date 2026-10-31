@@ -249,7 +249,7 @@ class TestReloadSiteMemory:
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "no matching site" not in result
-        assert "1 edge contact(s) new to the program start from their tag's current value" in result
+        assert "1 edge contact(s) new or edited start from their tag's current value" in result
         assert "rise(Button) line 8 = on" in result
         memory = adapter._runner.current_state.memory
         assert memory["_edge:e1"] is True
@@ -259,6 +259,18 @@ class TestReloadSiteMemory:
         tags = adapter._runner.current_state.tags
         assert tags["Pulse"] is False
         assert tags["Extra"] is False
+
+    def test_reloading_an_unchanged_script_seeds_no_edge_contact(self, tmp_path: Path):
+        adapter, out, _script_path = _setup(tmp_path, EDGE_SCRIPT.format(extra=""))
+        _repl(adapter, out, "step 1", seq=10)
+        _repl(adapter, out, "force Button true", seq=11)
+        resp, _ = _repl(adapter, out, "reload", seq=12)
+        assert resp["success"] is True
+        assert "edge contact(s)" not in resp["body"]["result"]
+        assert "_edge:e1" not in adapter._runner.current_state.memory
+
+        _repl(adapter, out, "step 1", seq=13)
+        assert adapter._runner.current_state.tags["Pulse"] is True
 
 
 class TestReloadTagTypeChange:

@@ -28,8 +28,9 @@ key, and asking for one raises (there is no ``id()`` fallback).
 Every site records a fingerprint ``(scope, source line, kind, operands)`` and
 its contacts (an edge also its row as source text), so hot reload can carry
 memory to the matching site of the new program, and drop it where no site
-matches unambiguously (:func:`remap_site_memory`).  An edge site the new
-program adds starts from its tag's current value (:func:`seed_new_edge_memory`).
+matches unambiguously (:func:`remap_site_memory`).  An edge site with no match
+in the old program (added or edited) starts from its tag's current value
+(:func:`seed_new_edge_memory`).
 
 Keys are stamped on the objects.  A bound object is never renamed: a bare rung
 list whose objects would clash (rungs of two programs, or of two lists) is
@@ -1052,29 +1053,33 @@ def remap_site_memory(
 
 def seed_new_edge_memory(
     memory: Mapping[str, Any],
-    table: SiteTable | None,
+    old: SiteTable | None,
+    new: SiteTable | None,
     tags: Mapping[str, Any],
 ) -> tuple[dict[str, Any], tuple[Site, ...]]:
-    """*memory* with every edge site of *table* it holds no memory for seeded
-    from its tag's value in *tags*.
+    """*memory* with every edge site of *new* that no site of *old* matches
+    seeded from its tag's value in *tags*.
 
     Run after :func:`remap_site_memory` on reload: an edge contact the new
-    program adds (or one whose memory could not be matched) then starts as if
-    it had seen its tag last scan, so a held bit never rises (or falls) just
-    because the program was reloaded.  A site whose tag *tags* does not hold
-    is left to its default.  Returns ``(memory, seeded sites)``.
+    program adds (or one edited so it no longer matches) then starts as if it
+    had seen its tag last scan, so a held bit never rises (or falls) just
+    because the program was reloaded.  A matched site keeps what the remap
+    gave it, including no memory at all: a contact that has only seen its tag
+    off has never written its memory, and must still see a rise.  A site whose
+    tag *tags* does not hold is left to its default.  Returns ``(memory,
+    seeded sites)``.
     """
     out = dict(memory)
-    seeded: list[Site] = []
-    if table is None:
+    if new is None:
         return out, ()
-    for site in table.edge_sites:
-        if site.tag is None or site.tag not in tags:
+    matched = (
+        frozenset(_match_sites(old.sites, new.sites).values()) if old is not None else frozenset()
+    )
+    seeded: list[Site] = []
+    for site in new.edge_sites:
+        if site.key in matched or site.tag is None or site.tag not in tags:
             continue
-        names = [name for name, _default in site.memory if name not in out]
-        if not names:
-            continue
-        for name in names:
+        for name, _default in site.memory:
             out[name] = bool(tags[site.tag])
         seeded.append(site)
     return out, tuple(seeded)
