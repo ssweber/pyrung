@@ -97,6 +97,28 @@ def _nested_branch():
     return p
 
 
+def _branches_only_2():
+    with Program() as p:
+        with Rung():
+            with branch(c[2]):
+                out(c[1])
+            with branch(c[3]):
+                out(c[4])
+    return p
+
+
+def _branches_only_3():
+    with Program() as p:
+        with Rung():
+            with branch(c[2]):
+                out(c[1])
+            with branch(c[3]):
+                out(c[4])
+            with branch(c[5]):
+                out(c[6])
+    return p
+
+
 def _box_with_pins():
     with Program() as p:
         with Rung():
@@ -147,6 +169,8 @@ SHAPES = [
     _two_branches,
     _branch_with_two_outputs,
     _nested_branch,
+    _branches_only_2,
+    _branches_only_3,
     _box_with_pins,
     _timer_pin,
     _for_body,
@@ -170,6 +194,40 @@ def test_no_vertical_token_in_column_a_and_round_trip(shape):
         assert not (row[1] in ("T", "|") or row[1].startswith("T:")), row
     _code, before, after = round_trip_logic(program, _tag_map())
     assert before == after
+
+
+ONE_RUNG = [
+    _calc_copy,
+    _branch_after_out,
+    _nested_branch,
+    _branch_with_two_outputs,
+    _two_branches,
+    _branches_only_2,
+    _branches_only_3,
+    _for_body,
+    _subroutine,
+]
+
+
+@pytest.mark.parametrize("shape", ONE_RUNG, ids=lambda f: f.__name__)
+def test_importer_reads_the_unconditional_shape_as_one_rung(shape):
+    from pyrung.click import ladder_to_pyrung
+
+    code = ladder_to_pyrung(pyrung_to_ladder(shape(), _tag_map()))
+    assert code.count("with rung(") == 1, code
+    assert ".continued()" not in code, code
+
+
+def test_rail_rows_still_read_as_continued():
+    from pyrung.click import ladder_to_pyrung
+
+    with Program() as p:
+        with Rung(c[1]):
+            out(c[2])
+        with Rung(c[3]).continued():
+            out(c[4])
+    code = ladder_to_pyrung(pyrung_to_ladder(p, _tag_map()))
+    assert ".continued()" in code, code
 
 
 def test_unconditional_outputs_hang_a_wire_trunk_and_split_in_column_b():
