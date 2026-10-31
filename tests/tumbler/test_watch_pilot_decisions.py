@@ -82,7 +82,11 @@ def _watch(
     stall_budget_s: float,
     output_budget_s: float = 1.0,
     memory_budget_mb: int | None = None,
+    wall_budget_s: float = 30.0,
 ) -> int:
+    # The wall budget must never race the budget a test is about: a spawned
+    # worker re-imports pyrung and can take seconds to emit its first event
+    # under load. Stall/output/memory clocks only run once the worker is ready.
     context = mp.get_context("spawn")
     messages = context.Queue()
     dump_request = context.Event()
@@ -101,7 +105,7 @@ def _watch(
             messages,
             dump_request,
             dump_ready,
-            wall_budget_s=2.0,
+            wall_budget_s=wall_budget_s,
             stall_budget_s=stall_budget_s,
             output_budget_s=output_budget_s,
             memory_budget_mb=memory_budget_mb,
