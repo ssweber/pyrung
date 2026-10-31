@@ -587,9 +587,7 @@ def _audit_coordinate_reads(
     if not coords:
         return frozenset(), rung_cmps, instr_cmps, frozenset()
     for node in pdg.rung_nodes:
-        reads = (
-            (node.condition_reads - node.guard_reads) | node.data_reads | node.exclusive_reads
-        ) & coords
+        reads = (node.own_condition_reads | node.data_reads | node.exclusive_reads) & coords
         if not reads:
             continue
         rung = _resolve_rung(program, node)
