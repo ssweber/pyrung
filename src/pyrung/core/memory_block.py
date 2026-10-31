@@ -1465,6 +1465,46 @@ class IndirectExprRef:
         self.block._validate_address(addr)
         return self.block._get_tag(addr)
 
+    # Comparisons build the same conditions as ``IndirectRef``'s.  Without
+    # them, ``DS[idx + 1] == 5`` fell back to the dataclass ``__eq__`` and
+    # produced a plain ``bool``.
+
+    def __eq__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
+        """Create equality comparison condition."""
+        from pyrung.core.condition import IndirectCompareEq
+
+        return IndirectCompareEq(self, other)
+
+    def __ne__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
+        """Create inequality comparison condition."""
+        from pyrung.core.condition import IndirectCompareNe
+
+        return IndirectCompareNe(self, other)
+
+    def __lt__(self, other: Any) -> IndirectCompareLt:
+        """Create less-than comparison condition."""
+        from pyrung.core.condition import IndirectCompareLt
+
+        return IndirectCompareLt(self, other)
+
+    def __le__(self, other: Any) -> IndirectCompareLe:
+        """Create less-than-or-equal comparison condition."""
+        from pyrung.core.condition import IndirectCompareLe
+
+        return IndirectCompareLe(self, other)
+
+    def __gt__(self, other: Any) -> IndirectCompareGt:
+        """Create greater-than comparison condition."""
+        from pyrung.core.condition import IndirectCompareGt
+
+        return IndirectCompareGt(self, other)
+
+    def __ge__(self, other: Any) -> IndirectCompareGe:
+        """Create greater-than-or-equal comparison condition."""
+        from pyrung.core.condition import IndirectCompareGe
+
+        return IndirectCompareGe(self, other)
+
     def __repr__(self) -> str:
         return f"IndirectExprRef({self.block.name}[{self.expr}])"
 
