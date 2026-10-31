@@ -47,6 +47,8 @@ class Instruction(ABC):
     debug_substeps: tuple[DebugInstructionSubStep, ...] | None = None
     _state_key: str | None = None
     _site_program_owned: bool = False
+    # The binding that stamped ``_state_key`` (see ``Condition._site_owner``).
+    _site_owner: object | None = None
     # Edge sites a bare For-body instruction scans each iteration (``(memory key,
     # tag)`` pairs), stamped by ``site_memory.build_edge_frames``.
     _edge_frame: tuple[tuple[str, str], ...] | None = None

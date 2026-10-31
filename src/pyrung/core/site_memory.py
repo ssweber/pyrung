@@ -258,6 +258,10 @@ def _iter_edges(cond: Any) -> Iterable[Any]:
             yield from _iter_edges(child)
 
 
+# Owner of every binding no program owns (a bare rung list, an overlay).
+_UNOWNED = object()
+
+
 class _Binder:
     """One :func:`bind_sites` run."""
 
@@ -267,12 +271,14 @@ class _Binder:
         *,
         only_unbound: bool,
         program_owned: bool = False,
+        owner: object | None = None,
         keepers: Mapping[str, Any] | None = None,
         reserved: frozenset[str] = frozenset(),
     ) -> None:
         self.namespace = namespace
         self.only_unbound = only_unbound
         self.program_owned = program_owned
+        self.owner: object = owner if owner is not None else _UNOWNED
         # only_unbound: the one object allowed to keep each key it already
         # carries, and every key some object of the list carries (a fresh key
         # never takes one of those).
@@ -304,6 +310,60 @@ class _Binder:
         """only_unbound: *obj* keeps the key it carries (it is that key's keeper)."""
         return self.only_unbound and key is not None and self.keepers.get(key) is obj
 
+    def foreign(self, obj: Any) -> bool:
+        """Whether another binding stamped *obj*: its keys are that binding's, so
+        this one must work on a copy, never re-key the object in place."""
+        if self.only_unbound:
+            return False
+        owner = getattr(obj, "_site_owner", None)
+        return owner is not None and owner is not self.owner
+
+    def holds_foreign(self, rung: Any) -> bool:
+        """Whether *rung*, a rung of its tree or an instruction in it is another
+        binding's (a rung or instruction object shared with another program)."""
+        from pyrung.core.instruction.control import ForLoopInstruction
+        from pyrung.core.rung import Rung as RungLogic
+
+        def _instruction(instr: Any) -> bool:
+            if self.foreign(instr):
+                return True
+            if isinstance(instr, ForLoopInstruction):
+                for item in instr.body:
+                    if _rung(item) if isinstance(item, RungLogic) else _instruction(item):
+                        return True
+            return False
+
+        def _rung(current: Any) -> bool:
+            if self.foreign(current):
+                return True
+            for item in current._execution_items:
+                if _rung(item) if isinstance(item, RungLogic) else _instruction(item):
+                    return True
+            return False
+
+        return _rung(rung)
+
+    def stamp_rungs(self, rungs: Sequence[Rung]) -> None:
+        """Mark every rung of *rungs*' trees as this binding's (a list bound as
+        it is, ``only_unbound``, takes nothing over)."""
+        if self.only_unbound:
+            return
+        from pyrung.core.instruction.control import ForLoopInstruction
+        from pyrung.core.rung import Rung as RungLogic
+
+        def _rung(current: Any) -> None:
+            current._site_owner = self.owner
+            for item in current._execution_items:
+                if isinstance(item, RungLogic):
+                    _rung(item)
+                elif isinstance(item, ForLoopInstruction):
+                    for child in item.body:
+                        if isinstance(child, RungLogic):
+                            _rung(child)
+
+        for rung in rungs:
+            _rung(rung)
+
     # -- instruction keys ---------------------------------------------------
 
     def number_instructions(self, rungs: Sequence[Rung], scope: str) -> None:
@@ -321,9 +381,13 @@ class _Binder:
                 self.instruction_count += 1
                 key: str | None = instr._state_key
                 if key is None or not self._keeps(instr, key):
+                    # bind_sites copied every rung holding another binding's
+                    # instruction, so this one is this binding's to re-key.
+                    assert not self.foreign(instr)
                     key = self._fresh_key("i", self.instruction_count)
                     instr._state_key = key
                     instr._site_program_owned = self.program_owned
+                    instr._site_owner = self.owner
                 own = (*contacts, *body_contacts.get(id(instr), ()))
                 self._record_instruction(instr, key, scope, row, own)
                 if isinstance(instr, ForLoopInstruction):
@@ -387,17 +451,19 @@ class _Binder:
                 assert owner is not None
                 key = owner
             else:
-                # A second site, or an edge another namespace (the user program)
-                # already owns, gets an object of its own.
+                # A second site, or an edge another binding (another program,
+                # a bare list a runner scans, another namespace) already keyed,
+                # gets an object of its own: that binding keeps its key.
                 if id(cond) in self.claimed or (
                     not self.only_unbound
                     and owner is not None
-                    and _namespace_of(owner) != self.namespace
+                    and (self.foreign(cond) or _namespace_of(owner) != self.namespace)
                 ):
                     cond = copy.copy(cond)
                 key = self._fresh_key("e", self.edge_count)
                 cond._site_key = key
                 cond._site_program_owned = self.program_owned
+                cond._site_owner = self.owner
             self.claimed.add(id(cond))
             line = cond.source_line if cond.source_line is not None else line_hint
             tag = cond._resolved_tag.name
@@ -564,6 +630,7 @@ def bind_sites(
     *,
     namespace: str = USER_NAMESPACE,
     program_owned: bool = False,
+    owner: object | None = None,
     _keepers: Mapping[str, Any] | None = None,
     _reserved: frozenset[str] = frozenset(),
 ) -> SiteTable:
@@ -573,12 +640,19 @@ def bind_sites(
     (``e{N}``), both prefixed ``namespace:`` outside the user program.  Main
     rungs come first, then subroutines in definition order.  Rebinding the same
     rungs reproduces the same keys.  *program_owned* marks the keys as a
-    ``Program``'s.
+    ``Program``'s; *owner* is the binding's owner (the ``Program``).
+
+    Keys are never re-stamped on another owner's objects: an edge another
+    binding keyed is copied before this one keys it, and a rung of *rungs* or
+    *subroutines* whose tree holds another binding's rung or instruction is
+    replaced (in that list) by a structural copy, so the other program, and a
+    runner already scanning it, keep their keys.
     """
     binder = _Binder(
         namespace,
         only_unbound=_keepers is not None,
         program_owned=program_owned,
+        owner=owner,
         keepers=_keepers,
         reserved=_reserved,
     )
@@ -586,17 +660,36 @@ def bind_sites(
         (namespace or "main", rungs),
         *((name, body) for name, body in (subroutines or {}).items()),
     ]
+    for _scope, scope_rungs in scopes:
+        _own_copies(binder, scope_rungs)
     for scope, scope_rungs in scopes:
         binder.number_instructions(scope_rungs, scope)
     for scope, scope_rungs in scopes:
         binder.bind_edges(scope_rungs, scope)
     for _scope, scope_rungs in scopes:
+        binder.stamp_rungs(scope_rungs)
         for rung in scope_rungs:
             # Keys may have changed: each row rebuilds its edge frame when scanned next.
             rung._edge_frame = None
     instruction_sites = [s for s in binder.sites if s.site == SITE_INSTRUCTION]
     edge_sites = [s for s in binder.sites if s.site == SITE_EDGE]
     return SiteTable(namespace=namespace, sites=(*instruction_sites, *edge_sites))
+
+
+def _own_copies(binder: _Binder, rungs: Sequence[Rung]) -> None:
+    """Replace each rung of *rungs* that holds another binding's rung or
+    instruction with a structural copy of it (see :func:`bind_sites`)."""
+    memo: dict[int, Any] = {}
+    for index, rung in enumerate(rungs):
+        if not binder.holds_foreign(rung):
+            continue
+        if not isinstance(rungs, list):
+            raise TypeError(
+                "these rungs hold another program's rungs or instructions; "
+                "pass them as a list so they can be copied, or copy them first "
+                "with pyrung.core.site_memory.copy_rungs()"
+            )
+        rungs[index] = _copy_rung(rung, memo)
 
 
 def _list_site_holders(rungs: Sequence[Rung]) -> list[tuple[Any, str | None]]:
@@ -677,6 +770,7 @@ def _copy_condition(cond: Any, memo: dict[int, Any]) -> Any:
     if _edge_kind(cond) is not None:
         new = copy.copy(cond)
         new._site_key = None
+        new._site_owner = None
     else:
         children = _children(cond)
         if children is None:
@@ -704,6 +798,7 @@ def _copy_instruction(instr: Any, memo: dict[int, Any]) -> Any:
         return done
     new = copy.copy(instr)
     new._state_key = None
+    new._site_owner = None
     new._edge_frame = None
     memo[id(instr)] = new
     for name in type(instr)._conditions:
@@ -730,6 +825,7 @@ def _copy_rung(rung: Any, memo: dict[int, Any]) -> Any:
     if done is not None:
         return done
     new = copy.copy(rung)
+    new._site_owner = None
     memo[id(rung)] = new
     new._conditions = [_copy_condition(c, memo) for c in rung._conditions]
     new._instructions = [_copy_instruction(i, memo) for i in rung._instructions]

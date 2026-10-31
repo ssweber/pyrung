@@ -76,7 +76,7 @@ class Program:
         """Bind every memory-keeping site (see :mod:`pyrung.core.site_memory`)."""
         from pyrung.core.site_memory import bind_sites
 
-        self._site_table = bind_sites(self.rungs, self.subroutines, program_owned=True)
+        self._site_table = bind_sites(self.rungs, self.subroutines, program_owned=True, owner=self)
         self._invalidate_graph_cache()
 
     def _add_rung(self, rung: RungLogic) -> None:

@@ -311,6 +311,83 @@ class TestBareListKeysAreUnique:
         assert plc.current_state.tags["Q"] is True
 
 
+def _rise_b_reaches(plc: PLC, out_name: str) -> bool:
+    """Whether *out_name* turns on the scan B rises (B held off first)."""
+    plc.patch({"B": False})
+    plc.step()
+    plc.patch({"B": True})
+    plc.step()
+    return plc.current_state.tags[out_name] is True
+
+
+class TestKeysNeverRestampedAcrossPrograms:
+    """A second program never re-keys objects the first one bound (keys per PLC)."""
+
+    @staticmethod
+    def _first() -> tuple[Program, object]:
+        shared = rise(Bool("B"))
+        with Program(strict=False) as p1:
+            with Rung(rise(Bool("A"))):
+                out(Bool("YA"))
+            with Rung(shared):
+                out(Bool("YB"))
+        return p1, shared
+
+    @staticmethod
+    def _p1_keys(p1: Program) -> list[str | None]:
+        return [rung._conditions[0]._site_key for rung in p1.rungs]
+
+    def test_an_edge_shared_with_a_later_program_keeps_its_key(self):
+        p1, shared = self._first()
+        with Program(strict=False) as p2:
+            with Rung(shared):
+                out(Bool("Z"))
+        assert self._p1_keys(p1) == ["e1", "e2"]
+        assert p1.rungs[1]._conditions[0] is shared
+        assert p2.rungs[0]._conditions[0] is not shared
+        assert p2.rungs[0]._conditions[0]._site_key == "e1"
+        assert _rise_b_reaches(PLC(p1), "YB")
+        assert _rise_b_reaches(PLC(p2), "Z")
+
+    def test_a_runner_scanning_the_first_program_is_untouched(self):
+        p1, shared = self._first()
+        plc = PLC(p1)
+        assert _rise_b_reaches(plc, "YB")
+        with Program(strict=False) as p2:
+            with Rung(shared):
+                out(Bool("Z"))
+        assert self._p1_keys(p1) == ["e1", "e2"]
+        assert _rise_b_reaches(PLC(p2), "Z")
+        assert _rise_b_reaches(plc, "YB")
+        plc.patch({"B": True})
+        plc.step()
+        assert plc.current_state.tags["YB"] is False
+
+    def test_a_rung_object_in_two_programs_is_copied_into_the_second(self):
+        p1, _shared = self._first()
+        shared_rung = p1.rungs[1]
+        instruction = shared_rung._instructions[0]
+        with Program(strict=False) as p2:
+            with Rung(Bool("C")):
+                out(Bool("W"), oneshot=True)
+            p2._add_rung(shared_rung)
+        assert p1.rungs[1] is shared_rung
+        assert p2.rungs[1] is not shared_rung
+        assert self._p1_keys(p1) == ["e1", "e2"]
+        assert instruction.state_key == "i2"
+        assert p2.rungs[1]._instructions[0] is not instruction
+        assert p2.rungs[1]._instructions[0].state_key == "i2"
+        assert p2.rungs[1]._conditions[0]._site_key == "e1"
+        assert _rise_b_reaches(PLC(p1), "YB")
+        assert _rise_b_reaches(PLC(p2), "YB")
+
+    def test_a_program_rebinding_itself_keeps_its_objects(self):
+        p1, shared = self._first()
+        p1._assign_state_keys()
+        assert p1.rungs[1]._conditions[0] is shared
+        assert self._p1_keys(p1) == ["e1", "e2"]
+
+
 def _counter_program(*, insert_rung: bool) -> Program:
     A = Bool("A")
     P = Bool("P")

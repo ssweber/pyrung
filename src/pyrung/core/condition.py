@@ -48,6 +48,9 @@ class Condition(ABC):
     # :mod:`pyrung.core.site_memory`.
     _site_key: str | None = None
     _site_program_owned: bool = False
+    # The binding that stamped ``_site_key`` (a ``Program``, or one token for
+    # every binding no program owns); another binding copies the object first.
+    _site_owner: object | None = None
 
     @abstractmethod
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
