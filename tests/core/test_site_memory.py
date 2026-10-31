@@ -847,6 +847,7 @@ class TestEdgeFrames:
         assert tags(loop) == []
         assert tags(body_rung) == ["E", "F"]
         assert tags(body_box) == ["A"]
+        assert outer._edge_frame is not None
         assert [name for _key, name in outer._edge_frame] == ["B"]
         assert body_box._body_row_legs is True
 
