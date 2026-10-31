@@ -548,6 +548,27 @@ class TestEdgeSiteMemory:
         assert "_edge:e3" not in source_code
         assert "_prev" not in source_code
 
+    @pytest.mark.parametrize("edge", [False, True], ids=["level_leg", "edge_leg"])
+    def test_bare_body_helper_leg_reads_its_own_row_on_every_backend(self, monkeypatch, edge):
+        """A bare For-body instruction is a row of its own (CLICK: a wire-only
+        rung between For and Next): its reset leg reads Y as latched by the
+        body row above it in the same pass, whether or not the leg holds an
+        edge contact."""
+        from pyrung.core import Or, latch, rise
+
+        y = Bool("Y")
+        z = Bool("Z")
+        cnt = Counter.clone("Cnt")
+        leg = Or(y, rise(z)) if edge else y
+        with Program(strict=False) as prog:
+            with Rung():
+                with forloop(2):
+                    latch(y)
+                    count_up(cnt, 100).reset(leg)
+
+        results = _on_every_backend(prog, monkeypatch, (y, cnt.Acc), scans=1)
+        assert results == {name: (True, 0) for name in results}
+
 
 class TestConditionAndExpressionCompiler:
     @pytest.mark.parametrize(

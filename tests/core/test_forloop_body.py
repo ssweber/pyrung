@@ -171,6 +171,22 @@ def test_body_rung_contact_driven_by_same_iteration_write(runner_factory):
     _assert_paths_agree(logic, {"Enable": True}, A=3, Trip=True)
 
 
+def test_bare_body_helper_leg_reads_the_body_rows_above_it(runner_factory):
+    """A bare body instruction is a row of its own: its reset leg reads Rst as
+    latched by the body row above it, on every path and backend."""
+    with Program() as logic:
+        with Rung(Enable):
+            with forloop(2):
+                latch(Rst)
+                count_up(CtrA, 100).reset(Rst)
+
+    runner = runner_factory(logic)
+    runner.patch({"Enable": True})
+    runner.step()
+    assert runner.current_state.tags["CtrA_Acc"] == 0
+    _assert_paths_agree(logic, {"Enable": True}, CtrA_Acc=0, Rst=True)
+
+
 def test_loop_rung_false_leaves_body_rung_outs_alone(runner_factory):
     # CLICK skips the body of a false For rung: the coil keeps its value.
     light = Bool("Light")

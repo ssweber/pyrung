@@ -50,6 +50,9 @@ class Instruction(ABC):
     # Edge sites a bare For-body instruction scans each iteration (``(memory key,
     # tag)`` pairs), stamped by ``site_memory.build_edge_frames``.
     _edge_frame: tuple[tuple[str, str], ...] | None = None
+    # Whether a bare For-body instruction has a helper leg (reset, jump, ...):
+    # it is then a row of its own whose legs read the tags as that row starts.
+    _body_row_legs: bool = False
     ALWAYS_EXECUTES: bool = False
     INERT_WHEN_DISABLED: bool = True
     _reads: tuple[str, ...] = ()

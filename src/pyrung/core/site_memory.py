@@ -1025,8 +1025,20 @@ def _frame_instruction(instr: Any, contacts: set[int], out: dict[str, Any], rows
                 _frame_row(child, contacts, child_frame, rows)
             else:
                 _frame_instruction(child, contacts, child_frame, rows)
+                child._body_row_legs = _has_helper_leg(child)
             child._edge_frame = _frame_names(child_frame)
             rows[id(child)] = tuple(child_frame.items())
+
+
+def _has_helper_leg(instr: Any) -> bool:
+    for name in type(instr)._conditions:
+        if _is_power_field(instr, name):
+            continue
+        value = getattr(instr, name, None)
+        if value is None or (isinstance(value, tuple) and not value):
+            continue
+        return True
+    return False
 
 
 def _frame_row(rung: Any, contacts: set[int], out: dict[str, Any], rows: _Rows) -> None:
@@ -1081,20 +1093,23 @@ def scan_edge_frame(ctx: Any, view: Any, frame: Sequence[tuple[str, str]]) -> No
 
 
 def begin_bare_body_row(ctx: Any, instr: Any) -> tuple[Any] | None:
-    """Scan a bare For-body instruction as a row of its own, if it has edge sites.
+    """Scan a bare For-body instruction as a row of its own, if it has helper legs.
 
-    Its helper legs then read a fresh view, so an edge leg compares against the
-    memory the previous iteration stored.  Returns the condition snapshot to
-    restore afterwards (wrapped), or ``None`` when the instruction has no edge
-    site and runs on the loop's view as before.
+    CLICK holds a bare body instruction as a wire-only rung between For and
+    Next, so its helper legs (reset, jump, ...) read the tags as that rung
+    starts, after the body rows above it, as a body rung's contacts do.  An
+    edge leg then compares against the memory the previous iteration stored.
+    Returns the condition snapshot to restore afterwards (wrapped), or ``None``
+    when the instruction has no helper leg (nothing reads a view).
     """
     frame = getattr(instr, "_edge_frame", None)
-    if not frame:
+    if not frame and not getattr(instr, "_body_row_legs", False):
         return None
     outer = ctx._condition_snapshot
     view = ctx._new_condition_view()
     ctx._condition_snapshot = view
-    scan_edge_frame(ctx, view, frame)
+    if frame:
+        scan_edge_frame(ctx, view, frame)
     return (outer,)
 
 
