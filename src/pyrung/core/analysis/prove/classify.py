@@ -1505,6 +1505,8 @@ def _domain_for_source_tag(
     all_exprs: list[Expr],
     known_domains: dict[str, tuple[Any, ...]],
     atom_index: dict[str, list[Atom]] | None = None,
+    *,
+    real_gap_points: bool = True,
 ) -> tuple[Any, ...] | None:
     """Resolve the best current finite domain for a source tag."""
     if tag_name in known_domains:
@@ -1533,6 +1535,7 @@ def _domain_for_source_tag(
         known_domains=known_domains,
         graph=graph,
         atom_index=atom_index,
+        real_gap_points=real_gap_points,
     )
     if domain:
         return domain
@@ -1606,11 +1609,20 @@ def _domain_from_copy_like_value(
     all_exprs: list[Expr],
     known_domains: dict[str, tuple[Any, ...]],
     atom_index: dict[str, list[Atom]] | None = None,
+    *,
+    real_gap_points: bool = True,
 ) -> tuple[Any, ...] | None:
     """Infer a target domain from a copy/fill-style source operand."""
     source_tag_name = _tag_name_from_value(raw_value)
     if source_tag_name is not None:
-        return _domain_for_source_tag(source_tag_name, graph, all_exprs, known_domains, atom_index)
+        return _domain_for_source_tag(
+            source_tag_name,
+            graph,
+            all_exprs,
+            known_domains,
+            atom_index,
+            real_gap_points=real_gap_points,
+        )
 
     literal = _literal_value_from_value(raw_value)
     if literal is not None:
@@ -1690,12 +1702,20 @@ def _domain_from_calc_expression(
     all_exprs: list[Expr],
     known_domains: dict[str, tuple[Any, ...]],
     atom_index: dict[str, list[Atom]] | None = None,
+    *,
+    real_gap_points: bool = True,
 ) -> tuple[Any, ...] | None:
     """Infer a target domain from a supported calc expression shape."""
     from pyrung.core.expression import BinaryExpr
 
     direct = _domain_from_copy_like_value(
-        expression, target, graph, all_exprs, known_domains, atom_index
+        expression,
+        target,
+        graph,
+        all_exprs,
+        known_domains,
+        atom_index,
+        real_gap_points=real_gap_points,
     )
     if direct is not None:
         return direct
@@ -1812,8 +1832,14 @@ def _domain_from_write_instruction(
     all_exprs: list[Expr],
     known_domains: dict[str, tuple[Any, ...]],
     atom_index: dict[str, list[Atom]] | None = None,
+    *,
+    real_gap_points: bool = True,
 ) -> tuple[Any, ...] | None:
-    """Infer a target domain from one supported writer instruction."""
+    """Infer a target domain from one supported writer instruction.
+
+    *real_gap_points* is :func:`_extract_value_domain`'s, for a source tag's
+    domain.
+    """
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import (
         BlockCopyInstruction,
@@ -1825,12 +1851,24 @@ def _domain_from_write_instruction(
         if instr.convert is not None:
             return _domain_from_copy_convert(instr)
         return _domain_from_copy_like_value(
-            instr.source, target, graph, all_exprs, known_domains, atom_index
+            instr.source,
+            target,
+            graph,
+            all_exprs,
+            known_domains,
+            atom_index,
+            real_gap_points=real_gap_points,
         )
 
     if isinstance(instr, FillInstruction):
         return _domain_from_copy_like_value(
-            instr.value, target, graph, all_exprs, known_domains, atom_index
+            instr.value,
+            target,
+            graph,
+            all_exprs,
+            known_domains,
+            atom_index,
+            real_gap_points=real_gap_points,
         )
 
     if isinstance(instr, BlockCopyInstruction):
@@ -1848,6 +1886,7 @@ def _domain_from_write_instruction(
             all_exprs,
             known_domains,
             atom_index,
+            real_gap_points=real_gap_points,
         )
 
     from pyrung.core.instruction.drums import (
@@ -1907,6 +1946,7 @@ def _collect_structural_domain_info(
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
     *,
     model_system_points: bool = False,
+    real_gap_points: bool = True,
 ) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
     """Discover finite domains and reverse soundness blockers.
 
@@ -1917,6 +1957,8 @@ def _collect_structural_domain_info(
     *model_system_points* (BFS only) treats scan-, clock- and time-derived
     system tags as free inputs: never constant storage, and seeded with their
     calendar range when it is small (``rtc.hour``, ``rtc.minute``, ...).
+
+    *real_gap_points* is :func:`_extract_value_domain`'s.
     """
     from pyrung.core.validation._common import walk_instructions
 
@@ -2004,6 +2046,7 @@ def _collect_structural_domain_info(
             known_domains=seed_domains,
             graph=graph,
             atom_index=atom_idx,
+            real_gap_points=real_gap_points,
         )
         if not domain:
             continue
@@ -2053,6 +2096,7 @@ def _collect_structural_domain_info(
                     all_exprs,
                     known_domains,
                     atom_idx,
+                    real_gap_points=real_gap_points,
                 )
                 if domain is None:
                     candidate_values = set()
@@ -2085,7 +2129,12 @@ def _collect_structural_domain_info(
         profile_last = _classify_profile_mark(timings, "discovered_domain_merge", profile_last)
 
     blockers = _backward_propagate_comparison_boundaries(
-        program, graph, all_exprs, known_domains, atom_idx
+        program,
+        graph,
+        all_exprs,
+        known_domains,
+        atom_idx,
+        real_gap_points=real_gap_points,
     )
     if profile:
         _classify_profile_mark(timings, "reverse_boundary_blockers", profile_last)
@@ -2411,6 +2460,8 @@ def _backward_propagate_comparison_boundaries(
     all_exprs: list[Expr],
     known_domains: dict[str, tuple[Any, ...]],
     atom_idx: dict[str, list[Atom]],
+    *,
+    real_gap_points: bool = True,
 ) -> frozenset[str]:
     """Propagate comparison boundary values from write targets back to sources.
 
@@ -2418,7 +2469,7 @@ def _backward_propagate_comparison_boundaries(
     ``calc(expr, target)`` expressions.  When a target has downstream
     comparisons (e.g. ``target == 75``), the boundary values are transformed
     through the inverse and added to the source's domain so the BFS
-    enumerates them.
+    enumerates them.  *real_gap_points* is :func:`_extract_value_domain`'s.
 
     Returns the set of *reverse soundness blockers* — source tags with
     unsupported reverse dependencies whose domains could not be safely
@@ -2545,7 +2596,7 @@ def _backward_propagate_comparison_boundaries(
                         back_values.add(own_boundary)
                         back_values.add(own_boundary - 1)
                         back_values.add(own_boundary + 1)
-                if source_tag.type == TagType.REAL:
+                if real_gap_points and source_tag.type == TagType.REAL:
                     back_values |= _real_gap_points(split_points)
 
                 existing = set(known_domains.get(source_name, ()))
@@ -2605,8 +2656,18 @@ def _extract_value_domain(
     known_domains: Mapping[str, tuple[Any, ...]] | None = None,
     graph: ProgramGraph | None = None,
     atom_index: dict[str, list[Atom]] | None = None,
+    *,
+    real_gap_points: bool = True,
 ) -> tuple[Any, ...] | None:
-    """Determine the finite value domain for a tag, or None if unbounded."""
+    """Determine the finite value domain for a tag, or None if unbounded.
+
+    *real_gap_points* gives a REAL the midpoints of its split points at most
+    1 apart (:func:`_real_gap_points`), so the search covers every value.
+    The ``how()`` prior turns it off: its domains steer, they prove nothing,
+    and it keeps its whole-number picks (131, not 130.5).  A midpoint copied
+    into an INT truncates (-0.5 lands at 0), so the prior would steer with a
+    value the copy never stores.
+    """
     if tag.type == TagType.BOOL:
         return (False, True)
 
@@ -2682,7 +2743,7 @@ def _extract_value_domain(
         # Merge comparison literals into the write domain — if the program
         # tests for a value, it belongs in the domain even if never written.
         merged = set(base_domain) | literals
-        if tag.type == TagType.REAL:
+        if real_gap_points and tag.type == TagType.REAL:
             merged |= _real_gap_points(literals)
         return tuple(sorted(merged))
 
@@ -2714,7 +2775,7 @@ def _extract_value_domain(
         if isinstance(lit, (int, float)):
             partitioned.add(lit - 1)
             partitioned.add(lit + 1)
-    if tag.type == TagType.REAL:
+    if real_gap_points and tag.type == TagType.REAL:
         partitioned |= _real_gap_points(literals)
     if isinstance(tag.default, (int, float)) and not isinstance(tag.default, bool):
         partitioned.add(tag.default)
@@ -3237,6 +3298,7 @@ def _classify_dimensions_from_graph(
     abstract_timers: bool,
     _skip_absorptions: bool,
     exhaust_tag_compared_inputs: bool = True,
+    real_gap_points: bool = True,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context.
 
@@ -3272,6 +3334,11 @@ def _classify_dimensions_from_graph(
     value (``_tag_compared_names``) every value it can hold, or refuses it,
     instead of the expression partition, which does not cover it.  The
     ``how()`` prior turns it off: its domains steer, they prove nothing.
+
+    *real_gap_points* gives a REAL input the midpoints of its split points at
+    most 1 apart (:func:`_extract_value_domain`).  The ``how()`` prior turns
+    it off too, keeping its whole-number REAL partition.  It must match the
+    flag *structural_domain_info* was collected with.
     """
     profile = _classify_profile_enabled()
     timings: list[tuple[str, float]] = []
@@ -3316,6 +3383,7 @@ def _classify_dimensions_from_graph(
             literal_write_domains,
             discovered_domains,
             model_system_points=model_system_points,
+            real_gap_points=real_gap_points,
         )
         if profile:
             profile_last = _classify_profile_mark(
@@ -3622,6 +3690,7 @@ def _classify_dimensions_from_graph(
                     tag_known_domains,
                     graph,
                     atom_idx,
+                    real_gap_points=real_gap_points,
                 )
             if not domain:
                 declared = _declared_domain(tag)
@@ -3698,6 +3767,7 @@ def _classify_dimensions_from_graph(
                     known_domains,
                     graph,
                     atom_idx,
+                    real_gap_points=real_gap_points,
                 )
                 if domain:
                     stateful[tag_name] = _with_done_boundary(
@@ -3830,6 +3900,7 @@ def _classify_dimensions_from_graph(
             known_domains,
             graph,
             atom_idx,
+            real_gap_points=real_gap_points,
         )
         if domain is None:
             if tag_name in known_domains:

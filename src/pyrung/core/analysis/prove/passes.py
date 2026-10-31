@@ -863,6 +863,9 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         threshold_absorptions_out=threshold_absorptions,
         model_system_points=not ctx.domains_only,
         exhaust_tag_compared_inputs=not ctx.domains_only,
+        # REAL gap points cover the search; how()'s prior keeps whole-number
+        # picks.
+        real_gap_points=not ctx.domains_only,
         observe_everything=ctx.opaque_reads_all,
         # The search's timers are black boxes and it absorbs nothing; how()'s
         # domain prior keeps the absorbing classification PILOT's world key
@@ -1882,6 +1885,7 @@ def _get_structural_domain_info(
             ctx.all_exprs,
             literal_write_domains,
             model_system_points=not ctx.domains_only,
+            real_gap_points=not ctx.domains_only,
         )
     return ctx._structural_domain_info
 

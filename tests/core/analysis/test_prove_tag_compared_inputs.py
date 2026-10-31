@@ -465,6 +465,21 @@ def test_real_input_between_close_split_points(config, via_copy, low, high, insi
     _agree(logic, Bool("KBad"), reachable, config)
 
 
+@pytest.mark.parametrize("via_copy", [False, True], ids=["direct", "copied"])
+def test_domains_only_prior_keeps_whole_number_real_partition(via_copy) -> None:
+    # The search gets the gap point; how()'s prior keeps the partition it
+    # steered with before (5, 6 and their neighbours), so its picks stay put.
+    logic = _real_window(5, 6, via_copy=via_copy)
+    search = _build_explore_context(logic, _opt_config=_OptConfig())
+    prior = _build_explore_context(logic, _opt_config=replace(_OptConfig(), domains_only=True))
+    assert not isinstance(search, Intractable)
+    assert not isinstance(prior, Intractable)
+    assert 5.5 in search.nondeterministic_dims["KLevel"]
+    assert set(prior.nondeterministic_dims["KLevel"]) == (
+        set(search.nondeterministic_dims["KLevel"]) - {5.5}
+    )
+
+
 # -- comparisons only the property makes (review B1) -------------------------
 
 
