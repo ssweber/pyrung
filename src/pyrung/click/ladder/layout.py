@@ -124,6 +124,12 @@ class _LayoutMixin:
             source=source,
         )
         split_col = condition_rows[0].cursor
+        if split_col == 0 and len(condition_rows) == 1 and len(execution_items) > 1:
+            # No trunk contact: a wire in column A stands in for it so the split
+            # lands in column B (column A is the rail and takes no vertical token).
+            condition_rows[0].cells[0] = "-"
+            condition_rows[0].cursor = 1
+            split_col = 1
         if split_col >= _CONDITION_COLS:
             self._raise_issue(
                 path=f"{path}.branch",
@@ -339,6 +345,14 @@ class _LayoutMixin:
                 source=source,
             )
 
+        if col == 0:
+            # Column A is the left power rail; no vertical marker belongs here.
+            self._raise_issue(
+                path=path,
+                message="Vertical token would land in column A (the left power rail).",
+                source=source,
+            )
+
         existing = cells[col]
         if existing in {"", "-"}:
             marker = "|" if any(cell != "" for cell in cells[col + 1 :]) else "T"
@@ -368,6 +382,14 @@ class _LayoutMixin:
             )
 
         row_count = max(len(condition_rows), len(slots))
+        if split_col == 0 and len(slots) > 1:
+            # No trunk contact: a plain wire in column A stands in for it, and
+            # the split goes in column B (column A is the rail and takes no
+            # vertical token).
+            condition_rows = [row.clone() for row in condition_rows]
+            condition_rows[0].cells[0] = "-"
+            condition_rows[0].cursor = 1
+            split_col = 1
         rows: list[list[str]] = []
         for row_index in range(row_count):
             cells = (
@@ -708,6 +730,28 @@ class _LayoutMixin:
         cells[col] = value
 
 
+# ---- Column A guard ----
+def _is_vertical_token(cell: str) -> bool:
+    return cell in {"T", "|"} or cell.startswith("T:")
+
+
+def assert_no_column_a_vertical(rows: list[tuple[str, ...]] | tuple[tuple[str, ...], ...]) -> None:
+    """Raise ``ValueError`` if any ladder row has a vertical token in column A.
+
+    Column A is CLICK's left power rail; CLICK rejects ``T``, ``|`` and ``T:``
+    there ("Vertical-down tokens are not allowed in Column A").  Rows are
+    ``(marker, A, B, ..., AF)``; ``#`` comment rows are skipped.
+    """
+    for index, row in enumerate(rows):
+        if len(row) < 2 or row[0].startswith("#"):
+            continue
+        if _is_vertical_token(row[1]):
+            raise ValueError(
+                f"Vertical token {row[1]!r} in column A (row {index}); column A is the "
+                "left power rail and cannot carry a T, | or T: marker."
+            )
+
+
 # ---- Marker helpers ----
 def _vertical_marker(*, index: int, total: int) -> str:
     if total <= 1:
@@ -738,4 +782,5 @@ __all__ = [
     "_LayoutMixin",
     "_output_bus_marker",
     "_vertical_marker",
+    "assert_no_column_a_vertical",
 ]

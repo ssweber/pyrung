@@ -68,6 +68,8 @@
 
 ### Fixes
 
+- Ladder export no longer puts a vertical token (`T`, `|`, `T:`) in column A, the left power rail, which CLICK refuses ("Vertical-down tokens are not allowed in Column A"). A rung or branch with several outputs and no trunk contact now draws a wire in column A and the split in column B; the exporter raises if a vertical token ever reaches column A, and a conformance `TeeSpec` with `after=0` is refused.
+
 - `calc(Tbl[P], D)` or `calc(Tbl[Q + 100], D)` with an address outside the block sets `fault.address_error` and leaves `D` alone in the simulator, as compiled replay and generated CircuitPython already did; it stopped the scan with `IndexError`. The analyses see the flag written by such a `calc`.
 - `always()` and `never()` no longer report `Proven` when a subroutine's writes depend on whether it is called and the call sits in a `forloop()` body (`with Rung(G): with forloop(1): call("work")`, or a tag count that can be 0) or in another subroutine whose own call is guarded (`Rung(G): call("outer")`, `outer` calling `work`), or when an indirect comparison or an arithmetic one decides a rung or a loop count (`Rung(DS[P] != 0)`, `forloop(DS[P])`, `Rung((DQ + 0) != 0)`); the inputs deciding them were left out of the search.
 - The stuck-bit and conflicting-output validators and the simplified call guards see calls in `forloop()` bodies, with a body rung's contacts as part of the call's guard where no iteration can change them (`with Rung(M): call("a")` and `with Rung(~M): call("b")` in one loop are exclusive); where a contact that reads the loop index or a tag the loop writes, a oneshot loop or a `break_loop()`/`continue_loop()` decide such a call, they no longer treat the loop rung's conditions as the call's guard.
