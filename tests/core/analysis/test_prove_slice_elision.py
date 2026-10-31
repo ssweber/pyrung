@@ -6,6 +6,8 @@ slice elision edge cases.
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung.core import (
     Block,
     Bool,
@@ -17,9 +19,11 @@ from pyrung.core import (
     calc,
     call,
     copy,
+    fall,
     latch,
     out,
     reset,
+    rise,
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
@@ -110,6 +114,32 @@ def test_oneshot_write_does_not_hide_entry_read() -> None:
 
     assert "N2" not in elided
     assert reduced == {"N2": (0, 1, 2, 3)}
+
+
+@pytest.mark.parametrize("edge", [rise, fall])
+def test_edge_contact_memory_exposes_entry_read(edge) -> None:
+    """An edge contact turns on the bit it saw last scan, not only this one.
+
+    ``fall(B)`` is True only when the contact's memory (``_edge:e1``) holds
+    True and ``B`` is False, so the slice must try both memory values: with
+    the memory left at its default False, ``fall(B)`` never fires, the copy
+    never reads ``X`` before ``Rung(): copy(5, X)`` writes it, and ``X`` would
+    look scan-local.  ``rise(B)`` fires from either memory value, so it is
+    caught either way.
+    """
+    b = Bool("B", external=True)
+    x = Int("X", min=0, max=5)
+    y = Int("Y", min=0, max=5)
+
+    with Program(strict=False) as logic:
+        with Rung(edge(b)):
+            copy(x, y)
+        with Rung():
+            copy(5, x)
+
+    _reduced, elided = _slice_elide(logic, {"X": (0, 5), "Y": (0, 5)}, {"B": (False, True)})
+
+    assert "X" not in elided
 
 
 def test_subroutine_scratch_is_elided() -> None:

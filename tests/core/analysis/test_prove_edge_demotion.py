@@ -1,9 +1,10 @@
-"""Tests for edge-source tag demotion from the BFS state key.
+"""Tests for edge-source tags leaving the BFS state key.
 
 When a tag appears in rise()/fall() but its exit value is scan-local
-(determined by retained state + inputs, not by its own entry), the tag's
-prev value can be forwarded from transitions instead of tracked in the
-state key.  This reduces state space without overapproximation.
+(determined by retained state + inputs, not by its own entry), the tag
+itself need not be tracked: each edge contact keeps the bit it last saw in
+its own site memory (``_edge:e{N}``), which the state key carries as a
+memory key.  This reduces state space without overapproximation.
 """
 
 from __future__ import annotations
@@ -38,8 +39,22 @@ from pyrung.core.analysis.prove import (
     never,
     reachable_states,
 )
+from pyrung.core.site_memory import site_table_of
 
 prove_module = importlib.import_module("pyrung.core.analysis.prove")
+
+
+def _edge_keys(program: Program) -> set[str]:
+    """``_edge:e{N}`` of every edge contact in *program*."""
+    table = site_table_of(program)
+    assert table is not None
+    return {f"_edge:{site.key}" for site in table.edge_sites}
+
+
+def _assert_edge_memory_keyed(context, program: Program) -> None:
+    """Every edge contact's memory is in the state key."""
+    assert _edge_keys(program)
+    assert _edge_keys(program) <= set(context.memory_key_names)
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
@@ -110,9 +125,9 @@ class TestDemotionClassification:
                 latch(target)
 
         context = prove_module._build_explore_context(logic)
-        assert "Sensor" in context.demoted_edge_names
         assert "Sensor" not in context.edge_tag_names
         assert "Sensor" not in context.stateful_names
+        _assert_edge_memory_keyed(context, logic)
 
     def test_copy_written_edge_source_is_demoted(self):
         """Copy-written tag used in rise() is scan-local → demoted via elision."""
@@ -144,8 +159,8 @@ class TestDemotionClassification:
 
         context = prove_module._build_explore_context(logic)
         assert "Sensor" not in context.demoted_edge_names
-        assert "Sensor" in context.edge_tag_names
         assert "Sensor" in context.stateful_names
+        _assert_edge_memory_keyed(context, logic)
 
     def test_self_referencing_calc_not_demoted(self):
         """Self-referencing calc (accumulator pattern) depends on entry → not demoted."""
@@ -162,8 +177,9 @@ class TestDemotionClassification:
                 latch(target)
 
         context = prove_module._build_explore_context(logic)
-        assert "Flag" in context.demoted_edge_names
-        assert "Counter" not in context.demoted_edge_names
+        assert "Flag" not in context.stateful_names
+        assert "Counter" in context.stateful_names
+        _assert_edge_memory_keyed(context, logic)
 
     def test_fall_contact_also_qualifies(self):
         """fall() edge source is demoted when exit is scan-local."""
@@ -177,7 +193,8 @@ class TestDemotionClassification:
                 latch(target)
 
         context = prove_module._build_explore_context(logic)
-        assert "Sensor" in context.demoted_edge_names
+        assert "Sensor" not in context.stateful_names
+        _assert_edge_memory_keyed(context, logic)
 
     def test_external_input_not_demoted(self):
         """External input with rise() stays in edge_tag_names (ND, not demotable)."""
@@ -346,8 +363,9 @@ class TestDemotionSoundness:
                 latch(target)
 
         context = prove_module._build_explore_context(logic)
-        assert "Sensor" in context.demoted_edge_names
-        assert "Flag" not in context.demoted_edge_names
+        assert "Sensor" not in context.stateful_names
+        assert "Flag" in context.stateful_names
+        _assert_edge_memory_keyed(context, logic)
         _assert_soundness(logic, ~target)
 
     def test_multiple_demoted_tags_soundness(self):
@@ -366,8 +384,9 @@ class TestDemotionSoundness:
                 latch(target)
 
         context = prove_module._build_explore_context(logic)
-        assert "S1" in context.demoted_edge_names
-        assert "S2" in context.demoted_edge_names
+        assert "S1" not in context.stateful_names
+        assert "S2" not in context.stateful_names
+        _assert_edge_memory_keyed(context, logic)
         _assert_soundness(logic, ~target)
 
     @pytest.mark.parametrize("edge", [rise, fall])
@@ -403,7 +422,7 @@ class TestDemotionSoundness:
 
 
 class TestDemotedEdgeReplay:
-    """Verify that BFS traces carry demoted prev values through replay."""
+    """Verify that BFS traces through edges on tags left out of the key replay."""
 
     def test_how_replay_with_demoted_rise(self):
         """how() path through rise() on a demoted tag must replay correctly."""
@@ -419,7 +438,8 @@ class TestDemotedEdgeReplay:
                 latch(target)
 
         context = prove_module._build_explore_context(logic)
-        assert "Sensor" in context.demoted_edge_names
+        assert "Sensor" not in context.stateful_names
+        _assert_edge_memory_keyed(context, logic)
 
         plc = PLC(logic, dt=0.010)
         path = plc.how(target)
@@ -450,8 +470,12 @@ class TestDemotedEdgeReplay:
 
         assert path.replay().state.tags["Target"] is True
 
-    def test_counterexample_trace_carries_prev(self):
-        """Counterexample traces for demoted tags include prev in TraceStep."""
+    def test_counterexample_trace_replays_without_prev(self):
+        """A trace through an edge on a tag left out of the key replays as recorded.
+
+        The contact's memory travels in the replayed state, so no step has to
+        forward a prev value for it.
+        """
         button = Bool("Button", external=True)
         sensor = Bool("Sensor")
         target = Bool("Target")
@@ -463,6 +487,5 @@ class TestDemotedEdgeReplay:
 
         result = always(logic, ~target, max_states=10_000, depth_budget=20)
         assert isinstance(result, Counterexample)
-        has_prev = any(step.prev for step in result.trace)
-        assert has_prev, "trace steps should carry demoted prev values"
+        assert not any(step.prev for step in result.trace)
         _assert_trace_replays(logic, result, "Target")

@@ -19,9 +19,10 @@ an accumulator something reads is a plain value, both concrete in the key.
 A counter whose accumulator nothing reads is keyed no further than its
 preset (``count_clamps``).
 
-Edge compression: rise/fall prev values are only included when "live" —
-when partial evaluation of their containing expression doesn't resolve
-to a constant under the current stateful configuration.
+Edge memory: each rise()/fall() contact keeps its own bit in site memory
+(``_edge:e{N}``), which is one of the memory keys.  Edge compression (per-tag
+prev values, included only when "live") is inert: compiled kernels keep no
+per-tag prev, so ``edge_tag_names`` is empty.
 """
 
 from __future__ import annotations

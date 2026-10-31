@@ -91,6 +91,7 @@ from pyrung.core.instruction.out_variants import (
 )
 from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 from pyrung.core.rung import Rung
+from pyrung.core.site_memory import EDGE_MEMORY, site_table_of
 from pyrung.core.state import SystemState
 from pyrung.core.tag import ImmediateRef
 
@@ -604,14 +605,15 @@ class _SliceElision:
                 var_names.append(key)
                 domains.append((False, True))
 
-        # Rising/falling-edge _prev memory keys for relevant edge tags.
-        for name in sorted(closure & self.edge_tags):
-            prev_domain = self._prev_domain(name)
-            if prev_domain is None:
-                return False
+        # The memory of every edge contact reading a relevant tag: a contact's
+        # result, and so which rungs it powers, turns on the bit it last saw.
+        edge_keys = self._edge_memory_keys(relevant_tags)
+        if edge_keys is None:
+            return False
+        for key in edge_keys:
             var_kinds.append("mem")
-            var_names.append(f"_prev:{name}")
-            domains.append(prev_domain)
+            var_names.append(key)
+            domains.append((False, True))
 
         # Step 4: cap the cross product.
         total = 1
@@ -745,15 +747,19 @@ class _SliceElision:
                 return False
         return True
 
-    def _prev_domain(self, name: str) -> tuple[Any, ...] | None:
-        """Domain for an edge tag's ``_prev:`` memory key, or None to bail."""
-        domain = self.stateful_dims.get(name) or self.nondeterministic_dims.get(name)
-        if domain and PENDING not in domain:
-            return tuple(domain)
-        tag = self.graph.tags.get(name)
-        if tag is not None and tag.type.name == "BOOL":
-            return (False, True)
-        return None
+    def _edge_memory_keys(self, tags: set[str]) -> tuple[str, ...] | None:
+        """``_edge:e{N}`` of every edge contact reading one of *tags*, or None to bail.
+
+        Each contact keeps its own bit (``site_memory``), so a tag read by two
+        contacts gives two free variables.  A program with edge contacts on
+        *tags* but no site table (assembled by hand) bails.
+        """
+        if not tags & self.edge_tags:
+            return ()
+        table = site_table_of(self.program)
+        if table is None:
+            return None
+        return tuple(f"{EDGE_MEMORY}:{site.key}" for site in table.edge_sites if site.tag in tags)
 
 
 # ---------------------------------------------------------------------------

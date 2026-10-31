@@ -351,7 +351,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] out oneshot fires for one scan only (`coils/out_oneshot_fires_one_scan`)
 - [x] out oneshot re-fires after rung goes False then True again (`coils/out_oneshot_refires`)
 - [x] rise / fall fire one scan (`coils/rise_fall_fire_one_scan`)
-- [x] each edge contact keeps its own memory, not the bit's end-of-scan value (`coils/edge_sees_previous_scan_end`, `coils/edge_before_its_writer`, pending S3)
+- [x] each edge contact keeps its own memory, not the bit's end-of-scan value (`coils/edge_sees_previous_scan_end`, `coils/edge_before_its_writer`; in a loop and across calls: `loop/edge_contact_inside_loop`, `loop/edge_memory_across_iterations`, `call_twice/rise_once_per_scan`)
 - [x] edge memory behind an open contact and in a false rung's branch (answered on hardware; `coils/edge_behind_open_contact`, `coils/edge_in_false_rung_branch`)
 - [x] latch / reset stickiness (`coils/latch_reset_sticky`)
 - [x] toggle flips once per OFF->ON and holds (O1) (`out/toggle_flips_once_per_edge`)
