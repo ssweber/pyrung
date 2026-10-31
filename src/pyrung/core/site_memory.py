@@ -721,6 +721,7 @@ def bind_sites(
         for rung in scope_rungs:
             # Keys may have changed: each row rebuilds its edge frame when scanned next.
             rung._edge_frame = None
+            rung._scan_frame = None
     instruction_sites = [s for s in binder.sites if s.site == SITE_INSTRUCTION]
     edge_sites = [s for s in binder.sites if s.site == SITE_EDGE]
     return SiteTable(namespace=namespace, sites=(*instruction_sites, *edge_sites))
@@ -1140,12 +1141,20 @@ def program_memory_defaults(program: Any) -> dict[str, Any]:
 
 # -- edge frames: which edge sites a row scans ------------------------------
 #
-# A row is a top-level rung (main or subroutine), a For loop's body rung, or a
-# bare For-body instruction.  When a row is scanned, every edge site in it
-# stores the bit its contact sees (``_edge:e{N}``), powered or not (a CLICK
-# updates an edge contact's memory whenever the contact is scanned).  The
-# row's condition view is taken first, so its edges compare the bit against the
-# memory as it was before the row: ``evaluate()`` stays a pure read.
+# A row is a trunk (a top-level rung's own contacts, main or subroutine), a
+# branch (its local contacts), a box (an instruction's helper legs: reset,
+# jump, ...), a For loop's body rung, or a bare For-body instruction.  Each row
+# has an edge frame of its own: the edge sites its contacts hold, in solve
+# order.  When a row is scanned, every edge site in it stores the bit its
+# contact sees (``_edge:e{N}``), powered or not (a CLICK updates an edge
+# contact's memory whenever the contact is scanned).  The row's condition view
+# is taken first, so its edges compare the bit against the memory as it was
+# before the row: ``evaluate()`` stays a pure read.
+#
+# Every row of a rung reads the condition view taken at rung entry, so that
+# view scans the frames of the rung's branches and boxes with the trunk's (the
+# rung's *scan frame*).  A For-body row is scanned with a view of its own on
+# every iteration.
 
 
 def edge_memory_key(cond: Any) -> str:
@@ -1186,10 +1195,17 @@ def _frame_names(frame: dict[str, Any]) -> tuple[tuple[str, str], ...]:
 _Rows = dict[int, tuple[tuple[str, Any], ...]]
 
 
-def _frame_instruction(instr: Any, contacts: set[int], out: dict[str, Any], rows: _Rows) -> None:
+def _stamp_row(row: Any, frame: dict[str, Any], rows: _Rows) -> None:
+    row._edge_frame = _frame_names(frame)
+    rows[id(row)] = tuple(frame.items())
+
+
+def _frame_instruction(instr: Any, contacts: set[int], rows: _Rows, scans: _Rows) -> None:
+    """Frame box *instr* (its helper legs) and, for a For loop, each body row."""
     from pyrung.core.instruction.control import ForLoopInstruction
     from pyrung.core.rung import Rung as RungLogic
 
+    frame: dict[str, Any] = {}
     for name in type(instr)._conditions:
         value = getattr(instr, name, None)
         power = _is_power_field(instr, name)
@@ -1198,17 +1214,16 @@ def _frame_instruction(instr: Any, contacts: set[int], out: dict[str, Any], rows
                 # A power field's edges are its rung's contacts (scanned with
                 # the row that owns them), unless built by hand.
                 if not (power and id(edge) in contacts):
-                    _frame_add(edge, out)
+                    _frame_add(edge, frame)
+    _stamp_row(instr, frame, rows)
     if isinstance(instr, ForLoopInstruction):
         for child in instr.body:
-            child_frame: dict[str, Any] = {}
             if isinstance(child, RungLogic):
-                _frame_row(child, contacts, child_frame, rows)
+                _frame_scan_row(child, contacts, rows, scans)
             else:
-                _frame_instruction(child, contacts, child_frame, rows)
+                _frame_instruction(child, contacts, rows, scans)
                 child._body_row_legs = _has_helper_leg(child)
-            child._edge_frame = _frame_names(child_frame)
-            rows[id(child)] = tuple(child_frame.items())
+                scans[id(child)] = rows[id(child)]
 
 
 def _has_helper_leg(instr: Any) -> bool:
@@ -1222,47 +1237,89 @@ def _has_helper_leg(instr: Any) -> bool:
     return False
 
 
-def _frame_row(rung: Any, contacts: set[int], out: dict[str, Any], rows: _Rows) -> None:
-    from pyrung.core.rung import Rung as RungLogic
-
+def _frame_row(rung: Any, rows: _Rows) -> None:
+    """Frame the contacts *rung* adds as a row (a branch: its local ones), not
+    the rows inside it."""
     conditions = rung._conditions
+    frame: dict[str, Any] = {}
     for index in range(rung._branch_condition_start, len(conditions)):
         for edge in _iter_edges(conditions[index]):
-            _frame_add(edge, out)
+            _frame_add(edge, frame)
+    _stamp_row(rung, frame, rows)
+
+
+def _frame_rung(
+    rung: Any, contacts: set[int], rows: _Rows, scans: _Rows, scanned: list[Any]
+) -> None:
+    """Frame *rung* and each branch and box inside it as a row of its own, and
+    append them to *scanned* in solve order (For-body rows are not)."""
+    from pyrung.core.rung import Rung as RungLogic
+
+    _frame_row(rung, rows)
+    scanned.append(rung)
     for item in rung._execution_items:
         if isinstance(item, RungLogic):
-            _frame_row(item, contacts, out, rows)
+            _frame_rung(item, contacts, rows, scans, scanned)
         else:
-            _frame_instruction(item, contacts, out, rows)
+            _frame_instruction(item, contacts, rows, scans)
+            scanned.append(item)
 
 
-def edge_rows(rung: Any) -> dict[int, tuple[tuple[str, Any], ...]]:
-    """``(memory key, edge condition)`` of every row in top-level *rung*, by ``id``.
+def _frame_scan_row(rung: Any, contacts: set[int], rows: _Rows, scans: _Rows) -> None:
+    """Frame top-level or body rung *rung* and stamp its scan frame: its own
+    frame and those of its branches and boxes, in solve order."""
+    scanned: list[Any] = []
+    _frame_rung(rung, contacts, rows, scans, scanned)
+    merged: dict[str, Any] = {}
+    for row in scanned:
+        for key, edge in rows[id(row)]:
+            merged.setdefault(key, edge)
+    rung._scan_frame = _frame_names(merged)
+    scans[id(rung)] = tuple(merged.items())
 
-    The rows are *rung* itself and every For-body row inside it (a body rung or
-    a bare body instruction), each with the edge sites it scans, in solve
-    order.  Also stamps each row's ``_edge_frame`` (``(memory key, tag)``
-    pairs) for the interpreter.
-    """
+
+def _frame_rows(rung: Any) -> tuple[_Rows, _Rows]:
     contacts: set[int] = set()
     _frame_contacts(rung, contacts)
-    frame: dict[str, Any] = {}
     rows: _Rows = {}
-    _frame_row(rung, contacts, frame, rows)
-    rows[id(rung)] = tuple(frame.items())
-    rung._edge_frame = _frame_names(frame)
-    return rows
+    scans: _Rows = {}
+    _frame_scan_row(rung, contacts, rows, scans)
+    return rows, scans
+
+
+def edge_rows(rung: Any) -> _Rows:
+    """``(memory key, edge condition)`` of every row in top-level *rung*, by ``id``.
+
+    The rows are *rung*'s trunk, each of its (nested) branches and boxes, and
+    every For-body row inside it (a body rung with its branches and boxes, or
+    a bare body instruction), each with the edge sites its own contacts hold,
+    in solve order.  Also stamps each row's ``_edge_frame`` (``(memory key,
+    tag)`` pairs) and each scanning rung's ``_scan_frame`` for the interpreter.
+    """
+    return _frame_rows(rung)[0]
+
+
+def edge_scan_rows(rung: Any) -> _Rows:
+    """``(memory key, edge condition)`` stored by each scan point in top-level
+    *rung*, by the ``id`` of the row whose view is taken there.
+
+    The scan points are *rung* itself, each For-body rung and each bare
+    For-body instruction.  A rung's view scans its trunk and every branch and
+    box inside it, in solve order (see :func:`build_edge_frames`).
+    """
+    return _frame_rows(rung)[1]
 
 
 def build_edge_frames(rung: Any) -> tuple[tuple[str, str], ...]:
-    """``(memory key, tag)`` of every edge site *rung*'s row scans, in solve order.
+    """``(memory key, tag)`` of every edge site *rung*'s view scans, in solve order.
 
-    Also stamps the frame of every For-body row inside it (``_edge_frame`` on
-    each body rung and bare body instruction): a body row scans its sites on
-    every iteration, not with the row that holds the loop.
+    That is its trunk and every branch and box inside it.  Also stamps the
+    frame of every row inside it (``_edge_frame``) and the scan frame of every
+    For-body rung (``_scan_frame``): a body row scans its sites on every
+    iteration, not with the row that holds the loop.
     """
-    edge_rows(rung)
-    return rung._edge_frame
+    _frame_rows(rung)
+    return rung._scan_frame
 
 
 def scan_edge_frame(ctx: Any, view: Any, frame: Sequence[tuple[str, str]]) -> None:

@@ -87,7 +87,7 @@ from pyrung.core.instruction.send_receive import (
 )
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.rung import Rung as LogicRung
-from pyrung.core.site_memory import edge_memory_key, edge_rows
+from pyrung.core.site_memory import edge_memory_key, edge_scan_rows
 from pyrung.core.storage import REAL_MAX
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation.walker import _condition_children
@@ -816,7 +816,7 @@ def compile_rungs(
         )
         lines.extend(snapshot_lines)
         for rung in chain:
-            ctx._edge_rows.update(edge_rows(rung))
+            ctx._edge_rows.update(edge_scan_rows(rung))
         for rung in chain:
             lines.extend(
                 compile_rung(
