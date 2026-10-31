@@ -19,7 +19,6 @@ from pyrung.core.instruction import (
     LoopBreakSignal,
     LoopContinueSignal,
     SubroutineReturnSignal,
-    resolve_tag_or_value_ctx,
 )
 from pyrung.core.instruction.base import (
     _EXECUTOR_BRANCH,
@@ -28,7 +27,6 @@ from pyrung.core.instruction.base import (
     _EXECUTOR_LOOP_EXIT,
     _EXECUTOR_RETURN,
 )
-from pyrung.core.instruction.control import for_loop_iterations
 from pyrung.core.rung import Rung
 
 if TYPE_CHECKING:
@@ -1223,7 +1221,7 @@ def _execute_for_loop_natural(
     if not instruction._should_execute(ctx):
         return
 
-    iterations = for_loop_iterations(resolve_tag_or_value_ctx(instruction.count, ctx))
+    iterations = instruction.iterations(ctx)
     for i in range(iterations):
         ctx.set_tag(instruction.idx_tag.name, i)
         try:
@@ -1590,7 +1588,7 @@ def _execute_for_loop_instruction(
     if not instruction._should_execute(ctx):
         return
 
-    iterations = for_loop_iterations(resolve_tag_or_value_ctx(instruction.count, ctx))
+    iterations = instruction.iterations(ctx)
 
     for i in range(iterations):
         observer.begin_loop_iteration(ctx, rung_index, instruction, i, depth, call_stack)

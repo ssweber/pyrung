@@ -12,6 +12,7 @@ import math
 import operator
 import weakref
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core._source import _capture_source
@@ -31,34 +32,109 @@ Numeric = int | float
 # =============================================================================
 
 
+#: True while ``calc`` evaluates its expression: there a math error raises
+#: (a division by zero ``ZeroDivisionError``, an Inf or NaN into a bitwise
+#: operation ``OverflowError``, a domain error ``MathDomainError``), and calc
+#: stores 0 and sets the matching flag, as CLICK's Math does.  A REAL can hold
+#: +/-Inf itself (a Math overflow), so ``calc`` cannot tell a division by zero
+#: from an Inf operand afterwards.
+#:
+#: Everywhere else (a rung condition, a copy source, a forloop count, a
+#: pointer expression) an expression is permissive: the operation that hits a
+#: math error gives 0, nothing raises and no flag is set (pyrung's choice;
+#: CLICK has no expressions outside Math).  See :func:`_permissive`.
+STRICT_DIVISION: ContextVar[bool] = ContextVar("pyrung_strict_division", default=False)
+
+
+def _permissive(error: Exception) -> int:
+    """The value of an operation that raised *error* outside ``calc``: 0.
+
+    Inside ``calc`` (:data:`STRICT_DIVISION`) the error propagates instead.
+    """
+    if STRICT_DIVISION.get():
+        raise error
+    return 0
+
+
 def _op_div(a: Numeric, b: Numeric) -> Numeric:
     if b == 0:
-        return float("inf") if a >= 0 else float("-inf")
+        if STRICT_DIVISION.get():
+            raise ZeroDivisionError("division by zero")
+        return 0
     return a / b
 
 
+def _op_pow(a: Numeric, b: Numeric) -> Numeric:
+    """``a ** b``; a float result past the float range is +/-Inf (IEEE 754).
+
+    Python raises ``OverflowError`` where ``*`` would give Inf, so a ``calc``
+    of ``Big ** 2`` would store 0, not the Inf a ``Big * Big`` stores.  The
+    sign is the IEEE one: negative only for a negative base and an odd
+    integer exponent.
+    """
+    try:
+        result = a**b
+    except OverflowError:
+        if not (isinstance(a, float) or isinstance(b, float)):
+            raise  # an int too large for a float: calc stores 0 with SC43
+        odd = b % 2 == 1 if isinstance(b, int) else b.is_integer() and int(b) % 2 == 1
+        negative = a < 0 and odd
+        return -math.inf if negative else math.inf
+    if isinstance(result, complex):
+        # A negative base to a fractional power (``(-8.0) ** 0.5``) has no real
+        # value: a math error, as ``sqrt(-1)`` is (calc sets SC46).
+        raise MathDomainError(f"({a!r}) ** {b!r}: math domain error")
+    return result
+
+
+def bit_operand(value: Numeric) -> int:
+    """``int(value)`` for an operand of a bitwise or shift operation.
+
+    An Inf raises ``OverflowError`` in ``int()``, and so does a NaN here
+    (``int(nan)`` raises ``ValueError``): ``calc`` stores 0 and sets the
+    out-of-range flag for either.  The compiled kernel and generated
+    CircuitPython use the ``_bit_int`` helper, which does the same.
+    """
+    if value != value:  # NaN
+        raise OverflowError("cannot convert float NaN to integer")
+    return int(value)
+
+
 def _op_and(a: Numeric, b: Numeric) -> int:
-    return int(a) & int(b)
+    return bit_operand(a) & bit_operand(b)
 
 
 def _op_or(a: Numeric, b: Numeric) -> int:
-    return int(a) | int(b)
+    return bit_operand(a) | bit_operand(b)
 
 
 def _op_xor(a: Numeric, b: Numeric) -> int:
-    return int(a) ^ int(b)
+    return bit_operand(a) ^ bit_operand(b)
+
+
+def shift_count(value: Numeric) -> int:
+    """``bit_operand(value)`` for a shift count, which must not be negative.
+
+    A negative count raises ``OverflowError`` (Python raises ``ValueError``), so
+    ``calc`` stores 0 and sets the out-of-range flag, pyrung's choice.  The
+    compiled kernel and generated CircuitPython use ``_shift_count``.
+    """
+    count = bit_operand(value)
+    if count < 0:
+        raise OverflowError("negative shift count")
+    return count
 
 
 def _op_lshift(a: Numeric, b: Numeric) -> int:
-    return int(a) << int(b)
+    return bit_operand(a) << shift_count(b)
 
 
 def _op_rshift(a: Numeric, b: Numeric) -> int:
-    return int(a) >> int(b)
+    return bit_operand(a) >> shift_count(b)
 
 
 def _op_invert(a: Numeric) -> int:
-    return ~int(a)
+    return ~bit_operand(a)
 
 
 # =============================================================================
@@ -127,10 +203,10 @@ class Expression(ABC):
         return BinaryExpr(_wrap(other), _wrap(self), operator.mod, "%")
 
     def __pow__(self, other: Expression | Numeric) -> BinaryExpr:
-        return BinaryExpr(_wrap(self), _wrap(other), operator.pow, "**")
+        return BinaryExpr(_wrap(self), _wrap(other), _op_pow, "**")
 
     def __rpow__(self, other: Numeric) -> BinaryExpr:
-        return BinaryExpr(_wrap(other), _wrap(self), operator.pow, "**")
+        return BinaryExpr(_wrap(other), _wrap(self), _op_pow, "**")
 
     def __neg__(self) -> UnaryExpr:
         return UnaryExpr(_wrap(self), operator.neg, "-")
@@ -181,33 +257,51 @@ class Expression(ABC):
     # =========================================================================
     # Comparison Operators -> Condition
     # =========================================================================
+    #
+    # A block element addressed at scan time (``DS[idx]``, ``DS[idx + 1]``) is
+    # not an Expression; ``_wrap`` would freeze it into a LiteralExpr that
+    # compares the ref object itself.  Return NotImplemented instead, so Python
+    # asks the ref for the reflected comparison (``expr < DS[i]`` becomes
+    # ``DS[i] > expr``), which builds an IndirectCompare condition.
 
     def __eq__(self, other: object) -> ExprCompare:  # ty: ignore[invalid-method-override]
+        if _is_indexed_element(other):
+            return NotImplemented
         cond = ExprCompare(_wrap(self), _wrap(other), operator.eq, "==")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
     def __ne__(self, other: object) -> ExprCompare:  # ty: ignore[invalid-method-override]
+        if _is_indexed_element(other):
+            return NotImplemented
         cond = ExprCompare(_wrap(self), _wrap(other), operator.ne, "!=")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
     def __lt__(self, other: Expression | Numeric) -> ExprCompare:
+        if _is_indexed_element(other):
+            return NotImplemented
         cond = ExprCompare(_wrap(self), _wrap(other), operator.lt, "<")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
     def __le__(self, other: Expression | Numeric) -> ExprCompare:
+        if _is_indexed_element(other):
+            return NotImplemented
         cond = ExprCompare(_wrap(self), _wrap(other), operator.le, "<=")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
     def __gt__(self, other: Expression | Numeric) -> ExprCompare:
+        if _is_indexed_element(other):
+            return NotImplemented
         cond = ExprCompare(_wrap(self), _wrap(other), operator.gt, ">")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
     def __ge__(self, other: Expression | Numeric) -> ExprCompare:
+        if _is_indexed_element(other):
+            return NotImplemented
         cond = ExprCompare(_wrap(self), _wrap(other), operator.ge, ">=")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
@@ -216,6 +310,13 @@ class Expression(ABC):
 # =============================================================================
 # Helper to wrap literals
 # =============================================================================
+
+
+def _is_indexed_element(value: Any) -> bool:
+    """Whether *value* is a block element addressed at scan time."""
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    return isinstance(value, (IndirectRef, IndirectExprRef))
 
 
 def _wrap(value: Any) -> Expression:
@@ -284,7 +385,12 @@ class BinaryExpr(Expression):
         self.symbol = symbol
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return self.op(self.left.evaluate(ctx), self.right.evaluate(ctx))
+        left = self.left.evaluate(ctx)
+        right = self.right.evaluate(ctx)
+        try:
+            return self.op(left, right)
+        except (ArithmeticError, ValueError) as error:
+            return _permissive(error)
 
     def __repr__(self) -> str:
         return f"({self.left} {self.symbol} {self.right})"
@@ -304,7 +410,11 @@ class UnaryExpr(Expression):
         self.symbol = symbol
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return self.op(self.operand.evaluate(ctx))
+        operand = self.operand.evaluate(ctx)
+        try:
+            return self.op(operand)
+        except (ArithmeticError, ValueError) as error:
+            return _permissive(error)
 
     def __repr__(self) -> str:
         if self.symbol == "abs":
@@ -353,18 +463,17 @@ DOMAIN_LIMITED_MATH_FUNCS = frozenset({"sqrt", "log", "log10", "asin", "acos"})
 
 
 def math_func_value(func: Any, name: str, value: Numeric) -> Numeric:
-    """``func(value)``, with a non-finite operand passed through unchanged.
+    """``func(value)``, IEEE 754 for a +/-Inf or NaN operand.
 
-    A non-finite operand comes from a division by zero (or a float overflow)
-    earlier in the expression; it propagates so ``calc`` reports that fault
-    (the result is not finite), not a domain error.  Any other ``ValueError``
-    from *func* is a domain error.
+    A ``ValueError`` from one of :data:`DOMAIN_LIMITED_MATH_FUNCS` is a domain
+    error (``sqrt(-1)``, ``asin(Inf)``).  Any other function only raises for a
+    non-finite operand (``sin(Inf)``), whose IEEE result is NaN.
     """
-    if isinstance(value, float) and not math.isfinite(value):
-        return value
     try:
         return func(value)
     except ValueError:
+        if name not in DOMAIN_LIMITED_MATH_FUNCS:
+            return math.nan
         raise MathDomainError(f"{name}({value!r}): math domain error") from None
 
 
@@ -377,7 +486,11 @@ class MathFuncExpr(Expression):
         self.name = name
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return math_func_value(self.func, self.name, self.operand.evaluate(ctx))
+        operand = self.operand.evaluate(ctx)
+        try:
+            return math_func_value(self.func, self.name, operand)
+        except (ArithmeticError, ValueError) as error:
+            return _permissive(error)
 
     def __repr__(self) -> str:
         return f"{self.name}({self.operand})"
@@ -457,9 +570,12 @@ class ShiftFuncExpr(Expression):
         self.name = name
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> int:
-        val = int(self.value.evaluate(ctx))
-        cnt = int(self.count.evaluate(ctx))
-        return self.func(val, cnt)
+        value = self.value.evaluate(ctx)
+        count = self.count.evaluate(ctx)
+        try:
+            return self.func(bit_operand(value), bit_operand(count))
+        except (ArithmeticError, ValueError) as error:
+            return _permissive(error)
 
     def __repr__(self) -> str:
         return f"{self.name}({self.value}, {self.count})"
@@ -467,12 +583,12 @@ class ShiftFuncExpr(Expression):
 
 def lsh(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
     """Left shift function: lsh(value, count)."""
-    return ShiftFuncExpr(_wrap(x), _wrap(n), lambda v, c: v << c, "lsh")
+    return ShiftFuncExpr(_wrap(x), _wrap(n), lambda v, c: v << shift_count(c), "lsh")
 
 
 def rsh(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
     """Right shift function: rsh(value, count)."""
-    return ShiftFuncExpr(_wrap(x), _wrap(n), lambda v, c: v >> c, "rsh")
+    return ShiftFuncExpr(_wrap(x), _wrap(n), lambda v, c: v >> shift_count(c), "rsh")
 
 
 def _rotate_left_16(value: int, count: int) -> int:
@@ -530,6 +646,21 @@ def randint_draw(site: int, scan_id: int, lo: int, hi: int) -> int:
     return lo + z % (hi - lo + 1)
 
 
+def _finite(value: Numeric) -> bool:
+    return not isinstance(value, float) or math.isfinite(value)
+
+
+def _integer_operand(operand: Expression) -> bool:
+    """Whether a ``randint`` bound is an integer literal or integer tag."""
+    from pyrung.core.tag import TagType
+
+    if isinstance(operand, LiteralExpr):
+        return not isinstance(operand.value, float)
+    if isinstance(operand, TagExpr):
+        return operand.tag.type != TagType.REAL
+    return False
+
+
 def _operand_span(operand: Expression) -> tuple[int, int] | None:
     """Lowest and highest integer a ``randint`` bound can take, if declared."""
     if isinstance(operand, LiteralExpr):
@@ -585,14 +716,30 @@ class RandIntExpr(Expression):
             **bounds,
         )
         _randint_sites[self.tag.name] = self
+        #: Whether a bound can be Inf or NaN (a REAL source): only then does
+        #: the calc reading the draw check the bounds (see :meth:`evaluate`).
+        self.checks_bounds = not (_integer_operand(lo) and _integer_operand(hi))
 
     def draw(self, ctx: ScanContext) -> int:
-        """This scan's draw, from the bounds as the scan starts."""
-        return randint_draw(
-            self.site, ctx.scan_id, int(self.lo.evaluate(ctx)), int(self.hi.evaluate(ctx))
-        )
+        """This scan's draw, from the bounds as the scan starts.
+
+        A bound that is Inf or NaN draws the tag's default; the calc reading
+        it stores 0 with SC43 instead (:meth:`evaluate`).
+        """
+        lo = self.lo.evaluate(ctx)
+        hi = self.hi.evaluate(ctx)
+        if not (_finite(lo) and _finite(hi)):
+            return self.tag.default
+        return randint_draw(self.site, ctx.scan_id, int(lo), int(hi))
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
+        if self.checks_bounds:
+            # A bound holding Inf or NaN has no integer range: the calc stores
+            # 0 with SC43 (pyrung's choice, not measured on CLICK).
+            # Outside calc the draw reads as 0 instead, with no flag.
+            for bound in (self.lo, self.hi):
+                if not _finite(bound.evaluate(ctx)):
+                    return _permissive(OverflowError("randint() bound is Inf or NaN"))
         return ctx.get_tag(self.tag.name, self.tag.default)
 
     def __repr__(self) -> str:
@@ -713,6 +860,76 @@ class RangeAggregateExpr(Expression):
 
     def __repr__(self) -> str:
         return f"{_range_dsl(self.block_range)}.{self.kind}()"
+
+
+#: Tag type names whose value is always an integer (never Inf or NaN).
+INTEGER_TAG_TYPE_NAMES = frozenset({"BOOL", "INT", "DINT", "WORD"})
+
+
+def may_be_float(expr: Any) -> bool:
+    """False only when *expr* is integer-valued: never a float, so never Inf or NaN.
+
+    A REAL operand, a float constant, a ``/``, a ``**`` or a math function
+    can make a float, which can be Inf or NaN (``Inf - Inf``).  Anything not
+    recognised counts as one.
+    """
+    from pyrung.core.tag import ImmediateRef
+
+    if isinstance(expr, TagExpr):
+        tag = expr.tag.tag if isinstance(expr.tag, ImmediateRef) else expr.tag
+        return tag.type.name not in INTEGER_TAG_TYPE_NAMES
+    if isinstance(expr, LiteralExpr):
+        return isinstance(expr.value, float)
+    if isinstance(expr, BinaryExpr):
+        return expr.symbol in ("/", "**") or may_be_float(expr.left) or may_be_float(expr.right)
+    if isinstance(expr, UnaryExpr):
+        return expr.symbol != "~" and may_be_float(expr.operand)
+    if isinstance(expr, (ShiftFuncExpr, RandIntExpr)):
+        return False
+    if isinstance(expr, (SumExpr, RangeAggregateExpr)):
+        block = getattr(expr.block_range, "block", None)
+        return getattr(getattr(block, "type", None), "name", None) not in INTEGER_TAG_TYPE_NAMES
+    return True
+
+
+#: Tag type names an index may be built from: a pointer holds an address.
+INDEX_TAG_TYPE_NAMES = frozenset({"INT", "DINT"})
+
+
+def is_integer_index(expr: Any) -> bool:
+    """True when *expr* may index a block: built only from Int and Dint tags,
+    integer constants and integer operations.
+
+    ``/``, ``**`` and the math functions can make a float, a ``Real``,
+    ``Word``, ``Bool`` or ``Char`` operand is not an address, and ``mean`` and
+    ``median`` of a block range can be fractional.  Anything not recognised
+    counts as not an index.
+    """
+    from pyrung.core.tag import ImmediateRef
+
+    if isinstance(expr, TagExpr):
+        tag = expr.tag.tag if isinstance(expr.tag, ImmediateRef) else expr.tag
+        return getattr(getattr(tag, "type", None), "name", None) in INDEX_TAG_TYPE_NAMES
+    if isinstance(expr, LiteralExpr):
+        return isinstance(expr.value, int)
+    if isinstance(expr, BinaryExpr):
+        return (
+            expr.symbol not in ("/", "**")
+            and is_integer_index(expr.left)
+            and is_integer_index(expr.right)
+        )
+    if isinstance(expr, UnaryExpr):
+        return is_integer_index(expr.operand)
+    if isinstance(expr, ShiftFuncExpr):
+        return is_integer_index(expr.value) and is_integer_index(expr.count)
+    if isinstance(expr, RandIntExpr):
+        return is_integer_index(expr.lo) and is_integer_index(expr.hi)
+    if isinstance(expr, SumExpr) or (
+        isinstance(expr, RangeAggregateExpr) and expr.kind in ("max", "min")
+    ):
+        block = getattr(expr.block_range, "block", None)
+        return getattr(getattr(block, "type", None), "name", None) in INDEX_TAG_TYPE_NAMES
+    return False
 
 
 # =============================================================================

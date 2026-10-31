@@ -281,7 +281,9 @@ class _TranslatorMixin:
                     IndirectCompareGe,
                 ),
             ):
-                left = self._render_indirect_ref(
+                # ``_render_operand`` renders ``block[pointer]`` and rejects
+                # ``block[expr]``, which CLICK cannot address.
+                left = self._render_operand(
                     condition.indirect_ref,
                     path=f"{path}.left",
                     source=condition,

@@ -222,8 +222,16 @@ def _assert_states_match(left: PLC | CompiledPLC, right: PLC | CompiledPLC) -> N
     right_state = right.current_state
     assert left_state.scan_id == right_state.scan_id
     assert left_state.timestamp == pytest.approx(right_state.timestamp)
-    assert dict(left_state.tags) == dict(right_state.tags)
-    assert dict(left_state.memory) == dict(right_state.memory)
+    assert _nan_free(left_state.tags) == _nan_free(right_state.tags)
+    assert _nan_free(left_state.memory) == _nan_free(right_state.memory)
+
+
+def _nan_free(values: Any) -> dict[str, Any]:
+    """*values* as a dict, NaN spelled so two NaNs compare equal (a REAL may hold NaN)."""
+    return {
+        key: "<NaN>" if isinstance(value, float) and value != value else value
+        for key, value in values.items()
+    }
 
 
 class _RunnerPair:

@@ -19,10 +19,12 @@ from pyrung.circuitpy.codegen import (
 )
 from pyrung.click import ClickBlocks, TagMap
 from pyrung.core import (
+    PLC,
     And,
     Block,
     Bool,
     Char,
+    CompiledPLC,
     Counter,
     Dint,
     InputBlock,
@@ -33,6 +35,8 @@ from pyrung.core import (
     Rung,
     TagType,
     Timer,
+    Word,
+    atan,
     blockcopy,
     branch,
     calc,
@@ -46,6 +50,7 @@ from pyrung.core import (
     flasher,
     forloop,
     lro,
+    lsh,
     named_array,
     off_delay,
     on_delay,
@@ -55,10 +60,13 @@ from pyrung.core import (
     pack_words,
     reset,
     return_early,
+    rro,
+    rsh,
     run_enabled_function,
     run_function,
     search,
     shift,
+    sin,
     sqrt,
     subroutine,
     time_drum,
@@ -135,6 +143,54 @@ def _namespace_list(namespace: dict[str, object], symbol: str) -> list[object]:
     value = namespace[symbol]
     assert isinstance(value, list)
     return cast(list[object], value)
+
+
+class _IdleBase:
+    """A P1AM base whose inputs read 0 and whose writes go nowhere."""
+
+    def rollCall(self, modules):
+        return None
+
+    def readDiscrete(self, slot):
+        return 0
+
+    def writeDiscrete(self, value, slot):
+        return None
+
+    def readAnalog(self, slot, ch):
+        return 0
+
+    def writeAnalog(self, value, slot, ch):
+        return None
+
+    def readTemperature(self, slot, ch):
+        return 0.0
+
+
+def _on_every_backend(program: Program, monkeypatch, watch, *, scans: int) -> dict[str, tuple]:
+    """*watch*'s values after *scans* scans on the interpreter, the compiled
+    kernel and the generated CircuitPython, keyed by backend."""
+    results: dict[str, tuple] = {}
+    for name, cls in (("interpreted", PLC), ("compiled", CompiledPLC)):
+        plc = cls(program)
+        for _ in range(scans):
+            plc.step()
+        tags = plc.current_state.tags
+        results[name] = tuple(tags[tag.name] for tag in watch)
+    hw = P1AM()
+    hw.slot(1, "P1-08SIM")
+    result = generate_circuitpy(
+        program,
+        hw,
+        target_scan_ms=10.0,
+        runstop=RunStopConfig(debounce_ms=0, run_when_high=False),
+    )
+    namespace = _run_single_scan_source(
+        result.code, monkeypatch, _IdleBase(), runtime_source=result.runtime, scans=scans
+    )
+    ctx = _context_for_program(program, hw)
+    results["circuitpy"] = tuple(namespace[ctx.symbol_for_tag(tag)] for tag in watch)
+    return results
 
 
 def _run_single_scan_source(
@@ -541,7 +597,12 @@ class TestConditionAndExpressionCompiler:
         assert "<<" in compile_expression(a << 1, ctx)
         assert ">>" in compile_expression(a >> 1, ctx)
         assert "~int" in compile_expression(~a, ctx)
-        assert "_math_func(math.sqrt, " in compile_expression(sqrt(a), ctx)
+        assert "_math_func(math.sqrt, " in compile_expression(sqrt(a), ctx, strict=True)
+        # Outside calc a domain error gives 0 (permissive), so sqrt goes through
+        # _permissive_math; a division by a variable through _permissive_op.
+        assert "_permissive_math(math.sqrt, " in compile_expression(sqrt(a), ctx)
+        assert "_permissive_op('/', " in compile_expression(a / b, ctx)
+        assert " / " in compile_expression(a / b, ctx, strict=True)
         assert "0xFFFF" in compile_expression(lro(a, 1), ctx)
 
     def test_unknown_expression_type_raises(self):
@@ -1078,6 +1139,59 @@ class TestPersistenceWatchdogAndDiagnostics:
         assert '_ret_snapshot.get("Count")' in source_code
         assert "save_memory()" in source_code
 
+    def test_save_memory_writes_an_inf_real_as_json(self):
+        """A REAL holding Inf or NaN saves as its str, valid JSON the load's float() parses."""
+        import json
+
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        level = Real("Level")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(1.5, level)
+
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        ctx = _context_for_program(prog, hw)
+        symbol = ctx.symbol_for_tag(level)
+        save_section = result.code.split("def save_memory():", 1)[1].split("\ndef ", 1)[0]
+        line = next(ln for ln in save_section.splitlines() if 'values["Level"] =' in ln)
+        entry_expr = line.split("=", 1)[1].strip()
+        for value in (1.5, math.inf, -math.inf, math.nan):
+            entry = eval(entry_expr, {"str": str}, {symbol: value})  # noqa: S307
+            loaded = float(json.loads(json.dumps(entry, allow_nan=False))["value"])
+            assert loaded == value or (math.isnan(value) and math.isnan(loaded))
+
+    def test_auto_save_dirty_check_treats_a_saved_nan_real_as_clean(self):
+        """NaN != NaN: a REAL saved as NaN and NaN still must not resave every interval."""
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        level = Real("Level")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(1.5, level)
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        symbol = _context_for_program(prog, hw).symbol_for_tag(level)
+        lines = source_code.splitlines()
+        at = next(i for i, ln in enumerate(lines) if "_RET_AUTO_SAVE_NS:" in ln)
+        dirty_line = lines[at + 1].strip()
+        assert dirty_line.startswith("if ") and dirty_line.endswith(":")
+        dirty_expr = dirty_line[3:-1]
+
+        def dirty(now: float, saved: float | None) -> bool:
+            return eval(dirty_expr, {}, {symbol: now, "_ret_snapshot": {"Level": saved}})  # noqa: S307
+
+        nan = math.nan
+        assert not dirty(nan, nan)
+        assert not dirty(math.inf, math.inf)
+        assert not dirty(1.5, 1.5)
+        assert dirty(nan, 1.5)
+        assert dirty(1.5, nan)
+        assert dirty(nan, None)
+        assert dirty(2.5, 1.5)
+
     def test_save_memory_updates_snapshot(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
@@ -1345,7 +1459,7 @@ class TestBoardPeripheralsAndRunStop:
         _run_single_scan_source(result.code, monkeypatch, stub_base, runtime_source=result.runtime)
         assert stub_base.discrete_writes[-1] == (2, 1)
 
-    def test_real_overflow_saturates_at_clicks_range(self, monkeypatch):
+    def test_real_overflow_stores_inf(self, monkeypatch):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         big = Real("Big", default=3.0e38)
@@ -1353,11 +1467,16 @@ class TestBoardPeripheralsAndRunStop:
         low = Real("Low")
         dint = Dint("Huge", default=2147483647)
         copied = Real("Copied")
+        square = Real("Square")
+        cube = Real("Cube")
+        neg = Real("Neg", default=-3.0e38)
         with Program(strict=False) as prog:
             with Rung():
                 calc(big * 10, dest)
                 calc(big * -10, low)
                 copy(dint, copied)
+                calc(big**2, square)
+                calc(neg**3, cube)
 
         result = generate_circuitpy(
             prog,
@@ -1389,10 +1508,340 @@ class TestBoardPeripheralsAndRunStop:
             result.code, monkeypatch, StubBase(), runtime_source=result.runtime
         )
         ctx = _context_for_program(prog, hw)
-        assert namespace[ctx.symbol_for_tag(dest)] == 3.4028235e38
-        assert namespace[ctx.symbol_for_tag(low)] == -3.4028235e38
+        assert namespace[ctx.symbol_for_tag(dest)] == math.inf
+        assert namespace[ctx.symbol_for_tag(low)] == -math.inf
         assert namespace[ctx.symbol_for_tag(copied)] == 2147483647.0
+        assert namespace[ctx.symbol_for_tag(square)] == math.inf
+        assert namespace[ctx.symbol_for_tag(cube)] == -math.inf
         assert namespace[ctx.symbol_for_tag(system.fault.out_of_range)] is True
+
+    @pytest.mark.parametrize(
+        ("label", "make"),
+        [
+            ("and", lambda r: r & 1),
+            ("or", lambda r: 1 | r),
+            ("xor", lambda r: r ^ 3),
+            ("lshift", lambda r: r << 1),
+            ("rshift", lambda r: 8 >> r),
+            ("invert", lambda r: ~r),
+            ("lsh", lambda r: lsh(r, 1)),
+            ("rsh", lambda r: rsh(4, r)),
+            ("lro", lambda r: lro(r, 1)),
+            ("rro", lambda r: rro(1, r)),
+            ("pow_then_and", lambda r: (r**2) & 1),
+        ],
+    )
+    @pytest.mark.parametrize("operand", ["nan", "inf"])
+    def test_non_finite_bitwise_operand_is_zero_and_sc43_on_every_backend(
+        self, monkeypatch, label, make, operand
+    ):
+        """A NaN or Inf REAL in a bitwise or shift op stores 0 with SC43, and the
+        scan runs on: core interpreter, compiled kernel and generated CircuitPython."""
+        big = Real("Big", default=3.0e38)
+        inf = Real("InfR")
+        odd = Real("OddR")
+        dest = Int("Dest", default=7)
+        after = Int("After")
+        with Program(strict=False) as prog:
+            # Scan 0 builds the operand (setting SC43); scan 1 starts with SC43
+            # off, so the flag on scan 1 is the bitwise op's.
+            with Rung(system.sys.first_scan):
+                calc(big * 10, inf)
+                calc(inf - inf if operand == "nan" else inf + 0, odd)
+            with Rung(~system.sys.first_scan):
+                calc(make(odd), dest)
+                copy(5, after)
+
+        results = _on_every_backend(
+            prog, monkeypatch, (dest, system.fault.out_of_range, after), scans=2
+        )
+        assert results == {name: (0, True, 5) for name in results}, label
+
+    @staticmethod
+    def _non_finite_real(operand: str) -> tuple[Real, list]:
+        """A Real that scan 0 sets to +Inf, -Inf or NaN (SC43 on scan 0 only),
+        and the calcs that set it; a REAL literal cannot be Inf or NaN."""
+        big = Real("Big", default=3.0e38)
+        inf = Real("InfR")
+        r = Real("R", default=3.0)
+        made = {"inf": inf + 0, "-inf": 0 - inf, "nan": inf - inf}[operand]
+        return r, [(big * 10, inf), (made, r)]
+
+    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
+    def test_non_finite_randint_bound_is_zero_and_sc43_on_every_backend(self, monkeypatch, operand):
+        """pyrung's choice: a randint() bound holding Inf or NaN makes the calc
+        store 0 with SC43, and the scan runs on, on all three backends."""
+        from pyrung.core import randint
+
+        r, setup = self._non_finite_real(operand)
+        dest = Dint("Dest", default=7)
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                calc(randint(0, r) + 5, dest)
+                copy(5, after)
+
+        results = _on_every_backend(
+            prog, monkeypatch, (dest, system.fault.out_of_range, after), scans=2
+        )
+        assert results == {name: (0, True, 5) for name in results}
+
+    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
+    def test_non_finite_forloop_count_runs_none_and_sc43_on_every_backend(
+        self, monkeypatch, operand
+    ):
+        """pyrung's choice: a forloop() whose REAL count holds Inf or NaN runs no
+        iteration and sets SC43, and the scan runs on, on all three backends."""
+        r, setup = self._non_finite_real(operand)
+        hits = Int("Hits")
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                with forloop(r):
+                    calc(hits + 1, hits)
+            with Rung(~system.sys.first_scan):
+                copy(5, after)
+
+        results = _on_every_backend(
+            prog, monkeypatch, (hits, system.fault.out_of_range, after), scans=2
+        )
+        assert results == {name: (0, True, 5) for name in results}
+
+    def test_finite_real_forloop_count_still_iterates_on_every_backend(self, monkeypatch):
+        r = Real("R", default=3.0)
+        hits = Int("Hits")
+        with Program(strict=False) as prog:
+            with Rung():
+                with forloop(r):
+                    calc(hits + 1, hits)
+
+        results = _on_every_backend(prog, monkeypatch, (hits, system.fault.out_of_range), scans=2)
+        assert results == {name: (6, False) for name in results}
+
+    _FAULTS = (
+        system.fault.division_error,
+        system.fault.out_of_range,
+        system.fault.math_operation_error,
+    )
+
+    @pytest.mark.parametrize(
+        ("label", "make"),
+        [
+            ("div", lambda i, z, r: i / z),
+            ("floordiv", lambda i, z, r: i // z),
+            ("mod", lambda i, z, r: i % z),
+            ("pow", lambda i, z, r: z ** (0 - i)),
+            ("div_then_add", lambda i, z, r: (i / z) + 5),
+            ("bit_and", lambda i, z, r: r & 3),
+            ("invert", lambda i, z, r: ~r),
+            ("lshift_negative", lambda i, z, r: i << (z - 1)),
+            ("lsh", lambda i, z, r: lsh(r, 1)),
+            ("rro", lambda i, z, r: rro(i, r)),
+            ("sqrt", lambda i, z, r: sqrt(z - i)),
+        ],
+    )
+    def test_a_math_error_outside_calc_is_zero_with_no_flag_on_every_backend(
+        self, monkeypatch, label, make
+    ):
+        """pyrung's choice: outside calc an expression is permissive.  The
+        operation that hits a math error gives 0, nothing raises and no flag is
+        set, in a rung condition, a copy source and a forloop count alike."""
+        i = Int("I", default=4)
+        z = Int("Z")
+        big = Real("Big", default=3.0e38)
+        r = Real("R")
+        expr = make(i, z, r)
+        hit = Bool("Hit")
+        copied = Dint("Copied", default=7)
+        hits = Int("Hits")
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                calc(big * 10, r)  # +Inf, with SC43 on scan 0 only
+            with Rung(~system.sys.first_scan, expr == (5 if label == "div_then_add" else 0)):
+                out(hit)
+            with Rung(~system.sys.first_scan):
+                copy(expr, copied)
+                with forloop(expr):
+                    calc(hits + 1, hits)
+            with Rung(~system.sys.first_scan):
+                copy(5, after)
+
+        results = _on_every_backend(
+            prog, monkeypatch, (hit, copied, hits, *self._FAULTS, after), scans=2
+        )
+        expected_copy = 5 if label == "div_then_add" else 0
+        expected = (True, expected_copy, expected_copy, False, False, False, 5)
+        assert results == {name: expected for name in results}, label
+
+    def test_calc_still_flags_the_math_errors_a_condition_ignores_on_every_backend(
+        self, monkeypatch
+    ):
+        i = Int("I", default=4)
+        z = Int("Z")
+        dest = Int("Dest", default=7)
+        hit = Bool("Hit")
+        with Program(strict=False) as prog:
+            with Rung((i / z) == 0):
+                out(hit)
+            with Rung():
+                calc(i / z, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (hit, dest, *self._FAULTS), scans=1)
+        assert results == {name: (True, 0, True, False, False) for name in results}
+
+    def test_a_float_overflow_in_a_condition_stays_inf_on_every_backend(self, monkeypatch):
+        """Plain IEEE results pass through: only an operation that raises is 0."""
+        big = Real("Big", default=3.0e38)
+        hit = Bool("Hit")
+        with Program(strict=False) as prog:
+            with Rung((big * 10) > 1.0e38):
+                out(hit)
+
+        results = _on_every_backend(prog, monkeypatch, (hit, *self._FAULTS), scans=1)
+        assert results == {name: (True, False, False, False) for name in results}
+
+    @pytest.mark.parametrize("operand", ["nan", "inf"])
+    def test_a_non_finite_randint_bound_outside_calc_is_zero_on_every_backend(
+        self, monkeypatch, operand
+    ):
+        from pyrung.core import randint
+
+        r, setup = self._non_finite_real(operand)
+        copied = Dint("Copied", default=7)
+        hit = Bool("Hit")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                copy(randint(0, r), copied)
+            with Rung(~system.sys.first_scan, randint(0, r) == 0):
+                out(hit)
+
+        results = _on_every_backend(prog, monkeypatch, (copied, hit, *self._FAULTS), scans=2)
+        assert results == {name: (0, True, False, False, False) for name in results}
+
+    def test_a_math_error_in_an_index_expression_is_index_zero_on_every_backend(self, monkeypatch):
+        ds = Block("DS", TagType.INT, 0, 3)
+        i = Int("I", default=4)
+        z = Int("Z")
+        got = Int("Got")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(11, ds[0])
+                copy(22, ds[1])
+            with Rung():
+                copy(ds[i // z], got)
+
+        results = _on_every_backend(prog, monkeypatch, (got, *self._FAULTS), scans=1)
+        assert results == {name: (11, False, False, False) for name in results}
+
+    _HUGE = [
+        ("pow_tag_exponent_times_float", lambda e, bd: (2**e) * 0.5),
+        ("pow_times_float", lambda e, bd: (bd**40) * 1.5),
+        ("pow_divided", lambda e, bd: (bd**40) / 2),
+        ("pow_plus_float", lambda e, bd: (bd**40) + 0.5),
+        ("sin_of_pow", lambda e, bd: sin(bd**40)),
+        ("sqrt_of_pow", lambda e, bd: sqrt(bd**40)),
+        ("atan_of_pow", lambda e, bd: atan(bd**40)),
+        ("lsh_tag_count_times_float", lambda e, bd: lsh(1, e) * 0.5),
+    ]
+
+    @pytest.mark.parametrize(("label", "make"), _HUGE, ids=[label for label, _ in _HUGE])
+    def test_an_integer_too_large_for_a_float_is_zero_outside_calc_on_every_backend(
+        self, monkeypatch, label, make
+    ):
+        """An exact integer power is fine until it meets a float; outside calc
+        that operation gives 0 with no flag."""
+        e = Int("E", default=1100)
+        bd = Dint("BD", default=2_000_000_000)
+        expr = make(e, bd)
+        hit = Bool("Hit")
+        copied = Real("Copied", default=7.0)
+        with Program(strict=False) as prog:
+            with Rung(expr == 0):
+                out(hit)
+            with Rung():
+                copy(expr, copied)
+
+        results = _on_every_backend(prog, monkeypatch, (hit, copied, *self._FAULTS), scans=1)
+        assert results == {name: (True, 0.0, False, False, False) for name in results}, label
+
+    @pytest.mark.parametrize(("label", "make"), _HUGE, ids=[label for label, _ in _HUGE])
+    def test_an_integer_too_large_for_a_float_in_calc_is_zero_and_sc43_on_every_backend(
+        self, monkeypatch, label, make
+    ):
+        e = Int("E", default=1100)
+        bd = Dint("BD", default=2_000_000_000)
+        dest = Real("Dest", default=7.0)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(make(e, bd), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        assert results == {name: (0.0, False, True, False) for name in results}, label
+
+    _COMPLEX = [
+        ("literal_exponent", lambda n, h: n**0.5),
+        ("tag_exponent", lambda n, h: n**h),
+        ("int_base", lambda n, h: (0 - 8) ** h),
+    ]
+
+    @pytest.mark.parametrize(("label", "make"), _COMPLEX, ids=[label for label, _ in _COMPLEX])
+    def test_a_complex_power_is_a_math_error_on_every_backend(self, monkeypatch, label, make):
+        """pyrung's choice: a negative base to a fractional power has no real
+        value, so it is a math error, as sqrt(-1) is: 0 with no flag outside
+        calc, 0 with math_operation_error (SC46) in calc."""
+        n = Real("N", default=-8.0)
+        h = Real("H", default=0.5)
+        hit = Bool("Hit")
+        copied = Real("Copied", default=7.0)
+        dest = Real("Dest", default=7.0)
+        with Program(strict=False) as prog:
+            with Rung(make(n, h) == 0):
+                out(hit)
+            with Rung():
+                copy(make(n, h), copied)
+            with Rung():
+                calc(make(n, h), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (hit, copied, dest, *self._FAULTS), scans=1)
+        assert results == {name: (True, 0.0, 0.0, False, False, True) for name in results}, label
+
+    _NEGATIVE_SHIFTS = [
+        ("lsh", lambda w, c: lsh(w, c)),
+        ("rsh", lambda w, c: rsh(w, c)),
+        ("left_shift", lambda w, c: w << c),
+        ("right_shift", lambda w, c: w >> c),
+    ]
+
+    @pytest.mark.parametrize(
+        ("label", "make"), _NEGATIVE_SHIFTS, ids=[label for label, _ in _NEGATIVE_SHIFTS]
+    )
+    def test_a_negative_shift_count_in_calc_is_zero_and_sc43_on_every_backend(
+        self, monkeypatch, label, make
+    ):
+        """pyrung's choice: a shift by a negative count stores 0 and sets
+        out_of_range (SC43), as a bitwise operation on Inf does."""
+        w = Word("W", default=0x00F0)
+        c = Int("C", default=-1)
+        dest = Word("Dest", default=7)
+        hit = Bool("Hit")
+        with Program(strict=False) as prog:
+            with Rung(make(w, c) == 0):
+                out(hit)
+            with Rung():
+                calc(make(w, c), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (hit, dest, *self._FAULTS), scans=1)
+        assert results == {name: (True, 0, False, True, False) for name in results}, label
 
     def test_text_literal_copy_fans_out_one_char_per_register(self, monkeypatch):
         hw = P1AM()

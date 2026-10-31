@@ -854,17 +854,6 @@ def test_index_through_calc_of_element_compared_with_literal() -> None:
     _assert_counterexample(logic, bad, _OptConfig())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=TypeError,
-    reason=(
-        "review NB3 (base too): Rung(Tbl[Q + 0] == S, S > 365) raises "
-        "TypeError: unhashable type: 'BinaryExpr' in _extract_value_domain "
-        "(the IndirectExprRef operand is taken for a literal). Treating it as "
-        "non-literal yields a Counterexample at Q = 37 that does not replay: "
-        "the runtime evaluates S == Tbl[Q + 0] False where S == Tbl[Q] is True"
-    ),
-)
 def test_expression_index_compared_with_stepped_int() -> None:
     en = Bool("KEn", external=True)
     table = Block("KTbl", TagType.INT, 1, 50)

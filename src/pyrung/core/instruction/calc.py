@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.expression import (
     DOMAIN_LIMITED_MATH_FUNCS,
+    STRICT_DIVISION,
     BinaryExpr,
     Expression,
     LiteralExpr,
@@ -16,6 +16,7 @@ from pyrung.core.expression import (
     RandIntExpr,
     ShiftFuncExpr,
     UnaryExpr,
+    may_be_float,
 )
 from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.storage import check_real_value
@@ -104,14 +105,18 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
 
 
 def has_domain_limited_func(value: Any, seen: set[int] | None = None) -> bool:
-    """True when *value* (a calc expression) calls a math function that can raise
-    :class:`~pyrung.core.expression.MathDomainError` (``sqrt``, ``log``, ...)."""
+    """True when *value* (a calc expression) can raise
+    :class:`~pyrung.core.expression.MathDomainError`: a math function with a
+    domain (``sqrt``, ``log``, ...) or a ``**`` whose exponent may be fractional
+    (``(-8.0) ** 0.5`` has no real value)."""
     if seen is None:
         seen = set()
     if id(value) in seen:
         return False
     seen.add(id(value))
     if isinstance(value, MathFuncExpr) and value.name in DOMAIN_LIMITED_MATH_FUNCS:
+        return True
+    if isinstance(value, BinaryExpr) and value.symbol == "**" and may_be_float(value.right):
         return True
     if isinstance(value, Expression):
         return any(has_domain_limited_func(child, seen) for child in vars(value).values())
@@ -225,6 +230,16 @@ class CalcInstruction(OneShotMixin, Instruction):
     **Division by zero:** Result is forced to 0 and the division-error fault
     flag is set. The instruction completes normally.
 
+    **REAL overflow:** a result past +/-3.4028235E+38 stores +/-Inf and sets
+    the out-of-range flag (``system.fault.out_of_range``, CLICK's SC43), as a
+    CLICK's float32 Math does.  An Inf operand follows IEEE 754 (``Inf / 2`` is
+    Inf, ``Inf - Inf`` is NaN); a REAL result that is not finite sets the flag
+    too.  Into an INT, DINT or WORD, a result that is not finite stores 0 and
+    sets the flag; so does a bitwise or shift operation on an Inf or NaN
+    operand, whatever the destination.  The range is checked on the stored
+    result only: a step of the formula is a 64-bit float (``**`` past it is
+    +/-Inf) or an exact integer.
+
     **Math domain error** (``sqrt`` of a negative, ``log``/``log10`` of 0 or a
     negative, ``asin``/``acos`` outside -1..1): Result is forced to 0 and the
     math-operation error flag (``system.fault.math_operation_error``, CLICK's
@@ -281,7 +296,10 @@ class CalcInstruction(OneShotMixin, Instruction):
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        # Evaluate expression (handles Tag, Expression, IndirectRef, literal)
+        # Evaluate expression (handles Tag, Expression, IndirectRef, literal).
+        # A division by zero raises here (STRICT_DIVISION), so a result that is
+        # not finite comes from an Inf or NaN operand, or an overflow.
+        token = STRICT_DIVISION.set(True)
         try:
             value = resolve_tag_or_value_ctx(self.expression, ctx)
         except ZeroDivisionError:
@@ -293,11 +311,8 @@ class CalcInstruction(OneShotMixin, Instruction):
         except MathDomainError:
             _set_fault_math_operation_error(ctx)
             value = 0
-
-        # Expression division may return non-finite sentinels for divide-by-zero.
-        if isinstance(value, float) and not math.isfinite(value):
-            _set_fault_division_error(ctx)
-            value = 0
+        finally:
+            STRICT_DIVISION.reset(token)
 
         if _math_out_of_range_for_dest(value, self.dest, self.mode):
             _set_fault_out_of_range(ctx)
