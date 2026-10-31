@@ -28,6 +28,12 @@ from pyrung.core.condition import (
     CompareNe,
     Condition,
     FallingEdgeCondition,
+    IndirectCompareEq,
+    IndirectCompareGe,
+    IndirectCompareGt,
+    IndirectCompareLe,
+    IndirectCompareLt,
+    IndirectCompareNe,
     IntTruthyCondition,
     NormallyClosedCondition,
     RisingEdgeCondition,
@@ -41,6 +47,12 @@ _COMPARE_SYMBOLS: dict[type, str] = {
     CompareLe: "<=",
     CompareGt: ">",
     CompareGe: ">=",
+    IndirectCompareEq: "==",
+    IndirectCompareNe: "!=",
+    IndirectCompareLt: "<",
+    IndirectCompareLe: "<=",
+    IndirectCompareGt: ">",
+    IndirectCompareGe: ">=",
 }
 
 # type(instruction).__name__ -> DSL verb.  Only the verb is needed for the fallback
@@ -115,7 +127,7 @@ def operand_name(value: Any) -> str:
     if isinstance(value, IndirectBlockRange):
         return f"{value.block.name}[{value.start_expr}..{value.end_expr}]"
     if isinstance(value, IndirectExprRef):
-        return f"{value.block.name}[{value.expr}]"
+        return f"{value.block.name}[{render_expr(value.expr)}]"
     if isinstance(value, Expression):
         return render_expr(value)
     if isinstance(value, bool):
@@ -178,6 +190,19 @@ def render_condition(cond: Condition) -> str:
     if isinstance(cond, (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)):
         sym = _COMPARE_SYMBOLS[type(cond)]
         return f"{operand_name(cond.tag)} {sym} {operand_name(cond.value)}"
+    if isinstance(
+        cond,
+        (
+            IndirectCompareEq,
+            IndirectCompareNe,
+            IndirectCompareLt,
+            IndirectCompareLe,
+            IndirectCompareGt,
+            IndirectCompareGe,
+        ),
+    ):
+        sym = _COMPARE_SYMBOLS[type(cond)]
+        return f"{operand_name(cond.indirect_ref)} {sym} {operand_name(cond.value)}"
     if isinstance(cond, BitCondition):
         return operand_name(cond.tag)
     if isinstance(cond, NormallyClosedCondition):

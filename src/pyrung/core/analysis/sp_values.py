@@ -130,7 +130,7 @@ def _required_from_atom(atom: Atom) -> list[tuple[str, Any]] | None:
     if form == "xio":
         return [(atom.tag, False)]
     if form == "eq":
-        if atom.operand_is_tag:
+        if atom.operand_is_tag or not isinstance(atom.operand, (bool, int, float, str)):
             return None
         return [(atom.tag, atom.operand)]
     if form in {"rise", "fall", "truthy"}:

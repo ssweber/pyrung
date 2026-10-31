@@ -1648,7 +1648,8 @@ def test_next_trace_collapses_right_pointer_expression_to_resolved_tag(tmp_path:
     traces = _trace_events(messages)
     assert traces
     condition = traces[0]["body"]["regions"][0]["conditions"][0]
-    assert condition["status"] == "false"
+    # DebugStep=5, Step[CurStep + 1 = 5]=5 -> 5 == 5 -> true
+    assert condition["status"] == "true"
 
     details = {item["name"]: item["value"] for item in condition["details"]}
     assert details["right"] == "Step[5]"

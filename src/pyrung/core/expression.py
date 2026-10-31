@@ -181,33 +181,51 @@ class Expression(ABC):
     # =========================================================================
     # Comparison Operators -> Condition
     # =========================================================================
+    #
+    # A block element addressed at scan time (``DS[idx]``, ``DS[idx + 1]``) is
+    # not an Expression; ``_wrap`` would freeze it into a LiteralExpr that
+    # compares the ref object itself.  Return NotImplemented instead, so Python
+    # asks the ref for the reflected comparison (``expr < DS[i]`` becomes
+    # ``DS[i] > expr``), which builds an IndirectCompare condition.
 
     def __eq__(self, other: object) -> ExprCompare:  # ty: ignore[invalid-method-override]
+        if _is_indexed_element(other):
+            return NotImplemented
         cond = ExprCompare(_wrap(self), _wrap(other), operator.eq, "==")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
     def __ne__(self, other: object) -> ExprCompare:  # ty: ignore[invalid-method-override]
+        if _is_indexed_element(other):
+            return NotImplemented
         cond = ExprCompare(_wrap(self), _wrap(other), operator.ne, "!=")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
     def __lt__(self, other: Expression | Numeric) -> ExprCompare:
+        if _is_indexed_element(other):
+            return NotImplemented
         cond = ExprCompare(_wrap(self), _wrap(other), operator.lt, "<")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
     def __le__(self, other: Expression | Numeric) -> ExprCompare:
+        if _is_indexed_element(other):
+            return NotImplemented
         cond = ExprCompare(_wrap(self), _wrap(other), operator.le, "<=")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
     def __gt__(self, other: Expression | Numeric) -> ExprCompare:
+        if _is_indexed_element(other):
+            return NotImplemented
         cond = ExprCompare(_wrap(self), _wrap(other), operator.gt, ">")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
     def __ge__(self, other: Expression | Numeric) -> ExprCompare:
+        if _is_indexed_element(other):
+            return NotImplemented
         cond = ExprCompare(_wrap(self), _wrap(other), operator.ge, ">=")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
@@ -216,6 +234,13 @@ class Expression(ABC):
 # =============================================================================
 # Helper to wrap literals
 # =============================================================================
+
+
+def _is_indexed_element(value: Any) -> bool:
+    """Whether *value* is a block element addressed at scan time."""
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    return isinstance(value, (IndirectRef, IndirectExprRef))
 
 
 def _wrap(value: Any) -> Expression:

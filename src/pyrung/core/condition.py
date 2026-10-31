@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 
 if TYPE_CHECKING:
     from pyrung.core.context import ConditionView, ScanContext
-    from pyrung.core.memory_block import IndirectRef
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
     from pyrung.core.tag import ImmediateRef, Tag
 
 
@@ -134,29 +134,29 @@ _VALUE_INDIRECT = 3
 
 def _classify_value(value: Any) -> int:
     from pyrung.core.expression import Expression
-    from pyrung.core.memory_block import IndirectRef
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
     from pyrung.core.tag import Tag
 
     if isinstance(value, Expression):
         return _VALUE_EXPR
     if isinstance(value, Tag):
         return _VALUE_TAG
-    if isinstance(value, IndirectRef):
+    if isinstance(value, (IndirectRef, IndirectExprRef)):
         return _VALUE_INDIRECT
     return _VALUE_LITERAL
 
 
 def _resolve_value(value: Any, ctx: ScanContext | ConditionView) -> Any:
-    """Resolve a value that may be a Tag, IndirectRef, Expression, or literal."""
+    """Resolve a Tag, IndirectRef, IndirectExprRef, Expression, or literal value."""
     from pyrung.core.expression import Expression
-    from pyrung.core.memory_block import IndirectRef
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
     from pyrung.core.tag import Tag
 
     if isinstance(value, Expression):
         return value.evaluate(ctx)
     if isinstance(value, Tag):
         return ctx.get_tag(value.name, value.default)
-    if isinstance(value, IndirectRef):
+    if isinstance(value, (IndirectRef, IndirectExprRef)):
         resolved_tag = value.resolve_ctx(ctx)
         return ctx.get_tag(resolved_tag.name, resolved_tag.default)
     return value
@@ -322,12 +322,16 @@ class FallingEdgeCondition(Condition):
 # =============================================================================
 # Indirect Comparison Conditions
 # =============================================================================
+#
+# The left operand is a block element addressed at scan time: an IndirectRef
+# (``block[pointer_tag]``) or an IndirectExprRef (``block[expr]``).  Both
+# resolve through ``resolve_ctx``.
 
 
 class IndirectCompareEq(Condition):
-    """Equality comparison for IndirectRef: indirect_ref == value or indirect_ref == tag."""
+    """Equality comparison: ``block[index] == value``."""
 
-    def __init__(self, indirect_ref: IndirectRef, value: Any):
+    def __init__(self, indirect_ref: IndirectRef | IndirectExprRef, value: Any):
         from pyrung.core.tag import Tag as _Tag
 
         self.indirect_ref = indirect_ref
@@ -345,9 +349,9 @@ class IndirectCompareEq(Condition):
 
 
 class IndirectCompareNe(Condition):
-    """Inequality comparison for IndirectRef: indirect_ref != value or indirect_ref != tag."""
+    """Inequality comparison: ``block[index] != value``."""
 
-    def __init__(self, indirect_ref: IndirectRef, value: Any):
+    def __init__(self, indirect_ref: IndirectRef | IndirectExprRef, value: Any):
         from pyrung.core.tag import Tag as _Tag
 
         self.indirect_ref = indirect_ref
@@ -365,9 +369,9 @@ class IndirectCompareNe(Condition):
 
 
 class IndirectCompareLt(Condition):
-    """Less-than comparison for IndirectRef: indirect_ref < value."""
+    """Less-than comparison: ``block[index] < value``."""
 
-    def __init__(self, indirect_ref: IndirectRef, value: Any):
+    def __init__(self, indirect_ref: IndirectRef | IndirectExprRef, value: Any):
         self.indirect_ref = indirect_ref
         self.value = value
 
@@ -378,9 +382,9 @@ class IndirectCompareLt(Condition):
 
 
 class IndirectCompareLe(Condition):
-    """Less-than-or-equal comparison for IndirectRef: indirect_ref <= value."""
+    """Less-than-or-equal comparison: ``block[index] <= value``."""
 
-    def __init__(self, indirect_ref: IndirectRef, value: Any):
+    def __init__(self, indirect_ref: IndirectRef | IndirectExprRef, value: Any):
         self.indirect_ref = indirect_ref
         self.value = value
 
@@ -391,9 +395,9 @@ class IndirectCompareLe(Condition):
 
 
 class IndirectCompareGt(Condition):
-    """Greater-than comparison for IndirectRef: indirect_ref > value."""
+    """Greater-than comparison: ``block[index] > value``."""
 
-    def __init__(self, indirect_ref: IndirectRef, value: Any):
+    def __init__(self, indirect_ref: IndirectRef | IndirectExprRef, value: Any):
         self.indirect_ref = indirect_ref
         self.value = value
 
@@ -404,9 +408,9 @@ class IndirectCompareGt(Condition):
 
 
 class IndirectCompareGe(Condition):
-    """Greater-than-or-equal comparison for IndirectRef: indirect_ref >= value."""
+    """Greater-than-or-equal comparison: ``block[index] >= value``."""
 
-    def __init__(self, indirect_ref: IndirectRef, value: Any):
+    def __init__(self, indirect_ref: IndirectRef | IndirectExprRef, value: Any):
         self.indirect_ref = indirect_ref
         self.value = value
 
