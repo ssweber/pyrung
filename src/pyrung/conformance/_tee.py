@@ -2,8 +2,10 @@
 
 pyrung's exporter writes every pin of a box from the rail, with the shared
 contacts copied into each pin's row.  CLICK also lets a pin's wire tee off the
-box's input wire after some shared contacts and add its own (C000A only asks that
-all pins start from the same branch).  A case with a :class:`TeeSpec` is the
+box's input wire after some shared contacts and add its own.  CLICK refuses a box
+whose pins start from different places (error C000A, "All inputs of the box
+instruction must originate from the same branch"): the pins either all start at the
+rail, or all tee off one common node of the box's input wire, never a mix.  A case with a :class:`TeeSpec` is the
 tee-drawn twin of a rail-drawn case: it runs the same pyrung rungs everywhere, and
 the CLICK export redraws the named pins as tees.  Nothing else in the rung moves,
 so what the twin runs in-process is what the drawing imports to (a test imports
@@ -26,8 +28,9 @@ class TeeSpec:
     ``pins`` the pin labels to tee (``(".down()",)``), which must be the first
     pin rows under the box row; ``after`` how many contacts at the start of the
     box row are shared (each teed pin's row begins with exactly those contacts
-    in its rail form).  Pins not named stay drawn from the rail, below the teed
-    ones.
+    in its rail form).  The pins named must be every pin of the box: a pin left on
+    the rail beside teed ones is the mixed drawing CLICK refuses with C000A, so
+    :func:`draw_tees` raises rather than draw it.
     """
 
     box: str
@@ -39,7 +42,8 @@ def draw_tees(rows: Sequence[Row], marker: str, spec: TeeSpec) -> tuple[Row, ...
     """*rows* with the pins of the case marked ``Case <marker>`` redrawn as tees.
 
     Raises:
-        ValueError: The case's box rung is not the rail drawing the spec expects.
+        ValueError: The case's box rung is not the rail drawing the spec expects, or
+            the spec leaves a pin of the box on the rail (CLICK error C000A).
     """
     out = [tuple(r) for r in rows]
     start = next(
@@ -79,8 +83,19 @@ def draw_tees(rows: Sequence[Row], marker: str, spec: TeeSpec) -> tuple[Row, ...
             # The bus continues down past this pin: a tee on its first cell.
             row[tee_col] = _tee_cell(row[tee_col], f"Case {marker}: pin {label}")
         out[index] = tuple(row)
+    after_pins = box_index + 1 + len(spec.pins)
+    if after_pins < len(out) and _is_pin_row(out[after_pins]):
+        raise ValueError(
+            f"Case {marker}: pin {out[after_pins][-1]} of the box would stay on the rail "
+            "beside teed pins; CLICK refuses that with error C000A (all inputs of the box "
+            "instruction must originate from the same branch). Tee every pin"
+        )
     out[box_index] = tuple(box)
     return tuple(out)
+
+
+def _is_pin_row(row: Row) -> bool:
+    return row[0] == "" and row[-1].startswith(".")
 
 
 def _tee_cell(cell: str, where: str) -> str:

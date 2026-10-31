@@ -76,19 +76,22 @@ tells apart:
   program's first scan, whatever run reads it.
 - ``pins_read_before_count`` (probe, box atomicity): a box reads its enable and
   every pin at one moment, before it executes.  The up rung and the ``.down()``
-  pin share Cmd != 0 and ~Done (copied into the pin's row: the exporter's rail
-  form) and each adds a pulse bit of its own.  Preset 2, up pulses on scans 1
+  pin share ~Done (copied into the pin's row: the exporter's rail form) and
+  each adds a pulse bit of its own; the ``.reset()`` pin shares it too and adds
+  Cmd == 0, so it resets the counter at idle (Done is off then).  Preset 2, up pulses on scans 1
   and 3, a down pulse on scan 3: the second count turns Done on during that
   very scan.  All inputs read before the box writes (adopted, pyrung's model):
   up and down both see ~Done on scan 3 and cancel, Acc = 1 (Result1) and Done
   off (Result2 = 0).  A down pin read after the box counted sees Done on, drops
   the down, and reads Acc = 2, Done on (Result1 = 2, Result2 = 1).
 - ``pins_read_before_count_tee``: the same ladder on its own counter and bits
-  (the same conditions, the same pins), with the ``.down()`` pin drawn teeing
-  off the up rung's input wire after the two shared contacts instead of from
-  the rail; the reset pin stays on the rail below it.  Same readings as above.
-  pyrung runs the same rungs in every target; the CLICK export redraws the pin
-  (``tee=``), and ``test_tee_twins.py`` imports the drawing and compares it
+  (the same conditions, the same pins), with the ``.down()`` and ``.reset()``
+  pins drawn teeing off the up rung's input wire after the shared ~Done contact
+  instead of from the rail.  Same readings as above.  The reset pin is teed too
+  because CLICK refuses a box whose pins do not all start from the same place
+  (C000A: the first twin left it on the rail), so its condition starts with the
+  shared ~Done instead of being the plain Cmd == 0 reset.  pyrung runs the same rungs in every
+  target; the CLICK export redraws the pins (``tee=``), and ``test_tee_twins.py`` imports the drawing and compares it
   with the rail drawing.  A CLICK that reads the two drawings differently is
   the answer.
 """
@@ -338,17 +341,22 @@ def prove_first_scan_input_already_on(slot):
 
 def _pins_read_before_count(slot, number: int, up_bit, down_bit):
     # Preset 2, up pulses on scans 1 and 3, a down pulse on scan 3.  The up
-    # rung and the down pin share Cmd != 0 and ~Done; each adds one contact of
-    # its own, a pulse bit.  The rail and tee cases are this ladder, on their
-    # own counter and bits; only the CLICK drawing of the pin differs.
+    # rung and the down pin share ~Done; each adds one contact of its own, a
+    # pulse bit (set only under Cmd != 0).  The reset pin shares ~Done too and adds
+    # Cmd == 0, so it resets the counter at idle between runs (Done is off then).  The
+    # rail and tee cases are this ladder, on their own counter and bits; only the
+    # CLICK drawing of the pins differs (CLICK takes pins all from the rail or all
+    # teed off one node, so the tee twin tees the reset pin too).
     counter = ClickCounter(number)
     count_scans(slot)
     with Rung(slot.Cmd != 0, on(slot, 1, 3)):
         out(up_bit)
     with Rung(slot.Cmd != 0, slot.Scratch == 3):
         out(down_bit)
-    with Rung(slot.Cmd != 0, ~counter.Done, up_bit):
-        count_up(counter, 2).down(And(slot.Cmd != 0, ~counter.Done, down_bit)).reset(slot.Cmd == 0)
+    with Rung(~counter.Done, up_bit):
+        count_up(counter, 2).down(And(~counter.Done, down_bit)).reset(
+            And(~counter.Done, slot.Cmd == 0)
+        )
     with Rung(slot.Cmd != 0):
         copy(counter.Acc, slot.Result1)
     with Rung(slot.Cmd != 0, counter.Done):
@@ -479,14 +487,14 @@ group = Group(
             scans=SCANS,
         ),
         case(
-            "The tee drawing of the same question: a counter whose .down() pin tees off "
-            "the up rung's input wire after Cmd != 0 and ~Done reads its rung and pin "
-            "at one moment, before it counts; the second count turns Done on during scan "
-            "3 while a down pulse arrives, both cancel, and the counter reads Acc = 1 "
-            "(Result1) with Done off (Result2 = 0)",
+            "The tee drawing of the same question: a counter whose .down() and .reset() "
+            "pins tee off the up rung's input wire after ~Done reads its "
+            "rung and pins at one moment, before it counts; the second count turns Done "
+            "on during scan 3 while a down pulse arrives, both cancel, and the counter "
+            "reads Acc = 1 (Result1) with Done off (Result2 = 0)",
             ladder=prove_pins_read_before_count_tee,
             probe="pins read before the box executes",
-            tee=TeeSpec("count_up(", (".down()",), after=2),
+            tee=TeeSpec("count_up(", (".down()", ".reset()"), after=1),
             expect={"Result1": 1, "Result2": 0},
             scans=SCANS,
         ),

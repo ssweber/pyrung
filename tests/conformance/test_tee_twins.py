@@ -84,9 +84,17 @@ def test_draw_tees_refuses_a_rung_that_is_not_the_expected_rail_drawing(part_a):
     rows = dict(rail.subroutine_rows)[build.group("counters").subroutine]
     marker = "counters/pins_read_before_count_tee"
     with pytest.raises(ValueError, match="shared contacts"):
-        draw_tees(rows, marker, TeeSpec("count_up(", (".down()",), after=3))
+        draw_tees(rows, marker, TeeSpec("count_up(", (".down()",), after=2))
     with pytest.raises(ValueError, match="not under the box row"):
-        draw_tees(rows, marker, TeeSpec("count_up(", (".reset()",), after=2))
+        draw_tees(rows, marker, TeeSpec("count_up(", (".reset()",), after=1))
+
+
+def test_draw_tees_refuses_a_pin_left_on_the_rail_c000a(part_a):
+    build, rail, _drawn = part_a
+    rows = dict(rail.subroutine_rows)[build.group("counters").subroutine]
+    marker = "counters/pins_read_before_count_tee"
+    with pytest.raises(ValueError, match="C000A"):
+        draw_tees(rows, marker, TeeSpec("count_up(", (".down()",), after=1))
 
 
 def _rows(*cells_per_row):
