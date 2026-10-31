@@ -77,9 +77,17 @@ class ConditionTraceEngine:
         if isinstance(value, Tag):
             return ctx.get_tag(value.name, value.default)
         if isinstance(value, (IndirectRef, IndirectExprRef)):
-            target = value.resolve_ctx(ctx)
-            return ctx.get_tag(target.name, target.default)
+            return value.read_ctx(ctx)
         return value
+
+    @staticmethod
+    def _element_label(ref: IndirectRef | IndirectExprRef, ctx: ScanContext) -> str:
+        """The element's tag name, or its address marked out of range (reads as 0)."""
+        addr = ref.address_ctx(ctx)
+        target = ref.block._element_or_none(addr)
+        if target is None:
+            return f"{ref.block._format_tag_name(addr)} (out of range)"
+        return target.name
 
     def _right_operand_details(self, right_operand: Any, ctx: ScanContext) -> list[dict[str, Any]]:
         right_details: list[dict[str, Any]] = []
@@ -87,12 +95,12 @@ class ConditionTraceEngine:
             right_details.append(self._detail("right", right_operand.name))
             return right_details
         if isinstance(right_operand, IndirectRef):
-            right_target = right_operand.resolve_ctx(ctx)
+            right_label = self._element_label(right_operand, ctx)
             right_pointer_name = right_operand.pointer.name
             right_pointer_value = ctx.get_tag(right_pointer_name, right_operand.pointer.default)
             right_details.extend(
                 [
-                    self._detail("right", right_target.name),
+                    self._detail("right", right_label),
                     self._detail(
                         "right_pointer_expr",
                         f"{right_operand.block.name}[{right_pointer_name}]",
@@ -104,8 +112,7 @@ class ConditionTraceEngine:
             return right_details
         if isinstance(right_operand, IndirectExprRef):
             # Collapse expression refs to concrete resolved tag labels (for concise trace display).
-            right_target = right_operand.resolve_ctx(ctx)
-            right_details.append(self._detail("right", right_target.name))
+            right_details.append(self._detail("right", self._element_label(right_operand, ctx)))
             return right_details
         if isinstance(right_operand, Expression):
             right_details.append(self._detail("right", repr(right_operand)))
@@ -206,9 +213,8 @@ class ConditionTraceEngine:
         self, condition: Any, ctx: ScanContext
     ) -> tuple[bool, list[dict[str, Any]]]:
         indirect_ref = condition.indirect_ref
-        target = indirect_ref.resolve_ctx(ctx)
-        left_label = target.name
-        left_value = ctx.get_tag(target.name, target.default)
+        left_label = self._element_label(indirect_ref, ctx)
+        left_value = indirect_ref.read_ctx(ctx)
         extra_details = [self._detail("left_pointer_expr", self._value_text(indirect_ref))]
         if isinstance(indirect_ref, IndirectRef):
             pointer_name = indirect_ref.pointer.name

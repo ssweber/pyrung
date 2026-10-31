@@ -51,6 +51,8 @@ _HELPER_ORDER = (
     "_rand_permissive",
     "_pow",
     "_permissive_op",
+    "_cond_elem",
+    "_cond_tag_elem",
 )
 
 _STORE_TYPE_HELPERS: dict[str, str] = {

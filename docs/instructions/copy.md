@@ -15,6 +15,8 @@ Out-of-range values are **clamped** to the destination type's min/max. This is d
 
 A pointer (`DS[Ptr]`) must be an `Int` or `Dint` tag, and an index expression (`DS[Ptr + 1]`) may use only `Int` and `Dint` tags, integer constants and integer operators (`//` rather than `/`, no `**` or math function). The same rule holds for the bounds of a `select()` whose bounds are tags or expressions (`DS.select(Start, Start + 9)`). A `Real`, `Word`, `Bool` or `Char` pointer or bound, or an index expression that breaks the rule, raises `TypeError` when the program is built; copy a `Word` or `Real` into an `Int` first.
 
+A pointer or index expression whose address falls outside the block (or in a gap of a sparse block) sets `system.fault.address_error` and leaves the destination alone, for a source or a destination; `calc()` with such a source does the same. In a rung condition such an element reads as 0 with no flag ([Comparisons](conditions.md#comparisons)).
+
 ## `blockcopy` — copy a range
 
 ```python

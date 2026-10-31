@@ -7,6 +7,7 @@ kernel all emit these same definitions; each picks the ones it needs.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
 
 from pyrung.circuitpy.codegen._constants import (
     _DINT_MAX,
@@ -379,6 +380,22 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    raise ValueError(op)",
         "",
     ],
+    # A rung condition reads an element outside its block as 0 (no flag):
+    # ``_cond_index_*`` gives -1 for such an address.
+    "_cond_elem": [
+        "def _cond_elem(seq, i, default):",
+        "    if i < 0:",
+        "        return default",
+        "    return seq[i]",
+        "",
+    ],
+    "_cond_tag_elem": [
+        "def _cond_tag_elem(tags, names, i, default):",
+        "    if i < 0:",
+        "        return default",
+        "    return tags.get(names[i], default)",
+        "",
+    ],
     "_store_bool": [
         "def _store_bool(value):",
         "    if type(value) is float and not math.isfinite(value):",
@@ -401,6 +418,24 @@ def _with_helper_deps(used: Iterable[str]) -> set[str]:
     if "_store_copy_value_to_type" in needed:
         needed.add("_store_real")
     return needed
+
+
+def _render_condition_index_helper(name: str, binding: Any) -> list[str]:
+    """``_cond_index_*`` for one block: the offset of *addr*, or -1 outside it.
+
+    A rung condition reads an element outside its block as 0, with no fault
+    flag (``_cond_elem``); instructions index through ``_resolve_index_*``,
+    which sets the address-error flag and raises.
+    """
+    lines = [f"def {name}(addr):"]
+    lines.append(f"    if addr < {binding.start} or addr > {binding.end}:")
+    lines.append("        return -1")
+    if binding.valid_addresses is not None:
+        lines.append(f"    if addr not in {binding.valid_addresses!r}:")
+        lines.append("        return -1")
+    lines.append(f"    return int(addr) - {binding.start}")
+    lines.append("")
+    return lines
 
 
 def _render_helper_defs(needed: Iterable[str]) -> list[str]:

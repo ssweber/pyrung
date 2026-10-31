@@ -813,6 +813,16 @@ class Block:
                 f"(valid window: {self.start}-{self.end}, sparse-ranged)"
             )
 
+    def _element_or_none(self, addr: int) -> Tag | None:
+        """The element at *addr*, or ``None`` if *addr* is outside the block.
+
+        A rung condition reads an element outside the block as the type's
+        zero (see ``IndirectRef.read_ctx``).
+        """
+        if addr < self.start or addr > self.end or not self._is_sparse_address_valid(addr):
+            return None
+        return self._get_tag(addr)
+
     def _validate_window_bound(self, addr: int, label: str) -> None:
         if addr < self.start or addr > self.end:
             raise IndexError(
@@ -1446,6 +1456,23 @@ class IndirectRef:
         self.block._validate_address(ptr_value)
         return self.block._get_tag(ptr_value)
 
+    def address_ctx(self, ctx: ScanContext | ConditionView) -> int:
+        """The address the pointer holds this scan."""
+        return int(ctx.get_tag(self.pointer.name, self.pointer.default))
+
+    def read_ctx(self, ctx: ScanContext | ConditionView) -> Any:
+        """The element's value as a rung condition reads it.
+
+        An address outside the block reads as the type's zero (``0``,
+        ``0.0``, ``False``) with no fault flag: a condition never stops the
+        scan.  Instructions resolve through ``resolve_ctx`` instead, which
+        raises, and set the address-error flag.
+        """
+        tag = self.block._element_or_none(self.address_ctx(ctx))
+        if tag is None:
+            return self.block._type_default()
+        return ctx.get_tag(tag.name, tag.default)
+
     def __eq__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
         """Create equality comparison condition."""
         from pyrung.core.condition import IndirectCompareEq
@@ -1524,6 +1551,17 @@ class IndirectExprRef:
         addr = int(self.expr.evaluate(ctx))
         self.block._validate_address(addr)
         return self.block._get_tag(addr)
+
+    def address_ctx(self, ctx: ScanContext | ConditionView) -> int:
+        """The address the expression gives this scan."""
+        return int(self.expr.evaluate(ctx))
+
+    def read_ctx(self, ctx: ScanContext | ConditionView) -> Any:
+        """The element's value as a rung condition reads it (see ``IndirectRef.read_ctx``)."""
+        tag = self.block._element_or_none(self.address_ctx(ctx))
+        if tag is None:
+            return self.block._type_default()
+        return ctx.get_tag(tag.name, tag.default)
 
     # Comparisons build the same conditions as ``IndirectRef``'s.  Without
     # them, ``DS[idx + 1] == 5`` fell back to the dataclass ``__eq__`` and

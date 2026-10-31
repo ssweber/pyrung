@@ -79,6 +79,18 @@ with rung(Counter != 5):
     out(NotAtTarget)
 ```
 
+A comparison may read a block element addressed at scan time, through a pointer or an index expression:
+
+```python
+with rung(DS[Step] == 0):
+    out(StepEmpty)
+
+with rung(Setpoint < DS[Step + 1]):
+    out(NextIsHigher)
+```
+
+An address outside the block, or in a gap of a sparse block, reads as its type's zero value (0, 0.0, False or a blank `Char`) on either side of the comparison: the rung evaluates, no fault flag is set and the scan carries on, in simulation, compiled replay and generated CircuitPython. `copy()` and `calc()` treat such a source differently: they set `system.fault.address_error` and write nothing (see [`copy`](copy.md)). This is pyrung's own rule: a CLICK takes a pointer only in Copy, and the CLICK validator flags one in a contact (`CLK_PTR_CONTEXT_ONLY_COPY`).
+
 ## INT truthiness
 
 INT tags are True when non-zero:
