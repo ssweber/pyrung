@@ -716,10 +716,15 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
     )
     for name, tag in sorted(ctx.retentive_tags.items()):
         symbol = ctx.symbol_for_tag(tag)
+        value_expr = symbol
+        if tag.type.name == "REAL":
+            # JSON has no Inf or NaN: save one as its str ("inf", "nan"), which
+            # the load's float() parses back.  ``x - x == 0`` only when finite.
+            value_expr = f"({symbol} if {symbol} - {symbol} == 0 else str({symbol}))"
         lines.extend(
             [
                 f'    if {symbol} != _RET_DEFAULTS["{name}"]:',
-                f'        values["{name}"] = {{"type": "{tag.type.name}", "value": {symbol}}}',
+                f'        values["{name}"] = {{"type": "{tag.type.name}", "value": {value_expr}}}',
             ]
         )
     lines.extend(

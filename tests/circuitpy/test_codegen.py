@@ -1078,6 +1078,29 @@ class TestPersistenceWatchdogAndDiagnostics:
         assert '_ret_snapshot.get("Count")' in source_code
         assert "save_memory()" in source_code
 
+    def test_save_memory_writes_an_inf_real_as_json(self):
+        """A REAL holding Inf or NaN saves as its str, valid JSON the load's float() parses."""
+        import json
+
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        level = Real("Level")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(1.5, level)
+
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        ctx = _context_for_program(prog, hw)
+        symbol = ctx.symbol_for_tag(level)
+        save_section = result.code.split("def save_memory():", 1)[1].split("\ndef ", 1)[0]
+        line = next(ln for ln in save_section.splitlines() if 'values["Level"] =' in ln)
+        entry_expr = line.split("=", 1)[1].strip()
+        for value in (1.5, math.inf, -math.inf, math.nan):
+            entry = eval(entry_expr, {"str": str}, {symbol: value})  # noqa: S307
+            loaded = float(json.loads(json.dumps(entry, allow_nan=False))["value"])
+            assert loaded == value or (math.isnan(value) and math.isnan(loaded))
+
     def test_save_memory_updates_snapshot(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
