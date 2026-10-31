@@ -1261,11 +1261,24 @@ def build_edge_frames(rung: Any) -> tuple[tuple[str, str], ...]:
 
 
 def scan_edge_frame(ctx: Any, view: Any, frame: Sequence[tuple[str, str]]) -> None:
-    """Store, for each edge site of *frame*, the bit its contact sees in *view*."""
-    for key, name in frame:
-        current = bool(view.get_tag(name, False))
-        if current != bool(view.get_memory(key, False)):
-            ctx.set_memory(key, current)
+    """Store, for each edge site of *frame*, the bit its contact sees in *view*.
+
+    These are bookkeeping reads, kept out of the read journal: a contact's
+    evaluation reads the same bit and memory from *view*, so the journal holds
+    exactly the reads its conditions make, in their order (as when edge
+    memory was stored at the end of the scan).
+    """
+    sink = getattr(view, "_read_sink", None)
+    if sink is not None:
+        view._read_sink = None
+    try:
+        for key, name in frame:
+            current = bool(view.get_tag(name, False))
+            if current != bool(view.get_memory(key, False)):
+                ctx.set_memory(key, current)
+    finally:
+        if sink is not None:
+            view._read_sink = sink
 
 
 def begin_bare_body_row(ctx: Any, instr: Any) -> tuple[Any] | None:

@@ -54,6 +54,12 @@ def _captured_projection():
     program, pending, entry, edge = _guard_surface_program()
     plc = PLC(program)
     plc.step()
+    # Pulse the edge once so its contact's memory is written (an entry read,
+    # not the unwritten default) when the captured scan sees it rise again.
+    plc.patch({edge.name: True})
+    plc.step()
+    plc.patch({edge.name: False})
+    plc.step()
     plc.patch({edge.name: True})
     captures: dict[int, ConditionViewCapture] = {}
     plc._run_single_scan(
@@ -177,7 +183,16 @@ def test_compact_views_preserve_guard_cursor_and_derivation() -> None:
     assert entry_read.occurrence.source == "entry"
     assert resolved_read.occurrence.source == "resolved"
     assert default_read.occurrence.source == "default"
-    assert memory_read.occurrence.name.endswith(edge.name)
+    # The edge contact reads its tag, then its own memory (``_edge:e{N}``,
+    # the contact's site key; it was ``_prev:<tag>`` when memory was per tag).
+    edge_contact = anchor.rung._conditions[4]
+    assert memory_read.occurrence.name == edge_contact._memory_key
+    edge_reads = [
+        read.occurrence.name
+        for read in guard_reads
+        if read.occurrence.name in {edge.name, edge_contact._memory_key}
+    ]
+    assert edge_reads == [edge.name, edge_contact._memory_key]
 
     compact_projection_condition_views(projection)
 
