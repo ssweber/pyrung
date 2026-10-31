@@ -2447,8 +2447,8 @@ def _build_infeasible_hints(
         blocker = blockers.get(name)
         if name in unmodeled:
             hints.append(
-                f"  {name}: {unmodeled[name]} accumulator; the prover does not model"
-                f" its timing yet; cover it with tests"
+                f"  {name}: {unmodeled[name]} accumulator; how()'s domain prior does"
+                f" not model its timing"
             )
             continue
         if blocker is not None:
@@ -2535,20 +2535,25 @@ def _classify_dimensions_from_graph(
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
     structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
-    _skip_absorptions: bool = False,
     exclusions: dict[str, str] | None = None,
     unclassified: set[str] | None = None,
     stepping_tags_out: set[str] | None = None,
     threshold_absorptions_out: list[_ThresholdAbsorptions] | None = None,
     model_system_points: bool = False,
     observe_everything: bool = False,
-    abstract_timers: bool = False,
+    abstract_timers: bool,
+    _skip_absorptions: bool,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context.
 
     *abstract_timers* classifies for the black-box timer kernel
     (``blackbox.py``): a Done bit is a plain Bool, and every accumulator
     (timer, counter, drum, Out timing) is state the search tracks itself.
+    *_skip_absorptions* skips the accumulator absorptions.  The search
+    passes True for both; only how()'s domain prior (``domains_only``)
+    passes False, for the absorbing classification its world key reads
+    (``absorb.py``).  Both are required so no caller gets the prior's
+    classification by default.
 
     *model_system_points* applies the BFS system-point model
     (:mod:`.system_points`): ``sys.first_scan`` becomes a stateful bit and
@@ -3144,8 +3149,13 @@ def _classify_dimensions_from_graph(
     if infeasible_tags:
         total_dims = len(stateful) + len(nondeterministic) + len(infeasible_tags)
         blocker_map = {b.acc_name: b for b in threshold_absorptions.blockers}
+        # Under black-box timers every such accumulator is state (above); only
+        # how()'s domain prior leaves one infeasible.
         hints = _build_infeasible_hints(
-            sorted(infeasible_tags), graph, blocker_map, _unmodeled_accumulators(program)
+            sorted(infeasible_tags),
+            graph,
+            blocker_map,
+            None if abstract_timers else _unmodeled_accumulators(program),
         )
         done_presets_partial = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
         done_presets_partial.update(

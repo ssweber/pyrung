@@ -1225,10 +1225,12 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         from .classify import _unmodeled_accumulators
 
         tags = sorted(infeasible_unclassified)
-        unmodeled = _unmodeled_accumulators(ctx.program)
+        # Under black-box timers such an accumulator is state, never
+        # unclassified; only how()'s domain prior leaves one here.
+        unmodeled = _unmodeled_accumulators(ctx.program) if ctx.domains_only else {}
         hints = [
-            f"  {name}: {unmodeled[name]} accumulator; the prover does not model"
-            f" its timing yet; cover it with tests"
+            f"  {name}: {unmodeled[name]} accumulator; how()'s domain prior does"
+            f" not model its timing"
             if name in unmodeled
             else f"  {name}: unclassified tag with no inferrable domain; "
             f"add choices=, min=/max=, or readonly=True"

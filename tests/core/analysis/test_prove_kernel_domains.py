@@ -351,6 +351,8 @@ class TestKernelDomainDiscovery:
             graph,
             all_exprs,
             project=("Stored",),
+            abstract_timers=True,
+            _skip_absorptions=True,
         )
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result

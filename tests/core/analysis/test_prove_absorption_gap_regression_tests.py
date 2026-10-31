@@ -1119,27 +1119,30 @@ class TestCounterRacingATimerBehindAGuard:
         return logic, hit
 
     @pytest.mark.parametrize(
-        ("variant", "preset"),
+        ("variant", "preset", "confirmed"),
         [
-            ("plain", 20),
-            ("indirect_safe", 20),
-            ("no_reset", 20),
-            ("reset_elsewhere", 30),
-            ("indirect_hits", 20),
-            ("unguarded", 20),
-            ("in_branch", 20),
-            ("read_outside", 20),
+            ("plain", 20, False),
+            ("indirect_safe", 20, False),
+            ("no_reset", 20, False),
+            ("reset_elsewhere", 30, False),
+            ("indirect_hits", 20, False),
+            # Called every scan, the subroutine counts while the timer is idle
+            # (Req == 0): the hit needs no timer choice and replays.
+            ("unguarded", 20, True),
+            ("in_branch", 20, False),
+            ("read_outside", 20, False),
         ],
     )
-    def test_race_with_a_short_timer_is_never_proven(self, variant: str, preset: int):
+    def test_race_with_a_short_timer_is_never_proven(
+        self, variant: str, preset: int, confirmed: bool
+    ):
         tag = "Dg" + "".join(part.title() for part in variant.split("_"))
         logic, hit = self._program(tag, variant, preset)
         result = always(logic, ~hit)
-        assert not isinstance(result, Proven)
-        if isinstance(result, Counterexample):
+        if confirmed:
             _assert_replays_to(logic, result, tag + "H")
         else:
-            assert isinstance(result, Intractable)
+            assert isinstance(result, Intractable), result
             assert result.kind == "timing"
             assert tag + "T_Done" in result.tags
 
