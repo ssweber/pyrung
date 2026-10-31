@@ -328,9 +328,9 @@ def test_invalid_step_with_reset_pin_matches_in_both_forms() -> None:
 #
 # Not discriminating, so not covered: a shift register's clock (the shift is
 # conditioned on the clock itself, so no write of the box precedes its read), a
-# drum's completion flag (written only by the event that ends the drum, which a
-# step parent already covers) and a counter's up input (the enable is read
-# before anything).
+# drum's jog on the completion flag (the jog acts whether or not the drum has
+# just completed) and a counter's up input (the enable is read before
+# anything).
 
 
 def _up2(w: Wire) -> None:
@@ -347,6 +347,10 @@ def _drum_events(w: Wire) -> None:
     _drum(w, jump_to=3)
 
 
+def _drum_jump_to_1(w: Wire) -> None:
+    _drum(w, jump_to=1)
+
+
 def _idle(**on: bool | int) -> dict:
     return {t.name: False for t in BOOL_INPUTS} | {"Stage": 0} | on
 
@@ -357,6 +361,8 @@ _step_is_1 = lambda: [Step == 1]  # noqa: E731
 # The drum case: stage step 1, run a scan, then the step's event rises together
 # with the pin.  The event advances 1 -> 2 before the pin acts.
 _DRUM_ROWS = [_idle(DoStage=True, Stage=1), _idle(En=True)]
+
+_COMPLETE_ROWS = [_idle(DoStage=True, Stage=3), _idle(En=True)]
 
 ABSOLUTE = {
     # Up and down pulse together on the scan the second count turns Done on:
@@ -422,6 +428,27 @@ ABSOLUTE = {
         (P2,),
         [*_DRUM_ROWS, _idle(En=True, E1=True, P2=True)],
         (3, False, True, True),
+    ),
+    # Completion: stage the last step, run a scan, then the last step's event
+    # arrives with the pin.  The event completes the drum and sets Flag; the
+    # parent ~Flag was read before that.  Reset wins (step 1, Flag off); a jump
+    # to 1 acts and the completion stays (Flag on).  Read after the event the
+    # parent is off and the pin does nothing (step 3, Flag on).
+    "drum_reset_vs_completion": (
+        _drum_jump_to_1,
+        lambda: [~Flag],
+        _DRUM_WATCH,
+        (P1,),
+        _COMPLETE_ROWS + [_idle(En=True, E3=True, P1=True)],
+        (1, False, False, False),
+    ),
+    "drum_jump_vs_completion": (
+        _drum_jump_to_1,
+        lambda: [~Flag],
+        _DRUM_WATCH,
+        (P2,),
+        _COMPLETE_ROWS + [_idle(En=True, E3=True, P2=True)],
+        (1, True, False, False),
     ),
 }
 
