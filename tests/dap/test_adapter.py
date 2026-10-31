@@ -4436,6 +4436,59 @@ def test_pyrung_causal_recorded_effect(tmp_path: Path):
     assert {"Relay", "Light"} <= chain_tags
 
 
+def test_pyrung_causal_branch_reads_trunk_contact_on_trunk_row(tmp_path: Path):
+    """A trunk contact written above a branch: the branch held the trunk's power,
+    so cause() names the trunk contact as the trigger it read, not its reset."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(
+        tmp_path,
+        "logic.py",
+        "from pyrung.core import Bool, PLC, Program, Rung, branch, out, reset\n"
+        "\n"
+        "a = Bool('A')\n"
+        "b = Bool('B')\n"
+        "y = Bool('Y')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(a):\n"
+        "        reset(a)\n"
+        "        with branch(b):\n"
+        "            out(y)\n"
+        "\n"
+        "runner = PLC(prog)\n",
+    )
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    for seq, tag in ((3, "A"), (4, "B")):
+        _send_request(
+            adapter,
+            out_stream,
+            seq=seq,
+            command="pyrungPatch",
+            arguments={"tag": tag, "value": True},
+        )
+        _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=5, command="pyrungStepScan")
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "cause:Y"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    chain = response["body"]["chain"]
+    assert chain["mode"] == "recorded"
+    (step,) = chain["steps"]
+    assert {(t["tag"], t["from"], t["to"]) for t in step["triggers"]} == {
+        ("A", False, True),
+        ("B", False, True),
+    }
+    assert step["enablers"] == []
+
+
 def test_pyrung_causal_cause_at_scan(tmp_path: Path):
     adapter, out_stream = _causal_adapter(tmp_path)
 

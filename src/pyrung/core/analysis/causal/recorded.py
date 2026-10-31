@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +37,7 @@ class _CrossedReads:
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.condition import Condition
+    from pyrung.core.executor import RungRun
     from pyrung.core.history import History
     from pyrung.core.program import Program
     from pyrung.core.rung import Rung
@@ -1069,22 +1070,25 @@ def _walk_frame(
         # Attribute from the exact entry-time view when replay captured one.
         # Otherwise reconstruct the committed historical state. Cache
         # residency affects cost only; it never selects a causal model.
+        # A branch writer's inherited contacts are read on the rows above it
+        # (``RungRun.condition_view``), its own on the branch row.
         view: Any = fire_view if fire_view is not None else _HistoricalView(history.at(scan_id))
-
-        def _eval(cond: Condition, _v: Any = view) -> bool:
-            return cond.evaluate(_v)  # type: ignore[arg-type]
+        _eval = _row_evaluator(fire_run, view)
 
         attributions = attribute(sp_tree, _eval)
 
         proximate: list[Transition] = []
         enabling: list[EnablingCondition] = []
         attributed_tags: dict[str, Any] = {}
+        attributed_rows: dict[str, Any] = {}
 
         for attr in attributions:
             cond_tag = _condition_tag_name(attr.condition)
-            if cond_tag is None:
+            if cond_tag is None or cond_tag in attributed_tags:
                 continue
-            attributed_tags.setdefault(cond_tag, view.get_tag(cond_tag))
+            row_view = _row_view(fire_run, view, attr.condition)
+            attributed_tags[cond_tag] = row_view.get_tag(cond_tag)
+            attributed_rows[cond_tag] = row_view
 
         # Classify contacts against the value the writer actually read,
         # not the end-of-scan value. Commands are commonly written,
@@ -1105,9 +1109,12 @@ def _walk_frame(
         }
         if rung_writes is not None and fire_run is not None:
             for name, value in attributed_tags.items():
+                row_run = _row_run(rung_writes, fire_run, attributed_rows[name])
+                if row_run is None:
+                    continue
                 observed = rung_writes.transition_observed_by(
                     name,
-                    fire_run,
+                    row_run,
                     observed_value=value,
                 )
                 if observed is not None:
@@ -1579,13 +1586,8 @@ def _writer_fire_view(
     rung_idx: int,
     scan_id: int,
     *,
-    rung: Rung | None = None,
-    tag_name: str | None = None,
-    to_value: Any = None,
     node_views_fn: Any,
     node_views_cache: dict[int, dict[RungId, Any]] | None,
-    node_runs_fn: Any = None,
-    node_runs_cache: dict[int, tuple[Any, ...]] | None = None,
 ) -> Any:
     """Return the writer rung's at-fire-time ``ConditionView``, or ``None``.
 
@@ -1597,16 +1599,11 @@ def _writer_fire_view(
     consistent (and now near-free) choice.  Falls back to ``None`` (caller uses
     end-of-scan state) when there is no replay — a logic-list PLC with no
     Program, or a scan out of replay range.  Memoized per distinct scan.
+
+    Callers try the exact writer run first (``latest_writer_run``): its
+    ``condition_view`` routes a branch's inherited contacts to the rows that
+    read them.  This per-rung view is the fallback.
     """
-    if rung is not None and tag_name is not None:
-        run = latest_writer_run(
-            rung,
-            tag_name,
-            to_value,
-            _node_runs_at(scan_id, node_runs_fn, node_runs_cache),
-        )
-        if run is not None:
-            return run.view
     if node_views_fn is None:
         return None
     if node_views_cache is not None and scan_id in node_views_cache:
@@ -1738,17 +1735,17 @@ def _executed_writers_from_pdg(
         ):
             writers.append((node.rung_index, rung, node.subroutine))
             continue
-        fire_view = _writer_fire_view(
-            node.subroutine,
-            node.rung_index,
-            scan_id,
-            rung=rung,
-            tag_name=tag_name,
-            to_value=to_value,
-            node_views_fn=node_views_fn,
-            node_views_cache=node_views_cache,
-            node_runs_fn=node_runs_fn,
-            node_runs_cache=node_runs_cache,
+        fire_run = latest_writer_run(rung, tag_name, to_value, observed_runs)
+        fire_view = (
+            fire_run.view
+            if fire_run is not None
+            else _writer_fire_view(
+                node.subroutine,
+                node.rung_index,
+                scan_id,
+                node_views_fn=node_views_fn,
+                node_views_cache=node_views_cache,
+            )
         )
         if fire_view is None:
             continue
@@ -1758,8 +1755,7 @@ def _executed_writers_from_pdg(
                 writers.append((node.rung_index, rung, node.subroutine))
             continue
 
-        def _eval_fire(cond: Condition, _v: Any = fire_view) -> bool:
-            return cond.evaluate(_v)  # type: ignore[arg-type]
+        _eval_fire = _row_evaluator(fire_run, fire_view)
 
         if evaluate_sp(sp_tree, _eval_fire) and _replayed_writer_proves_value(
             rung, tag_name, to_value, fire_view
@@ -2069,21 +2065,64 @@ class _RungWriteCounterfactualView:
         return self._base.get_memory(name, default)
 
 
+def _row_view(run: RungRun | None, view: Any, condition: Condition) -> Any:
+    """The view that read *condition*: its row's, for an observed run."""
+    return run.condition_view(condition) if run is not None else view
+
+
+def _row_evaluator(run: RungRun | None, view: Any) -> Callable[[Condition], bool]:
+    """Evaluate a rung's conditions as the solve read them.
+
+    With an observed *run*, each condition is read on the view of its own row
+    (``RungRun.condition_view``): a branch's inherited contacts on the rows
+    above it, its local contacts on the branch row.  Otherwise on *view*.
+    """
+    if run is None:
+
+        def _eval(cond: Condition, _v: Any = view) -> bool:
+            return cond.evaluate(_v)  # type: ignore[arg-type]
+
+        return _eval
+
+    def _routed(cond: Condition, _run: RungRun = run) -> bool:
+        return cond.evaluate(_run.condition_view(cond))  # type: ignore[arg-type]
+
+    return _routed
+
+
+def _row_run(
+    projection: ScanRungWriteProjection,
+    run: RungRun,
+    view: Any,
+) -> RungRun | None:
+    """The run whose row read with *view*: *run*, or a row it hangs from."""
+    current: RungRun | None = run
+    while current is not None:
+        if current.view is view:
+            return current
+        if current.kind != "branch" and current.kind != "loop_body":
+            return None
+        current = projection.parent_run(current)
+    return None
+
+
 def _rung_write_changes_outcome(
     sp_tree: Any,
-    view: Any,
+    run: RungRun,
     tag_name: str,
     from_value: Any,
 ) -> bool:
-    """Whether reverting one observed rung read changes conductivity."""
+    """Whether reverting one read on *run*'s own row changes conductivity.
 
-    def _actual(cond: Condition, _view: Any = view) -> bool:
-        return cond.evaluate(_view)  # type: ignore[arg-type]
+    Only the run's own row is reverted: the rows a branch hangs from were read
+    on views of their own, which the reverted read never reached.
+    """
+    _actual = _row_evaluator(run, run.view)
+    counterfactual: Any = _RungWriteCounterfactualView(run.view, tag_name, from_value)
 
-    counterfactual = _RungWriteCounterfactualView(view, tag_name, from_value)
-
-    def _counterfactual(cond: Condition, _view: Any = counterfactual) -> bool:
-        return cond.evaluate(_view)  # type: ignore[arg-type]
+    def _counterfactual(cond: Condition, _run: RungRun = run) -> bool:
+        view = _run.condition_view(cond)
+        return cond.evaluate(counterfactual if view is _run.view else view)
 
     return evaluate_sp(sp_tree, _actual) != evaluate_sp(sp_tree, _counterfactual)
 
@@ -2195,20 +2234,18 @@ def _recorded_effect_from_rung_writes(
         enablers_by_run: dict[int, tuple[EnablingCondition, ...]] = {}
         for run in projection.runs:
             sp_tree = run.rung.sp_tree()
-            attributed_names: list[str] = []
-
-            def _eval(cond: Condition, _view: Any = run.view) -> bool:
-                return cond.evaluate(_view)  # type: ignore[arg-type]
+            attributed_names: dict[str, Any] = {}
+            _eval = _row_evaluator(run, run.view)
 
             if sp_tree is not None:
                 for attr in attribute(sp_tree, _eval):
                     name = _condition_tag_name(attr.condition)
                     if name is not None and name not in attributed_names:
-                        attributed_names.append(name)
+                        attributed_names[name] = run.condition_view(attr.condition)
             enablers_by_run[id(run)] = tuple(
                 EnablingCondition(
                     tag_name=name,
-                    value=run.view.get_tag(name),
+                    value=row_view.get_tag(name),
                     held_since_scan=_find_last_transition_scan(
                         history,
                         name,
@@ -2217,7 +2254,7 @@ def _recorded_effect_from_rung_writes(
                         pdg=pdg,
                     ),
                 )
-                for name in attributed_names
+                for name, row_view in attributed_names.items()
             )
 
         def _control_source(
@@ -2248,7 +2285,7 @@ def _recorded_effect_from_rung_writes(
                     )
                     if source is not None and _rung_write_changes_outcome(
                         sp_tree,
-                        run.view,
+                        run,
                         name,
                         source.from_value,
                     ):

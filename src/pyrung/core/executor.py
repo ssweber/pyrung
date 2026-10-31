@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias, cast
 
 from pyrung.core.context import (
@@ -162,6 +163,41 @@ class RungRun:
     view: ConditionView
     enabled: bool
     body: tuple[ExecutionBodyItem, ...]
+    #: The rows a branch (or For-body rung) hangs from, outermost first:
+    #: ``(start, view)``, where ``rung._conditions[start:]`` up to the next
+    #: row's start were read on that row, with that row's view.  *view* is the
+    #: run's own row, for its local contacts.  Empty for a rung's trunk.
+    inherited_views: tuple[tuple[int, ConditionView], ...] = field(
+        default=(), compare=False, repr=False
+    )
+
+    def condition_view(self, condition: object) -> ConditionView:
+        """The view of the row that read *condition* of ``rung._conditions``.
+
+        A branch's conditions start with the contacts it inherits.  Those were
+        read on their own rows as the solve started them (the trunk power is
+        held from the split), not on the branch row, which comes after any
+        writes above it; re-reading them on *view* misexplains the branch.
+        """
+        if not self.inherited_views:
+            return self.view
+        return self._inherited_view_by_condition.get(id(condition), self.view)
+
+    @cached_property
+    def _inherited_view_by_condition(self) -> dict[int, ConditionView]:
+        conditions = self.rung._conditions
+        local_start = self.rung._branch_condition_start
+        bounds = [start for start, _view in self.inherited_views[1:]] + [local_start]
+        routed: dict[int, ConditionView] = {}
+        for (start, view), end in zip(self.inherited_views, bounds, strict=True):
+            for condition in conditions[start:end]:
+                for leaf in _condition_nodes(condition):
+                    routed[id(leaf)] = view
+        # A condition object shared with the local contacts is read on this row.
+        for condition in conditions[local_start:]:
+            for leaf in _condition_nodes(condition):
+                routed.pop(id(leaf), None)
+        return routed
 
     @property
     def direct_read_occurrences(self) -> tuple[ReadOccurrence, ...]:
@@ -236,6 +272,18 @@ def _summarize_tag_writes(
     return tuple(summary.items())
 
 
+def _condition_nodes(condition: object) -> list[object]:
+    """*condition* and every nested ``all_of``/``any_of`` member (the SP-tree
+    leaves are the members)."""
+    from pyrung.core.condition import AllCondition, AnyCondition
+
+    nodes = [condition]
+    if isinstance(condition, (AllCondition, AnyCondition)):
+        for member in condition.conditions:
+            nodes.extend(_condition_nodes(member))
+    return nodes
+
+
 def _append_nested_rungs(body: tuple[ExecutionBodyItem, ...], result: list[RungRun]) -> None:
     for item in body:
         if isinstance(item, RungRun):
@@ -258,6 +306,7 @@ class _RungRunBuilder:
     parent_body: list[object | None]
     parent_slot: int
     view: ConditionView | None = None
+    inherited_views: tuple[tuple[int, ConditionView], ...] = ()
 
 
 @dataclass
@@ -827,6 +876,15 @@ class ConditionViewCapture(_NoopExecutionObserver):
         parent_slot = len(parent_body)
         parent_body.append(None)
         body: list[object | None] = []
+        inherited_views: tuple[tuple[int, ConditionView], ...] = ()
+        if (kind == "branch" or kind == "loop_body") and self._active_runs:
+            # The rows this one hangs from: its inherited contacts were read there.
+            parent = self._active_runs[-1]
+            if parent.view is not None:
+                inherited_views = (
+                    *parent.inherited_views,
+                    (parent.rung._branch_condition_start, parent.view),
+                )
         self._active_runs.append(
             _RungRunBuilder(
                 slot=flat_slot,
@@ -839,6 +897,7 @@ class ConditionViewCapture(_NoopExecutionObserver):
                 body=body,
                 parent_body=parent_body,
                 parent_slot=parent_slot,
+                inherited_views=inherited_views,
             )
         )
         self._body_stack.append(body)
@@ -871,6 +930,7 @@ class ConditionViewCapture(_NoopExecutionObserver):
             view=active.view,
             enabled=enabled,
             body=_freeze_body(active.body),
+            inherited_views=active.inherited_views,
         )
         self._runs[active.slot] = run
         active.parent_body[active.parent_slot] = run
