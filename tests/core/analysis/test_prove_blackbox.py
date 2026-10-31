@@ -20,6 +20,7 @@ from pyrung.core import (
     Rung,
     Timer,
     calc,
+    call,
     copy,
     count_down,
     count_up,
@@ -30,6 +31,7 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    subroutine,
     time_drum,
 )
 from pyrung.core.analysis.prove import (
@@ -681,6 +683,76 @@ class TestElision:
             result = never(logic, bad, _opt_config=config, _debug=True)
             _assert_replays(logic, result, bad.name)
             assert "BbElT_Acc" not in result._debug_context.elided_tags
+
+
+def _gated_by_timer(shape: str):
+    """A write gated by a timer the slice would judge at the concrete tick.
+
+    ``D`` is copied 1 while the timer gate holds and 2 while ``X`` holds;
+    ``D == 2`` at the latch rung needs the gate closed for a scan.  With a
+    tag preset the slice's concrete tick never brings the timer to Done, so
+    the gated write looks unconditional and ``D`` would be elided.
+    """
+    p = f"BbSl{shape}"
+    en, x = Bool(f"{p}En", external=True), Bool(f"{p}X", external=True)
+    preset = Int(f"{p}P", external=True, min=20, max=100) if shape == "Hmi" else Int(f"{p}P")
+    d, timer, bad = Int(f"{p}D"), Timer.clone(f"{p}T"), Bool(f"{p}Bad")
+    with Program(strict=False) as logic:
+        if shape != "Hmi":
+            with Rung():
+                copy(50, preset)
+        if shape == "Sub":
+            with Rung(en):
+                call(f"{p}Sub")
+            with Rung(x):
+                copy(2, d)
+            with subroutine(f"{p}Sub"):
+                with Rung():
+                    on_delay(timer, preset)
+                with Rung(~timer.Done):
+                    copy(1, d)
+                with Rung(d == 2):
+                    latch(bad)
+        else:
+            with Rung(en):
+                if shape == "Tof":
+                    off_delay(timer, preset)
+                else:
+                    on_delay(timer, preset)
+            with Rung(timer.Done if shape == "Tof" else ~timer.Done):
+                copy(1, d)
+            with Rung(d == 2):
+                latch(bad)
+            with Rung(x):
+                copy(2, d)
+    if shape == "Tof":
+        seq = [({f"{p}En": True}, 2), ({f"{p}En": False, f"{p}X": True}, 10)]
+    elif shape == "Hmi":
+        seq = [({f"{p}En": True, f"{p}X": True, f"{p}P": 20}, 10)]
+    else:
+        seq = [({f"{p}En": True, f"{p}X": True}, 10)]
+    return logic, bad, seq
+
+
+class TestSliceElisionReadsBlackBoxTimers:
+    """The slice runs a scan at a fixed concrete tick, where a timer short
+    of its preset stays short of Done; the search's black-box timer can be
+    Done there.  A slice whose closure reads a timer must bail."""
+
+    @pytest.mark.parametrize("shape", ["Ton", "Tof", "Hmi", "Sub"])
+    def test_a_write_gated_by_a_timer_is_not_elided(self, shape):
+        logic, bad, seq = _gated_by_timer(shape)
+        assert _first_hit(logic, seq, bad.name) is not None
+        for config in (BLACKBOX, _OptConfig.all_off().subset(["traced_elision"])):
+            result = never(logic, bad, _opt_config=config, _debug=True)
+            _assert_replays(logic, result, bad.name)
+            assert f"BbSl{shape}D" not in result._debug_context.elided_tags
+
+    def test_reachable_states_keeps_the_row_the_timer_reaches(self):
+        logic, bad, _seq = _gated_by_timer("Hmi")
+        states = reachable_states(logic, project=[bad.name], _opt_config=BLACKBOX)
+        assert isinstance(states, frozenset)
+        assert frozenset({(bad.name, True)}) in states
 
 
 class TestKnownHoles:

@@ -89,6 +89,7 @@ from pyrung.core.instruction.out_variants import (
     TimedInstruction,
     ToggleInstruction,
 )
+from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 from pyrung.core.rung import Rung
 from pyrung.core.state import SystemState
 from pyrung.core.tag import ImmediateRef
@@ -280,6 +281,8 @@ def _instruction_write_targets(instr: Any, tag_refs: dict[str, Tag]) -> set[str]
 def _collect_hidden_memory_info(
     program: Program,
     tag_refs: dict[str, Tag],
+    *,
+    black_box_timers: bool = True,
 ) -> tuple[frozenset[str], tuple[tuple[str, frozenset[str]], ...]]:
     """Survey instructions for unmodelled cross-scan memory and oneshot keys.
 
@@ -289,6 +292,13 @@ def _collect_hidden_memory_info(
     oneshot instruction's ``_oneshot`` memory key with the tags it writes.  A
     oneshot forloop runs its whole body only on its rung's rising edge, so its
     key pairs with every tag written in the body, not just the loop index.
+
+    Under *black_box_timers* (the search's model) an on/off-delay timer's
+    Done and accumulator join *drum_shift_writes*: the slice runs a scan on
+    the concrete runtime at a fixed tick, where a timer moves by that tick,
+    while the search lets it jump to any value, so a slice reading the timer
+    would judge a write it gates by the wrong value.  How()'s domain prior
+    keeps the exact model and passes False.
     """
     drum_shift_writes: set[str] = set()
     oneshot_key_writes: list[tuple[str, frozenset[str]]] = []
@@ -310,7 +320,7 @@ def _collect_hidden_memory_info(
                 FlasherInstruction,
                 TimedInstruction,
             ),
-        ):
+        ) or (black_box_timers and isinstance(instr, (OnDelayInstruction, OffDelayInstruction))):
             drum_shift_writes.update(targets)
         if getattr(instr, "_oneshot", False):
             oneshot_key_writes.append((instr.memory_key("_oneshot"), frozenset(targets)))
@@ -400,6 +410,8 @@ class _SliceElision:
         stateful_dims: Mapping[str, tuple[Any, ...]],
         nondeterministic_dims: Mapping[str, tuple[Any, ...]],
         observed: frozenset[str] = frozenset(),
+        *,
+        black_box_timers: bool = True,
     ) -> None:
         self.program = program
         self.graph = graph
@@ -410,7 +422,7 @@ class _SliceElision:
 
         tag_refs = dict(graph.tags)
         self.drum_shift_writes, self.oneshot_key_writes = _collect_hidden_memory_info(
-            program, tag_refs
+            program, tag_refs, black_box_timers=black_box_timers
         )
         # Tags written by a oneshot instruction.  A oneshot write does not fire
         # every scan, so def-use chains (sequential SSA, which assumes every
@@ -560,6 +572,8 @@ class _SliceElision:
                 if self._is_scan_local(name):
                     continue
                 domain = self.stateful_dims[name]
+                # An absorbed timer's Done (how()'s prior only; the search's
+                # timers bail above as drum_shift_writes).
                 if PENDING in domain:
                     return False
             elif name in self.nondeterministic_dims:
@@ -763,6 +777,7 @@ def _elide_sliced(
     progress_prefix: Callable[[], str] | None = None,
     unclassified_tags: frozenset[str] = frozenset(),
     infeasible_out: set[str] | None = None,
+    black_box_timers: bool = True,
 ) -> tuple[
     dict[str, tuple[Any, ...]],
     dict[str, str],
@@ -776,7 +791,8 @@ def _elide_sliced(
 
     *observed_tags* are read from outside the program besides the observers
     (the projection, what a callable property reads); the subroutine-local
-    check leaves them alone.
+    check leaves them alone.  *black_box_timers* is the search's timer model
+    (see ``_collect_hidden_memory_info``); how()'s domain prior passes False.
     """
     del projected_observers  # slice elision does not need scratch projection
 
@@ -801,6 +817,7 @@ def _elide_sliced(
         stateful_dims,
         nondeterministic_dims,
         observed=frozenset(observer_seeds) | observed_tags,
+        black_box_timers=black_box_timers,
     )
 
     elidable: dict[str, str] = {}

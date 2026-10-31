@@ -27,6 +27,7 @@ def _elide_scan_local_stateful_dims(
     progress_prefix: Callable[[], str] | None = None,
     unclassified_tags: frozenset[str] = frozenset(),
     infeasible_out: set[str] | None = None,
+    black_box_timers: bool = True,
 ) -> tuple[
     dict[str, tuple[Any, ...]],
     dict[str, str],
@@ -50,4 +51,5 @@ def _elide_scan_local_stateful_dims(
         progress_prefix=progress_prefix,
         unclassified_tags=unclassified_tags,
         infeasible_out=infeasible_out,
+        black_box_timers=black_box_timers,
     )

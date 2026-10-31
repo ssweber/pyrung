@@ -1218,6 +1218,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         progress_prefix=ctx.progress_prefix,
         unclassified_tags=ctx._unclassified_written,
         infeasible_out=infeasible_unclassified,
+        black_box_timers=not ctx.domains_only,
     )
 
     if infeasible_unclassified:
