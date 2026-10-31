@@ -15,7 +15,7 @@ import math
 import time
 import warnings
 from collections import OrderedDict
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import Token
 from dataclasses import dataclass
@@ -179,6 +179,55 @@ class _BreakpointRegistration:
     callback: Callable[[SystemState], None] | None = None
     enabled: bool = True
     removed: bool = False
+
+
+class _EdgePredicate:
+    """A ``run_until()`` / ``when()`` condition holding ``rise()`` / ``fall()``.
+
+    Its edges compare against the bit as this predicate last judged it, armed
+    from the runner's current state.  A breakpoint registers its own armed
+    copy (two registrations from one ``when()`` never share memory) and
+    re-arms it when re-enabled, so the scans it skipped while disabled do not
+    count as an edge.
+    """
+
+    __slots__ = ("_condition", "_edges", "_context", "_current", "_last_seen")
+
+    def __init__(
+        self,
+        condition: Any,
+        edges: Sequence[Any],
+        context: Callable[[SystemState], Any],
+        current: Callable[[], SystemState],
+    ) -> None:
+        self._condition = condition
+        self._edges = tuple(edges)
+        self._context = context
+        self._current = current
+        self._last_seen: dict[str, bool] = {}
+        self.rearm()
+
+    def _bits(self, ctx: Any) -> dict[str, bool]:
+        return {
+            edge._memory_key: bool(ctx.get_tag(edge._resolved_tag.name, False))
+            for edge in self._edges
+        }
+
+    def rearm(self) -> None:
+        """Remember every edge's bit as it is in the runner's current state."""
+        self._last_seen = self._bits(self._context(self._current()))
+
+    def armed(self) -> _EdgePredicate:
+        """An independent copy, armed now."""
+        return _EdgePredicate(self._condition, self._edges, self._context, self._current)
+
+    def __call__(self, state: SystemState) -> bool:
+        ctx = self._context(state)
+        for key, bit in self._last_seen.items():
+            ctx.set_memory(key, bit)
+        hit = bool(self._condition.evaluate(ctx))
+        self._last_seen.update(self._bits(ctx))
+        return hit
 
 
 class _RunnerHandle:
@@ -4029,23 +4078,7 @@ class PLC:
 
             return _predicate
 
-        def _bits(ctx: ScanContext) -> dict[str, bool]:
-            return {
-                edge._memory_key: bool(ctx.get_tag(edge._resolved_tag.name, False))
-                for edge in edges
-            }
-
-        last_seen = _bits(_context(self._state))
-
-        def _edge_predicate(state: SystemState) -> bool:
-            ctx = _context(state)
-            for key, bit in last_seen.items():
-                ctx.set_memory(key, bit)
-            hit = bool(condition.evaluate(ctx))
-            last_seen.update(_bits(ctx))
-            return hit
-
-        return _edge_predicate
+        return _EdgePredicate(condition, edges, _context, lambda: self._state)
 
     def _normalize_tag_name(self, tag: str | Tag, *, method: str) -> str:
         from pyrung.core.tag import Tag as TagClass
@@ -4089,6 +4122,8 @@ class PLC:
         callback: Callable[[SystemState], None] | None = None,
     ) -> _RunnerHandle:
         breakpoint_id = self._next_handle_id()
+        if isinstance(predicate, _EdgePredicate):
+            predicate = predicate.armed()
         self._breakpoints_by_id[breakpoint_id] = _BreakpointRegistration(
             id=breakpoint_id,
             predicate=predicate,
@@ -4114,6 +4149,8 @@ class PLC:
         registration = self._breakpoints_by_id.get(breakpoint_id)
         if registration is None or registration.removed:
             return
+        if not registration.enabled and isinstance(registration.predicate, _EdgePredicate):
+            registration.predicate.rearm()
         registration.enabled = True
 
     def _disable_breakpoint(self, breakpoint_id: int) -> None:

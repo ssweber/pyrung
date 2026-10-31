@@ -441,6 +441,36 @@ class TestEdgeOutsideProgram:
         plc.step()
         assert hits == [2, 5]
 
+    def test_when_rise_reenabled_does_not_count_the_scans_it_skipped(self):
+        """Light turned on while the breakpoint was off: no edge on re-enable."""
+        plc, light = self._plc()
+        hits: list[int] = []
+        handle = plc.when(rise(light)).do(lambda state: hits.append(state.scan_id))
+        plc.step()
+        handle.disable()
+        plc.patch({"Button": True})
+        plc.step()
+        handle.enable()
+        plc.step()
+        assert hits == []
+        plc.patch({"Button": False})
+        plc.step()
+        plc.patch({"Button": True})
+        plc.step()
+        assert hits == [5]
+
+    def test_two_breakpoints_from_one_when_keep_their_own_memory(self):
+        plc, light = self._plc()
+        first: list[int] = []
+        second: list[int] = []
+        builder = plc.when(rise(light))
+        builder.do(lambda state: first.append(state.scan_id))
+        builder.do(lambda state: second.append(state.scan_id))
+        plc.step()
+        plc.patch({"Button": True})
+        plc.step()
+        assert first == second == [2]
+
     def test_program_edge_reused_in_run_until_keeps_its_own_memory(self):
         """The predicate copies the contact: the program's site is untouched."""
         from pyrung.core import PLC
