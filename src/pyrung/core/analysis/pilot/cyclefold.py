@@ -26,6 +26,9 @@ if TYPE_CHECKING:
     from pyrung.core.runner import PLC
     from pyrung.core.state import SystemState
 
+# The ring snapshot's coordinate for every edge site's memory (not a tag name).
+_EDGE_MEMORY_KEY = "_edge:*"
+
 
 @dataclass(frozen=True)
 class _Cycle:
@@ -142,7 +145,7 @@ def detect_cycle(
     of it — used to align P with the read system clocks' full periods so the
     observed window spans each clock's full cycle (capturing its net effect) and
     every whole-period jump preserves each clock's phase (so ``rise()``/``fall()``
-    ``_prev`` stays consistent across the skip).  ``1`` searches every period.
+    edge memory stays consistent across the skip).  ``1`` searches every period.
 
     *monotone_allowed* is the soundness governor.  A tag like ``i % 3`` reads
     ``[2, 1, 0]`` over three consecutive scans — locally indistinguishable from a
@@ -406,6 +409,7 @@ def cycle_fold_until(
         _scan_callbacks,
         _traced_call,
         _without_soft_rtc_ticks,
+        edge_memory_on,
         fold_run_until,
     )
 
@@ -444,7 +448,7 @@ def cycle_fold_until(
     # Align the cycle period to every read system clock's *full* period (in scans)
     # so the observed window spans each clock's whole cycle (its net effect is
     # captured) and every whole-period jump preserves each clock's phase (exact
-    # timestamp + same phase ⇒ rise()/fall() _prev stays consistent across the
+    # timestamp + same phase ⇒ rise()/fall() memory stays consistent across the
     # skip).  This is the runtime form of the soft-clock partition: instead of
     # statically proving an edge inert, we observe a full clock cycle and confirm
     # the net change is boundary-stable or a certified accumulator.
@@ -482,7 +486,7 @@ def cycle_fold_until(
     ignore = fold_ctx.frozen_writes | fold_ctx.churn_excluded | fold_ctx.profile_fb_names
     if fold_ctx.time_mirrors is not None:
         ignore = ignore | fold_ctx.time_mirrors.names
-    significant_keys = frozenset(plc.state.tags) - ignore
+    significant_keys = (frozenset(plc.state.tags) - ignore) | {_EDGE_MEMORY_KEY}
     # A jump runs no scan: an ignored tag other than a frozen write keeps its
     # pre-jump value until the next scan rebuilds it, so the jumped tip is then
     # not the exact state of its scan.
@@ -612,7 +616,14 @@ def cycle_fold_until(
         # corrective rungs do not turn a live timer into a false sterile cycle.
         # The persistent-map update keeps the immutable tag image structurally
         # shared and replaces only the owner-coordinate readings.
-        ring.append(plc.state.tags.update(_acc_totals(plc.state, fold_ctx.sources)))
+        # Edge memory joins the snapshot as one coordinate: a period whose
+        # anchors differ in any edge site's memory is no limit cycle (a jump
+        # would land with memory the skipped scans would have changed).
+        ring.append(
+            plc.state.tags.update(_acc_totals(plc.state, fold_ctx.sources)).set(
+                _EDGE_MEMORY_KEY, edge_memory_on(plc.state)
+            )
+        )
         if len(ring) > ring_cap:
             del ring[0]
 

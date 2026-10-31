@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.site_memory import begin_bare_body_row
 from pyrung.core.tag import Tag
 
 from .base import (
@@ -215,7 +216,12 @@ class ForLoopInstruction(OneShotMixin, Instruction):
             try:
                 for item in self.body:
                     if isinstance(item, Instruction):
-                        item.execute(ctx, True)
+                        row = begin_bare_body_row(ctx, item)
+                        try:
+                            item.execute(ctx, True)
+                        finally:
+                            if row is not None:
+                                ctx._condition_snapshot = row[0]
                     else:
                         item._execute_in_loop(ctx)
             except LoopContinueSignal:

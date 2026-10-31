@@ -18,20 +18,20 @@ the bits.  Latched bits are reset in ``init``.
 
 The expectations are what a CLICK does.  A CLICK edge contact keeps a memory of
 its own: the bit as that contact saw it when it last ran (hardware round 1,
-2026-10-29).  pyrung's edge contacts compare the bit with its value at the end
-of the previous scan, one history per bit, so the two cases that tell them
-apart are ``pending="S3"`` until per-contact memory lands.  Each lists the
-scans its edge contacts passed power as digits (``firings``):
+2026-10-29), and so does each of pyrung's.  pyrung's edge contacts compared
+the bit with its value at the end of the previous scan, one history per bit,
+until per-contact memory landed; the two cases below tell the models apart.
+Each lists the scans its edge contacts passed power as digits (``firings``):
 
 - ``edge_sees_previous_scan_end``: a bit set above two rise contacts and
   cleared below them on scans 3..5.  Per-contact memory: each contact rises on
-  scan 3 only (3, 3; the falls 3, 3).  pyrung's end-of-scan history: on all
+  scan 3 only (3, 3; the falls 3, 3).  The end-of-scan history: on all
   three scans (345 x 4).  One memory per bit updated by every read: the first
   contact 3, the second never (3, 0; the falls 3, 0).
 - ``edge_before_its_writer``: a bit on for scans 3..5, with a rise and a fall
   contact above its out rung and another pair below.  Per-contact memory: the
   pair above fires a scan late, rise on 4 and fall on 7; the pair below on 3
-  and 6.  pyrung's end-of-scan history: the pair above never fires (0, 0).
+  and 6.  The end-of-scan history: the pair above never fires (0, 0).
 
 The open probes (round 2), with the answer the expectation adopts:
 
@@ -250,7 +250,6 @@ group = Group(
             init=init_edge_sees_previous_scan_end,
             expect={"Result1": 3, "Result2": 3, "Result3": 3, "Result4": 3},
             scans=SCANS,
-            pending="S3",
         ),
         case(
             "An edge contact above the rung that writes its bit fires a scan late: it "
@@ -260,7 +259,6 @@ group = Group(
             ladder=prove_edge_before_its_writer,
             expect={"Result1": 4, "Result2": 7, "Result3": 3, "Result4": 6},
             scans=SCANS,
-            pending="S3",
         ),
         case(
             "A latched bit stays on after its rung goes false, and a reset bit stays "

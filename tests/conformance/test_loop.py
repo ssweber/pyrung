@@ -29,11 +29,11 @@ tells which model apart, and what the other model reads:
   iterations (Result2 = -1, the Int wraps); "at least once" reads 1.  Round 1
   read -1.  In-process only: on a CLICK it makes a scan of about 1.1 s that
   every wall-clock case beside it would see.
-- ``edge_contact_inside_loop`` (F6, probe, pending S3): C1721 latches on
-  iteration 1 of 3 and stays on.  An edge with memory in the contact rises
-  once (Result1 = 1, what CLICK's per-contact edge memory predicts, FINDINGS
-  item 2); one judged against the previous scan (pyrung today) rises on all
-  three (3).
+- ``edge_contact_inside_loop`` (F6, probe): C1721 latches on iteration 1
+  of 3 and stays on.  An edge with memory in the contact rises once
+  (Result1 = 1, what CLICK's per-contact edge memory predicts, FINDINGS item
+  2, which pyrung implements); one judged against the previous scan (pyrung
+  before) rises on all three (3).
 - ``counter_inside_loop`` (F8, probe): the count input is on in iterations 1,
   2 and 4 of 4.  A counter that counts edges remembered by the instruction
   reads 2 (CLICK's edge counters, FINDINGS item 1, which pyrung implements);
@@ -47,14 +47,14 @@ tells which model apart, and what the other model reads:
   2 of 4.  Skipped, the one-shot stays fired and Result1 = 1; a body run with
   power off re-arms it and it fires again on scan 3 (2).
 
-- ``edge_memory_across_iterations`` (F18, probe, pending S3): is an edge
+- ``edge_memory_across_iterations`` (F18, probe): is an edge
   contact in a For body one place in the program, its memory carried from
   iteration to iteration like a contact in a subroutine called N times?
   C1741 is latched on scan 1 and, on scan 2, off/on/on/off over iterations
   1..4; Result1 records the iterations ``rise(C1741)`` passed power on, as
-  digits.  Memory per iteration (the model pyrung would adopt with
-  per-contact edge memory) reads Result1 = 2, Result2 = 1; compared with the
-  previous scan's end (pyrung today) the bit was already on, so 0, 0; an edge
+  digits.  Memory per iteration (per-contact edge memory, which pyrung
+  implements) reads Result1 = 2, Result2 = 1; compared with the previous
+  scan's end (pyrung before) the bit was already on, so 0, 0; an edge
   that passes power whenever the bit is on reads 23, 2.  Result3 = 4 shows
   the loop ran.
 - ``skipped_body_holds_timer_and_counter`` (F19, probe): a TON (T211) and a
@@ -68,9 +68,7 @@ tells which model apart, and what the other model reads:
   reads 1, 1.  The For rung is true while ``Cmd = 0``, so the case's own
   reset is scanned whatever the answer.
 
-F6 and F18 expect what a CLICK is predicted to read and are pending the
-per-contact edge memory step (S3); on pyrung's own targets they run as strict
-xfails.
+F6 and F18 expect what a CLICK is predicted to read.
 """
 
 from __future__ import annotations
@@ -401,7 +399,6 @@ group = Group(
             ladder=prove_edge_contact_inside_loop,
             init=init_edge_contact_inside_loop,
             expect={"Result1": 1},
-            pending="S3",
             probe="edge contact memory inside a For body",
         ),
         case(
@@ -496,7 +493,6 @@ group = Group(
             ladder=prove_edge_memory_across_iterations,
             expect={"Result1": 2, "Result2": 1, "Result3": 4},
             scans=scans_for(2),
-            pending="S3",
             probe="edge memory carried across For iterations",
         ),
         case(

@@ -15,6 +15,7 @@ from pyrung.core.instruction import (
     resolve_tag_or_value_ctx,
 )
 from pyrung.core.instruction.control import for_loop_iterations
+from pyrung.core.site_memory import begin_bare_body_row
 
 if TYPE_CHECKING:
     from pyrung.core.debugger import DebugInstructionState, PLCDebugger
@@ -199,18 +200,23 @@ class ForLoopInstructionDebugHandler:
             try:
                 for child in instruction.body:
                     if isinstance(child, Instruction):
-                        yield from debugger._iter_instruction_steps(
-                            debugger._make_instruction_state(
-                                execution=child_execution,
-                                rung=instruction_state.rung,
-                                instruction=child,
-                                step_trace=instruction_state.step_trace,
+                        row = begin_bare_body_row(ctx, child)
+                        try:
+                            yield from debugger._iter_instruction_steps(
+                                debugger._make_instruction_state(
+                                    execution=child_execution,
+                                    rung=instruction_state.rung,
+                                    instruction=child,
+                                    step_trace=instruction_state.step_trace,
+                                )
                             )
-                        )
+                        finally:
+                            if row is not None:
+                                ctx._condition_snapshot = row[0]
                         continue
                     outer_view = ctx._condition_snapshot
                     try:
-                        body_view = ctx._new_condition_view()
+                        body_view = child._new_row_view(ctx)
                         ctx._condition_snapshot = body_view
                         local = child._conditions[child._branch_condition_start :]
                         body_enabled, body_traces = debugger._evaluate_conditions_with_trace(

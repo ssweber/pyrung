@@ -2581,7 +2581,9 @@ class PLC:
                 program._assign_state_keys()
                 table = program._site_table
             return table
-        return bind_logic_list(self._logic)
+        # A list whose rungs would clash comes back copied (originals keep their keys).
+        self._logic, table = bind_logic_list(self._logic)
+        return table
 
     def _soft_exec_program(self) -> Any:
         """The compilation unit for soft-exec replay: the user program bracketed
@@ -3208,7 +3210,6 @@ class PLC:
         # replay. Post-logic forces and scan-end runtime writes remain part of
         # the same root journal, while timelines/history/monitors stay untouched.
         replay._input_overrides.apply_post_logic(ctx)
-        replay._capture_previous_states(ctx)
         replay._system_runtime.on_scan_end(ctx)
         capture.exit_tags = ctx.commit(dt=_dt).tags
         return capture
@@ -4263,47 +4264,6 @@ class PLC:
             ctx._condition_snapshot = saved_snapshot
             ctx._condition_scope_token = saved_scope
 
-    def _capture_previous_states(self, ctx: ScanContext) -> None:
-        """Write _prev:* only for tags used in rise()/fall() edge detection.
-
-        A system clock is a pure function of the timestamp, resolved on read
-        and never stored, so its ``_prev`` is the value this scan read: the
-        clock at ``ctx.timestamp``.  That holds for every scan: an ordinary
-        one, a REALTIME one whose dt is wall-clock elapsed time, and a fold
-        landing, which already starts at the last folded scan's timestamp
-        (see ``fold._do_fold``).
-        """
-        from pyrung.core.system_points import _CLOCK_HALF_PERIODS, clock_high
-
-        state_memory = self._state.memory
-        tags_pending = ctx._tags_pending
-        state_tags = self._state.tags
-        clock_ts = ctx.timestamp
-        for name in self._edge_tag_names:
-            current = tags_pending.get(name, _SENTINEL)
-            if current is _SENTINEL:
-                current = state_tags.get(name, _SENTINEL)
-            if current is _SENTINEL:
-                # Derived system points (clocks, scan signals) are resolved on
-                # read and never stored, so the lookups above miss them.
-                hp = _CLOCK_HALF_PERIODS.get(name)
-                if hp is not None and hp > 0:
-                    # Clock = pure function of timestamp; capture the value
-                    # this scan read so the next scan's rise()/fall() compare
-                    # against it.  Grid-snapped phase (clock_high), as on read.
-                    current = clock_high(clock_ts, hp)
-                else:
-                    # Other resolved-on-read edge tags (e.g. scan-derived) carry
-                    # no timestamp half-period; fall back to the on-read value
-                    # (folding is disabled when such signals are read).
-                    resolved, value = self._system_runtime.resolve(name, ctx)
-                    current = value if resolved else None
-            if current is None:
-                continue
-            prev_key = f"_prev:{name}"
-            if state_memory.get(prev_key, _SENTINEL) != current:
-                ctx.set_memory(prev_key, current)
-
     def _commit_scan(
         self,
         ctx: ScanContext,
@@ -4322,7 +4282,6 @@ class PLC:
         previous_tip_scan_id = previous_state.scan_id
         self._input_overrides.apply_post_logic(ctx)
 
-        self._capture_previous_states(ctx)
         commit_dt = dt
         # A fold landing commits here at its first scan id and is then moved to
         # the scan it stands for; it is cached and checkpointed there (see
@@ -4504,10 +4463,12 @@ class PLC:
         4. Calculate dt and inject into context
         5. Evaluate all logic (writes batched in context), yielding after each rung
         6. Re-apply force overrides (post-logic)
-        7. Batch _prev:* updates for edge detection
-        8. Commit all changes in single operation
+        7. Commit all changes in single operation
 
-        The commit in phase 8 only happens when the generator is exhausted.
+        Edge contacts store their own memory while their rows are scanned
+        (``_edge:e{N}``, see :mod:`pyrung.core.site_memory`).
+
+        The commit in phase 7 only happens when the generator is exhausted.
         """
         self._ensure_running()
         ctx, dt = self._prepare_scan()

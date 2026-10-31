@@ -494,15 +494,15 @@ def test_state_left_after_the_reset_fails_the_case() -> None:
 
 
 def test_edge_history_of_a_system_clock_is_not_a_leak() -> None:
-    # rise() on a clock leaves _prev:sys.clock_* memory that moves with time,
-    # not with any case; a user tag's edge history still counts.
+    # rise() on a clock leaves edge memory that moves with time, not with any
+    # case; a user tag's edge history still counts.
     from pyrung.conformance._runner import _diff
     from pyrung.core.state import SystemState
 
-    clock = f"_prev:{system.sys.clock_100ms.name}"
-    fresh = SystemState().set(memory=SystemState().memory.set(clock, False))
-    now = fresh.set(memory=fresh.memory.set(clock, True).set("_prev:C1", True))
-    assert _diff(fresh, now, kept=()) == {"_prev:C1": (True, None)}
+    edge_tags = {"_edge:e1": system.sys.clock_100ms.name, "_edge:e2": "C1"}
+    fresh = SystemState().set(memory=SystemState().memory.set("_edge:e1", False))
+    now = fresh.set(memory=fresh.memory.set("_edge:e1", True).set("_edge:e2", True))
+    assert _diff(fresh, now, kept=(), edge_tags=edge_tags) == {"_edge:e2": (True, None)}
 
 
 def test_a_reset_that_never_completes_fails_only_its_case() -> None:

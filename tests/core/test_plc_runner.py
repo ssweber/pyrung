@@ -167,13 +167,10 @@ class TestPLCSimulationTime:
 
 
 class TestPLCEdgeHistory:
-    """Regression coverage for _prev:* memory capture behavior.
+    """Edge memory lives per contact site (``_edge:e{N}``), never per tag (``_prev:*``)."""
 
-    Only tags used with rise()/fall() get _prev:* entries.
-    """
-
-    def test_prev_memory_captures_edge_tags(self, runner_factory):
-        """Edge tags should be mirrored into _prev:* each scan."""
+    def test_edge_site_memory_captures_the_bit(self, runner_factory):
+        """An edge contact stores the bit it saw when its row was scanned."""
         from pyrung.core import Bool, Rung, out, rise
 
         Trigger = Bool("Trigger")
@@ -187,28 +184,52 @@ class TestPLCEdgeHistory:
         runner.patch({"Trigger": True})
         runner.step()
 
-        assert runner.current_state.memory.get("_prev:Trigger") is True
+        assert runner.current_state.memory.get("_edge:e1") is True
+        assert "_prev:Trigger" not in runner.current_state.memory
 
-    def test_prev_memory_captures_newly_pending_edge_tags(self, runner_factory):
-        """Edge tags introduced via patch() should get _prev:* entries."""
+    def test_edge_memory_starts_off_and_resets_at_run(self, runner_factory):
+        """Edge memory is off at RUN and again after STOP -> RUN."""
         from pyrung.core import Bool, Rung, out, rise
 
-        LateBound = Bool("LateBound")
+        Trigger = Bool("Trigger")
         Out = Bool("Out")
         with Program(strict=False) as logic:
-            with Rung(rise(LateBound)):
+            with Rung(rise(Trigger)):
                 out(Out)
 
         runner = runner_factory(logic)
-
-        runner.patch({"LateBound": True})
+        assert runner.current_state.memory.get("_edge:e1", False) is False
+        runner.patch({"Trigger": True})
         runner.step()
+        assert runner.current_state.tags.get("Out") is True
+        runner.step()
+        assert runner.current_state.tags.get("Out") is False
+        assert runner.current_state.memory.get("_edge:e1") is True
 
-        assert runner.current_state.tags.get("LateBound") is True
-        assert runner.current_state.memory.get("_prev:LateBound") is True
+    def test_stop_to_run_clears_edge_memory(self, runner_factory):
+        """A retentive bit held on through STOP -> RUN rises again on the first scan."""
+        from pyrung.core import Bool, Rung, out, rise
+
+        Trigger = Bool("Trigger", retentive=True)
+        Out = Bool("Out")
+        with Program(strict=False) as logic:
+            with Rung(rise(Trigger)):
+                out(Out)
+
+        runner = runner_factory(logic)
+        runner.patch({"Trigger": True})
+        runner.step()
+        runner.step()
+        assert runner.current_state.tags.get("Out") is False
+        runner.stop()
+        runner.start()
+        assert runner.current_state.tags.get("Trigger") is True
+        assert runner.current_state.memory.get("_edge:e1", False) is False
+        runner.step()
+        assert runner.current_state.tags.get("Out") is True
 
     def test_prev_memory_absent_for_non_edge_tags(self, runner_factory):
-        """Non-edge tags should not get _prev:* entries."""
+        """No tag gets a _prev:* entry."""
         runner = runner_factory(_empty_program())
 
         runner.step()

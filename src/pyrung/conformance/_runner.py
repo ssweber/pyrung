@@ -91,8 +91,10 @@ def run(cases: Sequence[Case] | Group) -> list[CaseResult]:
             if fresh is None:
                 fresh = plc.current_state
             else:
-                for key, (now, before) in sorted(_diff(fresh, plc.current_state, kept).items()):
-                    i = owner.get(key.rsplit(":", 1)[-1])
+                edge_tags = _edge_tags(plc)
+                diff = _diff(fresh, plc.current_state, kept, edge_tags)
+                for key, (now, before) in sorted(diff.items()):
+                    i = owner.get(edge_tags.get(key, key.rsplit(":", 1)[-1]))
                     text = f"{key} = {now!r} (fresh {before!r})"
                     for j in [i] if i is not None else indexes:
                         leaks.setdefault(j, []).append(text)
@@ -182,13 +184,29 @@ def _fire(
     return out
 
 
-def _diff(fresh: SystemState, now: SystemState, kept: Collection[str]) -> dict[str, tuple]:
+def _edge_tags(plc: PLC) -> dict[str, str]:
+    """Each edge contact's memory key (``_edge:e{N}``) -> the tag the contact reads."""
+    table = plc._site_table
+    if table is None:
+        return {}
+    return {name: s.tag for s in table.edge_sites if s.tag is not None for name, _ in s.memory}
+
+
+def _diff(
+    fresh: SystemState,
+    now: SystemState,
+    kept: Collection[str],
+    edge_tags: Mapping[str, str] | None = None,
+) -> dict[str, tuple]:
     """Tags and instruction memory that differ between two states, as ``key -> (now, fresh)``.
 
     System tags, pyrung's internal tags (a leading ``_``), system memory and
     *kept* tags are skipped, and so is memory keyed by a system or kept tag (a
-    clock's edge history ``_prev:sys.clock_100ms``, a timer's ``_frac:TD1``).
+    timer's ``_frac:TD1``), or an edge contact's memory (``_edge:e{N}``, mapped
+    to its tag by *edge_tags*) on a system or kept tag: a clock's edge
+    history moves with time, not with any case.
     """
+    edge_tags = edge_tags or {}
     out: dict[str, tuple] = {}
     for name in set(fresh.tags) | set(now.tags):
         if name in kept or name in SYSTEM_TAGS_BY_NAME or name.startswith("_"):
@@ -199,7 +217,7 @@ def _diff(fresh: SystemState, now: SystemState, kept: Collection[str]) -> dict[s
     for key in set(fresh.memory) | set(now.memory):
         if key == "_dt" or key.startswith("_sys."):
             continue
-        keyed_by = key.rsplit(":", 1)[-1]
+        keyed_by = edge_tags.get(key, key.rsplit(":", 1)[-1])
         if keyed_by in kept or keyed_by in SYSTEM_TAGS_BY_NAME:
             continue
         before, after = fresh.memory.get(key), now.memory.get(key)

@@ -24,7 +24,6 @@ from pyrung.core import (
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.rung import Rung as RungLogic
 from pyrung.core.site_memory import (
-    LOGIC_NAMESPACE,
     PILOT_NAMESPACE,
     PLANT_NAMESPACE,
     SITE_EDGE,
@@ -118,6 +117,7 @@ class TestBindSites:
             "_oneshot:i1": False,
             "_cu:i3": False,
             "_oneshot:i5": False,
+            **{f"_edge:e{n}": False for n in range(1, 6)},
         }
 
     def test_rebinding_reproduces_keys(self):
@@ -172,15 +172,24 @@ class TestNamespacesAndUnbound:
         assert plc._site_table is not None
         plc.step()
 
-    def test_list_of_bound_rungs_keeps_their_keys(self):
+    def test_list_of_bound_rungs_is_copied_not_renamed(self):
         logic, _shared = _program()
         extra = RungLogic(Bool("A"))
         extra.add_instruction(OutInstruction(Bool("Z"), oneshot=True))
         plc = PLC([*logic.rungs, extra])
+        # The program and the loose rung keep what they had; the runner scans a copy.
         assert logic.rungs[0]._instructions[0].state_key == "i1"
-        assert extra._instructions[0].state_key == f"{LOGIC_NAMESPACE}:i1"
-        assert plc._site_table is not None
+        assert extra._instructions[0]._state_key is None
+        assert plc._logic[0] is not logic.rungs[0]
+        keys = _list_keys(plc)
+        assert len(keys) == len(set(keys))
         plc.step()
+
+    def test_list_of_one_programs_rungs_keeps_them(self):
+        logic, _shared = _program()
+        plc = PLC(list(logic.rungs))
+        assert all(a is b for a, b in zip(plc._logic, logic.rungs, strict=True))
+        assert logic.rungs[0]._instructions[0].state_key == "i1"
 
 
 def _oneshot_rung(trigger: Bool, target: Bool) -> RungLogic:
@@ -211,24 +220,22 @@ class TestBareListKeysAreUnique:
         assert plc.current_state.tags["P"] is True
         assert plc.current_state.tags["Q"] is True
 
-    def test_fresh_key_skips_a_logic_key_already_held(self):
-        logic, _shared = _program()
+    def test_combining_never_renames_a_live_runner_keys(self):
+        """A runner scanning a rung keeps its memory when the rung joins another list."""
         A = Bool("A")
         x = _oneshot_rung(A, Bool("X"))
         y = _oneshot_rung(A, Bool("Y"))
-        PLC([*logic.rungs, x])
-        assert x._instructions[0].state_key == f"{LOGIC_NAMESPACE}:i1"
-        plc = PLC([*logic.rungs, y, x])
-        keys = _list_keys(plc)
-        assert len(keys) == len(set(keys))
-        assert x._instructions[0].state_key == f"{LOGIC_NAMESPACE}:i1"
-        assert y._instructions[0].state_key != x._instructions[0].state_key
-        plc.patch({"A": True})
-        plc.step()
-        assert plc.current_state.tags["X"] is True
-        assert plc.current_state.tags["Y"] is True
+        first = PLC([x])
+        first.patch({"A": True})
+        first.step()
+        assert first.current_state.memory.get("_oneshot:i1") is True
+        PLC([y, x])
+        assert x._instructions[0].state_key == "i1"
+        first.patch({"A": True})
+        first.step()
+        assert first.current_state.memory.get("_oneshot:i1") is True
 
-    def test_program_key_wins_over_a_list_key(self):
+    def test_program_keeps_its_keys_in_a_list(self):
         A = Bool("A")
         loose = _oneshot_rung(A, Bool("L"))
         PLC([loose])
@@ -238,13 +245,16 @@ class TestBareListKeysAreUnique:
                 out(Bool("M"), oneshot=True)
         plc = PLC([loose, *logic.rungs])
         assert logic.rungs[0]._instructions[0].state_key == "i1"
-        assert loose._instructions[0].state_key == f"{LOGIC_NAMESPACE}:i1"
+        assert loose._instructions[0].state_key == "i1"
+        assert logic._site_table is not None
+        assert [s.key for s in logic._site_table.sites] == ["i1"]
         plc.patch({"A": True})
         plc.step()
         assert plc.current_state.tags["L"] is True
         assert plc.current_state.tags["M"] is True
 
-    def test_two_programs_keeping_memory_under_one_key_raise(self):
+    def test_two_programs_keeping_memory_combine(self):
+        """Two programs that both keep memory under i1 scan as one copied list."""
         A = Bool("A")
         with Program(strict=False) as first:
             with Rung(A):
@@ -252,8 +262,13 @@ class TestBareListKeysAreUnique:
         with Program(strict=False) as second:
             with Rung(A):
                 out(Bool("S"), oneshot=True)
-        with pytest.raises(ValueError, match="'i1' is held by 2 objects"):
-            PLC([*first.rungs, *second.rungs])
+        plc = PLC([*first.rungs, *second.rungs])
+        assert _list_keys(plc) == ["i1", "i2"]
+        assert second.rungs[0]._instructions[0].state_key == "i1"
+        plc.patch({"A": True})
+        plc.step()
+        assert plc.current_state.tags["F"] is True
+        assert plc.current_state.tags["S"] is True
 
     def test_two_programs_without_memory_combine(self):
         """Regression: rungs of two Programs with no memory raised on the i1/e1 clash."""
@@ -269,26 +284,29 @@ class TestBareListKeysAreUnique:
         plc = PLC([*pa.rungs, *pb.rungs])
         keys = _list_keys(plc)
         assert len(keys) == len(set(keys))
+        assert pb.rungs[0]._conditions[0]._site_key == "e1"
         plc.patch({"X": True})
         plc.step()
         assert plc.current_state.tags["Y"] is True
         assert plc.current_state.tags["Q"] is True
 
-    def test_memory_holder_keeps_the_key_over_a_plain_one(self):
-        A = Bool("A")
-        with Program(strict=False) as plain:
-            with Rung(A):
-                out(Bool("Plain"))
-        with Program(strict=False) as kept:
-            with Rung(A):
-                out(Bool("Kept"), oneshot=True)
-        plc = PLC([*plain.rungs, *kept.rungs])
-        assert kept.rungs[0]._instructions[0].state_key == "i1"
-        assert plain.rungs[0]._instructions[0].state_key == f"{LOGIC_NAMESPACE}:i1"
-        plc.patch({"A": True})
+    def test_a_shared_edge_object_is_copied_in_the_list_copy(self):
+        X = Bool("X")
+        edge = rise(X)
+        r1 = RungLogic(edge)
+        r1.add_instruction(OutInstruction(Bool("P")))
+        PLC([r1])
+        r2 = RungLogic(edge)
+        r2.add_instruction(OutInstruction(Bool("Q")))
+        plc = PLC([r1, r2])
+        table = plc._site_table
+        assert table is not None
+        assert [s.key for s in table.edge_sites] == ["e1", "e2"]
+        assert edge._site_key == "e1"
+        plc.patch({"X": True})
         plc.step()
-        assert plc.current_state.tags["Plain"] is True
-        assert plc.current_state.tags["Kept"] is True
+        assert plc.current_state.tags["P"] is True
+        assert plc.current_state.tags["Q"] is True
 
 
 def _counter_program(*, insert_rung: bool) -> Program:
@@ -403,7 +421,11 @@ class TestRemap:
         (old_edge,) = old_table.edge_sites
         (new_edge,) = new_table.edge_sites
         assert old_edge.site == new_edge.site == SITE_EDGE
-        assert (old_edge.kind, old_edge.tag, old_edge.memory) == ("rise", "A", ())
+        assert (old_edge.kind, old_edge.tag, old_edge.memory) == (
+            "rise",
+            "A",
+            (("_edge:e1", False),),
+        )
         assert old_edge.source_line != new_edge.source_line
         matched = _match_sites(old_table.sites, new_table.sites)
         assert matched[old_edge.key] == new_edge.key == "e1"

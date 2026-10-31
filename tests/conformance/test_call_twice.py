@@ -15,11 +15,11 @@ digit each.
   out rung between a rise and a fall contact above it and another pair below.
   Each contact keeps a memory of its own, updated on each call (adopted, the
   CLICK model of the coils group): above the writer the rise fires on call 6
-  and the fall on call 8, below it on calls 5 and 7 (6, 5, 8, 7).  pyrung's
-  edge contacts compare the bit with its value at the end of the previous
-  scan, so on the second call of a scan they see the same edge again: 6, 56,
-  8, 78 (``pending="S3"``).  One memory per bit updated by every read: 0, 5,
-  0, 7.
+  and the fall on call 8, below it on calls 5 and 7 (6, 5, 8, 7), as
+  pyrung's do.  Edge contacts that compare the bit with its value at the end
+  of the previous scan (pyrung before) see the same edge again on the second
+  call of a scan: 6, 56, 8, 78.  One memory per bit updated by every read: 0,
+  5, 0, 7.
 """
 
 from __future__ import annotations
@@ -56,7 +56,6 @@ group = Group(
             ladder=prove_rise_once_per_scan,
             expect={"Result1": 6, "Result2": 5, "Result3": 8, "Result4": 7},
             scans=scans_for(CALLS),
-            pending="S3",
             probe="rise() in a subroutine called twice in one scan",
         ),
     ],

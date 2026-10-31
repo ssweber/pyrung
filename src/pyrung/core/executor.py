@@ -30,6 +30,7 @@ from pyrung.core.instruction.base import (
 )
 from pyrung.core.instruction.control import for_loop_iterations
 from pyrung.core.rung import Rung
+from pyrung.core.site_memory import begin_bare_body_row
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -1229,15 +1230,20 @@ def _execute_for_loop_natural(
         try:
             for child in instruction.body:
                 if isinstance(child, Instruction):
-                    _execute_instruction_natural(
-                        program,
-                        ctx,
-                        rung_index,
-                        rung,
-                        child,
-                        True,
-                        item_kind=child._executor_kind,
-                    )
+                    row = begin_bare_body_row(ctx, child)
+                    try:
+                        _execute_instruction_natural(
+                            program,
+                            ctx,
+                            rung_index,
+                            rung,
+                            child,
+                            True,
+                            item_kind=child._executor_kind,
+                        )
+                    finally:
+                        if row is not None:
+                            ctx._condition_snapshot = row[0]
                 else:
                     _execute_body_rung_natural(program, ctx, rung_index, child)
         except LoopContinueSignal:
@@ -1261,7 +1267,7 @@ def _execute_body_rung_natural(
             rung_index,
             body_rung,
             parent_enabled=True,
-            condition_view=ctx._new_condition_view(),
+            condition_view=body_rung._new_row_view(ctx),
         )
     finally:
         ctx._condition_snapshot = outer_view
@@ -1300,19 +1306,8 @@ def _forced_enabled(mode: ExecutionMode, natural_enabled: bool) -> bool:
 
 
 def _resolve_condition_view(ctx: ScanContext, rung: Rung) -> ConditionView:
-    if rung._use_prior_snapshot:
-        condition_view = ctx._condition_snapshot
-        if condition_view is None or condition_view.scope_token is not ctx._condition_scope_token:
-            raise RuntimeError(
-                "Rung.continued() used but no prior condition snapshot exists in the "
-                "same execution scope. continued() cannot be used on the first rung in "
-                "a program or subroutine, and cannot cross into or out of a subroutine."
-            )
-    else:
-        condition_view = ctx._new_condition_view()
-
-    ctx._condition_snapshot = condition_view
-    return condition_view
+    """The row's condition view (the prior one for ``.continued()``), edge sites scanned."""
+    return rung._resolve_condition_view(ctx)
 
 
 def _execute_rung(
@@ -1336,7 +1331,7 @@ def _execute_rung(
             raise RuntimeError(f"Internal executor error: {kind} missing parent condition view")
         ctx._condition_snapshot = condition_view
     elif kind == "loop_body":
-        condition_view = ctx._new_condition_view()
+        condition_view = rung._new_row_view(ctx)
         ctx._condition_snapshot = condition_view
     else:
         condition_view = _resolve_condition_view(ctx, rung)
@@ -1598,19 +1593,24 @@ def _execute_for_loop_instruction(
             ctx.set_tag(instruction.idx_tag.name, i)
             for child in instruction.body:
                 if isinstance(child, Instruction):
-                    _execute_instruction(
-                        program,
-                        ctx,
-                        rung_index,
-                        rung,
-                        child,
-                        True,
-                        mode=mode,
-                        observer=observer,
-                        depth=depth + 1,
-                        call_stack=call_stack,
-                        item_kind=child._executor_kind,
-                    )
+                    row = begin_bare_body_row(ctx, child)
+                    try:
+                        _execute_instruction(
+                            program,
+                            ctx,
+                            rung_index,
+                            rung,
+                            child,
+                            True,
+                            mode=mode,
+                            observer=observer,
+                            depth=depth + 1,
+                            call_stack=call_stack,
+                            item_kind=child._executor_kind,
+                        )
+                    finally:
+                        if row is not None:
+                            ctx._condition_snapshot = row[0]
                 else:
                     _run_body_rung(child)
         except LoopContinueSignal:

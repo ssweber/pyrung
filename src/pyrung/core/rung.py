@@ -15,6 +15,7 @@ from pyrung.core.condition import (
     _as_condition,
 )
 from pyrung.core.instruction.base import _EXECUTOR_BRANCH
+from pyrung.core.site_memory import build_edge_frames, scan_edge_frame
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.sp_tree import SPNode
@@ -64,6 +65,9 @@ class Rung:
         # This index marks where this rung's own local branch conditions begin.
         self._branch_condition_start = 0
         self._use_prior_snapshot = False
+        # ``(memory key, tag)`` of the edge sites this rung's row scans; built
+        # on first scan (pyrung.core.site_memory.build_edge_frames).
+        self._edge_frame: tuple[tuple[str, str], ...] | None = None
         self.source_file = source_file
         self.source_line = source_line
         self.end_line = end_line
@@ -126,6 +130,7 @@ class Rung:
         self._writer_by_tag_cache = None
         self._written_value_cache = None
         self._sp_tree_cache = _ANALYSIS_CACHE_MISS
+        self._edge_frame = None
 
     def _get_combined_condition(self) -> Condition | None:
         """Get a single condition representing all rung conditions ANDed together.
@@ -178,6 +183,22 @@ class Rung:
             condition_view = ctx._new_condition_view()
 
         ctx._condition_snapshot = condition_view
+        self._scan_edges(ctx, condition_view)
+        return condition_view
+
+    def _scan_edges(self, ctx: ScanContext, condition_view: ConditionView) -> None:
+        """Store the bit each edge site of this rung's row sees (scanned, powered or not)."""
+        frame = self._edge_frame
+        if frame is None:
+            frame = build_edge_frames(self)
+        if frame:
+            scan_edge_frame(ctx, condition_view, frame)
+
+    def _new_row_view(self, ctx: ScanContext) -> ConditionView:
+        """A fresh condition view for this rung as a row of its own (a For-body
+        rung on one iteration), with its edge sites scanned."""
+        condition_view = ctx._new_condition_view()
+        self._scan_edges(ctx, condition_view)
         return condition_view
 
     def _evaluate_conditions(self, ctx: ScanContext | ConditionView) -> bool:
@@ -220,7 +241,7 @@ class Rung:
         """
         outer_view = ctx._condition_snapshot
         try:
-            condition_view = ctx._new_condition_view()
+            condition_view = self._new_row_view(ctx)
             enabled = self._evaluate_local_conditions(condition_view)
             self.execute(ctx, enabled, condition_view=condition_view)
         finally:

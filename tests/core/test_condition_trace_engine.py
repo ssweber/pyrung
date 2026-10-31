@@ -58,19 +58,22 @@ def test_condition_trace_engine_evaluates_basic_contacts_and_edges() -> None:
     assert _detail_map(nc_details) == {"tag": "Button", "value": False}
     assert engine.expression(nc_cond) == "!Button"
 
+    # An edge contact reads its own site's memory, ``_edge:e{N}``.
     rise_cond = RisingEdgeCondition(button)
+    rise_cond._site_key = "e1"
     rise_value, rise_details = engine.evaluate(
         rise_cond,
-        _ctx({"Button": True}, {"_prev:Button": False}),
+        _ctx({"Button": True}, {"_edge:e1": False}),
     )
     assert rise_value is True
     assert _detail_map(rise_details) == {"tag": "Button", "current": True, "previous": False}
     assert engine.expression(rise_cond) == "rise(Button)"
 
     fall_cond = FallingEdgeCondition(button)
+    fall_cond._site_key = "e2"
     fall_value, fall_details = engine.evaluate(
         fall_cond,
-        _ctx({"Button": False}, {"_prev:Button": True}),
+        _ctx({"Button": False}, {"_edge:e2": True}),
     )
     assert fall_value is True
     assert _detail_map(fall_details) == {"tag": "Button", "current": False, "previous": True}

@@ -267,56 +267,58 @@ class NormallyClosedCondition(Condition):
         return not bool(ctx.get_tag(self._resolved_tag.name, False))
 
 
-class RisingEdgeCondition(Condition):
-    """Rising edge detection - true only on 0->1 transition.
+class _EdgeCondition(Condition):
+    """An edge contact: a site with memory of its own (``_edge:e{N}``).
 
-    Reads previous value from state.memory["_prev:{tag.name}"].
+    The memory holds the bit as this contact last saw it, stored whenever the
+    contact's row is scanned, powered or not, and off at RUN (CLICK).  Two
+    contacts on one tag, the same contact in a subroutine called twice, or in a
+    For body on successive iterations each compare against their own last
+    look.  The row stores the memory after taking its condition view
+    (:func:`pyrung.core.site_memory.scan_edge_frame`), so ``evaluate()`` only
+    reads: the bit and the memory both come from the view.
     """
+
+    _memory_key: str | None = None
 
     def __init__(self, tag: Tag | ImmediateRef):
         self.tag = tag
-        resolved = _contact_tag(tag)
-        self._resolved_tag = resolved
-        self._prev_key = f"_prev:{resolved.name}"
-        from pyrung.core.system_points import _DERIVED_EDGE_TAGS
+        self._resolved_tag = _contact_tag(tag)
 
-        self._edge_fn = _DERIVED_EDGE_TAGS.get(resolved.name)
+    @property
+    def _site_key(self) -> str | None:  # type: ignore[override]
+        key = self._memory_key
+        return None if key is None else key[len("_edge:") :]
+
+    @_site_key.setter
+    def _site_key(self, key: str | None) -> None:
+        self._memory_key = None if key is None else f"_edge:{key}"
+
+    def _edges(self, ctx: ScanContext | ConditionView) -> tuple[bool, bool]:
+        key = self._memory_key
+        if key is None:
+            from pyrung.core.site_memory import edge_memory_key
+
+            key = edge_memory_key(self)  # raises: never bound
+        current = bool(ctx.get_tag(self._resolved_tag.name, False))
+        previous = bool(ctx.get_memory(key, False))
+        return current, previous
+
+
+class RisingEdgeCondition(_EdgeCondition):
+    """Rising edge: the bit is on and was off when this contact last saw it."""
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        edge_fn = self._edge_fn
-        if edge_fn is not None:
-            rise, _fall = edge_fn(ctx.scan_id)
-            return rise
-        tag = self._resolved_tag
-        current = bool(ctx.get_tag(tag.name, False))
-        previous = bool(ctx.get_memory(self._prev_key, False))
+        current, previous = self._edges(ctx)
         return current and not previous
 
 
-class FallingEdgeCondition(Condition):
-    """Falling edge detection - true only on 1->0 transition.
-
-    Reads previous value from state.memory["_prev:{tag.name}"].
-    """
-
-    def __init__(self, tag: Tag | ImmediateRef):
-        self.tag = tag
-        resolved = _contact_tag(tag)
-        self._resolved_tag = resolved
-        self._prev_key = f"_prev:{resolved.name}"
-        from pyrung.core.system_points import _DERIVED_EDGE_TAGS
-
-        self._edge_fn = _DERIVED_EDGE_TAGS.get(resolved.name)
+class FallingEdgeCondition(_EdgeCondition):
+    """Falling edge: the bit is off and was on when this contact last saw it."""
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        edge_fn = self._edge_fn
-        if edge_fn is not None:
-            _rise, fall = edge_fn(ctx.scan_id)
-            return fall
-        tag = self._resolved_tag
-        current = bool(ctx.get_tag(tag.name, False))
-        previous = bool(ctx.get_memory(self._prev_key, False))
-        return not current and previous
+        current, previous = self._edges(ctx)
+        return previous and not current
 
 
 # =============================================================================

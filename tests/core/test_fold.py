@@ -936,7 +936,7 @@ class TestClockPulseFoldRegression:
     stay bit-equal to scan-by-scan across a fold.  These exact shapes were found
     by the fold soundness fuzzer; each stresses a different facet:
 
-    - the edge-detection ``_prev`` for a resolved-on-read clock surviving a big
+    - the edge memory of a contact on a resolved-on-read clock surviving a big
       fold step (a clock is a pure function of the timestamp, so the next scan
       must compare against its value one *normal* dt before the landing);
     - the inert classification needing a *full period* (both a rise and a fall)
@@ -978,7 +978,7 @@ class TestClockPulseFoldRegression:
 
     def test_timer_pulse_done_aligned_with_clock(self) -> None:
         # preset 17261 ms lands Done on a scan where rise(clock_500ms) fires;
-        # the big fold step into Done must leave a correct clock _prev.
+        # the big fold step into Done must leave correct clock edge memory.
         folded, stepped = self._both("timer", 17_261, 1, "clock_500ms", 0.01)
         assert folded == stepped
 
@@ -1815,8 +1815,9 @@ class TestFoldLandingTime:
         folded, stepped = run(True), run(False)
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
-        assert folded.state.memory.get("_prev:sys.clock_1s") == stepped.state.memory.get(
-            "_prev:sys.clock_1s"
+        # The rise(clock_1s) contact's own memory (site e1).
+        assert folded.state.memory.get("_edge:e1", False) == stepped.state.memory.get(
+            "_edge:e1", False
         )
 
 
@@ -2332,10 +2333,11 @@ def _forced_gate_program(edge: bool) -> Program:
     The stored (forced) value says the reader of the clock copy is off, but
     the rung between the writer and the post-logic force sees the written
     value and copies the second every scan.  With *edge*, the reader is
-    ``fall(G)``, which fires every scan because ``_prev`` is captured after
-    the force.
+    ``fall(G)`` in a subroutine called on both sides of the writer: the first
+    call sees the forced True, the second the written False, so the one
+    contact falls on every scan.
     """
-    from pyrung import copy, fall, latch
+    from pyrung import call, copy, fall, latch, subroutine
 
     Sec, Log, G, Seen = Int("Sec"), Int("Log"), Bool("G"), Bool("Seen")
     Tmr, Hit = Timer.clone("Tmr"), Bool("Hit")
@@ -2343,10 +2345,12 @@ def _forced_gate_program(edge: bool) -> Program:
         with Rung():
             copy(system.rtc.second, Sec)
         if edge:
+            with Rung():
+                call("Reader")
             with Rung(Tmr.Acc < 0):
                 out(G)  # False mid-scan; forced True
-            with Rung(fall(G)):
-                copy(Sec, Log)
+            with Rung():
+                call("Reader")
         else:
             with Rung(Tmr.Acc >= 0):
                 out(G)  # True mid-scan; forced False
@@ -2358,6 +2362,10 @@ def _forced_gate_program(edge: bool) -> Program:
             on_delay(Tmr, 60, "s")
         with Rung(Tmr.Done):
             out(Hit)
+        if edge:
+            with subroutine("Reader"):
+                with Rung(fall(G)):
+                    copy(Sec, Log)
     return prog
 
 

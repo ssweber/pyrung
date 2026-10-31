@@ -2,7 +2,7 @@
 
 These tests verify:
 1. rise()/fall() create proper conditions
-2. PLC auto-tracks _prev:* values in memory
+2. Each edge contact keeps its own memory (_edge:e{N})
 3. Edge detection works correctly across scan cycles
 """
 
@@ -223,11 +223,10 @@ class TestFallDSL:
         assert runner.current_state.tags.get("PulseCount") is True
 
 
-class TestPrevValueTracking:
-    """Test that PLC properly tracks _prev:* values for edge tags."""
+class TestEdgeSiteMemory:
+    """Each edge contact keeps its own memory (``_edge:e{N}``), stored when scanned."""
 
-    def test_runner_updates_prev_values_after_scan(self, runner_factory):
-        """Runner should update _prev:* in memory for edge tags after each scan."""
+    def test_site_memory_follows_the_bit_its_contact_saw(self, runner_factory):
         Button = Bool("Button")
         Light = Bool("Light")
 
@@ -240,15 +239,15 @@ class TestPrevValueTracking:
         runner.patch({"Button": True})
         runner.step()
 
-        assert runner.current_state.memory.get("_prev:Button") is True
+        assert runner.current_state.memory.get("_edge:e1") is True
+        assert "_prev:Button" not in runner.current_state.memory
 
         runner.patch({"Button": False})
         runner.step()
 
-        assert runner.current_state.memory.get("_prev:Button") is False
+        assert runner.current_state.memory.get("_edge:e1") is False
 
-    def test_runner_tracks_multiple_tags(self, runner_factory):
-        """Runner should track _prev:* for all edge tags that change."""
+    def test_each_contact_has_its_own_site(self, runner_factory):
         A = Bool("A")
         B = Bool("B")
         Out = Bool("Out")
@@ -262,14 +261,59 @@ class TestPrevValueTracking:
         runner.patch({"A": True, "B": False})
         runner.step()
 
-        assert runner.current_state.memory.get("_prev:A") is True
-        assert runner.current_state.memory.get("_prev:B") is False
+        assert runner.current_state.memory.get("_edge:e1") is True
+        assert runner.current_state.memory.get("_edge:e2", False) is False
 
         runner.patch({"A": False, "B": True})
         runner.step()
 
-        assert runner.current_state.memory.get("_prev:A") is False
-        assert runner.current_state.memory.get("_prev:B") is True
+        assert runner.current_state.memory.get("_edge:e1") is False
+        assert runner.current_state.memory.get("_edge:e2") is True
+
+    def test_contact_behind_an_open_contact_still_stores(self, runner_factory):
+        """Memory updates when the contact is scanned, powered or not."""
+        Gate = Bool("Gate")
+        Button = Bool("Button")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with Rung(Gate, rise(Button)):
+                out(Light)
+
+        runner = runner_factory(logic)
+        runner.patch({"Button": True})
+        runner.step()
+        assert runner.current_state.memory.get("_edge:e1") is True
+        # The rise happened while the rung was open: closing Gate later sees none.
+        runner.patch({"Gate": True})
+        runner.step()
+        assert runner.current_state.tags.get("Light") is False
+
+    def test_two_contacts_on_one_tag_keep_separate_memory(self, runner_factory):
+        """A contact above the bit's writer and one below it see different edges."""
+        Start = Bool("Start")
+        Bit = Bool("Bit")
+        Above = Bool("Above")
+        Below = Bool("Below")
+
+        with Program() as logic:
+            with Rung(rise(Bit)):
+                out(Above)
+            with Rung(Start):
+                out(Bit)
+            with Rung(rise(Bit)):
+                out(Below)
+
+        runner = runner_factory(logic)
+        runner.patch({"Start": True})
+        runner.step()
+        assert runner.current_state.tags.get("Above") is False
+        assert runner.current_state.tags.get("Below") is True
+        runner.step()
+        assert runner.current_state.tags.get("Above") is True
+        assert runner.current_state.tags.get("Below") is False
+        runner.step()
+        assert runner.current_state.tags.get("Above") is False
 
 
 class TestEdgeCombinations:

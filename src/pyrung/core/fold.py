@@ -170,6 +170,9 @@ class _FoldContext:
     landing_rebuilt: frozenset[str] = frozenset()
     # Timed accumulators a scan may write more than once (see _timer_contests).
     contested_timers: frozenset[str] = frozenset()
+    # Edge memory the plateau guard leaves to the clock handling (see
+    # every_scan_clock_edge_keys).
+    clock_edge_memory: frozenset[str] = frozenset()
 
     @cached_property
     def coordinates(self) -> frozenset[str]:
@@ -576,6 +579,7 @@ def _audit_coordinate_reads(
     from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.system_points import _DERIVED_EDGE_TAGS
     from pyrung.core.tag import Tag
 
     tags = dict(pdg.tags)
@@ -610,7 +614,7 @@ def _audit_coordinate_reads(
                     cond._resolved_tag.name
                     for cond in rung._conditions
                     if isinstance(cond, (RisingEdgeCondition, FallingEdgeCondition))
-                    and cond._edge_fn is None
+                    and cond._resolved_tag.name not in _DERIVED_EDGE_TAGS
                     and isinstance(cond.tag, Tag)
                 )
                 - node.all_writes
@@ -1712,6 +1716,7 @@ def _judge_condition(cond: Any, view: _OffView) -> bool | None:
         NormallyClosedCondition,
         RisingEdgeCondition,
     )
+    from pyrung.core.system_points import _DERIVED_EDGE_TAGS
     from pyrung.core.tag import ImmediateRef
 
     if isinstance(cond, AllCondition):
@@ -1726,8 +1731,10 @@ def _judge_condition(cond: Any, view: _OffView) -> bool | None:
         return False if all(r is False for r in results) else None
     if isinstance(cond, (RisingEdgeCondition, FallingEdgeCondition)):
         # An edge of a value fixed across the probe and the window never fires
-        # in a window scan.
-        if cond._edge_fn is not None or isinstance(cond.tag, ImmediateRef):
+        # in a window scan: the probe left every edge site's memory as it found
+        # it (``_OrdinaryFoldStrategy.plan`` declines otherwise), so each site saw the
+        # value it remembered, and sees it again.
+        if cond._resolved_tag.name in _DERIVED_EDGE_TAGS or isinstance(cond.tag, ImmediateRef):
             return None
         try:
             view.get_tag(cond._resolved_tag.name, False)
@@ -2693,6 +2700,7 @@ def _build_fold_context(
         mirror_sources=mirror_sources,
         landing_rebuilt=landing_rebuilt,
         contested_timers=contested_timers,
+        clock_edge_memory=every_scan_clock_edge_keys(getattr(plc, "_site_table", None)),
     )
 
 
@@ -3659,6 +3667,57 @@ def _visible_items(state: Any, exclude: frozenset[str]) -> dict[str, Any]:
     return {k: v for k, v in state.tags.items() if k not in exclude}
 
 
+EDGE_MEMORY_PREFIX = "_edge:"
+
+
+def edge_memory_on(state: Any, exempt: frozenset[str] = frozenset()) -> frozenset[str]:
+    """The edge sites whose memory (``_edge:e{N}``) holds on in *state*.
+
+    An edge contact stores the bit it saw each time its row is scanned, so
+    equal tags no longer imply equal edge memory: a scan that saw a bit change
+    at a contact leaves the memory changed, and the next scan sees no edge
+    there.  A window repeats its probe scan only if the probe left every edge
+    memory as it found it; absent and off read the same.  Keys in *exempt*
+    (see :func:`every_scan_clock_edge_keys`) are left out.
+    """
+    return frozenset(
+        key
+        for key, value in state.memory.items()
+        if value
+        and isinstance(key, str)
+        and key.startswith(EDGE_MEMORY_PREFIX)
+        and key not in exempt
+    )
+
+
+def every_scan_clock_edge_keys(site_table: Any) -> frozenset[str]:
+    """Memory keys of the edge sites on a system clock that every scan scans.
+
+    A contact on ``sys.clock_*`` in a main-program row (not a For body) is
+    scanned on every scan, so its memory is the clock as the previous scan
+    read it: a function of the timestamp, which the fold's clock handling
+    already models (an edge-sensitive rung sees the pair of reads one ``dt``
+    apart, see :func:`_mark_inert_soft`; windows end at a hard clock's edges).
+    The plateau guard leaves those keys to it.  A clock contact in a
+    subroutine, a For body or an overlay is scanned only when something lets
+    it, so what it remembers depends on when it last ran: it stays guarded.
+    """
+    from pyrung.core.site_memory import SITE_EDGE
+    from pyrung.core.system_points import _CLOCK_HALF_PERIODS
+
+    if site_table is None:
+        return frozenset()
+    return frozenset(
+        key
+        for site in site_table.sites
+        if site.site == SITE_EDGE
+        and site.scope == "main"
+        and site.leg != "body"
+        and (_CLOCK_HALF_PERIODS.get(site.tag or "") or 0) > 0
+        for key, _default in site.memory
+    )
+
+
 def _visible_items_match(
     state: Any,
     expected: dict[str, Any],
@@ -4156,6 +4215,8 @@ class _FoldProbe:
     timers: tuple[tuple[int, float], ...] = ()
     # Each of ``ctx.modwrap``'s values before the probe scan.
     mods: tuple[Any, ...] = ()
+    # The edge sites whose memory was on before the probe scan.
+    edges: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -4269,6 +4330,7 @@ class _OrdinaryFoldStrategy:
             scan_id=state.scan_id,
             timers=timers,
             mods=tuple(state.tags.get(mw.name) for mw in self.ctx.modwrap),
+            edges=edge_memory_on(state, self.ctx.clock_edge_memory),
         )
 
     def plan(
@@ -4300,6 +4362,12 @@ class _OrdinaryFoldStrategy:
         with a contested timer is not folded (see :func:`_timer_contests`).
         """
         if not _visible_items_match(state, probe.visible, self.exclude):
+            self.inert_soft.clear()
+            self.inert_run.clear()
+            return None
+        if edge_memory_on(state, self.ctx.clock_edge_memory) != probe.edges:
+            # The probe saw an edge at some contact (or its memory moved off a
+            # bit it last saw): the next scan is not a repeat of it.
             self.inert_soft.clear()
             self.inert_run.clear()
             return None

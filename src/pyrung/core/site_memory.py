@@ -15,9 +15,10 @@ uses the same names.
 - **Edge sites** (``rise()`` / ``fall()`` contacts) get ``e{N}`` in solve
   order: a rung's contacts, then its items in source order (a branch's local
   contacts and items, an instruction's helper legs such as a counter's reset or
-  a drum's jump, a For loop's body rows).  They are recorded but not yet used
-  for evaluation.  An edge condition object met at a second site is copied, so
-  each edge object stands for exactly one site.
+  a drum's jump, a For loop's body rows).  Each keeps one memory cell,
+  ``_edge:e{N}``: the contact's bit as that contact last saw it.  An edge
+  condition object met at a second site is copied, so each edge object stands
+  for exactly one site.
 
 Overlays get their own namespace, so their keys never collide with the user
 program's: plant rungs are ``plant:i{N}`` / ``plant:e{N}``, PILOT holds are
@@ -29,9 +30,10 @@ its contacts, so hot reload can carry memory to the matching site of the new
 program, and drop it where no site matches unambiguously
 (:func:`remap_site_memory`).
 
-Keys are stamped on the objects, so rungs reused in several bare rung lists
-share them; :func:`bind_logic_list` renames clashing holders so that keys stay
-unique within one runner's logic.
+Keys are stamped on the objects.  A bound object is never renamed: a bare rung
+list whose objects would clash (rungs of two programs, or of two lists) is
+bound as a copy (:func:`bind_logic_list`), so a program, and every runner
+already scanning its rungs, keeps its keys.
 """
 
 from __future__ import annotations
@@ -48,8 +50,10 @@ if TYPE_CHECKING:
 USER_NAMESPACE = ""
 PLANT_NAMESPACE = "plant"
 PILOT_NAMESPACE = "pilot"
-# Rungs handed to ``PLC`` as a bare list that mixes bound and unbound rungs.
-LOGIC_NAMESPACE = "logic"
+
+EDGE_MEMORY = "_edge"
+"""Memory prefix of an edge contact's site: ``_edge:e{N}`` holds the bit as the
+contact last saw it (off at RUN)."""
 
 SITE_INSTRUCTION = "instruction"
 SITE_EDGE = "edge"
@@ -192,13 +196,6 @@ def _contacts_text(conditions: Iterable[Any]) -> tuple[str, ...]:
             return type(cond).__name__
 
     return tuple(_text(c) for c in conditions)
-
-
-def _owns_memory(obj: Any) -> bool:
-    """Whether memory is stored under *obj*'s site key (an instruction with memory)."""
-    from pyrung.core.instruction.base import Instruction
-
-    return isinstance(obj, Instruction) and bool(instruction_memory(obj))
 
 
 def _operand_text(value: Any) -> str:
@@ -416,6 +413,7 @@ class _Binder:
                     source_line=line,
                     fingerprint=(self.scope, line, kind, (tag,)),
                     contacts=(leg.split(".", 1)[-1],),
+                    memory=((f"{EDGE_MEMORY}:{key}", False),),
                 )
             )
             return cond
@@ -575,7 +573,7 @@ def bind_sites(
     (``e{N}``), both prefixed ``namespace:`` outside the user program.  Main
     rungs come first, then subroutines in definition order.  Rebinding the same
     rungs reproduces the same keys.  *program_owned* marks the keys as a
-    ``Program``'s, which a bare rung list never renames (:func:`bind_logic_list`).
+    ``Program``'s.
     """
     binder = _Binder(
         namespace,
@@ -592,96 +590,192 @@ def bind_sites(
         binder.number_instructions(scope_rungs, scope)
     for scope, scope_rungs in scopes:
         binder.bind_edges(scope_rungs, scope)
+    for _scope, scope_rungs in scopes:
+        for rung in scope_rungs:
+            # Keys may have changed: each row rebuilds its edge frame when scanned next.
+            rung._edge_frame = None
     instruction_sites = [s for s in binder.sites if s.site == SITE_INSTRUCTION]
     edge_sites = [s for s in binder.sites if s.site == SITE_EDGE]
     return SiteTable(namespace=namespace, sites=(*instruction_sites, *edge_sites))
 
 
-def _list_key_holders(rungs: Sequence[Rung]) -> dict[str, list[Any]]:
-    """Every key an object of *rungs* carries -> the distinct objects carrying it."""
+def _list_site_holders(rungs: Sequence[Rung]) -> list[tuple[Any, str | None]]:
+    """Every site object of *rungs* with the key it carries, once per place it sits.
+
+    An object at two places appears twice (an edge object shared by two
+    contacts, a rung listed twice).  A power field's edges that are the rung's
+    own contacts are not places of their own; they are skipped.
+    """
     from pyrung.core.instruction.control import ForLoopInstruction
     from pyrung.core.rung import Rung as RungLogic
 
-    holders: dict[str, list[Any]] = {}
-    seen: set[int] = set()
-
-    def _hold(obj: Any, key: str | None) -> None:
-        if key is None or id(obj) in seen:
-            return
-        seen.add(id(obj))
-        holders.setdefault(key, []).append(obj)
+    out: list[tuple[Any, str | None]] = []
 
     def _conditions(cond: Any) -> None:
         for edge in _iter_edges(cond):
-            _hold(edge, edge._site_key)
+            out.append((edge, edge._site_key))
 
-    def _instruction(instr: Any) -> None:
-        _hold(instr, instr._state_key)
+    def _instruction(instr: Any, rung_edges: set[int]) -> None:
+        out.append((instr, instr._state_key))
         for name in type(instr)._conditions:
             value = getattr(instr, name, None)
             for item in value if isinstance(value, tuple) else (value,):
-                _conditions(item)
+                if _is_power_field(instr, name):
+                    for edge in _iter_edges(item):
+                        if id(edge) not in rung_edges:
+                            out.append((edge, edge._site_key))
+                else:
+                    _conditions(item)
         if isinstance(instr, ForLoopInstruction):
             for item in instr.body:
                 if isinstance(item, RungLogic):
-                    _rung(item)
+                    _rung(item, set())
                 else:
-                    _instruction(item)
+                    _instruction(item, set())
 
-    def _rung(rung: Any) -> None:
-        for cond in rung._conditions:
+    def _rung(rung: Any, inherited: set[int]) -> None:
+        own = set(inherited)
+        for cond in rung._conditions[rung._branch_condition_start :]:
             _conditions(cond)
+            own.update(id(e) for e in _iter_edges(cond))
         for item in rung._execution_items:
             if isinstance(item, RungLogic):
-                _rung(item)
+                _rung(item, own)
             else:
-                _instruction(item)
+                _instruction(item, own)
 
     for rung in rungs:
-        _rung(rung)
-    return holders
+        _rung(rung, set())
+    return out
 
 
-def bind_logic_list(rungs: Sequence[Rung]) -> SiteTable:
-    """Bind rungs handed to ``PLC`` as a bare list.
+def _bound_as_is(rungs: Sequence[Rung]) -> bool | None:
+    """Whether every site of *rungs* already carries a key no other place carries.
 
-    A list of fresh rungs binds like a program (``i{N}``).  A list that already
-    holds bound objects (rungs taken from a program, or from another bare list)
-    keeps one holder per key and names the rest, and every unbound object,
-    under :data:`LOGIC_NAMESPACE` with keys no object of the list carries, so
-    the keys are unique within this list.  The holder that keeps a key is the
-    one a ``Program`` owns (one that keeps memory under it first), else the
-    first in the list.  Two ``Program``-owned objects that both keep memory
-    under the same key cannot both keep it; that raises.  Any other clash
-    renames the later holders, ``Program``-owned or not: no memory is stored
-    under their keys (edge keys hold none yet).
+    ``None`` when no site is bound at all (a list of fresh rungs).
+    """
+    holders = _list_site_holders(rungs)
+    if all(key is None for _obj, key in holders):
+        return None
+    seen_objects: set[int] = set()
+    seen_keys: set[str] = set()
+    for obj, key in holders:
+        if key is None or id(obj) in seen_objects or key in seen_keys:
+            return False
+        seen_objects.add(id(obj))
+        seen_keys.add(key)
+    return True
+
+
+def _copy_condition(cond: Any, memo: dict[int, Any]) -> Any:
+    """*cond* with every edge (and every composite holding one) copied; the rest shared."""
+    if cond is None:
+        return None
+    done = memo.get(id(cond))
+    if done is not None:
+        return done
+    if _edge_kind(cond) is not None:
+        new = copy.copy(cond)
+        new._site_key = None
+    else:
+        children = _children(cond)
+        if children is None:
+            return cond
+        new_children = [_copy_condition(child, memo) for child in children]
+        if all(n is o for n, o in zip(new_children, children, strict=True)):
+            return cond
+        new = copy.copy(cond)
+        new.conditions = new_children
+    memo[id(cond)] = new
+    return new
+
+
+def _copy_item(item: Any, memo: dict[int, Any]) -> Any:
+    from pyrung.core.rung import Rung as RungLogic
+
+    return _copy_rung(item, memo) if isinstance(item, RungLogic) else _copy_instruction(item, memo)
+
+
+def _copy_instruction(instr: Any, memo: dict[int, Any]) -> Any:
+    from pyrung.core.instruction.control import ForLoopInstruction
+
+    done = memo.get(id(instr))
+    if done is not None:
+        return done
+    new = copy.copy(instr)
+    new._state_key = None
+    new._edge_frame = None
+    memo[id(instr)] = new
+    for name in type(instr)._conditions:
+        value = getattr(instr, name, None)
+        if isinstance(value, tuple):
+            setattr(new, name, tuple(_copy_condition(item, memo) for item in value))
+        elif value is not None:
+            setattr(new, name, _copy_condition(value, memo))
+    if instr.debug_substeps:
+        new.debug_substeps = tuple(
+            replace(step, condition=_copy_condition(step.condition, memo))
+            if step.condition is not None
+            else step
+            for step in instr.debug_substeps
+        )
+    if isinstance(instr, ForLoopInstruction):
+        new.body = tuple(_copy_item(item, memo) for item in instr.body)
+        new.instructions = [_copy_instruction(item, memo) for item in instr.instructions]
+    return new
+
+
+def _copy_rung(rung: Any, memo: dict[int, Any]) -> Any:
+    done = memo.get(id(rung))
+    if done is not None:
+        return done
+    new = copy.copy(rung)
+    memo[id(rung)] = new
+    new._conditions = [_copy_condition(c, memo) for c in rung._conditions]
+    new._instructions = [_copy_instruction(i, memo) for i in rung._instructions]
+    new._branches = [_copy_rung(b, memo) for b in rung._branches]
+    new._execution_items = [_copy_item(item, memo) for item in rung._execution_items]
+    new._execution_plan = [(kind, _copy_item(item, memo)) for kind, item in rung._execution_plan]
+    if rung._terminal_instruction is not None:
+        new._terminal_instruction = _copy_instruction(rung._terminal_instruction, memo)
+    new._invalidate_analysis_caches()
+    return new
+
+
+def copy_rungs(rungs: Sequence[Rung]) -> list[Rung]:
+    """A structural copy of *rungs*, unbound: rungs, instructions and edge contacts
+    are new objects; tags and every condition without an edge are shared."""
+    memo: dict[int, Any] = {}
+    return [_copy_rung(rung, memo) for rung in rungs]
+
+
+def bind_logic_list(rungs: Sequence[Any]) -> tuple[list[Any], SiteTable]:
+    """Bind rungs handed to ``PLC`` as a bare list; return the rungs to scan and
+    their table.
+
+    - A list of fresh rungs binds in place, like a program (``i{N}``/``e{N}``).
+    - A list whose every site already carries a key no other site of the list
+      carries (one program's rungs, a list bound before, or a slice of one)
+      keeps those keys; nothing is renamed.
+    - Anything else (rungs of two programs or of two lists, fresh rungs mixed
+      with bound ones, one rung listed twice) is copied and the copy bound
+      fresh.  The originals keep their keys, so a program, or another runner
+      scanning the same rung objects, never sees its keys change.
     """
     from pyrung.core.rung import Rung as RungLogic
 
     # A stand-in object scanned through ``evaluate()`` keeps no site memory.
-    rungs = [rung for rung in rungs if isinstance(rung, RungLogic)]
-    holders = _list_key_holders(rungs)
-    if not holders:
-        return bind_sites(rungs)
-    keepers: dict[str, Any] = {}
-    for key, objs in holders.items():
-        owned = [obj for obj in objs if getattr(obj, "_site_program_owned", False)]
-        # Renaming a Program's key is harmless unless memory is stored under it.
-        owned_memory = [obj for obj in owned if _owns_memory(obj)]
-        if len(owned_memory) > 1:
-            raise ValueError(
-                f"Site key {key!r} is held by {len(owned_memory)} objects of different "
-                "programs that keep memory under it, in one rung list; their memory would "
-                "collide. Build the rungs into one Program instead of combining rungs of "
-                "separately built programs."
-            )
-        keepers[key] = (owned_memory or owned or objs)[0]
-    return bind_sites(
-        rungs,
-        namespace=LOGIC_NAMESPACE,
-        _keepers=keepers,
-        _reserved=frozenset(holders),
-    )
+    scanned = rungs if isinstance(rungs, list) else list(rungs)
+    real = [rung for rung in scanned if isinstance(rung, RungLogic)]
+    state = _bound_as_is(real)
+    if state is None:
+        return scanned, bind_sites(real)
+    if state:
+        keepers = {key: obj for obj, key in _list_site_holders(real) if key is not None}
+        return scanned, bind_sites(real, _keepers=keepers, _reserved=frozenset(keepers))
+    memo: dict[int, Any] = {}
+    copied = [_copy_rung(rung, memo) if isinstance(rung, RungLogic) else rung for rung in scanned]
+    return copied, bind_sites([rung for rung in copied if isinstance(rung, RungLogic)])
 
 
 def site_table_of(logic: Any) -> SiteTable | None:
@@ -808,3 +902,144 @@ def program_memory_defaults(program: Any) -> dict[str, Any]:
         for prefix, default in instruction_memory(instr):
             out[f"{prefix}:{key}"] = default
     return out
+
+
+# -- edge frames: which edge sites a row scans ------------------------------
+#
+# A row is a top-level rung (main or subroutine), a For loop's body rung, or a
+# bare For-body instruction.  When a row is scanned, every edge site in it
+# stores the bit its contact sees (``_edge:e{N}``), powered or not (a CLICK
+# updates an edge contact's memory whenever the contact is scanned).  The
+# row's condition view is taken first, so its edges compare the bit against the
+# memory as it was before the row: ``evaluate()`` stays a pure read.
+
+
+def edge_memory_key(cond: Any) -> str:
+    """``_edge:e{N}`` of an edge condition; raises for an edge never bound."""
+    key = cond._site_key
+    if key is None:
+        raise RuntimeError(
+            f"{_edge_kind(cond)}({cond._resolved_tag.name}) has no site key: it was never "
+            "bound into a program. Build it inside `with Program():`, or bind overlay "
+            "rungs with pyrung.core.site_memory.bind_sites()."
+        )
+    return f"{EDGE_MEMORY}:{key}"
+
+
+def _frame_contacts(rung: Any, out: set[int]) -> None:
+    from pyrung.core.instruction.control import ForLoopInstruction
+    from pyrung.core.rung import Rung as RungLogic
+
+    for cond in rung._conditions:
+        out.update(id(e) for e in _iter_edges(cond))
+    for item in rung._execution_items:
+        if isinstance(item, RungLogic):
+            _frame_contacts(item, out)
+        elif isinstance(item, ForLoopInstruction):
+            for child in item.body:
+                if isinstance(child, RungLogic):
+                    _frame_contacts(child, out)
+
+
+def _frame_add(edge: Any, out: dict[str, Any]) -> None:
+    out.setdefault(edge_memory_key(edge), edge)
+
+
+def _frame_names(frame: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    return tuple((key, edge._resolved_tag.name) for key, edge in frame.items())
+
+
+_Rows = dict[int, tuple[tuple[str, Any], ...]]
+
+
+def _frame_instruction(instr: Any, contacts: set[int], out: dict[str, Any], rows: _Rows) -> None:
+    from pyrung.core.instruction.control import ForLoopInstruction
+    from pyrung.core.rung import Rung as RungLogic
+
+    for name in type(instr)._conditions:
+        value = getattr(instr, name, None)
+        power = _is_power_field(instr, name)
+        for item in value if isinstance(value, tuple) else (value,):
+            for edge in _iter_edges(item):
+                # A power field's edges are its rung's contacts (scanned with
+                # the row that owns them), unless built by hand.
+                if not (power and id(edge) in contacts):
+                    _frame_add(edge, out)
+    if isinstance(instr, ForLoopInstruction):
+        for child in instr.body:
+            child_frame: dict[str, Any] = {}
+            if isinstance(child, RungLogic):
+                _frame_row(child, contacts, child_frame, rows)
+            else:
+                _frame_instruction(child, contacts, child_frame, rows)
+            child._edge_frame = _frame_names(child_frame)
+            rows[id(child)] = tuple(child_frame.items())
+
+
+def _frame_row(rung: Any, contacts: set[int], out: dict[str, Any], rows: _Rows) -> None:
+    from pyrung.core.rung import Rung as RungLogic
+
+    conditions = rung._conditions
+    for index in range(rung._branch_condition_start, len(conditions)):
+        for edge in _iter_edges(conditions[index]):
+            _frame_add(edge, out)
+    for item in rung._execution_items:
+        if isinstance(item, RungLogic):
+            _frame_row(item, contacts, out, rows)
+        else:
+            _frame_instruction(item, contacts, out, rows)
+
+
+def edge_rows(rung: Any) -> dict[int, tuple[tuple[str, Any], ...]]:
+    """``(memory key, edge condition)`` of every row in top-level *rung*, by ``id``.
+
+    The rows are *rung* itself and every For-body row inside it (a body rung or
+    a bare body instruction), each with the edge sites it scans, in solve
+    order.  Also stamps each row's ``_edge_frame`` (``(memory key, tag)``
+    pairs) for the interpreter.
+    """
+    contacts: set[int] = set()
+    _frame_contacts(rung, contacts)
+    frame: dict[str, Any] = {}
+    rows: _Rows = {}
+    _frame_row(rung, contacts, frame, rows)
+    rows[id(rung)] = tuple(frame.items())
+    rung._edge_frame = _frame_names(frame)
+    return rows
+
+
+def build_edge_frames(rung: Any) -> tuple[tuple[str, str], ...]:
+    """``(memory key, tag)`` of every edge site *rung*'s row scans, in solve order.
+
+    Also stamps the frame of every For-body row inside it (``_edge_frame`` on
+    each body rung and bare body instruction): a body row scans its sites on
+    every iteration, not with the row that holds the loop.
+    """
+    edge_rows(rung)
+    return rung._edge_frame
+
+
+def scan_edge_frame(ctx: Any, view: Any, frame: Sequence[tuple[str, str]]) -> None:
+    """Store, for each edge site of *frame*, the bit its contact sees in *view*."""
+    for key, name in frame:
+        current = bool(view.get_tag(name, False))
+        if current != bool(view.get_memory(key, False)):
+            ctx.set_memory(key, current)
+
+
+def begin_bare_body_row(ctx: Any, instr: Any) -> tuple[Any] | None:
+    """Scan a bare For-body instruction as a row of its own, if it has edge sites.
+
+    Its helper legs then read a fresh view, so an edge leg compares against the
+    memory the previous iteration stored.  Returns the condition snapshot to
+    restore afterwards (wrapped), or ``None`` when the instruction has no edge
+    site and runs on the loop's view as before.
+    """
+    frame = getattr(instr, "_edge_frame", None)
+    if not frame:
+        return None
+    outer = ctx._condition_snapshot
+    view = ctx._new_condition_view()
+    ctx._condition_snapshot = view
+    scan_edge_frame(ctx, view, frame)
+    return (outer,)

@@ -151,8 +151,7 @@ class ConditionTraceEngine:
         self, condition: RisingEdgeCondition, ctx: ScanContext
     ) -> tuple[bool, list[dict[str, Any]]]:
         tag = self._contact_tag(condition.tag)
-        current = bool(ctx.get_tag(tag.name, False))
-        previous = bool(ctx.get_memory(f"_prev:{tag.name}", False))
+        current, previous = condition._edges(ctx)
         value = current and not previous
         return value, [
             self._detail("tag", tag.name),
@@ -165,8 +164,7 @@ class ConditionTraceEngine:
         self, condition: FallingEdgeCondition, ctx: ScanContext
     ) -> tuple[bool, list[dict[str, Any]]]:
         tag = self._contact_tag(condition.tag)
-        current = bool(ctx.get_tag(tag.name, False))
-        previous = bool(ctx.get_memory(f"_prev:{tag.name}", False))
+        current, previous = condition._edges(ctx)
         value = (not current) and previous
         return value, [
             self._detail("tag", tag.name),
