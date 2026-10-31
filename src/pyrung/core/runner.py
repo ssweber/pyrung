@@ -4304,8 +4304,9 @@ class PLC:
         """Evaluate synthesis bracket rungs in their own condition scope.
 
         The brackets are scanned like a subroutine body: a fresh condition
-        scope, writes batched into the same ctx/commit as the user rungs.  Each entry records under a synthetic ``RungId`` in the
-        node timeline, leaving the public integer main-rung timeline unchanged.
+        scope, writes batched into the same ctx/commit as the user rungs.  Each
+        entry records under a synthetic ``RungId`` in the node timeline, leaving
+        the public integer main-rung timeline unchanged.
         """
         if not rungs:
             return

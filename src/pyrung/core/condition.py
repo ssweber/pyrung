@@ -57,7 +57,7 @@ class Condition(ABC):
         """Evaluate this condition against a ScanContext or ConditionView.
 
         Accepts either a live ScanContext (read-after-write within a scan)
-        or a frozen ConditionView (rung-entry snapshot for branch conditions).
+        or a ConditionView of one row, taken as the solve reaches it.
         """
         pass
 

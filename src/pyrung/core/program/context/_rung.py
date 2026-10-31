@@ -89,13 +89,13 @@ class Rung:
             self._rung._branch_condition_start = len(inherited)
 
     def continued(self) -> Rung:
-        """Mark this rung as a continuation of the previous rung's condition snapshot.
+        """Mark this rung as a continuation of the previous rung.
 
-        All conditions in this rung will evaluate against the same frozen
-        state as the prior rung, rather than taking a fresh snapshot. This
-        models multiple independent wires on the same visual rung in Click's
-        ladder editor. The reused snapshot must come from the prior rung in
-        the same execution scope (main or the current subroutine).
+        This models multiple independent wires on the same visual rung in
+        Click's ladder editor. The rung is solved like a rung of its own: its
+        contacts read live, so they see every write above them, including the
+        prior rung's. The prior rung must be in the same execution scope (main
+        or the current subroutine).
 
         Returns:
             self, for chaining: ``with Rung(B).continued(): ...``

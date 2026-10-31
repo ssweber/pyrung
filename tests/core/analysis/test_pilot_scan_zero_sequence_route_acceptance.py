@@ -2,7 +2,10 @@
 
 from typing import Any
 
+import pytest
+
 from pyrung import PLC
+from pyrung.core.analysis.pilot.working_theory import TheoryInvariantError
 from tests.fixtures import pilot_scan_zero_sequence_route as fixture
 
 
@@ -231,3 +234,72 @@ def test_neutral_reconnect_boundary_uses_one_exact_intrascan_pulse() -> None:
         pulse.data["expected_write"].before,
         pulse.data["expected_write"].after,
     ) == (98, 10)
+
+
+def _field_order_reconnect_logic() -> Any:
+    """The reconnect rung in the field program's order (the repair branch above
+    the status branch), cut to the rungs that still crash the pilot.
+
+    Under the row solve the status branch sees the repair's 10 on the same
+    scan.  The fixture moves the repair branch below the status branch.
+    """
+    from pyrung import Or, Program, branch, copy, count_up, rung
+
+    S = fixture.SequenceStep
+    with Program() as logic:
+        with rung(S == 80, fixture.SettleDelay.Done):
+            copy(81, S, oneshot=True)
+        with rung(
+            Or(
+                fixture.PositionReading < fixture.PositionThreshold,
+                fixture.BypassPositionCheck,
+                fixture.SequenceInterrupted == 1,
+            ),
+            S == 81,
+        ):
+            copy(10, S, oneshot=True)
+        with rung(~fixture.InterruptionInput):
+            with branch(fixture.BaseSensor):
+                copy(10, S, oneshot=True)
+            with branch(S < 50, ~fixture.BaseSensor):
+                copy(80, S, oneshot=True)
+        with rung(~fixture.NetworkAvailable, S <= 20):
+            copy(98, S, oneshot=True)
+        with rung(fixture.NetworkAvailable):
+            with branch(S == 98):
+                copy(10, S, oneshot=True)
+            with branch(S <= 20):
+                with branch(fixture.RecoveryCounter.Done):
+                    copy(97, S, oneshot=True)
+                with branch(~fixture.RecoveryCounter.Done, fixture.ServiceStatus == 0):
+                    copy(94, S, oneshot=True)
+        with rung(fixture.CommunicationError):
+            count_up(fixture.RecoveryCounter, 60).reset(~fixture.CommunicationError)
+        with rung():
+            copy(fixture.ServiceStatusInput, fixture.ServiceStatus)
+    return logic
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=TheoryInvariantError,
+    reason=(
+        "S4c: the pilot raises 'conflicting lifecycle fact' on a same-scan overwrite "
+        "of the repaired 98 (predates the row solve: two separate rungs raise it too)"
+    ),
+)
+def test_field_order_reconnect_boundary_does_not_crash() -> None:
+    logic = _field_order_reconnect_logic()
+    boundary = PLC(logic, dt=0.010)
+    boundary.step()
+    runner = PLC(
+        logic,
+        dt=0.010,
+        initial_state=boundary.state.with_tags(
+            {fixture.SequenceStep.name: 98, fixture.SafetyPermit.name: True}
+        ),
+    )
+
+    plan = runner.how(fixture.SequenceStep == 10, max_scans=30)
+
+    assert plan.reachable or plan.reason

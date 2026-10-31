@@ -772,9 +772,8 @@ def test_fuzz_oneshot_out_elision_with_timer_reset():
 
 
 def test_fuzz_same_rung_branch_reader_not_combinational():
-    """out(B0) + branch(B0): out(B1) — B0 must not be classified as
-    combinational because the branch reads the rung-entry snapshot, not
-    the freshly-written value."""
+    """out(B0) + branch(B0): out(B1) — the branch reads B0 on its own row,
+    after out(B0) above it has written it, so B0 and B1 are True together."""
     B0 = Bool("B0")
     B1 = Bool("B1")
 

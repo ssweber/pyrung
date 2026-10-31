@@ -203,8 +203,7 @@ A rung is solved row by row (the live row solve), and the trace follows it:
 - A branch's contacts are evaluated when the step reaches the branch, against the writes of the rows above it. Until then its region reads `disabled_local` with its conditions skipped (under an unpowered parent, `disabled_parent`, final from the rung's first step).
 - Every branch under a powered parent gets a `branch` step, powered or not, so its final region is in some event. Branch steps are not stop points for `next`/`stepIn`.
 - A box's pins are traced as the box read them, at box entry.
-- The trace of a whole rung (Continue frames, `pyrungTrace`) takes each region's last state across the rung's events.
-- Recordings made before the live row solve hold one view per rung, so they show lower branches as of rung entry.
+- The whole-program trace built from the last committed scan (Continue and scan frames) takes each region of a rung's first event from the last event carrying it, so each branch shows its solved state. `pyrungTrace` sends the debugger's current event (`runner.debug.last_event()`) as it stands.
 
 ### Architecture
 
