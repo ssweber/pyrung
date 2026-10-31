@@ -95,6 +95,12 @@ def _assert_counterexample(program: Program, bad: Bool, config: _OptConfig) -> N
     assert _replay(program, result.trace).current_state.tags[bad.name] is True
 
 
+def _assert_found_on_timing(program: Program, bad: Bool, config: _OptConfig) -> None:
+    result = never(program, bad, _opt_config=config)
+    assert isinstance(result, Intractable) and result.kind == "timing", result
+    assert result.trace, result
+
+
 def _agree(program: Program, bad: Bool, reachable: bool, config: _OptConfig) -> None:
     if reachable:
         _assert_counterexample(program, bad, config)
@@ -153,13 +159,18 @@ def _stepped_int_equals_input() -> tuple[Program, Bool, list[tuple[dict[str, Any
 def test_input_equal_to_stepping_value_is_found(build, config) -> None:
     logic, bad, seq = build()
     assert _witness_hits(logic, seq, bad.name)
-    _assert_counterexample(logic, bad, config)
+    if build is _timer_equals_input:
+        # A black-box timer's accumulator takes any value its tick allows, so
+        # the hit is found but rests on timer timing: unconfirmed, never Proven.
+        _assert_found_on_timing(logic, bad, config)
+    else:
+        _assert_counterexample(logic, bad, config)
 
 
 def test_input_equal_to_accumulator_explores_every_value() -> None:
     logic, bad, _seq = _timer_equals_input()
     result = never(logic, bad, _debug=True)
-    assert isinstance(result, Counterexample)
+    assert isinstance(result, Intractable) and result.kind == "timing", result
     assert result._debug_context.nondeterministic_dims["KIn"] == tuple(range(200))
 
 
