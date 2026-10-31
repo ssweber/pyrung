@@ -22,7 +22,7 @@ class SystemState(PRecord):
     memory    : PMap   # engine-internal state (edge detection, timer fractionals)
 ```
 
-`tags` is everything user code touches. `memory` is internal engine bookkeeping — edge detection bits (`rise`/`fall`), timer fractional accumulators, etc.
+`tags` is everything user code touches. `memory` is internal engine bookkeeping — the bit each `rise()`/`fall()` contact last saw (`_edge:e{N}`, one per contact), each counter's input memory, timer fractional accumulators, etc.
 
 `SystemState` is a [`PRecord`](https://pyrsistent.readthedocs.io/) from the pyrsistent library — a frozen, persistent data structure that shares structure between versions for memory efficiency. Each scan produces a new `SystemState` without modifying the previous one.
 

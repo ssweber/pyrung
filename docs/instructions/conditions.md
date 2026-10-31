@@ -39,6 +39,17 @@ with rung(fall(Button)):    # True for ONE scan on True→False transition
     reset(Motor)
 ```
 
+As on a CLICK, each `rise()` or `fall()` contact keeps its own memory: the bit as that contact last saw it. The memory is updated every time the contact's row is scanned, whether the rung has power or not, and starts off at RUN (and again on STOP→RUN). So:
+
+- A bit already on at the first scan rises on that scan.
+- Two `rise(Button)` contacts each see the edge, wherever they sit.
+- A `rise()` above the rung that writes its bit sees the write one scan later, and still sees it once.
+- A contact in a rung whose other contacts are open keeps watching: an edge that happens while the rung is off is spent, not saved for later.
+- Inside a `forloop()` body, a contact compares with the bit at the previous iteration; in a subroutine called twice a scan, with the bit at the previous call.
+- A contact the scan skips (a subroutine not called, a loop that does not run, rungs passed over by `return_early()`) keeps its memory until it is scanned again.
+
+The memory lives in `SystemState.memory` as `_edge:e1`, `_edge:e2`, ... one key per contact.
+
 ## Multiple conditions (AND)
 
 ```python
