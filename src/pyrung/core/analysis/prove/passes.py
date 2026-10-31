@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 
 logger = logging.getLogger(__name__)
@@ -14,11 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
 from pyrung.core.analysis.simplified import Expr
-from pyrung.core.kernel import (
-    PROVE_EFFECTIVE_PRESET_PREFIX,
-    CompiledKernel,
-    prove_effective_preset_key,
-)
+from pyrung.core.kernel import PROVE_EFFECTIVE_PRESET_PREFIX, CompiledKernel
 from pyrung.core.site_memory import program_memory_defaults
 from pyrung.core.structure import _DoneAccRuntime
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
@@ -26,19 +21,8 @@ from pyrung.core.tag import Tag, TagType
 
 from . import _ExploreContext
 from .absorb import (
-    _DONE_KIND_COUNT_DOWN,
-    _DONE_KIND_COUNT_UP,
-    _DONE_KIND_OFF_DELAY,
-    _DONE_KIND_ON_DELAY,
-    _THRESHOLD_KIND_COMPARISON_ONLY,
     _collect_done_acc_pairs,
-    _DoneAccInfo,
-    _find_comparison_absorptions,
-    _find_redundant_acc_absorptions,
-    _find_threshold_absorptions,
-    _has_forbidden_data_read,
-    _merge_threshold_absorptions,
-    _RedundantAccAbsorptions,
+    _prior_key_done_specs,
     _ThresholdAbsorptions,
 )
 from .classify import (
@@ -51,15 +35,8 @@ from .classify import (
     _collect_structural_domain_info,
     _pilot_sweep_domains,
 )
-from .deadness import DeadGuard, hidden_dead_guards
 from .elision import _elide_scan_local_stateful_dims
-from .events import _TIMER_DELAY_KINDS, _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
-from .expr import (
-    _build_atom_index,
-    _collect_atoms_for_tag,
-    _partition_edge_bearing_inputs,
-    _referenced_tags,
-)
+from .expr import _partition_edge_bearing_inputs, _referenced_tags
 from .inputs import (
     _detect_auto_joint_inputs,
     _detect_exclusive_input_groups,
@@ -216,7 +193,7 @@ class _PipelineCache:
     done_kinds: dict[str, str]
     consumed_accs: frozenset[str]
     unclassified_written: frozenset[str]
-    threshold_absorptions: _ThresholdAbsorptions
+    threshold_absorptions: _ThresholdAbsorptions | None
     stepping_tags: frozenset[str]
 
 
@@ -273,22 +250,18 @@ class _PassContext:
     done_presets: dict[str, int] | None = None
     done_kinds: dict[str, str] | None = None
 
-    done_acc_info: _DoneAccInfo | None = None
-    absorptions: _RedundantAccAbsorptions | None = None
+    # how()'s domain prior only (domains_only): the absorptions its
+    # classification made, and the PILOT world-key specs built from them
+    # (absorb.py).  The search absorbs nothing: its timers are black boxes.
     threshold_absorptions: _ThresholdAbsorptions | None = None
+    state_key_done_specs: tuple[Any, ...] | None = None
 
     stateful_names: tuple[str, ...] | None = None
     edge_tag_names: tuple[str, ...] | None = None
-    state_key_done_specs: tuple[_StateKeyDoneSpec, ...] | None = None
-    done_event_specs: tuple[_DoneEventSpec, ...] | None = None
-    threshold_event_specs: tuple[_ThresholdEventSpec, ...] | None = None
     edge_tag_exprs: dict[str, list[Expr]] | None = None
     memory_key_names: tuple[str, ...] | None = None
     memory_key_defaults: tuple[Any, ...] | None = None
-    synthetic_preset_tags: tuple[str, ...] | None = None
     receive_dest_names: frozenset[str] = frozenset()
-    drum_event_meta: dict[str, Any] | None = None
-    timer_quanta: dict[str, float] | None = None
     demotable_edge_tag_names: tuple[str, ...] | None = None
     _combinational_tags: frozenset[str] | None = None
     _stepping_tags: frozenset[str] | None = None
@@ -306,14 +279,11 @@ class _PassContext:
     _pending_infeasible_hints: list[str] = field(default_factory=list)
     system_points: SystemPointModel | None = None
     # Black-box timers (blackbox.py): the search kernel ticks by choice.
-    abstract_timers: bool = False
     timer_model: Any = None
     count_clamps: tuple[tuple[int, bool, int], ...] = ()
 
     def extract_cache(self) -> _PipelineCache | None:
         if self.stateful_dims is None or self.nondeterministic_dims is None:
-            return None
-        if self.threshold_absorptions is None:
             return None
         return _PipelineCache(
             stateful_dims=dict(self.stateful_dims),
@@ -328,53 +298,6 @@ class _PassContext:
             stepping_tags=self._stepping_tags or frozenset(),
         )
 
-    def _hidden_dead_guards(self) -> dict[str, DeadGuard]:
-        """Guards past which a hidden counter's progress is dead (deadness.py)."""
-        from .cycles import _TIMER_KINDS
-
-        assert self.graph is not None
-        assert self.stateful_names is not None
-        assert self.nondeterministic_dims is not None
-        kinds: dict[str, str] = {}
-        for spec in self.done_event_specs or ():
-            kinds.setdefault(spec.acc_name, spec.kind)
-        vectors = self.threshold_absorptions.vector_specs if self.threshold_absorptions else ()
-        for vector in vectors:
-            if vector.kind != _THRESHOLD_KIND_COMPARISON_ONLY:
-                kinds.setdefault(vector.acc_name, vector.kind)
-        stateful = set(self.stateful_names)
-        # A hidden accumulator another tag is derived from, or that anything
-        # outside the program reads, is not a candidate (it would not be hidden).
-        derived = {source for source, *_ in (self._functional_dep_projections or {}).values()}
-        derived |= {source for source, *_ in (self._init_constant_projections or {}).values()}
-        observed = {*(self.project or ()), *self.opaque_reads}
-        accumulators = sorted(
-            name
-            for name, kind in kinds.items()
-            if kind not in _TIMER_KINDS
-            and name not in stateful
-            and name not in derived
-            and name not in observed
-            and not self.opaque_reads_all
-        )
-        if not accumulators:
-            return {}
-        done_slots = {self.stateful_names[spec.index] for spec in self.state_key_done_specs or ()}
-        tags = self.graph.tags
-        eligible = {
-            name
-            for name in stateful - done_slots
-            if name not in self.nondeterministic_dims and name in tags and not tags[name].external
-        }
-        return hidden_dead_guards(
-            self.program,
-            tags,
-            accumulators,
-            eligible=eligible,
-            unbounded=set(self.nondeterministic_dims) | set(self.receive_dest_names),
-            initial_state=self.initial_state,
-        )
-
     def freeze(self) -> _ExploreContext:
         assert self.compiled is not None
         assert self.graph is not None
@@ -383,19 +306,10 @@ class _PassContext:
         assert self.nondeterministic_dims is not None
         assert self.stateful_names is not None
         assert self.edge_tag_names is not None
-        domains_only = (
-            self.memory_key_names is None
-            or self.state_key_done_specs is None
-            or self.done_event_specs is None
-            or self.threshold_absorptions is None
-            or self.threshold_event_specs is None
-        )
+        # The how() prior builds no memory keys: no search runs on it.
+        domains_only = self.memory_key_names is None
         if not domains_only:
-            assert self.memory_key_names is not None
-            assert self.state_key_done_specs is not None
-            assert self.done_event_specs is not None
-            assert self.threshold_absorptions is not None
-            assert self.threshold_event_specs is not None
+            assert self.timer_model is not None
         exclusive_input_groups = _detect_exclusive_input_groups(
             self.program,
             self.graph,
@@ -447,43 +361,6 @@ class _PassContext:
             )
         else:
             caveats = ()
-
-        if self._consumed_accs and self.done_acc_info is not None:
-            for acc_name in sorted(self._consumed_accs):
-                if acc_name not in self.stateful_dims:
-                    continue
-                domain = self.stateful_dims[acc_name]
-                for done_name, paired_acc in self.done_acc_info.pairs.items():
-                    if paired_acc != acc_name:
-                        continue
-                    preset = self.done_acc_info.presets.get(done_name)
-                    if preset is None:
-                        continue
-                    kind = self.done_acc_info.kinds.get(done_name, "")
-                    if kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_ON_DELAY}:
-                        if max(domain) < preset:
-                            caveats = (
-                                *caveats,
-                                f"Consumed accumulator {acc_name} has domain max "
-                                f"{max(domain)} < preset {preset} for {done_name}. "
-                                f"BFS tracks concrete values so this is diagnostic only.",
-                            )
-                    elif kind == _DONE_KIND_COUNT_DOWN:
-                        if min(domain) > preset:
-                            caveats = (
-                                *caveats,
-                                f"Consumed accumulator {acc_name} has domain min "
-                                f"{min(domain)} > {preset} for {done_name}. "
-                                f"BFS tracks concrete values so this is diagnostic only.",
-                            )
-                    elif kind == _DONE_KIND_OFF_DELAY:
-                        if min(domain) > -preset:
-                            caveats = (
-                                *caveats,
-                                f"Consumed accumulator {acc_name} has domain min "
-                                f"{min(domain)} > -{preset} for {done_name}. "
-                                f"BFS tracks concrete values so this is diagnostic only.",
-                            )
 
         journal: Journal | None = None
         if self.journal_builder is not None:
@@ -575,46 +452,22 @@ class _PassContext:
         #   - graph.writers_of — step_fn writes (conservatively covers indirect/
         #     full-block and implicit fault writes)
         #   - nondeterministic_dims — inputs BFS assigns directly
-        #   - stateful_dims, edge_tag_names, synthetic_preset_tags
-        #   - accumulators / abstract thresholds / dynamic presets that the
-        #     hidden-event scheduler materializes via kernel.tags[...] *outside*
-        #     step_fn (so writers_of misses them — see events.py)
+        #   - stateful_dims, edge_tag_names
         #   - system tags (fault.*, rtc.*, ...) the kernel runtime sets each
         #     scan, also outside writers_of
         mutable_tag_names: frozenset[str] | None = None
         if self.scope_snapshot and not domains_only:
-            assert self.state_key_done_specs is not None
-            assert self.done_event_specs is not None
-            assert self.threshold_event_specs is not None
-            assert self.threshold_absorptions is not None
             mutable: set[str] = set(self.graph.writers_of)
             mutable.update(SYSTEM_TAGS_BY_NAME)
             mutable.update(self.nondeterministic_dims)
             mutable.update(self.stateful_dims)
             mutable.update(self.edge_tag_names)
-            mutable.update(self.synthetic_preset_tags or ())
-            for sk_spec in self.state_key_done_specs:
-                mutable.add(sk_spec.acc_name)
-            for done_spec in self.done_event_specs:
-                mutable.add(done_spec.acc_name)
-                if isinstance(done_spec.preset, str):
-                    mutable.add(done_spec.preset)
-            for thr_spec in self.threshold_event_specs:
-                mutable.add(thr_spec.acc_name)
-                if isinstance(thr_spec.threshold, str):
-                    mutable.add(thr_spec.threshold)
-            for vec_spec in self.threshold_absorptions.vector_specs:
-                mutable.add(vec_spec.acc_name)
-                for atom in vec_spec.atoms:
-                    if isinstance(atom.threshold, str):
-                        mutable.add(atom.threshold)
             # Text fan-out: copy/copy_convert to a Char tag can create new
             # tag keys at runtime (e.g. dest=Ch0 writes Ch1, Ch2, …) that
             # don't exist in any static tag set.  Snapshot scoping must
             # capture/restore these dynamic keys — see _snapshot_kernel.
             mutable_tag_names = frozenset(mutable)
 
-        dead_guards = {} if domains_only else self._hidden_dead_guards()
         outside_defaults = tuple(
             (tag.name, tag.default)
             for tag in self.observed_tags
@@ -629,26 +482,17 @@ class _PassContext:
             nondeterministic_dims=self.nondeterministic_dims,
             stateful_names=self.stateful_names,
             edge_tag_names=self.edge_tag_names,
-            # A site that reads an edge (a counter's count input, a one-shot,
-            # a drum/shift/toggle edge cell, ``rise()``/``fall()``): an input
-            # changing on a hidden crossing scan reads differently there, so
-            # jumps keep the plateaus just before each crossing (events.py).
-            edge_sensitive=bool(self.compiled.edge_tags)
-            or bool(program_memory_defaults(self.program)),
             memory_key_names=self.memory_key_names or (),
             memory_key_defaults=self.memory_key_defaults or (),
             state_key_done_specs=self.state_key_done_specs or (),
-            done_event_specs=self.done_event_specs or (),
             threshold_vector_specs=(
                 self.threshold_absorptions.vector_specs
                 if self.threshold_absorptions is not None
                 else ()
             ),
-            threshold_event_specs=self.threshold_event_specs or (),
             dt=self.dt,
             edge_tag_exprs=self.edge_tag_exprs or {},
             demoted_edge_names=tuple(sorted(self.demotable_edge_tag_names or ())),
-            synthetic_preset_tags=self.synthetic_preset_tags or (),
             nondeterministic_names=tuple(sorted(nd_in_key)),
             free_input_names=free,
             always_live_input_names=tuple(
@@ -667,9 +511,6 @@ class _PassContext:
             joint_inputs=combined_joint_inputs,
             caveats=caveats,
             journal=journal,
-            drum_event_meta=self.drum_event_meta or {},
-            timer_quanta=self.timer_quanta or {},
-            dead_guards=dead_guards,
             independence_relation=independence_relation,
             free_input_factoring=free_input_factoring,
             mutable_tag_names=mutable_tag_names,
@@ -691,8 +532,7 @@ class _PassContext:
             free_system_inputs=frozenset()
             if self.domains_only
             else free_system_tags(self.nondeterministic_dims, self.graph.writers_of),
-            abstract_timers=self.abstract_timers and not domains_only,
-            timer_model=self.timer_model,
+            timer_model=None if domains_only else self.timer_model,
             count_clamps=self.count_clamps,
         )
 
@@ -727,8 +567,6 @@ class _BFSConfig:
     live_input_pruning: bool = True
     exclusive_input_grouping: bool = True
     edge_compression: bool = True
-    hidden_event_jumping: bool = True
-    pending_settlement: bool = True
     free_input_factoring: bool = True
 
     @property
@@ -740,10 +578,6 @@ class _BFSConfig:
             names.append("exclusive_input_grouping")
         if self.edge_compression:
             names.append("edge_compression")
-        if self.hidden_event_jumping:
-            names.append("hidden_event_jumping")
-        if self.pending_settlement:
-            names.append("pending_settlement")
         if self.free_input_factoring:
             names.append("free_input_factoring")
         return tuple(names)
@@ -752,13 +586,11 @@ class _BFSConfig:
 _DEFAULT_BFS_CONFIG = _BFSConfig()
 
 
-# Optimizations whose effect is a sound search-space *reduction* — disabling
-# any of them makes BFS explore an equal or larger set, so an all-off-of-these
-# config is still a sound ground truth. The remaining two optimizations
-# (hidden_event_jumping, pending_settlement) instead *extend reachability per
-# unit of depth_budget*: disabling them under a finite budget under-approximates
-# the reachable set (a timer never reaches its preset), so they must stay
-# enabled in any config used as a ground-truth baseline.
+# Optimizations whose effect is a sound search-space *reduction*: disabling
+# any of them makes BFS explore an equal or larger set.  Every toggle but the
+# declared-bounds check is one.  With black-box timers nothing extends reach
+# per unit of depth_budget (there are no hidden-event jumps or settlement to
+# keep on), so ``all_off()`` is a sound ground truth.
 #
 # scope_snapshot is representation-level: disabling it explores the *same* set
 # (just with full snapshots), so it satisfies "equal or larger". Listing it here
@@ -767,7 +599,6 @@ _DEFAULT_BFS_CONFIG = _BFSConfig()
 _REDUCTION_OPTIMIZATIONS: frozenset[str] = frozenset(
     {
         "traced_elision",
-        "accumulator_absorption",
         "functional_dependency_projection",
         "init_constant_projection",
         "live_input_pruning",
@@ -779,40 +610,17 @@ _REDUCTION_OPTIMIZATIONS: frozenset[str] = frozenset(
 )
 
 
-# The timer model a config defaults to (see ``_OptConfig.abstract_timers``).
-# ``PYRUNG_PROVE_ABSTRACT_TIMERS=1`` selects black-box timers process-wide, to
-# run a suite under both models side by side.
-_ABSTRACT_TIMERS_DEFAULT: bool = os.environ.get("PYRUNG_PROVE_ABSTRACT_TIMERS", "") not in (
-    "",
-    "0",
-)
-
-# What black-box timers turn off: the exact-timing layer (absorption,
-# hidden-event jumps, settlement).  None of it applies to a timer whose Done
-# is a choice.
-_EXACT_TIMING_OPTIMIZATIONS: frozenset[str] = frozenset(
-    {"accumulator_absorption", "hidden_event_jumping", "pending_settlement"}
-)
-
-
 @dataclass(frozen=True)
 class _OptConfig:
     """Per-optimization enable flags spanning pre-BFS passes and BFS-interleaved opts.
 
-    ``_OptConfig()`` is the all-on default and reproduces current production
-    behavior exactly. ``_OptConfig.sound_baseline()`` disables every
-    soundness-optional reduction while keeping the reach-extending
-    optimizations on — that is the maximally-reduced config still usable as a
-    ground truth. ``_OptConfig.all_off()`` disables everything; it is a valid
-    config to *test* but is NOT a sound baseline (see _REDUCTION_OPTIMIZATIONS).
-
-    ``abstract_timers`` selects the timer model, not an optimization: the
-    black-box timers of ``blackbox.py`` (every timed tick a search choice,
-    counterexamples confirmed by concrete replay) instead of the exact-timing
-    layer.  It forces that layer's flags off (``_EXACT_TIMING_OPTIMIZATIONS``)
-    and leaves nothing reach-extending, so under it ``all_off()`` is a sound
-    baseline, and ``sound_baseline()`` is ``all_off()`` with the declared-bounds
-    check kept.  ``domains_only`` (the ``how()`` prior) ignores it.
+    ``_OptConfig()`` is the all-on default.  ``_OptConfig.all_off()`` disables
+    everything and is a sound ground truth: timers are black boxes
+    (``blackbox.py``), so no optimization extends reach per unit of
+    ``depth_budget`` and each one left is a reduction the soundness fuzzer
+    checks against plain BFS.  ``_OptConfig.sound_baseline()`` is ``all_off()``
+    with the declared-bounds check kept (a check, not a reduction).
+    ``domains_only`` selects the ``how()`` domain prior, not an optimization.
 
     Each field is one independently-toggleable optimization. This lets the
     soundness fuzzer test arbitrary *subsets* against the baseline —
@@ -822,7 +630,6 @@ class _OptConfig:
 
     # pre-BFS passes
     traced_elision: bool = True
-    accumulator_absorption: bool = True
     functional_dependency_projection: bool = True
     init_constant_projection: bool = True
     validate_declared_bounds: bool = True
@@ -831,18 +638,9 @@ class _OptConfig:
     live_input_pruning: bool = True
     exclusive_input_grouping: bool = True
     edge_compression: bool = True
-    hidden_event_jumping: bool = True
-    pending_settlement: bool = True
     free_input_factoring: bool = True
     # representation-level (does not change the explored state set)
     scope_snapshot: bool = True
-    # the timer model (see the class docstring); not a toggle
-    abstract_timers: bool = _ABSTRACT_TIMERS_DEFAULT
-
-    def __post_init__(self) -> None:
-        if self.abstract_timers and not self.domains_only:
-            for name in _EXACT_TIMING_OPTIMIZATIONS:
-                object.__setattr__(self, name, False)
 
     @classmethod
     def all_off(cls) -> _OptConfig:
@@ -850,12 +648,7 @@ class _OptConfig:
 
     @classmethod
     def sound_baseline(cls) -> _OptConfig:
-        """Maximally-reduced config that is still a sound ground truth.
-
-        Every soundness-optional reduction is disabled; the reach-extending
-        optimizations stay enabled because disabling them under a finite
-        depth_budget under-approximates reachability.
-        """
+        """Every reduction off: ``all_off()`` with the declared-bounds check kept."""
         return cls(**{f: f not in _REDUCTION_OPTIMIZATIONS for f in _OPT_TOGGLE_FIELDS})
 
     def subset(self, names: Iterable[str]) -> _OptConfig:
@@ -870,8 +663,6 @@ class _OptConfig:
             live_input_pruning=self.live_input_pruning,
             exclusive_input_grouping=self.exclusive_input_grouping,
             edge_compression=self.edge_compression,
-            hidden_event_jumping=self.hidden_event_jumping,
-            pending_settlement=self.pending_settlement,
             free_input_factoring=self.free_input_factoring,
         )
 
@@ -880,9 +671,7 @@ class _OptConfig:
         return tuple(f for f in _OPT_TOGGLE_FIELDS if getattr(self, f))
 
 
-_OPT_TOGGLE_FIELDS = tuple(
-    f for f in _OptConfig.__dataclass_fields__ if f not in ("domains_only", "abstract_timers")
-)
+_OPT_TOGGLE_FIELDS = tuple(f for f in _OptConfig.__dataclass_fields__ if f != "domains_only")
 _DEFAULT_OPT_CONFIG = _OptConfig()
 
 
@@ -1071,6 +860,11 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         threshold_absorptions_out=threshold_absorptions,
         model_system_points=not ctx.domains_only,
         observe_everything=ctx.opaque_reads_all,
+        # The search's timers are black boxes and it absorbs nothing; how()'s
+        # domain prior keeps the absorbing classification PILOT's world key
+        # is built from (absorb.py).
+        abstract_timers=not ctx.domains_only,
+        _skip_absorptions=not ctx.domains_only,
     )
     if profile:
         profile_last = _classify_profile_mark(timings, "classify_from_graph", profile_last)
@@ -1836,9 +1630,21 @@ def _pass_detect_init_constants(ctx: _PassContext) -> None:
 
 
 def _pass_compile_kernel(ctx: _PassContext) -> None:
+    """Compile the search's kernel and derive the stateful and edge tag names.
+
+    The search's kernel ticks timers by choice (``abstract_timers``,
+    blackbox.py).  Earlier passes (declared bounds, elision) and the caller may
+    have compiled the runtime's kernel for their own probes; the search always
+    gets the abstract one.  How()'s domain prior (domains_only) keeps the
+    runtime's.
+    """
     from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
 
-    if ctx.compiled is None:
+    if not ctx.domains_only:
+        ctx.compiled = _compile_kernel(
+            ctx.program, blockless=True, proof_metadata=True, abstract_timers=True
+        )
+    elif ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
     assert ctx.stateful_dims is not None
     ctx.stateful_names = tuple(sorted(ctx.stateful_dims))
@@ -1860,23 +1666,8 @@ def _pass_compile_kernel(ctx: _PassContext) -> None:
     ctx.edge_tag_names = tuple(n for n in sorted(ctx.compiled.edge_tags) if n not in demoted)
 
 
-def _pass_compile_abstract_kernel(ctx: _PassContext) -> None:
-    """``compile_kernel`` for black-box timers: the search's kernel ticks by choice.
-
-    Earlier passes (declared bounds, elision) may have compiled the exact
-    kernel for their own probes; the search always gets the abstract one.
-    """
-    from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
-
-    ctx.abstract_timers = True
-    ctx.compiled = _compile_kernel(
-        ctx.program, blockless=True, proof_metadata=True, abstract_timers=True
-    )
-    _pass_compile_kernel(ctx)
-
-
 def _pass_build_timer_model(ctx: _PassContext) -> None:
-    """``build_event_specs`` for black-box timers: no events, a choice model instead."""
+    """The black-box timer model: which ticks branch, and onto what (blackbox.py)."""
     from .blackbox import (
         accumulator_reads,
         build_timer_model,
@@ -1887,11 +1678,6 @@ def _pass_build_timer_model(ctx: _PassContext) -> None:
 
     assert ctx.graph is not None and ctx.all_exprs is not None
     assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
-    ctx.state_key_done_specs = ()
-    ctx.done_event_specs = ()
-    ctx.threshold_event_specs = ()
-    ctx.timer_quanta = {}
-    ctx.drum_event_meta = {}
     # Who reads each accumulator, by tag reference (not the atom index: an
     # accumulator inside arithmetic is an opaque atom there).
     reads = accumulator_reads(
@@ -1935,67 +1721,12 @@ def _pass_build_timer_model(ctx: _PassContext) -> None:
     ctx.count_clamps = count_clamps(ctx.program, ctx.graph, ctx.stateful_names, reads=reads)
 
 
-def _pass_collect_done_acc_pairs(ctx: _PassContext) -> None:
-    ctx.done_acc_info = _collect_done_acc_pairs(ctx.program)
-    if ctx.journal_builder is not None:
-        for done_name, acc_name in ctx.done_acc_info.pairs.items():
-            ctx.journal_builder.record(
-                done_name,
-                Decision(
-                    "collect_done_acc_pairs",
-                    "pairing",
-                    "paired",
-                    f"Done/Acc pair: {done_name} -> {acc_name}",
-                    detail=(("acc_name", acc_name),),
-                ),
-            )
-
-
-def _pass_find_redundant_absorptions(ctx: _PassContext) -> None:
-    assert ctx.graph is not None and ctx.all_exprs is not None
-    assert ctx.done_acc_info is not None
-    atom_index = _build_atom_index(ctx.all_exprs)
-    consumed_accs = {
-        acc_name
-        for acc_name in ctx.done_acc_info.pairs.values()
-        if _collect_atoms_for_tag(atom_index, acc_name)
-        or _has_forbidden_data_read(ctx.program, ctx.graph, acc_name)
-    }
-    ctx.absorptions = _find_redundant_acc_absorptions(
-        ctx.program,
-        ctx.graph,
-        ctx.all_exprs,
-        ctx.done_acc_info,
-        consumed_accs,
-        atom_index,
+def _pass_build_prior_key_specs(ctx: _PassContext) -> None:
+    """How()'s domain prior only: the PILOT world key's Done specs (absorb.py)."""
+    assert ctx.stateful_names is not None
+    ctx.state_key_done_specs = _prior_key_done_specs(
+        ctx.stateful_names, ctx.done_acc or {}, ctx.done_kinds or {}
     )
-    ctx.synthetic_preset_tags = tuple(sorted(ctx.absorptions.preset_tags))
-    if ctx.journal_builder is not None:
-        for acc_name in ctx.absorptions.acc_names:
-            ctx.journal_builder.record(
-                acc_name,
-                Decision(
-                    "find_redundant_absorptions",
-                    "absorption",
-                    "absorbed",
-                    "three-valued Done bit absorption",
-                ),
-            )
-        for preset_name in ctx.absorptions.preset_tags:
-            ctx.journal_builder.record(
-                preset_name,
-                Decision(
-                    "find_redundant_absorptions",
-                    "absorption",
-                    "absorbed",
-                    "synthetic preset replacement",
-                ),
-            )
-        for acc_name, reason in ctx.absorptions.rejected.items():
-            ctx.journal_builder.record(
-                acc_name,
-                Decision("find_redundant_absorptions", "absorption_skipped", "skipped", reason),
-            )
 
 
 def _get_structural_domain_info(
@@ -2003,10 +1734,8 @@ def _get_structural_domain_info(
 ) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
     """Structural domains + reverse blockers, computed once per pipeline run.
 
-    Both ``find_threshold_absorptions`` and ``classify_dimensions`` run the same
-    fixpoint over ``(program, graph, all_exprs)`` with no discovered domains, and
-    that fixpoint dominates context-build time. Memoize it on *ctx* so whichever
-    pass runs first pays for it and the other reuses the result (order-agnostic).
+    The fixpoint over ``(program, graph, all_exprs)`` dominates context-build
+    time; it is memoized on *ctx*.
     """
     if ctx._structural_domain_info is None:
         assert ctx.graph is not None and ctx.all_exprs is not None
@@ -2021,160 +1750,6 @@ def _get_structural_domain_info(
             model_system_points=not ctx.domains_only,
         )
     return ctx._structural_domain_info
-
-
-def _record_threshold_absorption_journal(ctx: _PassContext) -> None:
-    if ctx.journal_builder is None or ctx.threshold_absorptions is None:
-        return
-    for name in ctx.threshold_absorptions.progress_names:
-        ctx.journal_builder.record(
-            name,
-            Decision(
-                "find_threshold_absorptions",
-                "absorption",
-                "absorbed",
-                "threshold vector abstraction",
-            ),
-        )
-    for name in ctx.threshold_absorptions.threshold_tags:
-        ctx.journal_builder.record(
-            name,
-            Decision(
-                "find_threshold_absorptions", "absorption", "absorbed", "threshold tag absorbed"
-            ),
-        )
-    for name in ctx.threshold_absorptions.comparison_tags:
-        ctx.journal_builder.record(
-            name,
-            Decision(
-                "find_threshold_absorptions",
-                "absorption",
-                "absorbed",
-                "comparison-only tag absorbed",
-            ),
-        )
-    for blocker in ctx.threshold_absorptions.blockers:
-        for reason in blocker.reasons:
-            ctx.journal_builder.record(
-                blocker.acc_name,
-                Decision("find_threshold_absorptions", "absorption_blocked", "blocked", reason),
-            )
-
-
-def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
-    if ctx.pipeline_cache is not None:
-        ctx.threshold_absorptions = ctx.pipeline_cache.threshold_absorptions
-        _record_threshold_absorption_journal(ctx)
-        return
-    if ctx.threshold_absorptions is not None:
-        _record_threshold_absorption_journal(ctx)
-        return
-    assert ctx.graph is not None and ctx.all_exprs is not None
-    structural_domains = _get_structural_domain_info(ctx)[0]
-    atom_index = _build_atom_index(ctx.all_exprs)
-
-    threshold_absorptions = _find_threshold_absorptions(
-        ctx.program,
-        ctx.graph,
-        ctx.all_exprs,
-        project=_observed_project(ctx),
-        atom_index=atom_index,
-    )
-    comparison_absorptions = _find_comparison_absorptions(
-        ctx.program,
-        ctx.graph,
-        ctx.all_exprs,
-        structural_domains,
-        project=_observed_project(ctx),
-        receive_dest_names=ctx.receive_dest_names,
-        atom_index=atom_index,
-    )
-    ctx.threshold_absorptions = _merge_threshold_absorptions(
-        threshold_absorptions,
-        comparison_absorptions,
-    )
-    _record_threshold_absorption_journal(ctx)
-
-
-def _timer_quanta(program: Program, dt: float) -> dict[str, float]:
-    """Timer units each timed instruction adds per scan at *dt*, by accumulator."""
-    from pyrung.core.instruction.drums import TimeDrumInstruction
-    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
-    from pyrung.core.validation._common import walk_instructions
-
-    quanta: dict[str, float] = {}
-    conflicting: set[str] = set()
-    for instr in walk_instructions(program):
-        if not isinstance(instr, (OnDelayInstruction, OffDelayInstruction, TimeDrumInstruction)):
-            continue
-        name = instr.accumulator.name
-        quantum = instr.unit.dt_to_units(dt)
-        if quanta.setdefault(name, quantum) != quantum:
-            conflicting.add(name)
-    for name in conflicting:
-        del quanta[name]
-    return quanta
-
-
-def _pass_build_event_specs(ctx: _PassContext) -> None:
-    assert ctx.stateful_names is not None and ctx.done_acc is not None
-    assert ctx.done_kinds is not None and ctx.done_presets is not None
-    assert ctx.threshold_absorptions is not None
-    sk_done: list[_StateKeyDoneSpec] = []
-    d_events: list[_DoneEventSpec] = []
-    for index, done_name in enumerate(ctx.stateful_names):
-        acc_name = ctx.done_acc.get(done_name)
-        if acc_name is None:
-            continue
-        kind = ctx.done_kinds[done_name]
-        sk_done.append(
-            _StateKeyDoneSpec(
-                index=index,
-                acc_name=acc_name,
-                kind=kind,
-                frac_key=f"_frac:{acc_name}" if kind in _TIMER_DELAY_KINDS else None,
-            )
-        )
-        preset: int | str | None = ctx.done_presets.get(done_name)
-        if preset is None and ctx.done_acc_info is not None:
-            preset = ctx.done_acc_info.preset_tags.get(done_name)
-        if preset is not None:
-            preset_memory_key = (
-                prove_effective_preset_key(done_name) if isinstance(preset, str) else None
-            )
-            d_events.append(
-                _DoneEventSpec(
-                    state_index=index,
-                    acc_name=acc_name,
-                    kind=kind,
-                    preset=preset,
-                    preset_memory_key=preset_memory_key,
-                )
-            )
-    ctx.state_key_done_specs = tuple(sk_done)
-    ctx.done_event_specs = tuple(d_events)
-    ctx.timer_quanta = _timer_quanta(ctx.program, ctx.dt)
-
-    if ctx.done_acc_info is not None:
-        ctx.drum_event_meta = dict(ctx.done_acc_info.drum_meta)
-
-    t_events: list[_ThresholdEventSpec] = []
-    for vi, vector in enumerate(ctx.threshold_absorptions.vector_specs):
-        if vector.kind == _THRESHOLD_KIND_COMPARISON_ONLY:
-            continue
-        for ai, atom in enumerate(vector.atoms):
-            t_events.append(
-                _ThresholdEventSpec(
-                    vector_index=vi,
-                    atom_index=ai,
-                    acc_name=vector.acc_name,
-                    kind=vector.kind,
-                    threshold=atom.threshold,
-                    form=atom.form,
-                    mode=atom.mode,
-                )
-            )
-    ctx.threshold_event_specs = tuple(t_events)
 
 
 def _pass_collect_edge_exprs(ctx: _PassContext) -> None:
@@ -2196,12 +1771,10 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
     are one state.  The trial scan still runs as a floor: a key it writes that
     the table does not name is kept, with no default (``None`` stays apart).
     """
-    assert ctx.compiled is not None and ctx.absorptions is not None
+    assert ctx.compiled is not None
     defaults: dict[str, Any] = dict(program_memory_defaults(ctx.program))
     defaults.update(dict.fromkeys(_tof_timing_keys(ctx.program), False))
     pilot = ctx.compiled.create_kernel()
-    for name in ctx.absorptions.preset_tags:
-        pilot.tags[name] = 1
     if ctx.system_points is not None:
         ctx.system_points.seed(pilot.tags)
     _step_compiled_kernel(ctx.compiled, pilot, dt=ctx.dt, system=ctx.system_points)
@@ -2232,85 +1805,6 @@ def _tof_timing_keys(program: Program) -> set[str]:
     }
 
 
-def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
-    assert ctx.graph is not None and ctx.all_exprs is not None
-    if ctx.journal_builder is not None:
-        ctx.journal_builder.add_note(
-            "Pass 'classify_dimensions' ran without absorption (_skip_optimizations=True)"
-        )
-    exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
-    unclassified: set[str] = set()
-    stepping: set[str] = set()
-    result = _classify_dimensions_from_graph(
-        ctx.program,
-        ctx.graph,
-        ctx.all_exprs,
-        scope=ctx.scope,
-        project=_observed_project(ctx),
-        structural_domain_info=_get_structural_domain_info(ctx),
-        receive_dest_names=ctx.receive_dest_names,
-        _skip_absorptions=True,
-        exclusions=exclusions,
-        unclassified=unclassified,
-        stepping_tags_out=stepping,
-        model_system_points=not ctx.domains_only,
-        observe_everything=ctx.opaque_reads_all,
-        abstract_timers=ctx.abstract_timers,
-    )
-    ctx._stepping_tags = frozenset(stepping)
-    if isinstance(result, Intractable):
-        ctx._pending_infeasible_tags.extend(result.tags)
-        ctx._pending_infeasible_hints.extend(result.hints)
-        ctx._unclassified_written = frozenset(unclassified)
-        if result._debug_context is not None:
-            sd, nd, _comb, da, dp, dk = result._debug_context
-            ctx.stateful_dims = sd
-            ctx.nondeterministic_dims = nd
-            ctx._combinational_tags = _comb
-            ctx.done_acc = da
-            ctx.done_presets = dp
-            ctx.done_kinds = dk
-        if exclusions:
-            ctx._exclusions = exclusions
-        return
-    sd, nd, _comb, da, dp, dk = result
-    ctx.stateful_dims = sd
-    ctx.nondeterministic_dims = nd
-    ctx._combinational_tags = _comb
-    ctx.done_acc = da
-    ctx.done_presets = dp
-    ctx.done_kinds = dk
-    ctx._unclassified_written = frozenset(unclassified)
-    if exclusions:
-        ctx._exclusions = exclusions
-
-
-def _pass_stub_redundant_absorptions(ctx: _PassContext) -> None:
-    ctx.absorptions = _RedundantAccAbsorptions(
-        acc_names=frozenset(),
-        preset_tags=frozenset(),
-        synthetic_presets={},
-    )
-    ctx.synthetic_preset_tags = ()
-    if ctx.journal_builder is not None:
-        ctx.journal_builder.add_note(
-            "Pass 'find_redundant_absorptions' disabled (_skip_optimizations=True)"
-        )
-
-
-def _pass_stub_threshold_absorptions(ctx: _PassContext) -> None:
-    ctx.threshold_absorptions = _ThresholdAbsorptions(
-        progress_names=frozenset(),
-        threshold_tags=frozenset(),
-        comparison_tags=frozenset(),
-        vector_specs=(),
-    )
-    if ctx.journal_builder is not None:
-        ctx.journal_builder.add_note(
-            "Pass 'find_threshold_absorptions' disabled (_skip_optimizations=True)"
-        )
-
-
 def _pass_skip_elision(ctx: _PassContext) -> None:
     if ctx.journal_builder is not None:
         ctx.journal_builder.add_note(
@@ -2335,16 +1829,13 @@ def _pass_skip_declared_bounds(ctx: _PassContext) -> None:
 def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
     """Select the pre-BFS pass tuple for *opt*, stubbing disabled optimizations.
 
-    Each disabled pre-BFS optimization swaps its pass(es) for a stub. With all
-    pre-BFS flags enabled this returns ``_DEFAULT_PRE_BFS_PASSES`` unchanged.
-    The BFS-interleaved flags are not handled here — see ``_OptConfig.bfs_config``.
+    Each disabled pre-BFS optimization swaps its pass for a stub. With all
+    pre-BFS flags enabled (and not ``domains_only``) this returns
+    ``_DEFAULT_PRE_BFS_PASSES`` unchanged.  The BFS-interleaved flags are not
+    handled here — see ``_OptConfig.bfs_config``.
     """
     overrides: dict[str, Callable[[_PassContext], None]] = {}
     enable_overrides: dict[str, bool] = {}
-    if not opt.accumulator_absorption:
-        overrides["classify_dimensions"] = _pass_classify_dimensions_no_absorb
-        overrides["find_redundant_absorptions"] = _pass_stub_redundant_absorptions
-        overrides["find_threshold_absorptions"] = _pass_stub_threshold_absorptions
     if not opt.traced_elision:
         overrides["elide_scan_local_state"] = _pass_skip_elision
     if not opt.functional_dependency_projection:
@@ -2354,18 +1845,15 @@ def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
     if not opt.validate_declared_bounds:
         overrides["validate_declared_bounds"] = _pass_skip_declared_bounds
     if opt.domains_only:
+        # How()'s domain prior: no search runs on it, so it builds no timer
+        # model, edge expressions or memory keys (freeze() reads the missing
+        # memory keys as domains_only), and builds the PILOT world-key specs.
         enable_overrides["validate_declared_bounds"] = False
         enable_overrides["diagnose_unwritten_tags"] = False
-        # Absorption and event passes stay enabled so domains_only contexts
-        # still produce state_key_done_specs and threshold_vector_specs
-        # (consumed by the pilot's state key).  domains_only remains True in
-        # freeze() because discover_memory_keys is disabled → memory_key_names
-        # stays None.
+        enable_overrides["build_timer_model"] = False
         enable_overrides["collect_edge_exprs"] = False
         enable_overrides["discover_memory_keys"] = False
-    if opt.abstract_timers and not opt.domains_only:
-        overrides["compile_kernel"] = _pass_compile_abstract_kernel
-        overrides["build_event_specs"] = _pass_build_timer_model
+        enable_overrides["build_prior_key_specs"] = True
     if not overrides and not enable_overrides:
         return _DEFAULT_PRE_BFS_PASSES
     return tuple(
@@ -2382,8 +1870,8 @@ def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
 
 
 def _unoptimized_passes() -> tuple[_PreBFSPass, ...]:
-    """Return the pass tuple with elision and absorption replaced by stubs."""
-    return _passes_for_opt_config(_OptConfig(traced_elision=False, accumulator_absorption=False))
+    """Return the pass tuple with elision replaced by its stub."""
+    return _passes_for_opt_config(_OptConfig(traced_elision=False))
 
 
 _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
@@ -2440,37 +1928,24 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
     ),
     _PreBFSPass(
         "compile_kernel",
-        "Compile the replay kernel and derive stateful/edge tag names",
+        "Compile the search kernel and derive stateful/edge tag names",
         _pass_compile_kernel,
         requires=frozenset({"classification"}),
         provides=frozenset({"compiled_names"}),
     ),
     _PreBFSPass(
-        "collect_done_acc_pairs",
-        "Map Done tags to their accumulator partners",
-        _pass_collect_done_acc_pairs,
-        provides=frozenset({"done_acc_info"}),
+        "build_timer_model",
+        "Build the black-box timer model (which ticks branch, and onto what)",
+        _pass_build_timer_model,
+        requires=frozenset({"compiled_names", "classification"}),
+        provides=frozenset({"timer_model"}),
     ),
     _PreBFSPass(
-        "find_redundant_absorptions",
-        "Identify accumulators absorbed into Done bit state",
-        _pass_find_redundant_absorptions,
-        requires=frozenset({"graph", "all_exprs", "done_acc_info"}),
-        provides=frozenset({"absorptions"}),
-    ),
-    _PreBFSPass(
-        "find_threshold_absorptions",
-        "Identify threshold jumping patterns for hidden accumulators",
-        _pass_find_threshold_absorptions,
-        requires=frozenset({"graph", "all_exprs"}),
-        provides=frozenset({"threshold_absorptions"}),
-    ),
-    _PreBFSPass(
-        "build_event_specs",
-        "Construct Done and threshold event specifications",
-        _pass_build_event_specs,
-        requires=frozenset({"compiled_names", "classification", "threshold_absorptions"}),
-        provides=frozenset({"event_specs"}),
+        "build_prior_key_specs",
+        "Build the how() prior's PILOT world-key Done specs",
+        _pass_build_prior_key_specs,
+        enabled=False,
+        requires=frozenset({"compiled_names", "classification"}),
     ),
     _PreBFSPass(
         "collect_edge_exprs",
@@ -2483,7 +1958,7 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         "discover_memory_keys",
         "Discover kernel memory keys via pilot scan",
         _pass_discover_memory_keys,
-        requires=frozenset({"compiled_names", "absorptions"}),
+        requires=frozenset({"compiled_names"}),
         provides=frozenset({"memory_key_names", "memory_key_defaults"}),
     ),
 )

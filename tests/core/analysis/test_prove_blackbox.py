@@ -1,9 +1,7 @@
 """Black-box timers (prove/blackbox.py): Done is a choice, every counterexample replays.
 
 The prover's kernel ticks timers by choice and the search confirms what it
-finds on the concrete PLC.  These tests run that model explicitly
-(``_OptConfig(abstract_timers=True)``); the exact-timing layer stays the
-default until it is deleted.
+finds on the concrete PLC.  This is the prover's only timer model.
 """
 
 from __future__ import annotations
@@ -44,7 +42,7 @@ from pyrung.core.analysis.prove import (
     reachable_states,
 )
 
-BLACKBOX = _OptConfig(abstract_timers=True)
+BLACKBOX = _OptConfig()
 
 
 def _replay(program: Program, trace) -> PLC:
@@ -199,12 +197,16 @@ class TestReviewProbes:
 
 
 class TestModel:
-    def test_config_turns_the_exact_timing_layer_off(self):
-        opt = _OptConfig(abstract_timers=True)
-        assert not opt.accumulator_absorption
-        assert not opt.hidden_event_jumping
-        assert not opt.pending_settlement
-        assert "abstract_timers" not in opt.active_optimizations
+    def test_all_off_is_the_sound_baseline(self):
+        # Nothing reach-extending is left: every toggle is a reduction the
+        # soundness fuzzer checks against plain BFS, but the bounds check.
+        from pyrung.core.analysis.prove.passes import _REDUCTION_OPTIMIZATIONS
+
+        assert _OptConfig.all_off().active_optimizations == ()
+        assert _OptConfig.sound_baseline().active_optimizations == ("validate_declared_bounds",)
+        assert set(_OptConfig().active_optimizations) == _REDUCTION_OPTIMIZATIONS | {
+            "validate_declared_bounds"
+        }
 
     def test_kernel_without_an_oracle_never_advances(self):
         en = Bool("BbKEn", external=True)
@@ -402,14 +404,7 @@ def _never_concretely(program: Program, tag: str, *, dts=(0.010, 0.001), scans=3
             assert not plc.current_state.tags.get(tag), (dt, plc.current_state.scan_id)
 
 
-ALL_OFF_BLACKBOX = _OptConfig(
-    **{
-        name: False
-        for name in _OptConfig.__dataclass_fields__
-        if name not in ("domains_only", "abstract_timers")
-    },
-    abstract_timers=True,
-)
+ALL_OFF_BLACKBOX = _OptConfig.all_off()
 
 
 class TestReviewRound1:
@@ -486,8 +481,6 @@ class TestReviewRound1:
                 out(y)
             with Rung(long_t.Done, ~short_t.Done):
                 latch(z)
-        exact = _OptConfig(abstract_timers=False)
-        assert isinstance(never(logic, Or(y, z), settled=True, _opt_config=exact), Proven)
         result = never(logic, Or(y, z), settled=True, _opt_config=BLACKBOX)
         assert not isinstance(result, Counterexample), result.trace
 
@@ -656,10 +649,6 @@ class TestReviewRound2:
                     accumulator=Int("BbR2MAcc"),
                     completion_flag=done,
                 ).reset(rst)
-        assert isinstance(
-            never(logic, done, settled=True, _opt_config=_OptConfig(abstract_timers=False)),
-            Counterexample,
-        )
         result = never(logic, done, settled=True, _opt_config=BLACKBOX)
         _assert_replays(logic, result, done.name)
 

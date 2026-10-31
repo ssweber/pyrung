@@ -487,17 +487,11 @@ def _format_context(ctx: Any) -> str:
     lines.append(f"  memory_key_names:       {ctx.memory_key_names}")
     lines.append(f"  demoted_edge_names:     {ctx.demoted_edge_names}")
 
-    lines.append(f"  threshold_vector_specs ({len(ctx.threshold_vector_specs)}):")
-    for vs in ctx.threshold_vector_specs:
-        lines.append(f"    acc={vs.acc_name}  kind={vs.kind}  atoms={vs.atoms}")
-
-    lines.append(f"  done_event_specs ({len(ctx.done_event_specs)}):")
-    for de in ctx.done_event_specs:
-        lines.append(f"    acc={de.acc_name}  kind={de.kind}  preset={de.preset}")
-
-    lines.append(f"  threshold_event_specs ({len(ctx.threshold_event_specs)}):")
-    for te in ctx.threshold_event_specs:
-        lines.append(f"    acc={te.acc_name}  kind={te.kind}  threshold={te.threshold}")
+    model = ctx.timer_model
+    if model is not None:
+        lines.append(f"  timer_model: branch={sorted(model.branch)}  exact={sorted(model.exact)}")
+        lines.append(f"    reps={dict(model.reps)}")
+    lines.append(f"  count_clamps:           {ctx.count_clamps}")
 
     if ctx.journal:
         lines.append(f"  journal ({len(ctx.journal)} tags):")

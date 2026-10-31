@@ -710,9 +710,6 @@ def _abstract_states(
 
 def seed_search_kernel(context: _ExploreContext, kernel: ReplayKernel) -> None:
     """Power-on seeding the search applies to a fresh kernel (bfs.py)."""
-    from .kernel import _seed_synthetic_presets
-
-    _seed_synthetic_presets(context, kernel)
     for name, value in context.outside_tag_defaults:
         kernel.tags[name] = value
     if context.system_points is not None:

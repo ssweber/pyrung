@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from pyrung.core.tag import Tag
 
     from .blackbox import _TimerModel
-    from .deadness import DeadGuard
     from .inputs import _ExclusiveInputGroup
 
 from .expr import _eval_atom as _eval_atom
@@ -55,16 +54,15 @@ class _ExploreContext:
     stateful_names: tuple[str, ...]
     edge_tag_names: tuple[str, ...]
     memory_key_names: tuple[str, ...]
+    # How()'s domain prior only (PILOT's world key, absorb.py); empty for the
+    # search, whose timers are black boxes.
     state_key_done_specs: tuple[_StateKeyDoneSpec, ...]
-    done_event_specs: tuple[_DoneEventSpec, ...]
     threshold_vector_specs: tuple[_ThresholdVectorSpec, ...]
-    threshold_event_specs: tuple[_ThresholdEventSpec, ...]
     dt: float
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
     # Parallel to ``memory_key_names``: the value an unwritten key reads as.
     memory_key_defaults: tuple[Any, ...] = ()
     demoted_edge_names: tuple[str, ...] = ()
-    synthetic_preset_tags: tuple[str, ...] = ()
     nondeterministic_names: tuple[str, ...] = ()
     free_input_names: frozenset[str] = field(default_factory=frozenset)
     always_live_input_names: tuple[str, ...] = ()
@@ -73,7 +71,6 @@ class _ExploreContext:
     joint_inputs: tuple[tuple[str, ...], ...] = ()
     caveats: tuple[str, ...] = ()
     journal: Journal | None = None
-    drum_event_meta: dict[str, _DrumEventMeta] = field(default_factory=dict)
     independence_relation: IndependenceRelation | None = None
     free_input_factoring: FreeInputFactoring | None = None
     # Tags that BFS or step_fn can mutate. When set, kernel snapshots capture
@@ -98,26 +95,16 @@ class _ExploreContext:
     # power-on values.  The compiled kernel has no slot for them, so BFS seeds
     # them; the nondeterministic ones among them are then assigned as inputs.
     outside_tag_defaults: tuple[tuple[str, Any], ...] = ()
-    # Timer units added per scan at ``dt``, by accumulator (see
-    # ``events._exact_timer_move``).
-    timer_quanta: dict[str, float] = field(default_factory=dict)
-    # Hidden counters whose progress is dead at a key where a guard tag
-    # holds a given value (see deadness.py).
-    dead_guards: dict[str, DeadGuard] = field(default_factory=dict)
-    # The program has an edge-sensitive site (counter, one-shot, drum/shift/
-    # toggle edge cell, rise()/fall()): hidden-event jumps keep the plateaus
-    # just before each crossing (see events._stop_point_outcome).
-    edge_sensitive: bool = False
     # Black-box timers (blackbox.py): the compiled kernel ticks by choice,
-    # and every counterexample is confirmed by concrete replay.
-    abstract_timers: bool = False
+    # and every counterexample is confirmed by concrete replay.  None for
+    # how()'s domain prior, which runs no search.
     timer_model: _TimerModel | None = None
     # ``(stateful index, counts up, preset)``: a counter accumulator keyed
     # no further than its preset (``blackbox.count_clamps``).
     count_clamps: tuple[tuple[int, bool, int], ...] = ()
 
 
-from .absorb import _DrumEventMeta, _ThresholdVectorSpec
+from .absorb import _StateKeyDoneSpec, _ThresholdVectorSpec
 from .bfs import _bfs_explore
 from .bfs import _build_trace as _build_trace
 from .bfs import _merge_caveats as _merge_caveats
@@ -133,11 +120,6 @@ from .classify import (
     _pilot_sweep_domains as _pilot_sweep_domains,
 )
 from .elision import _elide_scan_local_stateful_dims as _elide_scan_local_stateful_dims
-from .events import (
-    _DoneEventSpec,
-    _StateKeyDoneSpec,
-    _ThresholdEventSpec,
-)
 from .independence import FreeInputFactoring, IndependenceRelation
 from .lockfile import _apply_band as _apply_band
 from .lockfile import (
@@ -174,10 +156,9 @@ def _resolve_opt_config(opt_config: _OptConfig | None, skip_optimizations: bool)
     """Resolve the effective optimization config for a prove/reachable call.
 
     An explicit ``_opt_config`` wins. Otherwise ``_skip_optimizations=True``
-    selects the maximally-reduced *sound* baseline — every soundness-optional
-    reduction off, the reach-extending optimizations left on (disabling those
-    under a finite depth_budget would under-approximate the reachable set).
-    The absence of both means the production default.
+    selects the *sound* baseline: every reduction off (``sound_baseline()``,
+    ``all_off()`` with the declared-bounds check kept).  The absence of both
+    means the production default.
     """
     if opt_config is not None:
         return opt_config
@@ -187,8 +168,6 @@ def _resolve_opt_config(opt_config: _OptConfig | None, skip_optimizations: bool)
 def _validate_split_at(
     program: Program,
     split_at: list[str],
-    *,
-    abstract_timers: bool = False,
 ) -> dict[str, tuple[Any, ...]]:
     from pyrung.core.analysis.pdg import TagRole, build_program_graph
     from pyrung.core.tag import TagType
@@ -224,7 +203,8 @@ def _validate_split_at(
         if tag.type is TagType.BOOL:
             domain: tuple[Any, ...] = (False, True)
         elif tag_name in done_info.pairs:
-            domain = (False, True) if abstract_timers else (False, PENDING, True)
+            # A black-box timer's Done is a plain Bool.
+            domain = (False, True)
         elif tag.choices is not None:
             domain = tuple(sorted(tag.choices.keys()))
         else:
@@ -262,15 +242,7 @@ def _build_explore_context(
     observed_tags: tuple[Tag, ...] = (),
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for always()/reachable_states()."""
-    split_at_tags = (
-        _validate_split_at(
-            program,
-            split_at,
-            abstract_timers=_opt_config.abstract_timers and not _opt_config.domains_only,
-        )
-        if split_at
-        else None
-    )
+    split_at_tags = _validate_split_at(program, split_at) if split_at else None
     ctx = _PassContext(
         program=program,
         scope=scope,
@@ -292,7 +264,6 @@ def _build_explore_context(
         opaque_reads=opaque_reads,
         opaque_reads_all=opaque_reads_all,
         observed_tags=observed_tags,
-        abstract_timers=_opt_config.abstract_timers and not _opt_config.domains_only,
     )
     return _run_pre_bfs_pipeline(
         ctx, _passes_for_opt_config(_opt_config), allow_partial=allow_partial
@@ -571,8 +542,7 @@ def always(
         is its read set: every input upstream of these tags is explored.
         A callable without ``scope=`` keeps every input in play.
     depth_budget : int
-        Abstract BFS depth budget. Hidden-event acceleration may cover more
-        concrete PLC scans than this budget.
+        BFS depth budget: the longest scan sequence explored.
     max_states : int
         Visited-set cap — bail with ``Intractable`` if exceeded.
     joint_inputs : tuple of tag-name tuples
@@ -580,10 +550,12 @@ def always(
     exclusive_inputs : tuple of tag-name tuples
         Mutually exclusive input groups (at most one True at a time).
     settled : bool
-        When True, evaluate predicates only on settled states (after
-        pending timers/counters have fired), not on transient base
-        states.  Use this for timer-gated alarm properties where the
-        transient period before the timer fires is expected.
+        When True, evaluate predicates only in states where no timer's
+        Done is still open (every enabled on-delay done, every disabled
+        off-delay off, every running drum step finished), not in the
+        transient states while one runs.  Use this for timer-gated alarm
+        properties where the transient period before the timer fires is
+        expected.
     paced : bool
         When True, enforce that after any input flip the next BFS step
         must hold all inputs (stutter).  This separates violations
@@ -797,16 +769,14 @@ def _confirm_results(
     *,
     settled: bool = False,
 ) -> list[Proven | Counterexample | Intractable]:
-    """Under black-box timers, replay every counterexample on the concrete PLC.
+    """Replay every counterexample on the concrete PLC.
 
     A trace the PLC follows to a violation stays a ``Counterexample`` (with
     the concrete trace); one it cannot is an ``Intractable`` of kind
-    ``"timing"`` (blackbox.confirm).  A paced ``Proven``'s aggressive
+    ``"timing"`` or ``"property"`` (blackbox.confirm).  A paced ``Proven``'s aggressive
     counterexample is kept only if it replays.  With *settled*, the replay
     accepts a violation only in a state no running timer leaves unsettled.
     """
-    if not context.abstract_timers:
-        return results
     from .blackbox import confirm
 
     confirmed: list[Proven | Counterexample | Intractable] = []
@@ -1002,8 +972,6 @@ class _StderrProgressReporter:
         *,
         label: str = "",
     ) -> None:
-        from .absorb import _THRESHOLD_KIND_COMPARISON_ONLY
-
         if not isinstance(context, _ExploreContext):
             return
         stateful = context.stateful_dims
@@ -1033,14 +1001,6 @@ class _StderrProgressReporter:
             parts = [f"{name}: {size}" for name, size in top]
             suffix = f" ... +{len(dims) - 8} more" if len(dims) > 8 else ""
             self.info(f"  {', '.join(parts)}{suffix}", label=label)
-
-        absorbed: dict[str, int] = {}
-        for vec in context.threshold_vector_specs:
-            kind = "comparison" if vec.kind == _THRESHOLD_KIND_COMPARISON_ONLY else "threshold"
-            absorbed[kind] = absorbed.get(kind, 0) + 1
-        if absorbed:
-            parts = [f"{kind}: {count}" for kind, count in sorted(absorbed.items())]
-            self.info(f"  absorbed: {', '.join(parts)}", label=label)
 
     def prefix_builder(self, label: str = "") -> Callable[[], str]:
         def _build() -> str:
@@ -1173,8 +1133,7 @@ def reachable_states(
     project : list of tag names, optional
         Tags to project onto. Defaults to terminal tags.
     depth_budget : int
-        Abstract BFS depth budget. Hidden-event acceleration may cover more
-        concrete PLC scans than this budget.
+        BFS depth budget: the longest scan sequence explored.
     max_states : int
         Visited-set cap.
     joint_inputs : tuple of tag-name tuples

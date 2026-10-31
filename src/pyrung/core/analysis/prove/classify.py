@@ -3246,10 +3246,10 @@ def _classify_dimensions(
 
     Returns ``(stateful_dims, nondeterministic_dims, combinational_tags,
     done_acc_pairs, done_presets, done_kinds)`` where each dim dict maps
-    tag name to its value domain.
-    Timer/counter Done bits get a three-valued domain ``(False, PENDING, True)``
-    and their Acc tags are excluded from the state space.
-    Returns ``Intractable`` when a domain cannot be bounded.
+    tag name to its value domain.  Timers are classified as the search sees
+    them (black boxes): a Done bit is a plain Bool and an accumulator
+    something reads is state.  Returns ``Intractable`` when a domain cannot be
+    bounded.
     """
     from pyrung.core.analysis.prove.passes import _collect_receive_dest_names
 
@@ -3261,6 +3261,8 @@ def _classify_dimensions(
         all_exprs,
         scope=scope,
         receive_dest_names=frozenset(_collect_receive_dest_names(program)),
+        abstract_timers=True,
+        _skip_absorptions=True,
     )
 
 

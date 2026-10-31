@@ -138,9 +138,6 @@ class _ParentLink:
     scans: int
     caveats: tuple[str, ...] = ()
     prev: dict[str, Any] = field(default_factory=dict)
-    # Steps replayed after this one: the repeated traversals of a pumped cycle
-    # (see cycles.py).
-    repeat: tuple[TraceStep, ...] = ()
     # Black-box timer choices of this link (see TraceStep).
     timers: tuple[tuple[str, Any], ...] = ()
     choices: tuple[int, ...] = ()
@@ -185,4 +182,6 @@ class StateDiff:
     removed: frozenset[frozenset[tuple[str, Any]]]
 
 
+# A timer's Done between off and done in how()'s domain prior and PILOT's
+# world key (``absorb._done_acc_state``).  The search keys Done as a Bool.
 PENDING = "Pending"

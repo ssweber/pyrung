@@ -46,10 +46,10 @@ from pyrung.core.analysis.pilot.world_key import (
 )
 from pyrung.core.analysis.prove.absorb import (
     _done_acc_state,
+    _StateKeyDoneSpec,
     _ThresholdAtomSpec,
     _ThresholdVectorSpec,
 )
-from pyrung.core.analysis.prove.events import _StateKeyDoneSpec
 from pyrung.core.analysis.prove.results import PENDING
 from pyrung.core.condition import (
     AllCondition,
