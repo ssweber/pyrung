@@ -106,14 +106,23 @@ What each case tells apart:
   condition off, and no jog: Result1 = 1, Result3 = 0, step 1's output first on
   at scan 3 (Result4 = 3).  The pin drawn teeing off the enable wire is the
   other CLICK drawing of the same logic; pyrung's exporter always copies the
-  contacts, so hardware round 3 loads the tee by hand.
+  contacts.
+- ``pins_read_before_step_fix_tee``: the same question with the ``.reset()``
+  and ``.jog()`` pins drawn teeing off the drum's input wire after the one
+  shared contact (Result1 != 1), each with one contact of its own (Cmd == 0,
+  C1980).  The shared condition is true while idle (step 0) and on the invalid
+  step, so the reset pin can be a tee too.  Same readings as above.  pyrung
+  runs the same rungs in every target; the CLICK export redraws the pins
+  (``tee=``), and ``test_tee_twins.py`` imports the drawing and compares it
+  with the rail drawing.  A CLICK that reads the two drawings differently is
+  the answer.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from pyrung.conformance import Group, assert_all_passed, case, run
+from pyrung.conformance import Group, TeeSpec, assert_all_passed, case, run
 from pyrung.core import (
     And,
     Or,
@@ -511,6 +520,28 @@ def prove_pins_read_before_step_fix(slot):
     done(slot)
 
 
+def prove_pins_read_before_step_fix_tee(slot):
+    # Step 5 is written into the step register (Result1) on scan 3, above the
+    # drum.  The drum's rung and its two pins share Result1 != 1 (true while
+    # idle, at step 0, and on the bad step); the jog input is C1980, on scan 3.
+    count_scans(slot)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+        copy(5, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+        out(c[1980])
+    with Rung(slot.Result1 != 1):
+        event_drum(
+            outputs=[c[1976], c[1977]],
+            events=[c[1978], c[1978]],
+            pattern=[[1, 0], [0, 1]],
+            current_step=slot.Result1,
+            completion_flag=c[1979],
+        ).reset(And(slot.Result1 != 1, slot.Cmd == 0)).jog(And(slot.Result1 != 1, c[1980]))
+    first_on_from(slot, c[1977], 3, slot.Result3)
+    first_on_from(slot, c[1976], 3, slot.Result4)
+    done(slot)
+
+
 group = Group(
     "drum",
     [
@@ -639,6 +670,19 @@ group = Group(
             "is on from scan 3 (Result3), and step 1's never comes on (Result4 = 0)",
             ladder=prove_pins_read_before_step_fix,
             probe="pins read before the box executes",
+            expect={"Result1": 2, "Result3": 3, "Result4": 0},
+            scans=SCANS,
+        ),
+        case(
+            "The tee drawing of the same question: a drum whose reset and jog pins tee "
+            "off its input wire after Result1 != 1 reads its rung and pins at one "
+            "moment, before it runs; a step register staged out of range on scan 3 is "
+            "that condition, the jog sees it though the drum corrects the step to 1 as "
+            "it runs, and takes the corrected step to 2 (Result1), whose output is on "
+            "from scan 3 (Result3), and step 1's never comes on (Result4 = 0)",
+            ladder=prove_pins_read_before_step_fix_tee,
+            probe="pins read before the box executes",
+            tee=TeeSpec("event_drum(", (".reset()", ".jog()"), after=1),
             expect={"Result1": 2, "Result3": 3, "Result4": 0},
             scans=SCANS,
         ),

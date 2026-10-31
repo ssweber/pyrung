@@ -50,6 +50,10 @@ def test_rungs():
 
 **`probe="..."`** marks a case that asks an open hardware question, in a few words for the report. Its expectation is the answer pyrung would adopt (and, where pyrung reads something else, the case is also `pending`). Its module docstring lists every candidate answer and what each reads, so a probe that fails on a CLICK is an answer, not a bug: change the expectation to what the CLICK read and say which answer it was; the next CLICK run confirms it.
 
+## Tee-drawn twins
+
+A CLICK pin can run from the rail with its contacts, or tee off the box's input wire after contacts it shares with the enable (C000A only asks that all pins start from the same branch). pyrung's exporter always writes the first. A case with `tee=TeeSpec(box, pins, after)` is the tee-drawn twin of a rail-drawn case: it runs the same pyrung rungs on every target (its pins hold the shared contacts too, as `And(shared..., own)`), and the CLICK export (`ConformanceProgram.export()`, so the part export and the workspace) redraws the named pins, which must be the first pin rows under the box row, as tees after the first `after` contacts of the box row; pins not named stay drawn from the rail below them (a tee cannot cross a rail pin row, which is why the drum twin tees `.reset()` too). `export(drawn=False)` writes the rail drawing. The group and case hashes are taken from the drawn rows. `test_tee_twins.py` pins what the redraw touches and that the importer reads the drawing back as the rail drawing, so what the twin runs in-process is what the drawing imports to. In ClickNick, Preview Changes lists a twin's rungs as changed against the rail source, since pyrung source cannot draw a tee.
+
 ## One-shot pattern
 
 Every test ladder gates on `slot.Cmd != 0, slot.Fired == 0` and sets `copy(1, slot.Fired)` in its last rung. This ensures instructions fire exactly once:

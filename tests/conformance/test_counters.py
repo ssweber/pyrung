@@ -87,11 +87,18 @@ tells apart:
   teeing off the up rung's input wire after ~Done is the other CLICK drawing
   of the same logic; hardware round 3 should also load it by hand in CLICK
   (it cannot be written in pyrung, whose exporter always copies the contacts).
+- ``pins_read_before_count_tee``: the same question with the ``.down()`` pin
+  drawn teeing off the up rung's input wire after the two shared contacts
+  (Cmd != 0, ~Done), its own contact C1397 alone on the pin's row; the reset
+  pin stays drawn from the rail below it.  Same readings as above.  pyrung runs
+  the same rungs in every target; the CLICK export redraws the pin (``tee=``),
+  and ``test_tee_twins.py`` imports the drawing and compares it with the rail
+  drawing.  A CLICK that reads the two drawings differently is the answer.
 """
 
 from __future__ import annotations
 
-from pyrung.conformance import Group, assert_all_passed, case, run
+from pyrung.conformance import Group, TeeSpec, assert_all_passed, case, run
 from pyrung.core import And, Or, Rung, calc, copy, count_down, count_up, latch, out, rise, system
 from tests.conformance.memory import ClickCounter, c
 from tests.conformance.scans import WINDOW, count_scans, done, scans_for
@@ -346,6 +353,24 @@ def prove_pins_read_before_count(slot):
     done(slot)
 
 
+def prove_pins_read_before_count_tee(slot):
+    # As pins_read_before_count, with the pulses on bits so the up rung and the
+    # down pin each hold just the shared contacts and one of their own.
+    counter = ClickCounter(141)
+    count_scans(slot)
+    with Rung(slot.Cmd != 0, on(slot, 1, 3)):
+        out(c[1396])
+    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+        out(c[1397])
+    with Rung(slot.Cmd != 0, ~counter.Done, c[1396]):
+        count_up(counter, 2).down(And(slot.Cmd != 0, ~counter.Done, c[1397])).reset(slot.Cmd == 0)
+    with Rung(slot.Cmd != 0):
+        copy(counter.Acc, slot.Result1)
+    with Rung(slot.Cmd != 0, counter.Done):
+        copy(1, slot.Result2)
+    done(slot)
+
+
 group = Group(
     "counters",
     [
@@ -457,6 +482,18 @@ group = Group(
             "the counter reads Acc = 1 (Result1) with Done off (Result2 = 0)",
             ladder=prove_pins_read_before_count,
             probe="pins read before the box executes",
+            expect={"Result1": 1, "Result2": 0},
+            scans=SCANS,
+        ),
+        case(
+            "The tee drawing of the same question: a counter whose .down() pin tees off "
+            "the up rung's input wire after Cmd != 0 and ~Done reads its rung and pin "
+            "at one moment, before it counts; the second count turns Done on during scan "
+            "3 while a down pulse arrives, both cancel, and the counter reads Acc = 1 "
+            "(Result1) with Done off (Result2 = 0)",
+            ladder=prove_pins_read_before_count_tee,
+            probe="pins read before the box executes",
+            tee=TeeSpec("count_up(", (".down()",), after=2),
             expect={"Result1": 1, "Result2": 0},
             scans=SCANS,
         ),

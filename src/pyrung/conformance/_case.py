@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pyrung.conformance._slot import SLOT_FIELDS
+from pyrung.conformance._tee import TeeSpec
 from pyrung.core.tag import Tag
 
 #: An expected slot value: an exact int, or a ``range`` the value must fall in.
@@ -56,6 +57,8 @@ class Case:
     pending: str | None = None
     #: The open hardware question the case asks; ``expect`` is the hypothesis.
     probe: str | None = None
+    #: Pins the CLICK export redraws as tees off the box's input wire (see ``_tee.py``).
+    tee: TeeSpec | None = None
 
     @property
     def checks(self) -> dict[str, Expectation]:
@@ -154,6 +157,7 @@ def case(
     expect_system: Mapping[str, Expectation] | None = None,
     pending: str | None = None,
     probe: str | None = None,
+    tee: TeeSpec | None = None,
 ) -> Case:
     """Define a conformance case.
 
@@ -195,6 +199,11 @@ def case(
             *expect* is the answer pyrung would adopt; the case's module
             docstring says which reading means which answer, so a failure on
             a CLICK is an answer, not a bug.
+        tee: Makes the case the tee-drawn twin of a rail-drawn one: the CLICK
+            export draws the named pins teeing off the box's input wire after
+            its shared contacts, instead of from the rail with those contacts
+            copied.  The pyrung rungs are the same, so every target runs them
+            as before, and a test imports the drawing and compares.
     """
     bad = set(expect) - set(RESULT_FIELDS)
     if bad:
@@ -232,6 +241,7 @@ def case(
         expect_system=system_expect,
         pending=pending,
         probe=probe,
+        tee=tee,
     )
 
 

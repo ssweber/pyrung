@@ -9,6 +9,7 @@ ladder, gated by its slot's ``Cmd``/``Fired``.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import shutil
 import tempfile
@@ -29,6 +30,7 @@ from pyrung.conformance._slot import (
     make_slot,
     slot_register,
 )
+from pyrung.conformance._tee import draw_tees
 from pyrung.core import Int, Program, Rung, call, copy, subroutine
 
 if TYPE_CHECKING:
@@ -108,9 +110,12 @@ class ConformanceProgram:
                 return g
         raise KeyError(name)
 
-    def export(self, directory: str | Path) -> Path:
+    def export(self, directory: str | Path, *, drawn: bool = True) -> Path:
         """Write the whole CLICK project: ``main.csv``, one CSV per group subroutine
         under ``subroutines/``, and ``nicknames.csv``.
+
+        Cases with a ``tee`` are drawn with their pins teeing off the box's
+        input wire; ``drawn=False`` writes the exporter's rail drawing for them.
 
         Returns the directory.  Load it once; afterwards replace one group's
         subroutine at a time.
@@ -122,7 +127,10 @@ class ConformanceProgram:
         # A subroutine left by an earlier export into *out* would be pasted too.
         for stale in (out / "subroutines").glob("*.csv"):
             stale.unlink()
-        pyrung_to_ladder(self.program, self.tag_map).write(out)
+        bundle = pyrung_to_ladder(self.program, self.tag_map)
+        if drawn:
+            bundle = _draw_tees(bundle, self.groups)
+        bundle.write(out)
         self.tag_map.to_nickname_file(out / "nicknames.csv")
         return out
 
@@ -238,7 +246,7 @@ def build_program(
                     _case_rungs(g.name, cases, slot)
         # Validated export: a case the CLICK exporter rejects fails here, before
         # any wire traffic.  Mark such a case ``in_process_only``.
-        bundle = pyrung_to_ladder(body, tag_map)
+        bundle = _draw_tees(pyrung_to_ladder(body, tag_map), [_Drawn(g, cases)])
         if g.in_main:
             # The rungs are main's, and the helper subroutines they call.
             rows = (("main", bundle.main_rows), *bundle.subroutine_rows)
@@ -289,6 +297,31 @@ def build_program(
         tag_map=tag_map,
         program_hash=program_hash,
     )
+
+
+@dataclass(frozen=True)
+class _Drawn:
+    group: Group
+    cases: tuple[tuple[int, Case], ...]
+
+
+def _draw_tees(bundle, groups):
+    """*bundle* with every ``tee`` case's pins redrawn as tees off the box's input wire."""
+    main_rows = bundle.main_rows
+    subroutines = list(bundle.subroutine_rows)
+    for g in groups:
+        group = g.group
+        for _index, c in g.cases:
+            if c.tee is None:
+                continue
+            marker = f"{group.name}/{c.id}"
+            if group.in_main:
+                main_rows = draw_tees(main_rows, marker, c.tee)
+                continue
+            for i, (name, rows) in enumerate(subroutines):
+                if name == group.subroutine:
+                    subroutines[i] = (name, draw_tees(rows, marker, c.tee))
+    return dataclasses.replace(bundle, main_rows=main_rows, subroutine_rows=tuple(subroutines))
 
 
 def _layout_entry(g: GroupBuild) -> tuple[str | int, ...]:

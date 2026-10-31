@@ -55,7 +55,7 @@ def _csv_files(directory: Path) -> dict[str, bytes]:
 @pytest.mark.filterwarnings("ignore:CLK_STEP_LIMIT")
 def test_workspace_source_exports_byte_identical_ladder(tmp_path: Path, plc_package):
     program = suite.build()
-    expected = _csv_files(program.export(tmp_path / "export"))
+    expected = _csv_files(program.export(tmp_path / "export", drawn=False))
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
