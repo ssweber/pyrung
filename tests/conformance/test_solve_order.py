@@ -26,15 +26,16 @@ round 2 reads S for some topology, its ``expect`` becomes S's reading and its
 annotation flips to False.
 
 Every case of the ``solve_order`` group itself keeps edge, counter and drum
-semantics out of the answer (no S2, S3 or DRUM; the folded-in ``row_solve`` and
-``cont_box`` cases ask about edges and boxes on purpose): the bit a later part
-reads (P below) is latched by its writer row and cleared by the next rung (or,
-in a one-shot case whose rung never runs again, by ``init``), so it is never
-on when the rung that reads it is entered.  A part that reads P live sees it; one that reads the snapshot never
-does.  A pulsed edge fires once under L and never under S, and every counted or
-clocked input is a one-scan pulse, so level and edge counting agree.  The drum
-cases read only the step, never an output or the completion flag, and no scan
-has two drum controls on.  A box's reset leg is ``Cmd == 0`` (or that, or P).
+semantics out of the answer (no S2, S3 or DRUM; the folded-in ``row_solve``
+and ``cont_box`` cases ask about edges and boxes on purpose): the bit a later
+part reads (P below) is latched by its writer row and cleared by the next rung
+(or, in a one-shot case whose rung never runs again, by ``init``), so it is
+never on when the rung that reads it is entered.  A part that reads P live
+sees it; one that reads the snapshot never does.  A pulsed edge fires once
+under L and never under S, and every counted or clocked input is a one-scan
+pulse, so level and edge counting agree.  The drum cases read only the step,
+never an output or the completion flag, and no scan has two drum controls on.
+A box's reset leg is ``Cmd == 0`` (or that, or P).
 
 A case where L and S agree (a control, -) must still tell some model apart,
 as AGENTS.md asks.  The models named below, and what each reads:

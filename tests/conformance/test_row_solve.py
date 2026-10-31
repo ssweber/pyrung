@@ -7,12 +7,12 @@ a continued wire below it).  Part C, beside ``rungs`` and ``solve_order``.
 
 The models, as in ``test_solve_order.py``:
 
-- **L** (live, CLICK's model since hardware round 1, adopted by S4): the trunk's power
-  is computed once and held for every row under it; each row's own contacts,
-  edge contacts included, are read when the solve reaches the row, so they see
-  the writes of the rows above; a box reads its enable and pins before it
-  writes; a continued wire is a wire of its own from the rail, read live.
-  Each case's ``expect`` is L's reading.
+- **L** (live, CLICK's model since hardware round 1, adopted by S4): the
+  trunk's power is computed once and held for every row under it; each row's
+  own contacts, edge contacts included, are read when the solve reaches the
+  row, so they see the writes of the rows above; a box reads its enable and
+  pins before it writes; a continued wire is a wire of its own from the rail,
+  read live.  Each case's ``expect`` is L's reading.
 - **S** (snapshot, pyrung today): every contact of the rung, its branches and
   its continued wires reads the memory the rung was entered with, and S3's edge
   frame samples every edge contact of the rung there too.  ``SOLVE_ORDER``
@@ -32,17 +32,18 @@ The cases, what each model reads, and the other models they tell apart:
   also fires on 3 and 6, so this case does not tell it from L;
   ``coils/edge_sees_previous_scan_end`` rules that model out.
 - ``edge_under_unpowered_branch`` (-, probe): the trunk is powered every scan;
-  a parent branch whose only contact (the gate) is off while a bit rises
-  (scan 3) and falls (scan 7) holds a ``rise`` and a ``fall`` branch; the gate
-  is on for scans 5 and 8 only, written by one rung (two ``out`` rungs would
-  leave it as the lower one writes it, off on scan 5).  An edge contact under
-  an unpowered parent is still solved and its memory updated ("scanned",
-  adopted: S3 frames every contact of the rung, and S4 reaches every row,
-  unpowered or not): R1 = 0, R2 = 0.  Updated only when power reaches it, or a solve that skips the rows of
-  an unpowered branch: the rise fires on scan 5 and the fall on 8 (5, 8).  The
-  rail rise and fall below (R3 = 3, R4 = 7) are the bit's own edges under
-  both.  ``coils/edge_in_false_rung_branch`` answered this for a rung whose
-  rail contact is open; this one asks it under a powered trunk, one level down.
+  a parent branch whose only contact (the gate) is off while a bit rises (scan
+  3) and falls (scan 7) holds a ``rise`` and a ``fall`` branch; the gate is on
+  for scans 5 and 8 only, written by one rung (two ``out`` rungs would leave
+  it as the lower one writes it, off on scan 5).  An edge contact under an
+  unpowered parent is still solved and its memory updated ("scanned", adopted:
+  S3 frames every contact of the rung, and S4 reaches every row, unpowered or
+  not): R1 = 0, R2 = 0.  Updated only when power reaches it, or a solve that
+  skips the rows of an unpowered branch: the rise fires on scan 5 and the fall
+  on 8 (5, 8).  The rail rise and fall below (R3 = 3, R4 = 7) are the bit's own
+  edges under both.  ``coils/edge_in_false_rung_branch`` answered this for a
+  rung whose rail contact is open; this one asks it under a powered trunk, one
+  level down.
 - ``continued_after_box_rereads_trunk`` (+, probe): a counter (preset 1) whose
   rung needs its own Done off counts on scan 2; the continued wire under the
   box repeats that rung's contacts (~Done first, so the importer does not fold
