@@ -301,11 +301,13 @@ class _InstructionMixin:
                 )
             return self._fn("fill", fill_value, dest, **oneshot_kw)
         if instruction_type == "CalcInstruction":
-            mode = infer_calc_mode(instruction.expression, instruction.dest).mode
+            # The formula as written: CLICK cuts an Int Math's constants itself.
+            expression = instruction.source_expression
+            mode = infer_calc_mode(expression, instruction.dest).mode
             # Hex-mode Math reads every constant as hex (shift counts too).
             with self._hex_constants("wrap" if str(mode) == "hex" else None):
                 formula = self._render_operand(
-                    instruction.expression,
+                    expression,
                     path=f"{path}.expression",
                     source=instruction,
                 )

@@ -36,13 +36,13 @@ def test_rungs():
 
 - **Group**: a named set of cases, one per case module (`group = Group(...)`). The name is snake_case; the subroutine is `Conf_<Name>` (`rung_order` -> `Conf_RungOrder`) and slot nicknames start with `<Name>`. CLICK nicknames are at most 24 characters and `<Name><slot>_ErrorCode` must fit, so keep `<Name>` to 12 characters (build fails otherwise). `suite.py` lists every group in `ALL_GROUPS`; a new case module adds its `group` there.
 - **Case id**: the stable key of the case's slot in the manifest. It defaults to the ladder function's name without a leading `_` or `prove_` (`prove_source_order` -> `source_order`); pass `id=` to pin it. Renaming the ladder function renames the id, and the build then asks for a manifest entry -- pin `id=` if you rename. To change a case, rewrite it in place (same id, same slot) while its id still names the question it asks; the group goes stale until it is pushed again, as for any edit. When the id no longer fits, or the case asks nothing (no model reads it differently), retire it: drop the case and leave its manifest line, commented `# retired: why`, so the slot is never reused; a replacement takes a new id at the next index.
-- **Confirmed**: nobody flips a flag. A run against a real CLICK (`make test-conformance PLC=...`) writes every case that passed to `confirmed.toml` (`group/id`, the hash of the case's own exported rows, the date) and drops every case that failed (`record_confirmations()`). The report marks a case `[confirmed]` while its recorded hash matches the case as it is now, so rewriting a case (sentence, expectation, ladder, slot) leaves it unconfirmed until it passes on a CLICK again, and counts the unconfirmed ones. Commit `confirmed.toml` with the run. An in-process-only case confirmed some other way is entered by hand with `hash = ""`.
+- **Confirmed**: nobody flips a flag. A run against a real CLICK (`make test-conformance PLC=...`) writes every case that passed to `confirmed.toml` (`group/id`, the hash of the case's own exported rows -- its `Case` comment through its last rung, not the subroutine's closing `return()` rung, so appending a case leaves its hash alone -- the date) and drops every case that failed (`record_confirmations()`). The report marks a case `[confirmed]` while its recorded hash matches the case as it is now, so rewriting a case (sentence, expectation, ladder, slot) leaves it unconfirmed until it passes on a CLICK again, and counts the unconfirmed ones. Commit `confirmed.toml` with the run. An in-process-only case confirmed some other way is entered by hand with `hash = ""`.
 - **The expectation is CLICK's.** A case expects what a real CLICK reads, not what pyrung does today. Where pyrung differs, the case says so with `pending=` (next section); where nobody knows yet, it is a probe (`probe=`) expecting the answer pyrung would adopt.
 - **Comment**: generated, never written by hand. Each case's first rung carries `Case <group>/<id>`, the sentence, and `Expect: Result1 = 5, Result2 in 1..6` (`case_comment()` in `src/pyrung/conformance/_ladder.py`), so the ladder in CLICK documents itself and Python stays the single source. The comment is part of the exported ladder, so editing a sentence or an expectation changes the group hash: the group reports stale until its rungs are pushed again, and Preview Changes shows the comment as a diff.
 
 ## Pending and probes
 
-**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `S4` live row-by-row rung solve, `DRUM` drum ordering, `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` SC3/SD9 phase and the fault-flag model, `CONST16` a Math constant into an Int is cut to 16 bits.
+**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `S4` live row-by-row rung solve, `DRUM` drum ordering, `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` the fault-flag model (SC40 follows the last Math, SC43/SC44 the last instruction).
 
 - On pyrung's own targets (in-process `run()`, the local sim, `TARGET=circuitpy`) a pending case is a **strict xfail**: it passes, reported `XFAIL` with what pyrung read, only if no run meets its expectation and its reset is clean (a leak still fails it). Once pyrung starts meeting the expectation, the case fails with "remove pending=": the fixer of that step deletes the marker in the same commit, so `grep 'pending="S2"'` lists exactly what a step must flip.
 - Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `pending=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
@@ -155,7 +155,7 @@ Each slot is a `named_array` instance with 9 Int fields:
 
 Cases cannot share memory, and the build checks it (see "Reset"). Anything a case touches outside its slot is raw CLICK memory its group owns (see "Raw memory"). `build_program(groups, manifest)` returns the program, its TagMap, the layout hash, and one `GroupBuild` per group (subroutine, block, slots, group hash). The build exports each group's subroutine through the validating CLICK exporter, so a case the exporter rejects fails at build time -- mark it in-process-only. Without a manifest, `build_program` packs the groups in order from DS11 (`Manifest.packed`): fine for harness tests and the local sim, never for a real CLICK, because adding a case moves registers.
 
-CLICK does not support nested subroutine calls (confirmed in the CLICK editor), so a case cannot `call()` a subroutine of its own: its rungs already run inside `Conf_<Group>`. A group whose subroutine main calls more than once a scan (`Group(..., calls=2)`, the `call_twice` group) is how a case asks what a subroutine called twice does; every rung of such a group runs twice a scan, so its cases count calls, not scans. Other subroutine tests (a call from a case, memory seen after the call) need a home called from main; that is not built yet.
+CLICK does not support nested subroutine calls (confirmed in the CLICK editor), so a case cannot `call()` a subroutine of its own: its rungs already run inside `Conf_<Group>`. A group whose subroutine main calls more than once a scan (`Group(..., calls=2)`, the `call_twice` group) is how a case asks what a subroutine called twice does; every rung of such a group runs twice a scan, so its cases count calls, not scans. A group built with `in_main=True` (`loop_call`, part E) is the subroutine home: its case rungs run in main, so a case can `call()` a helper subroutine it defines itself (`with subroutine("Conf_<Group>_<Name>")` in the case ladder), even from a `forloop()` body. It has no `Conf_<Group>` subroutine: its group hash covers main's case rungs and the helpers, so a changed case is re-pasted into main (Preview Changes) plus its helper subroutines, and it takes a part of its own.
 
 Unconditional rungs (an output wired straight to the rail, as in main's `copy`/`call` rungs and each group's hash rung) are valid in CLICK (confirmed).
 
@@ -227,7 +227,7 @@ Over Modbus (`run_modbus(build, endpoint, groups=None)`), every step is a regist
 
 Over Modbus nothing counts scans, so waits are wall clock: "Fired, then settle, then two reads". `case.scans` becomes settle time at the nominal 10 ms scan. The double read is the stability check: a value still moving when the harness reads fails loudly instead of passing by luck.
 
-The local sim (`SimServer`) is `ClickDataProvider` behind `pyclickplc.server.ClickServer` on a free localhost port, serving a `PLC(realtime=True)` that free-runs on its own thread at one scan per 10 ms of wall clock (late scans are not burst to catch up). Timers therefore see wall-clock time, as on a CLICK. Modbus reads and writes take the same lock as the scan, and each write becomes a `patch()` applied at the start of the next scan. A scan exception stops the sim and fails the run.
+The local sim (`SimServer`) is `ClickDataProvider` behind `pyclickplc.server.ClickServer` on a free localhost port, serving a `PLC(realtime=True)` that free-runs on its own thread at one scan per 10 ms of wall clock (late scans are not burst to catch up). Timers therefore see wall-clock time, as on a CLICK, with one exception: a scan advances them by at most `MAX_SCAN_DT_S` (40 ms; `SimServer(max_scan_dt=None)` lifts it). With the whole suite loaded the sim scans every 30-40 ms, and on a busy machine the scan thread stalls 70-190 ms now and then; let through, a stall becomes a scan no CLICK has (they take milliseconds), steps over a case's 80-100 ms windows, and fails cases that are right (the O4 flasher did, about one run in five). Capped, PLC time lags wall time by what the stall took beyond 40 ms, which the harness never sees: it waits on `Fired`, not on the clock. The P1AM-200 target has no cap: its generated code times itself. Modbus reads and writes take the same lock as the scan, and each write becomes a `patch()` applied at the start of the next scan. A scan exception stops the sim and fails the run.
 
 The default 10 s timeout is far above what the sim needs (a debounce coil's 1 s off side is the longest reset, and no case runs past 1 s); it is sized for a real CLICK on a busy network.
 
@@ -245,7 +245,7 @@ The harness does not push ladder. CLICK takes it two ways: a whole program throu
 
 First load:
 
-1. `make conformance-export PART=A` (and `PART=B`, `PART=C`; `OUT=dir`, default `build/conformance-A`) writes one part as its own project: `main.csv`, `subroutines/Conf_<Group>.csv` per group, and `nicknames.csv`, and prints the layout hash and each group's hash and block. The whole suite (no `PART=`) is more than CLICK's 8000 steps, so a CLICK loads it as three projects (`suite.PARTS`, split by topic: A and B the instructions, C how a rung is solved -- `rungs`, `solve_order`, `call_twice`, `loop`, `coils`). `test_build.py` keeps each part's `estimate_steps()` under `suite.PART_STEP_BUDGET` (7500); a part that outgrows it moves a group to another part. The registers are the manifest's either way, so a group's subroutine is the same in its part as in the whole project; only main differs, writing its own part's layout hash to `DS1`.
+1. `make conformance-export PART=A` (and `PART=B` to `PART=E`; `OUT=dir`, default `build/conformance-A`) writes one part as its own project: `main.csv`, `subroutines/Conf_<Group>.csv` per group, and `nicknames.csv`, and prints the layout hash and each group's hash and block. The whole suite (no `PART=`) is more than CLICK's 8000 steps, so a CLICK loads it as five projects (`suite.PARTS`, split by topic: A and B the instructions, C how a rung is solved -- `rungs`, `solve_order`, `call_twice`, `loop`, `coils`; D and E probes CLICK may refuse at paste or transfer, `ret_branch` and `loop_call`, each kept apart so a refusal costs only that project). `test_build.py` keeps each part's `estimate_steps()` under `suite.PART_STEP_BUDGET` (7500); a part that outgrows it moves a group to another part. The registers are the manifest's either way, so a group's subroutine is the same in its part as in the whole project; only main differs, writing its own part's layout hash to `DS1`.
 2. In a new CLICK project, ClickNick **Ladder > Open in Guided Paste...** on `dir`: it imports `nicknames.csv`, then walks through main and each subroutine.
 3. In ClickNick's Workspace controls, find an existing workspace and pick `tests/conformance/workspace/`. ClickNick asks a project without a PLC name for one: enter `PYRUNG_CONFORMANCE`. It refuses the folder if the project already has another name; rename the PLC in CLICK.
 4. Save in CLICK (ClickNick fills `src/plc/` and `csv/`), write to the PLC, put it in RUN.
@@ -256,7 +256,7 @@ A change to the header protocol (`LAYOUT_VERSION`, now 3 for the `Ready` field) 
 Then, per edit:
 
 1. Edit a group's cases (add a manifest line if `make test-conformance` asks for one).
-2. `make conformance-workspace` (or `WORKSPACE=dir` for another folder, `PART=A`, `B` or `C` for a part's project) rewrites the workspace's `src/plc/` from the suite: `pyrung_to_ladder` to temporary CSVs, then `ladder_to_pyrung_project` with ClickNick's arguments (`index=True`, the suite's nicknames), swapped in whole. It never touches `csv/`, which is CLICK's accepted snapshot and ClickNick's diff baseline.
+2. `make conformance-workspace` (or `WORKSPACE=dir` for another folder, `PART=A` to `E` for a part's project) rewrites the workspace's `src/plc/` from the suite: `pyrung_to_ladder` to temporary CSVs, then `ladder_to_pyrung_project` with ClickNick's arguments (`index=True`, the suite's nicknames), swapped in whole. It never touches `csv/`, which is CLICK's accepted snapshot and ClickNick's diff baseline.
 3. ClickNick **Preview Changes** shows only the changed rungs: the group's case rungs and its hash rung (R1 of `Conf_<Group>`). **Copy to Click**, paste in CLICK, save, write to the PLC.
 4. `make test-conformance PLC=... GROUP=<group>`.
 
@@ -272,12 +272,13 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [ ] patch values consumed after one scan
 - [ ] patch applied before logic, on the same scan
 - [ ] forces persist across scans
-- [x] fault flags (SC40/SC43/SC44): which later instruction clears them (probes, pending SYS; `system/division_flag_clears_each_scan`, `system/out_of_range_flag_clears_each_scan`, `system/address_flag_clears_each_scan`)
-- [x] first scan after STOP->RUN: SD9 and SC3 (probe; `system/first_scan_counter_and_clock`); SD9's wrap (probe; `system/scan_counter_wraps_to_zero`)
-- [x] edge and counter memory at STOP->RUN (probes; `coils/edge_on_first_scan`, `counters/first_scan_input_already_on`)
+- [x] fault flags (SC40/SC43/SC44): which later instruction clears them (answered on hardware round 2: SC40 the next Math, SC43/SC44 the next instruction; pending SYS; `system/division_flag_clears_each_scan`, `system/out_of_range_flag_clears_each_scan`, `system/address_flag_clears_each_scan`)
+- [x] fault flags after a coil, an open rung, a timer, a counter (SC43/SC44), and after a hex-mode Math (SC40) (probes, pending SYS; `system/out_of_range_flag_vs_other_instructions`, `system/address_flag_vs_other_instructions`, `system/division_flag_vs_hex_math`)
+- [x] first scan after STOP->RUN: SD9 = 0 with SC3 on (`system/first_scan_counter_and_clock`, answered on hardware round 2); SD9's wrap (answered on hardware; `system/scan_counter_wraps_to_zero`)
+- [x] edge and counter memory at STOP->RUN (answered on hardware; `coils/edge_on_first_scan`, `counters/first_scan_input_already_on`)
 - [ ] first_scan true once, on scan 0
 - [ ] first_scan re-triggers on STOP->RUN
-- [x] scan clock on when SD9 is even (`system/scan_clock_follows_counter`, pending SYS)
+- [x] scan clock on when SD9 is even (`system/scan_clock_follows_counter`)
 - [x] scan_counter steps by one every scan (`system/scan_counter_steps_by_one`)
 - [ ] scan_counter resets on STOP->RUN
 - [x] clock toggles fire at their nominal rate (`system/clock_bits_toggle_at_their_rate`)
@@ -300,20 +301,20 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] an OR on the rail is solved once, before the outputs (`solve_order/input_or_legs_read_before_outputs`); an OR on a branch reads live (`solve_order/branch_or_reads_row_above`, pending S4)
 - [x] output bus: an operand sees the coil above it (`solve_order/bus_operand_sees_coil`); the last coil write wins (`solve_order/bus_coils_last_write_wins`)
 - [x] a wire does not see a later continued wire's write (`solve_order/continued_reads_later_wire`)
-- [x] a box leg does not see a continued wire below the box (probe; `solve_order/box_leg_reads_row_below`)
+- [x] a box leg does not see a continued wire below the box (answered on hardware; `solve_order/box_leg_reads_row_below`)
 - [x] For body: a body rung sees the body rung above it in the same pass (`solve_order/for_body_rung_reads_body_rung_above`)
-- [ ] solve order around a `call()` between the rows of one rung (needs the subroutine home called from main); a branch row in a For body rung (pyrung refuses `branch()` inside `forloop()`)
+- [ ] solve order around a `call()` between the rows of one rung (the home exists, `in_main=True`, but no such case yet); a branch row in a For body rung (pyrung refuses `branch()` inside `forloop()`)
 - [ ] empty rung (NOP): nothing to observe. CLICK refuses a contact before NOP and deletes a NOP row that shares its rung (so `rungs/nop_rung_takes_snapshot` is retired); the exporter refuses both, and a bare NOP round-trips (`tests/click/test_codegen.py`)
 - [x] subroutines: same rules (every case runs inside its group's subroutine)
-- [x] a subroutine called twice a scan: an edge contact fires once per edge (probe; `call_twice/rise_once_per_scan`, pending S3)
-- [ ] call into subroutine (not inside a group: CLICK has no nested calls)
+- [x] a subroutine called twice a scan: an edge contact fires once per edge (answered on hardware; `call_twice/rise_once_per_scan`, pending S3)
+- [x] call into a subroutine from a For body (probe; `loop_call/call_inside_loop`; a call from a group's own subroutine is nested, which CLICK refuses and `CLK_NESTED_CALL` flags)
 - [ ] subroutine memory writes visible to the caller after the call
 - [x] forloop runs N times in one scan (`loop/loop_runs_n_times`)
 - [x] forloop body sees its own prior-iteration writes (`loop/loop_runs_n_times`)
 - [ ] forloop loop.idx indirect addressing
-- [x] forloop dynamic count == 0: no iteration (probe; 65536 is the other reading) (`loop/zero_count`); -1 runs 65535 (unsigned 16-bit) (`loop/negative_count_reads_unsigned`, in-process only)
-- [x] forloop (`loop` group, F1-F14, F17-F19): a false For rung skips its body (F2); count read as unsigned 16-bit (F3); count read once (F4); body-rung contacts per iteration (F5); edges inside a loop (F6, probe, pending S3); timers accumulate per iteration (F7); counters count edges across iterations (F8, probe, pending S2); Break leaves the innermost loop (F9) after the earlier body rungs (F10); Continue skips the rest of one iteration (F11, F12); a Break contact sees same-iteration writes (F13); a one-shot re-arms on an iteration its rung is false (F14); a body one-shot holds while its For rung is false (F17); an edge contact's memory across iterations of one scan (F18, probe, pending S3); a timer and a counter in a skipped body hold, reset unscanned (F19, probe)
-- [ ] forloop inner one-shot: does CLICK reject it (C0111) or ignore it (F15); a loop in a called subroutine counts toward depth 3 (F16, needs the subroutine home)
+- [x] forloop dynamic count == 0: no iteration (answered on hardware; 65536 was the other reading) (`loop/zero_count`); -1 runs 65535 (unsigned 16-bit) (`loop/negative_count_reads_unsigned`, in-process only)
+- [x] forloop (`loop` group, F1-F14, F17-F19): a false For rung skips its body (F2); count read as unsigned 16-bit (F3); count read once (F4); body-rung contacts per iteration (F5); edges inside a loop (F6, answered, pending S3); timers accumulate per iteration (F7); counters count edges across iterations (F8, answered); Break leaves the innermost loop (F9) after the earlier body rungs (F10); Continue skips the rest of one iteration (F11, F12); a Break contact sees same-iteration writes (F13); a one-shot re-arms on an iteration its rung is false (F14); a body one-shot holds while its For rung is false (F17); an edge contact's memory across iterations of one scan (F18, answered, pending S3); a timer and a counter in a skipped body hold, reset unscanned (F19, answered)
+- [ ] forloop inner one-shot: does CLICK reject it (C0111) or ignore it (F15); a loop in a called subroutine counts toward depth 3 (F16, probe at depth exactly 3, `loop_call/loop_in_called_subroutine`; depth 4 is refused by the exporter, so CLICK's own C010D is not probed); body-rung contacts per iteration around a call (`loop_call/body_contact_after_call`)
 
 ### Memory
 - [x] rung N+1 sees rung N's writes, same scan (`rungs/global_mutation`)
@@ -333,7 +334,8 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] Word wrap at 65535 (`numeric/word_calc_wraps`)
 - [x] Real precision: pyrung keeps 64 bits, CLICK 32 (`numeric/real_is_64_bit_in_pyrung`, expected to fail on a CLICK: a documented deviation)
 - [x] Real range: an overflow stores +/-Inf with SC43 (`numeric/real_overflow_stays_finite`)
-- [x] a Dint quotient into an Int: a Math constant into an Int is cut to 16 bits (`numeric/dint_quotient_into_int`, pending CONST16)
+- [x] a Dint quotient into an Int: a Math constant into an Int is cut to 16 bits (`numeric/dint_quotient_into_int`)
+- [x] an Int Math constant in 32768..65535 or below -32768, a float constant, and RAND bounds past 16 bits (probes; `numeric/int_math_wide_constant`, `numeric/int_math_rand_wide_bounds`, `numeric/int_math_real_operand_constant`)
 - [x] division by zero -> 0 + fault (`numeric/div_by_zero`)
 - [x] a REAL division by zero (1/0, -1/0, 0/0) -> 0 + SC40, not +/-Inf or NaN (`numeric/real_div_by_zero`)
 - [x] math domain error (sqrt, ln/log, asin/acos) -> 0 + SC46 for the rest of the scan, and the PLC stays in RUN (`math_error/math_errors_do_not_stop`)
@@ -350,11 +352,11 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] out oneshot re-fires after rung goes False then True again (`coils/out_oneshot_refires`)
 - [x] rise / fall fire one scan (`coils/rise_fall_fire_one_scan`)
 - [x] each edge contact keeps its own memory, not the bit's end-of-scan value (`coils/edge_sees_previous_scan_end`, `coils/edge_before_its_writer`, pending S3)
-- [x] edge memory behind an open contact and in a false rung's branch (probes; `coils/edge_behind_open_contact`, `coils/edge_in_false_rung_branch`)
+- [x] edge memory behind an open contact and in a false rung's branch (answered on hardware; `coils/edge_behind_open_contact`, `coils/edge_in_false_rung_branch`)
 - [x] latch / reset stickiness (`coils/latch_reset_sticky`)
 - [x] toggle flips once per OFF->ON and holds (O1) (`out/toggle_flips_once_per_edge`)
 - [x] debounce TD keeps counting past its preset while steady (O2); a bounce restarts the timing side (O3) (`out/debounce_td_keeps_counting`, `out/debounce_bounce_restarts_on_side`)
-- [x] flasher with its rung false: TDs cleared, kept or frozen, and the restart's phase (O4, probe; `out/flasher_restarts_with_on_phase`)
+- [x] flasher with its rung false: TDs kept and frozen, and the restart is a fresh on phase (O4, answered on hardware round 2; `out/flasher_restarts_with_on_phase`)
 - [x] timed (not maintained) needs a fresh edge after timing out (O5) (`out/timed_needs_fresh_edge`)
 - [x] Out coil variants never set the phase timer's T bit (O6) (`out/out_coil_sets_timer_done`)
 - [x] TON auto-reset, drops Acc and Done together when rung goes false (`timers/ton_auto_reset`)
@@ -372,7 +374,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] timer fires immediately if preset lowered below Acc (`timers/preset_lowered_fires_at_once`)
 - [x] timer preset resolved dynamically each tick (the two preset cases above)
 - [x] counter counts rising edges of its inputs, not scans; a held input is not counted again after a reset (`counters/level_vs_edge`, `counters/held_input_not_recounted`, pending S2)
-- [x] counter edge on a reset scan; up and down edges on one scan (probes; `counters/edge_on_reset_scan`, `counters/up_down_same_scan`)
+- [x] counter edge on a reset scan; up and down edges on one scan (answered on hardware; `counters/edge_on_reset_scan`, `counters/up_down_same_scan`)
 - [x] counter resumes if preset raised mid-count (`counters/preset_raised_resumes`)
 - [x] counter survives rung going false (no auto-reset) (`counters/survives_rung_false`)
 - [x] counter Acc clamp at Dint range (`counters/acc_clamps_at_dint_range`)
@@ -380,7 +382,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] counter preset lowered while idle: Done turns on without a count (undocumented by CLICK; `counters/preset_lowered_while_idle` is the probe)
 - [x] counter reset with preset<=0: Done stays False for one scan even though Acc>=preset (`counters/reset_zero_preset`)
 - [x] counter preset resolved dynamically each scan (`counters/preset_raised_resumes`, `counters/preset_lowered_while_idle`)
-- [x] count_down starts at 0, counts negative, done at Acc <= preset (`counters/count_down_negative`; probe `counters/count_down_done_at_preset`)
+- [x] count_down starts at 0, counts negative, done at Acc <= preset (`counters/count_down_negative`, answered: `counters/count_down_done_at_preset`)
 - [x] copy converters: to_value, to_ascii, to_text, to_binary (`text/value_vs_ascii`, `text/to_text_suppress`, `text/to_binary`)
 - [x] to_value vs to_ascii on the same CHAR ('5' -> 5 vs 53) (`text/value_vs_ascii`)
 - [x] to_ascii of default/null TXT ($00) writes 0 to destination (not a no-op) (`text/null_ascii`); to_value of NUL writes 0 (`text/to_value_rejects`, pending TEXT)
@@ -396,7 +398,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] pack_words first source is the low word (`block/pack_words`)
 - [x] pack_text into WORD parses hex; into INT/DINT parses signed decimal (`text/pack_text_word_hex`, `text/pack_text_int`, `text/pack_text_dint`)
 - [x] pack_text on numeric with leading whitespace faults unless allow_whitespace (`text/pack_text_whitespace`)
-- [x] pack_text into INT/DINT clamps and stops at a point or a non-digit (`text/pack_text_int`, `text/pack_text_dint`, probe `text/pack_text_int_fraction`, pending TEXT); TXT is 8-bit (`text/to_binary`)
+- [x] pack_text into INT/DINT clamps with the out-of-range fault, stops at a point and refuses any other non-digit with the fault (`text/pack_text_int`, `text/pack_text_dint`, `text/pack_text_int_fraction`, answered on hardware round 2); TXT is 8-bit (`text/to_binary`)
 - [x] copy/fill executes every scan while rung true (not edge-triggered) (`block/every_scan`)
 - [x] shift register direction by range order (`shift/forward_range_shifts_up`; `shift/reversed_range_shifts_down` in-process only)
 - [x] shift register: reset takes precedence over clock if both true same scan (`shift/reset_beats_clock`, `shift/reset_swallows_the_edge`)
@@ -404,8 +406,8 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] drum events are edge-based (`drum/events_are_edges`)
 - [x] time & event drum events are levels: one already on ends the step when its time is up (D3) (`drum/te_level_event_already_on`)
 - [x] time & event step keeps timing past its duration while it waits for the event (D1) (`drum/te_acc_counts_while_waiting`)
-- [x] drum reset wins, jump beats jog; a paused drum takes jog, jump and reset and leaves its outputs (`drum/reset_jump_jog_order`, `drum/paused_drum_jogs_and_resets`, probe `drum/paused_drum_jumps`)
-- [x] drum reset is a level that turns every output off (`drum/reset_no_stale_outputs`); a jog rising on a reset scan is spent (probe; `drum/reset_swallows_held_jog`)
+- [x] drum reset wins, jump beats jog; a paused drum takes jog, jump and reset and leaves its outputs (`drum/reset_jump_jog_order`, `drum/paused_drum_jogs_and_resets`, answered: `drum/paused_drum_jumps`)
+- [x] drum reset is a level that turns every output off (`drum/reset_no_stale_outputs`); a jog rising on a reset scan is spent (answered on hardware; `drum/reset_swallows_held_jog`)
 - [x] drum completion turns its outputs off; a jog brings them back, a jump does not (`drum/completion_turns_outputs_off`)
 - [x] drum jump/jog do NOT clear completion flag -- only reset does (`drum/jump_jog_keep_completion`)
 - [x] drum jump/jog are edge-triggered (no double-fire on sustained condition) (`drum/jump_jog_edge_triggered`)
@@ -414,7 +416,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] drum step auto-corrects to 1 if current_step tag holds an invalid value (`drum/invalid_step_corrects_to_1`)
 - [x] search hit / miss / continuous (`search/hit_returns_address`, `search/miss_writes_minus_one`, `search/continuous_walks`)
 - [x] search returns the register number of the match, -1 on miss (`search/hit_returns_address`, `search/miss_writes_minus_one`)
-- [x] search continuous resumes after an old result inside the range; result=0 restarts; anything else misses (`search/continuous_walks`, `search/continuous_zero_restarts`, `search/continuous_cursor_is_address`, probe `search/continuous_cursor_outside_range`)
+- [x] search continuous resumes after an old result inside the range; result=0 restarts; anything else misses (`search/continuous_walks`, `search/continuous_zero_restarts`, `search/continuous_cursor_is_address`, answered: `search/continuous_cursor_outside_range`)
 - [ ] search over a reversed range: the exporter writes it as an address list, which CLICK's Search does not take
 - [x] search rung false preserves result and found (`search/false_rung_preserves`)
 - [ ] send / receive status tags

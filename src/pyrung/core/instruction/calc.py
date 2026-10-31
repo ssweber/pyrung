@@ -8,10 +8,14 @@ from typing import TYPE_CHECKING, Any, Literal
 from pyrung.core.expression import (
     DOMAIN_LIMITED_MATH_FUNCS,
     STRICT_DIVISION,
+    BinaryExpr,
     Expression,
+    LiteralExpr,
     MathDomainError,
     MathFuncExpr,
     RandIntExpr,
+    ShiftFuncExpr,
+    UnaryExpr,
 )
 from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.storage import check_real_value
@@ -133,6 +137,54 @@ def check_float_literals(value: Any, seen: set[int] | None = None) -> None:
             check_float_literals(item, seen)
 
 
+def _int16(value: int) -> int:
+    """*value* cut to its low 16 bits, read as a signed Int."""
+    return ((value + 0x8000) & 0xFFFF) - 0x8000
+
+
+def cut_int_constants(value: Any) -> Any:
+    """*value* (a calc expression) with each integer constant cut to 16 bits.
+
+    A CLICK Math whose destination is an Int keeps each constant of its
+    formula in 16 bits (measured on hardware: ``DD1 / 65536`` into a DS
+    divides by 0), so a constant outside -32768..32767 is read as its low
+    16 bits, signed.  Operands read from memory keep their width.  Returns
+    *value* itself when no constant changes, else a copy of the tree with
+    the changed nodes rebuilt.  The bounds of a ``randint()`` are left as
+    written.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return _int16(value)
+    if isinstance(value, LiteralExpr):
+        cut = cut_int_constants(value.value)
+        return value if cut == value.value else LiteralExpr(cut)
+    if isinstance(value, BinaryExpr):
+        left = cut_int_constants(value.left)
+        right = cut_int_constants(value.right)
+        if left is value.left and right is value.right:
+            return value
+        return BinaryExpr(left, right, value.op, value.symbol)
+    if isinstance(value, UnaryExpr):
+        operand = cut_int_constants(value.operand)
+        if operand is value.operand:
+            return value
+        return UnaryExpr(operand, value.op, value.symbol)
+    if isinstance(value, MathFuncExpr):
+        operand = cut_int_constants(value.operand)
+        if operand is value.operand:
+            return value
+        return type(value)(operand, value.func, value.name)
+    if isinstance(value, ShiftFuncExpr):
+        shifted = cut_int_constants(value.value)
+        count = cut_int_constants(value.count)
+        if shifted is value.value and count is value.count:
+            return value
+        return type(value)(shifted, count, value.func, value.name)
+    return value
+
+
 def infer_calc_mode(expression: Any, dest: Tag) -> CalcModeInference:
     """Infer calc arithmetic mode and whether the expression mixes mode families."""
     tag_types: set[TagType] = set()
@@ -151,6 +203,13 @@ def infer_calc_mode(expression: Any, dest: Tag) -> CalcModeInference:
         has_hex_family=has_hex_family,
         has_decimal_family=has_decimal_family,
     )
+
+
+def _dest_type(dest: Any) -> TagType | None:
+    if isinstance(dest, Tag):
+        return dest.type
+    block = getattr(dest, "block", None)
+    return getattr(block, "type", None)
 
 
 class CalcInstruction(OneShotMixin, Instruction):
@@ -180,6 +239,14 @@ class CalcInstruction(OneShotMixin, Instruction):
     off.  The PLC stays in RUN, as a CLICK does (its help says SC50 turns on
     and the PLC goes to STOP; the hardware does not).
 
+    **Constants into an Int:** with an ``Int`` destination, each integer
+    constant in `expression` is cut to 16 bits, as a CLICK Math stores it:
+    ``calc(DD1 / 65536, DS1)`` divides by 0 (writes 0 and sets the
+    division-error flag).  Tags keep their width (``calc(DD1 / DD2, DS1)``
+    with ``DD2 = 65536`` divides by 65536).  ``expression`` holds the formula
+    as it runs; ``source_expression`` the one written, which the CLICK export
+    writes.
+
     **Mode inference:**
     - Uses ``"hex"`` only when all referenced tags (plus destination) are WORD.
     - Uses ``"decimal"`` otherwise.
@@ -207,10 +274,13 @@ class CalcInstruction(OneShotMixin, Instruction):
     ):
         OneShotMixin.__init__(self, oneshot)
         check_float_literals(expression)
-        self.expression = expression
+        self.source_expression = expression
         self.dest = dest
         self.mode_inference = infer_calc_mode(expression, dest)
         self.mode = self.mode_inference.mode
+        if self.mode == "decimal" and _dest_type(dest) == TagType.INT:
+            expression = cut_int_constants(expression)
+        self.expression = expression
         if has_domain_limited_func(expression):
             # Only a calc that can hit a domain error sets SC46: the analyses
             # (PDG, prover) see the flag written where it can be.

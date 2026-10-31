@@ -8,9 +8,9 @@ validation passes (conflicting outputs, stuck bits, etc.).
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pyrung.core.condition import (
     AllCondition,
@@ -100,6 +100,8 @@ def _resolve_tag_objects(target: Any) -> list[Tag]:
 
 def _build_tag_map(program: Program) -> dict[str, Tag]:
     """Build a name→Tag map from all tag references in a program."""
+    from pyrung.core.instruction.control import ForLoopInstruction
+
     tag_map: dict[str, Tag] = {}
 
     def _collect_from_rung(rung: Any) -> None:
@@ -122,8 +124,18 @@ def _build_tag_map(program: Program) -> dict[str, Tag]:
                 for tag_obj in _resolve_tag_objects(source):
                     if tag_obj.name not in tag_map:
                         tag_map[tag_obj.name] = tag_obj
+            _collect_loop_counts(instr)
         for branch in rung._branches:
             _collect_from_rung(branch)
+
+    def _collect_loop_counts(instr: Any) -> None:
+        # A loop's count gates the calls in its body (caller-map conditions).
+        if not isinstance(instr, ForLoopInstruction):
+            return
+        if isinstance(instr.count, Tag) and instr.count.name not in tag_map:
+            tag_map[instr.count.name] = instr.count
+        for child in instr.instructions:
+            _collect_loop_counts(child)
 
     for rung in program.rungs:
         _collect_from_rung(rung)
@@ -391,42 +403,447 @@ def _collect_write_sites(
     return sites
 
 
-def _build_caller_map(program: Program) -> _CallerMap:
-    """Map subroutine name -> list of call sites with their conditions."""
-    from pyrung.core.instruction.control import CallInstruction
+# A count of one of these types is a 16-bit (or narrower) number, so it is 0
+# exactly when ``count & 0xFFFF`` is: ``count != 0`` decides the body.
+_EXACT_COUNT_TYPES = frozenset({"BOOL", "INT", "WORD"})
 
-    caller_map: _CallerMap = defaultdict(list)
+
+def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | None:
+    """What a forloop's count says about its body running, or None if it never does.
+
+    Returns ``(conditions, exact)``.  A count read from a tag or an element runs
+    no iteration when ``count & 0xFFFF`` is 0 (:func:`for_loop_iterations`), so
+    a body item needs ``count != 0``.  That is exact for a 16-bit count; a wider
+    one (a ``Dint`` holding 65536) can be nonzero and still skip the body, so
+    there it is only a necessary condition (``exact`` False).  While
+    ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero every count runs the body.  A
+    constant count that runs no iteration never runs it (None).
+    """
+    from pyrung.core.condition import IndirectCompareNe
+    from pyrung.core.instruction.control import FOR_ZERO_COUNT_ITERATIONS, for_loop_iterations
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    count = loop.count
+    if isinstance(count, (bool, int, float)):
+        return None if for_loop_iterations(count) == 0 else ((), True)
+    if FOR_ZERO_COUNT_ITERATIONS:
+        return ((), True)
+    if isinstance(count, Tag):
+        return (CompareNe(count, 0),), count.type.name in _EXACT_COUNT_TYPES
+    if isinstance(count, (IndirectRef, IndirectExprRef)):
+        block_type = getattr(count.block, "type", None)
+        exact = block_type is not None and block_type.name in _EXACT_COUNT_TYPES
+        return (IndirectCompareNe(cast(Any, count), 0),), exact
+    return (), False
+
+
+@dataclass
+class _Footprint:
+    """The tags a condition reads, or the tags a stretch of a scan can write.
+
+    *names* are tags named outright (a static range counts each element),
+    each with its Tag (None for a fault flag).  *blocks* are the blocks
+    addressed through a dynamic address (an indirect reference or range): any
+    of their elements.  *opaque* is a destination that is neither (it can be
+    anything).
+    """
+
+    names: dict[str, Any] = field(default_factory=dict)
+    blocks: dict[str, Any] = field(default_factory=dict)
+    opaque: bool = False
+
+    def update(self, other: _Footprint) -> None:
+        self.names.update(other.names)
+        self.blocks.update(other.blocks)
+        self.opaque = self.opaque or other.opaque
+
+
+def _block_slot_names(block: Any) -> frozenset[str] | None:
+    """The name every address of *block* resolves to now: a renamed slot's,
+    a tag mapped onto it (``map_to``), or the block's own element name.
+
+    Read from the block's slot configuration and mapping registry, not its tag
+    cache, which ``Block.reset()`` clears.  A block whose names cannot be
+    listed gives None.
+    """
+    start, end = getattr(block, "start", None), getattr(block, "end", None)
+    slot_name = getattr(block, "_effective_slot_name", None)
+    if not isinstance(start, int) or not isinstance(end, int) or slot_name is None:
+        return None
+    mapped = getattr(block, "_mapped_tags", None) or {}
+    return frozenset(
+        [slot_name(addr) for addr in range(start, end + 1)] + [tag.name for tag in mapped.values()]
+    )
+
+
+def _tag_in_block(
+    name: str, tag: Any, block: Any, slot_names: Callable[[Any], frozenset[str] | None]
+) -> bool:
+    """Whether a write to some element of *block* can change the tag *name*.
+
+    A block element carries its block (``_pyrung_block``); a tag that does not
+    may still name one of its slots (mapped onto it, or a same-named tag), so
+    the block's current slot names (*slot_names*, :func:`_block_slot_names`
+    or a memo of it) are checked too.  Unknown is a meet.
+    """
+    owner = getattr(tag, "_pyrung_block", None)
+    if owner is not None and getattr(owner, "name", None) == block.name:
+        return True
+    names = slot_names(block)
+    return names is None or name in names
+
+
+def _footprints_meet(
+    reads: _Footprint,
+    writes: _Footprint,
+    slot_names: Callable[[Any], frozenset[str] | None],
+) -> bool:
+    """Whether a write in *writes* can change a tag *reads* reads."""
+    if reads.opaque or writes.opaque:
+        return True
+    if reads.names.keys() & writes.names.keys():
+        return True
+    if reads.blocks.keys() & writes.blocks.keys():
+        return True
+    if any(
+        _tag_in_block(name, tag, block, slot_names)
+        for block in writes.blocks.values()
+        for name, tag in reads.names.items()
+    ):
+        return True
+    return any(
+        _tag_in_block(name, tag, block, slot_names)
+        for block in reads.blocks.values()
+        for name, tag in writes.names.items()
+    )
+
+
+def _condition_footprint(condition: Any) -> _Footprint:
+    """Every tag *condition* can read, an indirect address as its whole block."""
+    from enum import Enum
+
+    from pyrung.core.expression import Expression
+    from pyrung.core.memory_block import (
+        BlockRange,
+        IndirectBlockRange,
+        IndirectExprRef,
+        IndirectRef,
+    )
+    from pyrung.core.validation.walker import _condition_children
+
+    reads = _Footprint()
+    seen: set[int] = set()
+
+    def walk(current: Any) -> None:
+        if current is None or isinstance(current, (bool, int, float, str, bytes, bytearray, Enum)):
+            return
+        if id(current) in seen:
+            return
+        seen.add(id(current))
+        if isinstance(current, ImmediateRef):
+            walk(current.value)
+        elif isinstance(current, Tag):
+            reads.names[current.name] = current
+        elif isinstance(current, BlockRange):
+            reads.names.update((tag.name, tag) for tag in current.tags())
+        elif isinstance(current, IndirectRef):
+            walk(current.pointer)
+            reads.blocks[current.block.name] = current.block
+        elif isinstance(current, IndirectExprRef):
+            walk(current.expr)
+            reads.blocks[current.block.name] = current.block
+        elif isinstance(current, IndirectBlockRange):
+            walk(current.start_expr)
+            walk(current.end_expr)
+            reads.blocks[current.block.name] = current.block
+        elif isinstance(current, Condition):
+            for _name, child in _condition_children(current):
+                walk(child)
+        elif isinstance(current, (list, tuple, set, frozenset)):
+            for item in current:
+                walk(item)
+        elif isinstance(current, dict):
+            for item in current.values():
+                walk(item)
+        elif isinstance(current, Expression) or hasattr(current, "__dict__"):
+            for key in sorted(vars(current)):
+                if not key.startswith("_"):
+                    walk(getattr(current, key))
+
+    walk(condition)
+    return reads
+
+
+class _ScanWrites:
+    """What a stretch of a scan can write, subroutines it calls included.
+
+    A destination is what :func:`instruction_write_targets` declares (a
+    forloop's index too), plus the fault flags an instruction can set; a call
+    adds everything its subroutine, and the ones that calls, can write.
+    """
+
+    def __init__(self, program: Program) -> None:
+        self._program = program
+        self._subroutines: dict[str, tuple[_Footprint, frozenset[str]]] = {}
+        self._memo: dict[int, _Footprint] = {}
+        self._slot_names: dict[int, tuple[Any, frozenset[str] | None]] = {}
+
+    def slot_names(self, block: Any) -> frozenset[str] | None:
+        """:func:`_block_slot_names`, once per block for this build."""
+        entry = self._slot_names.get(id(block))
+        if entry is None or entry[0] is not block:
+            entry = (block, _block_slot_names(block))
+            self._slot_names[id(block)] = entry
+        return entry[1]
+
+    def _direct(self, items: Iterable[Any], writes: _Footprint, callees: set[str]) -> None:
+        from pyrung.core.analysis.write_sites import (
+            instruction_fault_writes,
+            instruction_write_targets,
+        )
+        from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
+        from pyrung.core.memory_block import (
+            BlockRange,
+            IndirectBlockRange,
+            IndirectExprRef,
+            IndirectRef,
+        )
+        from pyrung.core.rung import Rung as RungClass
+
+        for item in items:
+            if isinstance(item, RungClass):  # a rung, a branch or a forloop body rung
+                self._direct(item._instructions, writes, callees)
+                self._direct(item._branches, writes, callees)
+                continue
+            if isinstance(item, CallInstruction):
+                callees.add(item.subroutine_name)
+            for target in instruction_write_targets(item):
+                if isinstance(target, ImmediateRef):
+                    target = target.value
+                if isinstance(target, Tag):
+                    writes.names[target.name] = target
+                elif isinstance(target, BlockRange):
+                    writes.names.update((tag.name, tag) for tag in target.tags())
+                elif isinstance(target, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
+                    writes.blocks[target.block.name] = target.block
+                else:
+                    writes.opaque = True
+            writes.names.update(dict.fromkeys(instruction_fault_writes(item)))
+            if isinstance(item, ForLoopInstruction):
+                self._direct(item.body, writes, callees)
+
+    def _subroutine(self, name: str) -> tuple[_Footprint, frozenset[str]]:
+        if name not in self._subroutines:
+            writes, callees = _Footprint(), set()
+            self._direct(self._program.subroutines.get(name, ()), writes, callees)
+            self._subroutines[name] = (writes, frozenset(callees))
+        return self._subroutines[name]
+
+    def of(self, item: Any) -> _Footprint:
+        """Everything running *item* (a rung or an instruction) can write."""
+        key = id(item)
+        if key not in self._memo:
+            writes, callees = _Footprint(), set()
+            self._direct((item,), writes, callees)
+            seen: set[str] = set()
+            pending = list(callees)
+            while pending:
+                name = pending.pop()
+                if name in seen:
+                    continue
+                seen.add(name)
+                sub_writes, sub_callees = self._subroutine(name)
+                writes.update(sub_writes)
+                pending.extend(sub_callees)
+            self._memo[key] = writes
+        return self._memo[key]
+
+
+def _iter_rung_calls(
+    rung: Rung, scan_writes: _ScanWrites, top: Rung | None = None
+) -> Iterable[tuple[str, tuple[Condition, ...], bool]]:
+    """Each call in *rung*'s own instructions: ``(callee, extra, exact)``.
+
+    *extra* holds the conditions a call in a forloop body (nested loops too)
+    needs beyond the rung's: each enclosing loop's nonzero count, and the
+    contacts of the body rung it sits in that no iteration can change.  A body
+    rung reads its contacts afresh on every iteration, so one that reads a
+    loop's index, or a tag the outermost enclosing loop (subroutines it calls
+    included) can write, is left out: it is no condition on the scan.  The rest
+    hold on every scan that runs the call.
+
+    *exact* says they (with the rung's) also decide it, which they do not when
+    a body-rung contact is left out, a kept one reads a tag *top* (the whole
+    rung the call is in, branches and calls included; default *rung*) can
+    write (it is read after that write, not with the rung's own contacts), a
+    ``break_loop()`` or ``continue_loop()`` in an enclosing loop can skip it,
+    an enclosing loop is a oneshot (it runs on its rung's rising edge only), or
+    a count is wider than 16 bits.  The rung's branches are not visited.
+    """
+    from pyrung.core.instruction.control import (
+        BreakInstruction,
+        CallInstruction,
+        ContinueInstruction,
+        ForLoopInstruction,
+    )
+
+    top_rung = rung if top is None else top
+
+    def _has_exit(loop: ForLoopInstruction) -> bool:
+        return any(
+            isinstance(item, (BreakInstruction, ContinueInstruction))
+            or (isinstance(item, ForLoopInstruction) and _has_exit(item))
+            for item in loop.instructions
+        )
+
+    def _split_local(
+        local: tuple[Condition, ...], outermost: ForLoopInstruction
+    ) -> tuple[tuple[Condition, ...], bool]:
+        """The *local* contacts no iteration changes, and whether they decide."""
+        if not local:
+            return (), True
+        loop_writes = scan_writes.of(outermost)
+        kept: list[Condition] = []
+        decides = True
+        for condition in local:
+            reads = _condition_footprint(condition)
+            if _footprints_meet(reads, loop_writes, scan_writes.slot_names):
+                decides = False
+                continue
+            kept.append(condition)
+            if _footprints_meet(reads, scan_writes.of(top_rung), scan_writes.slot_names):
+                decides = False
+        return tuple(kept), decides
+
+    def _walk(
+        items: Iterable[tuple[Any, tuple[Condition, ...], bool]],
+        outermost: ForLoopInstruction | None,
+    ) -> Iterable[tuple[str, tuple[Condition, ...], bool]]:
+        for instr, extra, exact in items:
+            if isinstance(instr, CallInstruction):
+                yield instr.subroutine_name, extra, exact
+            elif isinstance(instr, ForLoopInstruction):
+                count = _loop_count_conditions(instr)
+                if count is None:
+                    continue
+                count_conditions, count_exact = count
+                loop_exact = exact and count_exact and not instr._oneshot and not _has_exit(instr)
+                loop_outermost = instr if outermost is None else outermost
+                for child, local in instr.iter_body():
+                    if not isinstance(child, (CallInstruction, ForLoopInstruction)):
+                        continue
+                    kept, decides = _split_local(local, loop_outermost)
+                    yield from _walk(
+                        ((child, extra + count_conditions + kept, loop_exact and decides),),
+                        loop_outermost,
+                    )
+
+    yield from _walk(((instr, (), True) for instr in rung._instructions), None)
+
+
+# (scope, caller subroutine, rung index, branch path, rung, callee, extra, exact)
+_ProgramCall = tuple[
+    FactScope, str | None, int, tuple[int, ...], "Rung", str, tuple[Condition, ...], bool
+]
+
+
+def _iter_program_calls(program: Program) -> Iterable[_ProgramCall]:
+    """Every call in *program*: its place and rung, and :func:`_iter_rung_calls`'s data."""
+
+    scan_writes = _ScanWrites(program)
 
     def _scan_rung(
         rung: Rung,
+        top: Rung,
         scope: FactScope,
         subroutine: str | None,
         rung_index: int,
         branch_path: tuple[int, ...],
-    ) -> None:
-        conditions = tuple(rung._conditions)
-        for instr in rung._instructions:
-            if isinstance(instr, CallInstruction):
-                caller_map[instr.subroutine_name].append(
-                    (scope, subroutine, rung_index, branch_path, conditions)
-                )
+    ) -> Iterable[_ProgramCall]:
+        for callee, extra, exact in _iter_rung_calls(rung, scan_writes, top):
+            yield scope, subroutine, rung_index, branch_path, rung, callee, extra, exact
         for branch_idx, branch_rung in enumerate(rung._branches):
-            _scan_rung(
-                branch_rung,
-                scope,
-                subroutine,
-                rung_index,
-                branch_path + (branch_idx,),
+            yield from _scan_rung(
+                branch_rung, top, scope, subroutine, rung_index, branch_path + (branch_idx,)
             )
 
     for rung_index, rung in enumerate(program.rungs):
-        _scan_rung(rung, "main", None, rung_index, ())
-
+        yield from _scan_rung(rung, rung, "main", None, rung_index, ())
     for sub_name in sorted(program.subroutines):
         for rung_index, rung in enumerate(program.subroutines[sub_name]):
-            _scan_rung(rung, "subroutine", sub_name, rung_index, ())
+            yield from _scan_rung(rung, rung, "subroutine", sub_name, rung_index, ())
 
+
+def _inexact_entry_subroutines(program: Program) -> frozenset[str]:
+    """Subroutines a call into is not decided by its caller-map conditions.
+
+    A subroutine with a call site :func:`_iter_rung_calls` marks inexact, and
+    every subroutine called (at any depth) from one, since its entry goes
+    through that call too.  Its caller-map conditions still hold on every scan
+    that runs it, but it may not run on a scan they hold.
+    """
+    calls: dict[str | None, set[str]] = defaultdict(set)
+    inexact: set[str] = set()
+    for _scope, caller, _ri, _bp, _rung, callee, _extra, exact in _iter_program_calls(program):
+        calls[caller].add(callee)
+        if not exact:
+            inexact.add(callee)
+    pending = list(inexact)
+    while pending:
+        for callee in calls.get(pending.pop(), ()):
+            if callee not in inexact:
+                inexact.add(callee)
+                pending.append(callee)
+    return frozenset(inexact)
+
+
+def _build_caller_map(program: Program) -> _CallerMap:
+    """Map subroutine name -> list of call sites with their conditions.
+
+    The conditions hold on every scan that runs the call.  A call in a forloop
+    body is a call site too, with each enclosing loop's nonzero count and the
+    body-rung contacts no iteration can change among them; there they may not
+    decide the call (a body-rung contact an iteration can change, a oneshot
+    loop, a ``break_loop()``): see :func:`_inexact_entry_subroutines`.
+    """
+    caller_map: _CallerMap = defaultdict(list)
+    for (
+        scope,
+        subroutine,
+        rung_index,
+        branch_path,
+        rung,
+        callee,
+        extra,
+        _exact,
+    ) in _iter_program_calls(program):
+        caller_map[callee].append(
+            (scope, subroutine, rung_index, branch_path, tuple(rung._conditions) + extra)
+        )
     return dict(caller_map)
+
+
+def _transitive_caller_conditions(
+    subroutine: str, caller_map: _CallerMap
+) -> list[tuple[Condition, ...]]:
+    """The conditions of every call site on some path into *subroutine*.
+
+    Its own call sites' and, transitively, those of the subroutines that call
+    it: a call nested two subroutines deep runs only when the outer call does
+    too.  Unordered and not split into per-path chains (see
+    :func:`_scope_reach_chains` for those): it is for analyses that need every
+    tag a call guard reads, not the guard itself.
+    """
+    out: list[tuple[Condition, ...]] = []
+    seen = {subroutine}
+    pending = [subroutine]
+    while pending:
+        for _scope, caller_sub, _ri, _bp, conditions in caller_map.get(pending.pop(), ()):
+            out.append(conditions)
+            if caller_sub is not None and caller_sub not in seen:
+                seen.add(caller_sub)
+                pending.append(caller_sub)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1022,25 +1439,23 @@ def _scope_reach_chains(program: Program) -> dict[str, tuple[tuple[Condition, ..
     This is scope entry only.  It says nothing about the rungs *inside* the
     subroutine — a rung that runs and evaluates false has still run.
     """
-    from pyrung.core.instruction.control import CallInstruction
-
     # sub_name -> list of (enclosing subroutine or None for main, chain within that scope)
     calls: dict[str, list[tuple[str | None, tuple[Condition, ...]]]] = defaultdict(list)
+    scan_writes = _ScanWrites(program)
 
-    def _scan(rung: Rung, subroutine: str | None, chain: tuple[Condition, ...]) -> None:
+    def _scan(rung: Rung, top: Rung, subroutine: str | None, chain: tuple[Condition, ...]) -> None:
         # A branch is gated by its own conditions on top of its parent's.
         chain = chain + tuple(rung._conditions)
-        for instr in rung._instructions:
-            if isinstance(instr, CallInstruction):
-                calls[instr.subroutine_name].append((subroutine, chain))
+        for callee, extra, _exact in _iter_rung_calls(rung, scan_writes, top):
+            calls[callee].append((subroutine, chain + extra))
         for branch in rung._branches:
-            _scan(branch, subroutine, chain)
+            _scan(branch, top, subroutine, chain)
 
     for rung in program.rungs:
-        _scan(rung, None, ())
+        _scan(rung, rung, None, ())
     for sub_name, sub_rungs in program.subroutines.items():
         for rung in sub_rungs:
-            _scan(rung, sub_name, ())
+            _scan(rung, rung, sub_name, ())
 
     memo: dict[str, tuple[tuple[Condition, ...], ...]] = {}
 
