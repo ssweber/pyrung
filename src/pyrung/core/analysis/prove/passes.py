@@ -1029,6 +1029,7 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         stepping_tags_out=stepping,
         threshold_absorptions_out=threshold_absorptions,
         model_system_points=not ctx.domains_only,
+        exhaust_tag_compared_inputs=not ctx.domains_only,
         observe_everything=ctx.opaque_reads_all,
     )
     if profile:
@@ -2138,6 +2139,7 @@ def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
         unclassified=unclassified,
         stepping_tags_out=stepping,
         model_system_points=not ctx.domains_only,
+        exhaust_tag_compared_inputs=not ctx.domains_only,
         observe_everything=ctx.opaque_reads_all,
     )
     ctx._stepping_tags = frozenset(stepping)
