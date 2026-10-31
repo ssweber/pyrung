@@ -794,16 +794,6 @@ class TestKnownHoles:
         assert not isinstance(result, Proven)
         _assert_replays(logic, result, z.name)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "classify input partition (fixed on bob/input-partition): an Int input "
-            "with min/max compared tag-to-tag with a timer accumulator "
-            "(T.Acc == In) is explored only at representatives derived from its "
-            "own literal comparisons, so the accumulator values the program "
-            "checks between them are never tried"
-        ),
-    )
     def test_input_compared_to_an_accumulator_is_not_partitioned_by_its_own_literals(self):
         en = Bool("BbEqEn", external=True)
         inp = Int("BbEqIn", external=True, min=0, max=1000)
