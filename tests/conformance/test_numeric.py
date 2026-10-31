@@ -66,10 +66,10 @@ could plausibly differ, these cases tell the models apart:
   16777216.0 would export as 16777220.0.
 - ``real_overflow_stays_finite``: 3.0E+38 * 10 and * -10 in a Real.  A CLICK
   stores +Inf and -Inf with SC43 on (round 1), so half of each is still past
-  3.0E+38 (Result1 = 1, Result2 = 1) and SC43 is on (Result3 = 1).  pyrung
-  saturates at +/-3.4028235E+38, whose halves are 1.7E+38 (Result1 = 0,
-  Result2 = 0), so the case is ``pending="INF"``.  A Real that overflows
-  without the flag reads Result3 = 0.
+  3.0E+38 (Result1 = 1, Result2 = 1) and SC43 is on (Result3 = 1).  A Real
+  that saturates at +/-3.4028235E+38 (pyrung before step INF) reads halves of
+  1.7E+38 (Result1 = 0, Result2 = 0); one that overflows without the flag
+  reads Result3 = 0.
 - ``div_by_zero``, ``real_div_by_zero``: division by zero writes 0 and sets
   the division-error flag (SC40).  A Math that skips the write reads the
   preset (99, or Result1..3 = 0 for the Real compares); an IEEE Real division
@@ -249,7 +249,7 @@ def prove_real_overflow_stays_finite(slot):
     # DF121 = 3.0E+38; on scan 3, 3.0E+38 * 10 goes into DF122 and * -10 into
     # DF123, both preset to 1.0 so a skipped write does not read as an
     # overflow.  Half of each goes into DF124 and DF125: half of +/-Inf is
-    # still +/-Inf, half of a saturated +/-3.4028235E+38 is +/-1.7E+38.
+    # still +/-Inf; half of a saturated +/-3.4028235E+38 would be +/-1.7E+38.
     count_scans(slot, REAL_OVERFLOW_WINDOW)
     on_scan = slot.Scratch == REAL_OVERFLOW_WINDOW
     with Rung(slot.Cmd != 0, on_scan):
@@ -451,7 +451,6 @@ group = Group(
             init=init_real_overflow_stays_finite,
             expect={"Result1": 1, "Result2": 1, "Result3": 1},
             scans=scans_for(REAL_OVERFLOW_WINDOW),
-            pending="INF",
         ),
         case(
             "Integer division by zero writes 0 over the destination's 99 (Result1) and sets "

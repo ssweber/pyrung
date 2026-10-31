@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.expression import (
     DOMAIN_LIMITED_MATH_FUNCS,
+    STRICT_DIVISION,
     Expression,
     MathDomainError,
     MathFuncExpr,
@@ -166,6 +166,13 @@ class CalcInstruction(OneShotMixin, Instruction):
     **Division by zero:** Result is forced to 0 and the division-error fault
     flag is set. The instruction completes normally.
 
+    **REAL overflow:** a result past +/-3.4028235E+38 stores +/-Inf and sets
+    the out-of-range flag (``system.fault.out_of_range``, CLICK's SC43), as a
+    CLICK's float32 Math does.  An Inf operand follows IEEE 754 (``Inf / 2`` is
+    Inf, ``Inf - Inf`` is NaN); a REAL result that is not finite sets the flag
+    too.  Into an INT, DINT or WORD, a result that is not finite stores 0 and
+    sets the flag.
+
     **Math domain error** (``sqrt`` of a negative, ``log``/``log10`` of 0 or a
     negative, ``asin``/``acos`` outside -1..1): Result is forced to 0 and the
     math-operation error flag (``system.fault.math_operation_error``, CLICK's
@@ -211,7 +218,10 @@ class CalcInstruction(OneShotMixin, Instruction):
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        # Evaluate expression (handles Tag, Expression, IndirectRef, literal)
+        # Evaluate expression (handles Tag, Expression, IndirectRef, literal).
+        # A division by zero raises here (STRICT_DIVISION), so a result that is
+        # not finite comes from an Inf or NaN operand, or an overflow.
+        token = STRICT_DIVISION.set(True)
         try:
             value = resolve_tag_or_value_ctx(self.expression, ctx)
         except ZeroDivisionError:
@@ -223,11 +233,8 @@ class CalcInstruction(OneShotMixin, Instruction):
         except MathDomainError:
             _set_fault_math_operation_error(ctx)
             value = 0
-
-        # Expression division may return non-finite sentinels for divide-by-zero.
-        if isinstance(value, float) and not math.isfinite(value):
-            _set_fault_division_error(ctx)
-            value = 0
+        finally:
+            STRICT_DIVISION.reset(token)
 
         if _math_out_of_range_for_dest(value, self.dest, self.mode):
             _set_fault_out_of_range(ctx)

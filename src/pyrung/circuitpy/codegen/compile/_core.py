@@ -827,7 +827,8 @@ def _calc_range_condition(value_var: str, dest_type: str, mode: str) -> str | No
     if dest_type == "WORD":
         return f"int({value_var}) < 0 or int({value_var}) > 65535"
     if dest_type == "REAL":
-        return f"{value_var} > {REAL_MAX!r} or {value_var} < {-REAL_MAX!r}"
+        # Also true for NaN: a REAL result that is not finite sets the flag.
+        return f"not ({-REAL_MAX!r} <= {value_var} <= {REAL_MAX!r})"
     return None
 
 
@@ -863,18 +864,29 @@ def _compile_calc_instruction(
                 "    _calc_value = 0",
             ]
         )
-    enabled_body += [
-        "if isinstance(_calc_value, float) and not math.isfinite(_calc_value):",
-        div_err_line,
-        "    _calc_value = 0",
-    ]
-    range_cond = _calc_range_condition("_calc_value", instr.dest.type.name, instr.mode)
-    if range_cond and instr.dest.type.name == "REAL":
-        # A REAL saturates at CLICK's range, with the out-of-range flag.
+    dest_type = instr.dest.type.name
+    range_cond = _calc_range_condition("_calc_value", dest_type, instr.mode)
+    if dest_type == "REAL" and instr.mode != "hex":
+        # Past CLICK's REAL range the result is +/-Inf, with the out-of-range
+        # flag, as a float32 Math stores it; NaN is kept and flagged too.
         enabled_body.append(f"if {range_cond}:")
         enabled_body.extend(f"    {line}" for line in out_of_range_body if line != "pass")
-        enabled_body.append(f"    _calc_value = {REAL_MAX!r} if _calc_value > 0 else {-REAL_MAX!r}")
-    elif range_cond and out_of_range_body != ["pass"]:
+        enabled_body += [
+            f"    if _calc_value > {REAL_MAX!r}:",
+            '        _calc_value = float("inf")',
+            f"    elif _calc_value < {-REAL_MAX!r}:",
+            '        _calc_value = float("-inf")',
+        ]
+        range_cond = None
+    else:
+        # An Inf or NaN result (from an Inf or NaN operand) stores 0; into an
+        # integer register it sets the out-of-range flag.
+        flags_non_finite = range_cond is not None and out_of_range_body != ["pass"]
+        enabled_body.append("if isinstance(_calc_value, float) and not math.isfinite(_calc_value):")
+        if flags_non_finite:
+            enabled_body.extend(f"    {line}" for line in out_of_range_body)
+        enabled_body.append("    _calc_value = 0")
+    if range_cond and out_of_range_body != ["pass"]:
         enabled_body.append(f"if {range_cond}:")
         enabled_body.extend(f"    {line}" for line in out_of_range_body)
     enabled_body.append("try:")

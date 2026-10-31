@@ -1345,7 +1345,7 @@ class TestBoardPeripheralsAndRunStop:
         _run_single_scan_source(result.code, monkeypatch, stub_base, runtime_source=result.runtime)
         assert stub_base.discrete_writes[-1] == (2, 1)
 
-    def test_real_overflow_saturates_at_clicks_range(self, monkeypatch):
+    def test_real_overflow_stores_inf(self, monkeypatch):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         big = Real("Big", default=3.0e38)
@@ -1389,8 +1389,8 @@ class TestBoardPeripheralsAndRunStop:
             result.code, monkeypatch, StubBase(), runtime_source=result.runtime
         )
         ctx = _context_for_program(prog, hw)
-        assert namespace[ctx.symbol_for_tag(dest)] == 3.4028235e38
-        assert namespace[ctx.symbol_for_tag(low)] == -3.4028235e38
+        assert namespace[ctx.symbol_for_tag(dest)] == math.inf
+        assert namespace[ctx.symbol_for_tag(low)] == -math.inf
         assert namespace[ctx.symbol_for_tag(copied)] == 2147483647.0
         assert namespace[ctx.symbol_for_tag(system.fault.out_of_range)] is True
 

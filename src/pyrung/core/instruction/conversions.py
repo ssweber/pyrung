@@ -231,7 +231,7 @@ def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
     - INT: 16-bit signed (-32768 to 32767)
     - DINT: 32-bit signed (-2147483648 to 2147483647)
     - WORD: 16-bit unsigned (0 to 65535)
-    - REAL: float, saturated at CLICK's range (+/-3.4028235E+38)
+    - REAL: float; past CLICK's range (+/-3.4028235E+38) it is +/-Inf
     - BOOL: truthiness
     - CHAR: no truncation
 
@@ -250,14 +250,18 @@ def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
 
 
 def _math_out_of_range_for_dest(value: Any, dest: Tag, mode: str) -> bool:
-    """Return True if math result exceeds destination storage range."""
+    """Return True if math result exceeds destination storage range.
+
+    A REAL result past +/-3.4028235E+38 (stored as +/-Inf), or one that is
+    not finite (an Inf or NaN operand), is out of range; so is a result that
+    is not finite headed for an integer register (stored as 0).
+    """
     from pyrung.core.tag import TagType
 
-    if isinstance(value, float) and not math.isfinite(value):
-        return False
     if dest.type == TagType.REAL and mode != "hex":
-        # Past CLICK's REAL range: the store saturates, the flag says so.
         return isinstance(value, (int, float)) and not real_in_range(value)
+    if isinstance(value, float) and not math.isfinite(value):
+        return mode == "hex" or dest.type in (TagType.INT, TagType.DINT, TagType.WORD)
 
     try:
         int_value = int(value)

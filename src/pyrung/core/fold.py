@@ -1066,7 +1066,7 @@ def _expr_range(expr: Any, ranges: dict[str, _Span]) -> _Span | None:
 def _fits_dest(span: _Span, dest: Any) -> bool:
     type_name = getattr(getattr(dest, "type", None), "name", None)
     if type_name == "REAL":
-        # Past +/-REAL_MAX the store saturates and sets the out-of-range flag.
+        # Past +/-REAL_MAX the store is +/-Inf and sets the out-of-range flag.
         return real_in_range(span[0]) and real_in_range(span[1])
     if type_name not in ("INT", "DINT", "WORD"):
         return False

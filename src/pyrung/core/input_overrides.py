@@ -74,7 +74,11 @@ class InputOverrideManager:
     def _check_range(
         self, key: str | Tag, name: str, value: bool | int | float | str, *, method: str
     ) -> None:
-        """A REAL never holds a value outside CLICK's range: refuse one."""
+        """A REAL never holds a finite value outside CLICK's range: refuse one.
+
+        +/-Inf and NaN are accepted: a REAL holds them (a Math overflow stores
+        +/-Inf), so a patch or force can put one back.
+        """
         from pyrung.core.storage import check_real_value
         from pyrung.core.tag import Tag as TagClass
         from pyrung.core.tag import TagType
@@ -83,7 +87,7 @@ class InputOverrideManager:
         if tag is None and self._known_tag is not None:
             tag = self._known_tag(name)
         if tag is not None and tag.type is TagType.REAL:
-            check_real_value(value, f"{method}() of {name}")
+            check_real_value(value, f"{method}() of {name}", allow_non_finite=True)
 
     def patch(
         self,

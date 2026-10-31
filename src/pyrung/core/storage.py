@@ -18,8 +18,9 @@ class StoreTransform:
 
 IDENTITY_STORE = StoreTransform()
 
-#: Largest magnitude a CLICK REAL holds (+/-3.4028235E+38).  pyrung keeps a
-#: REAL at 64-bit precision but never outside this range.
+#: Largest finite magnitude a CLICK REAL holds (+/-3.4028235E+38).  pyrung
+#: keeps a REAL at 64-bit precision but never outside this range: a result
+#: past it is +/-Inf, as a CLICK's float32 Math stores it.
 REAL_MAX = 3.4028235e38
 
 #: The blank CHAR.  A CLICK TXT is one byte, so blank and NUL ($00) are the
@@ -37,20 +38,45 @@ def store_char(value: Any) -> Any:
 
 
 def real_in_range(value: Any) -> bool:
-    """True when *value* fits a REAL: finite and within +/-``REAL_MAX``."""
+    """True when *value* is a finite REAL: within +/-``REAL_MAX`` (not Inf, not NaN)."""
     return -REAL_MAX <= value <= REAL_MAX
 
 
-def check_real_value(value: Any, what: str) -> None:
+def check_real_value(value: Any, what: str, *, allow_non_finite: bool = False) -> None:
     """Raise ``ValueError`` when a user-supplied REAL value is out of range.
 
-    Non-numbers are left to the caller's own checks.
+    A finite value past +/-``REAL_MAX`` is always refused: no float32 holds it.
+    +/-Inf and NaN are refused too unless *allow_non_finite*: a REAL register
+    holds them (a Math overflow stores +/-Inf), so a patch or force may write
+    one, but a constant or default cannot be one.  Non-numbers are left to the
+    caller's own checks.
     """
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        if not real_in_range(value):
-            raise ValueError(
-                f"{what}: {value!r} is outside the REAL range -3.4028235E+38..3.4028235E+38"
-            )
+        if real_in_range(value):
+            return
+        if allow_non_finite and isinstance(value, float) and not math.isfinite(value):
+            return
+        raise ValueError(
+            f"{what}: {value!r} is outside the REAL range -3.4028235E+38..3.4028235E+38"
+        )
+
+
+def store_real(value: Any) -> float:
+    """The value a REAL holds when *value* is stored: past +/-``REAL_MAX`` it is +/-Inf.
+
+    A CLICK REAL is a float32, so a result past its range is +/-Inf (not a
+    saturated +/-``REAL_MAX``).  Inf and NaN are kept.  pyrung keeps a finite
+    value at 64-bit precision: a compare, no float32 round trip.
+    """
+    try:
+        real = float(value)
+    except OverflowError:  # an int too large for a float
+        return math.inf if value > 0 else -math.inf
+    if real > REAL_MAX:
+        return math.inf
+    if real < -REAL_MAX:
+        return -math.inf
+    return real
 
 
 def store_value(value: Any, storage: StoreTransform) -> Any:
@@ -59,19 +85,13 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
     kind = storage.kind
     if kind == "identity":
         return value
-    if isinstance(value, float) and not math.isfinite(value):
-        return 0
     if kind == "real":
-        # Saturate at CLICK's REAL range: a compare, no float32 round trip.
-        try:
-            real = float(value)
-        except OverflowError:  # an int too large for a float
-            return REAL_MAX if value > 0 else -REAL_MAX
-        if real > REAL_MAX:
-            return REAL_MAX
-        if real < -REAL_MAX:
-            return -REAL_MAX
-        return real
+        return store_real(value)
+    if isinstance(value, float) and not math.isfinite(value):
+        # A clamp pins +/-Inf at its bound; NaN, and anything that wraps, is 0.
+        if kind == "clamp" and value == value and storage.lower is not None:
+            return storage.upper if value > 0 else storage.lower
+        return 0
     if kind == "bool":
         return bool(value)
     if kind == "char":
@@ -112,5 +132,6 @@ __all__ = [
     "check_real_value",
     "real_in_range",
     "store_char",
+    "store_real",
     "store_value",
 ]

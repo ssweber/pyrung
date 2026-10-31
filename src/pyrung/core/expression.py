@@ -12,6 +12,7 @@ import math
 import operator
 import weakref
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core._source import _capture_source
@@ -31,8 +32,18 @@ Numeric = int | float
 # =============================================================================
 
 
+#: True while ``calc`` evaluates its expression: there a division by zero
+#: raises ``ZeroDivisionError`` (CLICK's Math writes 0 and sets SC40), as it
+#: does in the compiled kernel.  Elsewhere (a comparison in a rung condition)
+#: it reads as +/-Inf.  A REAL can hold +/-Inf itself (a Math overflow), so
+#: ``calc`` cannot tell a division by zero from an Inf operand afterwards.
+STRICT_DIVISION: ContextVar[bool] = ContextVar("pyrung_strict_division", default=False)
+
+
 def _op_div(a: Numeric, b: Numeric) -> Numeric:
     if b == 0:
+        if STRICT_DIVISION.get():
+            raise ZeroDivisionError("division by zero")
         return float("inf") if a >= 0 else float("-inf")
     return a / b
 
@@ -353,18 +364,17 @@ DOMAIN_LIMITED_MATH_FUNCS = frozenset({"sqrt", "log", "log10", "asin", "acos"})
 
 
 def math_func_value(func: Any, name: str, value: Numeric) -> Numeric:
-    """``func(value)``, with a non-finite operand passed through unchanged.
+    """``func(value)``, IEEE 754 for a +/-Inf or NaN operand.
 
-    A non-finite operand comes from a division by zero (or a float overflow)
-    earlier in the expression; it propagates so ``calc`` reports that fault
-    (the result is not finite), not a domain error.  Any other ``ValueError``
-    from *func* is a domain error.
+    A ``ValueError`` from one of :data:`DOMAIN_LIMITED_MATH_FUNCS` is a domain
+    error (``sqrt(-1)``, ``asin(Inf)``).  Any other function only raises for a
+    non-finite operand (``sin(Inf)``), whose IEEE result is NaN.
     """
-    if isinstance(value, float) and not math.isfinite(value):
-        return value
     try:
         return func(value)
     except ValueError:
+        if name not in DOMAIN_LIMITED_MATH_FUNCS:
+            return math.nan
         raise MathDomainError(f"{name}({value!r}): math domain error") from None
 
 
