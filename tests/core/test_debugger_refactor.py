@@ -5,7 +5,22 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from pyrung.core import PLC, Bool, Int, Program, Real, Rung, call, forloop, out, subroutine, system
+from pyrung.core import (
+    PLC,
+    Bool,
+    Counter,
+    Int,
+    Program,
+    Real,
+    Rung,
+    call,
+    count_up,
+    forloop,
+    out,
+    rise,
+    subroutine,
+    system,
+)
 from pyrung.core.debug_handlers import (
     CallInstructionDebugHandler,
     ForLoopInstructionDebugHandler,
@@ -122,6 +137,69 @@ def test_forloop_handler_runs_no_iteration_for_a_non_finite_count() -> None:
     assert not [step for step in steps if step.instruction_kind == "OutInstruction"]
     assert runner.current_state.tags["Pulse"] is False
     assert runner.current_state.tags[system.fault.out_of_range.name] is True
+
+
+def _bare_body_edge_reset_program() -> Program:
+    enable = Bool("Enable")
+    x = Bool("X")
+    cnt = Counter.clone("Cnt")
+
+    with Program(strict=False) as logic:
+        with Rung(enable):
+            with forloop(3):
+                count_up(cnt, 100).reset(rise(x))
+    return logic
+
+
+def _rise_x_shown(events: Any) -> list[tuple[str, Any]]:
+    shown = []
+    for event in events:
+        if event.instruction_kind != "Reset" or event.trace is None:
+            continue
+        for region in event.trace.regions:
+            for condition in region.conditions:
+                if condition.expression == "rise(X)":
+                    details = {d["name"]: d["value"] for d in condition.details}
+                    shown.append((condition.status, details["previous"]))
+    return shown
+
+
+def test_forloop_handler_shows_a_bare_body_edge_leg_as_the_engine_scans_it() -> None:
+    """A bare body instruction with an edge leg is a row of its own: the debugger
+    traces its helper leg on that row's view, so rise() shows true on the first
+    iteration only, as the engine fires it."""
+    logic = _bare_body_edge_reset_program()
+
+    def staged() -> PLC:
+        plc = PLC(logic)
+        plc.patch({"Enable": True})
+        plc.step()
+        plc.patch({"Enable": True, "X": True})
+        return plc
+
+    plain = staged()
+    plain.step()
+    debugged = staged()
+    steps = list(debugged.debug.scan_steps_debug())
+
+    assert _rise_x_shown(steps) == [("true", False), ("false", True), ("false", True)]
+    assert debugged.current_state.tags == plain.current_state.tags
+    assert debugged.current_state.memory == plain.current_state.memory
+
+
+def test_replay_trace_shows_a_bare_body_edge_leg_as_the_engine_scans_it() -> None:
+    plc = PLC(_bare_body_edge_reset_program())
+    plc.patch({"Enable": True})
+    plc.step()
+    plc.patch({"Enable": True, "X": True})
+    plc.step()
+    plc.step()
+
+    rise_scan = plc.current_state.scan_id - 1
+    events = [e for trace in plc.replay_trace_at(rise_scan).values() for e in trace.events]
+    assert _rise_x_shown(events) == [("true", False), ("false", True), ("false", True)]
+    held = [e for trace in plc.replay_trace_at(rise_scan + 1).values() for e in trace.events]
+    assert _rise_x_shown(held) == [("false", True)] * 3
 
 
 def test_debugger_accepts_protocol_runner_wrapper_without_private_api() -> None:

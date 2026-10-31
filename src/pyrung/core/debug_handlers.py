@@ -199,10 +199,19 @@ class ForLoopInstructionDebugHandler:
                 for child in instruction.body:
                     if isinstance(child, Instruction):
                         row = begin_bare_body_row(ctx, child)
+                        # A row of its own reads the fresh view the engine scans
+                        # its helper legs against, not the loop rung's entry view.
+                        row_execution = (
+                            child_execution
+                            if row is None
+                            else child_execution.with_overrides(
+                                condition_view=ctx._condition_snapshot
+                            )
+                        )
                         try:
                             yield from debugger._iter_instruction_steps(
                                 debugger._make_instruction_state(
-                                    execution=child_execution,
+                                    execution=row_execution,
                                     rung=instruction_state.rung,
                                     instruction=child,
                                     step_trace=instruction_state.step_trace,
