@@ -20,8 +20,11 @@ import pytest
 
 from pyrung.core import (
     PLC,
+    And,
     Block,
     Bool,
+    Dint,
+    InputBlock,
     Int,
     Program,
     Real,
@@ -33,7 +36,10 @@ from pyrung.core import (
     latch,
     on_delay,
     out,
+    pack_words,
+    run_function,
     search,
+    unpack_to_words,
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -440,3 +446,299 @@ def test_real_input_between_close_split_points(config, via_copy, low, high, insi
     if reachable:
         assert _witness_hits(logic, [({"KLevel": inside}, 1)], "KBad")
     _agree(logic, Bool("KBad"), reachable, config)
+
+
+# -- comparisons only the property makes (review B1) -------------------------
+
+
+@pytest.mark.parametrize("config", CONFIGS.values(), ids=CONFIGS.keys())
+def test_property_compares_input_with_stepped_int(config) -> None:
+    en = Bool("KEn", external=True)
+    value = Int("KIn", external=True, min=0, max=199)
+    stepped = Int("KD")
+    with Program(strict=False) as logic:
+        with Rung(en, stepped < 200):
+            calc(stepped + 10, stepped)
+        with Rung(value > 100, value < 160):
+            out(Bool("KWin"))
+    prop = And(stepped == value, stepped > 100, stepped < 120)
+    result = never(logic, prop, _opt_config=config)
+    assert isinstance(result, Counterexample), result
+    state = _replay(logic, result.trace).current_state
+    assert state.tags["KD"] == state.tags["KIn"] == 110
+
+
+@pytest.mark.parametrize("config", CONFIGS.values(), ids=CONFIGS.keys())
+def test_property_compares_two_inputs(config) -> None:
+    first = Int("KA", external=True, min=0, max=500)
+    second = Int("KB", external=True, min=0, max=500)
+    with Program(strict=False) as logic:
+        with Rung(first > 100, second > 100):
+            out(Bool("KWin"))
+    result = never(logic, And(first == second, first > 300, first < 302), _opt_config=config)
+    assert isinstance(result, Counterexample), result
+    state = _replay(logic, result.trace).current_state
+    assert state.tags["KA"] == state.tags["KB"] == 301
+
+
+# -- the index of an indirect access (review B2) -----------------------------
+
+
+def _indexed_table(*, via_calc: bool) -> tuple[Program, Bool]:
+    en = Bool("KEn", external=True)
+    table = Block("KTbl", TagType.INT, 1, 50)
+    pointer = Int("KPtr", external=True, min=1, max=50, default=1)
+    loaded, stepped, index = Int("KLoaded"), Int("KS"), Int("KP2", default=1)
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung():
+            for i in range(1, 51):
+                copy(i * 10, table[i])
+        with Rung(en, stepped < 400):
+            calc(stepped + 10, stepped)
+        if via_calc:
+            with Rung():
+                calc(pointer + 0, index)
+            with Rung(index >= 1, index <= 50):
+                copy(table[index], loaded)
+            with Rung(loaded == stepped, stepped > 365, stepped < 375):
+                latch(bad)
+        else:
+            with Rung():
+                copy(pointer, index)
+            with Rung(index >= 1, index <= 50, table[index] == stepped, stepped > 365):
+                latch(bad)
+    return logic, bad
+
+
+@pytest.mark.parametrize("config", CONFIGS.values(), ids=CONFIGS.keys())
+@pytest.mark.parametrize("via_calc", [False, True], ids=["indirect_compare", "calc_index"])
+def test_index_of_element_compared_with_stepped_int(config, via_calc) -> None:
+    logic, bad = _indexed_table(via_calc=via_calc)
+    assert _witness_hits(logic, [({"KEn": True, "KPtr": 37}, 37)], "KBad")
+    _assert_counterexample(logic, bad, config)
+
+
+# -- free inputs compared with each other (review N5) ------------------------
+
+
+@pytest.mark.parametrize("config", CONFIGS.values(), ids=CONFIGS.keys())
+def test_wide_inputs_compared_with_each_other(config) -> None:
+    value = Int("KPV", external=True, min=0, max=4095)
+    setpoint = Int("KSP", external=True, min=0, max=4095)
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung(value > setpoint):
+            latch(bad)
+    _assert_counterexample(logic, bad, config)
+
+
+@pytest.mark.parametrize("config", CONFIGS.values(), ids=CONFIGS.keys())
+def test_real_inputs_compared_with_each_other(config) -> None:
+    first = Real("KA", external=True, min=0.0, max=100.0)
+    second = Real("KB", external=True, min=0.0, max=100.0)
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung(first > second):
+            latch(bad)
+    _assert_counterexample(logic, bad, config)
+
+
+@pytest.mark.parametrize("config", CONFIGS.values(), ids=CONFIGS.keys())
+def test_real_and_int_inputs_ordered_between_literals(config) -> None:
+    level = Real("KLevel", external=True, min=0.0, max=10.0)
+    count = Int("KCount", external=True, min=0, max=10)
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        # 4 <= Count < Level < 5: no literal names a value of Level in there.
+        with Rung(count > 3, level < 5, count < level):
+            latch(bad)
+    assert _witness_hits(logic, [({"KLevel": 4.5, "KCount": 4}, 1)], "KBad")
+    _assert_counterexample(logic, bad, config)
+
+
+# -- known gaps, left for a later prover sweep -------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "review B3: _all_write_targets drops a run_function out bound to an "
+        "indirect element (outs={'y': W[Ptr]}), so In == W[2] is partitioned "
+        "against the literal writes only: false Proven"
+    ),
+)
+def test_run_function_indirect_out_is_a_writer() -> None:
+    go = Bool("KGo", external=True)
+    words = Block("KW", TagType.INT, 1, 3)
+    pointer = Int("KPtr", external=True, min=1, max=3)
+    value = Int("KIn", external=True, min=0, max=2000)
+    bad = Bool("KBad")
+
+    def fifty():
+        return {"y": 50}
+
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(5, words[2])
+        with Rung(go):
+            run_function(fifty, outs={"y": words[pointer]})
+        with Rung(value == words[2], value > 45):
+            latch(bad)
+    assert _witness_hits(logic, [({"KGo": True, "KPtr": 2, "KIn": 50}, 1)], "KBad")
+    _assert_counterexample(logic, bad, _OptConfig())
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "review B3: _all_write_targets skips the indirect dest of "
+        "unpack_to_words(Src, W.select(Ptr, Ptr + 1)) and pack_words(..., "
+        "DD[Ptr]), so In == W[2] / In == DD[2] is partitioned against the "
+        "literal writes only: false Proven"
+    ),
+)
+@pytest.mark.parametrize("packing", ["unpack_indirect_range", "pack_indirect_dest"])
+def test_packing_indirect_dest_is_a_writer(packing) -> None:
+    go = Bool("KGo", external=True)
+    words = Block("KW", TagType.INT, 1, 4)
+    dwords = Block("KDD", TagType.DINT, 1, 3)
+    pointer = Int("KPtr", external=True, min=1, max=3)
+    value = Int("KIn", external=True, min=0, max=2000)
+    source = Dint("KSrc")
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        if packing == "unpack_indirect_range":
+            with Rung():
+                copy(50, source)
+                copy(5, words[2])
+            with Rung(go):
+                unpack_to_words(source, words.select(pointer, pointer + 1))
+            with Rung(value == words[2], value > 45):
+                latch(bad)
+        else:
+            with Rung():
+                copy(50, words[1])
+                copy(0, words[2])
+                copy(5, dwords[2])
+            with Rung(go):
+                pack_words(words.select(1, 2), dwords[pointer])
+            with Rung(value == dwords[2], value > 45):
+                latch(bad)
+    assert _witness_hits(logic, [({"KGo": True, "KPtr": 2, "KIn": 50}, 1)], "KBad")
+    _assert_counterexample(logic, bad, _OptConfig())
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "review N1: a REAL with integer min/max (L = Real(min=0.0, max=10.0), "
+        "calc(L * L, P); P > 30, P < 31) is enumerated at integers only, so "
+        "L = 5.5 is never tried: false Proven"
+    ),
+)
+def test_real_with_integer_bounds_is_not_enumerated_as_integers() -> None:
+    level = Real("KL", external=True, min=0.0, max=10.0)
+    square = Real("KP")
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(level * level, square)
+        with Rung(square > 30, square < 31):
+            latch(bad)
+    assert _witness_hits(logic, [({"KL": 5.5}, 1)], "KBad")
+    _assert_counterexample(logic, bad, _OptConfig())
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "review N2: an Int compared with fractional literals (In > 2.5, "
+        "In < 3.5) gets the literals +-1, not floor/ceil, so In = 3 is never "
+        "tried: false Proven"
+    ),
+)
+def test_int_between_fractional_literals() -> None:
+    value = Int("KIn", external=True, min=0, max=2000)
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung(value > 2.5, value < 3.5):
+            latch(bad)
+    assert _witness_hits(logic, [({"KIn": 3}, 1)], "KBad")
+    _assert_counterexample(logic, bad, _OptConfig())
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "review N2: an Int compared with a fractional literal (In > 2.5) gets "
+        "a witness value it cannot hold (In = 3.5)"
+    ),
+)
+def test_int_witness_value_is_integral() -> None:
+    value = Int("KIn", external=True, min=0, max=2000)
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung(value > 2.5):
+            latch(bad)
+    result = never(logic, bad)
+    assert isinstance(result, Counterexample), result
+    witnessed = [step.inputs["KIn"] for step in result.trace if "KIn" in step.inputs]
+    assert witnessed
+    assert all(float(v).is_integer() for v in witnessed), witnessed
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "review N6: InputBlock[Ptr] == 5 (a literal) marks the elements as "
+        "compared with a changing value (each other); the refusal hint should "
+        "name the missing bounds, not a comparison"
+    ),
+)
+def test_indirect_compare_with_literal_hint() -> None:
+    pointer = Int("KPtr", external=True, min=1, max=3, default=1)
+    inputs = InputBlock("KIB", TagType.INT, 1, 3)
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung(inputs[pointer] == 5):
+            latch(bad)
+    result = never(logic, bad)
+    assert isinstance(result, Intractable), result
+    assert not any("compared with a changing value" in hint for hint in result.hints)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "review N5/D1: Level * 0.1 > 9.5 (Real 0..100) is refused: the "
+        "expression marks Level as compared with a computed value and the "
+        "reverse edge of * is not inverted; base found the counterexample"
+    ),
+)
+def test_scaled_real_compared_with_literal() -> None:
+    level = Real("KLevel", external=True, min=0.0, max=100.0)
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung(level * 0.1 > 5):
+            out(Bool("KHigh"))
+        with Rung(level * 0.1 > 9.5):
+            latch(bad)
+    _assert_counterexample(logic, bad, _OptConfig())
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "pre-existing (base too): an unscoped callable property "
+        "(never(p, lambda s: s['In'] == 301)) reads In where classify cannot "
+        "see it, so In keeps its program partition: false Proven"
+    ),
+)
+def test_unscoped_callable_property_reads_input() -> None:
+    value = Int("KIn", external=True, min=0, max=500)
+    with Program(strict=False) as logic:
+        with Rung(value > 100):
+            out(Bool("KWin"))
+    result = never(logic, lambda state: state["KIn"] == 301)
+    assert isinstance(result, Counterexample), result

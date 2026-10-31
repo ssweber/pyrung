@@ -43,11 +43,12 @@ No domain → ``Intractable`` with hints.
 from __future__ import annotations
 
 import itertools
+import math
 import os
 import sys
 import time
 from collections import ChainMap
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from pyrung.core.analysis.affine import (
     extract_forward_affine as _extract_forward_affine,
@@ -121,7 +122,7 @@ from .system_points import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable, Mapping, Sequence
 
     from pyrung.core.analysis.pdg import ProgramGraph, RungNode
     from pyrung.core.analysis.simplified import Atom
@@ -599,12 +600,15 @@ def _comparison_influencing_tags(
     return frozenset(influential)
 
 
-def _compared_value_names(value: Any, graph: ProgramGraph) -> set[str]:
+def _compared_value_names(
+    value: Any, graph: ProgramGraph, index_out: set[str] | None = None
+) -> set[str]:
     """Names of the tags whose *values* a comparison operand reads.
 
     A literal or a readonly tag (a constant) reads none.  An indirect access
-    reads the block elements it can reach, not its pointer: the pointer picks
-    an element, its value is not compared.
+    reads the block elements it can reach; the tags its index reads (the
+    pointer picks the element) go to *index_out*, or are returned with the
+    elements when it is None.
     """
     from enum import Enum
 
@@ -634,6 +638,17 @@ def _compared_value_names(value: Any, graph: ProgramGraph) -> set[str]:
                 found.add(current.name)
         elif isinstance(current, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
             found.update(_expand_indirect_tag_names(current, graph.indirect_read_reach))
+            if isinstance(current, IndirectRef):
+                index_parts: tuple[Any, ...] = (current.pointer,)
+            elif isinstance(current, IndirectExprRef):
+                index_parts = (current.expr,)
+            else:
+                index_parts = (current.start_expr, current.end_expr)
+            index_names = _compared_value_names(index_parts, graph)
+            if index_out is None:
+                found.update(index_names)
+            else:
+                index_out.update(index_names)
         elif isinstance(current, BlockRange):
             found.update(tag.name for tag in current.tags() if not tag.readonly)
         elif isinstance(current, Expression):
@@ -803,12 +818,24 @@ def _exact_value_sets(
     return exact
 
 
+class _ComparedInputs(NamedTuple):
+    """What ``_tag_compared_names`` found; see there."""
+
+    compared: dict[str, str]
+    exact_partners: dict[str, frozenset[str]]
+    groups: tuple[frozenset[str], ...]
+    index_only: frozenset[str]
+
+
 def _tag_compared_names(
     program: Program,
     graph: ProgramGraph,
     exact_values: Mapping[str, frozenset[Any]],
-) -> tuple[dict[str, str], dict[str, frozenset[str]]]:
-    """Tags compared with a changing value, and tags compared with exact tags.
+    *,
+    exprs: Iterable[Any] = (),
+    free_inputs: frozenset[str] = frozenset(),
+) -> _ComparedInputs:
+    """Tags compared with a changing value, with exact tags, or with each other.
 
     The expression partition (``_extract_value_domain``) gives a tag one
     representative per class its comparisons distinguish, splitting its values
@@ -817,20 +844,33 @@ def _tag_compared_names(
     ``search(DS > In)``) splits them at points no literal names, and ``==``
     against a value that steps past the literals (an accumulator moving 10 ms a
     scan) needs that exact value.  No partition covers such a tag: the search
-    needs every value it can hold.  These are the first map, ``{name: what it
-    is compared with}``.
+    needs every value it can hold.  These are ``compared``,
+    ``{name: what it is compared with}``.
 
     A tag compared directly with a tag whose every value is known
     (``_exact_value_sets``: ``In < Limit`` with ``Limit`` in ``0..5``) is
     compared with those values as literals: its partition stays sound once the
-    partner's values are among its split points.  These are the second map,
-    ``{name: its exact partners}``.
+    partner's values are among its split points (``exact_partners``).
+
+    Free inputs (*free_inputs*: chosen afresh each scan) compared directly
+    with each other (``PV > SP``) form ``groups``: each member's partition is
+    taken over the split points of every member, with a representative per
+    member in each gap (see ``_group_domains``).
 
     The value reaches a comparison through data flow as well: a tag copied or
     calculated into a tag compared with a changing or an exact value needs
     every value (the partner's values are not carried back through the
-    arithmetic).
+    arithmetic).  So does the index of an indirect access whose element is
+    compared with a changing value, and what that index is computed from; an
+    index that is itself a free input keeps its pointer domain
+    (``index_only``).
+
+    *exprs* are the lowered expressions of the search (the property and the
+    program): their comparisons count like the program's.
     """
+    from pyrung.core.analysis.simplified import And as ExprAnd
+    from pyrung.core.analysis.simplified import ArithAtom, Atom
+    from pyrung.core.analysis.simplified import Or as ExprOr
     from pyrung.core.condition import (
         AllCondition,
         AnyCondition,
@@ -853,11 +893,22 @@ def _tag_compared_names(
     from pyrung.core.validation.walker import _condition_children
 
     compared: dict[str, str] = {}
+    index_marks: dict[str, str] = {}
     partners: dict[str, set[str]] = {}
+    group_of: dict[str, str] = {}
+
+    def find(name: str) -> str:
+        while group_of.get(name, name) != name:
+            name = group_of[name]
+        return name
 
     def mark(names: Iterable[str], partner: str) -> None:
         for name in names:
             compared.setdefault(name, partner)
+
+    def mark_index(names: Iterable[str], what: str) -> None:
+        for name in names:
+            index_marks.setdefault(name, f"an index of {what}")
 
     def label(names: set[str]) -> str:
         return ", ".join(sorted(names)) if names else "a computed value"
@@ -876,6 +927,48 @@ def _tag_compared_names(
             return value.readonly
         return isinstance(value, (bool, int, float, str))
 
+    def compare(left_value: Any, right_value: Any) -> None:
+        left_index: set[str] = set()
+        right_index: set[str] = set()
+        left = _compared_value_names(left_value, graph, left_index)
+        right = _compared_value_names(right_value, graph, right_index)
+        left_seen, right_seen = seen_by_partition(left_value), seen_by_partition(right_value)
+        if (left_seen or plain_tag(left_value)) and (right_seen or plain_tag(right_value)):
+            if left_seen or right_seen or left == right:
+                # A literal or a constant against a tag: the partition splits
+                # at it.
+                return
+            (left_name,), (right_name,) = left, right
+            if left_name in free_inputs and right_name in free_inputs:
+                left_root, right_root = find(left_name), find(right_name)
+                if left_root != right_root:
+                    group_of[left_root] = right_root
+                group_of.setdefault(left_name, left_name)
+                group_of.setdefault(right_name, right_name)
+                return
+            if right_name in exact_values:
+                partners.setdefault(left_name, set()).add(right_name)
+            else:
+                mark(left, right_name)
+            if left_name in exact_values:
+                partners.setdefault(right_name, set()).add(left_name)
+            else:
+                mark(right, left_name)
+            return
+        mark(left, label(right))
+        mark(right, label(left))
+        everything = left | right
+        mark_index(left_index | right_index, label(everything))
+
+    def mark_all(values: Iterable[Any]) -> None:
+        index: set[str] = set()
+        names: set[str] = set()
+        for value in values:
+            names |= _compared_value_names(value, graph, index)
+        for name in names:
+            mark((name,), label(names - {name}))
+        mark_index(index, label(names))
+
     leaf_skip = (
         BitCondition,
         NormallyClosedCondition,
@@ -884,8 +977,33 @@ def _tag_compared_names(
         FallingEdgeCondition,
     )
     direct_compare = (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)
+    compare_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
 
-    stack = list(_iter_program_conditions(program))
+    stack: list[Any] = list(_iter_program_conditions(program))
+    # The property's (and the program's) lowered atoms: a property names no
+    # rung, so its comparisons are only found here.
+    expr_stack: list[Any] = list(exprs)
+    while expr_stack:
+        expr = expr_stack.pop()
+        if isinstance(expr, (ExprAnd, ExprOr)):
+            expr_stack.extend(expr.terms)
+        elif isinstance(expr, ArithAtom):
+            names = {
+                name
+                for name in (expr.left, expr.right)
+                if name in graph.tags and not graph.tags[name].readonly
+            }
+            for name in names:
+                mark((name,), label(names - {name}))
+        elif isinstance(expr, Atom):
+            if expr.unsupported is not None:
+                stack.append(expr.unsupported)
+            elif expr.form in compare_forms and expr.tag in graph.tags:
+                operand = expr.operand
+                if expr.operand_is_tag:
+                    operand = graph.tags.get(operand, operand)
+                compare(graph.tags[expr.tag], operand)
+
     seen: set[int] = set()
     while stack:
         cond = stack.pop()
@@ -898,54 +1016,35 @@ def _tag_compared_names(
         if isinstance(cond, leaf_skip):
             continue
         if isinstance(cond, direct_compare):
-            left = _compared_value_names(cond.tag, graph)
-            right = _compared_value_names(cond.value, graph)
-            left_seen, right_seen = seen_by_partition(cond.tag), seen_by_partition(cond.value)
-            if (left_seen or plain_tag(cond.tag)) and (right_seen or plain_tag(cond.value)):
-                if left_seen or right_seen or left == right:
-                    # A literal or a constant against a tag: the partition
-                    # splits at it.
-                    continue
-                (left_name,), (right_name,) = left, right
-                if right_name in exact_values:
-                    partners.setdefault(left_name, set()).add(right_name)
-                else:
-                    mark(left, right_name)
-                if left_name in exact_values:
-                    partners.setdefault(right_name, set()).add(left_name)
-                else:
-                    mark(right, left_name)
-            else:
-                mark(left, label(right))
-                mark(right, label(left))
+            compare(cond.tag, cond.value)
             continue
         # Indirect, expression and unknown comparisons: every value they read
         # is compared with something the partition does not see.
-        names: set[str] = set()
-        for _child_name, child in _condition_children(cond):
-            names |= _compared_value_names(child, graph)
-        for name in names:
-            mark((name,), label(names - {name}))
+        mark_all(child for _child_name, child in _condition_children(cond))
 
     for instr in walk_instructions(program):
         if isinstance(instr, SearchInstruction):
-            names = _compared_value_names(instr.value, graph) | _compared_value_names(
-                instr.search_range, graph
-            )
-            for name in names:
-                mark((name,), label(names - {name}))
+            mark_all((instr.value, instr.search_range))
 
-    # Back through data flow: whatever such a tag is computed from.
+    # Back through data flow: whatever such a tag is computed from.  The
+    # index of an indirect read or write is a source too: it picks the
+    # element read, or the element written.
     sources_of: dict[str, set[str]] = {}
     for instr in walk_instructions(program):
         reads: set[str] = set()
         for field_name in getattr(type(instr), "_reads", ()):
             reads |= _compared_value_names(getattr(instr, field_name, None), graph)
+        for field_name in getattr(type(instr), "_writes", ()):
+            write_index: set[str] = set()
+            _compared_value_names(getattr(instr, field_name, None), graph, write_index)
+            reads |= write_index
         if not reads:
             continue
         for target_name, _itype in _all_write_targets(instr, graph.indirect_reach):
             sources_of.setdefault(target_name, set()).update(reads)
     why = dict(compared)
+    for name, reason in index_marks.items():
+        why.setdefault(name, reason)
     for name, exact_partners in partners.items():
         why.setdefault(name, label(exact_partners))
     queue = list(why)
@@ -956,9 +1055,18 @@ def _tag_compared_names(
                 compared[source] = f"{why[target_name]}, through {target_name}"
                 why.setdefault(source, compared[source])
                 queue.append(source)
-    return compared, {
-        name: frozenset(found) for name, found in partners.items() if name not in compared
-    }
+    index_only = frozenset(name for name in index_marks if name not in compared)
+    for name in index_only:
+        compared[name] = index_marks[name]
+    groups: dict[str, set[str]] = {}
+    for name in group_of:
+        groups.setdefault(find(name), set()).add(name)
+    return _ComparedInputs(
+        compared,
+        {name: frozenset(found) for name, found in partners.items() if name not in compared},
+        tuple(frozenset(members) for members in groups.values()),
+        index_only,
+    )
 
 
 def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
@@ -1245,6 +1353,90 @@ def _every_value_domain(tag: Tag) -> tuple[Any, ...] | None:
     if tag.max - tag.min + 1 > _TAG_COMPARED_DOMAIN_CAP:
         return None
     return tuple(range(int(tag.min), int(tag.max) + 1))
+
+
+_INTEGRAL_TYPE_RANGE: dict[TagType, tuple[int, int]] = {
+    TagType.INT: (-32768, 32767),
+    TagType.DINT: (-(2**31), 2**31 - 1),
+    TagType.WORD: (0, 65535),
+}
+
+
+def _group_domains(
+    members: Sequence[str],
+    domains: dict[str, tuple[Any, ...]],
+    tags: Mapping[str, Tag],
+) -> None:
+    """Widen the domains of free inputs compared with each other (``PV > SP``).
+
+    Each member's own partition splits only at its own literals; the
+    comparison between members needs their relative order too.  Over the
+    union *S* of every member's split points (and declared min/max), any
+    assignment of the members is order-equivalent, against *S* and against
+    each other, to one that puts in each gap of *S* at most one value per
+    member: k members need k representatives per gap (the integers nearest
+    each end of the gap for an integral member; for a REAL, k points between
+    any two neighbouring candidates, so it can sit between or beside the
+    integers).  Every member's domain becomes *S* plus those representatives,
+    filtered to what the member can hold.  Mutates *domains*.
+    """
+    k = len(members)
+    points: set[float] = set()
+    for name in members:
+        tag = tags[name]
+        for value in domains[name]:
+            if isinstance(value, int | float) and not isinstance(value, bool):
+                points.add(value)
+        for bound in (tag.min, tag.max):
+            if isinstance(bound, int | float) and not isinstance(bound, bool):
+                points.add(bound)
+    if not points:
+        return
+    ordered = sorted(points)
+    any_integral = any(tags[name].type in _INTEGRAL_TYPE_RANGE for name in members)
+    any_real = any(tags[name].type == TagType.REAL for name in members)
+    gaps = list(zip(ordered, ordered[1:], strict=False))
+    gaps.insert(0, (ordered[0] - k - 1, ordered[0]))
+    gaps.append((ordered[-1], ordered[-1] + k + 1))
+    candidates: set[Any] = set(ordered)
+    for low, high in gaps:
+        ints: list[int] = []
+        if any_integral or not any_real:
+            first, last = math.floor(low) + 1, math.ceil(high) - 1
+            if first <= last:
+                ints = sorted(
+                    set(range(first, min(first + k, last + 1)))
+                    | set(range(max(last - k + 1, first), last + 1))
+                )
+                candidates.update(ints)
+        if any_real:
+            anchors = [low, *ints, high]
+            for left, right in zip(anchors, anchors[1:], strict=False):
+                step = (right - left) / (k + 1)
+                candidates.update(left + step * j for j in range(1, k + 1))
+    for name in members:
+        tag = tags[name]
+        allowed = set(domains[name])
+        for value in candidates:
+            if tag.type in _INTEGRAL_TYPE_RANGE:
+                if value != int(value):
+                    continue
+                value = int(value)
+                type_low, type_high = _INTEGRAL_TYPE_RANGE[tag.type]
+                if not type_low <= value <= type_high:
+                    continue
+            elif tag.type == TagType.REAL:
+                value = float(value)
+            else:
+                continue
+            if tag.min is not None and value < tag.min:
+                continue
+            if tag.max is not None and value > tag.max:
+                continue
+            if tag.choices is not None and value not in tag.choices:
+                continue
+            allowed.add(value)
+        domains[name] = tuple(sorted(allowed))
 
 
 def _declared_domain(tag: Tag) -> tuple[Any, ...] | None:
@@ -3215,9 +3407,25 @@ def _classify_dimensions_from_graph(
     tag_compared: dict[str, str] = {}
     exact_partners: dict[str, frozenset[str]] = {}
     exact_values: dict[str, frozenset[Any]] = {}
+    compared_groups: tuple[frozenset[str], ...] = ()
+    index_only: frozenset[str] = frozenset()
     if exhaust_tag_compared_inputs:
         exact_values = _exact_value_sets(program, graph, receive_dest_names, constant_storage)
-        tag_compared, exact_partners = _tag_compared_names(program, graph, exact_values)
+        free_inputs = frozenset(
+            name
+            for name, tag in graph.tags.items()
+            if name not in constant_storage
+            and not tag.readonly
+            and tag.type in (TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL)
+            and (
+                graph.tag_roles.get(name) is TagRole.INPUT
+                or name not in graph.writers_of
+                or name in receive_dest_names
+            )
+        )
+        tag_compared, exact_partners, compared_groups, index_only = _tag_compared_names(
+            program, graph, exact_values, exprs=all_exprs, free_inputs=free_inputs
+        )
         if profile:
             profile_last = _classify_profile_mark(timings, "tag_compared_index", profile_last)
     tag_compared_refused: dict[str, str] = {}
@@ -3279,6 +3487,9 @@ def _classify_dimensions_from_graph(
             if tag_name in tag_compared and tag_name not in constant_storage:
                 # No partition covers it (see _tag_compared_names): every value.
                 domain = _every_value_domain(tag)
+                if domain is None and tag_name in index_only and tag_name in known_domains:
+                    # Only an index: the values that land in its blocks.
+                    domain = known_domains[tag_name]
                 if domain is None:
                     infeasible_tags.append(tag_name)
                     tag_compared_refused[tag_name] = tag_compared[tag_name]
@@ -3534,6 +3745,12 @@ def _classify_dimensions_from_graph(
         if tag_name in consumed_accs:
             domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)
         stateful[tag_name] = domain
+    for group in compared_groups:
+        # A member that took every value it can hold adds them all as split
+        # points for the others.
+        members = sorted(name for name in group if name in nondeterministic)
+        if len(members) > 1:
+            _group_domains(members, nondeterministic, graph.tags)
     if profile:
         profile_last = _classify_profile_mark(timings, "tag_classification_loop", profile_last)
 
