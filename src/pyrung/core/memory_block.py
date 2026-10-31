@@ -1342,6 +1342,34 @@ class RangeComparison:
     value: Any
 
 
+#: Tag types a pointer may have: a pointer holds an address, an integer.
+POINTER_TAG_TYPES = frozenset({TagType.INT, TagType.DINT})
+
+
+def _check_pointer_tag(block: Block, pointer: Any) -> None:
+    """Refuse a pointer tag that is not an Int or Dint (``DS[R]`` with R a Real)."""
+    tag_type = getattr(pointer, "type", None)
+    if tag_type is None or tag_type in POINTER_TAG_TYPES:
+        return
+    raise TypeError(
+        f"Pointer {getattr(pointer, 'name', pointer)!r} into block {block.name!r} is "
+        f"{tag_type.name}; a pointer must be an Int or Dint tag."
+    )
+
+
+def _check_pointer_expression(block: Block, expr: Any) -> None:
+    """Refuse an index expression that may be a float (``DS[R + 1]``, ``DS[I / 2]``)."""
+    from pyrung.core.expression import format_expr, may_be_float
+
+    if not may_be_float(expr):
+        return
+    raise TypeError(
+        f"Index expression {format_expr(expr)!r} into block {block.name!r} may be a "
+        "float (a Real operand, a float constant, '/', '**' or a math function); "
+        "an index expression must be integer-valued: use Int or Dint operands and '//'."
+    )
+
+
 @dataclass(frozen=True)
 class IndirectRef:
     """Tag with runtime-resolved address via pointer.
@@ -1356,6 +1384,9 @@ class IndirectRef:
 
     block: Block
     pointer: Tag
+
+    def __post_init__(self) -> None:
+        _check_pointer_tag(self.block, self.pointer)
 
     def resolve(self, state: SystemState) -> Tag:
         """Resolve pointer value to concrete Tag.
@@ -1448,6 +1479,9 @@ class IndirectExprRef:
 
     block: Block
     expr: Any  # Expression type - use Any to avoid circular import
+
+    def __post_init__(self) -> None:
+        _check_pointer_expression(self.block, self.expr)
 
     def resolve_ctx(self, ctx: ScanContext | ConditionView) -> Tag:
         """Resolve expression value to concrete Tag using ScanContext.

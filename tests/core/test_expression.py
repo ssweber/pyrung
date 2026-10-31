@@ -9,6 +9,7 @@ import pytest
 
 from pyrung.core import Block, Bool, Int, ScanContext, SystemState, TagType
 from pyrung.core.condition import Condition
+from pyrung.core.expression import STRICT_DIVISION
 from tests.conftest import evaluate_condition
 
 # =============================================================================
@@ -713,23 +714,29 @@ class TestShiftRotateFunctions:
 class TestExpressionEdgeCases:
     """Test edge cases and error handling."""
 
-    def test_division_by_zero_returns_inf(self):
-        """Division by zero returns infinity (like hardware)."""
+    @pytest.mark.parametrize("symbol", ["/", "//", "%"])
+    def test_division_by_zero_outside_calc_is_zero(self, symbol):
+        """Outside calc an expression is permissive: a division by zero gives 0."""
         DS = Block("DS", TagType.INT, 1, 9)
-        expr = DS[1] / DS[2]
+        expr = {"/": DS[1] / DS[2], "//": DS[1] // DS[2], "%": DS[1] % DS[2]}[symbol]
         state = SystemState().with_tags({"DS1": 10, "DS2": 0})
         ctx = ScanContext(state)
-        result = expr.evaluate(ctx)
-        assert math.isinf(result)
+        assert expr.evaluate(ctx) == 0
+        assert (expr + 5).evaluate(ctx) == 5  # only the failing operation is 0
 
-    def test_floor_division_by_zero_raises(self):
-        """Floor division by zero raises ZeroDivisionError."""
+    @pytest.mark.parametrize("symbol", ["/", "//", "%"])
+    def test_division_by_zero_inside_calc_raises(self, symbol):
+        """Inside calc (STRICT_DIVISION) a division by zero raises: calc sets SC40."""
         DS = Block("DS", TagType.INT, 1, 9)
-        expr = DS[1] // DS[2]
+        expr = {"/": DS[1] / DS[2], "//": DS[1] // DS[2], "%": DS[1] % DS[2]}[symbol]
         state = SystemState().with_tags({"DS1": 10, "DS2": 0})
         ctx = ScanContext(state)
-        with pytest.raises(ZeroDivisionError):
-            expr.evaluate(ctx)
+        token = STRICT_DIVISION.set(True)
+        try:
+            with pytest.raises(ZeroDivisionError):
+                expr.evaluate(ctx)
+        finally:
+            STRICT_DIVISION.reset(token)
 
     def test_expression_with_default_value(self):
         """Expression uses tag's default when not in state."""

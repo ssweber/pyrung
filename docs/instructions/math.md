@@ -63,6 +63,12 @@ A math function given an operand outside its domain — `sqrt` of a negative, `l
 
 A division by zero earlier in the expression wins: `sqrt(X / 0)` is 0 with `division_error`, not a domain error. An infinite operand outside the domain is one: `sqrt` of −Inf and `asin` of Inf are 0 with `math_operation_error`; `sqrt` and `log` of +Inf are +Inf.
 
+## Math outside `calc()`
+
+An expression evaluated anywhere but `calc()` (a rung condition, a `copy()` source, a `forloop()` count, an index expression such as `DS[I + 1]`) is permissive: an operation that hits a math error gives 0, sets no fault flag and never stops the scan. That covers a division by zero (`/`, `//` or `%`, where `calc()` sets `division_error`), a math function outside its domain, a bitwise or shift operation on Inf or NaN or with a negative count, and a `randint()` bound holding Inf or NaN. A result that IEEE 754 defines passes through: `Big * 10 > 1.0E+38` is true when the product is +Inf. This is pyrung's own rule; a CLICK has no expressions outside Math, and the CLICK validator flags them. Use `calc()` when the flag matters.
+
+When a value stored as Inf or NaN reaches an instruction's own integer conversion, that instruction's rule applies: a `forloop()` over a `Real` count holding Inf runs no iteration and sets `out_of_range`.
+
 ## Mode inference
 
 `calc()` infers arithmetic mode from referenced tag types (including destination):
@@ -127,7 +133,7 @@ calc(randint(1, 6), Die)                 # 1..6 inclusive, a new draw every scan
 calc(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan starts
 ```
 
-`randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them. A `Real` bound is cut toward zero; one holding Inf or NaN makes the `calc()` store 0 and set `system.fault.out_of_range` (SC43), pyrung's choice, not yet measured on a CLICK.
+`randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them. A `Real` bound is cut toward zero; one holding Inf or NaN makes the `calc()` store 0 and set `system.fault.out_of_range` (SC43), pyrung's choice, not yet measured on a CLICK. Outside `calc()` such a draw is 0 with no flag ([Math outside `calc()`](#math-outside-calc)).
 
 Draws are deterministic, so the simulation stays replayable. Each `randint` call in the program is one site, and its value is a fixed function of the site and the scan number. Two runs of the same program draw the same sequence; replay, `history.at()`, seek and `fork()` see the values the original run saw; and a fork draws what its parent would have. Restarting (STOP -> RUN, `reboot()`) resets the scan number, so the sequence starts over.
 

@@ -13,6 +13,8 @@ copy(DS[1], DS[1], oneshot=True)    # Execute only on rung rising edge
 
 Out-of-range values are **clamped** to the destination type's min/max. This is different from `calc()`, which wraps.
 
+A pointer (`DS[Ptr]`) must be an `Int` or `Dint` tag, and an index expression (`DS[Ptr + 1]`) must be integer-valued: `Int`, `Dint` or `Word` operands, integer constants and `//` rather than `/`. Any other pointer, or an index expression that may be a float, raises `TypeError` when the program is built.
+
 ## `blockcopy` — copy a range
 
 ```python

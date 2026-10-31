@@ -594,7 +594,12 @@ class TestConditionAndExpressionCompiler:
         assert "<<" in compile_expression(a << 1, ctx)
         assert ">>" in compile_expression(a >> 1, ctx)
         assert "~int" in compile_expression(~a, ctx)
-        assert "_math_func(math.sqrt, " in compile_expression(sqrt(a), ctx)
+        assert "_math_func(math.sqrt, " in compile_expression(sqrt(a), ctx, strict=True)
+        # Outside calc a domain error gives 0 (permissive), so sqrt goes through
+        # _permissive_math; a division by a variable through _permissive_op.
+        assert "_permissive_math(math.sqrt, " in compile_expression(sqrt(a), ctx)
+        assert "_permissive_op('/', " in compile_expression(a / b, ctx)
+        assert " / " in compile_expression(a / b, ctx, strict=True)
         assert "0xFFFF" in compile_expression(lro(a, 1), ctx)
 
     def test_unknown_expression_type_raises(self):
@@ -1615,6 +1620,125 @@ class TestBoardPeripheralsAndRunStop:
 
         results = _on_every_backend(prog, monkeypatch, (hits, system.fault.out_of_range), scans=2)
         assert results == {name: (6, False) for name in results}
+
+    _FAULTS = (
+        system.fault.division_error,
+        system.fault.out_of_range,
+        system.fault.math_operation_error,
+    )
+
+    @pytest.mark.parametrize(
+        ("label", "make"),
+        [
+            ("div", lambda i, z, r: i / z),
+            ("floordiv", lambda i, z, r: i // z),
+            ("mod", lambda i, z, r: i % z),
+            ("pow", lambda i, z, r: z ** (0 - i)),
+            ("div_then_add", lambda i, z, r: (i / z) + 5),
+            ("bit_and", lambda i, z, r: r & 3),
+            ("invert", lambda i, z, r: ~r),
+            ("lshift_negative", lambda i, z, r: i << (z - 1)),
+            ("lsh", lambda i, z, r: lsh(r, 1)),
+            ("rro", lambda i, z, r: rro(i, r)),
+            ("sqrt", lambda i, z, r: sqrt(z - i)),
+        ],
+    )
+    def test_a_math_error_outside_calc_is_zero_with_no_flag_on_every_backend(
+        self, monkeypatch, label, make
+    ):
+        """pyrung's choice: outside calc an expression is permissive.  The
+        operation that hits a math error gives 0, nothing raises and no flag is
+        set, in a rung condition, a copy source and a forloop count alike."""
+        i = Int("I", default=4)
+        z = Int("Z")
+        big = Real("Big", default=3.0e38)
+        r = Real("R")
+        expr = make(i, z, r)
+        hit = Bool("Hit")
+        copied = Dint("Copied", default=7)
+        hits = Int("Hits")
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                calc(big * 10, r)  # +Inf, with SC43 on scan 0 only
+            with Rung(~system.sys.first_scan, expr == (5 if label == "div_then_add" else 0)):
+                out(hit)
+            with Rung(~system.sys.first_scan):
+                copy(expr, copied)
+                with forloop(expr):
+                    calc(hits + 1, hits)
+            with Rung(~system.sys.first_scan):
+                copy(5, after)
+
+        results = _on_every_backend(
+            prog, monkeypatch, (hit, copied, hits, *self._FAULTS, after), scans=2
+        )
+        expected_copy = 5 if label == "div_then_add" else 0
+        expected = (True, expected_copy, expected_copy, False, False, False, 5)
+        assert results == {name: expected for name in results}, label
+
+    def test_calc_still_flags_the_math_errors_a_condition_ignores_on_every_backend(
+        self, monkeypatch
+    ):
+        i = Int("I", default=4)
+        z = Int("Z")
+        dest = Int("Dest", default=7)
+        hit = Bool("Hit")
+        with Program(strict=False) as prog:
+            with Rung((i / z) == 0):
+                out(hit)
+            with Rung():
+                calc(i / z, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (hit, dest, *self._FAULTS), scans=1)
+        assert results == {name: (True, 0, True, False, False) for name in results}
+
+    def test_a_float_overflow_in_a_condition_stays_inf_on_every_backend(self, monkeypatch):
+        """Plain IEEE results pass through: only an operation that raises is 0."""
+        big = Real("Big", default=3.0e38)
+        hit = Bool("Hit")
+        with Program(strict=False) as prog:
+            with Rung((big * 10) > 1.0e38):
+                out(hit)
+
+        results = _on_every_backend(prog, monkeypatch, (hit, *self._FAULTS), scans=1)
+        assert results == {name: (True, False, False, False) for name in results}
+
+    @pytest.mark.parametrize("operand", ["nan", "inf"])
+    def test_a_non_finite_randint_bound_outside_calc_is_zero_on_every_backend(
+        self, monkeypatch, operand
+    ):
+        from pyrung.core import randint
+
+        r, setup = self._non_finite_real(operand)
+        copied = Dint("Copied", default=7)
+        hit = Bool("Hit")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                copy(randint(0, r), copied)
+            with Rung(~system.sys.first_scan, randint(0, r) == 0):
+                out(hit)
+
+        results = _on_every_backend(prog, monkeypatch, (copied, hit, *self._FAULTS), scans=2)
+        assert results == {name: (0, True, False, False, False) for name in results}
+
+    def test_a_math_error_in_an_index_expression_is_index_zero_on_every_backend(self, monkeypatch):
+        ds = Block("DS", TagType.INT, 0, 3)
+        i = Int("I", default=4)
+        z = Int("Z")
+        got = Int("Got")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(11, ds[0])
+                copy(22, ds[1])
+            with Rung():
+                copy(ds[i // z], got)
+
+        results = _on_every_backend(prog, monkeypatch, (got, *self._FAULTS), scans=1)
+        assert results == {name: (11, False, False, False) for name in results}
 
     def test_text_literal_copy_fans_out_one_char_per_register(self, monkeypatch):
         hw = P1AM()

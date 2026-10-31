@@ -32,19 +32,35 @@ Numeric = int | float
 # =============================================================================
 
 
-#: True while ``calc`` evaluates its expression: there a division by zero
-#: raises ``ZeroDivisionError`` (CLICK's Math writes 0 and sets SC40), as it
-#: does in the compiled kernel.  Elsewhere (a comparison in a rung condition)
-#: it reads as +/-Inf.  A REAL can hold +/-Inf itself (a Math overflow), so
-#: ``calc`` cannot tell a division by zero from an Inf operand afterwards.
+#: True while ``calc`` evaluates its expression: there a math error raises
+#: (a division by zero ``ZeroDivisionError``, an Inf or NaN into a bitwise
+#: operation ``OverflowError``, a domain error ``MathDomainError``), and calc
+#: stores 0 and sets the matching flag, as CLICK's Math does.  A REAL can hold
+#: +/-Inf itself (a Math overflow), so ``calc`` cannot tell a division by zero
+#: from an Inf operand afterwards.
+#:
+#: Everywhere else (a rung condition, a copy source, a forloop count, a
+#: pointer expression) an expression is permissive: the operation that hits a
+#: math error gives 0, nothing raises and no flag is set (pyrung's choice;
+#: CLICK has no expressions outside Math).  See :func:`_permissive`.
 STRICT_DIVISION: ContextVar[bool] = ContextVar("pyrung_strict_division", default=False)
+
+
+def _permissive(error: Exception) -> int:
+    """The value of an operation that raised *error* outside ``calc``: 0.
+
+    Inside ``calc`` (:data:`STRICT_DIVISION`) the error propagates instead.
+    """
+    if STRICT_DIVISION.get():
+        raise error
+    return 0
 
 
 def _op_div(a: Numeric, b: Numeric) -> Numeric:
     if b == 0:
         if STRICT_DIVISION.get():
             raise ZeroDivisionError("division by zero")
-        return float("inf") if a >= 0 else float("-inf")
+        return 0
     return a / b
 
 
@@ -326,7 +342,12 @@ class BinaryExpr(Expression):
         self.symbol = symbol
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return self.op(self.left.evaluate(ctx), self.right.evaluate(ctx))
+        left = self.left.evaluate(ctx)
+        right = self.right.evaluate(ctx)
+        try:
+            return self.op(left, right)
+        except (ArithmeticError, ValueError) as error:
+            return _permissive(error)
 
     def __repr__(self) -> str:
         return f"({self.left} {self.symbol} {self.right})"
@@ -346,7 +367,11 @@ class UnaryExpr(Expression):
         self.symbol = symbol
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return self.op(self.operand.evaluate(ctx))
+        operand = self.operand.evaluate(ctx)
+        try:
+            return self.op(operand)
+        except (ArithmeticError, ValueError) as error:
+            return _permissive(error)
 
     def __repr__(self) -> str:
         if self.symbol == "abs":
@@ -418,7 +443,11 @@ class MathFuncExpr(Expression):
         self.name = name
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return math_func_value(self.func, self.name, self.operand.evaluate(ctx))
+        operand = self.operand.evaluate(ctx)
+        try:
+            return math_func_value(self.func, self.name, operand)
+        except (ArithmeticError, ValueError) as error:
+            return _permissive(error)
 
     def __repr__(self) -> str:
         return f"{self.name}({self.operand})"
@@ -498,9 +527,12 @@ class ShiftFuncExpr(Expression):
         self.name = name
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> int:
-        val = bit_operand(self.value.evaluate(ctx))
-        cnt = bit_operand(self.count.evaluate(ctx))
-        return self.func(val, cnt)
+        value = self.value.evaluate(ctx)
+        count = self.count.evaluate(ctx)
+        try:
+            return self.func(bit_operand(value), bit_operand(count))
+        except (ArithmeticError, ValueError) as error:
+            return _permissive(error)
 
     def __repr__(self) -> str:
         return f"{self.name}({self.value}, {self.count})"
@@ -661,9 +693,10 @@ class RandIntExpr(Expression):
         if self.checks_bounds:
             # A bound holding Inf or NaN has no integer range: the calc stores
             # 0 with SC43 (pyrung's choice, not measured on CLICK).
+            # Outside calc the draw reads as 0 instead, with no flag.
             for bound in (self.lo, self.hi):
                 if not _finite(bound.evaluate(ctx)):
-                    raise OverflowError("randint() bound is Inf or NaN")
+                    return _permissive(OverflowError("randint() bound is Inf or NaN"))
         return ctx.get_tag(self.tag.name, self.tag.default)
 
     def __repr__(self) -> str:
@@ -784,6 +817,36 @@ class RangeAggregateExpr(Expression):
 
     def __repr__(self) -> str:
         return f"{_range_dsl(self.block_range)}.{self.kind}()"
+
+
+#: Tag type names whose value is always an integer (never Inf or NaN).
+INTEGER_TAG_TYPE_NAMES = frozenset({"BOOL", "INT", "DINT", "WORD"})
+
+
+def may_be_float(expr: Any) -> bool:
+    """False only when *expr* is integer-valued: never a float, so never Inf or NaN.
+
+    A REAL operand, a float constant, a ``/``, a ``**`` or a math function
+    can make a float, which can be Inf or NaN (``Inf - Inf``).  Anything not
+    recognised counts as one.
+    """
+    from pyrung.core.tag import ImmediateRef
+
+    if isinstance(expr, TagExpr):
+        tag = expr.tag.tag if isinstance(expr.tag, ImmediateRef) else expr.tag
+        return tag.type.name not in INTEGER_TAG_TYPE_NAMES
+    if isinstance(expr, LiteralExpr):
+        return isinstance(expr.value, float)
+    if isinstance(expr, BinaryExpr):
+        return expr.symbol in ("/", "**") or may_be_float(expr.left) or may_be_float(expr.right)
+    if isinstance(expr, UnaryExpr):
+        return expr.symbol != "~" and may_be_float(expr.operand)
+    if isinstance(expr, (ShiftFuncExpr, RandIntExpr)):
+        return False
+    if isinstance(expr, (SumExpr, RangeAggregateExpr)):
+        block = getattr(expr.block_range, "block", None)
+        return getattr(getattr(block, "type", None), "name", None) not in INTEGER_TAG_TYPE_NAMES
+    return True
 
 
 # =============================================================================

@@ -22,6 +22,7 @@ from pyrung.circuitpy.codegen.context import (
     CodegenContext,
 )
 from pyrung.core.expression import (
+    DOMAIN_LIMITED_MATH_FUNCS,
     BinaryExpr,
     Expression,
     LiteralExpr,
@@ -32,6 +33,7 @@ from pyrung.core.expression import (
     SumExpr,
     TagExpr,
     UnaryExpr,
+    may_be_float,
 )
 from pyrung.core.memory_block import (
     BlockRange,
@@ -109,8 +111,15 @@ def _compile_expression_impl(
     *,
     scalar_snapshots: dict[str, str] | None = None,
     block_snapshots: dict[int, str] | None = None,
+    strict: bool = False,
 ) -> str:
-    """Return a Python expression string with explicit parentheses."""
+    """Return a Python expression string with explicit parentheses.
+
+    *strict* is for calc, whose expression raises on a math error (calc stores
+    0 and sets the flag).  Anywhere else an expression is permissive, as the
+    core's: an operation that can raise goes through ``_permissive_op`` /
+    ``_permissive_math``, which give 0 instead.
+    """
     if isinstance(expr, TagExpr):
         return _snapshot_tag_symbol(
             expr.tag,
@@ -127,13 +136,17 @@ def _compile_expression_impl(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
         right = _compile_expression_impl(
             expr.right,
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
+        if not strict and _binary_may_raise(expr):
+            return _permissive_op(expr.symbol, left, right, ctx)
         if expr.symbol in _BITWISE_SYMBOLS:
             left_int = _bit_int_expr(expr.left, left, ctx)
             right_int = _bit_int_expr(expr.right, right, ctx)
@@ -151,10 +164,13 @@ def _compile_expression_impl(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
         if expr.symbol == "abs":
             return f"abs({inner})"
         if expr.symbol == "~":
+            if not strict and _may_be_float(expr.operand):
+                return _permissive_op("~", inner, "0", ctx)
             return f"(~{_bit_int_expr(expr.operand, inner, ctx)})"
         return f"({expr.symbol}({inner}))"
 
@@ -162,11 +178,16 @@ def _compile_expression_impl(
         if expr.name not in _ALLOWED_MATH_FUNCS:
             raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
         # _math_func passes a non-finite operand through and raises
-        # _MathDomainError for a domain error, as MathFuncExpr.evaluate does.
+        # _MathDomainError for a domain error, as MathFuncExpr.evaluate does;
+        # outside calc _permissive_math gives 0 for it instead.
         ctx.mark_helper("_math_func")
+        helper = "_math_func"
+        if not strict and expr.name in DOMAIN_LIMITED_MATH_FUNCS:
+            ctx.mark_helper("_permissive_math")
+            helper = "_permissive_math"
         return (
-            f"_math_func(math.{expr.name}, "
-            f"{_compile_expression_impl(expr.operand, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f"{helper}(math.{expr.name}, "
+            f"{_compile_expression_impl(expr.operand, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, strict=strict)}"
             ")"
         )
 
@@ -176,13 +197,21 @@ def _compile_expression_impl(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
         count = _compile_expression_impl(
             expr.count,
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
+        if not strict and (
+            _may_be_float(expr.value)
+            or _may_be_float(expr.count)
+            or (expr.name in ("lsh", "rsh") and not _non_negative_literal(expr.count))
+        ):
+            return _permissive_op(expr.name, value, count, ctx)
         value_int = _bit_int_expr(expr.value, value, ctx)
         count_int = _bit_int_expr(expr.count, count, ctx)
         if expr.name == "lsh":
@@ -217,10 +246,18 @@ def _compile_expression_impl(
         lo = hi = ""
         if expr.checks_bounds or not ctx.kernel_runtime:
             lo = _compile_expression_impl(
-                expr.lo, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots
+                expr.lo,
+                ctx,
+                scalar_snapshots=scalar_snapshots,
+                block_snapshots=block_snapshots,
+                strict=strict,
             )
             hi = _compile_expression_impl(
-                expr.hi, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots
+                expr.hi,
+                ctx,
+                scalar_snapshots=scalar_snapshots,
+                block_snapshots=block_snapshots,
+                strict=strict,
             )
         if ctx.kernel_runtime:
             # The runner's input drain wrote this scan's draw into the site tag.
@@ -233,11 +270,17 @@ def _compile_expression_impl(
             if not expr.checks_bounds:
                 return draw
             # A bound holding Inf or NaN raises OverflowError: the calc stores
-            # 0 with SC43 (RandIntExpr.evaluate).
+            # 0 with SC43 (RandIntExpr.evaluate).  Outside calc the draw
+            # reads as 0 instead.
             ctx.mark_helper("_bit_int")
-            ctx.mark_helper("_rand_checked")
-            return f"_rand_checked({draw}, {lo}, {hi})"
+            helper = "_rand_checked" if strict else "_rand_or_zero"
+            ctx.mark_helper(helper)
+            return f"{helper}({draw}, {lo}, {hi})"
         ctx.uses_random = True
+        if expr.checks_bounds and not strict:
+            ctx.mark_helper("_bit_int")
+            ctx.mark_helper("_rand_permissive")
+            return f"_rand_permissive({lo}, {hi})"
         # A bound holding Inf or NaN raises OverflowError, so the calc stores
         # 0 with SC43: int() of Inf raises it, _bit_int turns NaN into it.
         lo, hi = _bit_int_expr(expr.lo, lo, ctx), _bit_int_expr(expr.hi, hi, ctx)
@@ -291,32 +334,51 @@ def _compile_range_aggregate(expr: RangeAggregateExpr, terms: list[str]) -> str:
 
 _BITWISE_SYMBOLS = frozenset({"&", "|", "^", "<<", ">>"})
 
-#: Tag types whose value is always an integer (never Inf or NaN).
-_INTEGER_TAG_TYPES = frozenset({"BOOL", "INT", "DINT", "WORD"})
+
+def _non_zero_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and expr.value != 0
 
 
-def _may_be_float(expr: Any) -> bool:
-    """False only when *expr* is integer-valued: never a float, so never Inf or NaN.
+def _non_negative_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and expr.value >= 0
 
-    A REAL operand, a float constant, a ``/``, a ``**`` or a math function
-    can make a float, which can be Inf or NaN (``Inf - Inf``).  Anything not
-    recognised counts as one.
+
+def _binary_may_raise(expr: BinaryExpr) -> bool:
+    """Whether *expr* can raise on a math error (and so, outside calc, give 0).
+
+    A division by a non-zero constant, a power with a non-negative constant
+    exponent, a bitwise operation on integers and a shift by a non-negative
+    constant cannot; ``+``, ``-`` and ``*`` never do (a float overflow is Inf).
     """
-    if isinstance(expr, TagExpr):
-        tag = expr.tag.tag if isinstance(expr.tag, ImmediateRef) else expr.tag
-        return tag.type.name not in _INTEGER_TAG_TYPES
-    if isinstance(expr, LiteralExpr):
-        return isinstance(expr.value, float)
-    if isinstance(expr, BinaryExpr):
-        return expr.symbol in ("/", "**") or _may_be_float(expr.left) or _may_be_float(expr.right)
-    if isinstance(expr, UnaryExpr):
-        return expr.symbol != "~" and _may_be_float(expr.operand)
-    if isinstance(expr, (ShiftFuncExpr, RandIntExpr)):
-        return False
-    if isinstance(expr, (SumExpr, RangeAggregateExpr)):
-        block = getattr(expr.block_range, "block", None)
-        return getattr(getattr(block, "type", None), "name", None) not in _INTEGER_TAG_TYPES
-    return True
+    symbol = expr.symbol
+    if symbol in ("/", "//", "%"):
+        return not _non_zero_literal(expr.right)
+    if symbol == "**":
+        return not _non_negative_literal(expr.right)
+    if symbol in ("&", "|", "^"):
+        return _may_be_float(expr.left) or _may_be_float(expr.right)
+    if symbol in ("<<", ">>"):
+        return (
+            _may_be_float(expr.left)
+            or _may_be_float(expr.right)
+            or not _non_negative_literal(expr.right)
+        )
+    return False
+
+
+def _permissive_op(op: str, left: str, right: str, ctx: CodegenContext) -> str:
+    """``_permissive_op(op, left, right)``: the operation, or 0 for a math error.
+
+    The core's expressions outside calc give 0 where an operation raises
+    (``_permissive`` in pyrung.core.expression).
+    """
+    ctx.mark_helper("_bit_int")
+    ctx.mark_helper("_pow")
+    ctx.mark_helper("_permissive_op")
+    return f"_permissive_op({op!r}, {left}, {right})"
+
+
+_may_be_float = may_be_float
 
 
 def _bit_int_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
@@ -987,7 +1049,9 @@ def _compile_value(
     *,
     scalar_snapshots: dict[str, str] | None = None,
     block_snapshots: dict[int, str] | None = None,
+    strict: bool = False,
 ) -> str:
+    """*value* as a Python expression; *strict* for calc (see _compile_expression_impl)."""
     if isinstance(value, Tag):
         return _snapshot_tag_symbol(
             value,
@@ -1015,6 +1079,7 @@ def _compile_value(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
         index_expr = f"{helper}(int({expr}))"
         if block_snapshots is not None and block_id in block_snapshots:
@@ -1032,5 +1097,6 @@ def _compile_value(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
     return repr(value)

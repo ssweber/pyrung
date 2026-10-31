@@ -502,8 +502,13 @@ def compile_expression(
     ctx: CodegenContext,
     *,
     condition_snapshot: _ConditionSnapshotBindings | None = None,
+    strict: bool = False,
 ) -> str:
-    """Return a Python expression string with explicit parentheses."""
+    """Return a Python expression string with explicit parentheses.
+
+    *strict* for calc's expression, which raises on a math error; anywhere
+    else an operation that can raise gives 0 instead (permissive).
+    """
     scalar_snapshots = None
     block_snapshots = None
     if condition_snapshot is not None:
@@ -514,6 +519,7 @@ def compile_expression(
         ctx,
         scalar_snapshots=scalar_snapshots,
         block_snapshots=block_snapshots,
+        strict=strict,
     )
 
 
@@ -840,7 +846,7 @@ def _compile_calc_instruction(
 ) -> list[str]:
     ctx.mark_helper("_calc_math_isfinite")
     div_err = ctx.symbol_if_referenced(_FAULT_DIVISION_ERROR_TAG)
-    value_expr = _compile_value(instr.expression, ctx)
+    value_expr = _compile_value(instr.expression, ctx, strict=True)
     store_expr = _calc_store_expr("_calc_value", instr.dest.type.name, instr.mode, ctx)
     zero_store_expr = _calc_store_expr("0", instr.dest.type.name, instr.mode, ctx)
     div_err_line = f"    {div_err} = True" if div_err else "    pass"
