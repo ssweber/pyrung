@@ -457,8 +457,8 @@ class TestDeterministicOutput:
         assert s1 == s2
 
 
-class TestPrevSnapshotScope:
-    def test_no_edge_conditions_emit_no_prev_snapshots(self):
+class TestEdgeSiteMemory:
+    def test_no_edge_conditions_emit_no_edge_memory(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         with Program(strict=False) as prog:
@@ -466,9 +466,10 @@ class TestPrevSnapshotScope:
                 out(Bool("Light"))
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
-        assert '_prev["' not in source_code
+        assert "_edge:" not in source_code
+        assert "_prev" not in source_code
 
-    def test_prev_snapshots_only_include_edge_tags(self):
+    def test_each_edge_contact_keeps_its_own_memory(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         sensor = Bool("Car_Sensor")
@@ -485,11 +486,11 @@ class TestPrevSnapshotScope:
                 out(light)
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
-        assert '_prev["Car_Sensor"]' in source_code
-        assert '_prev["Car_LogEnable"]' in source_code
-        assert source_code.count('_prev["') == 2
-        assert '_prev["Aux"]' not in source_code
-        assert '_prev["Light"]' not in source_code
+        # One memory per contact, stored when its row is scanned.
+        assert source_code.count("_mem['_edge:e1'] = ") == 1
+        assert source_code.count("_mem['_edge:e2'] = ") == 1
+        assert "_edge:e3" not in source_code
+        assert "_prev" not in source_code
 
 
 class TestConditionAndExpressionCompiler:
@@ -507,8 +508,8 @@ class TestConditionAndExpressionCompiler:
             (CompareGe(Int("N"), 1), ">="),
             (AllCondition(Bool("A"), Bool("B")), " and "),
             (AnyCondition(Bool("A"), Bool("B")), " or "),
-            (RisingEdgeCondition(Bool("A")), "_rise("),
-            (FallingEdgeCondition(Bool("A")), "_fall("),
+            (RisingEdgeCondition(Bool("A")), "_now and not "),
+            (FallingEdgeCondition(Bool("A")), "_was and not "),
         ],
     )
     def test_condition_mappings(self, condition, needle):

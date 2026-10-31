@@ -148,7 +148,9 @@ def compile_kernel(
         pre_step_fn=pre_step_fn,
         referenced_tags=dict(ctx.referenced_tags),
         block_specs=block_specs,
-        edge_tags=set(ctx.edge_prev_tags),
+        # Edge contacts keep their memory per site in ``memory``
+        # (``_edge:e{N}``); nothing reads a previous-scan tag copy.
+        edge_tags=set(),
         source=source,
         blockless=blockless,
         has_io_gaps=ctx.has_io_gaps,

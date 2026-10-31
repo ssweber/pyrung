@@ -36,16 +36,6 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return v",
         "",
     ],
-    "_rise": [
-        "def _rise(curr, prev):",
-        "    return bool(curr) and not bool(prev)",
-        "",
-    ],
-    "_fall": [
-        "def _fall(curr, prev):",
-        "    return not bool(curr) and bool(prev)",
-        "",
-    ],
     "_int_to_float_bits": [
         "def _int_to_float_bits(n):",
         '    return struct.unpack("<f", struct.pack("<I", int(n) & 0xFFFFFFFF))[0]',

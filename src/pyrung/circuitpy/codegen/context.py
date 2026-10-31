@@ -22,8 +22,6 @@ from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig
 from pyrung.core.condition import (
     Condition,
-    FallingEdgeCondition,
-    RisingEdgeCondition,
 )
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import (
@@ -168,7 +166,6 @@ class CodegenContext:
     scalar_tags: dict[str, Tag] = field(default_factory=dict)
     referenced_tags: dict[str, Tag] = field(default_factory=dict)
     retentive_tags: dict[str, Tag] = field(default_factory=dict)
-    edge_prev_tags: set[str] = field(default_factory=set)
     dict_backed_tag_names: set[str] = field(default_factory=set)
 
     subroutine_names: list[str] = field(default_factory=list)
@@ -200,6 +197,9 @@ class CodegenContext:
     modbus_client_specs: list[ModbusClientJobSpec] = field(default_factory=list)
     modbus_client_specs_by_instruction: dict[int, ModbusClientJobSpec] = field(default_factory=dict)
     _helper_condition_snapshots: dict[int, dict[str, str | list[str]]] = field(default_factory=dict)
+    # ``(memory key, edge condition)`` per row (top-level rung or For-body row),
+    # by ``id``, for the rows being compiled (see site_memory.edge_rows).
+    _edge_rows: dict[int, tuple[tuple[str, Any], ...]] = field(default_factory=dict)
     compact_block_map: dict[int, dict[int, int]] = field(default_factory=dict)
     _static_range_layouts: dict[int, StaticRangeLayout] = field(default_factory=dict)
 
@@ -253,7 +253,6 @@ class CodegenContext:
 
     def collect_program_references(self) -> None:
         self.referenced_tags.clear()
-        self.edge_prev_tags.clear()
         self.dict_backed_tag_names.clear()
         self._static_range_layouts.clear()
         self.subroutine_names = sorted(self.program.subroutines)
@@ -357,8 +356,6 @@ class CodegenContext:
                 return
 
             if isinstance(value, Condition):
-                if isinstance(value, (RisingEdgeCondition, FallingEdgeCondition)):
-                    self.edge_prev_tags.add(value.tag.name)
                 for _, child in _condition_children(value):
                     walk_value(child)
                 return

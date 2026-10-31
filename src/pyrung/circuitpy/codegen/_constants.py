@@ -24,8 +24,6 @@ _TYPE_DEFAULTS: dict[TagType, Any] = {
 _HELPER_ORDER = (
     "_clamp_int",
     "_wrap_int",
-    "_rise",
-    "_fall",
     "_int_to_float_bits",
     "_float_to_int_bits",
     "_ascii_char_from_code",

@@ -21,14 +21,11 @@ from pyrung.core.kernel import CompiledKernel, ReplayKernel
 from pyrung.core.state import SystemState
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
-    _CLOCK_HALF_PERIODS,
-    _DERIVED_EDGE_TAGS,
     _DERIVED_TAG_NAMES,
     _MODE_RUN_KEY,
     READ_ONLY_SYSTEM_TAG_NAMES,
     SYSTEM_TAGS_BY_NAME,
     SystemPointRuntime,
-    clock_high,
     system,
 )
 from pyrung.core.tag import Tag
@@ -519,7 +516,6 @@ class CompiledPLC:
         ctx.blocks_live = False
         self._flush_blocks_tracked(tracked)
 
-        self._capture_previous_states()
         self._system_runtime.on_scan_end(scan_ctx)
         self._discover_new_commit_tags()
 
@@ -593,8 +589,6 @@ class CompiledPLC:
             ctx.blocks_live = False
             self._flush_blocks_tracked(tracked)
 
-            # The kernel clock already sits at the last folded scan's start.
-            self._capture_previous_states(ctx=ctx)
             self._system_runtime.on_scan_end(scan_ctx)
             if logical_scans > 1:
                 # The large dt advances timers, but it is not a historical scan
@@ -669,11 +663,6 @@ class CompiledPLC:
             state_memory_defaults[_BATTERY_PRESENT_KEY] = self._battery_present
         if state_memory_defaults:
             self._state = self._state.with_memory(state_memory_defaults)
-        for name in self._compiled.edge_tags:
-            self._kernel.prev[name] = state.memory.get(
-                f"_prev:{name}",
-                state.tags.get(name, self._compiled.referenced_tags[name].default),
-            )
         for spec in self._compiled.block_specs.values():
             self._kernel.load_block_from_tags(spec)
         # Plain-dict mirror of the committed tags, baseline for the next
@@ -708,35 +697,6 @@ class CompiledPLC:
 
     def _should_seed_tag(self, name: str) -> bool:
         return name not in self._block_element_names or name in self._materialized_block_tag_names
-
-    def _capture_previous_states(self, *, ctx: _KernelRuntimeContext | None = None) -> None:
-        """Capture edge memory: a system clock's value is the one this scan read.
-
-        A macro (folded) scan's kernel clock already sits at the last folded
-        scan's start, so its read time is the kernel timestamp too.
-        """
-        clock_ts = self._kernel.timestamp
-        for name in self._compiled.edge_tags:
-            half_period = _CLOCK_HALF_PERIODS.get(name)
-            if half_period is not None and half_period > 0:
-                value = clock_high(clock_ts, half_period)
-            elif name in self._kernel.tags:
-                value = self._kernel.tags[name]
-            elif ctx is not None:
-                resolved, resolved_value = self._system_runtime.resolve(
-                    name, cast(ScanContext, ctx)
-                )
-                if not resolved:
-                    continue
-                value = resolved_value
-            else:
-                continue
-            self._kernel.prev[name] = value
-            # Scan-derived edges compute directly from scan_id and deliberately
-            # have no committed _prev:* entry in the interpreter.  The kernel
-            # still needs its private prev value while executing compiled code.
-            if name not in _DERIVED_EDGE_TAGS:
-                self._kernel.memory[f"_prev:{name}"] = value
 
     def _committed_tags(self) -> dict[str, Any]:
         return {

@@ -87,6 +87,7 @@ from pyrung.core.instruction.send_receive import (
 )
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.rung import Rung as LogicRung
+from pyrung.core.site_memory import edge_memory_key, edge_rows
 from pyrung.core.storage import REAL_MAX
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation.walker import _condition_children
@@ -103,10 +104,41 @@ from ._primitives import (
 )
 
 
-def _contact_tag_name(tag: Tag | ImmediateRef) -> str:
-    if isinstance(tag, ImmediateRef):
-        return tag.tag.name
-    return tag.name
+def _edge_locals(memory_key: str) -> tuple[str, str]:
+    """The locals holding an edge site's bit this row and its memory before it."""
+    base = "_" + "".join(ch if ch.isalnum() else "_" for ch in memory_key.lstrip("_"))
+    return f"{base}_now", f"{base}_was"
+
+
+def _compile_edge_row(
+    row: Any,
+    ctx: CodegenContext,
+    indent: int,
+    *,
+    condition_snapshot: _ConditionSnapshotBindings | None = None,
+) -> list[str]:
+    """Scan the edge sites of one row: read each memory, then store the bit seen.
+
+    Every edge contact in the row stores the bit it sees whether or not power
+    reaches it (CLICK updates an edge contact's memory whenever it is scanned),
+    and compares against the memory as it was before the row: the row's edge
+    expressions read the ``_was`` locals.
+    """
+    sites = ctx._edge_rows.get(id(row), ())
+    sp = " " * indent
+    lines: list[str] = []
+    for key, edge in sites:
+        now, was = _edge_locals(key)
+        tag_expr = _snapshot_tag_symbol(
+            edge.tag,
+            ctx,
+            scalar_snapshots=condition_snapshot.scalar_symbols if condition_snapshot else None,
+            block_snapshots=condition_snapshot.block_symbols if condition_snapshot else None,
+        )
+        lines.append(f"{sp}{now} = bool({tag_expr})")
+        lines.append(f"{sp}{was} = _mem.get({key!r}, False)")
+        lines.append(f"{sp}_mem[{key!r}] = {now}")
+    return lines
 
 
 def _collect_helper_conditions(
@@ -437,27 +469,11 @@ def compile_condition(
         ]
         return "(" + " or ".join(parts) + ")" if parts else "False"
     if isinstance(cond, RisingEdgeCondition):
-        ctx.mark_helper("_rise")
-        if ctx._current_function is not None:
-            ctx.mark_function_global(ctx._current_function, "_prev")
-        tag_expr = _snapshot_tag_symbol(
-            cond.tag,
-            ctx,
-            scalar_snapshots=scalar_snapshots,
-            block_snapshots=block_snapshots,
-        )
-        return f'_rise(bool({tag_expr}), bool(_prev.get("{_contact_tag_name(cond.tag)}", False)))'
+        now, was = _edge_locals(edge_memory_key(cond))
+        return f"({now} and not {was})"
     if isinstance(cond, FallingEdgeCondition):
-        ctx.mark_helper("_fall")
-        if ctx._current_function is not None:
-            ctx.mark_function_global(ctx._current_function, "_prev")
-        tag_expr = _snapshot_tag_symbol(
-            cond.tag,
-            ctx,
-            scalar_snapshots=scalar_snapshots,
-            block_snapshots=block_snapshots,
-        )
-        return f'_fall(bool({tag_expr}), bool(_prev.get("{_contact_tag_name(cond.tag)}", False)))'
+        now, was = _edge_locals(edge_memory_key(cond))
+        return f"({was} and not {now})"
     if isinstance(cond, IndirectCompareEq):
         return (
             f"({_compile_indirect_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
@@ -678,7 +694,8 @@ def compile_rung(
                 condition_snapshot=condition_snapshot,
             )
         )
-        lines = [f"{' ' * indent}{enabled_var} = {cond_expr}"]
+        lines = _compile_edge_row(rung, ctx, indent, condition_snapshot=condition_snapshot)
+        lines.append(f"{' ' * indent}{enabled_var} = {cond_expr}")
 
         helpers = _collect_helper_conditions(rung)
         if helpers:
@@ -790,6 +807,8 @@ def compile_rungs(
             indent=indent,
         )
         lines.extend(snapshot_lines)
+        for rung in chain:
+            ctx._edge_rows.update(edge_rows(rung))
         for rung in chain:
             lines.extend(
                 compile_rung(
@@ -998,6 +1017,9 @@ def _compile_loop_body(
     lines: list[str] = []
     for item in instr.body:
         if not isinstance(item, LogicRung):
+            # A bare body instruction is a row of its own: its edge legs scan
+            # on every iteration.
+            lines.extend(_compile_edge_row(item, ctx, 0))
             lines.extend(compile_instruction(item, "True", ctx, 0))
         else:
             # A body rung reads live tags: its contacts are evaluated afresh

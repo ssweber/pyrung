@@ -543,7 +543,6 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
     lines.extend(
         [
             "_mem = {}",
-            "_prev = {}",
             # Scan time in integer ns: a float monotonic() loses ms resolution
             # within hours on CircuitPython's 30-bit floats.
             "_last_scan_ns = time.monotonic_ns()",
@@ -857,7 +856,6 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
         reset_globals = sorted(
             {
                 "_mem",
-                "_prev",
                 "_ret_snapshot",
                 "_sd_save_cmd",
                 "_sd_eject_cmd",
@@ -871,7 +869,6 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
         lines.extend(
             [
                 "    _mem = {}",
-                "    _prev = {}",
                 "    _ret_snapshot = {}",
                 "    _sd_save_cmd = False",
                 "    _sd_eject_cmd = False",
@@ -1293,9 +1290,6 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             ]
         )
 
-    for tag_name in sorted(ctx.edge_prev_tags):
-        tag = ctx.referenced_tags[tag_name]
-        lines.append(f'    _prev["{tag_name}"] = {ctx.symbol_for_tag(tag)}')
     lines.append("")
     if ctx.watchdog_ms is not None:
         lines.append("    _wd_pet()")

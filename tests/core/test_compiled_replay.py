@@ -692,7 +692,7 @@ def test_compiled_plc_matches_plc_for_initial_and_first_scan_system_runtime_defa
     _assert_states_equivalent(plc, compiled)
 
 
-def test_compiled_plc_matches_plc_for_patch_force_and_prev_capture() -> None:
+def test_compiled_plc_matches_plc_for_patch_force_and_edge_memory() -> None:
     enable = Bool("Enable")
     reset_tag = Bool("Reset")
     output = Bool("Output")
@@ -713,7 +713,16 @@ def test_compiled_plc_matches_plc_for_patch_force_and_prev_capture() -> None:
     compiled.step()
 
     _assert_states_equivalent(plc, compiled)
-    assert compiled.current_state.memory["_prev:Enable"] is True
+    # The rise() contact stored the bit it saw in its own site memory.
+    assert compiled.current_state.memory["_edge:e1"] is True
+    assert plc.current_state.memory["_edge:e1"] is True
+    assert compiled.current_state.tags["Output"] is True
+
+    plc.step()
+    compiled.step()
+
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["Output"] is False
 
 
 def test_compiled_plc_matches_plc_for_indirect_copy_converter_address_fault() -> None:
