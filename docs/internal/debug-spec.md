@@ -198,6 +198,14 @@ After each scan, the extension reads trace data and applies decorations to the s
 - **Inline annotations**: evaluated condition and instruction values as faded text
 - **Red inline text**: the condition that caused an unpowered rung
 
+A rung is solved row by row (the live row solve), and the trace follows it:
+
+- A branch's contacts are evaluated when the step reaches the branch, against the writes of the rows above it. Until then its region reads `disabled_local` with its conditions skipped (under an unpowered parent, `disabled_parent`, final from the rung's first step).
+- Every branch under a powered parent gets a `branch` step, powered or not, so its final region is in some event. Branch steps are not stop points for `next`/`stepIn`.
+- A box's pins are traced as the box read them, at box entry.
+- The trace of a whole rung (Continue frames, `pyrungTrace`) takes each region's last state across the rung's events.
+- Recordings made before the live row solve hold one view per rung, so they show lower branches as of rung entry.
+
 ### Architecture
 
 The extension consists of:

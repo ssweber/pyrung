@@ -42,7 +42,7 @@ def test_rungs():
 
 ## Pending and probes
 
-**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `S4` live row-by-row rung solve, `DRUM` drum ordering, `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` the fault-flag model (SC40 follows the last Math, SC43/SC44 the last instruction).
+**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `DRUM` drum ordering, `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` the fault-flag model (SC40 follows the last Math, SC43/SC44 the last instruction).
 
 - On pyrung's own targets (in-process `run()`, the local sim, `TARGET=circuitpy`) a pending case is a **strict xfail**: it passes, reported `XFAIL` with what pyrung read, only if no run meets its expectation and its reset is clean (a leak still fails it). Once pyrung starts meeting the expectation, the case fails with "remove pending=": the fixer of that step deletes the marker in the same commit, so `grep 'pending="S2"'` lists exactly what a step must flip.
 - Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `pending=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
@@ -292,25 +292,25 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [ ] STOP->RUN clears scan_id and scan_counter
 
 ### Rung semantics
-- [x] rows solve live, top to bottom: a branch reads its contacts when the solve reaches it (`rungs/branch_sees_rung_entry`, pending S4)
+- [x] rows solve live, top to bottom: a branch reads its contacts when the solve reaches it (`rungs/branch_sees_rung_entry`)
 - [x] CLICK refuses a box below another output on one wire (C000A: all inputs (pins) of a box must start from the same branch), so a box's legs never read a row above it in the same wire (`rungs/box_leg_reads_rows_above` and the `solve_order` box-leg cases retired)
 - [x] source order within a rung (`rungs/memory_is_immediate`)
 - [x] branches AND with parent (`rungs/branch_and_with_parent`)
-- [x] nested branches read live too (`rungs/nested_branches_see_rung_entry`, pending S4)
+- [x] nested branches read live too (`rungs/nested_branches_see_rung_entry`)
 - [x] last rung wins on shared coil (`rungs/last_rung_wins_shared_coil`)
-- [x] a continued rung is one more row, read live (`rungs/continued_shares_snapshot`, `rungs/continued_chain_breaks`, pending S4)
-- [x] solve order: every topology where an earlier part of a rung writes what a later part reads, each annotated order-dependent or not (`ORDER_DEPENDENT` in `test_solve_order.py`, which also maps the four `rungs` live-read cases and folds in the `SOLVE_ORDER` maps of `test_row_solve.py` and `test_cont_box.py`; the order-dependent ones are pending S4)
-- [x] rows in series read the rows above (`solve_order/row_series_reads_rows_above`, pending S4); a row does not see a row below, and the rung is solved once (`solve_order/row_reads_row_below`)
-- [x] sibling branches inside a branch, and a later branch reading an inner branch's write (`solve_order/sibling_branch_reads_sibling_above`, `solve_order/outer_row_reads_inner_branch_write`, pending S4)
-- [x] an OR on the rail is solved once, before the outputs (`solve_order/input_or_legs_read_before_outputs`); an OR on a branch reads live (`solve_order/branch_or_reads_row_above`, pending S4)
+- [x] a continued rung is one more row, read live (`rungs/continued_shares_snapshot`, `rungs/continued_chain_breaks`)
+- [x] solve order: every topology where an earlier part of a rung writes what a later part reads, each annotated order-dependent or not (`ORDER_DEPENDENT` in `test_solve_order.py`, which also maps the four `rungs` live-read cases and folds in the `SOLVE_ORDER` maps of `test_row_solve.py` and `test_cont_box.py`)
+- [x] rows in series read the rows above (`solve_order/row_series_reads_rows_above`); a row does not see a row below, and the rung is solved once (`solve_order/row_reads_row_below`)
+- [x] sibling branches inside a branch, and a later branch reading an inner branch's write (`solve_order/sibling_branch_reads_sibling_above`, `solve_order/outer_row_reads_inner_branch_write`)
+- [x] an OR on the rail is solved once, before the outputs (`solve_order/input_or_legs_read_before_outputs`); an OR on a branch reads live (`solve_order/branch_or_reads_row_above`)
 - [x] output bus: an operand sees the coil above it (`solve_order/bus_operand_sees_coil`); the last coil write wins (`solve_order/bus_coils_last_write_wins`)
 - [x] a wire does not see a later continued wire's write (`solve_order/continued_reads_later_wire`)
 - [x] a box leg does not see a continued wire below the box (answered on hardware; `solve_order/box_leg_reads_row_below`)
 - [x] For body: a body rung sees the body rung above it in the same pass (`solve_order/for_body_rung_reads_body_rung_above`)
-- [x] an edge contact on a branch reads the rows above it (probe; `row_solve/edge_on_branch_reads_row_above`, pending S4)
+- [x] an edge contact on a branch reads the rows above it (probe; `row_solve/edge_on_branch_reads_row_above`)
 - [x] an edge contact under an unpowered branch still tracks its bit (probe; `row_solve/edge_under_unpowered_branch`)
-- [x] a continued wire below a box re-reads the trunk after the box writes (probe; `row_solve/continued_after_box_rereads_trunk`, pending S4)
-- [x] a box on a continued wire: its pins and its enable read the wire above (probe, part F; `cont_box/box_pin_on_continued_wire`, `cont_box/box_enable_on_continued_wire`, pending S4)
+- [x] a continued wire below a box re-reads the trunk after the box writes (probe; `row_solve/continued_after_box_rereads_trunk`)
+- [x] a box on a continued wire: its pins and its enable read the wire above (probe, part F; `cont_box/box_pin_on_continued_wire`, `cont_box/box_enable_on_continued_wire`)
 - [ ] whether a NOP or a blank row splits a rung's solve: no drawing tells L from a split (`test_row_solve.py` docstring)
 - [ ] solve order around a `call()` between the rows of one rung (the home exists, `in_main=True`, but no such case yet); a branch row in a For body rung (pyrung refuses `branch()` inside `forloop()`)
 - [ ] empty rung (NOP): nothing to observe. CLICK refuses a contact before NOP and deletes a NOP row that shares its rung (so `rungs/nop_rung_takes_snapshot` is retired); the exporter refuses both, and a bare NOP round-trips (`tests/click/test_codegen.py`)
