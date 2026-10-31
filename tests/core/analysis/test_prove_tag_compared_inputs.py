@@ -114,23 +114,28 @@ def _agree(program: Program, bad: Bool, reachable: bool, config: _OptConfig) -> 
 
 
 def _timer_equals_input() -> tuple[Program, Bool, list[tuple[dict[str, Any], int]]]:
+    # Smaller than the stepped-Int case below: a black-box tick may land on
+    # every value the input takes, so each state's successors are the input's
+    # values times the accumulator's, and at 0..199 one never() took ~90 s.
+    # The hole is the same: the input's own literals (5, 36) give it no value
+    # in the window's middle third, and the three latches need one in each.
     en = Bool("KEn", external=True)
-    value = Int("KIn", external=True, min=0, max=199)
+    value = Int("KIn", external=True, min=0, max=39)
     timer = Timer.clone("KT")
     window, first, second, bad = Bool("KY"), Bool("KA"), Bool("KB"), Bool("KBad")
     with Program(strict=False) as logic:
         with Rung(en):
-            on_delay(timer, 200)
-        with Rung(value > 100, value < 160):
+            on_delay(timer, 40)
+        with Rung(value > 5, value < 36):
             out(window)
-        with Rung(timer.Acc == value, timer.Acc < 120, window):
+        with Rung(timer.Acc == value, timer.Acc < 15, window):
             latch(first)
-        with Rung(first, timer.Acc == value, timer.Acc > 120, timer.Acc < 140, window):
+        with Rung(first, timer.Acc == value, timer.Acc > 15, timer.Acc < 25, window):
             latch(second)
-        with Rung(second, timer.Acc == value, timer.Acc > 140, window):
+        with Rung(second, timer.Acc == value, timer.Acc > 25, window):
             latch(bad)
-    # The accumulator moves 10 ms a scan: 110, then 130, then 150.
-    seq = [({"KEn": True, "KIn": 110}, 11), ({"KIn": 130}, 2), ({"KIn": 150}, 2)]
+    # The accumulator moves 10 ms a scan: 10, then 20, then 30.
+    seq = [({"KEn": True, "KIn": 10}, 1), ({"KIn": 20}, 1), ({"KIn": 30}, 1)]
     return logic, bad, seq
 
 
@@ -171,7 +176,7 @@ def test_input_equal_to_accumulator_explores_every_value() -> None:
     logic, bad, _seq = _timer_equals_input()
     result = never(logic, bad, _debug=True)
     assert isinstance(result, Intractable) and result.kind == "timing", result
-    assert result._debug_context.nondeterministic_dims["KIn"] == tuple(range(200))
+    assert result._debug_context.nondeterministic_dims["KIn"] == tuple(range(40))
 
 
 # -- expressions -------------------------------------------------------------
