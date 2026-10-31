@@ -192,6 +192,12 @@ ONESHOT_SCRIPT = (
     "runner = PLC(prog, dt=0.010)\n"
 )
 EXTRA_RUNG = "    with Rung(button):\n        out(extra, oneshot=True)\n"
+EDGE_SCRIPT = (
+    ONESHOT_SCRIPT.replace("import Bool,", "import Bool, rise,")
+    .replace("with Rung(button):", "with Rung(rise(button)):")
+    .replace("out(pulse, oneshot=True)", "out(pulse)")
+)
+EDGE_EXTRA_RUNG = "    with Rung(rise(button)):\n        out(extra)\n"
 
 
 class TestReloadSiteMemory:
@@ -226,6 +232,33 @@ class TestReloadSiteMemory:
         assert resp["success"] is True
         assert "no matching site" in resp["body"]["result"]
         assert "_oneshot:i1" not in adapter._runner.current_state.memory
+
+    def test_an_inserted_edge_contact_does_not_rise_on_a_held_bit(self, tmp_path: Path):
+        adapter, out, script_path = _setup(tmp_path, EDGE_SCRIPT.format(extra=""))
+        _repl(adapter, out, "force Button true", seq=10)
+        _repl(adapter, out, "step 2", seq=11)
+        assert adapter._runner.current_state.memory["_edge:e1"] is True
+        assert adapter._runner.current_state.tags["Pulse"] is False
+
+        # The new contact lands on the old one's line, above it.
+        script_path.write_text(
+            EDGE_SCRIPT.format(extra=EDGE_EXTRA_RUNG),
+            encoding="utf-8",
+        )
+        resp, _ = _repl(adapter, out, "reload", seq=12)
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "no matching site" not in result
+        assert "1 edge contact(s) new to the program start from their tag's current value" in result
+        assert "rise(Button) line 8 = on" in result
+        memory = adapter._runner.current_state.memory
+        assert memory["_edge:e1"] is True
+        assert memory["_edge:e2"] is True
+
+        _repl(adapter, out, "step 1", seq=13)
+        tags = adapter._runner.current_state.tags
+        assert tags["Pulse"] is False
+        assert tags["Extra"] is False
 
 
 class TestReloadTagTypeChange:

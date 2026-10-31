@@ -26,9 +26,10 @@ program's: plant rungs are ``plant:i{N}`` / ``plant:e{N}``, PILOT holds are
 key, and asking for one raises (there is no ``id()`` fallback).
 
 Every site records a fingerprint ``(scope, source line, kind, operands)`` and
-its contacts, so hot reload can carry memory to the matching site of the new
-program, and drop it where no site matches unambiguously
-(:func:`remap_site_memory`).
+its contacts (an edge also its row as source text), so hot reload can carry
+memory to the matching site of the new program, and drop it where no site
+matches unambiguously (:func:`remap_site_memory`).  An edge site the new
+program adds starts from its tag's current value (:func:`seed_new_edge_memory`).
 
 Keys are stamped on the objects.  A bound object is never renamed: a bare rung
 list whose objects would clash (rungs of two programs, or of two lists) is
@@ -104,6 +105,10 @@ class Site:
     """An instruction's contacts (rung, branch, body row) as source text; an
     edge's leg.  Reload uses it, with the fingerprint less its line, to match a
     site whose line moved."""
+    context: tuple[str, ...] = ()
+    """An edge's row as source text: the contacts and instructions of its
+    top-level rung.  Reload matches on it too, so a rung inserted with the same
+    contact never takes this one's memory."""
 
 
 @dataclass(frozen=True)
@@ -218,6 +223,39 @@ def _instruction_operands(instr: Instruction) -> tuple[str, ...]:
     return tuple(_operand_text(getattr(instr, name, None)) for name in fields)
 
 
+def _row_text(rung: Rung) -> tuple[str, ...]:
+    """A top-level rung as source text: its contacts and instructions in order
+    (branches and For bodies included)."""
+    from pyrung.core.instruction.control import ForLoopInstruction
+    from pyrung.core.rung import Rung as RungLogic
+
+    out: list[str] = []
+
+    def _instruction(instr: Any) -> None:
+        out.append(f"{type(instr).__name__}({', '.join(_instruction_operands(instr))})")
+        if isinstance(instr, ForLoopInstruction):
+            for item in instr.body:
+                if isinstance(item, RungLogic):
+                    _rung(item)
+                else:
+                    _instruction(item)
+
+    def _rung(current: Any) -> None:
+        out.append(
+            "["
+            + ", ".join(_contacts_text(current._conditions[current._branch_condition_start :]))
+            + "]"
+        )
+        for item in current._execution_items:
+            if isinstance(item, RungLogic):
+                _rung(item)
+            else:
+                _instruction(item)
+
+    _rung(rung)
+    return tuple(out)
+
+
 def _first_tag_name(instr: Instruction) -> str | None:
     from pyrung.core.tag import Tag
 
@@ -296,6 +334,9 @@ class _Binder:
         self.rung_edges: set[int] = set()
         self.scope = "main"
         self.row = 0
+        # The top-level rung being bound, and its source text once an edge asks.
+        self.row_rung: Any = None
+        self.row_text: tuple[str, ...] | None = None
 
     def _fresh_key(self, letter: str, position: int) -> str:
         if not self.only_unbound:
@@ -479,6 +520,7 @@ class _Binder:
                     source_line=line,
                     fingerprint=(self.scope, line, kind, (tag,)),
                     contacts=(leg.split(".", 1)[-1],),
+                    context=self._row_context(),
                     memory=((f"{EDGE_MEMORY}:{key}", False),),
                 )
             )
@@ -492,6 +534,11 @@ class _Binder:
         clone = copy.copy(cond)
         clone.conditions = new_children
         return clone
+
+    def _row_context(self) -> tuple[str, ...]:
+        if self.row_text is None:
+            self.row_text = () if self.row_rung is None else _row_text(self.row_rung)
+        return self.row_text
 
     def _substituted(self, cond: Any) -> Any:
         """*cond* with this rung tree's replaced contacts swapped in (never mutates)."""
@@ -516,6 +563,8 @@ class _Binder:
             self.row = row
             self.subst = {}
             self.rung_edges = set()
+            self.row_rung = rung
+            self.row_text = None
             self._edges_in_rung(rung, leg="rung")
 
     def _edges_in_rung(self, rung: Rung, *, leg: str) -> None:
@@ -905,11 +954,12 @@ def _match_sites(old: Sequence[Site], new: Sequence[Site]) -> dict[str, str]:
     """Old site key -> new site key, for the sites reload may carry memory between.
 
     1. Exact fingerprint ``(scope, line, kind, operands)`` plus the site's
-       contacts: groups of the same size pair in source order (one source line
-       that builds several rungs, such as a helper called in a loop).
-    2. The rest, with the line ignored: ``(scope, kind, operands, contacts)``
-       pairs only when exactly one old and one new site have it, so an edit
-       that shifts lines keeps the memory of the sites it did not touch.
+       contacts and (an edge) its row's text: groups of the same size pair in
+       source order (one source line that builds several rungs, such as a
+       helper called in a loop).
+    2. The rest, with the line ignored: ``(scope, kind, operands, contacts,
+       row text)`` pairs only when exactly one old and one new site have it, so
+       an edit that shifts lines keeps the memory of the sites it did not touch.
 
     Anything else is unmatched; its memory is dropped, not guessed.
     """
@@ -922,7 +972,7 @@ def _match_sites(old: Sequence[Site], new: Sequence[Site]) -> dict[str, str]:
         return groups
 
     def _exact(site: Site) -> Any:
-        return (site.site, site.fingerprint, site.contacts)
+        return (site.site, site.fingerprint, site.contacts, site.context)
 
     old_groups = _groups(old, _exact)
     new_groups = _groups(new, _exact)
@@ -937,7 +987,7 @@ def _match_sites(old: Sequence[Site], new: Sequence[Site]) -> dict[str, str]:
 
     def _moved(site: Site) -> Any:
         scope, _line, kind, operands = site.fingerprint
-        return (site.site, scope, kind, operands, site.contacts)
+        return (site.site, scope, kind, operands, site.contacts, site.context)
 
     old_groups = _groups(rest_old, _moved)
     new_groups = _groups(rest_new, _moved)
@@ -998,6 +1048,36 @@ def remap_site_memory(
             continue
         out[new_name] = value
     return out, tuple(dropped)
+
+
+def seed_new_edge_memory(
+    memory: Mapping[str, Any],
+    table: SiteTable | None,
+    tags: Mapping[str, Any],
+) -> tuple[dict[str, Any], tuple[Site, ...]]:
+    """*memory* with every edge site of *table* it holds no memory for seeded
+    from its tag's value in *tags*.
+
+    Run after :func:`remap_site_memory` on reload: an edge contact the new
+    program adds (or one whose memory could not be matched) then starts as if
+    it had seen its tag last scan, so a held bit never rises (or falls) just
+    because the program was reloaded.  A site whose tag *tags* does not hold
+    is left to its default.  Returns ``(memory, seeded sites)``.
+    """
+    out = dict(memory)
+    seeded: list[Site] = []
+    if table is None:
+        return out, ()
+    for site in table.edge_sites:
+        if site.tag is None or site.tag not in tags:
+            continue
+        names = [name for name, _default in site.memory if name not in out]
+        if not names:
+            continue
+        for name in names:
+            out[name] = bool(tags[site.tag])
+        seeded.append(site)
+    return out, tuple(seeded)
 
 
 LEGACY_EDGE_PREFIX = "_prev:"

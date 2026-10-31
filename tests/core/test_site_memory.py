@@ -31,6 +31,7 @@ from pyrung.core.site_memory import (
     edge_memory_seeding,
     migrate_legacy_edge_memory,
     remap_site_memory,
+    seed_new_edge_memory,
     site_table_of,
 )
 
@@ -530,6 +531,120 @@ class TestRemap:
         remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(new))
         assert remapped == {"_edge:e2": True, "_edge:e3": False}
         assert dropped == ()
+
+
+_A_HELD_SOURCE = """
+with Program(strict=False) as logic:
+{extra}    with Rung(rise(A)):
+        out(Y1)
+"""
+_A_EXTRA_RUNG = "    with Rung(rise(A)):\n        out(Y0)\n"
+
+
+def _a_program(*, extra: bool) -> Program:
+    """``rise(A) -> Y1``; *extra* inserts ``rise(A) -> Y0`` above it, on its line."""
+    namespace = {
+        "Program": Program,
+        "Rung": Rung,
+        "rise": rise,
+        "out": out,
+        "A": Bool("A"),
+        "Y0": Bool("Y0"),
+        "Y1": Bool("Y1"),
+    }
+    source = _A_HELD_SOURCE.format(extra=_A_EXTRA_RUNG if extra else "")
+    exec(compile(source, "a_program.py", "exec"), namespace)
+    return namespace["logic"]
+
+
+class TestReloadEdgeMemory:
+    """An edit next to an edge contact never moves or invents its memory."""
+
+    def test_an_inserted_rung_with_the_same_contact_takes_no_memory(self):
+        old = _a_program(extra=False)
+        new = _a_program(extra=True)
+        (old_edge,) = site_table_of(old).edge_sites
+        inserted, unedited = site_table_of(new).edge_sites
+        # The inserted contact sits on the old one's line: only its row tells them apart.
+        assert old_edge.fingerprint == inserted.fingerprint
+        assert old_edge.context == unedited.context != inserted.context
+        remapped, dropped = remap_site_memory(
+            {"_edge:e1": True}, site_table_of(old), site_table_of(new)
+        )
+        assert remapped == {"_edge:e2": True}
+        assert dropped == ()
+
+    def test_two_contacts_on_one_tag_keep_their_memory_when_lines_shift(self):
+        A = Bool("A")
+        with Program(strict=False) as old:
+            with Rung(rise(A)):
+                out(Bool("P"))
+            with Rung(rise(A)):
+                out(Bool("Q"))
+        with Program(strict=False) as new:
+            with Rung(rise(Bool("B"))):
+                out(Bool("Extra"))
+            with Rung(rise(A)):
+                out(Bool("P"))
+            with Rung(rise(A)):
+                out(Bool("Q"))
+        memory = {"_edge:e1": True, "_edge:e2": False}
+        remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(new))
+        assert remapped == {"_edge:e2": True, "_edge:e3": False}
+        assert dropped == ()
+
+    def test_a_new_edge_site_starts_from_its_tags_value(self):
+        new = _a_program(extra=True)
+        seeded_memory, seeded = seed_new_edge_memory(
+            {"_edge:e2": False, "_dt": 0.01}, site_table_of(new), {"A": True}
+        )
+        # e1 had no memory: seeded from A.  e2 carried its own: kept.
+        assert seeded_memory == {"_edge:e1": True, "_edge:e2": False, "_dt": 0.01}
+        assert [(site.key, site.tag) for site in seeded] == [("e1", "A")]
+
+    def test_a_site_whose_tag_the_state_does_not_hold_is_left_to_its_default(self):
+        new = _a_program(extra=True)
+        seeded_memory, seeded = seed_new_edge_memory({}, site_table_of(new), {"B": True})
+        assert seeded_memory == {}
+        assert seeded == ()
+
+    @pytest.mark.parametrize("extra", [False, True], ids=["unedited", "rung_inserted"])
+    def test_a_held_bit_does_not_rise_after_a_reload(self, extra):
+        from pyrsistent import pmap
+
+        from pyrung.core.state import SystemState
+
+        old = PLC(_a_program(extra=False), dt=0.01)
+        old.patch({"A": True})
+        old.step()
+        assert old.current_state.tags["Y1"] is True
+        old.step()
+        state = old.current_state
+        new_logic = _a_program(extra=extra)
+        memory, _dropped = remap_site_memory(
+            state.memory, site_table_of(old), site_table_of(new_logic)
+        )
+        memory, _seeded = seed_new_edge_memory(memory, site_table_of(new_logic), state.tags)
+        reloaded = PLC(
+            new_logic,
+            initial_state=SystemState(
+                scan_id=state.scan_id,
+                timestamp=state.timestamp,
+                tags=state.tags,
+                memory=pmap(memory),
+            ),
+            dt=0.01,
+        )
+        reloaded.step()
+        assert reloaded.current_state.tags["Y1"] is False
+        assert reloaded.current_state.tags.get("Y0", False) is False
+        reloaded.patch({"A": False})
+        reloaded.step()
+        reloaded.patch({"A": True})
+        reloaded.step()
+        assert reloaded.current_state.tags["Y1"] is True
+        if extra:
+            assert reloaded.current_state.tags["Y0"] is True
 
 
 def _two_contacts_on_a() -> Program:

@@ -18,7 +18,7 @@ from typing import Any
 from pyrsistent import pmap
 
 from pyrung.core import PLC
-from pyrung.core.site_memory import remap_site_memory
+from pyrung.core.site_memory import remap_site_memory, seed_new_edge_memory
 from pyrung.core.state import SystemState
 from pyrung.dap.console import ConsoleResult, register
 
@@ -109,6 +109,22 @@ def _reload_locked(
         warnings.append(
             f"  {len(dropped_memory)} site memory value(s) had no matching site "
             "in the new program, reset: " + ", ".join(sorted(dropped_memory))
+        )
+    # An edge contact that got no memory (new, or edited) starts from its tag's
+    # current value, so a held bit does not rise on the first scan after reload.
+    patched_memory, seeded_edges = seed_new_edge_memory(
+        patched_memory, new_runner._site_table, patched_tags
+    )
+    if seeded_edges:
+        warnings.append(
+            f"  {len(seeded_edges)} edge contact(s) new to the program start from "
+            "their tag's current value: "
+            + ", ".join(
+                f"{site.kind}({site.tag})"
+                + (f" line {site.source_line}" if site.source_line is not None else "")
+                + f" = {'on' if patched_memory[site.memory[0][0]] else 'off'}"
+                for site in seeded_edges
+            )
         )
     patched_state = SystemState(
         scan_id=old_state.scan_id,
