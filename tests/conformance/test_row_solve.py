@@ -54,8 +54,51 @@ The cases, what each model reads, and the other models they tell apart:
   box writes land when the CLICK rung's solve ends: R1 = 1.  The next rung
   reads Done on scan 2 in every model (R2 = 1): the box counted on that scan.
 
-The cases own C401..C450 and counters CT191..CT200 (``memory.OWNED``), ten C
-bits per case (case N takes C<391+10N>..).
+S5 adds three probes (the questions are in ``scratchpad/conformance_review/
+S5-QUESTIONS.md``):
+
+- ``edge_on_box_path_after_false_contact`` (probe, S5 #1): does a contact
+  after a false one on an instruction's path still get solved, so an edge
+  contact's memory updates while the path is dead?  A counter whose enable is
+  ``gate, rise(bit)`` and one whose only live input is a down pin
+  ``And(gate, rise(bit))`` (a box solves its enable and pins together, a path
+  of their own).  The bit rises on scan 3 and stays on; the gate is open on
+  scan 5 only.  Solved ("scanned", what ``coils/edge_behind_open_contact`` and
+  ``edge_under_unpowered_branch`` answer for a coil and a branch, and what
+  pyrung reads): the rise memory is already on, neither counts (R1 = 0, R2 =
+  0).  A path that stops at its first false contact: the rise fires on scan 5,
+  the up counter reads 1 and the down pin counts -1 (1, -1).
+- ``edge_after_false_contact_in_branch`` (probe, S5 #1): the same question
+  for a branch's own prefix, under a powered trunk: ``branch(gate, rise(bit))``
+  and ``branch(gate, fall(bit))``, with a sibling output above them.  Scanned:
+  0 and 0; the rail rise and fall below read 3 and 7 in every model.  Stopped
+  at the false gate: 5 and 8.  (The trunk-off form is
+  ``coils/edge_in_false_rung_branch``, answered on hardware.)
+- ``correction_scan_with_free_enable`` (probe, S5 #6): the drum's enable and
+  jog are not tied to its step register.  A 2-step event drum is on step 2
+  (scan 2: the event advances it, output A off and B on); on scan 3 the step
+  register is staged out of range (5) and a jog is on that scan.  Result3 is B
+  and Result4 A as they stand at the end of scan 3, Result2 the completion
+  flag then and ErrorCode the step then; Result1 is the step at the end.
+  Adopted (pyrung's reading today): the jog is taken from the corrected step 1
+  and moves the drum to step 2 (ErrorCode = 2), flag off (Result2 = 0), step 2's
+  output B on (Result3 = 1, Result4 = 0), and the drum stays on step 2
+  (Result1 = 2).  The S5 hypothesis, that the correction scan does the
+  correction only (no jog, no output write): step 1 (ErrorCode = 1), flag off
+  (0), outputs untouched so B still on (1, 0), and on from scan 4 the drum runs
+  on step 1 (Result1 = 1).  The jog acting on the bad step 5, as
+  ``drum/pins_read_before_step_fix`` adopted: the drum completes (Result2 =
+  1) with both outputs off (0, 0), on step 1 (ErrorCode = 1, Result1 = 1).
+  Step 1's outputs written on the correction scan: A on, B off (0, 1), step
+  1.  Each reading differs from the others in at least one field.  The round-2
+  reading of ``drum/pins_read_before_step_fix`` (1, 0, 0) had the enable tied
+  to the step register, which paused the drum after the correction; here it
+  runs on.  A CLICK that reads differently answers S5 #6 and its reading is
+  adopted.
+
+The cases own C401..C450 and C1..C50 and counters CT191..CT195
+(``memory.OWNED``): cases 1 to 3 take ten C bits each (case N takes
+C<391+10N>..), cases 4 to 6 take C1.., C11.. and C21...
 
 Open (S4-PLAN section 10, question 6): whether a NOP or a blank row splits the
 solve has no case.  Under L nothing is held from one wire to the next (each
@@ -73,7 +116,19 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, branch, calc, copy, count_up, fall, out, rise
+from pyrung.core import (
+    And,
+    Or,
+    Rung,
+    branch,
+    calc,
+    copy,
+    count_up,
+    event_drum,
+    fall,
+    out,
+    rise,
+)
 from tests.conformance.memory import ClickCounter, c
 from tests.conformance.scans import WINDOW, count_scans, done, firings, scans_for
 
@@ -92,6 +147,17 @@ SOLVE_ORDER: Mapping[str, tuple[bool, Mapping[str, int]]] = {
         {"Result1": 0, "Result2": 0, "Result3": 3, "Result4": 7},
     ),
     "continued_after_box_rereads_trunk": (True, {"Result1": 1, "Result2": 1}),
+    # The S5 probes: every contact reads what an earlier rung wrote, so the model
+    # does not change the reading.
+    "edge_on_box_path_after_false_contact": (False, {"Result1": 0, "Result2": 0}),
+    "edge_after_false_contact_in_branch": (
+        False,
+        {"Result1": 0, "Result2": 0, "Result3": 3, "Result4": 7},
+    ),
+    "correction_scan_with_free_enable": (
+        False,
+        {"Result1": 2, "Result2": 0, "Result3": 1, "Result4": 0, "ErrorCode": 2},
+    ),
 }
 
 
@@ -147,6 +213,79 @@ def prove_continued_after_box_rereads_trunk(slot):
     done(slot)
 
 
+def prove_edge_on_box_path_after_false_contact(slot):
+    # The bit C1 is on from scan 3 on; the gate C2 only on scan 5.  C3 is never
+    # on: it keeps the second counter's up input off, so only its down pin acts.
+    bit, gate, never = c[1], c[2], c[3]
+    up, down = ClickCounter(192), ClickCounter(193)
+    count_scans(slot)
+    with Rung(slot.Cmd != 0, slot.Scratch >= 3):
+        out(bit)
+    with Rung(slot.Cmd != 0, slot.Scratch == 5):
+        out(gate)
+    with Rung(gate, rise(bit), slot.Cmd != 0):
+        count_up(up, 100).reset(slot.Cmd == 0)
+    with Rung(slot.Cmd != 0, never):
+        count_up(down, 100).down(And(gate, rise(bit))).reset(slot.Cmd == 0)
+    with Rung(slot.Cmd != 0):
+        copy(up.Acc, slot.Result1)
+        copy(down.Acc, slot.Result2)
+    done(slot)
+
+
+def prove_edge_after_false_contact_in_branch(slot):
+    # C11 on for scans 3..6; the gate C12 on scans 5 and 8; C13 the trunk's own
+    # output, above the branches.
+    bit, gate = c[11], c[12]
+    count_scans(slot)
+    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 6):
+        out(bit)
+    with Rung(slot.Cmd != 0, Or(slot.Scratch == 5, slot.Scratch == 8)):
+        out(gate)
+    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
+        out(c[13])
+        with branch(gate, rise(bit)):
+            calc(slot.Result1 * 10 + slot.Scratch, slot.Result1)
+        with branch(gate, fall(bit)):
+            calc(slot.Result2 * 10 + slot.Scratch, slot.Result2)
+    firings(rise(bit), slot, slot.Result3)
+    firings(fall(bit), slot, slot.Result4)
+    done(slot)
+
+
+def prove_correction_scan_with_free_enable(slot):
+    # Outputs A = C21 and B = C22, events C23 and C24 (the first pulses on scan
+    # 2), completion flag C25, jog C26 (scan 3).  The step register is Result1:
+    # staged 1 on scan 1 and 5 (out of range) on scan 3, above the drum.  The
+    # drum's enable is Cmd != 0 and its jog pin the jog bit alone.
+    a, b, event, flag, jog = c[21], c[22], c[23], c[25], c[26]
+    count_scans(slot)
+    with Rung(slot.Cmd != 0, slot.Scratch == 1):
+        copy(1, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+        out(event)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+        copy(5, slot.Result1)
+        out(jog)
+    with Rung(slot.Cmd != 0):
+        event_drum(
+            outputs=[a, b],
+            events=[event, c[24]],
+            pattern=[[1, 0], [0, 1]],
+            current_step=slot.Result1,
+            completion_flag=flag,
+        ).reset(slot.Cmd == 0).jog(jog)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+        copy(slot.Result1, slot.ErrorCode)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3, flag):
+        copy(1, slot.Result2)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3, b):
+        copy(1, slot.Result3)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3, a):
+        copy(1, slot.Result4)
+    done(slot)
+
+
 group = Group(
     GROUP,
     [
@@ -180,6 +319,38 @@ group = Group(
             expect={"Result1": 0, "Result2": 1},
             scans=SCANS,
             probe="continued wire re-reads the trunk after a box",
+        ),
+        case(
+            "An edge contact after a false contact on a box's enable and on its down pin "
+            "still tracks its bit: a bit that rises on scan 3 is already seen when the "
+            "gate opens on scan 5, so neither the up counter (Result1 = 0) nor the down "
+            "pin (Result2 = 0) counts",
+            ladder=prove_edge_on_box_path_after_false_contact,
+            expect={"Result1": 0, "Result2": 0},
+            scans=SCANS,
+            probe="S5 #1: edge memory on a box path after a false contact",
+        ),
+        case(
+            "An edge contact after a false contact in a branch still tracks its bit: "
+            "with the trunk powered and the branch's gate off while a bit rises (scan "
+            "3) and falls (scan 7), the rise and fall behind the gate do not fire when "
+            "it opens on scans 5 and 8 (Result1 = 0, Result2 = 0); the rail rise and "
+            "fall see scans 3 (Result3) and 7 (Result4)",
+            ladder=prove_edge_after_false_contact_in_branch,
+            expect={"Result1": 0, "Result2": 0, "Result3": 3, "Result4": 7},
+            scans=SCANS,
+            probe="S5 #1: edge memory after a false contact on a branch's prefix",
+        ),
+        case(
+            "A drum whose enable and jog do not read its step register, with the "
+            "register staged out of range on the scan of a jog: the jog is taken "
+            "from the corrected step 1, so on that scan the drum is on step 2 "
+            "(ErrorCode = 2) with the flag off (Result2 = 0), output B on "
+            "(Result3 = 1) and A off (Result4 = 0), and stays on step 2 (Result1 = 2)",
+            ladder=prove_correction_scan_with_free_enable,
+            expect={"Result1": 2, "Result2": 0, "Result3": 1, "Result4": 0, "ErrorCode": 2},
+            scans=SCANS,
+            probe="S5 #6: the correction scan with an enable and a jog of its own",
         ),
     ],
 )

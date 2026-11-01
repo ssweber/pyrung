@@ -6,8 +6,8 @@ the editor or the project check could refuse), so a refusal at paste,
 transfer or project check costs only this small project, and no confirmed
 group shares it.  A case CLICK refuses never fires: that is its answer.
 
-The raw registers are the group's own (``memory.OWNED``): C751..C770 and
-DF411..DF420.
+The raw registers are the group's own (``memory.OWNED``): C751..C770, CT196..CT200
+and DF411..DF420.
 
 - ``jump_to_own_step_register`` (probe): a 3-step event drum whose jump step
   register is its own current-step register (Result1).  Its event (C752) goes
@@ -33,14 +33,34 @@ DF411..DF420.
   (step MATH) writes 0 with SC43 instead: 3, 0, 1, 0.  A CLICK that keeps
   RAND's bounds as integers and refuses a DF never fires the case.  (Moved
   here from ``faults`` before any CLICK ran it.)
+- ``loop_body_split`` (probe, S5 #4): a For body rung with an instruction above
+  a box.  pyrung's exporter splits the rung at the box (C000A: a box starts a
+  CLICK rung of its own), so the body is two body rungs, the calc and then the
+  counter, each repeating the rung's contacts (the Scratch contact is written
+  by an earlier pyrung rung, so the split re-reads nothing it wrote).  The
+  count input is on in iterations 1, 2 and 4 of 4 (``loop/counter_inside_loop``,
+  F8), the calc runs on those three.  Adopted: the split body reads like the
+  one rung pyrung runs, Result1 = 2 (counter edges) and Result2 = 3 (the calc).
+  A CLICK that refuses the split loop never fires the case.
 """
 
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, calc, copy, event_drum, fill, out, reset
+from pyrung.core import (
+    Or,
+    Rung,
+    calc,
+    copy,
+    count_up,
+    event_drum,
+    fill,
+    forloop,
+    out,
+    reset,
+)
 from pyrung.core.expression import randint
-from tests.conformance.memory import c, df
+from tests.conformance.memory import ClickCounter, c, df
 from tests.conformance.scans import count_scans, done, scans_for
 from tests.conformance.test_drum import entered, first_on_from
 from tests.conformance.test_faults import (
@@ -114,6 +134,27 @@ def init_rand_real_bounds(slot):
     fill(0.0, df.select(411, 412))
 
 
+def _fire(slot):
+    with Rung(slot.Cmd != 0):
+        copy(1, slot.Fired, oneshot=True)
+
+
+def prove_loop_body_split(slot):
+    # S5 #4.  The count input (the second body rung's Scratch != 3) is on in
+    # iterations 1, 2 and 4 of 4; the calc above the counter shares its rung.
+    counter = ClickCounter(196)
+    with Rung():
+        with forloop(4):
+            with Rung(slot.Cmd != 0, slot.Fired == 0):
+                calc(slot.Scratch + 1, slot.Scratch)
+            with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
+                calc(slot.Result2 + 1, slot.Result2)
+                count_up(counter, 100).reset(slot.Cmd == 0)
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(counter.Acc, slot.Result1)
+    _fire(slot)
+
+
 group = Group(
     "paste_risk",
     [
@@ -138,6 +179,15 @@ group = Group(
             scans=FAULT_SCANS,
             probe="RAND with a DF bound, finite and +Inf",
             pending="MATH",
+        ),
+        case(
+            "A For body rung with an instruction above a counter is two body rungs on "
+            "a CLICK, and reads like the one rung: the count input is on in iterations "
+            "1, 2 and 4 of 4, the counter counts 2 edges (Result1) and the calc above "
+            "it runs 3 times (Result2)",
+            ladder=prove_loop_body_split,
+            expect={"Result1": 2, "Result2": 3},
+            probe="S5 #4: a For body split into separate body rungs",
         ),
     ],
 )

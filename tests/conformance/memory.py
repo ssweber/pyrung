@@ -103,7 +103,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # Solve order within a rung (tests/conformance/test_solve_order.py).
     "solve_order": {"C": range(501, 701), "T": range(151, 161), "CT": range(161, 171)},
     # Row solve, round 3 (tests/conformance/test_row_solve.py).
-    "row_solve": {"C": range(401, 451), "CT": range(191, 201)},
+    "row_solve": {"C": (range(401, 451), range(1, 51)), "CT": range(191, 196)},
     # A box on a continued wire (tests/conformance/test_cont_box.py).
     "cont_box": {"C": range(451, 501), "CT": range(181, 191)},
     # Which stores raise a fault flag (tests/conformance/test_faults.py).
@@ -116,7 +116,11 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # A FOR whose count is a Real (tests/conformance/test_for_count.py).
     "for_count": {"DD": range(601, 611), "DF": range(496, 501)},
     # Probes a CLICK may refuse at paste (tests/conformance/test_paste_risk.py).
-    "paste_risk": {"C": range(751, 771), "DF": range(411, 421)},
+    "paste_risk": {
+        "C": range(751, 771),
+        "CT": range(196, 201),
+        "DF": range(411, 421),
+    },
 }
 
 
