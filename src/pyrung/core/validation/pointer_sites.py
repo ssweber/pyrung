@@ -117,11 +117,10 @@ def site_evidence(
             else:
                 apply(item, guaranteed)
 
-    snapshot_index = loc.rung_index
-    while snapshot_index and rungs[snapshot_index]._use_prior_snapshot:
-        snapshot_index -= 1
-    for rung in rungs[:snapshot_index]:
-        visit(rung)
+    # Rungs solve one after another, so the access sees every rung above it
+    # (a ``continued()`` rung is no exception: it reads live).
+    for previous in rungs[: loc.rung_index]:
+        visit(previous)
 
     # Entry conditions are usable only when their operands cannot change in the
     # program. Mutable caller guards need interprocedural instruction-local proof.
@@ -139,31 +138,42 @@ def site_evidence(
             for chain in reach
         ] or [()]
 
-    rung = rungs[loc.rung_index]
-    ancestors: list[tuple[Rung, Rung]] = []
+    # The rows from the rail down to the access.  A row reads its own contacts
+    # when the solve reaches it (the trunk as the rung starts), after the rows
+    # above it ran; a branch's ``_conditions`` repeat its ancestors' first.
+    path = [rungs[loc.rung_index]]
     for branch_index in loc.branch_path:
-        guards.extend(rung._conditions)
-        branch = rung._branches[branch_index]
-        ancestors.append((rung, branch))
-        rung = branch
+        path.append(path[-1]._branches[branch_index])
+    if any(row._rows_read_at_entry for row in path[:-1]):
+        # A synthesis bracket solves its rows at its entry: not modelled here.
+        return None, ((),), True
+    depth = len(path) - 1
     if loc.instruction_index is None:
-        # Every branch condition is evaluated before any instruction in the
-        # top-level rung. Instruction prefixes must not affect these reads.
-        guards.extend(_preceding_conditions(rung._conditions, loc.arg_path))
+        match = re.match(r"condition(?:\[(\d+)\])?", loc.arg_path)
+        if match is not None:
+            condition_index = int(match.group(1) or 0)
+            # An inherited contact is read on the ancestor row that owns it.
+            while depth and condition_index < path[depth]._branch_condition_start:
+                depth -= 1
+    for level in range(depth):
+        row, branch = path[level], path[level + 1]
+        guards.extend(row._conditions[row._branch_condition_start :])
+        for item in row._execution_items:
+            if item is branch:
+                break
+            if isinstance(item, Rung):
+                visit(item)
+            else:
+                apply(item, True)
+    rung = path[depth]
+    own_start = rung._branch_condition_start
+    if loc.instruction_index is None:
+        # A contact reads after the AND terms before it on its own row.
+        guards.extend(_preceding_conditions(rung._conditions, loc.arg_path)[own_start:])
     else:
-        guards.extend(rung._conditions)
-        # Install all pre-evaluated guards first, then invalidate them as earlier
+        guards.extend(rung._conditions[own_start:])
+        # Install the row's guards first, then invalidate them as earlier
         # instructions change their operands on the way to this exact access.
-        for previous in rungs[snapshot_index : loc.rung_index]:
-            visit(previous)
-        for parent, branch in ancestors:
-            for item in parent._execution_items:
-                if item is branch:
-                    break
-                if isinstance(item, Rung):
-                    visit(item)
-                else:
-                    apply(item, True)
         target_instr = rung._instructions[loc.instruction_index]
         for item in rung._execution_items:
             if item is target_instr:

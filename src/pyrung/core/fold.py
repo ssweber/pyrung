@@ -920,7 +920,7 @@ class _TimeMirrors:
     * *names* (the clock mirrors) are written only by *recompute* rungs: reached
       on every scan (a main rung, or a rung of a subroutine called on every scan
       by an unconditional direct ``call()``, with no ``return_early()`` in the
-      chain), with no condition, not continued, and holding only plain
+      chain), with no condition, and holding only plain
       ``copy``/``calc`` with direct destinations whose result range provably
       fits the destination (so no clamp, wrap or fault flag depends on the
       clock).  A mirror's value after a scan depends only on that scan's clock
@@ -946,9 +946,9 @@ class _TimeMirrors:
     dead_nodes: tuple[int, ...]
     # Dead nodes whose clock reads are all one-shot copies/calcs of a main rung.
     oneshot_nodes: frozenset[int]
-    # Per PDG node: the enable conditions, or ``None`` when they are not judged
-    # (a ``continued()`` rung, or a branch of one: a rung of its own since the
-    # live row solve, kept unjudged until its positions are modelled).
+    # Per PDG node: the enable conditions, or ``None`` when they are not judged.
+    # A ``continued()`` rung is an ordinary rung (its trunk is read as it
+    # starts), so it is judged like any other.
     conditions: tuple[tuple[Any, ...] | None, ...]
     # Per PDG node: (first, last) main-scan position, or ``None`` if never run.
     spans: tuple[tuple[int, int] | None, ...]
@@ -1306,7 +1306,7 @@ def _time_mirror_analysis(
             return False
         if node.subroutine is not None and node.subroutine not in always:
             return False
-        if top._use_prior_snapshot or node.condition_reads or rung._conditions:
+        if node.condition_reads or rung._conditions:
             return False
         return bool(rung._instructions) and not rung._branches
 
@@ -1409,7 +1409,7 @@ def _time_mirror_analysis(
             if in_loop or not getattr(instr, "oneshot", False):
                 all_oneshot = False
         dead.append(i)
-        if all_oneshot and node.scope == "main" and not top._use_prior_snapshot:
+        if all_oneshot and node.scope == "main":
             oneshot_nodes.add(i)
 
     writers: dict[str, set[int]] = {}
@@ -1458,9 +1458,7 @@ def _time_mirror_analysis(
         dead_nodes=tuple(dead),
         oneshot_nodes=frozenset(oneshot_nodes),
         conditions=tuple(
-            None
-            if rung is None or top is None or top._use_prior_snapshot
-            else tuple(rung._conditions)
+            None if rung is None or top is None else tuple(rung._conditions)
             for rung, top in zip(rungs, tops, strict=True)
         ),
         spans=tuple((min(p), max(p)) if p else None for p in pos),

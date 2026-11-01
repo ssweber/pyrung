@@ -124,7 +124,7 @@ from .system_points import (
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
-    from pyrung.core.analysis.pdg import ProgramGraph, RungNode
+    from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.analysis.simplified import Atom
     from pyrung.core.program import Program
     from pyrung.core.tag import Tag
@@ -3050,32 +3050,15 @@ def _reads_scan_entry_value(tag_name: str, graph: ProgramGraph) -> bool:
     return bool(chain) and bool(chain[0].read_by)
 
 
-def _uses_prior_snapshot(program: Program, node: RungNode) -> bool:
-    """Return whether a graph node belongs to a continued() top-level rung."""
-    if node.scope == "main":
-        return program.rungs[node.rung_index]._use_prior_snapshot
-    assert node.subroutine is not None
-    return program.subroutines[node.subroutine][node.rung_index]._use_prior_snapshot
-
-
-def _has_continued_reader(
-    program: Program,
-    tag_name: str,
-    graph: ProgramGraph,
-) -> bool:
-    """True if any read of *tag_name* comes from a continued() rung."""
-    return any(
-        _uses_prior_snapshot(program, graph.rung_nodes[reader_idx])
-        for reader_idx in graph.readers_of.get(tag_name, frozenset())
-    )
-
-
 def _has_instruction_snapshot_reader(program: Program, tag_name: str) -> bool:
-    """True when an instruction-internal helper condition snapshots *tag_name*.
+    """True when a timer or counter helper leg (reset, down) reads *tag_name*.
 
-    These conditions are evaluated from rung-entry values. An OTE-written tag
-    feeding one of them therefore carries cross-scan information even if its
-    ordinary rung readers are combinational.
+    The legs read live, at the instruction's position in the solve, and the
+    def-use chains order those reads like any other.  This stays a
+    conservative gate: these are the legs ``absorb`` lifts into how()'s
+    domain prior, and keeping their OTE feeders in the state key keeps that
+    prior's view of them exact.  Drum and shift legs are not absorbed and are
+    ordered by the def-use chains alone.
     """
     from pyrung.core.analysis.pdg import _extract_tag_names
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
@@ -3100,13 +3083,30 @@ def _has_same_rung_branch_reader(
     tag_name: str,
     graph: ProgramGraph,
 ) -> bool:
-    """True if *tag_name* is read by a branch condition in the same top-level rung that writes it."""
-    writer_indices = graph.writers_of.get(tag_name, frozenset())
-    reader_indices = graph.readers_of.get(tag_name, frozenset())
-    for w in writer_indices:
-        w_rung = graph.rung_nodes[w].rung_index
-        for r in reader_indices:
-            if r != w and graph.rung_nodes[r].rung_index == w_rung:
+    """True if another node of the writer's own rung reads what an OTE wrote.
+
+    Rows solve in order, so such a reader sits below the writer and reads the
+    value it just wrote.  A reader above the first write sees the scan-entry
+    value and is caught by :func:`_reads_scan_entry_value`.  This gate keeps
+    the below-the-writer case out of the combinational set, as before the row
+    solve; it is conservative.
+    """
+    chain = graph.def_use_chains.get(tag_name, ())
+    for version in chain:
+        w = version.defined_at
+        if w is None:
+            continue
+        writer = graph.rung_nodes[w]
+        if tag_name not in writer.ote_writes:
+            continue
+        for r in version.read_by:
+            reader = graph.rung_nodes[r]
+            if (
+                r != w
+                and reader.rung_index == writer.rung_index
+                and reader.scope == writer.scope
+                and reader.subroutine == writer.subroutine
+            ):
                 return True
     return False
 
@@ -3881,7 +3881,6 @@ def _classify_dimensions_from_graph(
 
         if (
             _is_ote_only(tag_name, graph)
-            and not _has_continued_reader(program, tag_name, graph)
             and not _has_instruction_snapshot_reader(program, tag_name)
             and _is_ote_unconditionally_reachable(tag_name, graph)
             and not _is_self_referencing_ote(tag_name, graph)
