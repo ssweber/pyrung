@@ -1662,6 +1662,110 @@ class TestBoardPeripheralsAndRunStop:
             )
             assert flag is flagged
 
+    @pytest.mark.parametrize(
+        "operand,dest_tag,stored,flagged",
+        [
+            ("inf", Int, 32767, True),
+            ("-inf", Int, -32768, True),
+            ("nan", Int, 0, False),
+            ("inf", Dint, 2147483647, True),
+            ("-inf", Dint, -2147483648, True),
+            ("nan", Dint, 0, False),
+            ("inf", Word, 0, False),
+            ("nan", Word, 0, False),
+        ],
+    )
+    def test_copy_non_finite_on_every_backend(
+        self, monkeypatch, operand, dest_tag, stored, flagged
+    ):
+        """A Copy of +/-Inf clamps with SC43 on an INT or DINT; NaN, or a WORD, stores 0 with none."""
+        r, setup = self._non_finite_real(operand)
+        dest = dest_tag("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                copy(r, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=2)
+        assert results == {name: (stored, flagged) for name in results}
+
+    @pytest.mark.parametrize(
+        "source_tag,value,dest_tag,stored,flagged",
+        [
+            (Dint, 40000, Int, 32767, True),
+            (Dint, -40000, Int, -32768, True),
+            (Dint, 32767, Int, 32767, False),
+            (Real, 32767.5, Int, 32767, False),
+            (Real, -32768.5, Int, -32768, False),
+            (Real, 32768.0, Int, 32767, True),
+            (Real, -32769.0, Int, -32768, True),
+            (Real, 1.0e10, Dint, 2147483647, True),
+            (Dint, 70000, Word, 4464, False),
+        ],
+    )
+    def test_copy_clamp_flag_on_every_backend(
+        self, monkeypatch, source_tag, value, dest_tag, stored, flagged
+    ):
+        """A Copy raises SC43 when the store stops at a limit: not on a truncation or a wrap."""
+        source = source_tag("Source", default=value)
+        dest = dest_tag("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(source, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=1)
+        assert results == {name: (stored, flagged) for name in results}
+
+    @pytest.mark.parametrize("literal,stored,flagged", [(40000, 32767, True), (5, 5, False)])
+    def test_copy_literal_clamp_flag_on_every_backend(self, monkeypatch, literal, stored, flagged):
+        """A literal source clamps and flags as a tag does."""
+        dest = Int("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(literal, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=1)
+        assert results == {name: (stored, flagged) for name in results}
+
+    @pytest.mark.parametrize(
+        "values,flagged", [((40000, 5), True), ((-40000, 5), True), ((1, 5), False)]
+    )
+    def test_blockcopy_clamp_flag_on_every_backend(self, monkeypatch, values, flagged):
+        """A Block Copy raises SC43 if any element clamps, and stores every element."""
+        source = Block("SrcB", TagType.DINT, 1, 2)
+        dest = Block("DstB", TagType.INT, 1, 2)
+        first, second = Int("First"), Int("Second")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                copy(values[0], source[1])
+                copy(values[1], source[2])
+            with Rung(~system.sys.first_scan):
+                blockcopy(source.select(1, 2), dest.select(1, 2))
+                copy(dest[1], first)
+                copy(dest[2], second)
+
+        watch = (first, second, system.fault.out_of_range)
+        results = _on_every_backend(prog, monkeypatch, watch, scans=2)
+        expected = (max(-32768, min(32767, values[0])), values[1], flagged)
+        assert results == {name: expected for name in results}
+
+    def test_fill_clamps_with_no_flag_on_every_backend(self, monkeypatch):
+        """A Fill stops at the limit with no flag: only Single, Block and Pack Copy raise it."""
+        source = Dint("Source", default=40000)
+        dest = Block("DstB", TagType.INT, 1, 2)
+        first, second = Int("First"), Int("Second")
+        with Program(strict=False) as prog:
+            with Rung():
+                fill(source, dest.select(1, 2))
+                copy(dest[1], first)
+                copy(dest[2], second)
+
+        watch = (first, second, system.fault.out_of_range)
+        results = _on_every_backend(prog, monkeypatch, watch, scans=1)
+        assert results == {name: (32767, 32767, False) for name in results}
+
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_non_finite_randint_bound_is_zero_and_sc43_on_every_backend(self, monkeypatch, operand):
         """pyrung's choice: a randint() bound holding Inf or NaN makes the calc

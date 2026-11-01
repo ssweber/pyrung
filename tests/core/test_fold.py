@@ -7,7 +7,20 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Counter, Dint, Int, Program, Rung, Timer, calc, count_up, on_delay, out
+from pyrung import (
+    Bool,
+    Counter,
+    Dint,
+    Int,
+    Program,
+    Rung,
+    Timer,
+    calc,
+    copy,
+    count_up,
+    on_delay,
+    out,
+)
 from pyrung.core import fall, rise, system
 from pyrung.core.runner import PLC
 
@@ -2780,6 +2793,47 @@ class TestSelfFeedingChurnExact:
             _until_hit(1_000),
             patch={"K": 7, "Tot": start},
         )
+
+    @pytest.mark.parametrize("start", [32_000, 32_767, 40_000])
+    def test_copy_clamp_faults_as_stepping(self, start: int) -> None:
+        def build() -> Program:
+            from pyrung import latch
+
+            Wide = Dint("Wide")
+            Narrow = Int("Narrow")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    calc(Wide + 7, Wide)
+                with Rung():
+                    copy(Wide, Narrow)
+                with Rung(system.fault.out_of_range):
+                    latch(Bool("FaultSeen"))
+                with Rung():
+                    on_delay(Tmr, 5_000)
+                with Rung(Tmr.Done):
+                    out(Bool("Hit"))
+            return prog
+
+        _assert_fold_is_exact(build, _until_hit(1_000), patch={"Wide": start})
+
+    def test_timer_acc_copied_to_an_int_never_faults(self) -> None:
+        def build() -> Program:
+            Copied = Int("Copied")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Tmr, 5_000)
+                with Rung():
+                    copy(Tmr.Acc, Copied)
+                with Rung(system.fault.out_of_range):
+                    out(Bool("FaultNow"))
+                with Rung(Tmr.Done):
+                    out(Bool("Hit"))
+            return prog
+
+        folded = _assert_fold_is_exact(build, _until_hit(1_000))
+        assert folded.state.tags["FaultNow"] is False
 
     def test_cycle_jump_stops_short_of_a_wrap(self) -> None:
         from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until

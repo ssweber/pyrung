@@ -542,7 +542,6 @@ group = Group(
             init=_init(1, dds=[(511, 512)], dfs=[(451, 451)]),
             expect={"Result1": 32767, "Result2": -32768, "Result3": 32767, "Result4": 7},
             scans=SCANS,
-            pending="SC43",
             probe="does a clamping Copy raise SC43",
         ),
         case(
@@ -617,7 +616,6 @@ group = Group(
             expect={"Result1": 32767, "Result2": -32768, "Result3": 0, "Result4": 3},
             scans=SCANS,
             probe="Copy of Inf or NaN into an Int",
-            pending="SC43",
         ),
         case(
             "A Copy of +Inf to text writes inf with no flag: TXT401..404 read i, n, f and "

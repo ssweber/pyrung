@@ -224,6 +224,20 @@ def _store_copy_value_to_tag_type(value: Any, tag: Tag) -> Any:
     return value if storage is None else store_value(value, storage)
 
 
+def _copy_clamps(value: Any, tag: Tag) -> bool:
+    """True when a Copy of the number *value* into *tag* stops at a limit.
+
+    Only an INT or DINT clamps.  +/-Inf clamps; NaN stores 0 and does not.
+    """
+    storage = copy_store_transform(tag.type)
+    if storage is None or storage.kind != "clamp" or not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, float) and not math.isfinite(value):
+        return not math.isnan(value)
+    assert storage.lower is not None and storage.upper is not None
+    return not storage.lower <= int(value) <= storage.upper
+
+
 def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
     """Truncate a value to fit the destination tag's type.
 

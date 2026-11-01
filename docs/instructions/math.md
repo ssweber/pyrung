@@ -38,7 +38,7 @@ An Inf or NaN operand follows IEEE 754: `Inf / 2` is Inf, `Inf − Inf` and `sin
 Where Inf or NaN meets an integer:
 
 - A `calc()` result of ±Inf stores 0 into an `Int`, `Dint` or `Word` and sets `out_of_range`; NaN stores 0 with no flag.
-- A `copy()` of ±Inf into an `Int` or `Dint` clamps to its limit; NaN, or anything not finite into a `Word`, stores 0.
+- A `copy()` of ±Inf into an `Int` or `Dint` clamps to its limit and sets `out_of_range`; NaN, or anything not finite into a `Word`, stores 0 with no flag.
 - A bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand, or a shift (`<<`, `>>`, `lsh`, `rsh`) by a negative count, makes the `calc()` store 0 and set `out_of_range`.
 - A [`randint()`](#randint) bound that is Inf or NaN makes the `calc()` store 0 and set `out_of_range`.
 - A [`forloop()`](program-control.md) whose `Real` count is Inf or NaN runs no iteration and sets `out_of_range`.
@@ -86,7 +86,7 @@ For CLICK portability, do not mix WORD and non-WORD math in the same `calc()` ex
 
 | Operation | Out-of-range behavior |
 |-----------|----------------------|
-| `copy()` | Clamps to destination min/max |
+| `copy()` | Clamps to destination min/max, `system.fault.out_of_range` set |
 | `calc()` | Wraps (modular arithmetic) |
 | Timer accumulator | Clamps at 32,767 |
 | Counter accumulator | Clamps at DINT min/max |

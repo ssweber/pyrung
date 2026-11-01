@@ -959,6 +959,20 @@ def _compile_set_out_of_range_fault_body(ctx: CodegenContext) -> list[str]:
     return [f"{fault_symbol} = True"]
 
 
+def _copy_clamp_condition(value_var: str, dest_type: str, source_type: str | None) -> str | None:
+    """The test that a Copy of *value_var* into *dest_type* stops at a limit, if it can.
+
+    It holds what the store truncates: 32767.5 into an INT stores 32767 without
+    clamping.  +/-Inf passes and NaN compares false, as a clamp pins Inf and
+    stores NaN as 0.  Text converts in the store and never clamps here.
+    """
+    bounds = {"INT": (-32768, 32767), "DINT": (-2147483648, 2147483647)}.get(dest_type)
+    if bounds is None or source_type == "CHAR":
+        return None
+    lower, upper = bounds
+    return f"{value_var} >= {upper + 1} or {value_var} <= {lower - 1}"
+
+
 def _compile_set_address_error_fault_body(ctx: CodegenContext) -> list[str]:
     fault_symbol = ctx.symbol_if_referenced(_FAULT_ADDRESS_ERROR_TAG)
     if fault_symbol is None:

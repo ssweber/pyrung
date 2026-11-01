@@ -12,6 +12,7 @@ from .base import Instruction, OneShotMixin
 from .conversions import (
     _as_single_ascii_char,
     _ascii_char_from_code,
+    _copy_clamps,
     _render_text_from_numeric,
     _store_copy_value_to_tag_type,
     _store_numeric_text_digits,
@@ -44,7 +45,9 @@ class CopyInstruction(OneShotMixin, Instruction):
 
     **Clamping semantics:** Out-of-range values are clamped to the
     destination type's min/max (e.g. copying 40 000 into an INT tag produces
-    32 767). This differs from `CalcInstruction`, which wraps.
+    32 767) and the out-of-range flag (``system.fault.out_of_range``, CLICK's
+    SC43) is set; +/-Inf into an INT or DINT clamps the same way, and NaN stores
+    0 with no flag. This differs from `CalcInstruction`, which wraps.
 
     **Pointer errors:** If the pointer resolves to an out-of-range address,
     the address-error fault flag is set and the copy is skipped.
@@ -132,8 +135,10 @@ class CopyInstruction(OneShotMixin, Instruction):
             ctx.set_tags(updates)
             return
 
-        value = _store_copy_value_to_tag_type(value, resolved_target)
-        ctx.set_tag(resolved_target.name, value)
+        stored = _store_copy_value_to_tag_type(value, resolved_target)
+        ctx.set_tag(resolved_target.name, stored)
+        if _copy_clamps(value, resolved_target):
+            _set_fault_out_of_range(ctx)
 
     def _execute_converter_copy(
         self, ctx: ScanContext, resolved_target: Tag, converter: CopyConverter
@@ -333,6 +338,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
         for src_tag, dst_tag in zip(src_tags, dst_tags, strict=True):
             value = ctx.get_tag(src_tag.name, src_tag.default)
             updates[dst_tag.name] = _store_copy_value_to_tag_type(value, dst_tag)
+            if _copy_clamps(value, dst_tag):
+                _set_fault_out_of_range(ctx)
         ctx.set_tags(updates)
 
     def _execute_converter_block_copy(

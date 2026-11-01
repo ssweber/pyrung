@@ -11,7 +11,7 @@ copy(DS[1], DS[DS[0]])              # Indirect addressing: DS[pointer]
 copy(DS[1], DS[1], oneshot=True)    # Execute only on rung rising edge
 ```
 
-Out-of-range values are **clamped** to the destination type's min/max. This is different from `calc()`, which wraps.
+Out-of-range values are **clamped** to the destination type's min/max, which sets `system.fault.out_of_range`, for `copy()`, `blockcopy()` and `pack_text()`; `fill()` clamps with no flag. This is different from `calc()`, which wraps.
 
 A pointer (`DS[Ptr]`) must be an `Int` or `Dint` tag, and an index expression (`DS[Ptr + 1]`) may use only `Int` and `Dint` tags, integer constants and integer operators (`//` rather than `/`, no `**` or math function). The same rule holds for the bounds of a `select()` whose bounds are tags or expressions (`DS.select(Start, Start + 9)`). A `Real`, `Word`, `Bool` or `Char` pointer or bound, or an index expression that breaks the rule, raises `TypeError` when the program is built; copy a `Word` or `Real` into an `Int` first.
 
