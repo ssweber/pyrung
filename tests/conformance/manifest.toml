@@ -446,3 +446,50 @@ jog_again_after_last_step = 4
 output_reset_while_running = 5
 step_written_while_running = 6
 step_written_while_paused = 7
+
+# S6 probes (parts E and F).  The DS blocks sit in staging DS that no group's cases use
+# (tests/conformance/memory.py, STAGING_DS): between the text, block, search and
+# math groups' staged registers and past faults' block.
+
+[groups.drum_idle]
+base = 3871 # Conf_DrumIdle: DS3871..DS3900; part E, a drum not reached; rungs in main
+slots = 2
+
+[groups.drum_idle.cases]
+uncalled_subroutine = 1
+drum_in_skipped_loop = 2
+
+[groups.drum_rule]
+base = 3933 # Conf_DrumRule: DS3933..DS3992; part E, the drum rule on time and time & event drums
+slots = 5
+
+[groups.drum_rule.cases]
+writes_on_move_only = 1
+writes_on_return = 2
+bad_step_and_first_scan_jog = 3
+correction_moves = 4
+last_step_jog = 5
+
+[groups.store_probe]
+base = 4111 # Conf_StoreProbe: DS4111..DS4190; part F, RAND and non-finite stores
+slots = 7
+
+[groups.store_probe.cases]
+rand_int_cuts = 1
+rand_other_stores = 2
+rand_tag_bounds = 3
+inf_and_nan_to_text = 4
+non_finite_into_word = 5
+real_into_text_and_fill = 6
+rand_bound_forms = 7
+
+[groups.drum_jump]
+base = 4439 # Conf_DrumJump: DS4439..DS4498; part E, jog, jump and pause on time and time & event drums
+slots = 5
+
+[groups.drum_jump.cases]
+paused_jog_cases = 1
+jump_with_jog_and_to_own_step = 2
+jump_after_completion = 3
+completed_drum_fires_again = 4
+acc_through_jog_completion = 5
