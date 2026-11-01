@@ -749,14 +749,18 @@ class TestCycleFoldRtcTicks:
             folded.cause("RcTmr_Acc", first)
 
 
-def _clock_mirror_cycle_program(*, live_stamp: bool = False, continued: bool = False) -> Program:
+def _clock_mirror_cycle_program(
+    *, live_stamp: bool = False, continued: bool = False, continued_live: bool = False
+) -> Program:
     """A period-2 oscillation, a ``clock_1s`` contact (so a cycle spans whole
     seconds and every observed window holds an RTC tick), clock mirrors with an
     off history logger, and a 20 s timer.
 
     *live_stamp* adds a reader of the half-minute while ``CmStopped``;
-    *continued* adds a branch on a ``continued()`` rung that reads a mirror and
-    is live on the earlier rung's snapshot although off at its own position.
+    *continued* adds a branch on a ``continued()`` rung that reads a mirror
+    behind ``X == 0``, written 1 on the rung above.  A continued rung reads
+    live, so the branch is off where it stands (it was on when it read the
+    earlier rung's snapshot); *continued_live* makes it ``X == 1``, on there.
     """
     from pyrung import Or, branch, calc, copy
 
@@ -788,7 +792,7 @@ def _clock_mirror_cycle_program(*, live_stamp: bool = False, continued: bool = F
                 calc(Sec // 30, StopSec)
             with Rung(StopSec > 0):
                 out(Bool("CmStopSecHigh"))
-        if continued:
+        if continued or continued_live:
             with Rung():
                 copy(0, X)
             with Rung(X == 0):
@@ -796,7 +800,7 @@ def _clock_mirror_cycle_program(*, live_stamp: bool = False, continued: bool = F
             with Rung():
                 copy(1, X)
             with Rung().continued():
-                with branch(X == 0):
+                with branch(X == (1 if continued_live else 0)):
                     calc(Sec // 30, Half)
             with Rung(Half == 1):
                 out(Bool("CmHalfOn"))
@@ -896,9 +900,9 @@ class TestCycleFoldClockMirrors:
         ("program", "patch"),
         [
             ({"live_stamp": True}, {"CmStopped": True}),
-            ({"continued": True}, {}),
+            ({"continued_live": True}, {}),
         ],
-        ids=["powered_reader", "continued_branch"],
+        ids=["powered_reader", "continued_branch_on_where_it_stands"],
     )
     def test_live_reader_blocks_the_jump_across_ticks(
         self, program: dict[str, bool], patch: dict[str, object]
@@ -919,6 +923,29 @@ class TestCycleFoldClockMirrors:
         assert stats.get("rtc_readers_on", 0) >= 1
         assert plc.state.scan_id == ref.state.scan_id
         assert plc.state.tags == ref.state.tags
+
+    @pytest.mark.parametrize("budget", [400, 1_500, 3_000])
+    def test_continued_branch_off_where_it_stands_lets_the_jump_through(self, budget: int) -> None:
+        """A continued rung reads live (the row solve), so a branch behind
+        ``X == 0`` under ``copy(1, X)`` never runs, though it was on when a
+        continued rung read the earlier rung's snapshot.  Its mirror reader is
+        dead, and the jump equals stepping, history included."""
+        ref = self._stepped(_clock_mirror_cycle_program(continued=True), budget)
+        plc = self._plc(_clock_mirror_cycle_program(continued=True))
+        stats: dict[str, int] = {}
+        cycle_fold_until(
+            plc,
+            lambda _s: False,
+            budget=budget,
+            kernel_budget=False,
+            predicate_reads=frozenset(),
+            stats=stats,
+        )
+
+        assert stats["cycle_folds"] >= 1
+        assert plc.state.scan_id == ref.state.scan_id
+        assert plc.state.tags == ref.state.tags
+        _assert_history_matches(plc, ref)
 
     # 208 kernel scans spends the budget on the scan that certifies the first
     # cycle; a jump taken there would end the coast on stale mirrors.
