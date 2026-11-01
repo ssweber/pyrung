@@ -296,12 +296,41 @@ def _retained_98(logic: Any) -> PLC:
     )
 
 
+def _reconnect_overwrites(events: list[Any]) -> set[tuple[Any, Any, bool]]:
+    """What each rejected reconnect saw happen to the step: the value it
+    wrote, the value that displaced it, and whether that was the same scan."""
+    reconnect = ((fixture.NetworkAvailable.name, True),)
+    return {
+        (
+            observation.appeared.values,
+            observation.displacement.values,
+            observation.displacement.scan_id == observation.appeared.scan_id,
+        )
+        for event in events
+        if event.kind == "candidate_rejected" and event.data.get("applied") == reconnect
+        for observation in event.data.get("effect_observations", ())
+        if observation.appeared is not None and observation.displacement is not None
+    }
+
+
+def _assert_reconnect_overwritten_on_its_scan(plan: Any, events: list[Any]) -> None:
+    # The pilot tries the reconnect and rejects it each time: the status
+    # branch below the repair turns its 10 into 94 on the same scan.  It does
+    # not yet try a nonzero ServiceStatusInput, which keeps that branch off,
+    # so the search runs out of budget.
+    assert _reconnect_overwrites(events) == {((98, 10), (10, 94), True)}
+    assert not plan.reachable
+    assert plan.reason.startswith("budget exhausted")
+    assert "RouteSequenceStep=10 (have 98)" in plan.reason
+
+
 def test_field_order_reconnect_boundary_does_not_crash() -> None:
+    events: list[Any] = []
     plan = _retained_98(_field_order_reconnect_logic()).how(
-        fixture.SequenceStep == 10, max_scans=30
+        fixture.SequenceStep == 10, max_scans=30, on_event=events.append
     )
 
-    assert plan.reachable or plan.reason
+    _assert_reconnect_overwritten_on_its_scan(plan, events)
 
 
 def test_field_order_reconnect_overwrite_is_intrascan() -> None:
@@ -311,8 +340,11 @@ def test_field_order_reconnect_overwrite_is_intrascan() -> None:
     runner.step()
 
     assert runner.state.tags[fixture.SequenceStep.name] == 94
-    plan = _retained_98(fixture.logic).how(fixture.SequenceStep == 10, max_scans=30)
-    assert plan.reachable or plan.reason
+    events: list[Any] = []
+    plan = _retained_98(fixture.logic).how(
+        fixture.SequenceStep == 10, max_scans=30, on_event=events.append
+    )
+    _assert_reconnect_overwritten_on_its_scan(plan, events)
 
 
 def test_field_order_route_reaches_the_terminal_step() -> None:
