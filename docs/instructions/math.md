@@ -181,4 +181,5 @@ In pyrung the aggregates work anywhere an expression does (`copy()` sources, run
 | `CLK_CALC_RANGE_NOT_CONTIGUOUS` | The range must map to consecutive addresses, low to high (drop `.reverse()`). |
 | `CLK_CALC_RANGE_MIXED_BANKS` | Both ends must be in the same bank. |
 | `CLK_CALC_MEDIAN_RANGE_TOO_LARGE` | `MDN` covers at most 1024 bytes: 512 DS/DH or 256 DD/DF. |
-| `CLK_CALC_BIT_RANGE_AGGREGATE` | Only `SUM` accepts a bit range (X, Y, C, T, CT, SC). |
+| `CLK_CALC_BIT_RANGE_AGGREGATE` | Only `SUM` accepts a bit range. |
+| `CLK_CALC_SUM_BANK_NOT_AVAILABLE` | `SUM` reads X, Y, C, T, SC, DS, DD, DF, TD, CTD, or SD in decimal mode, and DH, XD, or YD in hex mode. |

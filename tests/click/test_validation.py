@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung.click import ClickBlocks, TagMap
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
@@ -14,6 +16,7 @@ from pyrung.click.validation import (
     CLK_CALC_NESTING_DEPTH,
     CLK_CALC_RANGE_MIXED_BANKS,
     CLK_CALC_RANGE_NOT_CONTIGUOUS,
+    CLK_CALC_SUM_BANK_NOT_AVAILABLE,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
@@ -931,6 +934,48 @@ class TestRangeAggregateRules:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert any(f.code == CLK_CALC_BIT_RANGE_AGGREGATE for f in report.hints)
+
+    @staticmethod
+    def _sum_findings(block, dest_type, dest_address):
+        dest = Tag("Dest", dest_type)
+
+        def logic():
+            with Rung():
+                calc(block.select(1, 4).sum(), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([dest.map_to(dest_address)], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        return [f for f in _all_findings(report) if f.code == CLK_CALC_SUM_BANK_NOT_AVAILABLE]
+
+    @pytest.mark.parametrize("block", [x, y, c, t, sc, ds, dd, df, td, ctd, sd])
+    def test_sum_decimal_banks_no_finding(self, block):
+        assert self._sum_findings(block, TagType.INT, ds[1000]) == []
+
+    @pytest.mark.parametrize("block", [dh, xd, yd])
+    def test_sum_hex_banks_no_finding(self, block):
+        assert self._sum_findings(block, TagType.WORD, dh[100]) == []
+
+    @pytest.mark.parametrize("block", [ct, txt])
+    def test_sum_unavailable_banks_give_finding(self, block):
+        findings = self._sum_findings(block, TagType.INT, ds[1000])
+        assert len(findings) == 1
+        assert "not available in CLICK" in findings[0].message
+
+    def test_sum_mixed_families_reports_mode_mixed_only(self):
+        """A hex range into a decimal dest is CLK_CALC_MODE_MIXED, not a SUM bank finding."""
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(dh.select(1, 4).sum(), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([dest.map_to(ds[1000])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        codes = {f.code for f in _all_findings(report)}
+        assert CLK_CALC_MODE_MIXED in codes
+        assert CLK_CALC_SUM_BANK_NOT_AVAILABLE not in codes
 
 
 class TestTildeExpressionPortability:
