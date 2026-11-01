@@ -143,8 +143,8 @@ class PLCDebugger:
 
         execution = rung_state.execution
         rung = rung_state.rung
-        # The rung is solved row by row, so a branch's region is only final
-        # once the solve reaches it; until then it shows as off with its
+        # A branch's contacts are solved when execution reaches it, so its region
+        # is only final from there; until then it shows as off with its
         # contacts skipped.  Every step's trace is built from this board as
         # it stands at that step.
         branch_trace_map = self._initial_branch_trace_map(rung_state)

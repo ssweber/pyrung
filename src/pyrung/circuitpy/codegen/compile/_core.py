@@ -466,7 +466,7 @@ def compile_rung(
     *,
     local_conditions: bool = False,
 ) -> list[str]:
-    """Compile one rung into Python source lines, row by row.
+    """Compile one rung into Python source lines, in instruction order.
 
     The trunk's contacts are read once, as the rung starts; each branch's own
     contacts are read where the solve reaches the branch (after the writes of

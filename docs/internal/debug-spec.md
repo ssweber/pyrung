@@ -198,9 +198,9 @@ After each scan, the extension reads trace data and applies decorations to the s
 - **Inline annotations**: evaluated condition and instruction values as faded text
 - **Red inline text**: the condition that caused an unpowered rung
 
-A rung is solved row by row (the live row solve), and the trace follows it:
+Each instruction solves the path from the rail to it, and the trace follows that:
 
-- A branch's contacts are evaluated when the step reaches the branch, against the writes of the rows above it. Until then its region reads `disabled_local` with its conditions skipped (under an unpowered parent, `disabled_parent`, final from the rung's first step).
+- A branch's contacts are evaluated when the step reaches the branch, against the writes of the instructions above it. Until then its region reads `disabled_local` with its conditions skipped (under an unpowered parent, `disabled_parent`, final from the rung's first step).
 - Every branch under a powered parent gets a `branch` step, powered or not, so its final region is in some event. Branch steps are not stop points for `next`/`stepIn`.
 - A box's pins are traced as the box read them, at box entry.
 - The whole-program trace built from the last committed scan (Continue and scan frames) takes each region of a rung's first event from the last event carrying it, so each branch shows its solved state. Regions are matched by their place in the rung's tree (each step carries its own as `branch_path`), not by source span, which branches built by one helper share. Nested branches are included, those under an unpowered branch too; steps of a called subroutine or a loop body are skipped. `pyrungTrace` sends the debugger's current event (`runner.debug.last_event()`) as it stands.
@@ -285,7 +285,7 @@ Mapped to core engine phases:
 ### Force and edge detection
 
 - Each `rise()` / `fall()` contact keeps its own memory (`_edge:e{N}` in `SystemState.memory`): the bit as that contact last saw it, updated every scan its row is solved, powered or not, and off at RUN and at STOP->RUN.
-- A contact compares the value present when its row is solved with that memory. Since forced variables may diverge mid-cycle, a contact below a rung that assigns a forced tag sees the assigned value; one above it sees the pre-logic force value.
+- A contact compares the value present when it is solved with that memory. Since forced variables may diverge mid-cycle, a contact below a rung that assigns a forced tag sees the assigned value; one above it sees the pre-logic force value.
 - So the memory a contact carries into the next scan is the value it read, not the committed post-force value: two contacts on one forced tag can remember different values.
 - Breakpoint and `run_until()` edges are no contact of the program: each keeps private memory, judged on the committed scan snapshot (see below).
 

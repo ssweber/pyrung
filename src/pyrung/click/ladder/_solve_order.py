@@ -1,8 +1,8 @@
 """When each contact of a rung is read, so an export keeps it there.
 
-A CLICK solves a rung row by row, and so does pyrung: the trunk's contacts are
-read as the rung starts, and a branch reads its own contacts when the solve
-reaches it, after the rows above it ran.  The exporter redraws a rung two
+On a CLICK and in pyrung, each output solves only the path from the rail to it:
+the trunk's contacts are read as the rung starts, and a branch reads its own
+contacts when execution reaches it, after the outputs above it ran.  The exporter redraws a rung two
 ways that move a contact to another row:
 
 * it factors label-equal contacts into a shared node (``branch(C, D)`` beside

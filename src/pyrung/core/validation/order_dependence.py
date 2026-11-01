@@ -1,7 +1,7 @@
 """Intra-rung order dependence: rows that read a tag an earlier row wrote.
 
-A CLICK solves a rung row by row, top to bottom (hardware rounds 1 and 2), and
-so does pyrung since the live row solve.  The trunk's contacts are read once
+On a CLICK and in pyrung, each instruction solves only the path from the rail
+to it (hardware rounds 1 and 2).  The trunk's contacts are read once
 and its power is held for every row below it; each branch reads its own
 contacts when the solve reaches it, after the rows above it have run; a
 ``.continued()`` rung is one more row of the same CLICK rung, from the rail;
@@ -556,9 +556,9 @@ _READER_TEXT = {
 }
 
 _ABOVE_TEXT = {
-    _BRANCH: "a row above it in the same rung",
-    _CONTINUED: "a row above it in the chain of continued rungs",
-    _BOX: "a row above it in the same rung",
+    _BRANCH: "an instruction above it in the same rung",
+    _CONTINUED: "an instruction above it in the chain of continued rungs",
+    _BOX: "an instruction above it in the same rung",
 }
 
 
@@ -573,9 +573,7 @@ def _display(
         lead = lead[0].lower() + lead[1:]
     problem = (
         f"{where}{lead} {names} after {_ABOVE_TEXT[reader.kind]} writes {noun}, "
-        "so it reads the new value: pyrung solves a rung row by row, as a CLICK does. "
-        f"pyrung releases before the live row solve read {noun} as at rung entry, "
-        "so this result differs from theirs."
+        "so it reads the new value, as on a CLICK."
     )
     lines = _reader_lines(reader, tags, bank_of)
     return FindingDisplay(

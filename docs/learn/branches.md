@@ -93,9 +93,9 @@ The diverter needs to fire in two cases: auto mode during sorting, or manual mod
 
 The diverter rung reads `State` and `IsLarge` directly from the state machine in [Lesson 7](state-machines.md) — no intermediate latch needed. Both control sources fold into one rung with a single `out(DiverterCmd)`. Remember "order has meaning" from [Lesson 1](scan-cycle.md)? This is how you escape it: **one coil, one rung.** If two separate rungs both `out` the same tag, the last one evaluated wins — a false manual rung below a true auto rung would de-energize the diverter. Fold every reason the output should energize into one rung and order stops being a side effect.
 
-!!! tip "Key concept: rows solve in order"
+!!! tip "Key concept: order inside a rung"
 
-    **A rung is solved row by row, top to bottom, as a CLICK does.** The rung's own condition is read once, as the rung starts, and holds for every row below it. A branch reads its own condition when the solve reaches it, so it sees what the rows above it in the same rung just wrote. Order inside a rung has meaning, just as order between rungs does ([Lesson 1's scan cycle](scan-cycle.md)), and the scan is still deterministic, so [Testing](testing.md) can pin it down. When a branch should not depend on a write above it, read the tag on the rung's own condition or move the write to a rung of its own.
+    **A rung is commonly referred to as evaluated left to right, top to bottom; actually it's a little more nuanced than that.** Instructions run in the order written. The rung's own condition is read once and holds for everything below it. A branch reads its own condition when execution reaches it, so it sees what the instructions above it in the same rung just wrote. Order inside a rung has meaning, just as order between rungs does ([Lesson 1's scan cycle](scan-cycle.md)), and the scan is still deterministic, so [Testing](testing.md) can pin it down. When a branch should not depend on a write above it, read the tag on the rung's own condition or move the write to a rung of its own.
 
 ## Seal-in: a branch that holds itself
 

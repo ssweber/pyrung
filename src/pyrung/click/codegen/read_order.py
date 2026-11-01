@@ -1,7 +1,7 @@
 """When a CLICK rung reads each contact, so the generated code reads it there too.
 
-CLICK solves a rung row by row.  A contact is read when the solve first
-reaches it: on the row of the first output whose wire runs through it.  A
+Each output solves only the path from the rail to it.  A contact is read when
+an output first needs it: on the row of the first output whose wire runs through it.  A
 contact two outputs share (one cell, teed off) is read once; two cells with the
 same label are two reads, and a row in between may write what the second one
 reads.

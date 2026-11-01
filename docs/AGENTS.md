@@ -19,6 +19,8 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - **Don't front-load internals.** Concepts page = vocabulary for writing programs. Architecture page = how the engine works. API reference = exhaustive details. Keep them separate.
 - **Real scenarios, not API walkthroughs.** The quickstart is a traffic light, not "Step 1: Define tags." Teach by building something.
 - **Respect the reader's time.** If we've explained `dt=` determinism in the quickstart, don't re-explain it in concepts. Link, don't repeat.
+- **State the rule, not its history.** No release narration, dated readings or "measured on hardware"; `CHANGELOG.md` holds what changed.
+- **Don't document every edge case.** The conformance suite is the source of truth for CLICK behaviour. Docs cover what a program author needs, plus a reference area for gotchas; a corner that only a conformance case reaches can stay there.
 
 ## API design decisions (implemented)
 
@@ -35,7 +37,7 @@ All PLC methods accept Tag objects as the primary interface. String keys are sup
 
 ## Key technical details
 
-- **Scan evaluation:** a rung is solved row by row, as a CLICK does. The rung's own contacts are read once, as it starts, and their power is held; a branch reads its own contacts when the solve reaches it, after the rows above it ran. Instructions execute in source order — interleaved naturally, not "all rung then all branch." A `.continued()` rung is drawing only: it solves like a rung of its own.
+- **Scan evaluation:** a rung is commonly referred to as evaluated left to right, top to bottom; actually it's a little more nuanced than that. Each instruction solves only the path from the rail to its inputs; a box solves its enable and every pin together, before it writes. A solved segment (the trunk, a branch's own contacts) is kept for later instructions that share it, and contacts not solved yet are read live when an instruction first needs them. Don't describe a rung as solved row by row. Instructions execute in source order — interleaved naturally, not "all rung then all branch." A `.continued()` rung is drawing only: it solves like a rung of its own.
 - **Branches** AND their condition with the parent rung's condition.
 - **Each rung starts fresh** — sees state as left by previous rung's instructions.
 - **`out`** de-energizes when rung is false. **`latch`** is sticky until `reset`.

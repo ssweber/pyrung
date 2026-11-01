@@ -39,7 +39,7 @@ with rung(First):          # ① Read: First
 
 Three rules:
 
-1. **A rung is solved row by row, as a CLICK does.** The rung's own contacts (①) are read once, as the rung starts, and their power is held for every row below. A branch reads its own contacts (③) when the solve reaches it, so it sees what the rows above it wrote (②). A branch ANDs its own condition with the parent rung's.
+1. **A rung is commonly referred to as evaluated left to right, top to bottom; actually it's a little more nuanced than that.** Each instruction solves only the path from the rail to it. The rung's own contacts (①) are read once and hold for everything below. A branch reads its own contacts (③) when the first instruction in it needs them, so it sees what the instructions above it wrote (②). A branch ANDs its own condition with the parent rung's.
 2. **Instructions execute in source order.** ② → ④ → ⑤, as written — not "all rung, then all branch."
 3. **Each rung starts fresh.** The next rung sees the state as it was left after the previous rung's instructions.
 
@@ -50,7 +50,7 @@ with rung(A):
         out(Y)  # On in the same scan: the branch reads B after the latch
 ```
 
-A box with pins (a counter's `.reset()` or `.down()`, a shift register's `.clock()`, a drum's events) reads its enable and every pin once, as the solve reaches it, before it writes anything.
+A box with pins (a counter's `.reset()` or `.down()`, a shift register's `.clock()`, a drum's events) reads its enable and every pin together, before it writes anything.
 
 ### Nested branches
 
@@ -69,7 +69,7 @@ This exists so codegen can faithfully represent imported ladder topologies. For 
 
 ## Continued rungs
 
-`rung.continued()` draws a rung as a further wire of the rung above it: in CLICK, one visual rung with several independent wires to the right power rail. It does not change what the rung does: a continued rung is solved like a rung of its own, and its contacts read the state the rows above it left.
+`rung.continued()` draws a rung as a further wire of the rung above it: in CLICK, one visual rung with several independent wires to the right power rail. It does not change what the rung does: a continued rung is solved like a rung of its own, and its contacts read the state the instructions above it left.
 
 ```python
 with rung(A):

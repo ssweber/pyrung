@@ -1436,7 +1436,7 @@ def _build_access_sequence(
         for item in rung._execution_items:
             if isinstance(item, RungClass):
                 # A branch reads its own contacts when the solve reaches it,
-                # after the rows above it have run (the live row solve).
+                # after the instructions above it have run.
                 emit_branch_conditions(item)
                 walk_execution(item)
                 continue

@@ -151,11 +151,11 @@ class Rung:
     def evaluate(self, ctx: ScanContext) -> None:
         """Evaluate this rung within a ScanContext.
 
-        Writes are batched in the context and committed at scan end.  The rung
-        is solved row by row: its trunk's contacts are read once, as the rung
-        starts, and that power is held for every row under it; each branch's
-        own contacts are read when the solve reaches the branch, so they see
-        the writes of the rows above it.  A ``.continued()`` rung is a rung of
+        Writes are batched in the context and committed at scan end.  Each
+        instruction solves only the path from the rail to it: the trunk's
+        contacts are read once and that power is held for everything under
+        it; each branch's own contacts are read when execution reaches the
+        branch, so they see the writes of the instructions above it.  A ``.continued()`` rung is a rung of
         its own, its contacts read live like any other's.
 
         Args:

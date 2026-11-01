@@ -1226,7 +1226,7 @@ def _execute_rung_natural(
     parent_enabled: bool = True,
     row: bool = False,
 ) -> None:
-    """Solve *rung* row by row.
+    """Run *rung*'s instructions in list order, each solving its own path.
 
     The rung's trunk -- or, for a *row* (a branch or a For-body rung), its own
     contacts -- reads live as the solve reaches it, so it sees the writes of

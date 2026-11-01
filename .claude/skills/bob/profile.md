@@ -28,7 +28,15 @@ Repo-specific rules for the /bob skill. Another repo replaces this file.
   conformance arc (match CLICK) first; prover side-issues get a second sweep afterwards.
 - Core runtime, compiled kernel and CircuitPython codegen must agree.
 - pyrung-authored terminal/log/exception text is ASCII only; "pyrung" is always lowercase.
-- Docs + CHANGELOG (Unreleased) move with behaviour changes.
+- CHANGELOG (Unreleased) moves with behaviour changes, one or two sentences per bullet. Docs
+  move only where a program author's understanding changes: state the rule with no history,
+  and leave corners to the conformance suite, the source of truth (`docs/AGENTS.md`).
+
+## Docs pass
+
+At the end of a train (user, 2026-11-01), one docs-only `bob-builder` edits the docs diff as a
+whole against `docs/AGENTS.md`: cut history and edge cases, lead with code, keep gotchas in a
+reference area. A fresh `bob-reviewer` reads the result against the same rules.
 
 ## Debugger follow-along review
 
