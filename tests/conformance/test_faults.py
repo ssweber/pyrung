@@ -626,7 +626,6 @@ group = Group(
             expect={"Result1": 105, "Result2": 0, "Result3": 110, "Result4": 102, "ErrorCode": 0},
             scans=SCANS,
             probe="Copy of +Inf to text",
-            pending="TEXT",
         ),
         case(
             "SIN ( +Inf ) is NaN with no flag (Result1 = 4, Result2 = 0, Result3 = 0), and "

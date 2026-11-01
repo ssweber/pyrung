@@ -1766,6 +1766,29 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, watch, scans=1)
         assert results == {name: (32767, 32767, False) for name in results}
 
+    @pytest.mark.parametrize("exponential", [False, True])
+    @pytest.mark.parametrize("operand,text", [("inf", "inf"), ("-inf", "-inf"), ("nan", "nan")])
+    def test_copy_non_finite_to_text_on_every_backend(
+        self, monkeypatch, operand, text, exponential
+    ):
+        """A Copy of a non-finite Real to text writes it lowercase, with no flag."""
+        r, setup = self._non_finite_real(operand)
+        chars = Block("Chars", TagType.CHAR, 1, 5)
+        codes = [Int(f"Code{i}") for i in range(1, 6)]
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+                copy("Z", chars[1])
+            with Rung(~system.sys.first_scan):
+                copy(r, chars[1], convert=to_text(exponential=exponential))
+                for i, code in enumerate(codes, start=1):
+                    copy(chars[i], code, convert=to_ascii)
+
+        results = _on_every_backend(prog, monkeypatch, (*codes, system.fault.out_of_range), scans=2)
+        wanted = [ord(ch) for ch in text] + [0] * (5 - len(text))
+        assert results == {name: (*wanted, False) for name in results}
+
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_non_finite_randint_bound_is_zero_and_sc43_on_every_backend(self, monkeypatch, operand):
         """pyrung's choice: a randint() bound holding Inf or NaN makes the calc

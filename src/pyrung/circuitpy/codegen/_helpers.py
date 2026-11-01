@@ -109,7 +109,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         '    if source_type == "REAL" or isinstance(value, float):',
         "        numeric = float(value)",
         "        if not math.isfinite(numeric):",
-        '            raise ValueError("REAL source is not finite")',
+        '            return "nan" if numeric != numeric else ("inf" if numeric > 0 else "-inf")',
         '        return f"{numeric:.7E}" if exponential else f"{numeric:.7f}"',
         "",
         "    number = int(value)",

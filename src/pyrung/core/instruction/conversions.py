@@ -156,7 +156,8 @@ def _render_text_from_numeric(
     if source_type == TagType.REAL or isinstance(value, float):
         numeric = float(value)
         if not math.isfinite(numeric):
-            raise ValueError("REAL source is not finite")
+            # CLICK writes these as text, lowercase, with no flag.
+            return "nan" if numeric != numeric else ("inf" if numeric > 0 else "-inf")
         return f"{numeric:.7E}" if exponential else f"{numeric:.7f}"
 
     number = int(value)

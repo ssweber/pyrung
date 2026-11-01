@@ -72,6 +72,7 @@
 
 ### Fixes
 
+- A `copy(..., convert=to_text())` of an Inf or NaN `Real` writes it as lowercase text (`inf`, `-inf`, `nan`) with no flag, as a CLICK writes `inf`; it left the text alone and set `out_of_range`.
 - A `copy()` or `blockcopy()` that clamps at an `Int` or `Dint` limit, a `copy()` of ±Inf among them, sets `out_of_range`, as on a CLICK; a NaN stores 0 with no flag, and `fill()` still clamps with none.
 - A `calc()` whose result is NaN sets no flag, into a `Real` (which keeps it) or an integer (which stores 0), as on a CLICK; it set `out_of_range`. A result of ±Inf still sets it.
 - CLICK export draws a plain contact right after an `Or` merge on the merge cell (`T:X003`) instead of a bare `T` and then the contact, which saves a column.
