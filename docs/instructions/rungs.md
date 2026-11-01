@@ -30,22 +30,31 @@ Comments are limited to 1400 characters. Exceeding this raises `ValueError`.
 `branch()` creates a parallel path within a rung. The branch condition is ANDed with the parent rung's condition.
 
 ```python
-with rung(First):          # ① Evaluate: First
-    out(Third)             # ③ Execute
-    with branch(Second):   # ② Evaluate: First AND Second
+with rung(First):          # ① Read: First
+    out(Third)             # ② Execute
+    with branch(Second):   # ③ Read: Second (First's power is held)
         out(Fourth)        # ④ Execute
     out(Fifth)             # ⑤ Execute
 ```
 
 Three rules:
 
-1. **Conditions evaluate before instructions.** ① and ② are resolved before ③ ④ ⑤ run. A branch ANDs its own condition with the parent rung's.
-2. **Instructions execute in source order.** ③ → ④ → ⑤, as written — not "all rung, then all branch."
+1. **A rung is solved row by row, as a CLICK does.** The rung's own contacts (①) are read once, as the rung starts, and their power is held for every row below. A branch reads its own contacts (③) when the solve reaches it, so it sees what the rows above it wrote (②). A branch ANDs its own condition with the parent rung's.
+2. **Instructions execute in source order.** ② → ④ → ⑤, as written — not "all rung, then all branch."
 3. **Each rung starts fresh.** The next rung sees the state as it was left after the previous rung's instructions.
+
+```python
+with rung(A):
+    latch(B)
+    with branch(B):
+        out(Y)  # On in the same scan: the branch reads B after the latch
+```
+
+A box with pins (a counter's `.reset()` or `.down()`, a shift register's `.clock()`, a drum's events) reads its enable and every pin once, as the solve reaches it, before it writes anything.
 
 ### Nested branches
 
-Branches can nest inside other branches. All conditions at every depth evaluate against the same rung-entry snapshot.
+Branches can nest inside other branches. Each one reads its own contacts where it stands, under the power of the branches around it.
 
 ```python
 with rung(A):
@@ -60,33 +69,20 @@ This exists so codegen can faithfully represent imported ladder topologies. For 
 
 ## Continued rungs
 
-`rung.continued()` tells a rung to reuse the previous rung's condition snapshot instead of freezing a fresh one. All conditions in the continued rung evaluate against the pre-instruction state from the original rung.
-
-```python
-with rung(A):
-    out(X)
-with rung(B).continued():
-    out(Y)  # B evaluated against pre-X state (same snapshot as A)
-```
-
-This models the CLICK ladder editor pattern where a single visual rung has multiple independent wires to the right power rail. Without `.continued()`, splitting into separate `rung` blocks would give each its own snapshot — changing behavior if the first rung's instructions mutate a tag that the second rung's conditions reference.
-
-Multiple continued rungs chain — they all share the original snapshot:
+`rung.continued()` draws a rung as a further wire of the rung above it: in CLICK, one visual rung with several independent wires to the right power rail. It does not change what the rung does: a continued rung is solved like a rung of its own, and its contacts read the state the rows above it left.
 
 ```python
 with rung(A):
     copy(10, Counter)
-with rung(Counter == 0).continued():
-    out(X)  # True: Counter was 0 at snapshot time
 with rung(Counter == 10).continued():
-    out(Y)  # False: Counter was 0 at snapshot time, not 10 yet
+    out(X)  # True: Counter was set to 10 above
 ```
 
-A normal (non-continued) rung breaks the chain and takes a fresh snapshot.
+`.continued()` exists so CLICK projects round-trip: a CLICK rung with two wires imports as a rung and a continued rung, and exports back as one CLICK rung. The exporter also uses it when it has to split a rung (a box with pins needs a CLICK rung of its own; see the [CLICK dialect](../dialects/click.md)).
 
 Constraints:
 
 - `continued()` cannot be the first rung in a program or subroutine.
 - Continued rungs cannot have their own `.comment`.
 
-Like nested branches, this exists primarily for codegen round-tripping. For hand-written logic, separate rungs with fresh snapshots are easier to reason about.
+For hand-written logic, separate rungs are easier to read and behave the same.

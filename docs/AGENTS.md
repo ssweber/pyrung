@@ -35,7 +35,7 @@ All PLC methods accept Tag objects as the primary interface. String keys are sup
 
 ## Key technical details
 
-- **Scan evaluation:** conditions (rung + branches) evaluate first against pre-instruction state. Then instructions execute in source order — interleaved naturally, not "all rung then all branch."
+- **Scan evaluation:** a rung is solved row by row, as a CLICK does. The rung's own contacts are read once, as it starts, and their power is held; a branch reads its own contacts when the solve reaches it, after the rows above it ran. Instructions execute in source order — interleaved naturally, not "all rung then all branch." A `.continued()` rung is drawing only: it solves like a rung of its own.
 - **Branches** AND their condition with the parent rung's condition.
 - **Each rung starts fresh** — sees state as left by previous rung's instructions.
 - **`out`** de-energizes when rung is false. **`latch`** is sticky until `reset`.
