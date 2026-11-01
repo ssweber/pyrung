@@ -45,6 +45,7 @@ from pyrung.core import (
     count_up,
     event_drum,
     fall,
+    forloop,
     on_delay,
     out,
     reset,
@@ -220,8 +221,12 @@ def trace_circuitpy(
     in_syms = {t.name: ctx.symbol_for_tag(t) for t in ALL_INPUTS if t.name in ctx.referenced_tags}
     watch_syms = [ctx.symbol_for_tag(t) for t in watch]
     drive = [{in_syms[k]: v for k, v in row.items() if k in in_syms} for row in rows]
+    # The board's first scan times boot to scan, where core's first scan
+    # takes a full dt: a scan's time passes before it, and the two then agree.
     hook = (
         f"_ROWS = {drive!r}\n_TRACE = []\nwhile True:\n"
+        "    if not __scan_once:\n"
+        "        time.sleep(0)\n"
         "    globals().update(_ROWS[__scan_once])\n"
         "    if __scan_once:\n"
         f"        _TRACE.append(tuple(eval(_s) for _s in {watch_syms!r}))\n"
@@ -572,6 +577,52 @@ def _time_event_drum_box() -> None:
 
 
 _ALL_DRUMS = [_event_drum_box, _time_drum_box, _time_event_drum_box]
+
+
+def test_first_scan_times_alike_given_the_same_time(monkeypatch) -> None:
+    """A plain timer shows the rule: the board times boot to scan, so a first scan
+    with a scan's time before it adds what core's fixed dt adds."""
+    timer = Timer.clone("BootTimer")
+    with Program(strict=False) as logic:
+        with Rung(En):
+            on_delay(timer, 60_000)
+    rows = [{"En": True}] * 4
+    want = [(10,), (20,), (30,), (40,)]
+    assert trace_core(logic, "interpreted", rows, (timer.Acc,)) == want
+    assert trace_circuitpy(logic, monkeypatch, rows, (timer.Acc,)) == want
+
+
+def _for_body_time_drum() -> Program:
+    with Program(strict=False) as logic:
+        with Rung(En):
+            with forloop(2):
+                time_drum(
+                    outputs=[Y1, Y2],
+                    presets=[3000, 4000, 5000],
+                    unit="ms",
+                    pattern=[[1, 0], [0, 1], [1, 1]],
+                    current_step=Step,
+                    accumulator=DrumAcc,
+                    completion_flag=Flag,
+                ).reset(P1).jump(P2, step=2).jog(P3)
+    return logic
+
+
+def test_for_body_time_drum_times_each_iteration_on_every_backend(monkeypatch) -> None:
+    """The first iteration corrects the step register's default 0, and the second
+    times, so the first scan's time counts here as a plain drum's does not.  The
+    jog's iteration clears the accumulator and the next one times again."""
+    watch = (Step, Flag, Y1, Y2, DrumAcc)
+    rows = [{"En": True}] * 3 + [{"En": True, "P3": True}] + [{"En": True, "P3": False}] * 3
+    want = [10, 30, 50, 10, 30, 50, 70]
+    logic = _for_body_time_drum()
+    assert [row[-1] for row in trace_core(logic, "interpreted", rows, watch)] == want
+    assert trace_core(logic, "compiled", rows, watch) == trace_core(
+        logic, "interpreted", rows, watch
+    )
+    assert trace_circuitpy(logic, monkeypatch, rows, watch) == trace_core(
+        logic, "interpreted", rows, watch
+    )
 
 
 @pytest.mark.parametrize("build", _ALL_DRUMS, ids=lambda b: b.__name__)
