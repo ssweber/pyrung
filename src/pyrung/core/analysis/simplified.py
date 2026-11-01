@@ -368,6 +368,64 @@ def _build_rung_map(program: Program) -> dict[int, Rung]:
     return mapping
 
 
+@dataclass(frozen=True)
+class _SolveOrder:
+    """Where each graph node reads and writes in one scan's solve order.
+
+    Each instruction reads its conditions when the scan reaches it; a
+    branch's own contacts see what earlier instructions wrote, and the
+    conditions it shares with them keep the value they were first solved
+    with.  Positions count each node's first read and its instructions in
+    that order (main rungs, then subroutines in graph order), so a node whose
+    instructions come after a branch in source order writes after that branch
+    reads, although its node index is lower.
+    """
+
+    reads: dict[int, int]  # node index -> position its own contacts are read at
+    writes: dict[int, int]  # node index -> position of its last instruction
+
+    def reader_position(self, nodes: list[int]) -> int:
+        """The latest position at which any of *nodes* reads its contacts."""
+        return max(self.reads[ni] for ni in nodes)
+
+    def written_before(self, writer: int, position: int) -> bool:
+        """True when *writer*'s instructions have all run by *position*."""
+        return self.writes.get(writer, self.reads[writer]) < position
+
+
+def _build_solve_order(program: Program) -> _SolveOrder:
+    """Number every node's read and instructions in solve order, mirroring
+    build_program_graph's node order."""
+    from pyrung.core.rung import Rung as _Rung
+
+    reads: dict[int, int] = {}
+    writes: dict[int, int] = {}
+    index = 0
+    position = 0
+
+    def walk(rung: Rung) -> None:
+        nonlocal index, position
+        node = index
+        index += 1
+        reads[node] = position
+        position += 1
+        for item in rung._execution_items:
+            if isinstance(item, _Rung):
+                walk(item)
+            else:
+                writes[node] = position
+                position += 1
+
+    for rung in program.rungs:
+        walk(rung)
+
+    for sub_name in sorted(program.subroutines):
+        for rung in program.subroutines[sub_name]:
+            walk(rung)
+
+    return _SolveOrder(reads=reads, writes=writes)
+
+
 # ---------------------------------------------------------------------------
 # Writer expression builder (shared by terminal + pivot resolution)
 # ---------------------------------------------------------------------------
@@ -388,11 +446,13 @@ def _try_factored_branches(
 ) -> Expr | None:
     """Factor sibling branches into ``And(parent, Or(local₁, local₂, ...))``.
 
-    Returns ``None`` if the writers are not all sibling branches at
-    the same nesting depth.
+    Returns ``None`` unless the writers are all branches of one parent: only
+    then do they inherit the same contacts.
     """
     nodes = [graph.rung_nodes[ni] for ni in effective]
     if not all(n.branch_path for n in nodes):
+        return None
+    if len({n.branch_path[:-1] for n in nodes}) != 1:
         return None
 
     rungs: list[Rung] = []
@@ -505,17 +565,21 @@ def _build_guard_ctx(program: Program) -> _GuardCtx:
 
 
 def _combine_single_scope(
-    indices: frozenset[int], graph: ProgramGraph, rung_map: dict[int, Rung]
+    indices: frozenset[int],
+    graph: ProgramGraph,
+    rung_map: dict[int, Rung],
+    order: _SolveOrder,
 ) -> tuple[Expr, list[int]] | None:
     """Combine writers within one scope: last rung-group wins; sibling branches
-    in that rung factor as ``And(parent, Or(...))`` (else ORed)."""
+    in that rung factor as ``And(parent, Or(...))`` (else ORed).  The writers
+    are listed in solve order."""
     by_rung: dict[int, list[int]] = {}
     for ni in indices:
         by_rung.setdefault(graph.rung_nodes[ni].rung_index, []).append(ni)
     if not by_rung:
         return None
 
-    effective = sorted(by_rung[max(by_rung)])
+    effective = sorted(by_rung[max(by_rung)], key=lambda ni: order.writes.get(ni, -1))
     if len(effective) > 1:
         factored = _try_factored_branches(effective, graph, rung_map)
         if factored is not None:
@@ -539,6 +603,7 @@ def _expr_for_writers(
     writer_indices: frozenset[int],
     graph: ProgramGraph,
     rung_map: dict[int, Rung],
+    order: _SolveOrder,
     *,
     tag: str | None = None,
     before: int | None = None,
@@ -561,13 +626,15 @@ def _expr_for_writers(
     unconditionally-reached reset would collapse the form to ``True``).  When
     *every* writer only resets the tag, the True form is ``False``.
 
-    *before*, when set, restricts to writers whose node index < before.
+    *before*, when set, is a reader's position in *order*: it restricts to
+    the writers whose instructions have run by then (if none have, the reader
+    sees the last scan's value, so every writer stays).
 
     Returns ``(expr, effective_node_indices)`` or ``None`` if no writers.
     """
     indices = writer_indices
     if before is not None:
-        indices = frozenset(i for i in indices if i < before)
+        indices = frozenset(i for i in indices if order.written_before(i, before))
         if not indices:
             indices = writer_indices
 
@@ -580,7 +647,7 @@ def _expr_for_writers(
         indices = drivers
 
     if ctx is None:
-        return _combine_single_scope(frozenset(indices), graph, rung_map)
+        return _combine_single_scope(frozenset(indices), graph, rung_map, order)
 
     scopes: dict[str | None, list[int]] = {}
     for ni in indices:
@@ -596,7 +663,7 @@ def _expr_for_writers(
     # wins caused (keeping only the highest-rung-index scope) is gone.
     contribs: list[tuple[int, Expr, list[int]]] = []
     for sub, nodes in scopes.items():
-        res = _combine_single_scope(frozenset(nodes), graph, rung_map)
+        res = _combine_single_scope(frozenset(nodes), graph, rung_map, order)
         if res is None:
             continue
         local, eff = res
@@ -654,9 +721,10 @@ def _resolve_pivots(
     expr: Expr,
     graph: ProgramGraph,
     rung_map: dict[int, Rung],
+    order: _SolveOrder,
     *,
     resolvable: frozenset[str],
-    reader_node_index: int | None = None,
+    reader_position: int | None = None,
     visited: frozenset[str] = frozenset(),
     depth: int = 0,
     ctx: _GuardCtx | None = None,
@@ -665,6 +733,8 @@ def _resolve_pivots(
     """Recursively substitute pivot atoms with their writing rung's expression.
 
     Only pivots in *resolvable* (all writers are OTE) are substituted.
+    *reader_position* is where, in *order*, the expression's contacts are
+    read: a pivot takes the form of the writers that ran before it.
     """
     if depth >= _MAX_DEPTH:
         return expr
@@ -678,8 +748,9 @@ def _resolve_pivots(
                 t,
                 graph,
                 rung_map,
+                order,
                 resolvable=resolvable,
-                reader_node_index=reader_node_index,
+                reader_position=reader_position,
                 visited=visited,
                 depth=depth,
                 ctx=ctx,
@@ -695,8 +766,9 @@ def _resolve_pivots(
                 t,
                 graph,
                 rung_map,
+                order,
                 resolvable=resolvable,
-                reader_node_index=reader_node_index,
+                reader_position=reader_position,
                 visited=visited,
                 depth=depth,
                 ctx=ctx,
@@ -726,8 +798,9 @@ def _resolve_pivots(
         writer_indices,
         graph,
         rung_map,
+        order,
         tag=tag_name,
-        before=reader_node_index,
+        before=reader_position,
         ctx=ctx,
     )
     if result is None:
@@ -743,8 +816,9 @@ def _resolve_pivots(
         pivot_expr,
         graph,
         rung_map,
+        order,
         resolvable=resolvable,
-        reader_node_index=max(effective),
+        reader_position=order.reader_position(effective),
         visited=visited | {tag_name},
         depth=depth + 1,
         ctx=ctx,
@@ -1096,6 +1170,7 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
     """Compute the simplified Boolean form for every terminal tag."""
     graph = build_program_graph(program)
     rung_map = _build_rung_map(program)
+    order = _build_solve_order(program)
     resolvable = _ote_resolvable(graph)
     ctx = _build_guard_ctx(program)
 
@@ -1109,7 +1184,7 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
         if not writer_indices:
             continue
 
-        result = _expr_for_writers(writer_indices, graph, rung_map, tag=tag_name, ctx=ctx)
+        result = _expr_for_writers(writer_indices, graph, rung_map, order, tag=tag_name, ctx=ctx)
         if result is None:
             continue
 
@@ -1120,8 +1195,9 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
             raw_expr,
             graph,
             rung_map,
+            order,
             resolvable=resolvable,
-            reader_node_index=max(effective),
+            reader_position=order.reader_position(effective),
             ctx=ctx,
             _stats=stats,
         )
