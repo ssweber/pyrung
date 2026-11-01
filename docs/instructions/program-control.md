@@ -67,6 +67,11 @@ A `Real` count holding Inf or NaN runs no iteration and sets
 `system.fault.out_of_range` (SC43), pyrung's choice: a CLICK For takes an
 integer count, so this has no hardware answer.
 
+For CLICK, the count must be a constant or a `DS`, `DD`, `TD`, `CTD` or `SD`
+tag. CLICK validation reports `CLK_FORLOOP_COUNT_BANK` for a count in any other
+bank; a `DF` count pasted into a CLICK stops the PLC on its watchdog. Copy the
+count into a `DS` or `DD` tag and loop on that.
+
 ```python
 with rung():
     with forloop(LoopCount):

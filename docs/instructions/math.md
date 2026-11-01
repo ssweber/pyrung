@@ -138,6 +138,8 @@ calc(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan 
 
 `randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them. A `Real` bound is cut toward zero; one holding Inf or NaN makes the `calc()` store 0 and set `system.fault.out_of_range` (SC43), pyrung's choice, not yet measured on a CLICK. Outside `calc()` such a draw is 0 with no flag ([Math outside `calc()`](#math-outside-calc)).
 
+The CLICK editor refuses a `DF` bound on `RAND` and refuses equal constant bounds (`randint(7, 7)`). CLICK validation reports them as `CLK_RAND_REAL_BOUND` and `CLK_RAND_EQUAL_BOUNDS`: use constants or an `Int`/`Dint` bound, and a plain constant for a one-value draw.
+
 Draws are deterministic, so the simulation stays replayable. Each `randint` call in the program is one site, and its value is a fixed function of the site and the scan number. Two runs of the same program draw the same sequence; replay, `history.at()`, seek and `fork()` see the values the original run saw; and a fork draws what its parent would have. Restarting (STOP -> RUN, `reboot()`) resets the scan number, so the sequence starts over.
 
 A site's draw is an input: the scan writes it into a hidden tag (`expr.tag`, named `_rand.<n>`) before logic runs. A test chooses a draw the way it sets any input:
