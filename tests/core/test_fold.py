@@ -3030,7 +3030,7 @@ class TestSelfFeedingChurnExact:
             ran += 1
             return prepare(*args, **kwargs)
 
-        plc._prepare_scan = counted  # type: ignore[method-assign]
+        setattr(plc, "_prepare_scan", counted)  # noqa: B010
         plc.run_until(Bool("Hit"), max_cycles=5_000, fold=True)
         assert plc.state.scan_id == 3_000
         assert ran < 50
