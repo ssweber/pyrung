@@ -503,6 +503,9 @@ def test_annotation_matches_readings(results: dict[str, CaseResult]):
     problems: list[str] = []
     for key, dependent in ORDER_DEPENDENT.items():
         r = results[key]
+        # Its fix step changes what it reads, and its snapshot moves with the fix.
+        if r.case.pending is not None:
+            continue
         snapshot = SNAPSHOT[key]
         if dependent != (snapshot != r.case.expect):
             problems.append(

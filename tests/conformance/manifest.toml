@@ -60,7 +60,7 @@ reset_swallows_held_jog = 14
 pins_read_before_step_fix = 15
 pins_read_before_step_fix_tee = 16
 correction_without_jog = 17
-jump_to_own_step_register = 18 # retired: moved to paste_risk (part I) before any CLICK ran it
+jump_to_own_step_register = 18 # retired: moved to paste_risk (part C) before any CLICK ran it
 jog_on_last_step = 19
 
 [groups.out]
@@ -361,14 +361,14 @@ for_body_box_leg_reads_row_above = 18 # retired: CLICK does not allow it (C000A:
 for_body_rung_reads_body_rung_above = 19
 
 [groups.ret_branch]
-base = 3441 # Conf_RetBranch: DS3441..DS3460; part D, a probe CLICK may refuse
+base = 3441 # Conf_RetBranch: DS3441..DS3460; part C, a probe CLICK may refuse
 slots = 1
 
 [groups.ret_branch.cases]
 branch_return_stops_subroutine = 1
 
 [groups.loop_call]
-base = 3461 # Conf_LoopCall: DS3461..DS3500; part E, rungs in main
+base = 3461 # Conf_LoopCall: DS3461..DS3500; part C, rungs in main
 slots = 3
 
 [groups.loop_call.cases]
@@ -389,7 +389,7 @@ edge_after_false_contact_in_branch = 5
 correction_scan_with_free_enable = 6
 
 [groups.cont_box]
-base = 3601 # Conf_ContBox: DS3601..DS3650; part F, a drawing CLICK may refuse
+base = 3601 # Conf_ContBox: DS3601..DS3650; part C, a drawing CLICK may refuse
 slots = 4
 
 [groups.cont_box.cases]
@@ -399,14 +399,14 @@ box_pin_on_own_rung = 3
 box_tee_without_trunk = 4
 
 [groups.faults]
-base = 3651 # Conf_Faults: DS3651..DS3810; part G
+base = 3651 # Conf_Faults: DS3651..DS3810; part E
 slots = 15
 
 [groups.faults.cases]
 math_store_out_of_range = 1
 copy_clamp_out_of_range = 2
 rand_wide_bounds_flags = 3
-rand_real_bounds = 4 # retired: moved to paste_risk (part I) before any CLICK ran it
+rand_real_bounds = 4 # retired: moved to paste_risk (part C) before any CLICK ran it
 pointer_past_bank = 5
 power_overflow_is_inf = 6
 real_intermediate_range = 7
@@ -415,19 +415,34 @@ non_finite_math_into_int = 9
 copy_non_finite_to_int = 10
 copy_inf_to_text = 11
 non_finite_functions = 12
+rand_unequal_bounds = 13
+pointer_past_bank_lands = 14
 
 [groups.for_count]
-base = 3811 # Conf_ForCount: DS3811..DS3830; part H, a probe that may stop a CLICK
+base = 3811 # DS3811..DS3830 unused: for_count stops a CLICK, so it runs in-process only
 slots = 1
 
 [groups.for_count.cases]
-non_finite_count = 1
+non_finite_count = 1 # retired from the wire
 
 [groups.paste_risk]
-base = 3831 # Conf_PasteRisk: DS3831..DS3870; part I, probes a CLICK may refuse at paste
+base = 3831 # Conf_PasteRisk: DS3831..DS3870; part C, probes a CLICK may refuse at paste
 slots = 3
 
 [groups.paste_risk.cases]
 jump_to_own_step_register = 1
 rand_real_bounds = 2
 loop_body_split = 3
+
+[groups.drum_trace]
+base = 11 # Conf_DrumTrace: DS11..DS100; part E, below the first block, the free room left
+slots = 8
+
+[groups.drum_trace.cases]
+tied_jog = 1
+free_jog = 2
+free_no_jog = 3
+jog_again_after_last_step = 4
+output_reset_while_running = 5
+step_written_while_running = 6
+step_written_while_paused = 7

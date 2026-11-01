@@ -132,9 +132,9 @@ def for_loop_iterations(count_value: Any) -> int:
 
     The count is read as unsigned 16-bit (``count & 0xFFFF``); a count of 0
     runs :data:`FOR_ZERO_COUNT_ITERATIONS` iterations.  A REAL count holding
-    Inf or NaN runs none (pyrung's choice, not measured on CLICK, whose For
-    takes an integer count; :meth:`ForLoopInstruction.iterations` also sets
-    SC43 for it).
+    Inf or NaN runs none (pyrung's choice: CLICK's editor refuses a REAL count,
+    and a pasted one stops the PLC on its watchdog;
+    :meth:`ForLoopInstruction.iterations` also sets SC43 for it).
     """
     if not _finite_count(count_value):
         return 0

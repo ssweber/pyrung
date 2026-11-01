@@ -62,6 +62,8 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DH": range(1, 101),
     },
     "drum": {"C": (range(1901, 2001), range(801, 851)), "T": range(401, 501)},
+    # A drum's state scan by scan (tests/conformance/test_drum_trace.py).
+    "drum_trace": {"C": range(51, 101)},
     "out": {"C": range(1801, 1901), "T": range(301, 401)},
     "loop": {"C": range(1701, 1801), "T": range(201, 301), "CT": range(201, 251)},
     "timers": {"C": range(1401, 1501), "T": range(1, 101)},

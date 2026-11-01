@@ -31,14 +31,17 @@ PENDING_STEPS: Mapping[str, str] = {
     "DRUM": "drum ordering (jump/jog/reset/pause/completion)",
     "INF": "REAL overflow stores +/-Inf",
     "TEXT": "text, pack, NUL, search cursor and MDN fixes",
-    "SYS": "the fault-flag model (SC40 follows the last Math, SC43/SC44 the last instruction)",
+    "SYS": (
+        "the fault-flag model (SC40 follows the last Math, SC43/SC44 the last instruction),"
+        " and a pointer past its bank, which is no address error"
+    ),
     "MATH": (
-        "Math results CLICK stores differently (RAND bounds past an Int or from a Real,"
-        " non-finite function results)"
+        "Math results CLICK stores differently (RAND with equal bounds, past an Int or"
+        " from a Real, non-finite function results)"
     ),
     "SC43": (
-        "which stores raise SC43 (a Math result that does not fit a narrower destination,"
-        " a clamping Copy, a Copy of Inf or NaN into an integer; not a 32-bit wrap)"
+        "which stores raise SC43 (a clamping Copy, a Copy of +/-Inf into an integer;"
+        " not a Math or a Copy of NaN)"
     ),
 }
 

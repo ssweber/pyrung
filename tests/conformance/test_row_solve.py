@@ -1,9 +1,8 @@
 """Row solve, round 3: the ``row_solve`` group (subroutine ``Conf_RowSolve``).
 
-Hardware questions the live row solve (S4, ``scratchpad/conformance_review/
-S4-PLAN.md`` section 10) still has open after round 2, in drawings pyrung's
-exporter writes and CLICK has taken before (branches off the trunk, a box with
-a continued wire below it).  Part C, beside ``rungs`` and ``solve_order``.
+Hardware questions the live row solve (S4) still had open after round 2, in
+drawings pyrung's exporter writes and CLICK has taken before (branches off the
+trunk, a box with a continued wire below it).  Part C, beside ``rungs`` and ``solve_order``.
 
 The models, as in ``test_solve_order.py``:
 
@@ -54,7 +53,7 @@ The cases, what each model reads, and the other models they tell apart:
   box writes land when the CLICK rung's solve ends: R1 = 1.  The next rung
   reads Done on scan 2 in every model (R2 = 1): the box counted on that scan.
 
-S5 adds three probes (the questions are in ``scratchpad/conformance_review/
+S5 adds three probes (answers indexed in ``scratchpad/conformance_review/
 S5-QUESTIONS.md``):
 
 - ``edge_on_box_path_after_false_contact`` (probe, S5 #1): does a contact
@@ -80,27 +79,18 @@ S5-QUESTIONS.md``):
   register is staged out of range (5) and a jog is on that scan.  Result3 is B
   and Result4 A as they stand at the end of scan 3, Result2 the completion
   flag then and ErrorCode the step then; Result1 is the step at the end.
-  Adopted (pyrung's reading today): the jog is taken from the corrected step 1
-  and moves the drum to step 2 (ErrorCode = 2), flag off (Result2 = 0), step 2's
-  output B on (Result3 = 1, Result4 = 0), and the drum stays on step 2
-  (Result1 = 2).  The S5 hypothesis, that the correction scan does the
-  correction only (no jog, no output write): step 1 (ErrorCode = 1), flag off
-  (0), outputs untouched so B still on (1, 0), and on from scan 4 the drum runs
-  on step 1 (Result1 = 1).  The jog acting on the bad step 5, as
-  ``drum/pins_read_before_step_fix`` adopted: the drum completes (Result2 =
-  1) with both outputs off (0, 0), on step 1 (ErrorCode = 1, Result1 = 1).
-  Step 1's outputs written on the correction scan: A on, B off (0, 1), step
-  1.  Each reading differs from the others in at least one field.  The round-2
-  reading of ``drum/pins_read_before_step_fix`` (1, 0, 0) had the enable tied
-  to the step register, which paused the drum after the correction; here it
-  runs on.  A CLICK that reads differently answers S5 #6 and its reading is
-  adopted.
+  Hardware (2026-11-01) answers that the jog scan leaves the bad step and the
+  outputs alone: step 5 at the end of scan 3 (ErrorCode = 5), flag off (Result2
+  = 0), B still on (Result3 = 1, Result4 = 0), and the drum ends on step 1
+  (Result1 = 1).  ``drum_trace/free_jog`` reads the scans after it: the next
+  scan corrects, and B stays on.  pyrung (step DRUM) takes the jog from the
+  corrected step: 2, 0, 1, 0, 2.
 
 The cases own C401..C450 and C1..C50 and counters CT191..CT195
 (``memory.OWNED``): cases 1 to 3 take ten C bits each (case N takes
 C<391+10N>..), cases 4 to 6 take C1.., C11.. and C21...
 
-Open (S4-PLAN section 10, question 6): whether a NOP or a blank row splits the
+Open: whether a NOP or a blank row splits the
 solve has no case.  Under L nothing is held from one wire to the next (each
 continued wire starts at the rail, read live), so a split at a NOP or a blank
 row reads the same as no split; only S or a fixpoint over a CLICK rung would
@@ -343,14 +333,15 @@ group = Group(
         ),
         case(
             "A drum whose enable and jog do not read its step register, with the "
-            "register staged out of range on the scan of a jog: the jog is taken "
-            "from the corrected step 1, so on that scan the drum is on step 2 "
-            "(ErrorCode = 2) with the flag off (Result2 = 0), output B on "
-            "(Result3 = 1) and A off (Result4 = 0), and stays on step 2 (Result1 = 2)",
+            "register staged out of range on the scan of a jog: that scan leaves it "
+            "alone, so the step reads 5 (ErrorCode) with the flag off (Result2 = 0), "
+            "output B on (Result3 = 1) and A off (Result4 = 0), and the drum ends on "
+            "step 1 (Result1)",
             ladder=prove_correction_scan_with_free_enable,
-            expect={"Result1": 2, "Result2": 0, "Result3": 1, "Result4": 0, "ErrorCode": 2},
+            expect={"Result1": 1, "Result2": 0, "Result3": 1, "Result4": 0, "ErrorCode": 5},
             scans=SCANS,
             probe="S5 #6: the correction scan with an enable and a jog of its own",
+            pending="DRUM",
         ),
     ],
 )

@@ -109,11 +109,11 @@ What each case tells apart:
   read after the correction (no jog) reads 1, 0, 3, as
   ``invalid_step_corrects_to_1`` shows a correction scan writes step 1's
   outputs.  So the pins are read before the drum runs and the jog does
-  something to the bad step itself.  Adopted: the jog acts on step 5, past the
-  last step, so the drum completes (its flag on from scan 3, Result2 = 3) with
-  every output off, and is left on step 1.  A correction scan that turns the
-  outputs off for some other reason reads Result2 = 0.  pyrung (step DRUM)
-  reads Result1 = 2, Result2 = 0, Result3 = 3, Result4 = 0.
+  something to the bad step itself.  Hardware (2026-11-01) answers that it does
+  not complete (Result2 = 0): the jog scan leaves step 5 and the outputs alone,
+  the next scan corrects the step and writes no output, and the rung is then
+  false (``drum_trace/tied_jog`` reads it scan by scan).  So 1, 0, 0, 0.
+  pyrung (step DRUM) reads Result1 = 2, Result2 = 0, Result3 = 3, Result4 = 0.
 - ``pins_read_before_step_fix_tee``: the same ladder on its own bits (the same
   conditions, the same pins), with the ``.reset()`` and ``.jog()`` pins drawn
   teeing off the drum's input wire after the shared contact (Result1 != 1)
@@ -136,12 +136,11 @@ What each case tells apart:
   since a CLICK may refuse the drum's own step register as its jump step; its
   C837..C840 stay unused here.
 - ``jog_on_last_step`` (probe): a jog on scan 2 takes a 2-step drum to step 2,
-  its last; a second jog on scan 4 is a jog from the last step.  The adopted
-  answer follows the reading of ``pins_read_before_step_fix``: a jog past the
-  last step completes the drum (flag first on at scan 4, Result2 = 4), turns
-  its outputs off (step 2's last on at scan 3, Result3 = 3, step 1's never,
-  Result4 = 0) and leaves step 1 (Result1 = 1).  Completing and staying on
-  step 2: 2, 4, 3, 0.  Wrapping to step 1 without completing: 1, 0, 3, 4.
+  its last; a second jog on scan 4 is a jog from the last step.  Hardware
+  (2026-11-01) answers that it completes the drum (flag first on at scan 4,
+  Result2 = 4), turns its outputs off (step 2's last on at scan 3, Result3 = 3,
+  step 1's never, Result4 = 0) and stays on step 2 (Result1 = 2).  Leaving step
+  1 would read 1, 4, 3, 0; wrapping to step 1 without completing 1, 0, 3, 4.
   pyrung (step DRUM) ignores a jog on the last step: 2, 0, 8, 0.
 """
 
@@ -707,14 +706,14 @@ group = Group(
         ),
         case(
             "A drum reads its rung and its pins at one moment, before it runs, and a "
-            "jog on a step it does not have completes it: a step register staged out of "
-            "range on scan 3 is the condition its rung and its jog pin share, the jog "
-            "sees it, and the drum completes (flag on from scan 3, Result2) with its "
-            "outputs off, so neither step's output comes on (Result3 = 0, Result4 = 0), "
-            "and is left on step 1 (Result1)",
+            "jog on a step it does not have leaves that scan alone: a step register "
+            "staged out of range on scan 3 is the condition its rung and its jog pin "
+            "share, the jog sees it, and the drum never completes (Result2 = 0), neither "
+            "step's output comes on (Result3 = 0, Result4 = 0), and it is left on step 1 "
+            "(Result1)",
             ladder=prove_pins_read_before_step_fix,
             probe="what a jog does on an out-of-range step",
-            expect={"Result1": 1, "Result2": 3, "Result3": 0, "Result4": 0},
+            expect={"Result1": 1, "Result2": 0, "Result3": 0, "Result4": 0},
             scans=SCANS,
             pending="DRUM",
         ),
@@ -722,13 +721,13 @@ group = Group(
             "The tee drawing of the same question: a drum whose reset and jog pins tee "
             "off its input wire after Result1 != 1 reads its rung and pins at one "
             "moment, before it runs; a step register staged out of range on scan 3 is "
-            "that condition, the jog sees it, and the drum completes (flag on from "
-            "scan 3, Result2) with its outputs off (Result3 = 0, Result4 = 0) and is "
+            "that condition, the jog sees it, and the drum never completes (Result2 = "
+            "0), neither step's output comes on (Result3 = 0, Result4 = 0), and it is "
             "left on step 1 (Result1)",
             ladder=prove_pins_read_before_step_fix_tee,
             probe="what a jog does on an out-of-range step",
             tee=TeeSpec("event_drum(", (".reset()", ".jog()"), after=1),
-            expect={"Result1": 1, "Result2": 3, "Result3": 0, "Result4": 0},
+            expect={"Result1": 1, "Result2": 0, "Result3": 0, "Result4": 0},
             scans=SCANS,
             pending="DRUM",
         ),
@@ -746,10 +745,10 @@ group = Group(
             "A jog on a drum's last step completes it: jogged to step 2 of 2 on scan 2 "
             "and again on scan 4, the drum's flag is on from scan 4 (Result2), step "
             "2's output is last on on scan 3 (Result3), step 1's never comes on "
-            "(Result4 = 0), and the drum is left on step 1 (Result1)",
+            "(Result4 = 0), and the drum stays on step 2 (Result1)",
             ladder=prove_jog_on_last_step,
             probe="what a jog on the last step does",
-            expect={"Result1": 1, "Result2": 4, "Result3": 3, "Result4": 0},
+            expect={"Result1": 2, "Result2": 4, "Result3": 3, "Result4": 0},
             scans=SCANS,
             pending="DRUM",
         ),

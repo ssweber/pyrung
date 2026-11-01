@@ -1,7 +1,7 @@
 """A box on a continued wire: the ``cont_box`` group (subroutine ``Conf_ContBox``).
 
-S4-PLAN section 10, question 2: can a box sit on a continued wire of the rung
-above, and do its enable and its pins see that wire's writes?  Each case is
+Can a box sit on a continued wire of the rung above, and do its enable and its
+pins see that wire's writes?  Each case is
 one CLICK rung of two wires from the rail: the first latches a bit P, the
 second is a counter whose enable or pin reads P, its pins drawn from the rail
 under it.  pyrung's exporter writes that drawing, but no CLICK has taken a box

@@ -28,11 +28,12 @@ and DF411..DF420.
   into an Int preset 99 (Result1: 3), and SC46 after it (ErrorCode); +Inf and
   +Inf (DF412, 3.0E+38 * 10 staged on scan 2) into an Int preset 99
   (Result2), with SC43 and SC46 after it as bits 1 and 2 of Result3.
-  Adopted: as ``numeric/int_math_rand_wide_bounds`` read, a bound the Int
-  cannot hold is a Math error that writes 0 with SC46: 3, 0, 2, 0.  pyrung
-  (step MATH) writes 0 with SC43 instead: 3, 0, 1, 0.  A CLICK that keeps
-  RAND's bounds as integers and refuses a DF never fires the case.  (Moved
-  here from ``faults`` before any CLICK ran it.)
+  Hardware (2026-11-01) reads 0, 0, 0, 0: both write 0 with no flag at all,
+  though RAND ( 7 , 7 ) from constants raises SC46
+  (``faults/rand_wide_bounds_flags``).  CLICK's editor refuses DF bounds typed
+  in, so this is what a pasted one does.  pyrung (step MATH) reads 3, 0, 1, 0.
+  ``faults/rand_unequal_bounds`` asks DF bounds that differ.  (Moved here from
+  ``faults`` before any CLICK ran it.)
 - ``loop_body_split`` (probe, S5 #4): a For body rung with an instruction above
   a box.  pyrung's exporter splits the rung at the box (C000A: a box starts a
   CLICK rung of its own), so the body is two body rungs, the calc and then the
@@ -170,12 +171,12 @@ group = Group(
             scans=SCANS,
         ),
         case(
-            "RAND takes DF bounds: RAND ( 3.0 , 3.0 ) from two DFs writes 3 into an Int "
-            "(Result1) without SC46 (ErrorCode = 0), and RAND of +Inf and +Inf is a Math "
-            "error that writes 0 (Result2) with SC46 alone (Result3 = 2)",
+            "RAND with equal DF bounds writes 0 and raises no flag: RAND ( 3.0 , 3.0 ) "
+            "into an Int reads 0 (Result1) without SC46 (ErrorCode = 0), and RAND of +Inf "
+            "and +Inf reads 0 (Result2) without SC43 or SC46 (Result3 = 0)",
             ladder=prove_rand_real_bounds,
             init=init_rand_real_bounds,
-            expect={"Result1": 3, "Result2": 0, "Result3": 2, "ErrorCode": 0},
+            expect={"Result1": 0, "Result2": 0, "Result3": 0, "ErrorCode": 0},
             scans=FAULT_SCANS,
             probe="RAND with a DF bound, finite and +Inf",
             pending="MATH",

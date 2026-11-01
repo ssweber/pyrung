@@ -5,12 +5,12 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
     make conformance-export OUT=path/to/dir
 
 The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as four
-projects, one part each (``PARTS``)::
+projects, one part each (``PARTS``; there is no part D)::
 
     make conformance-export PART=A OUT=path/to/a
     make conformance-export PART=B OUT=path/to/b
     make conformance-export PART=C OUT=path/to/c
-    make conformance-export PART=D OUT=path/to/d
+    make conformance-export PART=E OUT=path/to/e
 
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
@@ -42,6 +42,7 @@ from tests.conformance import (
     test_cont_box,
     test_counters,
     test_drum,
+    test_drum_trace,
     test_faults,
     test_for_count,
     test_loop,
@@ -79,6 +80,7 @@ ALL_GROUPS = [
     test_rung_semantics.group,
     test_math.group,
     test_drum.group,
+    test_drum_trace.group,
     test_out.group,
     test_loop.group,
     test_coils.group,
@@ -103,8 +105,8 @@ ALL_GROUPS = [
 
 #: Group names per CLICK project, split to keep each part under
 #: ``PART_STEP_BUDGET``: A and B the instructions, C how a rung is solved
-#: (solve order, edges, loops) with the fault-flag and paste probes, D a FOR
-#: that may stop the PLC.  Every group is in exactly one part.  The registers
+#: (solve order, edges, loops) with the paste probes, E the drum traces and the
+#: fault-flag probes.  Every group is in exactly one part.  The registers
 #: are the manifest's either way, so a group's subroutine is the same in its
 #: part as in the whole project.
 PARTS: dict[str, tuple[str, ...]] = {
@@ -131,13 +133,13 @@ PARTS: dict[str, tuple[str, ...]] = {
         "solve_order",
         "ret_branch",
         "loop_call",
-        "faults",
         "cont_box",
         "paste_risk",
+        "for_count",
     ),
-    # A FOR over a non-finite Real count, which may loop until a CLICK's
-    # watchdog stops it: a project of its own, so that costs only this one.
-    "D": ("for_count",),
+    # A drum's state scan by scan and the fault-flag probes, which outgrew
+    # the budget left in parts A and C.
+    "E": ("drum_trace", "faults"),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

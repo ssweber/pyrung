@@ -60,7 +60,8 @@ could plausibly differ, these cases tell the models apart:
   never fires.  Hardware round 2 (2026-10-31): a CLICK reads 0, none of them,
   so the Math wrote 0 (as a Math error does) and pyrung (step MATH) reads
   -30536.  Which flag, if any, comes with it is
-  ``faults/rand_wide_bounds_flags``.
+  ``faults/rand_wide_bounds_flags``, which finds equal bounds the likely cause.
+  CLICK's editor refuses them typed in; a paste gets them through.
 - ``int_math_real_operand_constant`` (probe): the 16-bit cut when the other
   operand is a REAL.  DF141 = 0.25 is multiplied by the constant 100000 into
   an Int, preset 99 (Result1).  The constant cut to its low 16 bits, signed
