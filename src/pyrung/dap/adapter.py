@@ -14,7 +14,7 @@ ParsedArgs = TypeVar("ParsedArgs")
 
 from pyrung.core import PLC
 from pyrung.core.context import ScanContext
-from pyrung.core.debug_trace import RungTraceEvent, SourceSpan, TraceEvent, TraceRegion
+from pyrung.core.debug_trace import RungTraceEvent, TraceEvent, TraceRegion
 from pyrung.core.rung import Rung
 from pyrung.core.runner import ScanStep
 from pyrung.core.state import SystemState
@@ -54,29 +54,64 @@ HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
 
 def _settled_rung_event(events: tuple[RungTraceEvent, ...]) -> RungTraceEvent:
-    """The rung's first event (its own step) with its regions as the scan left them.
+    """The rung's first event (its own step) with every region as the scan left them.
 
-    The first event holds a region for the rung and each of its branches.  The
-    rung is solved row by row, so a branch's region there is final only once
-    the solve has reached the branch; a later event carrying the same region
-    (the branch's own step, or a later step of the rung) has its solved state.
-    Each region of the first event is taken from the last event carrying it.
+    A rung or branch step's trace holds a region for that rung or branch, then
+    one for each of its direct branches, in order; so does each step of an
+    instruction on it.  A branch reads its conditions when the scan reaches
+    it, so its region is final only from then on: a later event has it.
+
+    Regions are matched by their place in the rung's tree, not by their source
+    span, which two branches built by one helper share.  A powered rung or
+    branch emits a step for each of its branches in order (an unpowered one
+    for none), so the k-th branch step under it is its k-th branch.  Nested
+    branches, which only their parent's own step carries, are kept too.
+    Steps of a called subroutine or a loop body are not this rung's and are
+    skipped.
     """
     first = events[0]
     if first.trace is None or len(events) == 1:
         return first
-    latest: dict[tuple[str, SourceSpan], TraceRegion] = {
-        (region.kind, region.source): region for region in first.trace.regions
-    }
-    for event in events[1:]:
-        if event.trace is None:
+    base_depth = first.depth
+    settled: dict[tuple[int, ...], TraceRegion] = {}
+    # Tree path of the rung or branch at each relative depth; None inside a
+    # loop body, whose steps are not this rung's.
+    path_at: dict[int, tuple[int, ...] | None] = {}
+    branches_seen: dict[tuple[int, ...], int] = {}
+    for event in events:
+        if event.trace is None or event.call_stack != first.call_stack:
             continue
-        for region in event.trace.regions:
-            key = (region.kind, region.source)
-            if key in latest:
-                latest[key] = region
-    regions = [latest[(region.kind, region.source)] for region in first.trace.regions]
-    return replace(first, trace=TraceEvent(regions=regions))
+        depth = event.depth - base_depth
+        if event.kind in ("rung", "branch"):
+            if depth == 0:
+                path: tuple[int, ...] | None = ()
+            else:
+                parent = path_at.get(depth - 1)
+                if parent is None:
+                    path = None
+                else:
+                    ordinal = branches_seen.get(parent, 0)
+                    branches_seen[parent] = ordinal + 1
+                    path = (*parent, ordinal)
+            path_at = {d: p for d, p in path_at.items() if d < depth}
+            path_at[depth] = path
+            if path is not None:
+                branches_seen.pop(path, None)
+        elif event.kind == "instruction":
+            path = path_at.get(depth)
+        else:
+            path_at = {d: p for d, p in path_at.items() if d < depth}
+            path_at[depth] = None
+            continue
+        regions = event.trace.regions
+        if path is None or not regions or regions[0].kind == "instruction":
+            continue
+        settled[path] = regions[0]
+        for ordinal, region in enumerate(regions[1:]):
+            settled[(*path, ordinal)] = region
+    if not settled:
+        return first
+    return replace(first, trace=TraceEvent(regions=[settled[path] for path in sorted(settled)]))
 
 
 class DAPAdapter:

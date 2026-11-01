@@ -140,6 +140,47 @@ def test_pivot_resolution_preserves_branch_topology() -> None:
     assert result == "A, B, Or(X, Y)"
 
 
+def test_pivot_written_below_a_branch_is_read_as_the_rows_above_left_it() -> None:
+    """A branch reads its contacts when the solve reaches it: a write of the
+    pivot by an instruction below that branch has not happened yet."""
+    A = Bool("A")
+    B = Bool("B")
+    P = Bool("P")
+    T = Bool("T")
+    with Program(strict=False) as prog:
+        with Rung(A):
+            out(P)
+        with Rung(B):
+            with branch(P):
+                out(T)
+            out(P)
+
+    forms = simplified_forms(prog)
+    assert render(forms["T"].expr) == "B, A"
+
+
+def test_branches_of_different_parents_do_not_factor() -> None:
+    """Writers at the same depth under different parent rows inherit different
+    contacts, so they OR whole paths instead of sharing one parent."""
+    G = Bool("G")
+    X = Bool("X")
+    Y = Bool("Y")
+    Q = Bool("Q")
+    R = Bool("R")
+    U = Bool("U")
+    with Program() as prog:
+        with Rung(G):
+            with branch(X):
+                with branch(Q):
+                    latch(U)
+            with branch(Y):
+                with branch(R):
+                    latch(U)
+
+    forms = simplified_forms(prog)
+    assert render(forms["U"].expr) == "Or(And(G, X, Q), And(G, Y, R))"
+
+
 def test_and_or_combined() -> None:
     """A, Or(B, C) topology via rung condition + OR branches."""
     A = Bool("A")

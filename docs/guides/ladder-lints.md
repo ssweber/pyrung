@@ -205,7 +205,7 @@ with rung(Ptr >= 1, Ptr <= 100):
     copy(Data[Ptr], Result)
 ```
 
-Conditions on a rung, its branches, and its `.continued()` rungs share the pre-instruction snapshot. Writing `Ptr` before the access invalidates a guard evaluated against that snapshot. An indirect read inside a condition can only use earlier short-circuit AND terms as guards. Declared or inferred bounds alone do not make a defensive range guard redundant.
+Each instruction reads its conditions when the scan reaches it. A guard covers the access only if nothing writes `Ptr` between the guard's read and the access: a write by an earlier instruction in the branch, or above the branch in its rung, invalidates a guard read before it. An indirect read inside a condition can only use earlier short-circuit AND terms as guards. Declared or inferred bounds alone do not make a defensive range guard redundant.
 
 ### Calls and arithmetic
 

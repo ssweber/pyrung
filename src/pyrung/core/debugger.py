@@ -167,25 +167,10 @@ class PLCDebugger:
                 instruction_kind=None,
             )
 
-        # A synthesis bracket (``Rung._rows_read_at_entry``) solves every
-        # direct branch here, before any row writes.
-        solved_at_entry = (
-            {
-                id(item): self._solve_branch(execution, item)
-                for item in rung._execution_items
-                if isinstance(item, RungClass)
-            }
-            if rung._rows_read_at_entry
-            else None
-        )
         try:
             for item in rung._execution_items:
                 if isinstance(item, RungClass):
-                    branch_enabled, branch_trace, branch_view = (
-                        self._solve_branch(execution, item)
-                        if solved_at_entry is None
-                        else solved_at_entry[id(item)]
-                    )
+                    branch_enabled, branch_trace, branch_view = self._solve_branch(execution, item)
                     branch_trace_map[id(item)] = branch_trace
                     child_execution = execution.with_overrides(
                         kind="branch",

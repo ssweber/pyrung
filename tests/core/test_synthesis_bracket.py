@@ -9,8 +9,10 @@ the harness, proving the bracket itself carries the semantics.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pyrung import Bool, Int, Program, Rung, copy
-from pyrung.core.condition import BitCondition
+from pyrung.core.condition import AllCondition, BitCondition, NormallyClosedCondition
 from pyrung.core.runner import PLC
 from pyrung.core.synthesis import (
     Synthesis,
@@ -80,10 +82,11 @@ def test_empty_synthesis_is_inert() -> None:
 
 
 def test_conditional_hold_branch_oscillates() -> None:
-    # A two-rule liveness hold as ONE multi-branch rung: each branch's guard reads
-    # the rung-entry snapshot, so the polarities stay mutually exclusive and the
-    # tag oscillates each scan.  If the branches read mid-rung writes instead, the
-    # second would see the first's flip and cancel it (net False every scan).
+    # A two-rule liveness hold as ONE rung: both guards mean the state the
+    # bracket starts from, so the polarities stay mutually exclusive and the tag
+    # oscillates each scan.  The bracket folds them into one out(W) (two
+    # writers of W in one rung would cancel); toggle() would not do here,
+    # since it flips on a rising edge, not every scan.
     from pyrung.core.condition import CompareNe
 
     W = Bool("W")
@@ -168,10 +171,10 @@ def _bracket_as_program_rung() -> Program:
     return prog
 
 
-def test_bracket_branches_read_at_rung_entry_on_every_backend() -> None:
-    # A synthesis bracket solves every branch's contacts at its entry, before
-    # any row writes, unlike a user rung (solved row by row).  The interpreter,
-    # the observed executor path, the debugger and the compiled kernel agree.
+def test_bracket_rules_read_the_starting_state_on_every_backend() -> None:
+    # A synthesis bracket runs like a user rung; it is laid out so its rules
+    # still read the state it starts from.  The interpreter, the
+    # observed executor path, the debugger and the compiled kernel agree.
     from pyrung.core import CompiledPLC
     from pyrung.core.executor import _NoopExecutionObserver, execute_program
 
@@ -223,3 +226,72 @@ def test_a_user_rung_of_the_same_shape_solves_row_by_row() -> None:
         plc.step()
         seq.append(plc.current_state.tags["W"])
     assert seq == [False, False, False]
+
+
+def _backends(program_factory: Any) -> list[Any]:
+    from pyrung.core import CompiledPLC
+
+    return [PLC(program_factory()), CompiledPLC(program_factory())]
+
+
+def _bracket_program(rung: Rung) -> Program:
+    prog = Program()
+    prog.rungs.append(rung)
+    return prog
+
+
+def test_non_bool_alternation_reads_the_starting_state_on_every_backend() -> None:
+    # Two rules on one Int whose guards read it: a copy row per value would let
+    # the second row read the first's write.  The bracket solves the guards
+    # first, so Sel alternates 3, 0, 3, 0 as the rules say.
+    from pyrung.core.condition import CompareEq, CompareNe
+    from pyrung.core.synthesis import guarded_copy_rung
+
+    def factory() -> Program:
+        sel = Int("Sel")
+        return _bracket_program(
+            guarded_copy_rung([(sel, 3, CompareNe(sel, 3)), (sel, 0, CompareEq(sel, 3))])
+        )
+
+    for plc in _backends(factory):
+        seq = []
+        for _ in range(4):
+            plc.step()
+            seq.append(plc.current_state.tags["Sel"])
+        assert seq == [3, 0, 3, 0]
+
+
+def test_guarded_copy_last_active_rule_wins_from_the_starting_state() -> None:
+    # A reads B and B reads A; every guard means the state the bracket starts
+    # from, the last active rule for a destination wins, and a Bool with no
+    # active rule returns to False.
+    from pyrung.core.synthesis import guarded_copy_rung
+
+    def reference(a: bool, b: bool) -> tuple[bool, bool]:
+        new_a = False
+        if not b:
+            new_a = True
+        if a and b:
+            new_a = False
+        new_b = bool(a)
+        return new_a, new_b
+
+    def factory() -> Program:
+        a, b = Bool("A"), Bool("B")
+        return _bracket_program(
+            guarded_copy_rung(
+                [
+                    (a, True, NormallyClosedCondition(b)),
+                    (b, True, BitCondition(a)),
+                    (a, False, AllCondition(BitCondition(a), BitCondition(b))),
+                ]
+            )
+        )
+
+    for plc in _backends(factory):
+        state = (False, False)
+        for _ in range(6):
+            plc.step()
+            state = reference(*state)
+            tags = plc.current_state.tags
+            assert (tags["A"], tags["B"]) == state

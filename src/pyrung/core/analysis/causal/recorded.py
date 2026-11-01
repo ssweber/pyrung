@@ -941,7 +941,6 @@ def _walk_frame(
             continue  # recurrence: this writer is already explained on the path
         walked = True
         writer_lineage = lineage | {writer_key}
-        sp_tree = rung.sp_tree()
 
         # At-fire-time view: for a subroutine writer, the rung's contacts
         # may have flipped later the same scan (a command gate consumed
@@ -972,6 +971,7 @@ def _walk_frame(
         caller_rung_index = (
             fire_run.caller_rung if fire_run is not None and fire_run.kind == "subroutine" else None
         )
+        sp_tree = _run_sp_tree(fire_run, rung)
 
         if indirect_crossings and (rung_idx, sub_name) in indirect_crossings:
             triggers, enablers = indirect_crossings[(rung_idx, sub_name)]
@@ -1749,7 +1749,7 @@ def _executed_writers_from_pdg(
         )
         if fire_view is None:
             continue
-        sp_tree = rung.sp_tree()
+        sp_tree = _run_sp_tree(fire_run, rung)
         if sp_tree is None:
             if _replayed_writer_proves_value(rung, tag_name, to_value, fire_view):
                 writers.append((node.rung_index, rung, node.subroutine))
@@ -2047,7 +2047,7 @@ def recorded_effect(
 
 
 class _RungWriteCounterfactualView:
-    """One-tag overlay over a replayed rung-entry ConditionView."""
+    """One-tag overlay over the replayed ConditionView of one row."""
 
     __slots__ = ("_base", "_name", "_value")
 
@@ -2063,6 +2063,11 @@ class _RungWriteCounterfactualView:
 
     def get_memory(self, name: str, default: Any = None) -> Any:
         return self._base.get_memory(name, default)
+
+
+def _run_sp_tree(run: RungRun | None, rung: Rung) -> Any:
+    """*rung*'s SP tree; an observed *run*'s, whose leaves name their rows."""
+    return run.sp_tree() if run is not None else rung.sp_tree()
 
 
 def _row_view(run: RungRun | None, view: Any, condition: Condition) -> Any:
@@ -2233,7 +2238,7 @@ def _recorded_effect_from_rung_writes(
         control_sources: dict[int, Transition] = {}
         enablers_by_run: dict[int, tuple[EnablingCondition, ...]] = {}
         for run in projection.runs:
-            sp_tree = run.rung.sp_tree()
+            sp_tree = run.sp_tree()
             attributed_names: dict[str, Any] = {}
             _eval = _row_evaluator(run, run.view)
 
@@ -2266,7 +2271,7 @@ def _recorded_effect_from_rung_writes(
             cached = control_sources.get(id(run))
             if cached is not None:
                 return cached
-            sp_tree = run.rung.sp_tree()
+            sp_tree = run.sp_tree()
             if sp_tree is not None:
                 condition_tags: list[str] = []
                 for leaf in _collect_sp_leaves(sp_tree):

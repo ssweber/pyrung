@@ -228,7 +228,7 @@ def _completion_branch_error(
     if controls is None:
         return "advance owner does not declare exact completion controls"
 
-    # Completion controls use the rung-entry ConditionView. Build that factual
+    # Completion controls read the view the owner's box started from. Build that factual
     # value surface from exact direct reads before the selected write, keeping
     # it separate from ``observed_operands`` where Acc is post-advance.
     entry_values: dict[str, Any] = {}

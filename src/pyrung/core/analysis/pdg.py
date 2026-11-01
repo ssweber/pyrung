@@ -1433,19 +1433,11 @@ def _build_access_sequence(
                     )
                 )
 
-        # A synthesis bracket solves every direct branch's contacts at its
-        # entry, before any row writes (``Rung._rows_read_at_entry``).
-        at_entry = rung._rows_read_at_entry
-        if at_entry:
-            for item in rung._execution_items:
-                if isinstance(item, RungClass):
-                    emit_branch_conditions(item)
         for item in rung._execution_items:
             if isinstance(item, RungClass):
                 # A branch reads its own contacts when the solve reaches it,
                 # after the rows above it have run (the live row solve).
-                if not at_entry:
-                    emit_branch_conditions(item)
+                emit_branch_conditions(item)
                 walk_execution(item)
                 continue
             walk_instruction(item, node_index)

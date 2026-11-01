@@ -1051,11 +1051,29 @@ def expectation_from_selected_path(
         if consumer_ready and consumer_rung is not None:
             consumer_state = dict(selected_state)
             consumer_state[producer.tag] = producer.value
+            # A consumer branch of the producer's own rung keeps the value
+            # its inherited contacts were first solved with, before the
+            # producer wrote; only its own contacts see the write.  A
+            # consumer in a later rung sees the write in every contact.
+            same_rung = (
+                consumer_node is not None
+                and consumer_node.branch_path
+                and consumer_node.rung_index == producer_node.rung_index
+                and consumer_node.subroutine == producer_node.subroutine
+            )
+            local_view = cast("ConditionView", _SnapshotView(consumer_state, {}))
+            inherited_view = (
+                cast("ConditionView", _SnapshotView(selected_state, {}))
+                if same_rung
+                else local_view
+            )
+            local_start = getattr(consumer_rung, "_branch_condition_start", 0)
             try:
-                consumer_ready = bool(
-                    consumer_rung._evaluate_conditions(
-                        cast("ConditionView", _SnapshotView(consumer_state, {}))
+                consumer_ready = all(
+                    bool(
+                        condition.evaluate(inherited_view if position < local_start else local_view)
                     )
+                    for position, condition in enumerate(consumer_rung._conditions)
                 )
             except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
                 # The retained scalar shape remains the conservative fallback

@@ -1366,8 +1366,8 @@ class TestIndirectCopyWriter:
         subroutine that uses and resets it.  The firing log captures the
         final value (False, after reset), so the intermediate True is
         invisible at scan boundaries.  The fire-view fallback in the PDG
-        writer resolution re-evaluates the rise() condition at rung-entry
-        time, where the edge is still live.
+        writer resolution re-evaluates the rise() condition on the view the
+        row read, where the edge is still live.
         """
         Trigger = Bool("Trigger")
         Param = Bool("Param")
@@ -1580,6 +1580,34 @@ class TestBranchInheritedRows:
         assert inner_run.condition_view(n_cond) is inner_run.view
         assert inner_run.view.get_tag("M") is False
         assert m_cond.evaluate(inner_run.condition_view(m_cond)) is True
+
+    def test_shared_condition_object_is_read_on_each_row(self) -> None:
+        """One condition object on the trunk and on a branch is two contacts:
+        each is read on its own row, so cause() names what each one read."""
+        A = Bool("A")
+        Z = Bool("Z")
+        Y = Bool("Y")
+        Go = Bool("Go")
+        shared = Or(A, Z)
+        with Program(strict=False) as prog:
+            with Rung(Go, shared):
+                reset(A)
+                latch(Z)
+                with branch(shared):
+                    out(Y)
+        plc = PLC(prog)
+        plc.patch({"A": True})
+        plc.step()
+        plc.patch({"Go": True})
+        plc.step()
+        assert plc.current_state.tags["Y"] is True
+
+        chain = plc.cause("Y")
+        assert chain is not None
+        step = next(s for s in chain.steps if s.transition.tag_name == "Y")
+        # The trunk read A on (Z off); the branch read Z on (A reset above it).
+        assert {t.tag_name for t in step.triggers} == {"Go", "Z"}
+        assert [(e.tag_name, e.value) for e in step.enablers] == [("A", True)]
 
     def test_compacted_projection_keeps_inherited_contacts(self) -> None:
         """A compacted branch view holds only its own contacts' reads; the
