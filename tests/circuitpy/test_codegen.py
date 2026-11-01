@@ -1865,6 +1865,118 @@ class TestBoardPeripheralsAndRunStop:
             assert 4464 <= value <= 4466
             assert faults == [False, False, False]
 
+    @pytest.mark.parametrize("narrow_first", [True, False], ids=["narrow_first", "wide_first"])
+    def test_one_randint_has_one_draw_per_width_on_every_backend(self, monkeypatch, narrow_first):
+        from pyrung.core import randint
+
+        roll = randint(70000, 70002)
+        narrow, wide = Int("Narrow", default=7), Dint("Wide", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                for dest in (narrow, wide) if narrow_first else (wide, narrow):
+                    calc(roll, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (narrow, wide, *self._FAULTS), scans=3)
+        for low, high, *faults in results.values():
+            assert 4464 <= low <= 4466
+            assert 70000 <= high <= 70002
+            assert faults == [False, False, False]
+
+    @pytest.mark.parametrize(
+        "make, low, high",
+        [
+            pytest.param(lambda n: n / 2, 8, 9, id="division"),
+            pytest.param(lambda n: n**2, 256, 257, id="power"),
+            pytest.param(lambda n: sqrt(n), 4, 5, id="sqrt"),
+        ],
+    )
+    def test_a_computed_randint_bound_draws_on_every_backend(self, monkeypatch, make, low, high):
+        from pyrung.core import randint
+
+        n = Int("N", default=16)
+        dest = Int("Dest")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(make(n), make(n) + 1), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
+        for value, *faults in results.values():
+            assert low <= value <= high
+            assert faults == [False, False, False]
+
+    def test_a_real_inside_a_computed_randint_bound_draws_on_every_backend(self, monkeypatch):
+        from pyrung.core import randint
+
+        r = Real("R", default=3.5)
+        dest = Int("Dest")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(r + 0, 5), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
+        for value, *faults in results.values():
+            assert 3 <= value <= 5
+            assert faults == [False, False, False]
+
+    @pytest.mark.parametrize(
+        "bounds, low, high",
+        [((2.5, 4.5), 2, 4), ((2.5, 2.5), 2, 2)],
+        ids=["different", "equal"],
+    )
+    def test_float_literal_randint_bounds_draw_on_every_backend(
+        self, monkeypatch, bounds, low, high
+    ):
+        from pyrung.core import randint
+
+        dest = Int("Dest", default=9)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(*bounds), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
+        for value, *faults in results.values():
+            assert low <= value <= high
+            assert faults == [False, False, False]
+
+    def test_a_char_randint_bound_draws_on_every_backend(self, monkeypatch):
+        from pyrung.core import randint
+
+        lo = Char("Lo", default="3")
+        dest = Int("Dest")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(lo, 5), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
+        for value, *faults in results.values():
+            assert 3 <= value <= 5
+            assert faults == [False, False, False]
+
+    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
+    def test_a_non_finite_computed_randint_bound_on_every_backend(self, monkeypatch, operand):
+        """pyrung's choice: 0 with SC43 in a calc, 0 with no flag outside one."""
+        from pyrung.core import randint
+
+        r, setup = self._non_finite_real(operand)
+        dest = Dint("Dest", default=7)
+        copied = Dint("Copied", default=7)
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                copy(randint(0, r + 0), copied)
+            with Rung(~system.sys.first_scan):
+                calc(randint(0, r + 0) + 5, dest)
+                copy(5, after)
+
+        results = _on_every_backend(
+            prog, monkeypatch, (dest, copied, *self._FAULTS, after), scans=2
+        )
+        faults = tuple(flag.name.endswith("out_of_range") for flag in self._FAULTS)
+        assert results == {name: (0, 0, *faults, 5) for name in results}
+
     def test_randint_constants_stay_wide_into_a_dint_on_every_backend(self, monkeypatch):
         from pyrung.core import randint
 

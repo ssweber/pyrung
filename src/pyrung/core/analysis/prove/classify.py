@@ -3216,10 +3216,16 @@ def _build_infeasible_hints(
         if is_randint_tag(name):
             site = randint_sites((name,))
             spelled = repr(site[0]) if site else "randint()"
-            hints.append(
-                f"  {name}: draw of {spelled} with tag bounds; give it literal bounds"
-                f", or declare min=/max= on the bound tags and narrow scope="
-            )
+            if site and site[0].equal_bounds:
+                hints.append(
+                    f"  {name}: {spelled} has equal constants, a math error with no draw"
+                    f" to explore; give it two different bounds"
+                )
+            else:
+                hints.append(
+                    f"  {name}: draw of {spelled} with tag bounds; give it literal bounds"
+                    f", or declare min=/max= on the bound tags and narrow scope="
+                )
         elif name in SYSTEM_TAGS_BY_NAME:
             hints.append(
                 f"  {name}: system tag explored as a free input with no finite range"
