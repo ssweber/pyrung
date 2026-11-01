@@ -184,12 +184,16 @@ class _ConditionRow:
     cells: list[str]
     cursor: int
     accepts_terms: bool = True
+    # The cell left of the cursor is an Or merge's bare ``T``; a contact placed next
+    # shares that cell as ``T:contact``.
+    merge_open: bool = False
 
     def clone(self) -> _ConditionRow:
         return _ConditionRow(
             cells=self.cells.copy(),
             cursor=self.cursor,
             accepts_terms=self.accepts_terms,
+            merge_open=self.merge_open,
         )
 
 

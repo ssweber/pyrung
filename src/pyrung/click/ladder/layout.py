@@ -572,6 +572,11 @@ class _LayoutMixin:
         for row in rows:
             if not row.accepts_terms:
                 continue
+            if row.merge_open:
+                # The contact shares the cell of the merge's vertical.
+                row.cells[row.cursor - 1] = f"T:{token}"
+                row.merge_open = False
+                continue
             if row.cursor >= _CONDITION_COLS:
                 self._raise_issue(
                     path=path,
@@ -604,6 +609,10 @@ class _LayoutMixin:
                 frozen_rows.append(row.clone())
                 continue
 
+            # A contact that opens its own Or keeps the previous merge's bare T;
+            # a one-way Or is just a contact.
+            if len(condition.conditions) > 1:
+                row.merge_open = False
             start_cursor = row.cursor
             branch_rows: list[_ConditionRow] = []
             for branch_condition in condition.conditions:
@@ -657,6 +666,7 @@ class _LayoutMixin:
 
                 branch_row.cursor = merge_col + 1
                 branch_row.accepts_terms = index == 0
+                branch_row.merge_open = index == 0
 
             active_rows.extend(branch_rows)
 

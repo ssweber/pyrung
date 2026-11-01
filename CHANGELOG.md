@@ -72,6 +72,7 @@
 
 ### Fixes
 
+- CLICK export draws a plain contact right after an `Or` merge on the merge cell (`T:X003`) instead of a bare `T` and then the contact, which saves a column.
 - The debugger no longer lists the tags pyrung adds itself (a synthesis bracket's `__frz{n}__` bits, a harness coupling's or pulse's `__cpl_...__` and `__pls_...__` timers) in tag values, the Variables Tags scope, scan-frame changes or `pyrungTagChanges`. User tags that only look like them, such as `__spare__1`, are still shown.
 - In the debugger, the trace shown during Continue keeps each branch's own state when two branches are built by one helper (they used to share one), and decorates nested branches, at any depth, too.
 - In compiled replay and generated CircuitPython, a box placed directly in a `forloop()` body (not inside a body rung) reads its `.reset()`/`.jump()`/... legs as its row starts, before it writes, as the simulator does: a drum's jump leg no longer reads the step the drum has just corrected.

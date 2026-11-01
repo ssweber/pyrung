@@ -17,6 +17,7 @@ from pyrung.click import (
     LadderExportError,
     ModbusTcpTarget,
     TagMap,
+    ladder_to_pyrung,
     pyrung_to_ladder,
     receive,
     send,
@@ -65,7 +66,7 @@ from pyrung.core.program import (
     unpack_to_bits,
     unpack_to_words,
 )
-from tests.click.helpers import build_program, normalize_csv
+from tests.click.helpers import build_program, exec_with_source, normalize_csv
 
 Counter3 = Counter.clone("Counter3")
 Timer2 = Timer.clone("Timer2")
@@ -221,9 +222,175 @@ def test_or_expansion_with_trailing_and_golden():
                 out(Y1)
         """,
         """
-        R,X001,T,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        R,X001,T:C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
         ,X002,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
         """,
+    )
+
+
+def _rows(*rows: str) -> list[tuple[str, ...]]:
+    """Rows from their leading cells: ``out(...)`` is reached by wires, others stop."""
+    expanded = []
+    for row in rows:
+        *cells, last = row.split(",")
+        if last.startswith("out("):
+            cells.extend(["-"] * (32 - len(cells)))
+            expanded.append((*cells, last))
+        else:
+            cells.append(last)
+            expanded.append((*cells, *[""] * (33 - len(cells))))
+    return expanded
+
+
+def _assert_or_merge(source: str, expected: list[tuple[str, ...]]) -> None:
+    """The rows export as drawn, and read back to a program that exports them again."""
+    logic, mapping = build_program(source)
+    bundle = pyrung_to_ladder(logic, mapping)
+    assert list(bundle.main_rows[1:-1]) == expected
+    namespace: dict[str, object] = {}
+    exec_with_source(ladder_to_pyrung(bundle), namespace)
+    again = pyrung_to_ladder(namespace["logic"], namespace["mapping"])
+    assert again.main_rows == bundle.main_rows
+
+
+@pytest.mark.parametrize(
+    ("conditions", "rows"),
+    [
+        pytest.param(
+            "X1, Or(X2, X3), X4",
+            ["R,X001,T:X002,T:X004,out(Y001)", ",,X003,"],
+            id="bit-after-mid-rung-or",
+        ),
+        pytest.param(
+            "Or(X1, X2), ~X3", ["R,X001,T:~X003,out(Y001)", ",X002,"], id="normally-closed"
+        ),
+        pytest.param(
+            "Or(X1, X2), rise(X3)", ["R,X001,T:rise(X003),out(Y001)", ",X002,"], id="rise"
+        ),
+        pytest.param(
+            "Or(X1, X2), fall(X3)", ["R,X001,T:fall(X003),out(Y001)", ",X002,"], id="fall"
+        ),
+        pytest.param(
+            "Or(X1, X2), DS1 >= 4", ["R,X001,T:DS1>=4,out(Y001)", ",X002,"], id="comparison"
+        ),
+        pytest.param(
+            "Or(X1, X2), And(X3, X4)",
+            ["R,X001,T:X003,X004,out(Y001)", ",X002,"],
+            id="and-group",
+        ),
+        pytest.param(
+            "Or(X1, X2), Or(X3), X4",
+            ["R,X001,T:X003,X004,out(Y001)", ",X002,"],
+            id="one-way-or-is-a-contact",
+        ),
+        pytest.param(
+            "Or(And(X1, X2), X3), X4",
+            ["R,X001,X002,T:X004,out(Y001)", ",X003,-,"],
+            id="unequal-branches",
+        ),
+        pytest.param(
+            "Or(X1, X2, X3), X4",
+            ["R,X001,T:X004,out(Y001)", ",X002,|,", ",X003,"],
+            id="three-way",
+        ),
+        pytest.param(
+            "X1, Or(X2, X3, X4), X5",
+            ["R,X001,T:X002,T:X005,out(Y001)", ",,T:X003,|,", ",,X004,"],
+            id="three-way-mid-rung",
+        ),
+        pytest.param(
+            "Or(X1, X2), Or(X3, X4), X5",
+            ["R,X001,T,T:X003,T:X005,out(Y001)", ",X002,,X004,"],
+            id="only-the-last-of-series-ors",
+        ),
+        pytest.param(
+            "Or(X1, X2), X3, Or(X4, X5)",
+            ["R,X001,T:X003,T:X004,T,out(Y001)", ",X002,,X005,"],
+            id="contact-between-ors",
+        ),
+    ],
+)
+def test_contact_after_or_merge_shares_the_merge_cell(conditions: str, rows: list[str]):
+    _assert_or_merge(
+        f"""
+        with Program() as p:
+            with Rung({conditions}):
+                out(Y1)
+        """,
+        _rows(*rows),
+    )
+
+
+@pytest.mark.parametrize(
+    ("conditions", "rows"),
+    [
+        pytest.param(
+            "X1, Or(X2, X3)", ["R,X001,T:X002,T,out(Y001)", ",,X003,"], id="merge-ends-the-rung"
+        ),
+        pytest.param(
+            "Or(X1, X2), Or(X3, X4)",
+            ["R,X001,T,T:X003,T,out(Y001)", ",X002,,X004,"],
+            id="next-contact-opens-its-own-or",
+        ),
+    ],
+)
+def test_or_merge_keeps_its_bare_t(conditions: str, rows: list[str]):
+    _assert_or_merge(
+        f"""
+        with Program() as p:
+            with Rung({conditions}):
+                out(Y1)
+        """,
+        _rows(*rows),
+    )
+
+
+def test_or_merge_keeps_its_bare_t_before_a_branch_split():
+    # or_topology.csv, CLICK's drawing: the split is a marker of its own.
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(Or(X1, X2)):
+                out(Y1)
+                with branch(C1):
+                    out(Y2)
+        """,
+        """
+        R,X001,T,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,X002,,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        """,
+    )
+
+
+def test_contact_merged_with_or_then_split_keeps_the_split_marker():
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(Or(X1, X2), X3):
+                out(Y1)
+                out(Y2)
+        """,
+        """
+        R,X001,T:X003,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,X002,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        """,
+    )
+
+
+def test_merged_contact_reads_back_as_the_or_it_was_written_as():
+    logic, mapping = build_program(
+        """
+        with Program() as p:
+            with Rung(DS1 != 0, Or(DS2 == 2, DS2 >= 4), DS2 <= 6):
+                out(C1)
+        """
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+    # Conf_Drum's rung, as CLICK has it saved.
+    assert bundle.main_rows[1][:5] == ("R", "DS1!=0", "T:DS2==2", "T:DS2<=6", "-")
+    assert bundle.main_rows[2][:4] == ("", "", "DS2>=4", "")
+    assert "Rung(DS1 != 0, Or(DS2 == 2, DS2 >= 4), DS2 <= 6)" in ladder_to_pyrung(bundle).replace(
+        "with rung(", "Rung("
     )
 
 
@@ -308,7 +475,7 @@ def test_branch_local_or_with_series_suffix_stays_mechanical():
         """,
         """
         R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
-        ,,T:X002,T,X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,T:X002,T:X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
         ,,X003,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
         """,
     )
@@ -326,7 +493,7 @@ def test_branch_local_or_with_series_suffix_pushes_post_branch_siblings_down():
         """,
         """
         R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
-        ,,T:X002,T,X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,T:X002,T:X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
         ,,T:X003,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
         ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
         """,
@@ -434,7 +601,7 @@ def test_vertical_wire_stack_for_three_or_branches():
                 out(Y1)
         """,
         """
-        R,X001,T,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        R,X001,T:C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
         ,X002,|
         ,X003
         """,
