@@ -96,6 +96,9 @@ class RungTraceEvent:
     enabled_state: EnabledState | None
     instruction_kind: str | None
     trace: TraceEvent | None
+    #: Place in the top-level rung's tree (``()`` for the rung, ``(k,)`` for its
+    #: k-th branch); ``None`` in a called subroutine or a loop body.
+    branch_path: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)

@@ -2385,3 +2385,51 @@ def test_execution_and_recording_retain_only_detached_effect_observations() -> N
                 _walk(getattr(value, declared.name))
 
     _walk(payload["effect_observations"])
+
+
+def test_same_rung_consumer_sees_a_write_only_in_contacts_read_after_it() -> None:
+    """A branch before the producer read its contacts before the write; a
+    branch after it reads the write.  Stepping agrees."""
+    from pyrung.core import Rung, branch
+    from pyrung.core.analysis.pilot.effects import (
+        _contacts_read_after_write,
+        expectation_from_selected_path,
+    )
+
+    A, B, Q, T, U = (Bool(name) for name in ("A", "B", "Q", "T", "U"))
+    with Program(strict=False) as prog:
+        with Rung(A):
+            with branch(Q):
+                out(T)
+            with branch(B):
+                out(Q)
+            with branch(Q):
+                out(U)
+    pdg = build_program_graph(prog)
+    producer = next(i for i, node in enumerate(pdg.rung_nodes) if "Q" in node.writes)
+    snapshot = {"A": True, "B": True, "Q": False, "T": False, "U": False}
+
+    def due(tag: str) -> bool:
+        consumer = next(i for i, node in enumerate(pdg.rung_nodes) if tag in node.writes)
+        path = (
+            EffectPathStep(consumer, tag, True),
+            EffectPathStep(producer, "Q", True, (("A", True), ("B", True))),
+        )
+        expectation = expectation_from_selected_path(
+            path, pdg, prog, boundary=None, snapshot=snapshot
+        )
+        return expectation is not None
+
+    assert not due("T")
+    assert due("U")
+    plc = PLC(prog)
+    plc.patch({"A": True, "B": True})
+    plc.step()
+    assert plc.current_state.tags["T"] is False
+    assert plc.current_state.tags["U"] is True
+
+    # The rung's own contacts are read before any of its writes.
+    top = prog.rungs[0]
+    assert _contacts_read_after_write(top, top._branches[1], (), "Q") == [False]
+    assert _contacts_read_after_write(top, top._branches[1], (2,), "Q") == [False, True]
+    assert _contacts_read_after_write(top, top._branches[1], (0,), "Q") == [False, False]

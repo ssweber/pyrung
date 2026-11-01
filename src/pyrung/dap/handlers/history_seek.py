@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pyrung.dap.handlers import monitor_data_breakpoints
+from pyrung.dap.internal_tags import visible_tag_names
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
@@ -87,7 +88,7 @@ def on_pyrung_seek(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         except KeyError as exc:
             raise adapter.DAPAdapterError(f"Scan {raw_scan_id} is not retained in history") from exc
 
-        tags = {name: adapter._format_value(value) for name, value in state.tags.items()}
+        tags = adapter._tag_values_body(state.tags)
 
     return {
         "scanId": state.scan_id,
@@ -156,7 +157,7 @@ def on_pyrung_tag_changes(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         current_state = cached_states[scan_id]
 
         changes: dict[str, list[str]] = {}
-        for tag_name in tags:
+        for tag_name in visible_tag_names(tags):
             old_value = previous_state.tags.get(tag_name)
             new_value = current_state.tags.get(tag_name)
             if old_value == new_value:

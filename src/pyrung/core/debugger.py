@@ -42,6 +42,10 @@ class DebugExecutionState:
     parent_enabled: bool
     enabled_state: EnabledState
     condition_view: Any = None
+    #: Place in the top-level rung's tree: ``()`` for the rung, ``(k,)`` for
+    #: its k-th branch, and so on; ``None`` in a called subroutine or a loop
+    #: body, which are not part of that tree.
+    branch_path: tuple[int, ...] | None = ()
 
     def with_overrides(self, **changes: Any) -> DebugExecutionState:
         """Return a copied state with selected fields replaced."""
@@ -168,10 +172,12 @@ class PLCDebugger:
             )
 
         try:
+            ordinal = 0
             for item in rung._execution_items:
                 if isinstance(item, RungClass):
                     branch_enabled, branch_trace, branch_view = self._solve_branch(execution, item)
                     branch_trace_map[id(item)] = branch_trace
+                    parent_path = execution.branch_path
                     child_execution = execution.with_overrides(
                         kind="branch",
                         depth=execution.depth + 1,
@@ -179,7 +185,9 @@ class PLCDebugger:
                         parent_enabled=execution.enabled,
                         enabled_state=branch_trace.enabled_state,
                         condition_view=branch_view,
+                        branch_path=None if parent_path is None else (*parent_path, ordinal),
                     )
+                    ordinal += 1
                     yield from self._iter_rung_steps(
                         self._make_rung_state(
                             execution=child_execution,
@@ -651,4 +659,5 @@ class PLCDebugger:
             enabled_state=execution.enabled_state,
             trace=trace,
             instruction_kind=instruction_kind,
+            branch_path=execution.branch_path,
         )

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from pyrung import Bool, Int, Program, Rung, copy
 from pyrung.core.condition import AllCondition, BitCondition, NormallyClosedCondition
 from pyrung.core.runner import PLC
@@ -295,3 +297,15 @@ def test_guarded_copy_last_active_rule_wins_from_the_starting_state() -> None:
             state = reference(*state)
             tags = plc.current_state.tags
             assert (tags["A"], tags["B"]) == state
+
+
+def test_guarded_copy_refuses_a_value_that_is_not_a_constant() -> None:
+    # A tag value would be read when the scan reaches its copy, after earlier
+    # writes of the bracket, so the bracket only takes constants.
+    from pyrung.core.synthesis import guarded_copy_rung
+
+    sel, src, gate = Int("Sel"), Int("Src"), Bool("Gate")
+    with pytest.raises(TypeError, match="Sel: value .* is not a constant"):
+        guarded_copy_rung([(sel, src, BitCondition(gate))])
+    with pytest.raises(TypeError, match="is not a constant"):
+        conditional_hold_rung(dest=sel, rules=[(3, gate), (src, None)])

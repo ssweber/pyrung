@@ -267,7 +267,7 @@ def conditional_hold_rung(
     like :func:`guarded_copy_rung`'s, so a liveness oscillator's "drive True
     while ``dest != True``" + "drive False while ``dest != False``" is one
     ``out(dest)`` whose condition reads ``dest`` before writing it, and
-    ``dest`` flips every scan.
+    ``dest`` flips every scan.  Values must be constants, as there.
 
     A single rule is better expressed by :func:`copy_hold_rung`; this is for the
     multi-rule (oscillating) case.
@@ -285,15 +285,20 @@ def guarded_copy_rung(
     Every guard means the state the bracket starts from, before any of its
     writes, including a guard that reads the destination it drives.
 
+    Every value must be a constant (``bool``, ``int``, ``float`` or ``str``).
+    A tag or expression value would be read when the scan reaches its
+    ``copy``, after earlier writes of the bracket, so it raises ``TypeError``.
+
     Each instruction reads its conditions when the scan reaches it, as in any
     user rung, so the rung is laid out so that no guard reads an earlier write
     of the bracket:
 
-    * Each destination has one writer.  A Boolean destination with constant
-      values is one ``out(dest)`` whose condition folds the ordered rules (a
-      ``True`` rule ORs its guard in, a ``False`` rule ANDs its complement in).
-      Any other destination has one ``copy`` per distinct value, guarded by
-      "the last active rule has this value", so its copies are exclusive.
+    * Each destination has one writer.  A Boolean destination whose values
+      are all ``True``/``False`` (or ``1``/``0``) is one ``out(dest)`` whose
+      condition folds the ordered rules (a ``True`` rule ORs its guard in, a
+      ``False`` rule ANDs its complement in).  Any other destination has one
+      ``copy`` per distinct value, guarded by "the last active rule has this
+      value", so its copies are exclusive.
     * A destination whose guards read another destination sits above that
       destination's writer.
     * A guard that would still read an earlier write (a cycle between
@@ -391,18 +396,16 @@ def _condition_complement(condition: Any) -> Any | None:
     return None
 
 
-def _static_reads(value: Any) -> set[str]:
-    if value is _ALWAYS or value is _NEVER or isinstance(value, (bool, int, float, str)):
+def _static_reads(condition: Any) -> set[str]:
+    if condition is _ALWAYS or condition is _NEVER:
         return set()
     from pyrung.core.analysis.pdg import _extract_tag_names
 
-    return _extract_tag_names(value, {})
+    return _extract_tag_names(condition, {})
 
 
 def _value_key(value: Any) -> Any:
-    if isinstance(value, (bool, int, float, str)):
-        return ("const", value)
-    return ("id", id(value))
+    return ("const", value)
 
 
 def _is_bool_constant(value: Any) -> bool:
@@ -436,8 +439,8 @@ class _DestRules:
 
     def reads(self) -> set[str]:
         found: set[str] = set()
-        for _index, value, guard in self.rules:
-            found |= _static_reads(guard) | _static_reads(value)
+        for _index, _value, guard in self.rules:
+            found |= _static_reads(guard)
         return found
 
 
@@ -453,6 +456,12 @@ def _guarded_rows(rules: list[tuple[Tag, Any, Any]], *, keep: bool) -> Rung:
 
     groups: dict[str, _DestRules] = {}
     for index, (dest, value, guard) in enumerate(rules):
+        if not isinstance(value, (bool, int, float, str)):
+            raise TypeError(
+                f"synthesis bracket rule {index} for {dest.name}: value {value!r} is not "
+                "a constant (bool, int, float or str); a tag or expression value would "
+                "be read after earlier writes of the bracket"
+            )
         group = groups.setdefault(dest.name, _DestRules(dest, []))
         group.rules.append((index, value, _ALWAYS if guard is None else _as_condition(guard)))
     reads = {name: group.reads() for name, group in groups.items()}

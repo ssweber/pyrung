@@ -159,6 +159,9 @@ class ScanStep:
     enabled_state: Literal["enabled", "disabled_local", "disabled_parent"] | None
     trace: TraceEvent | None
     instruction_kind: str | None
+    #: Place in the top-level rung's tree (``()`` for the rung, ``(k,)`` for its
+    #: k-th branch); ``None`` in a called subroutine or a loop body.
+    branch_path: tuple[int, ...] | None = None
 
 
 @dataclass
@@ -4618,6 +4621,7 @@ class PLC:
             enabled_state=step.enabled_state,
             instruction_kind=step.instruction_kind,
             trace=step.trace,
+            branch_path=step.branch_path,
         )
 
     def _evaluate_condition_value(
