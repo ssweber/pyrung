@@ -12,6 +12,7 @@ from pyrung import (
     Counter,
     Dint,
     Int,
+    Or,
     Program,
     Rung,
     Timer,
@@ -3404,6 +3405,222 @@ class TestTimedDrumCorrectedEveryScan:
         assert contested("none") == frozenset()
         for writer in ("above", "below", "same rung"):
             assert contested(writer) == {"DAcc"}
+
+
+class TestTimedDrumReadsAnotherStep:
+    """Writers above and below a timed drum can have it read one good step and the
+    boundary show another.  Its one accumulator write and the steady boundaries
+    say nothing, and a landing would time to the boundary step's preset."""
+
+    @staticmethod
+    def _drum(kind: str, presets: tuple[int, ...]) -> Any:
+        from pyrung import time_drum, time_event_drum
+
+        args: dict[str, Any] = {
+            "outputs": [Bool("O1"), Bool("O2")],
+            "pattern": [[1, 0], [0, 1], [1, 1]],
+            "presets": list(presets),
+            "unit": "ms",
+            "current_step": Int("Step"),
+            "accumulator": Dint("DAcc"),
+            "completion_flag": Bool("DDone"),
+        }
+        if kind == "time":
+            return time_drum(**args)
+        return time_event_drum(events=[None] * len(presets), **args)
+
+    @classmethod
+    def _build(
+        cls, kind: str, above: Any, below: Any, presets: tuple[int, ...], reader: bool = True
+    ) -> Callable[[], Program]:
+        def build() -> Program:
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Timer.clone("Long"), 60_000)
+                if above is not None:
+                    with Rung(Bool("Stage")):
+                        copy(above, Int("Step"))
+                with Rung(Bool("En")):
+                    cls._drum(kind, presets).reset(Bool("R"))
+                if below is not None:
+                    with Rung(Bool("Stage")):
+                        copy(below, Int("Step"))
+                if reader:  # What the drum did, each scan it holds.
+                    with Rung(Bool("O2")):
+                        calc(Int("N") + 1, Int("N"))
+            return prog
+
+        return build
+
+    @staticmethod
+    def _assert_replay_matches(folded: PLC, stepped: PLC) -> None:
+        for target in (2, 3, 19, 20, 21, 22, 150, folded.state.scan_id):
+            want = _full_state(stepped.replay_to(target))
+            assert _full_state(folded._replay_seek(target)) == want
+            assert _full_state(folded.replay_to(target)) == want
+
+    @pytest.mark.parametrize("kind", ["time", "time_event"])
+    @pytest.mark.parametrize(
+        "above, below, presets",
+        [
+            # It reads the short step: the boundary's preset would time long past it.
+            (1, 3, (200, 5000, 5000)),
+            (3, 1, (5000, 5000, 200)),
+            # It reads the long step: the boundary's preset would be up far too soon.
+            (3, 1, (200, 5000, 5000)),
+            (1, 3, (5000, 5000, 200)),
+        ],
+    )
+    def test_read_step_differs_from_boundary_step(
+        self, kind: str, above: int, below: int, presets: tuple[int, ...]
+    ) -> None:
+        build = self._build(kind, above, below, presets)
+        patch = {"En": True, "Stage": True}
+        folded, stepped = _folded_and_stepped(build, _scans(300), patch=patch)
+        assert _full_state(folded) == _full_state(stepped)
+        self._assert_replay_matches(folded, stepped)
+
+        def until_moved(plc: PLC, fold: bool) -> None:
+            plc.run_until(Or(Bool("O2"), Bool("DDone")), max_cycles=600, fold=fold)
+
+        _assert_fold_is_exact(build, until_moved, patch=patch)
+
+    @pytest.mark.parametrize("kind", ["time", "time_event"])
+    @pytest.mark.parametrize(
+        "above, below", [(2, None), (None, 2), (2, 2)], ids=["above", "below", "both"]
+    )
+    def test_one_good_step_held_folds_live_and_in_replay(
+        self, kind: str, above: int | None, below: int | None
+    ) -> None:
+        build = self._build(kind, above, below, (5000, 5000, 5000), reader=False)
+        kernel_scans: dict[bool, int] = {}
+
+        def run(plc: PLC, fold: bool) -> None:
+            counter = _count_kernel_scans(plc)
+            _run_scans(plc, 400, fold=fold)
+            kernel_scans[fold] = counter["n"]
+
+        folded, stepped = _folded_and_stepped(build, run, patch={"En": True, "Stage": True})
+        assert _full_state(folded) == _full_state(stepped)
+        assert folded.state.tags["Step"] == 2
+        assert folded.state.tags["DAcc"] == stepped.state.tags["DAcc"] > 0
+        assert kernel_scans[True] < kernel_scans[False]
+        self._assert_replay_matches(folded, stepped)
+        folded._replay_seek(folded.state.scan_id)
+        assert folded._last_replay_seek_stats["ordinary_folded_scans"] > 0
+
+    @pytest.mark.parametrize("kind", ["time", "time_event"])
+    @pytest.mark.parametrize("presets", [(5, 5000, 5000), (200, 5000, 5000), (5000, 5, 200)])
+    @pytest.mark.parametrize(
+        "above, below", [(1, None), (None, 1), (1, 1)], ids=["above", "below", "both"]
+    )
+    def test_one_good_step_held_through_its_moves(
+        self, kind: str, presets: tuple[int, ...], above: int | None, below: int | None
+    ) -> None:
+        """The drum finishes the step the writer holds, including within one scan."""
+
+        def run(plc: PLC, fold: bool) -> None:
+            _run_scans(plc, 80, fold=fold)
+            plc.patch({"Stage": False})
+            _run_scans(plc, 80, fold=fold)
+            plc.patch({"Stage": True})
+            _run_scans(plc, 200, fold=fold)
+
+        folded, stepped = _folded_and_stepped(
+            self._build(kind, above, below, presets), run, patch={"En": True, "Stage": True}
+        )
+        assert _full_state(folded) == _full_state(stepped)
+        for target in (40, 81, 82, 100, 161, 162, 163, 300, folded.state.scan_id):
+            assert _full_state(folded._replay_seek(target)) == _full_state(
+                stepped.replay_to(target)
+            )
+
+    @pytest.mark.parametrize(
+        "above, below, contested",
+        [
+            (None, None, False),
+            (1, None, False),
+            (None, 3, False),
+            (2, 2, False),
+            (1, 3, True),  # Two good steps.
+            (0, None, True),  # A bad step.
+            (4, None, True),  # Past the last step.
+            (True, None, True),  # Not a step number.
+            (Int("Staged"), None, True),  # Unknown.
+        ],
+    )
+    def test_replay_needs_one_good_literal_step(
+        self, above: Any, below: Any, contested: bool
+    ) -> None:
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.fold import _build_fold_context
+
+        program = self._build("time", above, below, (500, 500, 500))()
+        plc = PLC(program, dt=0.010)
+        found = _build_fold_context(plc, build_program_graph(program), program).contested_timers
+        assert found == ({"DAcc"} if contested else frozenset())
+
+    def test_replay_counts_any_other_way_to_write_the_step(self) -> None:
+        from pyrung import Block, TagType, time_drum
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.fold import _build_fold_context
+
+        bank = Block("Bank", TagType.INT, 1, 4)
+
+        def contested(write: Callable[[], Any], step: Any = None) -> frozenset[str]:
+            step = Int("Step") if step is None else step
+            with Program(strict=False) as program:
+                with Rung(Bool("Stage")):
+                    write()
+                with Rung(Bool("En")):
+                    time_drum(
+                        outputs=[Bool("O1")],
+                        pattern=[[1], [0]],
+                        presets=[500, 500],
+                        unit="ms",
+                        current_step=step,
+                        accumulator=Dint("DAcc"),
+                        completion_flag=Bool("DDone"),
+                    ).reset(Bool("R"))
+            plc = PLC(program, dt=0.010)
+            return _build_fold_context(plc, build_program_graph(program), program).contested_timers
+
+        assert contested(lambda: calc(Int("Step") * 0 + 1, Int("Step"))) == {"DAcc"}
+        assert contested(lambda: copy(1, bank[Int("I")]), bank[2]) == {"DAcc"}
+        assert contested(lambda: copy(1, bank[2]), bank[2]) == frozenset()
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="a tag written above and below a reader: the fold sees only its boundary value",
+    )
+    @pytest.mark.parametrize("reader", ["preset", "comparison"])
+    def test_tag_written_around_a_timer_reader(self, reader: str) -> None:
+        """The same read-mid-scan hole, with no drum in it: the fold takes a timer's
+        preset, or a threshold compared with it, from the scan-end value."""
+        limit = Int("Limit")
+        timer = Timer.clone("T")
+
+        def build() -> Program:
+            with Program(strict=False) as prog:
+                with Rung():
+                    copy(200, limit)
+                if reader == "preset":
+                    with Rung():
+                        on_delay(timer, limit)
+                    with Rung():
+                        copy(5000, limit)
+                    with Rung(timer.Done):
+                        out(Bool("Hit"))
+                else:
+                    with Rung():
+                        on_delay(timer, 60_000)
+                    with Rung(timer.Acc >= limit):
+                        latch(Bool("Hit"))
+                    with Rung():
+                        copy(5000, limit)
+            return prog
+
+        _assert_fold_is_exact(build, _until_hit(600))
 
 
 class TestDrumOneTimeScans:

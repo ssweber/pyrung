@@ -1494,13 +1494,19 @@ def _timer_contests(
     subroutine): the boundary readings stay put while the landing times the
     whole window in one step.  A time drum does the same when another
     instruction keeps its step register bad: each scan corrects the step and
-    clears the accumulator, so a drum whose step register has another writer
-    is contested too.  A live run counts each scan's writes instead (see
+    clears the accumulator.  And two writers around the drum can have it read
+    one good step and the boundary show another, so the landing would time to
+    the wrong step's preset.  So a drum whose step register has another writer
+    is contested too, unless every such writer holds one good literal step:
+    while such a drum times, what it read is the step the boundary shows.
+    A live run counts each scan's writes instead, with the drum counting a scan
+    that corrected or read an unseen step as a second write (see
     :meth:`_OrdinaryFoldStrategy.capture`); this static answer is for executors
     that cannot count them.
     """
     from pyrung.core.analysis.pdg import _extract_instruction_writes, resolve_rung
     from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
 
     registry = _ensure_registry()
     nodes = pdg.rung_nodes
@@ -1539,6 +1545,41 @@ def _timer_contests(
             return False  # the one call sits in a loop body
         return once_a_scan(caller, seen | {i})
 
+    def writers_hold_one_good_step(src: _AccSource, step: str, drum_node: int) -> bool:
+        """Whether every write of *step* but the drum's copies one good literal step."""
+        if any(ref.block.name == block_of.get(step) for ref in pdg.indirect_writes):
+            return False
+        literals: set[int] = set()
+        for node in {*pdg.writers_of.get(step, ()), drum_node}:
+            rung = resolve_rung(program, nodes[node])
+            writes = node == drum_node
+            for instr, _in_loop in walk(rung._instructions if rung is not None else (), False):
+                if type(instr) in registry and any(
+                    phase_acc.name == src.acc_name
+                    for phase_acc, _done, _preset in _instruction_phases(instr)
+                ):
+                    continue
+                dests, _target_reads, implicit = _extract_instruction_writes(instr, tags)
+                if step not in dests and step not in implicit:
+                    continue
+                writes = True
+                if (
+                    type(instr) is not CopyInstruction
+                    or type(instr.source) is not int
+                    or getattr(instr.dest, "name", None) != step
+                    or instr.convert is not None
+                ):
+                    return False
+                literals.add(instr.source)
+            if not writes:
+                return False  # A writer this walk cannot see.
+        preset = src.preset
+        return (
+            len(literals) <= 1
+            and isinstance(preset, _StepPreset)
+            and all(1 <= literal <= len(preset.values) for literal in literals)
+        )
+
     contested: set[str] = set()
     for src in sources:
         if not src.timed:
@@ -1576,25 +1617,8 @@ def _timer_contests(
                 contested.add(acc)
                 break
         step = src.step_name
-        if step is None:
-            continue
-        step_block = block_of.get(step)
-        step_writers = set(pdg.writers_of.get(step, ()))
-        step_writers |= {
-            ref.node_index for ref in pdg.indirect_writes if ref.block.name == step_block
-        }
-        if step_writers - {i}:
+        if step is not None and not writers_hold_one_good_step(src, step, i):
             contested.add(acc)
-            continue
-        for instr, _in_loop in walk(rung._instructions if rung is not None else (), False):
-            if type(instr) in registry and any(
-                phase_acc.name == acc for phase_acc, _done, _preset in _instruction_phases(instr)
-            ):
-                continue
-            dests, _target_reads, implicit = _extract_instruction_writes(instr, tags)
-            if step in dests or step in implicit:
-                contested.add(acc)
-                break
     return frozenset(contested)
 
 
@@ -4507,9 +4531,11 @@ class _OrdinaryFoldStrategy:
         boundary readings where they were while the landing scan would time the
         whole window at once.  Forces are writes around the scan too, and a
         force on a time drum's step register can keep the drum correcting it,
-        which clears the accumulator.  The window's scans run the same writers
-        as the probe: which rungs act is fixed by the plateau guard and the
-        crossings.
+        which clears the accumulator.  A time drum also counts a scan whose step
+        read is not what the scan entered with, as the boundaries then do not
+        show the preset it timed against.  The window's scans run the same
+        writers as the probe: which rungs act is fixed by the plateau guard and
+        the crossings.
         """
         ctx = self.ctx
         names = ctx.timed_acc_names

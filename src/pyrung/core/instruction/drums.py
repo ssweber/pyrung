@@ -302,18 +302,21 @@ class _DrumBaseInstruction(Instruction):
             return False
         return not self._jump_lands(jump_edge, jump_target)
 
-    @staticmethod
-    def _note_correction_clears(ctx: ScanContext, accumulator: Tag, acc_value: int) -> None:
-        """Count a time drum's correction as an accumulator write of its own.
+    def _note_scan_hidden_from_fold(
+        self, ctx: ScanContext, accumulator: Tag, step_read: int, enabled: bool, corrected: bool
+    ) -> None:
+        """Count a time drum scan the fold's boundary readings cannot repeat.
 
-        The scan that corrects a bad step times the accumulator and clears it,
-        with one write at the end.  That write leaves the fold's boundary
-        readings where they were, while a landing scan would time the whole
-        window at once and move the drum, so the fold must see a reset and a
-        timing step (see ``fold._timer_contests``).  The value is unchanged:
-        the timing still reads it.
+        A correction times the accumulator and clears it, so a landing at the
+        window's dt would move the drum.  A step read other than the one the
+        scan entered with (another rung rewrote the register above the drum, and
+        one below may restore it) times against a preset the boundaries do not
+        show.  Either way the accumulator has its one write, so count another:
+        the fold then declines (see ``fold._timer_contests``).
         """
-        ctx.set_tag(accumulator.name, acc_value)
+        step = self.current_step
+        if corrected or (enabled and step_read != ctx.entry_tag(step.name, step.default)):
+            ctx.count_acc_write(accumulator.name)
 
     def _jump_lands(self, jump_edge: bool, jump_target: int | None) -> bool:
         return jump_edge and jump_target is not None and self._step_is_valid(jump_target)
@@ -679,7 +682,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
         drum steps forward again, by its time or a jog; a jump does not end it.
         """
         condition_view = instruction_condition_view(ctx, self)
-        step = _read_step_tag_value(ctx, self.current_step)
+        step = step_read = _read_step_tag_value(ctx, self.current_step)
         step_changed = False
         reset_step_data = False
         invalid = not self._step_is_valid(step)
@@ -710,8 +713,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
                 ctx.set_tag(self.current_step.name, 1)
 
         acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
-        if reset_step_data:
-            self._note_correction_clears(ctx, self.accumulator, acc_value)
+        self._note_scan_hidden_from_fold(ctx, self.accumulator, step_read, enabled, reset_step_data)
         frac_key = f"_frac:{self.accumulator.name}"
         frac = float(ctx.get_memory(frac_key, 0.0))
 
@@ -941,7 +943,7 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
         jog) or resets; a jump does not end it.
         """
         condition_view = instruction_condition_view(ctx, self)
-        step = _read_step_tag_value(ctx, self.current_step)
+        step = step_read = _read_step_tag_value(ctx, self.current_step)
         step_changed = False
         reset_step_data = False
         invalid = not self._step_is_valid(step)
@@ -973,8 +975,7 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
                 ctx.set_tag(self.current_step.name, 1)
 
         acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
-        if reset_step_data:
-            self._note_correction_clears(ctx, self.accumulator, acc_value)
+        self._note_scan_hidden_from_fold(ctx, self.accumulator, step_read, enabled, reset_step_data)
         frac_key = f"_frac:{self.accumulator.name}"
         frac = float(ctx.get_memory(frac_key, 0.0))
 

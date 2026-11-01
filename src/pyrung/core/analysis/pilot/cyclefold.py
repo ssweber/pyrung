@@ -283,6 +283,10 @@ def _monotone_read_surface(
         # v1: only certified up-accumulators (timers / count-up) are foldable.
         if src is None or src.kind != "up" or d <= 0:
             return None
+        # A drum with other step writers may be timing to a step this state does
+        # not show (see fold._timer_contests), so its preset is not known here.
+        if src.step_name is not None and tag in fold_ctx.contested_timers:
+            return None
         cur = totals.get(tag)
         if isinstance(cur, bool) or not isinstance(cur, (int, float)):
             return None

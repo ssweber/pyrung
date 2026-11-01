@@ -493,6 +493,16 @@ class ScanContext:
             counts[name] += 1
         self._tags_pending[name] = value
 
+    def entry_tag(self, name: str, default: Any = None) -> Any:
+        """A tag's value as the scan entered, whatever this scan has written since."""
+        return self._state_tags_read.get(name, default)
+
+    def count_acc_write(self, name: str) -> None:
+        """Count a write the watched accumulator's own writes do not show (see ``_acc_writes``)."""
+        counts = self._acc_writes
+        if counts is not None and name in counts:
+            counts[name] += 1
+
     def set_tags(self, updates: dict[str, Any]) -> None:
         """Set multiple tag values (batched, committed at end of scan).
 

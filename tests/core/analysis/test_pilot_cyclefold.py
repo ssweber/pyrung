@@ -17,11 +17,13 @@ from pyrung import (
     Rung,
     Timer,
     calc,
+    copy,
     count_up,
     latch,
     on_delay,
     out,
     time_drum,
+    time_event_drum,
 )
 from pyrung.core import rise, system
 from pyrung.core.analysis.pilot.cyclefold import _Cycle, cycle_fold_until, detect_cycle
@@ -490,6 +492,49 @@ class TestCycleFoldBitEqual:
         assert folded.state.scan_id == ref.state.scan_id
         assert stats["macro_folds"] >= 1
         assert stats["kernel_scans"] < 500
+
+    @pytest.mark.parametrize("kind", ["time", "time_event"])
+    def test_drum_reading_another_step_than_the_boundary_shows(self, kind: str) -> None:
+        """Writers above and below have the drum time step 2's 500 ms while every
+        boundary shows step 3's 200 ms, which it is already past."""
+        Long = Timer.clone("Long")
+        Step = Int("DrumStep")
+        Acc = Int("DrumAcc")
+        Done = Bool("DrumDone")
+        args: dict[str, Any] = {
+            "outputs": [Bool("DrumO1"), Bool("DrumO2")],
+            "presets": [200, 500, 200],
+            "unit": "ms",
+            "pattern": [[1, 0], [0, 1], [1, 1]],
+            "current_step": Step,
+            "accumulator": Acc,
+            "completion_flag": Done,
+        }
+        with Program(strict=False) as program:
+            with Rung():
+                on_delay(Long, 3000)
+            with Rung(Long.Acc < 1500):
+                copy(2, Step)
+            with Rung():
+                if kind == "time":
+                    time_drum(**args).reset(Bool("DrumReset"))
+                else:
+                    time_event_drum(events=[None, None, None], **args).reset(Bool("DrumReset"))
+            with Rung():
+                copy(3, Step)
+
+        def done(state: Any) -> bool:
+            return state.tags.get(Done.name) is True
+
+        ref = PLC(program, dt=0.007)
+        ref.step()
+        ref.run_until(done, max_cycles=300, fold=False)
+        folded = PLC(program, dt=0.007)
+        folded.step()
+        cycle_fold_until(folded, done, budget=300, kernel_budget=False)
+        assert folded.state.scan_id == ref.state.scan_id
+        assert folded.state.tags[Acc.name] == ref.state.tags[Acc.name]
+        assert folded.state.tags[Long.Acc.name] == ref.state.tags[Long.Acc.name]
 
     def test_subtick_time_drum_uses_its_current_step_preset(self) -> None:
         Osc = Bool("DrumOsc", external=True)
