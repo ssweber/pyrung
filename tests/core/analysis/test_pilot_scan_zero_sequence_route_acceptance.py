@@ -7,6 +7,8 @@ where the status branch sees the repair on the same scan.
 
 from typing import Any
 
+import pytest
+
 from pyrung import PLC
 from tests.fixtures import pilot_scan_zero_sequence_route as fixture
 
@@ -345,6 +347,35 @@ def test_field_order_reconnect_overwrite_is_intrascan() -> None:
         fixture.SequenceStep == 10, max_scans=30, on_event=events.append
     )
     _assert_reconnect_overwritten_on_its_scan(plan, events)
+
+
+_FIELD_ORDER_LOGICS = pytest.mark.parametrize(
+    "make_logic",
+    [_field_order_reconnect_logic, lambda: fixture.logic],
+    ids=["cut", "full"],
+)
+
+
+@_FIELD_ORDER_LOGICS
+def test_field_order_reconnect_is_reachable_by_hand(make_logic: Any) -> None:
+    """A nonzero status keeps the status branch off, so the reconnect's 10 stays."""
+    runner = _retained_98(make_logic())
+    runner.patch({fixture.ServiceStatusInput.name: 1})
+    runner.step()
+    runner.patch({fixture.NetworkAvailable.name: True})
+    runner.step()
+
+    assert runner.state.tags[fixture.SequenceStep.name] == 10
+
+
+@_FIELD_ORDER_LOGICS
+@pytest.mark.xfail(
+    strict=True, raises=AssertionError, reason="the pilot never tries a nonzero ServiceStatusInput"
+)
+def test_field_order_reconnect_reaches_step_10(make_logic: Any) -> None:
+    plan = _retained_98(make_logic()).how(fixture.SequenceStep == 10, max_scans=30)
+
+    assert plan.reachable, plan.reason
 
 
 def test_field_order_route_reaches_the_terminal_step() -> None:
