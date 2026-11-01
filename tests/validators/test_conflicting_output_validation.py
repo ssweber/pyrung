@@ -493,7 +493,7 @@ class TestTimerOutConflict:
             with Rung(ButtonA):
                 on_delay(Timer2, preset=1000)
             with Rung(ButtonB):
-                out(Timer2.Done)
+                on_delay(Timer2, preset=2000)
 
         report = validate_conflicting_outputs(prog)
         assert any(f.target_name == "Timer2_Done" for f in report.findings)

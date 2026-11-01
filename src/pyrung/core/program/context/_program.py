@@ -68,6 +68,9 @@ class Program:
         if exc_type is None:
             self._assign_state_keys()
             self._validate_call_targets()
+            from pyrung.core.validation.owned_bit_coil import check_owned_bit_coils
+
+            check_owned_bit_coils(self)
 
     def _invalidate_graph_cache(self) -> None:
         self._cached_graph = None
