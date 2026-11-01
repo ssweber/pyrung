@@ -2147,10 +2147,11 @@ def _mirror_candidates(
 ) -> list[tuple[str, str, int, int, bool]]:
     """Structurally eligible affine acc views: ``(view, source, scale, offset, wraps)``.
 
-    Past the destination's range a ``calc`` stores a wrapped value (*wraps*) and
-    a ``copy`` the limit; inside it a view is a linear image of its source.  A
-    ``calc`` that stores anything but this scan's decimal result is not a view,
-    nor is a destination with no numeric range.
+    Past the destination's range a view's store wraps (*wraps*: a ``calc``, or a
+    ``copy`` into a ``Word``) or holds the limit (a ``copy`` into an ``Int`` or
+    ``Dint``); inside it a view is a linear image of its source.  A ``calc`` that
+    stores anything but this scan's decimal result is not a view, nor is a
+    destination with no numeric range.
     """
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.instruction.calc import CalcInstruction
@@ -2192,6 +2193,8 @@ def _mirror_candidates(
         dest_type = getattr(getattr(pdg.tags.get(tag), "type", None), "name", None)
         if dest_type not in ("INT", "DINT", "WORD", "REAL"):
             continue
+        if dest_type == "WORD":
+            wraps = True
         out.append((tag, matched[0], matched[1], matched[2], wraps))
     return out
 
@@ -3525,7 +3528,7 @@ def _timer_landing(
 
 
 def _mirror_past_limit(ctx: _FoldContext, state: Any) -> bool:
-    """Whether a view's source stands where its store clamps or wraps and flags.
+    """Whether a view's source stands where its store clamps or wraps.
 
     The scans there can each read differently, so only stepping is exact.
     """

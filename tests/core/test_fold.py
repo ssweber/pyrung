@@ -15,6 +15,7 @@ from pyrung import (
     Program,
     Rung,
     Timer,
+    Word,
     calc,
     copy,
     count_up,
@@ -2987,6 +2988,97 @@ class TestSelfFeedingChurnExact:
         )
         plc = PLC(build(), dt=0.010)
         assert bool(plc._ensure_fold_context().mirror_limits) is limit
+
+    @staticmethod
+    def _copy_into_a_word(step: int, reader: Callable[[Any], None]) -> Callable[[], Program]:
+        def build() -> Program:
+            Wide = Dint("Wide")
+            View = Word("View")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    calc(Wide + step, Wide)
+                with Rung():
+                    copy(Wide, View)
+                reader(View)
+                with Rung():
+                    on_delay(Tmr, 5_000)
+                with Rung(Tmr.Done):
+                    out(Bool("End"))
+            return prog
+
+        return build
+
+    @pytest.mark.parametrize(
+        "step, start",
+        [
+            pytest.param(7, 65_000, id="up-past-65535"),
+            pytest.param(-7, 200, id="down-past-0"),
+            pytest.param(-7, 1_000, id="down-through-the-reader-then-past-0"),
+            pytest.param(7, 70_000, id="starts-past-65535"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "read",
+        [
+            pytest.param(lambda v: v > 100, id="above"),
+            pytest.param(lambda v: v < 100, id="below"),
+            pytest.param(lambda v: v == 65_535, id="top"),
+            pytest.param(lambda v: v == 0, id="bottom"),
+        ],
+    )
+    def test_a_copy_into_a_word_wraps_and_a_comparison_sees_it(
+        self, step: int, start: int, read: Any
+    ) -> None:
+        """A Copy into a Word wraps with no flag, so past its range it reads like no line."""
+
+        def reader(v: Any) -> None:
+            with Rung(read(v)):
+                calc(Int("N") + 1, Int("N"))
+
+        _assert_fold_is_exact(
+            self._copy_into_a_word(step, reader),
+            lambda plc, fold: plc.run_until(Bool("End"), max_cycles=10_000, fold=fold),
+            patch={"Wide": start},
+        )
+
+    def test_a_copy_into_a_word_stops_at_the_first_read_of_its_wrapped_value(self) -> None:
+        def reader(v: Any) -> None:
+            with Rung(v == 1):
+                out(Bool("Hit"))
+
+        folded = _assert_fold_is_exact(
+            self._copy_into_a_word(7, reader), _until_hit(10_000), patch={"Wide": 65_495}
+        )
+        assert folded.state.tags["Wide"] == 65_537
+        assert folded.state.tags["View"] == 1
+
+    def test_a_copy_into_a_word_inside_its_range_still_folds(self) -> None:
+        """The wrap only ends a window at the edge: inside the range they stay long."""
+
+        def reader(v: Any) -> None:
+            with Rung(v > 1_000_000):
+                calc(Int("N") + 1, Int("N"))
+
+        build = self._copy_into_a_word(1, reader)
+        _assert_fold_is_exact(
+            build,
+            lambda plc, fold: plc.run_until(Bool("End"), max_cycles=10_000, fold=fold),
+        )
+        plc = PLC(build(), dt=0.010)
+        ran = 0
+        prepare = plc._prepare_scan
+
+        def counted(*args: Any, **kwargs: Any) -> Any:
+            nonlocal ran
+            ran += 1
+            return prepare(*args, **kwargs)
+
+        setattr(plc, "_prepare_scan", counted)  # noqa: B010
+        plc.run_until(Bool("End"), max_cycles=10_000, fold=True)
+        assert plc.state.scan_id == 500
+        assert plc.state.tags["View"] == 500
+        assert ran < 20
 
     @pytest.mark.parametrize(
         "expr_of",
