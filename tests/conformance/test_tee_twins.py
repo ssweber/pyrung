@@ -146,3 +146,39 @@ def test_no_exported_row_has_a_vertical_token_in_column_a(part):
     assert_no_column_a_vertical(drawn.main_rows[1:])
     for _name, rows in drawn.subroutine_rows:
         assert_no_column_a_vertical(rows[1:])
+
+
+@pytest.fixture(scope="module")
+def part_c():
+    build = suite.build("C")
+    rail = pyrung_to_ladder(build.program, build.tag_map, validate=False)
+    return build, rail, _draw_tees(rail, build.groups)
+
+
+def test_the_bare_twin_hangs_its_tee_off_a_wire_in_column_a(part_c):
+    """S5 #3: ``R,-,T`` over ``,,-``: no trunk contact, a wire in column A, the tee in B."""
+    build, rail, drawn = part_c
+    sub = build.group("cont_box").subroutine
+    before = _case_rows(rail, sub, "cont_box", "box_tee_without_trunk")
+    after = _case_rows(drawn, sub, "cont_box", "box_tee_without_trunk")
+    box = next(i for i, r in enumerate(after) if r[-1].startswith("count_up("))
+    assert after[box][:3] == ("R", "-", "T:C481")
+    assert after[box + 1][:3] == ("", "", "T:C482")
+    assert after[box + 2][:3] == ("", "", "DS3641==0")
+    # The rail drawing has the same contacts one cell to the left; nothing else moved.
+    assert before[box][:2] == ("R", "C481")
+    assert before[box + 1][:2] == ("", "C482")
+    moved = [i for i, (b, a) in enumerate(zip(before, after, strict=True)) if b != a]
+    assert moved == [box, box + 1, box + 2]
+    assert rail.main_rows == drawn.main_rows
+
+
+def test_the_importer_reads_the_bare_twin_as_the_rail_drawing(part_c):
+    _build, rail, drawn = part_c
+    assert bundle_logic(drawn) == bundle_logic(rail)
+
+
+def test_a_bare_tee_shares_no_contact():
+    with pytest.raises(ValueError, match="shares none"):
+        TeeSpec("box(", (".p()",), after=1, bare=True)
+    TeeSpec("box(", (".p()",), after=0, bare=True)

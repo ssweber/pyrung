@@ -384,6 +384,9 @@ slots = 9
 edge_on_branch_reads_row_above = 1
 edge_under_unpowered_branch = 2
 continued_after_box_rereads_trunk = 3
+edge_on_box_path_after_false_contact = 4
+edge_after_false_contact_in_branch = 5
+correction_scan_with_free_enable = 6
 
 [groups.cont_box]
 base = 3601 # Conf_ContBox: DS3601..DS3650; part F, a drawing CLICK may refuse
@@ -392,6 +395,8 @@ slots = 4
 [groups.cont_box.cases]
 box_pin_on_continued_wire = 1
 box_enable_on_continued_wire = 2
+box_pin_on_own_rung = 3
+box_tee_without_trunk = 4
 
 [groups.faults]
 base = 3651 # Conf_Faults: DS3651..DS3810; part G
@@ -419,9 +424,10 @@ slots = 1
 non_finite_count = 1
 
 [groups.paste_risk]
-base = 3831 # Conf_PasteRisk: DS3831..DS3860; part I, probes a CLICK may refuse at paste
-slots = 2
+base = 3831 # Conf_PasteRisk: DS3831..DS3870; part I, probes a CLICK may refuse at paste
+slots = 3
 
 [groups.paste_risk.cases]
 jump_to_own_step_register = 1
 rand_real_bounds = 2
+loop_body_split = 3
