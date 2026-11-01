@@ -63,21 +63,26 @@ with rung(State == "g"):          # Equality
 
 ### Branches
 
-A `branch` creates a parallel condition within a rung — like a parallel path on a ladder diagram:
+A `branch` creates a parallel condition within a rung — like a parallel path on a ladder diagram. It ANDs its own condition with the rung's:
 
 ```python
-with rung(First):          # ① Evaluate: First
-    out(Third)             # ③ Execute
-    with branch(Second):   # ② Evaluate: First AND Second
-        out(Fourth)        # ④ Execute
-    out(Fifth)             # ⑤ Execute
+with rung(Running):
+    out(Motor)
+    with branch(HighSpeed):
+        out(FastLamp)  # On when Running AND HighSpeed
 ```
 
-Three rules:
+### Evaluation order
 
-- **Conditions evaluate before instructions.** ① and ② are resolved before ③ ④ ⑤ run. A branch ANDs its own condition with the parent rung's.
-- **Instructions execute in source order.** ③ → ④ → ⑤, as written — not "all rung, then all branch."
-- **Each rung starts fresh.** The next rung sees the state as it was left after the previous rung's instructions.
+A rung is commonly referred to as evaluated left to right, top to bottom; actually it's a little more nuanced than that. A rung's contacts are read once, then its instructions run in order, and the next rung sees what this one left:
+
+```python
+with rung(A):
+    reset(A)
+    out(Y)      # Still on this scan: A was already read
+```
+
+A branch reads its own contacts when execution reaches it. See [Branching](../instructions/rungs.md#branching).
 
 ## Instructions
 

@@ -30,25 +30,31 @@ Comments are limited to 1400 characters. Exceeding this raises `ValueError`.
 `branch()` creates a parallel path within a rung. The branch condition is ANDed with the parent rung's condition.
 
 ```python
-with rung(First):          # ① Read: First
-    out(Third)             # ② Execute
-    with branch(Second):   # ③ Read: Second (First's power is held)
-        out(Fourth)        # ④ Execute
-    out(Fifth)             # ⑤ Execute
+with rung(Running):
+    out(Motor)
+    with branch(HighSpeed):
+        out(FastLamp)  # On when Running AND HighSpeed
+    out(RunLamp)
 ```
 
-Three rules:
+A rung is commonly referred to as evaluated left to right, top to bottom; actually it's a little more nuanced than that. Each instruction solves only the path from the rail to it, and instructions run in the order written, not "all rung, then all branch." A rung's own contacts are read once and hold for everything below:
 
-1. **A rung is commonly referred to as evaluated left to right, top to bottom; actually it's a little more nuanced than that.** Each instruction solves only the path from the rail to it. The rung's own contacts (①) are read once and hold for everything below. A branch reads its own contacts (③) when the first instruction in it needs them, so it sees what the instructions above it wrote (②). A branch ANDs its own condition with the parent rung's.
-2. **Instructions execute in source order.** ② → ④ → ⑤, as written — not "all rung, then all branch."
-3. **Each rung starts fresh.** The next rung sees the state as it was left after the previous rung's instructions.
+```python
+with rung(A):
+    reset(A)
+    out(Y)      # Still on this scan: A was already read
+```
+
+A branch reads its own contacts when execution reaches it, so it sees what the instructions above it wrote:
 
 ```python
 with rung(A):
     latch(B)
     with branch(B):
-        out(Y)  # On in the same scan: the branch reads B after the latch
+        out(Y)  # On this scan: the branch reads B after the latch
 ```
+
+Each rung starts fresh: the next rung sees the state as the previous rung's instructions left it.
 
 A box with pins (a counter's `.reset()` or `.down()`, a shift register's `.clock()`, a drum's events) reads its enable and every pin together, before it writes anything.
 
