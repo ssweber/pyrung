@@ -155,6 +155,7 @@ class CallInstructionDebugHandler:
                         parent_enabled=True,
                     ),
                     condition_view=sub_condition_view,
+                    branch_path=None,
                 )
                 yield from debugger._iter_rung_steps(
                     debugger._make_rung_state(
@@ -226,6 +227,7 @@ class ForLoopInstructionDebugHandler:
                             parent_enabled=True,
                         ),
                         condition_view=body_view,
+                        branch_path=None,
                     )
                     yield from debugger._iter_rung_steps(
                         debugger._make_rung_state(

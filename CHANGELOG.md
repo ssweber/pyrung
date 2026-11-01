@@ -70,6 +70,7 @@
 
 ### Fixes
 
+- In the debugger, the trace shown during Continue keeps each branch's own state when two branches are built by one helper (they used to share one), and decorates nested branches, at any depth, too.
 - In compiled replay and generated CircuitPython, a box placed directly in a `forloop()` body (not inside a body rung) reads its `.reset()`/`.jump()`/... legs as its row starts, before it writes, as the simulator does: a drum's jump leg no longer reads the step the drum has just corrected.
 - A drum reads its jump step when the scan reaches it, before it moves, in the simulator, compiled replay and generated CircuitPython: a jump whose step tag is one the drum writes itself (its own step register, or a time drum's accumulator) on a scan where the drum also moves goes to the value the tag held when the scan reached the drum, where it used to take the value the drum had just written.
 - Ladder export no longer puts a vertical token (`T`, `|`, `T:`) in column A, the left power rail, which CLICK refuses ("Vertical-down tokens are not allowed in Column A"). A rung or branch with several outputs and no trunk contact now draws a wire in column A and the split in column B; the exporter raises if a vertical token ever reaches column A, and a conformance `TeeSpec` with `after=0` is refused.

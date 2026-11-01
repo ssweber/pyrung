@@ -71,50 +71,23 @@ def _settled_rung_event(events: tuple[RungTraceEvent, ...]) -> RungTraceEvent:
     instruction on it.  A branch reads its conditions when the scan reaches
     it, so its region is final only from then on: a later event has it.
 
-    Regions are matched by their place in the rung's tree, not by their source
-    span, which two branches built by one helper share.  A powered rung or
-    branch emits a step for each of its branches in order (an unpowered one
-    for none), so the k-th branch step under it is its k-th branch.  Nested
-    branches, which only their parent's own step carries, are kept too.
-    Steps of a called subroutine or a loop body are not this rung's and are
-    skipped.
+    Regions are matched by the event's place in the rung's tree
+    (``branch_path``), not by their source span, which two branches built by
+    one helper share.  Nested branches are kept too, including those under an
+    unpowered branch, which have no step of their own but whose instructions
+    do.  Steps of a called subroutine or a loop body are not this rung's and
+    are skipped.
     """
     first = events[0]
     if first.trace is None or len(events) == 1:
         return first
-    base_depth = first.depth
     settled: dict[tuple[int, ...], TraceRegion] = {}
-    # Tree path of the rung or branch at each relative depth; None inside a
-    # loop body, whose steps are not this rung's.
-    path_at: dict[int, tuple[int, ...] | None] = {}
-    branches_seen: dict[tuple[int, ...], int] = {}
     for event in events:
-        if event.trace is None or event.call_stack != first.call_stack:
-            continue
-        depth = event.depth - base_depth
-        if event.kind in ("rung", "branch"):
-            if depth == 0:
-                path: tuple[int, ...] | None = ()
-            else:
-                parent = path_at.get(depth - 1)
-                if parent is None:
-                    path = None
-                else:
-                    ordinal = branches_seen.get(parent, 0)
-                    branches_seen[parent] = ordinal + 1
-                    path = (*parent, ordinal)
-            path_at = {d: p for d, p in path_at.items() if d < depth}
-            path_at[depth] = path
-            if path is not None:
-                branches_seen.pop(path, None)
-        elif event.kind == "instruction":
-            path = path_at.get(depth)
-        else:
-            path_at = {d: p for d, p in path_at.items() if d < depth}
-            path_at[depth] = None
+        path = event.branch_path
+        if event.trace is None or path is None or event.call_stack != first.call_stack:
             continue
         regions = event.trace.regions
-        if path is None or not regions or regions[0].kind == "instruction":
+        if not regions or regions[0].kind == "instruction":
             continue
         settled[path] = regions[0]
         for ordinal, region in enumerate(regions[1:]):
