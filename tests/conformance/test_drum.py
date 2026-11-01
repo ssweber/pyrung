@@ -113,7 +113,6 @@ What each case tells apart:
   not complete (Result2 = 0): the jog scan leaves step 5 and the outputs alone,
   the next scan corrects the step and writes no output, and the rung is then
   false (``drum_trace/tied_jog`` reads it scan by scan).  So 1, 0, 0, 0.
-  pyrung (step DRUM) reads Result1 = 2, Result2 = 0, Result3 = 3, Result4 = 0.
 - ``pins_read_before_step_fix_tee``: the same ladder on its own bits (the same
   conditions, the same pins), with the ``.reset()`` and ``.jog()`` pins drawn
   teeing off the drum's input wire after the shared contact (Result1 != 1)
@@ -141,7 +140,6 @@ What each case tells apart:
   Result2 = 4), turns its outputs off (step 2's last on at scan 3, Result3 = 3,
   step 1's never, Result4 = 0) and stays on step 2 (Result1 = 2).  Leaving step
   1 would read 1, 4, 3, 0; wrapping to step 1 without completing 1, 0, 3, 4.
-  pyrung (step DRUM) ignores a jog on the last step: 2, 0, 8, 0.
 """
 
 from __future__ import annotations
@@ -715,7 +713,6 @@ group = Group(
             probe="what a jog does on an out-of-range step",
             expect={"Result1": 1, "Result2": 0, "Result3": 0, "Result4": 0},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "The tee drawing of the same question: a drum whose reset and jog pins tee "
@@ -729,7 +726,6 @@ group = Group(
             tee=TeeSpec("event_drum(", (".reset()", ".jog()"), after=1),
             expect={"Result1": 1, "Result2": 0, "Result3": 0, "Result4": 0},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "Without the jog, the same out-of-range step register only goes to step 1: "
@@ -750,7 +746,6 @@ group = Group(
             probe="what a jog on the last step does",
             expect={"Result1": 2, "Result2": 4, "Result3": 3, "Result4": 0},
             scans=SCANS,
-            pending="DRUM",
         ),
     ],
 )

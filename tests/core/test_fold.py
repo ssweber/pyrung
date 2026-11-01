@@ -7,7 +7,22 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Counter, Dint, Int, Program, Rung, Timer, calc, count_up, on_delay, out
+from pyrung import (
+    Bool,
+    Counter,
+    Dint,
+    Int,
+    Program,
+    Rung,
+    Timer,
+    calc,
+    copy,
+    count_up,
+    latch,
+    on_delay,
+    out,
+    reset,
+)
 from pyrung.core import fall, rise, system
 from pyrung.core.runner import PLC
 
@@ -3276,6 +3291,93 @@ class TestClockGatedTimeDrum:
     def test_completion_scan_matches_stepping(self, gate: bool) -> None:
         folded = _assert_fold_is_exact(self._shape(gate), _scans(400), dt=0.1)
         assert folded.state.tags["DDone"]
+
+
+class TestDrumOneTimeScans:
+    """A drum's scan can leave every tag as it found it and still not repeat: a
+    jog edge on a bad step corrects on the next scan, and a rung coming back
+    writes its row once.  The memory those scans moved tells the fold so.  A
+    rung below the drum sets the stage, so the probe's tags do not change."""
+
+    @staticmethod
+    def _drum(kind: str) -> Any:
+        from pyrung import event_drum, time_drum
+
+        args = {
+            "outputs": [Bool("O1"), Bool("O2")],
+            "pattern": [[1, 0], [0, 1]],
+            "current_step": Int("Step"),
+            "completion_flag": Bool("DDone"),
+        }
+        if kind == "event":
+            return event_drum(events=[Bool("E1"), Bool("E2")], **args)
+        return time_drum(presets=[50_000, 50_000], accumulator=Int("DAcc"), **args)
+
+    @classmethod
+    def _build(cls, kind: str) -> Callable[[], Program]:
+        def build() -> Program:
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Timer.clone("Long"), 60_000)
+                with Rung():
+                    cls._drum(kind).reset(Bool("R")).jog(Bool("J"))
+                with Rung(rise(Bool("Go"))):
+                    copy(5, Int("Step"))
+                    latch(Bool("J"))
+            return prog
+
+        return build
+
+    @pytest.mark.parametrize("kind", ["event", "time"])
+    def test_correction_after_a_held_scan_matches_stepping(self, kind: str) -> None:
+        def run(plc: PLC, fold: bool) -> None:
+            _run_scans(plc, 5, fold=fold)
+            plc.patch({"Go": True})
+            _run_scans(plc, 2_000, fold=fold)
+
+        folded = _assert_fold_is_exact(self._build(kind), run)
+        assert folded.state.tags["Step"] == 1
+
+    @pytest.mark.parametrize("kind", ["event", "time"])
+    def test_rung_coming_back_matches_stepping(self, kind: str) -> None:
+        """The row the rung writes is on for the rest of that one scan, under a
+        timer, and the rung below the timer turns it off."""
+        reader = Timer.clone("Reader")
+
+        def build() -> Program:
+            with Program(strict=False) as prog:
+                with Rung(Bool("En")):
+                    self._drum(kind).reset(Bool("R"))
+                with Rung(Bool("O1")):
+                    on_delay(reader, 60_000)
+                with Rung():
+                    reset(Bool("O1"))
+                with Rung(Bool("Go")):
+                    latch(Bool("En"))
+            return prog
+
+        def run(plc: PLC, fold: bool) -> None:
+            _run_scans(plc, 5, fold=fold)
+            plc.patch({"Go": True})
+            _run_scans(plc, 2_000, fold=fold)
+
+        folded = _assert_fold_is_exact(build, run)
+        assert folded.state.tags[reader.Acc.name] == 0
+
+    @pytest.mark.parametrize("kind", ["event", "time"])
+    def test_jog_completion_matches_stepping(self, kind: str) -> None:
+        def run(plc: PLC, fold: bool) -> None:
+            _run_scans(plc, 5, fold=fold)
+            plc.patch({"J": True})
+            _run_scans(plc, 3, fold=fold)
+            plc.patch({"J": False})
+            _run_scans(plc, 3, fold=fold)
+            plc.patch({"J": True})
+            _run_scans(plc, 6_000, fold=fold)
+
+        folded = _assert_fold_is_exact(self._build(kind), run)
+        assert folded.state.tags["DDone"] is True
+        assert folded.state.tags["Step"] == 2
 
 
 class TestReadsOutsideTheCrossings:

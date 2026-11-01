@@ -13,6 +13,7 @@ from pyrung.core import (
     event_drum,
     latch,
     out,
+    reset,
     time_drum,
     time_event_drum,
 )
@@ -912,3 +913,214 @@ def test_drum_reads_its_jump_step_before_it_moves(kind: str, backend) -> None:
     plc.patch({"E1": True, "Acc": 1000, "Go": True})
     plc.step()
     assert plc.current_state.tags["Step"] == 1
+
+
+# -- when a drum writes: on a move, on completing, or as its rung comes back ----
+
+DRUM_KINDS = ["event", "time", "time_event"]
+BACKENDS = [PLC, CompiledPLC]
+
+
+def _two_step_drum(kind: str) -> Program:
+    """A 2-step drum (A on step 1, B on step 2) under ``Enable``, whose outputs a
+    rung above can reset; its steps end only by a jog here (or a jump, or E1/E2)."""
+    args = {
+        "outputs": [Bool("A"), Bool("B")],
+        "pattern": [[1, 0], [0, 1]],
+        "current_step": Int("Step"),
+        "completion_flag": Bool("Done"),
+    }
+    with Program(strict=False) as logic:
+        with Rung(Bool("ClearA")):
+            reset(Bool("A"))
+        with Rung(Bool("ClearB")):
+            reset(Bool("B"))
+        with Rung(Bool("Enable")):
+            if kind == "event":
+                drum = event_drum(events=[Bool("E1"), Bool("E2")], **args)
+            elif kind == "time":
+                drum = time_drum(presets=[30_000, 30_000], accumulator=Int("Acc"), **args)
+            else:
+                drum = time_event_drum(
+                    presets=[30_000, 30_000],
+                    events=[None, None],
+                    accumulator=Int("Acc"),
+                    **args,
+                )
+            drum.reset(Bool("Reset")).jump(Bool("Go"), step=1).jog(Bool("Jog"))
+    return logic
+
+
+def _on_step_two(kind: str, backend: type) -> PLC | CompiledPLC:
+    plc = backend(_two_step_drum(kind), dt=0.01)
+    plc.patch({"Enable": True})
+    plc.step()
+    assert _snapshot(plc)[:3] == (1, True, False)
+    plc.patch({"Jog": True})
+    plc.step()
+    plc.patch({"Jog": False})
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
+    return plc
+
+
+def _snapshot(plc: PLC | CompiledPLC) -> tuple[int, bool, bool, bool]:
+    tags = plc.current_state.tags
+    return tags["Step"], tags["A"], tags["B"], tags["Done"]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_running_drum_does_not_rewrite_its_row(kind: str, backend: type) -> None:
+    plc = _on_step_two(kind, backend)
+    plc.patch({"ClearB": True})
+    plc.step()
+    plc.patch({"ClearB": False})
+    for _ in range(3):
+        plc.step()
+        assert _snapshot(plc) == (2, False, False, False)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_rung_coming_back_writes_the_row(kind: str, backend: type) -> None:
+    plc = _on_step_two(kind, backend)
+    plc.patch({"Enable": False, "ClearB": True})
+    plc.step()
+    plc.patch({"ClearB": False})
+    plc.step()
+    assert _snapshot(plc) == (2, False, False, False)
+    plc.patch({"Enable": True})
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_reset_ending_under_a_true_rung_writes_step_one(kind: str, backend: type) -> None:
+    plc = _on_step_two(kind, backend)
+    plc.patch({"Reset": True})
+    plc.step()
+    assert _snapshot(plc) == (1, False, False, False)
+    plc.patch({"Reset": False})
+    plc.step()
+    assert _snapshot(plc) == (1, True, False, False)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_step_written_while_running_is_no_move(kind: str, backend: type) -> None:
+    plc = _on_step_two(kind, backend)
+    plc.patch({"Step": 1})
+    plc.step()
+    assert _snapshot(plc) == (1, False, True, False)
+    plc.step()
+    assert _snapshot(plc) == (1, False, True, False)
+    # The next move goes on from the step the register holds.
+    plc.patch({"Jog": True})
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_bad_step_corrects_with_no_output_write(kind: str, backend: type) -> None:
+    plc = _on_step_two(kind, backend)
+    plc.patch({"Step": 5})
+    plc.step()
+    assert _snapshot(plc) == (1, False, True, False)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_jog_on_a_bad_step_leaves_that_scan_alone(kind: str, backend: type) -> None:
+    plc = _on_step_two(kind, backend)
+    plc.patch({"Step": 5, "Jog": True})
+    acc_before = plc.current_state.tags.get("Acc", 0)
+    plc.step()
+    assert _snapshot(plc) == (5, False, True, False)
+    assert plc.current_state.tags.get("Acc", 0) == acc_before
+    plc.step()
+    assert _snapshot(plc) == (1, False, True, False)
+    assert plc.current_state.tags.get("Acc", 0) == 0
+    plc.step()
+    assert _snapshot(plc) == (1, False, True, False)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_jog_on_a_bad_step_of_a_paused_drum_does_nothing(kind: str, backend: type) -> None:
+    plc = _on_step_two(kind, backend)
+    plc.patch({"Enable": False, "Step": 5, "Jog": True})
+    plc.step()
+    assert _snapshot(plc) == (5, False, True, False)
+    plc.step()
+    assert _snapshot(plc) == (5, False, True, False)
+    # The rung coming back corrects the step and writes step 1's row.
+    plc.patch({"Enable": True})
+    plc.step()
+    assert _snapshot(plc) == (1, True, False, False)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_jump_acts_on_a_bad_step_under_a_jog(kind: str, backend: type) -> None:
+    plc = _on_step_two(kind, backend)
+    plc.patch({"Step": 5, "Jog": True, "Go": True})
+    plc.step()
+    assert _snapshot(plc) == (1, True, False, False)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_jog_on_the_last_step_completes(kind: str, backend: type) -> None:
+    plc = _on_step_two(kind, backend)
+    acc_before = plc.current_state.tags.get("Acc", 0)
+    plc.patch({"Jog": True})
+    plc.step()
+    assert _snapshot(plc) == (2, False, False, True)
+    # It stays on the step, and a timed step keeps its time.
+    if kind != "event":
+        assert plc.current_state.tags["Acc"] > acc_before
+    plc.patch({"Jog": False})
+    plc.step()
+    assert _snapshot(plc) == (2, False, False, True)
+    # A further jog does nothing, and a value another writer left stays.
+    plc.patch({"B": True, "Jog": True})
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, True)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_jog_on_the_last_step_of_a_paused_drum_completes(kind: str, backend: type) -> None:
+    plc = _on_step_two(kind, backend)
+    plc.patch({"Enable": False, "Jog": True})
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, True)
+    plc.patch({"Enable": True, "Jog": False})
+    plc.step()
+    assert _snapshot(plc) == (2, False, False, True)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_jump_beats_a_jog_on_the_last_step(kind: str, backend: type) -> None:
+    plc = _on_step_two(kind, backend)
+    plc.patch({"Jog": True, "Go": True})
+    plc.step()
+    assert _snapshot(plc) == (1, True, False, False)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", ["time", "time_event"])
+def test_timed_completion_writes_all_off_once(kind: str, backend: type) -> None:
+    """The time on a completed last step stays up scan after scan; only the scan
+    that completes the drum turns its outputs off."""
+    plc = _on_step_two(kind, backend)
+    plc.patch({"Acc": 30_000})
+    plc.step()
+    assert _snapshot(plc) == (2, False, False, True)
+    plc.patch({"B": True})
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, True)

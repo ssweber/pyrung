@@ -47,8 +47,11 @@ from pyrung.core import (
     fall,
     on_delay,
     out,
+    reset,
     rise,
     shift,
+    time_drum,
+    time_event_drum,
 )
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
 from tests.circuitpy.test_scan_time_and_stop import _BoardClock, _hw
@@ -283,15 +286,15 @@ def _invalid_rows(pin: str) -> list[dict]:
     idle = {t.name: False for t in BOOL_INPUTS} | {"Stage": 0}
     return [
         idle | {"DoStage": True, "Stage": 7},  # the step register holds 7 of 3
-        idle | {"En": True, pin: True},  # the drum runs, correcting 7 to 1
+        idle | {"En": True, pin: True},  # the drum runs on the bad step
         idle | {"En": True},
     ]
 
 
-# The step after scan 2 when the pin saw the parent (Step > 3) on: a jog from
-# the corrected step 1 reaches 2, a jump reaches 3.  A pin read after the
-# correction sees step 1, no parent, and leaves the step at 1.
-_PIN_RESULT = {"P2": 3, "P3": 2}
+# The step after scan 2 when the pin saw the parent (Step > 3) on: a jump
+# reaches 3, a jog leaves the bad step alone for that scan.  A pin read after
+# the correction sees step 1, no parent, and leaves the step at 1.
+_PIN_RESULT = {"P2": 3, "P3": 7}
 
 
 @pytest.mark.parametrize("pin", sorted(_PIN_RESULT))
@@ -507,3 +510,79 @@ def test_timer_reset_reads_done_before_the_timer_writes_it(shared, backend, monk
 
 def _not_done_timer() -> list:
     return [~Tm.Done]
+
+
+# -- the three drums agree on every backend, bad steps and other writers included --
+
+DrumAcc = Int("DrumAcc")
+
+
+def _output_writer_above() -> None:
+    with Rung(A):
+        reset(Y1)
+
+
+def _stage() -> None:
+    with Rung(DoStage):
+        copy(Stage, Step)
+
+
+def _event_drum_box() -> None:
+    _output_writer_above()
+    _stage()
+    with Rung(En):
+        event_drum(
+            outputs=[Y1, Y2],
+            events=[E1, E2, E3],
+            pattern=[[1, 0], [0, 1], [1, 1]],
+            current_step=Step,
+            completion_flag=Flag,
+        ).reset(P1).jump(P2, step=2).jog(P3)
+
+
+def _time_drum_box() -> None:
+    _output_writer_above()
+    _stage()
+    with Rung(En):
+        time_drum(
+            outputs=[Y1, Y2],
+            presets=[30, 40, 50],
+            unit="ms",
+            pattern=[[1, 0], [0, 1], [1, 1]],
+            current_step=Step,
+            accumulator=DrumAcc,
+            completion_flag=Flag,
+        ).reset(P1).jump(P2, step=2).jog(P3)
+
+
+def _time_event_drum_box() -> None:
+    _output_writer_above()
+    _stage()
+    with Rung(En):
+        time_event_drum(
+            outputs=[Y1, Y2],
+            presets=[30, None, 50],
+            events=[None, E2, E3],
+            unit="ms",
+            pattern=[[1, 0], [0, 1], [1, 1]],
+            current_step=Step,
+            accumulator=DrumAcc,
+            completion_flag=Flag,
+        ).reset(P1).jump(P2, step=2).jog(P3)
+
+
+_ALL_DRUMS = [_event_drum_box, _time_drum_box, _time_event_drum_box]
+
+
+@pytest.mark.parametrize("build", _ALL_DRUMS, ids=lambda b: b.__name__)
+def test_drum_writes_agree_on_every_backend(build, monkeypatch) -> None:
+    watch = (Step, Flag, Y1, Y2)
+    if build is not _event_drum_box:
+        watch += (DrumAcc,)
+    for seed in SEEDS:
+        with Program(strict=False) as logic:
+            build()
+        rows = schedule(seed)
+        want = trace_core(logic, "interpreted", rows, watch)
+        assert trace_core(logic, "compiled", rows, watch) == want, f"seed {seed}"
+        assert trace_circuitpy(logic, monkeypatch, rows, watch) == want, f"seed {seed}"

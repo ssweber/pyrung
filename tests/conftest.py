@@ -36,6 +36,9 @@ def pytest_configure(config: pytest.Config) -> None:
 
     cap_bytes = _MEMORY_CAP_MB * 1024 * 1024
     proc = psutil.Process()
+    # Bound here: a test's fake clock replaces time.sleep, and a call from this
+    # thread would advance that clock mid-scan.
+    sleep = time.sleep
 
     def _monitor() -> None:
         while True:
@@ -52,7 +55,7 @@ def pytest_configure(config: pytest.Config) -> None:
                 )
                 sys.stderr.flush()
                 os._exit(99)
-            time.sleep(2)
+            sleep(2)
 
     threading.Thread(target=_monitor, daemon=True).start()
 

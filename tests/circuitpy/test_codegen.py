@@ -844,6 +844,7 @@ class TestInstructionCoverage:
         assert "_drum_jump_prev:i" in source_code
         assert "_drum_jog_prev:i" in source_code
         assert "_drum_done:i" in source_code
+        assert "_drum_rung_prev:i" in source_code
 
         class StubBase:
             def rollCall(self, modules):

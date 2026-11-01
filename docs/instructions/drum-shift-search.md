@@ -95,11 +95,12 @@ Events are levels, unlike `event_drum`'s rising edges: an event already on when 
 
 All three drums follow a CLICK, measured on hardware:
 
+- **Outputs** are written when the step moves or the rung comes back, not on every scan, so a value another rung writes to one stands until then. A write to the step register is not a move: the outputs stay, and the next event, time or jog acts on the step the register holds.
 - **Reset** is a level, and it wins: while it is on the drum sits on step 1 with its completion flag and **every output off**, and a jump or jog that rises on a reset scan is dropped, not saved for later.
-- **Jump and jog** act on their rising edges, even while the rung is false. The jog runs first and the jump last, so a jump and a jog on one scan land on the jump's step. A jog on the last step does nothing.
+- **Jump and jog** act on their rising edges, even while the rung is false. The jog runs first and the jump last, so a jump and a jog on one scan land on the jump's step. A jog on the last step completes the drum, which stays on that step; a further jog there does nothing.
 - **A false rung** pauses the drum: no timing, no event steps, and its outputs stay as they were. They show the step a paused jump or jog took once the rung is true again.
 - **Completion** sets the flag and turns every output off. They stay off until the drum steps forward again, by a jog or by its own event or time. A jump moves the step but leaves them off. Only a reset clears the flag.
-- **A step register out of range** goes to step 1 the next scan the rung is true; a paused drum leaves it alone.
+- **A step register out of range** goes to step 1 the next scan the rung is true, with no output write; a paused drum leaves it alone. A jog edge leaves that scan alone too, and the scan after it corrects the step.
 - A time drum's accumulator is 0 on the scan of every step change: an advance, a jog, a jump and a reset.
 
 CLICK has not been asked yet whether an event or time step after a jump ends a completion; pyrung takes it that one does, as a jog does.

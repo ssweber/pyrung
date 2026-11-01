@@ -3668,7 +3668,7 @@ def _visible_items(state: Any, exclude: frozenset[str]) -> dict[str, Any]:
     return {k: v for k, v in state.tags.items() if k not in exclude}
 
 
-EDGE_MEMORY_PREFIX = "_edge:"
+EDGE_MEMORY_PREFIXES = ("_edge:", "_drum_")
 
 
 def edge_memory_on(state: Any, exempt: frozenset[str] = frozenset()) -> frozenset[str]:
@@ -3680,13 +3680,19 @@ def edge_memory_on(state: Any, exempt: frozenset[str] = frozenset()) -> frozense
     there.  A window repeats its probe scan only if the probe left every edge
     memory as it found it; absent and off read the same.  Keys in *exempt*
     (see :func:`every_scan_clock_edge_keys`) are left out.
+
+    A drum's memory counts too: it writes its outputs on a move or as its rung
+    comes back, not every scan, and a jog edge on a bad step changes no tag that
+    scan and corrects on the next (see ``_DrumBaseInstruction._holds_bad_step``).
+    Either can leave every tag as it found it, and the next scan does not repeat
+    it.
     """
     return frozenset(
         key
         for key, value in state.memory.items()
         if value
         and isinstance(key, str)
-        and key.startswith(EDGE_MEMORY_PREFIX)
+        and key.startswith(EDGE_MEMORY_PREFIXES)
         and key not in exempt
     )
 

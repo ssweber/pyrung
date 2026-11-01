@@ -83,8 +83,7 @@ S5-QUESTIONS.md``):
   outputs alone: step 5 at the end of scan 3 (ErrorCode = 5), flag off (Result2
   = 0), B still on (Result3 = 1, Result4 = 0), and the drum ends on step 1
   (Result1 = 1).  ``drum_trace/free_jog`` reads the scans after it: the next
-  scan corrects, and B stays on.  pyrung (step DRUM) takes the jog from the
-  corrected step: 2, 0, 1, 0, 2.
+  scan corrects, and B stays on.
 
 The cases own C401..C450 and C1..C50 and counters CT191..CT195
 (``memory.OWNED``): cases 1 to 3 take ten C bits each (case N takes
@@ -146,7 +145,7 @@ SOLVE_ORDER: Mapping[str, tuple[bool, Mapping[str, int]]] = {
     ),
     "correction_scan_with_free_enable": (
         False,
-        {"Result1": 2, "Result2": 0, "Result3": 1, "Result4": 0, "ErrorCode": 2},
+        {"Result1": 1, "Result2": 0, "Result3": 1, "Result4": 0, "ErrorCode": 5},
     ),
 }
 
@@ -341,7 +340,6 @@ group = Group(
             expect={"Result1": 1, "Result2": 0, "Result3": 1, "Result4": 0, "ErrorCode": 5},
             scans=SCANS,
             probe="S5 #6: the correction scan with an enable and a jog of its own",
-            pending="DRUM",
         ),
     ],
 )

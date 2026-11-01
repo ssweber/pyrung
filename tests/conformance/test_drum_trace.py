@@ -44,10 +44,6 @@ Answered on hardware (2026-11-01), with step 5 of 2 staged on scan 3:
 So a drum writes its outputs when its step moves or its rung comes back, not on
 every scan, and a write to its step register is not a move.
 
-pyrung (step DRUM) writes the row every scan, takes the jog from the corrected
-step and ignores a jog on the last step, so it reads 2010 on the jogged cases
-and 1001 on ``free_no_jog``.
-
 The cases own C51..C100 (``memory.OWNED``).
 """
 
@@ -231,7 +227,6 @@ group = Group(
                 "ErrorCode": 1000,
             },
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A jog on an out-of-range step, the rung free, scan by scan as step, flag, "
@@ -249,7 +244,6 @@ group = Group(
                 "ErrorCode": 1010,
             },
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "The same with no jog, scan by scan as step, flag, B, A: step 5 staged on "
@@ -265,7 +259,6 @@ group = Group(
                 "ErrorCode": 1010,
             },
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A further jog on a drum a jog completed on its last step does nothing, scan "
@@ -282,7 +275,6 @@ group = Group(
                 "ErrorCode": 2100,
             },
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A running drum leaves an output the ladder reset, scan by scan as step, "
@@ -298,7 +290,6 @@ group = Group(
                 "ErrorCode": 2000,
             },
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A running drum takes a step written to its register without writing that "
@@ -315,7 +306,6 @@ group = Group(
                 "ErrorCode": 2010,
             },
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A drum whose rung comes back writes the step in its register, scan by scan "

@@ -94,7 +94,8 @@ def _drum_times_under_its_flag(drum: Any, program: Program) -> str | None:
     The Done/Acc tri-state reads a flag that is on as settled, whatever the
     accumulator holds.  That holds for a time drum only while the flag comes
     on at the last step and stays there until a reset.  A jump keeps the flag
-    on but takes the drum back to an earlier step it times again; a flag that
+    on but takes the drum back to an earlier step it times again; a jog on the
+    last step turns the flag on with that step's time not yet up; a flag that
     starts on is on while the drum times its first steps; and another writer
     of its step register or of the flag can do either.  Then the drum's time
     is a real dimension, not absorbed.  The reason reads as a hint.
@@ -105,6 +106,8 @@ def _drum_times_under_its_flag(drum: Any, program: Program) -> str | None:
     flag_name = drum.completion_flag.name
     if drum.jump_condition is not None:
         return "its jump keeps the completion flag on"
+    if drum.jog_condition is not None:
+        return "its jog can complete it before its time is up"
     if bool(drum.completion_flag.default):
         return f"its completion flag {flag_name} starts on"
     for instr in walk_instructions(program):

@@ -199,6 +199,16 @@ def _is_step_one_restart(boundary: Eq | Cmp, current_step: Tag) -> bool:
 
 
 class _DrumBaseInstruction(Instruction):
+    """What the three drums share, in CLICK's rules.
+
+    A drum writes its outputs when its step moves or its rung comes back, and
+    all off as it completes; a scan with nothing to report writes none, so
+    another writer's value stays.  A write to the step register is not a move:
+    the next event acts on the register's step.  A bad step corrects to 1
+    with no output write, and a jog edge on a bad step leaves that scan alone
+    (see :meth:`_holds_bad_step`).
+    """
+
     ALWAYS_EXECUTES = True
     INERT_WHEN_DISABLED = False
     _exclusive_fields = ("current_step",)
@@ -272,11 +282,45 @@ class _DrumBaseInstruction(Instruction):
             }
         )
 
+    def _holds_bad_step(
+        self,
+        *,
+        invalid: bool,
+        jog_edge: bool,
+        jump_edge: bool,
+        jump_target: int | None,
+        reset_active: bool,
+    ) -> bool:
+        """Whether a jog edge on a bad step leaves this scan alone.
+
+        The register keeps its value, the drum neither times nor writes, and
+        the next scan corrects the step (an enabled drum's) as if nothing had
+        happened: the jog never moves the drum.  A reset, or a jump to a valid
+        step on the same scan, still acts.
+        """
+        if not (invalid and jog_edge) or reset_active:
+            return False
+        return not self._jump_lands(jump_edge, jump_target)
+
+    def _jump_lands(self, jump_edge: bool, jump_target: int | None) -> bool:
+        return jump_edge and jump_target is not None and self._step_is_valid(jump_target)
+
+    def _outputs_due(
+        self, ctx: ScanContext, *, enabled: bool, moved: bool, done: bool, was_done: bool
+    ) -> bool:
+        """An enabled drum writes when it moved, as it completes, or as its rung comes back."""
+        if not enabled:
+            return False
+        if moved or (done and not was_done):
+            return True
+        return not bool(ctx.get_memory(self.memory_key("_drum_rung_prev"), False))
+
     def _jog_then_jump(
         self,
         ctx: ScanContext,
         step: int,
         *,
+        done: bool,
         jog_edge: bool,
         jump_edge: bool,
         jump_target: int | None,
@@ -284,30 +328,32 @@ class _DrumBaseInstruction(Instruction):
         """Take a jog, then a jump, on their edges whether or not the drum is enabled.
 
         The jump comes last, so it beats a jog on the same scan; *jump_target*
-        is the jump step as the drum read it with its pins.  Returns
-        ``(step, step_changed, jogged, taken)``: *jogged* when the jog moved
-        the drum, which ends a completed drum's all-outputs-off state (a jump
-        does not, on a CLICK); *taken* when either moved it (a jump to a valid
-        step counts even when it is the step it is on), which clears a time
-        drum's accumulator.
+        is the jump step as the drum read it with its pins.  A jog forward ends
+        a completed drum's all-outputs-off state (a jump does not, on a CLICK);
+        a jog on the last step completes the drum, which stays on that step,
+        unless a jump takes it away on the same scan, and a further jog there
+        does nothing.  Returns ``(step, step_changed, taken, done)``: *taken*
+        when either moved the drum (a jump to a valid step counts even when it
+        is the step it is on), which clears a time drum's accumulator.
         """
         changed = False
-        jogged = False
         taken = False
-        if jog_edge and step < self.step_count:
-            step += 1
-            changed = True
-            jogged = True
-            taken = True
-        if jump_edge:
-            target = jump_target
-            if target is not None and self._step_is_valid(target):
-                changed = changed or step != target
-                step = target
+        if jog_edge:
+            if step < self.step_count:
+                step += 1
+                changed = True
                 taken = True
+                done = False
+            elif not done and not self._jump_lands(jump_edge, jump_target):
+                ctx.set_tag(self.completion_flag.name, True)
+                done = True
+        if jump_target is not None and self._jump_lands(jump_edge, jump_target):
+            changed = changed or step != jump_target
+            step = jump_target
+            taken = True
         if taken:
             ctx.set_tag(self.current_step.name, step)
-        return step, changed, jogged, taken
+        return step, changed, taken, done
 
     def _read_pins(
         self, ctx: ScanContext, condition_view: Any
@@ -344,8 +390,10 @@ class _DrumBaseInstruction(Instruction):
         return jog_curr, jog_curr and not jog_prev
 
     def _write_control_prev_state(
-        self, ctx: ScanContext, *, jump_curr: bool, jog_curr: bool
+        self, ctx: ScanContext, *, jump_curr: bool, jog_curr: bool, rung_on: bool
     ) -> None:
+        # A reset ending under a true rung counts as the rung coming back.
+        ctx.set_memory(self.memory_key("_drum_rung_prev"), rung_on)
         if self.jump_condition is not None:
             ctx.set_memory(self.memory_key("_drum_jump_prev"), jump_curr)
         if self.jog_condition is not None:
@@ -395,10 +443,11 @@ class EventDrumInstruction(_DrumBaseInstruction):
         scan's jump and jog are dropped (their edge memory still updates).
         Otherwise an enabled drum takes its step's event edge, then a jog and
         a jump act on their edges even while the drum is paused, the jump
-        last.  Only an enabled drum writes its outputs: its step's row, or
-        every output off once it completes (``_drum_done``) until it steps
-        forward again, by its event or a jog.  A jump moves the step but
-        leaves a completed drum's outputs off.
+        last.  Only an enabled drum writes its outputs, and only when one is
+        due (see :class:`_DrumBaseInstruction`): its step's row, or every
+        output off once it completes (``_drum_done``) until it steps forward
+        again, by its event or a jog.  A jump moves the step but leaves a
+        completed drum's outputs off.
         """
         condition_view = instruction_condition_view(ctx, self)
         step = _read_step_tag_value(ctx, self.current_step)
@@ -413,15 +462,26 @@ class EventDrumInstruction(_DrumBaseInstruction):
         )
         done_key = self.memory_key("_drum_done")
         done = bool(ctx.get_memory(done_key, False))
+        was_done = done
+        advanced = False
         event_curr = (
             bool(self.events[step - 1].evaluate(condition_view))
             if enabled and not reset_active
             else False
         )
 
-        if invalid and enabled:
-            ctx.set_tag(self.current_step.name, 1)
-            step_changed = True
+        hold = self._holds_bad_step(
+            invalid=invalid,
+            jog_edge=jog_edge,
+            jump_edge=jump_edge,
+            jump_target=jump_target,
+            reset_active=reset_active,
+        )
+        if invalid:
+            jog_edge = False
+            if enabled and not hold:
+                ctx.set_tag(self.current_step.name, 1)
+                step_changed = True
 
         if reset_active:
             step = 1
@@ -429,7 +489,7 @@ class EventDrumInstruction(_DrumBaseInstruction):
             done = False
             self._apply_reset(ctx)
         else:
-            if enabled:
+            if enabled and not hold:
                 last_step = int(ctx.get_memory(self.memory_key("_drum_last_step"), 0))
                 event_ready = bool(ctx.get_memory(self.memory_key("_drum_event_ready"), True))
                 event_prev = bool(ctx.get_memory(self.memory_key("_drum_event_prev"), False))
@@ -444,19 +504,25 @@ class EventDrumInstruction(_DrumBaseInstruction):
                         step += 1
                         ctx.set_tag(self.current_step.name, step)
                         step_changed = True
+                        advanced = True
                         done = False
                     else:
                         ctx.set_tag(self.completion_flag.name, True)
                         done = True
 
-            step, moved, jogged, _taken = self._jog_then_jump(
-                ctx, step, jog_edge=jog_edge, jump_edge=jump_edge, jump_target=jump_target
+            step, moved, taken, done = self._jog_then_jump(
+                ctx,
+                step,
+                done=done,
+                jog_edge=jog_edge,
+                jump_edge=jump_edge,
+                jump_target=jump_target,
             )
             step_changed = step_changed or moved
-            if jogged:
-                done = False
 
-            if enabled:
+            if not hold and self._outputs_due(
+                ctx, enabled=enabled, moved=advanced or taken, done=done, was_done=was_done
+            ):
                 self._apply_outputs(ctx, step, off=done)
 
         final_event_curr = bool(self.events[step - 1].evaluate(condition_view))
@@ -470,7 +536,9 @@ class EventDrumInstruction(_DrumBaseInstruction):
         ctx.set_memory(self.memory_key("_drum_last_step"), step)
         ctx.set_memory(done_key, done)
 
-        self._write_control_prev_state(ctx, jump_curr=jump_curr, jog_curr=jog_curr)
+        self._write_control_prev_state(
+            ctx, jump_curr=jump_curr, jog_curr=jog_curr, rung_on=enabled and not reset_active
+        )
 
     def advance_profile(self) -> AdvanceProfile:
         def plan(constraint: Constraint, snapshot: Snapshot) -> AdvanceStep | None:
@@ -592,9 +660,10 @@ class TimeDrumInstruction(_DrumBaseInstruction):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         """One scan, in the event drum's order (see ``EventDrumInstruction.execute``).
 
-        A jog, a jump, an advance and a reset each clear the accumulator.
-        Completion turns every output off (``_drum_done``) until the drum
-        steps forward again, by its time or a jog; a jump does not end it.
+        A move by a jog, a jump or the step's time, and a reset, each clear
+        the accumulator; a jog that completes the drum on its last step does
+        not.  Completion turns every output off (``_drum_done``) until the
+        drum steps forward again, by its time or a jog; a jump does not end it.
         """
         condition_view = instruction_condition_view(ctx, self)
         step = _read_step_tag_value(ctx, self.current_step)
@@ -610,11 +679,22 @@ class TimeDrumInstruction(_DrumBaseInstruction):
         )
         done_key = self.memory_key("_drum_done")
         done = bool(ctx.get_memory(done_key, False))
+        was_done = done
+        advanced = False
 
-        if invalid and enabled:
-            step_changed = True
-            reset_step_data = True
-            ctx.set_tag(self.current_step.name, 1)
+        hold = self._holds_bad_step(
+            invalid=invalid,
+            jog_edge=jog_edge,
+            jump_edge=jump_edge,
+            jump_target=jump_target,
+            reset_active=reset_active,
+        )
+        if invalid:
+            jog_edge = False
+            if enabled and not hold:
+                step_changed = True
+                reset_step_data = True
+                ctx.set_tag(self.current_step.name, 1)
 
         acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
         frac_key = f"_frac:{self.accumulator.name}"
@@ -627,7 +707,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
             done = False
             self._apply_reset(ctx)
         else:
-            if enabled:
+            if enabled and not hold:
                 dt = float(ctx.get_memory("_dt", 0.0))
                 dt_units = self.unit.dt_to_units(dt) + frac
                 int_units = int(dt_units)
@@ -639,34 +719,42 @@ class TimeDrumInstruction(_DrumBaseInstruction):
                         step += 1
                         step_changed = True
                         reset_step_data = True
+                        advanced = True
                         done = False
                         ctx.set_tag(self.current_step.name, step)
                     else:
                         ctx.set_tag(self.completion_flag.name, True)
                         done = True
 
-            step, moved, jogged, taken = self._jog_then_jump(
-                ctx, step, jog_edge=jog_edge, jump_edge=jump_edge, jump_target=jump_target
+            step, moved, taken, done = self._jog_then_jump(
+                ctx,
+                step,
+                done=done,
+                jog_edge=jog_edge,
+                jump_edge=jump_edge,
+                jump_target=jump_target,
             )
             if taken:
                 step_changed = step_changed or moved
                 reset_step_data = True
-            if jogged:
-                done = False
 
-            if enabled:
+            if not hold and self._outputs_due(
+                ctx, enabled=enabled, moved=advanced or taken, done=done, was_done=was_done
+            ):
                 self._apply_outputs(ctx, step, off=done)
 
         if reset_step_data:
             acc_value = 0
             frac = 0.0
 
-        if enabled or reset_active or step_changed or reset_step_data:
+        if (enabled and not hold) or reset_active or step_changed or reset_step_data:
             ctx.set_tags({self.accumulator.name: acc_value, self.current_step.name: step})
             ctx.set_memory(frac_key, frac)
         ctx.set_memory(done_key, done)
 
-        self._write_control_prev_state(ctx, jump_curr=jump_curr, jog_curr=jog_curr)
+        self._write_control_prev_state(
+            ctx, jump_curr=jump_curr, jog_curr=jog_curr, rung_on=enabled and not reset_active
+        )
 
     def advance_profile(self) -> AdvanceProfile:
         def _auto(until: Eq | Cmp) -> AdvanceStep:
@@ -852,11 +940,22 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
         )
         done_key = self.memory_key("_drum_done")
         done = bool(ctx.get_memory(done_key, False))
+        was_done = done
+        advanced = False
 
-        if invalid and enabled:
-            step_changed = True
-            reset_step_data = True
-            ctx.set_tag(self.current_step.name, 1)
+        hold = self._holds_bad_step(
+            invalid=invalid,
+            jog_edge=jog_edge,
+            jump_edge=jump_edge,
+            jump_target=jump_target,
+            reset_active=reset_active,
+        )
+        if invalid:
+            jog_edge = False
+            if enabled and not hold:
+                step_changed = True
+                reset_step_data = True
+                ctx.set_tag(self.current_step.name, 1)
 
         acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
         frac_key = f"_frac:{self.accumulator.name}"
@@ -869,7 +968,7 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
             done = False
             self._apply_reset(ctx)
         else:
-            if enabled:
+            if enabled and not hold:
                 dt = float(ctx.get_memory("_dt", 0.0))
                 dt_units = self.unit.dt_to_units(dt) + frac
                 int_units = int(dt_units)
@@ -880,35 +979,43 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
                         step += 1
                         step_changed = True
                         reset_step_data = True
+                        advanced = True
                         done = False
                         ctx.set_tag(self.current_step.name, step)
                     else:
                         ctx.set_tag(self.completion_flag.name, True)
                         done = True
 
-            step, moved, jogged, taken = self._jog_then_jump(
-                ctx, step, jog_edge=jog_edge, jump_edge=jump_edge, jump_target=jump_target
+            step, moved, taken, done = self._jog_then_jump(
+                ctx,
+                step,
+                done=done,
+                jog_edge=jog_edge,
+                jump_edge=jump_edge,
+                jump_target=jump_target,
             )
             if taken:
                 step_changed = step_changed or moved
                 reset_step_data = True
-            if jogged:
-                done = False
 
-            if enabled:
+            if not hold and self._outputs_due(
+                ctx, enabled=enabled, moved=advanced or taken, done=done, was_done=was_done
+            ):
                 self._apply_outputs(ctx, step, off=done)
 
         if reset_step_data:
             acc_value = 0
             frac = 0.0
 
-        if enabled or reset_active or step_changed or reset_step_data:
+        if (enabled and not hold) or reset_active or step_changed or reset_step_data:
             ctx.set_tags({self.accumulator.name: acc_value, self.current_step.name: step})
         # Every scan, as the compiled kernel writes it.
         ctx.set_memory(frac_key, frac)
         ctx.set_memory(done_key, done)
 
-        self._write_control_prev_state(ctx, jump_curr=jump_curr, jog_curr=jog_curr)
+        self._write_control_prev_state(
+            ctx, jump_curr=jump_curr, jog_curr=jog_curr, rung_on=enabled and not reset_active
+        )
 
     def _advance(self, until: Eq | Cmp, step: int) -> AdvanceStep:
         """Hold the drum enabled, and *step*'s event on, until *until*.

@@ -1239,6 +1239,27 @@ class TestDrumCompletion:
         tags = _replay_trace(logic, result.trace).current_state.tags
         assert (tags["Done"], tags["Step"], tags["Y2"]) == (True, 2, True)
 
+    def test_jog_completes_the_last_step_before_its_time_is_up(self) -> None:
+        """A jog on the last step turns the flag on with that step's time not
+        up, so the flag does not stand for the accumulator having reached it."""
+        from pyrung.core import time_drum
+
+        with Program(strict=False) as logic:
+            with Rung(Bool("Enable")):
+                time_drum(
+                    outputs=[Bool("Y1"), Bool("Y2")],
+                    presets=[200, 300],
+                    unit="ms",
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=Int("Step"),
+                    accumulator=Int("Acc"),
+                    completion_flag=Bool("Done"),
+                ).reset(Bool("Reset")).jog(Bool("Jog"))
+        result = never(logic, Bool("Done"), Int("Acc") < 300)
+        assert isinstance(result, Counterexample)
+        tags = _replay_trace(logic, result.trace).current_state.tags
+        assert tags["Done"] is True and tags["Acc"] < 300
+
     def test_time_drum_without_a_jump(self) -> None:
         logic = self._time_drum(jump=False)
         assert isinstance(never(logic, Bool("Y1"), Bool("Y2")), Proven)
