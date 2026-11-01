@@ -87,7 +87,7 @@ def on_pyrung_seek(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         except KeyError as exc:
             raise adapter.DAPAdapterError(f"Scan {raw_scan_id} is not retained in history") from exc
 
-        tags = {name: adapter._format_value(value) for name, value in state.tags.items()}
+        tags = adapter._tag_values_body(state.tags)
 
     return {
         "scanId": state.scan_id,

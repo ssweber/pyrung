@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import re
 import sys
 import threading
 import time
@@ -51,6 +52,15 @@ class DAPAdapterError(Exception):
 
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
+
+
+#: pyrung's own bookkeeping tags (``__frz3__Dest`` from a synthesis bracket,
+#: ``__cpl_on__Fb`` from a harness coupling): not the program's, so not shown.
+_INTERNAL_TAG_NAME = re.compile(r"__\w+?__")
+
+
+def _is_internal_tag_name(name: str) -> bool:
+    return _INTERNAL_TAG_NAME.match(name) is not None
 
 
 def _settled_rung_event(events: tuple[RungTraceEvent, ...]) -> RungTraceEvent:
@@ -747,9 +757,7 @@ class DAPAdapter:
         )
         if body is not None:
             body["forces"] = force_patch.json_safe_forces(runner.forces)
-            body["tagValues"] = {
-                name: self._format_value(value) for name, value in runner.current_state.tags.items()
-            }
+            body["tagValues"] = self._tag_values_body(runner.current_state.tags)
             body["tagTypes"] = self._tag_types_locked(runner)
             body["tagHints"] = self._tag_hints_locked(runner)
             body["tagGroups"] = self._tag_groups_locked(runner)
@@ -792,9 +800,7 @@ class DAPAdapter:
             "step": None,
             "regions": all_regions,
             "forces": force_patch.json_safe_forces(runner.forces),
-            "tagValues": {
-                name: self._format_value(value) for name, value in runner.current_state.tags.items()
-            },
+            "tagValues": self._tag_values_body(runner.current_state.tags),
             "tagTypes": self._tag_types_locked(runner),
             "tagHints": self._tag_hints_locked(runner),
             "tagGroups": self._tag_groups_locked(runner),
@@ -816,6 +822,14 @@ class DAPAdapter:
                 }
             )
         return variables
+
+    def _tag_values_body(self, tags: Any) -> dict[str, str]:
+        """Formatted values of the program's tags, without pyrung's internal ones."""
+        return {
+            name: self._format_value(value)
+            for name, value in tags.items()
+            if not _is_internal_tag_name(name)
+        }
 
     def _format_value(self, value: Any) -> str:
         if isinstance(value, str):

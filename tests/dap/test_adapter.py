@@ -3814,6 +3814,47 @@ def test_live_trace_body_includes_tag_hints(tmp_path: Path):
     assert plain_hints == {"min": -32768, "max": 32767, "rangeDefault": True}
 
 
+def test_trace_and_seek_tag_values_leave_out_internal_tags(tmp_path: Path):
+    # A synthesis bracket's ``__frz{n}__Dest`` bits and a harness's
+    # ``__cpl_*__Fb`` tags are pyrung's bookkeeping, not the program's.
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(
+        tmp_path,
+        "logic.py",
+        "from pyrung.core import Bool, PLC, Program, Rung, out\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        out(Bool('__frz0__Light'))\n"
+        "        out(Bool('__cpl_ond__Fb'))\n"
+        "        out(Bool('__Mine'))\n"
+        "        out(Bool('Light'))\n"
+        "\n"
+        "runner = PLC(prog)\n",
+    )
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="pyrungStepScan")
+    _drain_messages(out_stream)
+
+    with adapter._state_lock:
+        live = adapter._live_trace_body_locked()
+        current = adapter._current_trace_body_locked()
+    seek = _single_response(
+        _send_request(adapter, out_stream, seq=4, command="pyrungSeek", arguments={"scanId": 1})
+    )
+    assert live is not None
+    assert current is not None
+    for values in (live["tagValues"], current["tagValues"], seek["body"]["tags"]):
+        assert values["Light"] == "True"
+        assert values["__Mine"] == "True"
+        assert "__frz0__Light" not in values
+        assert "__cpl_ond__Fb" not in values
+
+
 def _tag_range_hints_script() -> str:
     return (
         "from pyrung.core import Bool, Char, Dint, Int, Real, Word, PLC, Program, Rung, copy\n"
