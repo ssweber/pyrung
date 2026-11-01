@@ -103,6 +103,8 @@ All three drums follow the same rules:
 - **A step register out of range** goes to step 1 the next scan the rung is true; a paused drum leaves it alone. The correction writes no output by itself, but a time drum also times on that scan: if step 1 is already finished, the drum moves on and writes the new step's row. A jog edge leaves that scan alone too, and the scan after it corrects the step.
 - A time drum's accumulator is 0 on the scan of every step change: an advance, a jog, a jump, a reset and a correction.
 
+CLICK has not been asked yet whether an event or time step after a jump ends a completion; pyrung takes it that one does, as a jog does.
+
 ### Variadic condition chaining
 
 Builder condition arguments (`.down(...)`, `.clock(...)`, `.reset(...)`, `.jump(...)`, `.jog(...)`) all accept single conditions, multiple positional conditions, or tuple/list groups. All forms normalize to one AND expression:
