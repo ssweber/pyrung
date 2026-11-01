@@ -7,7 +7,7 @@ it as a human-readable formula.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Set
+from collections.abc import Callable, Iterator, Set
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
@@ -374,56 +374,125 @@ class _SolveOrder:
 
     Each instruction reads its conditions when the scan reaches it; a
     branch's own contacts see what earlier instructions wrote, and the
-    conditions it shares with them keep the value they were first solved
-    with.  Positions count each node's first read and its instructions in
-    that order (main rungs, then subroutines in graph order), so a node whose
-    instructions come after a branch in source order writes after that branch
-    reads, although its node index is lower.
+    conditions it shares with them (its rung's and its parent branches') keep
+    the value they were first solved with.  Positions count each node's first
+    read and its instructions in that order (main rungs, then subroutines in
+    graph order), so a node whose instructions come after a branch in source
+    order writes after that branch reads, although its node index is lower.
     """
 
     reads: dict[int, int]  # node index -> position its own contacts are read at
     writes: dict[int, int]  # node index -> position of its last instruction
+    tag_writes: dict[tuple[int, str], int]  # (node, tag) -> its last write of tag
+    parents: dict[int, int | None]  # node index -> the rung or branch it is on
+
+    def chain(self, node: int) -> list[int]:
+        """The rung and branches from the top of *node*'s rung down to *node*."""
+        chain = [node]
+        parent = self.parents.get(node)
+        while parent is not None:
+            chain.append(parent)
+            parent = self.parents.get(parent)
+        chain.reverse()
+        return chain
 
     def reader_position(self, nodes: list[int]) -> int:
         """The latest position at which any of *nodes* reads its contacts."""
         return max(self.reads[ni] for ni in nodes)
 
-    def written_before(self, writer: int, position: int) -> bool:
-        """True when *writer*'s instructions have all run by *position*."""
-        return self.writes.get(writer, self.reads[writer]) < position
+    def write_position(self, writer: int, tag: str | None = None) -> int:
+        """Where *writer* last writes *tag* (or, without one, its last instruction)."""
+        if tag is not None and (writer, tag) in self.tag_writes:
+            return self.tag_writes[(writer, tag)]
+        return self.writes.get(writer, self.reads[writer])
+
+    def written_before(self, writer: int, position: int, tag: str | None = None) -> bool:
+        """True when *writer* has written *tag* by *position*."""
+        return self.write_position(writer, tag) < position
 
 
 def _build_solve_order(program: Program) -> _SolveOrder:
     """Number every node's read and instructions in solve order, mirroring
     build_program_graph's node order."""
     from pyrung.core.rung import Rung as _Rung
+    from pyrung.core.validation._common import _resolve_tag_names
 
     reads: dict[int, int] = {}
     writes: dict[int, int] = {}
+    tag_writes: dict[tuple[int, str], int] = {}
+    parents: dict[int, int | None] = {}
     index = 0
     position = 0
 
-    def walk(rung: Rung) -> None:
+    def walk(rung: Rung, parent: int | None) -> None:
         nonlocal index, position
         node = index
         index += 1
+        parents[node] = parent
         reads[node] = position
         position += 1
         for item in rung._execution_items:
             if isinstance(item, _Rung):
-                walk(item)
-            else:
-                writes[node] = position
-                position += 1
+                walk(item, node)
+                continue
+            writes[node] = position
+            target = getattr(item, "target", None)
+            if target is not None:
+                for name in _resolve_tag_names(target):
+                    tag_writes[(node, name)] = position
+            position += 1
 
     for rung in program.rungs:
-        walk(rung)
+        walk(rung, None)
 
     for sub_name in sorted(program.subroutines):
         for rung in program.subroutines[sub_name]:
-            walk(rung)
+            walk(rung, None)
 
-    return _SolveOrder(reads=reads, writes=writes)
+    return _SolveOrder(reads=reads, writes=writes, tag_writes=tag_writes, parents=parents)
+
+
+#: Resolves an expression whose contacts the scan reads at a position.
+_Resolve = Callable[["Expr", int], "Expr"]
+
+
+def _unresolved(expr: Expr, _position: int) -> Expr:
+    return expr
+
+
+def _node_parts(
+    ni: int, rung_map: dict[int, Rung], order: _SolveOrder
+) -> list[tuple[Expr, int]] | None:
+    """*ni*'s conditions, split by where the scan reads them.
+
+    One part per level from the top of the rung down to *ni*: that rung's or
+    branch's own contacts and the position they are read at.  ``None`` when
+    *ni* is missing from *rung_map*.
+    """
+    rung = rung_map.get(ni)
+    if rung is None:
+        return None
+    conditions = rung._conditions
+    parts: list[tuple[Expr, int]] = []
+    covered = 0
+    for level in order.chain(ni):
+        owner = rung_map.get(level)
+        if owner is None or owner._branch_condition_start != covered:
+            # Not the shape a branch is built with; read every contact
+            # where *ni* reads its own.
+            return [(_conditions_list_to_expr(list(conditions)), order.reads[ni])]
+        covered = len(owner._conditions)
+        own = list(conditions[owner._branch_condition_start : covered])
+        if own:
+            parts.append((_conditions_list_to_expr(own), order.reads[level]))
+    return parts
+
+
+def _resolved_parts(parts: list[tuple[Expr, int]], resolve: _Resolve) -> Expr:
+    exprs = tuple(resolve(expr, position) for expr, position in parts)
+    if not exprs:
+        return Const(True)
+    return exprs[0] if len(exprs) == 1 else And(exprs)
 
 
 # ---------------------------------------------------------------------------
@@ -443,38 +512,38 @@ def _try_factored_branches(
     effective: list[int],
     graph: ProgramGraph,
     rung_map: dict[int, Rung],
+    order: _SolveOrder,
+    resolve: _Resolve,
 ) -> Expr | None:
     """Factor sibling branches into ``And(parent, Or(local₁, local₂, ...))``.
 
     Returns ``None`` unless the writers are all branches of one parent: only
-    then do they inherit the same contacts.
+    then do they inherit the same contacts.  The inherited part is resolved
+    where the scan read it, each local part where its branch reads it.
     """
     nodes = [graph.rung_nodes[ni] for ni in effective]
     if not all(n.branch_path for n in nodes):
         return None
-    if len({n.branch_path[:-1] for n in nodes}) != 1:
+    parents = {order.parents.get(ni) for ni in effective}
+    if len(parents) != 1:
+        return None
+    parent = parents.pop()
+    if parent is None:
+        return None
+    shared = _node_parts(parent, rung_map, order)
+    if shared is None:
         return None
 
-    rungs: list[Rung] = []
+    local_exprs: list[Expr] = []
     for ni in effective:
         rung = rung_map.get(ni)
         if rung is None:
             return None
-        rungs.append(rung)
-
-    starts = [r._branch_condition_start for r in rungs]
-    if len(set(starts)) != 1:
-        return None
-
-    start = starts[0]
-    parent_expr = _conditions_list_to_expr(rungs[0]._conditions[:start])
-
-    local_exprs: list[Expr] = []
-    for rung in rungs:
-        local_exprs.append(_conditions_list_to_expr(rung._conditions[start:]))
+        own = list(rung._conditions[rung._branch_condition_start :])
+        local_exprs.append(resolve(_conditions_list_to_expr(own), order.reads[ni]))
 
     inner = local_exprs[0] if len(local_exprs) == 1 else Or(tuple(local_exprs))
-    return And((parent_expr, inner))
+    return And((_resolved_parts(shared, resolve), inner))
 
 
 def _resets_only(rung: Rung, tag: str) -> bool:
@@ -569,29 +638,41 @@ def _combine_single_scope(
     graph: ProgramGraph,
     rung_map: dict[int, Rung],
     order: _SolveOrder,
+    resolve: _Resolve,
+    *,
+    tag: str | None = None,
 ) -> tuple[Expr, list[int]] | None:
-    """Combine writers within one scope: last rung-group wins; sibling branches
-    in that rung factor as ``And(parent, Or(...))`` (else ORed).  The writers
-    are listed in solve order."""
+    """Combine writers within one scope: last rung-group wins.
+
+    In that rung the writers are taken in solve order.  An ``out`` writes its
+    power whether on or off, so with *tag* set the last ``out`` of *tag* wins
+    over every writer above it; the writers after it (a latch, a copy) are
+    ORed in.  Sibling branches factor as ``And(parent, Or(...))`` (else ORed).
+    """
     by_rung: dict[int, list[int]] = {}
     for ni in indices:
         by_rung.setdefault(graph.rung_nodes[ni].rung_index, []).append(ni)
     if not by_rung:
         return None
 
-    effective = sorted(by_rung[max(by_rung)], key=lambda ni: order.writes.get(ni, -1))
+    effective = sorted(by_rung[max(by_rung)], key=lambda ni: order.write_position(ni, tag))
+    if tag is not None:
+        last_out = max(
+            (k for k, ni in enumerate(effective) if tag in graph.rung_nodes[ni].ote_writes),
+            default=0,
+        )
+        effective = effective[last_out:]
     if len(effective) > 1:
-        factored = _try_factored_branches(effective, graph, rung_map)
+        factored = _try_factored_branches(effective, graph, rung_map, order, resolve)
         if factored is not None:
             return factored, effective
 
     branch_exprs: list[Expr] = []
     for ni in effective:
-        rung = rung_map.get(ni)
-        if rung is None:
+        parts = _node_parts(ni, rung_map, order)
+        if parts is None:
             continue
-        sp = rung.sp_tree()
-        branch_exprs.append(Const(True) if sp is None else _sp_to_expr(sp))
+        branch_exprs.append(_resolved_parts(parts, resolve))
 
     if not branch_exprs:
         return None
@@ -604,6 +685,7 @@ def _expr_for_writers(
     graph: ProgramGraph,
     rung_map: dict[int, Rung],
     order: _SolveOrder,
+    resolve: _Resolve = _unresolved,
     *,
     tag: str | None = None,
     before: int | None = None,
@@ -627,14 +709,17 @@ def _expr_for_writers(
     *every* writer only resets the tag, the True form is ``False``.
 
     *before*, when set, is a reader's position in *order*: it restricts to
-    the writers whose instructions have run by then (if none have, the reader
+    the writers that have written the tag by then (if none have, the reader
     sees the last scan's value, so every writer stays).
+
+    *resolve* is applied to each part of the form with the position the scan
+    reads that part's contacts at (see :func:`_node_parts`).
 
     Returns ``(expr, effective_node_indices)`` or ``None`` if no writers.
     """
     indices = writer_indices
     if before is not None:
-        indices = frozenset(i for i in indices if order.written_before(i, before))
+        indices = frozenset(i for i in indices if order.written_before(i, before, tag))
         if not indices:
             indices = writer_indices
 
@@ -647,7 +732,7 @@ def _expr_for_writers(
         indices = drivers
 
     if ctx is None:
-        return _combine_single_scope(frozenset(indices), graph, rung_map, order)
+        return _combine_single_scope(frozenset(indices), graph, rung_map, order, resolve, tag=tag)
 
     scopes: dict[str | None, list[int]] = {}
     for ni in indices:
@@ -663,13 +748,15 @@ def _expr_for_writers(
     # wins caused (keeping only the highest-rung-index scope) is gone.
     contribs: list[tuple[int, Expr, list[int]]] = []
     for sub, nodes in scopes.items():
-        res = _combine_single_scope(frozenset(nodes), graph, rung_map, order)
+        res = _combine_single_scope(frozenset(nodes), graph, rung_map, order, resolve, tag=tag)
         if res is None:
             continue
         local, eff = res
         guard = None if sub is None else ctx.caller_guards.get(sub)
         if guard == Const(False):
             continue  # uncalled subroutine never drives the tag
+        if guard is not None and guard != Const(True):
+            guard = resolve(guard, order.reader_position(eff))
         # Main scope has no guard.  An unknown one (a subroutine whose call its
         # conditions do not decide) narrows nothing either: the scope's own form
         # stands, a superset of the scans it drives the tag on.
@@ -794,11 +881,22 @@ def _resolve_pivots(
     if not writer_indices:
         return expr
 
+    resolve = _pivot_resolver(
+        graph,
+        rung_map,
+        order,
+        resolvable=resolvable,
+        visited=visited | {tag_name},
+        depth=depth + 1,
+        ctx=ctx,
+        _stats=_stats,
+    )
     result = _expr_for_writers(
         writer_indices,
         graph,
         rung_map,
         order,
+        resolve,
         tag=tag_name,
         before=reader_position,
         ctx=ctx,
@@ -806,29 +904,46 @@ def _resolve_pivots(
     if result is None:
         return expr
 
-    pivot_expr, effective = result
+    resolved, _effective = result
 
     if _stats is not None:
         _stats["pivot_count"] = _stats.get("pivot_count", 0) + 1
         _stats["depth"] = max(_stats.get("depth", 0), depth + 1)
 
-    resolved = _resolve_pivots(
-        pivot_expr,
-        graph,
-        rung_map,
-        order,
-        resolvable=resolvable,
-        reader_position=order.reader_position(effective),
-        visited=visited | {tag_name},
-        depth=depth + 1,
-        ctx=ctx,
-        _stats=_stats,
-    )
-
     if expr.form == "xio":
         resolved = _negate(resolved)
 
     return resolved
+
+
+def _pivot_resolver(
+    graph: ProgramGraph,
+    rung_map: dict[int, Rung],
+    order: _SolveOrder,
+    *,
+    resolvable: frozenset[str],
+    visited: frozenset[str] = frozenset(),
+    depth: int = 0,
+    ctx: _GuardCtx | None = None,
+    _stats: dict[str, int] | None = None,
+) -> _Resolve:
+    """A *resolve* for :func:`_expr_for_writers` that substitutes pivots."""
+
+    def resolve(expr: Expr, position: int) -> Expr:
+        return _resolve_pivots(
+            expr,
+            graph,
+            rung_map,
+            order,
+            resolvable=resolvable,
+            reader_position=position,
+            visited=visited,
+            depth=depth,
+            ctx=ctx,
+            _stats=_stats,
+        )
+
+    return resolve
 
 
 def _negate(expr: Expr) -> Expr:
@@ -1184,23 +1299,17 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
         if not writer_indices:
             continue
 
-        result = _expr_for_writers(writer_indices, graph, rung_map, order, tag=tag_name, ctx=ctx)
+        stats: dict[str, int] = {"pivot_count": 0, "depth": 0}
+        resolve = _pivot_resolver(
+            graph, rung_map, order, resolvable=resolvable, ctx=ctx, _stats=stats
+        )
+        result = _expr_for_writers(
+            writer_indices, graph, rung_map, order, resolve, tag=tag_name, ctx=ctx
+        )
         if result is None:
             continue
 
-        raw_expr, effective = result
-
-        stats: dict[str, int] = {"pivot_count": 0, "depth": 0}
-        resolved = _resolve_pivots(
-            raw_expr,
-            graph,
-            rung_map,
-            order,
-            resolvable=resolvable,
-            reader_position=order.reader_position(effective),
-            ctx=ctx,
-            _stats=stats,
-        )
+        resolved, _effective = result
         simplified_expr = simplify(resolved)
 
         results[tag_name] = TerminalForm(
