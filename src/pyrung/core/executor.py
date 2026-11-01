@@ -191,7 +191,12 @@ class RungRun:
         an object cannot name the row that read it.  Here every inherited
         position that shares an object with another row gets a structural copy
         of its own, so :meth:`condition_view` routes each leaf to its row.
+        Built once per run.
         """
+        return self._sp_tree
+
+    @cached_property
+    def _sp_tree(self) -> Any:
         if not self.inherited_views:
             return self.rung.sp_tree()
         from pyrung.core.analysis.sp_tree import conditions_to_sp
