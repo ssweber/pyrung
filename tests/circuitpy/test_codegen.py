@@ -1790,6 +1790,89 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: (*wanted, False) for name in results}
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
+    @pytest.mark.parametrize(
+        "store",
+        [
+            pytest.param(lambda r, chars, reals: copy(r, chars[1]), id="copy"),
+            pytest.param(lambda r, chars, reals: fill(r, chars.select(1, 2)), id="fill"),
+            pytest.param(
+                lambda r, chars, reals: blockcopy(reals.select(1, 2), chars.select(1, 2)),
+                id="blockcopy",
+            ),
+        ],
+    )
+    def test_a_non_finite_real_into_a_char_is_zero_on_every_backend(
+        self, monkeypatch, store, operand
+    ):
+        """No flag and no raise, and the rung runs on."""
+        r, setup = self._non_finite_real(operand)
+        chars = Block("Txt", TagType.CHAR, 1, 2)
+        reals = Block("Vals", TagType.REAL, 1, 2)
+        code = Int("Code", default=7)
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+                copy(r, reals[1])
+                copy(r, reals[2])
+            with Rung(~system.sys.first_scan):
+                store(r, chars, reals)
+                copy(5, after)
+            with Rung(~system.sys.first_scan, chars[1] == "A"):
+                copy(1, code)
+
+        results = _on_every_backend(prog, monkeypatch, (code, *self._FAULTS, after), scans=2)
+        assert results == {name: (7, False, False, False, 5) for name in results}
+
+    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
+    def test_a_copy_of_a_non_finite_real_stores_zero_in_a_char_on_every_backend(
+        self, monkeypatch, operand
+    ):
+        r, setup = self._non_finite_real(operand)
+        ch = Char("Ch", default="A")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                copy(r, ch)
+
+        results = _on_every_backend(prog, monkeypatch, (ch,), scans=2)
+        assert results == {name: (0,) for name in results}
+
+    def test_a_copy_of_a_finite_real_into_a_char_agrees_on_every_backend(self, monkeypatch):
+        r = Real("R", default=66.5)
+        ch = Char("Ch", default="A")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(r, ch)
+
+        results = _on_every_backend(prog, monkeypatch, (ch, *self._FAULTS), scans=1)
+        assert results == {name: (66.5, False, False, False) for name in results}
+
+    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
+    def test_a_non_finite_real_to_binary_faults_on_every_backend(self, monkeypatch, operand):
+        """A code needs an integer: the TXT stays as it was, with SC43, and the rung runs on."""
+        r, setup = self._non_finite_real(operand)
+        ch = Char("Ch", default="A")
+        code = Int("Code", default=7)
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                copy(r, ch, convert=to_binary)
+                copy(5, after)
+            with Rung(~system.sys.first_scan):
+                copy(ch, code, convert=to_ascii)
+
+        results = _on_every_backend(prog, monkeypatch, (code, *self._FAULTS, after), scans=2)
+        faults = tuple(flag.name.endswith("out_of_range") for flag in self._FAULTS)
+        assert results == {name: (ord("A"), *faults, 5) for name in results}
+
+    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_non_finite_randint_bound_reads_zero_on_every_backend(self, monkeypatch, operand):
         """A randint() of a Real reads 0 with no flag, whatever the Real holds."""
         from pyrung.core import randint

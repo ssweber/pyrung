@@ -261,7 +261,8 @@ class CopyInstruction(OneShotMixin, Instruction):
             else:
                 _set_fault_out_of_range(ctx)
             return
-        except ValueError:
+        except (ValueError, OverflowError):
+            # int() of NaN raises the first, of +/-Inf the second.
             _set_fault_out_of_range(ctx)
             return
 
@@ -402,7 +403,7 @@ class FillInstruction(OneShotMixin, Instruction):
 
         updates = {}
         for dst_tag in dst_tags:
-            if dst_tag.type.name == "CHAR":
+            if dst_tag.type.name == "CHAR" and isinstance(value, str):
                 updates[dst_tag.name] = _as_single_ascii_char(value)
             else:
                 updates[dst_tag.name] = _store_copy_value_to_tag_type(value, dst_tag)

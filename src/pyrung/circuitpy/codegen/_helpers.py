@@ -191,7 +191,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "        return bool(value)",
         '    if dest_type == "CHAR":',
         "        if not isinstance(value, str):",
-        '            raise ValueError("CHAR value must be a string")',
+        "            return value",
         '        if value == "":',
         '            return "\\x00"',
         "        if len(value) != 1 or ord(value) > 255:",
