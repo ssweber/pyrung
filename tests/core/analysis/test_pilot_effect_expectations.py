@@ -2391,7 +2391,6 @@ def test_same_rung_consumer_sees_a_write_only_in_contacts_read_after_it() -> Non
     """A branch before the producer read its contacts before the write; a
     branch after it reads the write.  Stepping agrees."""
     from pyrung.core import Rung, branch
-
     from pyrung.core.analysis.pilot.effects import (
         _contacts_read_after_write,
         expectation_from_selected_path,
