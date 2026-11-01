@@ -165,6 +165,10 @@ class _FoldContext:
     unmodeled: frozenset[str] = frozenset()
     # ``(view, source)`` per affine acc view in ``mirror_names``.
     mirror_sources: tuple[tuple[str, str], ...] = ()
+    # ``(source, lo, hi)`` per view whose store can leave its destination's range
+    # with a reader that can tell: the source's crossings end a window on leaving
+    # ``lo..hi``, and no window starts outside it (see _mirror_past_limit).
+    mirror_limits: tuple[tuple[str, int, int], ...] = ()
     # Unread tags a copy/calc writes from a coordinate: stale inside a window,
     # rebuilt by its landing scan (see _audit_coordinate_reads).
     landing_rebuilt: frozenset[str] = frozenset()
@@ -2122,21 +2126,39 @@ def _is_clock_view(tag: str, pdg: ProgramGraph, program: Any, source_names: froz
     return src in source_names or _is_free_running_selfcalc(src, pdg, program)
 
 
+def _mirror_limit(dest: Any, scale: int, offset: int) -> tuple[int, int] | None:
+    """Source range over which ``scale * source + offset`` fits *dest*.
+
+    ``None`` for a ``Real``: nothing a coordinate holds leaves its range.
+    """
+    found = _TYPE_RANGES.get(getattr(getattr(dest, "type", None), "name", None) or "")
+    if found is None:
+        return None
+    lo, hi = found
+    return (lo - offset, hi - offset) if scale == 1 else (offset - hi, offset - lo)
+
+
 def _mirror_candidates(
     plc: PLC,
     pdg: ProgramGraph,
     program: Any,
     target_names: frozenset[str],
     source_names: frozenset[str],
-) -> list[tuple[str, str, int, int]]:
-    """Structurally eligible affine acc views: ``(view, source, scale, offset)``."""
+) -> list[tuple[str, str, int, int, bool]]:
+    """Structurally eligible affine acc views: ``(view, source, scale, offset, wraps)``.
+
+    Past the destination's range a ``calc`` stores a wrapped value (*wraps*) and
+    a ``copy`` the limit; inside it a view is a linear image of its source.  A
+    ``calc`` that stores anything but this scan's decimal result is not a view,
+    nor is a destination with no numeric range.
+    """
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
     from pyrung.core.tag import Tag
 
     harness_names = _harness_referenced_names(plc)
-    out: list[tuple[str, str, int, int]] = []
+    out: list[tuple[str, str, int, int, bool]] = []
     for tag, writers in pdg.writers_of.items():
         if tag in harness_names or tag in target_names or tag in source_names:
             continue
@@ -2152,6 +2174,7 @@ def _mirror_candidates(
         if ro is None:
             continue
         matched: tuple[str, int, int] | None = None
+        wraps = False
         n_writers = 0
         for instr in ro._instructions:
             if isinstance(instr, CopyInstruction) and getattr(instr.dest, "name", None) == tag:
@@ -2161,11 +2184,15 @@ def _mirror_candidates(
             elif isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == tag:
                 n_writers += 1
                 m = _match_affine_of(instr.expression)
-                if m is not None:
+                if m is not None and instr.mode == "decimal" and not instr.oneshot:
                     matched = m
+                    wraps = True
         if n_writers != 1 or matched is None or matched[0] not in source_names:
             continue
-        out.append((tag, matched[0], matched[1], matched[2]))
+        dest_type = getattr(getattr(pdg.tags.get(tag), "type", None), "name", None)
+        if dest_type not in ("INT", "DINT", "WORD", "REAL"):
+            continue
+        out.append((tag, matched[0], matched[1], matched[2], wraps))
     return out
 
 
@@ -2370,7 +2397,7 @@ def _build_fold_context(
                 mod_period = 4096
                 break
 
-    mirror_cands: list[tuple[str, str, int, int]] = []
+    mirror_cands: list[tuple[str, str, int, int, bool]] = []
     if advice is None or advice.has("fold_derived_crossings"):
         mirror_cands = _mirror_candidates(
             plc, pdg, program, target_names, acc_names | modwrap_names
@@ -2378,7 +2405,7 @@ def _build_fold_context(
 
     watch = acc_names | profile_fb_names | modwrap_names
     comparisons, read_tags = _scan_rung_reads(
-        pdg, program, watch | frozenset(m for m, _a, _scale, _offset in mirror_cands)
+        pdg, program, watch | frozenset(cand[0] for cand in mirror_cands)
     )
 
     # sys.scan_clock_toggle (scan_id even) and sys.scan_counter (scan_id %
@@ -2418,8 +2445,28 @@ def _build_fold_context(
             + ", ".join(sorted(scan_derived_names))
         )
 
+    protected_names = target_names | _harness_referenced_names(plc)
+
+    def unread(name: str) -> bool:
+        return name not in protected_names and not pdg.all_readers_of.get(name)
+
+    # Where a source can stand, so a limit past that never shortens a window.
+    source_spans: dict[str, _Span] = {
+        s.acc_name: (0.0, float(s.acc_max)) for s in sources if s.timed
+    }
+    source_spans.update(
+        {
+            s.acc_name: (float(s.value_range[0]), float(s.value_range[1]))
+            for s in sources
+            if s.value_range is not None
+        }
+    )
+    source_spans.update({mw.name: (0.0, float(mw.m - 1)) for mw in modwrap})
+    fault_flag = _sys_points.fault.out_of_range.name
+    flag_stale = False
     mirror_names: set[str] = set()
     mirror_cmp_keys: dict[str, set[tuple[str, Any]]] = {}
+    mirror_limits: list[tuple[str, int, int]] = []
     if mirror_cands:
         merged = dict(comparisons)
         reverse_form = {
@@ -2430,7 +2477,7 @@ def _build_fold_context(
             "eq": "eq",
             "ne": "ne",
         }
-        for m, a, scale, offset in mirror_cands:
+        for m, a, scale, offset, wraps in mirror_cands:
             cmps = merged.get(m, ())
             (writer_ri,) = pdg.writers_of[m]
             if any(
@@ -2443,6 +2490,19 @@ def _build_fold_context(
                 if scale == 1
                 else tuple((reverse_form[f], offset - t) for f, t in cmps)
             )
+            limit = _mirror_limit(pdg.tags.get(m), scale, offset)
+            if limit is not None:
+                span = source_spans.get(a) or _tag_range(pdg.tags.get(a), {})
+                leaves_low = span is None or span[0] < limit[0]
+                leaves_high = span is None or span[1] > limit[1]
+                if not unread(fault_flag) or (wraps and cmps):
+                    mirror_limits.append((a, limit[0], limit[1]))
+                    if leaves_low:
+                        projected += (("lt", limit[0]),)
+                    if leaves_high:
+                        projected += (("gt", limit[1]),)
+                elif leaves_low or leaves_high:
+                    flag_stale = True
             merged[a] = merged.get(a, ()) + projected
             merged.pop(m, None)
             mirror_names.add(m)
@@ -2454,7 +2514,7 @@ def _build_fold_context(
                 + ", ".join(sorted(mirror_names))
             )
     mirror_sources = tuple(
-        sorted((m, a) for m, a, _scale, _offset in mirror_cands if m in mirror_names)
+        sorted((cand[0], cand[1]) for cand in mirror_cands if cand[0] in mirror_names)
     )
 
     # Every read of a moving coordinate must be one the crossing set places.
@@ -2464,10 +2524,6 @@ def _build_fold_context(
     }
     modeled_writes.update({name: frozenset({name}) for name in modwrap_names})
     modeled_writes.update({m: frozenset({a}) for m, a in mirror_sources})
-    protected_names = target_names | _harness_referenced_names(plc)
-
-    def unread(name: str) -> bool:
-        return name not in protected_names and not pdg.all_readers_of.get(name)
 
     dormant: dict[str, list[frozenset[str] | None]] = {}
     unmodeled_raw, rung_cmps, instr_cmps, landing_rebuilt = _audit_coordinate_reads(
@@ -2478,6 +2534,9 @@ def _build_fold_context(
         unread,
         dormant,
     )
+    if flag_stale:
+        # No reader of the flag those views raise: the landing scan rebuilds it.
+        landing_rebuilt = landing_rebuilt | {fault_flag}
     unmodeled_set = set(unmodeled_raw)
     found: dict[str, list[tuple[str, Any]]] = {}
     for table in (rung_cmps, instr_cmps):
@@ -2699,6 +2758,7 @@ def _build_fold_context(
         time_mirrors=time_mirrors,
         unmodeled=unmodeled,
         mirror_sources=mirror_sources,
+        mirror_limits=tuple(mirror_limits),
         landing_rebuilt=landing_rebuilt,
         contested_timers=contested_timers,
         clock_edge_memory=every_scan_clock_edge_keys(getattr(plc, "_site_table", None)),
@@ -3462,6 +3522,18 @@ def _timer_landing(
             return None
         out.append((move.src.acc_name, acc_last, frac_in, frac_out))
     return tuple(out)
+
+
+def _mirror_past_limit(ctx: _FoldContext, state: Any) -> bool:
+    """Whether a view's source stands where its store clamps or wraps and flags.
+
+    The scans there can each read differently, so only stepping is exact.
+    """
+    for source, lo, hi in ctx.mirror_limits:
+        value = state.tags.get(source)
+        if isinstance(value, (int, float)) and not lo <= value <= hi:
+            return True
+    return False
 
 
 def _nearest_acc_crossing(
@@ -4384,6 +4456,8 @@ class _OrdinaryFoldStrategy:
         if timer_moves is None:
             return None
         if not self._sole_timer_writes(forced, acc_writes):
+            return None
+        if _mirror_past_limit(self.ctx, state):
             return None
         unmodeled = self.unmodeled
         if self.predicate_reads is not None:
