@@ -354,6 +354,12 @@ def break_guard_holds(
     caller escalates to the skiff on.  Rejection stays over COMPLETE finite
     domains only (inherited from ``_best_forcing_holds`` / ``_read_domains``);
     it never fabricates a hold it cannot read.
+
+    The guard (a branch's inherited contacts and its own) is read on one trial
+    view.  The levers it varies are steerable inputs, which no instruction
+    writes, so every contact reads them alike.  The other reads keep the
+    values in ``snap`` and ``fixed``: a program-written read that an earlier
+    instruction changes is read as the caller gives it.
     """
     from pyrung.core.analysis.pdg import _extract_reads_from_condition
 
