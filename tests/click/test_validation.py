@@ -1610,8 +1610,9 @@ class TestForLoopCountAndRandBounds:
     def test_real_bound_is_refused(self):
         lo = Tag("Lo", TagType.REAL)
         report = self._rand(lo, 9, [lo.map_to(df[1])])
-        assert CLK_RAND_REAL_BOUND in [f.code for f in report.errors]
-        assert report.errors[0].message.isascii()
+        found = [f for f in report.errors if f.code == CLK_RAND_REAL_BOUND]
+        assert found
+        assert found[0].message.isascii()
 
     def test_real_high_bound_is_refused(self):
         hi = Tag("Hi", TagType.REAL)
