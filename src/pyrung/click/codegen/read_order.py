@@ -15,8 +15,10 @@ may write, and asks
 outputs a move would cross.
 
 What an output writes is read off its AF token: every operand it names (reads
-included), the Done bit of a named timer or counter accumulator, a whole bank
-for a pointer, and everything for ``call(...)``.  A system contact (SC, SD)
+included), both the Done bit and the accumulator of a timer or counter it names
+by either, a whole bank for a pointer or for a word view of a bit bank (``XD``,
+``YD``), and everything for ``call(...)``.  Addresses are compared in one
+spelling (``DS001`` is ``DS1``).  A system contact (SC, SD)
 counts as written by every output.  The guard over-approximates: it may keep
 two equal contacts apart that could have shared, never the reverse.
 """
@@ -28,15 +30,21 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pyrung.click._topology import Leaf, SPNode, as_series_children
-from pyrung.click.codegen.constants import _OPERAND_RE, _RANGE_RE
+from pyrung.click.codegen.constants import _RANGE_RE
 from pyrung.click.codegen.utils import _strip_quoted_strings
 from pyrung.core.validation.order_dependence import SolveRow, reads_after_write
 
+_ADDRESS_RE = re.compile(r"(CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|XD|YD|X|Y|C|T)(\d+)u?")
 _POINTER_RE = re.compile(r"([A-Z]+)\[")
 _BANK_RE = re.compile(r"[A-Z]+")
+_PAIR_RE = re.compile(r"(CTD|CT|TD|T)(\d+)")
 _SYSTEM = ("SC", "SD")
 _EVERYTHING = "*"
 """A write of every tag: ``call(...)`` runs a subroutine that may write any."""
+_WORD_VIEWS = {"XD": "X", "YD": "Y"}
+"""Word views of a bit bank: ``XD0`` reads sixteen X bits at once."""
+_PAIRS = {"CTD": "CT", "CT": "CTD", "TD": "T", "T": "TD"}
+"""A timer or counter's Done bit and accumulator, written together."""
 
 
 def _bank(name: str) -> str:
@@ -45,15 +53,34 @@ def _bank(name: str) -> str:
 
 
 def _operands(text: str) -> tuple[set[str], set[str]]:
-    """Named operands of *text* (ranges expanded), and banks it reaches by pointer."""
+    """Named operands of *text* (ranges expanded), and banks it reaches whole.
+
+    Names come normalized (``DS001`` and ``DS1`` are one address).  A bank
+    is reached whole through a pointer (``DS[DD1]``) or through a word view
+    of a bit bank (``XD0`` is sixteen X bits; the guard takes it as any).
+    """
     text = _strip_quoted_strings(text)
     names: set[str] = set()
+    banks: set[str] = set()
+
+    def add(prefix: str, number: int) -> None:
+        if prefix in _WORD_VIEWS:
+            banks.add(_WORD_VIEWS[prefix])
+        else:
+            names.add(f"{prefix}{number}")
+
     for match in _RANGE_RE.finditer(text):
         prefix, start, end = match.group(1), int(match.group(2)), int(match.group(4))
         if prefix == match.group(3) and start <= end:
-            names.update(f"{prefix}{number}" for number in range(start, end + 1))
-    names.update(_OPERAND_RE.findall(text))
-    return names, set(_POINTER_RE.findall(text))
+            if prefix in _WORD_VIEWS:
+                banks.add(_WORD_VIEWS[prefix])
+            else:
+                names.update(f"{prefix}{number}" for number in range(start, end + 1))
+    for prefix, digits in _ADDRESS_RE.findall(text):
+        add(prefix, int(digits))
+    for bank in _POINTER_RE.findall(text):
+        banks.add(_WORD_VIEWS.get(bank, bank))
+    return names, banks
 
 
 def _token_writes(af_token: str) -> SolveRow:
@@ -61,10 +88,11 @@ def _token_writes(af_token: str) -> SolveRow:
         return SolveRow(writes=frozenset({_EVERYTHING}))
     names, banks = _operands(af_token)
     for name in list(names):
-        # A token may name only the accumulator (an Out timer variant).
-        for acc, done in (("CTD", "CT"), ("TD", "T")):
-            if name.startswith(acc) and name[len(acc) :].isdigit():
-                names.add(done + name[len(acc) :])
+        # A token may name only the accumulator (an Out timer variant), or
+        # only the Done bit (a reset), and writes both.
+        match = _PAIR_RE.fullmatch(name)
+        if match:
+            names.add(_PAIRS[match.group(1)] + match.group(2))
     return SolveRow(writes=frozenset(names), indexed_writes=frozenset(banks))
 
 

@@ -463,14 +463,14 @@ class _LadderExporter(
                 "instruction must start from the same branch), and each CLICK rung the split "
                 f"makes repeats the contacts in front of its outputs. Contact {contact} would be "
                 f"read again after {writer} on this rung writes {tag}, so it would read "
-                f"another value. Write {tag} on another rung, or give the box a rung of "
-                "its own."
+                f"another value. To export it, move {writer} off this rung: to a rung of its "
+                "own, or to a separate rung before the box."
             )
         else:
             message = (
                 f"Contact {contact} cannot be drawn on the row that reads it here: {writer} on "
-                f"this rung writes {tag} between the two. Write {tag} on another "
-                "rung, or give the rows their own contacts."
+                f"this rung writes {tag} between the two. To export it, move {writer} to a "
+                "rung of its own, or give the rows their own contacts."
             )
         self._raise_issue(path=path, message=message, source=source)
 

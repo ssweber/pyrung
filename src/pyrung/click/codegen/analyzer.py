@@ -709,6 +709,50 @@ def _has_wire_trunk(raw: _RawRung | None) -> bool:
     return row[2] in {"T", "|"} or row[2].startswith("T:")
 
 
+# Instructions pyrung runs last in their flow (``Instruction.is_terminal``):
+# nothing may follow one at the same level of a rung.
+_TERMINAL_NAMES = frozenset(
+    {"count_up", "count_down", "shift", "event_drum", "time_drum", "time_event_drum"}
+)
+
+
+def _ends_flow(instr: _InstructionInfo) -> bool:
+    match = _FUNC_RE.match(instr.af_token)
+    return bool(instr.pins) or (match is not None and match.group(2) in _TERMINAL_NAMES)
+
+
+def _shares_prefix(group: Sequence[_InstructionInfo], order: ReadOrder | None) -> bool:
+    """Whether *group*'s branch trees have a leading contact one read can serve."""
+    trees = [instr.branch_tree for instr in group]
+    shared = len(factor_outputs(trees).shared)
+    return bool(shared_limit(order, trees, [instr.position for instr in group], shared))
+
+
+def _output_runs(
+    instructions: Sequence[_InstructionInfo], order: ReadOrder | None
+) -> list[list[_InstructionInfo]]:
+    """Consecutive outputs that share a leading contact, read once at the first.
+
+    A run grows while its outputs still share a prefix the read order lets
+    them read as one, so outputs teed off one cell stay together (that cell
+    is read once, at the first of them).  A run ends at an instruction that
+    must be last in its flow.
+    """
+    runs: list[list[_InstructionInfo]] = []
+    start = 0
+    while start < len(instructions):
+        stop = start + 1
+        while (
+            stop < len(instructions)
+            and not _ends_flow(instructions[stop - 1])
+            and _shares_prefix(instructions[start : stop + 1], order)
+        ):
+            stop += 1
+        runs.append(list(instructions[start:stop]))
+        start = stop
+    return runs
+
+
 def _split_continued(rung: _AnalyzedRung, raw: _RawRung | None = None) -> list[_AnalyzedRung]:
     """Split a rung with continued-style wires into primary + continued rungs.
 
@@ -719,6 +763,12 @@ def _split_continued(rung: _AnalyzedRung, raw: _RawRung | None = None) -> list[_
     layout cannot live in one DSL rung. Splitting off the sibling as
     ``.continued()`` keeps every output's contacts and stays expressible; a
     continued rung reads its contacts where it stands, as the CLICK rows do.
+
+    The rung splits into runs of outputs that share a leading contact (see
+    :func:`_output_runs`): the first run is the primary rung, each later run a
+    continued rung, each grouped with its shared prefix.  Outputs teed off
+    one cell are never split apart, since a continued rung would read the
+    cell again, after the outputs before it.
 
     The current trigger is still a structural proxy: no shared
     ``condition_tree`` and every instruction carries its own ``branch_tree``.
@@ -734,76 +784,24 @@ def _split_continued(rung: _AnalyzedRung, raw: _RawRung | None = None) -> list[_
     if _has_wire_trunk(raw):
         return [rung]
 
-    # First instruction → primary rung
-    first = rung.instructions[0]
     order = rung.read_order
-    result: list[_AnalyzedRung] = [
-        _AnalyzedRung(
-            comment=rung.comment,
-            condition_tree=first.branch_tree,
-            instructions=[
-                _InstructionInfo(first.af_token, None, first.pins, position=first.position)
-            ],
-            is_continued=rung.is_continued,
-            read_order=order,
+    result: list[_AnalyzedRung] = []
+    for index, run in enumerate(_output_runs(rung.instructions, order)):
+        trees = [(instr.branch_tree, instr.af_token, i) for i, instr in enumerate(run)]
+        cond_tree, grouped, _ = _group_outputs(
+            trees, order=order, positions=[instr.position for instr in run]
         )
-    ]
-
-    remaining = rung.instructions[1:]
-    if len(remaining) == 1:
-        instr = remaining[0]
+        for gi, orig in zip(grouped, run, strict=True):
+            gi.pins = orig.pins
         result.append(
             _AnalyzedRung(
-                comment=None,
-                condition_tree=instr.branch_tree,
-                instructions=[
-                    _InstructionInfo(instr.af_token, None, instr.pins, position=instr.position)
-                ],
-                is_continued=True,
+                comment=rung.comment if index == 0 else None,
+                condition_tree=cond_tree,
+                instructions=grouped,
+                is_continued=rung.is_continued if index == 0 else True,
                 read_order=order,
             )
         )
-    else:
-        # Re-group remaining outputs — they may share a prefix (→ branches)
-        trees = [(instr.branch_tree, instr.af_token, i) for i, instr in enumerate(remaining)]
-        cond_tree, grouped, _ = _group_outputs(
-            trees, order=order, positions=[instr.position for instr in remaining]
-        )
-
-        if (
-            cond_tree is None
-            and len(grouped) > 1
-            and all(g.branch_tree is not None for g in grouped)
-        ):
-            # Still no shared prefix → each becomes its own continued rung
-            for instr in remaining:
-                result.append(
-                    _AnalyzedRung(
-                        comment=None,
-                        condition_tree=instr.branch_tree,
-                        instructions=[
-                            _InstructionInfo(
-                                instr.af_token, None, instr.pins, position=instr.position
-                            )
-                        ],
-                        is_continued=True,
-                        read_order=order,
-                    )
-                )
-        else:
-            # Shared prefix → single continued rung (may have branches)
-            for gi, orig in zip(grouped, remaining, strict=True):
-                gi.pins = orig.pins
-            result.append(
-                _AnalyzedRung(
-                    comment=None,
-                    condition_tree=cond_tree,
-                    instructions=grouped,
-                    is_continued=True,
-                    read_order=order,
-                )
-            )
-
     return result
 
 

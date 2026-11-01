@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
+from pyrung.click._topology import Leaf
+from pyrung.click.codegen.read_order import ReadOrder, _operands, _token_writes
 from pyrung.core import PLC, Program, Rung
 from pyrung.core.program import branch, out, reset
 from tests.click.helpers import exec_with_source
@@ -76,6 +78,14 @@ def _coil_writes_trunk_contact() -> None:
         out(y[1])
 
 
+def _teed_cell_then_rail_row() -> None:
+    with Rung(c[5]):
+        reset(c[5])
+        out(y[1])
+    with Rung(c[5]).continued():
+        out(y[2])
+
+
 # name: (rows, the CLICK rung's meaning, text the generated code holds)
 CASES: dict[str, tuple[list[list[str]], Callable[[], None], str]] = {
     "rail_rows_write_c5": (
@@ -108,6 +118,18 @@ CASES: dict[str, tuple[list[list[str]], Callable[[], None], str]] = {
         _coil_writes_trunk_contact,
         "with rung(C1, X002).continued():",
     ),
+    # Y001 hangs off the C5 cell the reset reads, so it reads C5 as the rung
+    # started; only the rail row below reads C5 again, after the reset.
+    "teed_cell_then_rail_row": (
+        [
+            _row("R", ["C5", "T"], "reset(C5)"),
+            _row("", ["", "-"], "out(Y001)"),
+            _row("", ["C5"], "out(Y002)"),
+        ],
+        _teed_cell_then_rail_row,
+        "with rung(C5):\n        reset(C5)\n        out(Y001)\n"
+        "    with rung(C5).continued():\n        out(Y002)",
+    ),
 }
 
 
@@ -128,7 +150,7 @@ def _readings(program: Program, names: dict[str, str], seed: int) -> list[dict[s
             {
                 by_address.get(name, name): value
                 for name, value in plc.current_state.tags.items()
-                if by_address.get(name, name) in {"C1", "C5", "C6", "Y001"}
+                if by_address.get(name, name) in {"C1", "C5", "C6", "Y001", "Y002"}
             }
         )
     return seen
@@ -154,6 +176,47 @@ def test_import_reads_each_contact_where_click_does(name: str, tmp_path: Path):
     for seed in range(3):
         expected = _readings(reference, {}, seed)
         assert _readings(imported, names, seed) == expected, seed
+
+
+def test_round_trip_keeps_outputs_teed_off_one_cell_together():
+    with Program() as logic:
+        _teed_cell_then_rail_row()
+    bundle = pyrung_to_ladder(logic, TagMap(include_system=False))
+    cells = [(row[0], row[1:3], row[-1]) for row in bundle.main_rows[1:-1]]
+    assert cells == [
+        ("R", ("C5", "T"), "reset(C5)"),
+        ("", ("", "-"), "out(Y001)"),
+        ("", ("C5", "-"), "out(Y002)"),
+    ]
+    ns = exec_with_source(ladder_to_pyrung(bundle), {})
+    names = {slot.hardware_address: slot.logical_name for slot in ns["mapping"].mapped_slots()}
+    for seed in range(3):
+        assert _readings(ns["logic"], names, seed) == _readings(logic, {}, seed), seed
+
+
+def test_write_sets_name_each_address_one_way():
+    # A reset of a Done bit writes the accumulator too, and the reverse.
+    assert _token_writes("reset(CT1)").writes >= {"CT1", "CTD1"}
+    assert _token_writes("reset(T1)").writes >= {"T1", "TD1"}
+    assert _token_writes("copy(5, CTD2)").writes >= {"CT2", "CTD2"}
+    assert _token_writes("copy(1, TD3)").writes >= {"T3", "TD3"}
+    # Zero-padded and plain spellings are one address.
+    assert _operands("X001") == _operands("X1") == ({"X1"}, set())
+    assert _token_writes("copy(DS001..DS002, DD1)").writes == {"DS1", "DS2", "DD1"}
+    # A word view of a bit bank reaches the whole bank.
+    assert _operands("XD0u==5") == (set(), {"X"})
+    assert _token_writes("copy(DS1, YD0)").indexed_writes == {"Y"}
+
+
+def test_word_view_write_meets_a_bit_contact():
+    # R,Y001,T -> copy(0, YD0) / ,,- -> out(C1) / ,Y001 -> out(C2)
+    order = ReadOrder(
+        [Leaf("Y001", 0, 1), Leaf("Y001", 0, 1), Leaf("Y001", 2, 1)],
+        ["copy(0, YD0)", "out(C1)", "out(C2)"],
+    )
+    # Y001 on the rail row reads after the YD0 write; on the teed cell, before.
+    assert order.crosses(Leaf("Y001", 2, 1), 0)
+    assert not order.crosses(Leaf("Y001", 0, 1), 0)
 
 
 def test_export_keeps_a_written_contact_out_of_the_shared_prefix():
