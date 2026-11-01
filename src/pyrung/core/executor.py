@@ -172,7 +172,7 @@ class RungRun:
     )
 
     def condition_view(self, condition: object) -> ConditionView:
-        """The view of the row that read *condition* of ``rung._conditions``.
+        """The view of the row that read *condition*, a leaf of :meth:`sp_tree`.
 
         A branch's conditions start with the contacts it inherits.  Those were
         read on their own rows as the solve started them (the trunk power is
@@ -181,23 +181,51 @@ class RungRun:
         """
         if not self.inherited_views:
             return self.view
-        return self._inherited_view_by_condition.get(id(condition), self.view)
+        return self._row_conditions[1].get(id(condition), self.view)
+
+    def sp_tree(self) -> Any:
+        """The rung's SP tree, with one leaf object per position.
+
+        ``rung.sp_tree()`` shares a condition object wherever the program used
+        it twice (``shared = Or(A, Z)`` on the trunk and again on a branch), so
+        an object cannot name the row that read it.  Here every inherited
+        position that shares an object with another row gets a structural copy
+        of its own, so :meth:`condition_view` routes each leaf to its row.
+        """
+        if not self.inherited_views:
+            return self.rung.sp_tree()
+        from pyrung.core.analysis.sp_tree import conditions_to_sp
+
+        return conditions_to_sp(list(self._row_conditions[0]))
 
     @cached_property
-    def _inherited_view_by_condition(self) -> dict[int, ConditionView]:
-        conditions = self.rung._conditions
+    def _row_conditions(self) -> tuple[tuple[Any, ...], dict[int, ConditionView]]:
+        conditions = list(self.rung._conditions)
         local_start = self.rung._branch_condition_start
-        bounds = [start for start, _view in self.inherited_views[1:]] + [local_start]
-        routed: dict[int, ConditionView] = {}
-        for (start, view), end in zip(self.inherited_views, bounds, strict=True):
+        starts = [start for start, _view in self.inherited_views] + [local_start]
+        rows = [
+            (starts[index], starts[index + 1], view)
+            for index, (_start, view) in enumerate(self.inherited_views)
+        ]
+        rows.append((local_start, len(conditions), self.view))
+        row_of: dict[int, int] = {}
+        shared: set[int] = set()
+        for row, (start, end, _view) in enumerate(rows):
             for condition in conditions[start:end]:
                 for leaf in _condition_nodes(condition):
-                    routed[id(leaf)] = view
-        # A condition object shared with the local contacts is read on this row.
-        for condition in conditions[local_start:]:
-            for leaf in _condition_nodes(condition):
-                routed.pop(id(leaf), None)
-        return routed
+                    if row_of.setdefault(id(leaf), row) != row:
+                        shared.add(id(leaf))
+        routed: dict[int, ConditionView] = {}
+        for start, end, view in rows:
+            for position in range(start, end):
+                condition = conditions[position]
+                if view is not self.view and any(
+                    id(leaf) in shared for leaf in _condition_nodes(condition)
+                ):
+                    condition = conditions[position] = _distinct_condition(condition)
+                for leaf in _condition_nodes(condition):
+                    routed.setdefault(id(leaf), view)
+        return tuple(conditions), routed
 
     @property
     def direct_read_occurrences(self) -> tuple[ReadOccurrence, ...]:
@@ -282,6 +310,25 @@ def _condition_nodes(condition: object) -> list[object]:
         for member in condition.conditions:
             nodes.extend(_condition_nodes(member))
     return nodes
+
+
+def _distinct_condition(condition: Any) -> Any:
+    """A structural copy of *condition* whose every node is a new object.
+
+    Leaves are shallow copies: they read the same tags (and an edge contact
+    the same memory key) as the original.
+    """
+    import copy
+
+    from pyrung.core.condition import AllCondition, AnyCondition
+
+    if isinstance(condition, (AllCondition, AnyCondition)):
+        clone = copy.copy(condition)
+        clone.conditions = type(condition.conditions)(
+            _distinct_condition(member) for member in condition.conditions
+        )
+        return clone
+    return copy.copy(condition)
 
 
 def _append_nested_rungs(body: tuple[ExecutionBodyItem, ...], result: list[RungRun]) -> None:
@@ -1173,25 +1220,20 @@ def _execute_rung_natural(
     *,
     parent_enabled: bool = True,
     row: bool = False,
-    solved: bool | None = None,
 ) -> None:
     """Solve *rung* row by row.
 
     The rung's trunk -- or, for a *row* (a branch or a For-body rung), its own
     contacts -- reads live as the solve reaches it, so it sees the writes of
-    every row above it.  *solved* is a branch's power already solved at its
-    parent's entry (a synthesis bracket, ``Rung._rows_read_at_entry``).
+    every row above it.
     """
-    if solved is not None:
-        enabled = solved
-    elif row:
+    if row:
         condition_view = rung._new_row_view(ctx, live=True)
         enabled = parent_enabled and rung._evaluate_local_conditions(condition_view)
     else:
         condition_view = rung._new_row_view(ctx, live=True)
         enabled = rung._evaluate_conditions(condition_view)
 
-    powers = rung._solve_rows_at_entry(ctx, enabled) if rung._rows_read_at_entry else None
     for item_kind, item in rung._execution_plan:
         if item_kind == _EXECUTOR_BRANCH:
             _execute_rung_natural(
@@ -1201,7 +1243,6 @@ def _execute_rung_natural(
                 item,  # ty: ignore[invalid-argument-type]
                 parent_enabled=enabled,
                 row=True,
-                solved=None if powers is None else powers[id(item)],
             )
         else:
             _execute_instruction_natural(
@@ -1361,15 +1402,12 @@ def _execute_rung(
     parent_enabled: bool,
     subroutine_name: str | None,
     call_stack: tuple[str, ...],
-    entry_view: ConditionView | None = None,
 ) -> None:
     observer.begin_rung(ctx, rung_index, rung, kind, depth, subroutine_name, call_stack)
     # Each row gets its own view as the solve reaches it (rows above it have
     # written).  It is frozen so an observer can re-read the row after the
-    # scan; ``_condition_snapshot`` hands it to ``begin_condition``.  A
-    # branch of a synthesis bracket (``Rung._rows_read_at_entry``) brings the
-    # *entry_view* its parent took at its entry.
-    condition_view = entry_view if entry_view is not None else rung._new_row_view(ctx)
+    # scan; ``_condition_snapshot`` hands it to ``begin_condition``.
+    condition_view = rung._new_row_view(ctx)
     ctx._condition_snapshot = condition_view
     observer.begin_condition(ctx, rung_index, rung, kind, depth, subroutine_name, call_stack)
 
@@ -1422,15 +1460,6 @@ def _execute_rung_body(
     subroutine_name: str | None,
     call_stack: tuple[str, ...],
 ) -> None:
-    entry_views = (
-        {
-            id(item): item._new_row_view(ctx)  # ty: ignore[unresolved-attribute]
-            for item_kind, item in rung._execution_plan
-            if item_kind == _EXECUTOR_BRANCH
-        }
-        if rung._rows_read_at_entry
-        else None
-    )
     for item_kind, item in rung._execution_plan:
         if item_kind == _EXECUTOR_BRANCH:
             _execute_rung(
@@ -1445,7 +1474,6 @@ def _execute_rung_body(
                 parent_enabled=enabled,
                 subroutine_name=subroutine_name,
                 call_stack=call_stack,
-                entry_view=None if entry_views is None else entry_views[id(item)],
             )
         else:
             _execute_instruction(

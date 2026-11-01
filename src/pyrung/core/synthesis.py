@@ -196,8 +196,9 @@ def pulse_feedback_rungs(
         Rung(~enable):                 reset(fb)   # disabled → low
 
     Each dwell timer is a real on-delay that auto-resets when its guard drops
-    (``fb`` flips), so the two ping-pong.  Guards read the rung-entry snapshot, so
-    a half-cycle costs one scan of slop — inconsequential for a pulse train.
+    (``fb`` flips), so the two ping-pong.  Each rung reads ``fb`` and the timers
+    as the rungs above it left them, so a half-cycle costs one scan of slop —
+    inconsequential for a pulse train.
     Presets are ms with a ms accumulator, so a dwell lasts ``ceil(dwell_ms/dt_ms)``
     scans.
     """
@@ -258,52 +259,283 @@ def conditional_hold_rung(
     dest: Tag,
     rules: list[tuple[Any, Condition | Tag | None]],
 ) -> Rung:
-    """Build a multi-branch hold: one parallel branch per ``(value, guard)`` rule.
+    """Build a multi-rule hold: drive ``dest`` to the last active rule's value.
 
-    Each branch drives ``value`` into ``dest`` while its ``guard`` holds.  The
-    rung is a synthesis bracket (``Rung._rows_read_at_entry``): every branch's
-    guard is solved at **rung entry**, before any row writes, where a user rung
-    is solved row by row.  So mutually-exclusive rules — a liveness
-    oscillator's "drive True while ``dest != True``" + "drive False while
-    ``dest != False``" — stay exclusive with no mid-scan chaining (branch 1's
-    write is invisible to branch 2's guard).  Every backend (interpreter,
-    debugger, compiled kernel) honours the flag, so it compiles natively (no
-    io-gap) and folds like any other.
+    Each ``(value, guard)`` rule drives ``value`` while its ``guard`` holds; a
+    later active rule wins, and with no rule active ``dest`` keeps its value.
+    Every guard means the state the bracket starts from.  The rules compile
+    like :func:`guarded_copy_rung`'s, so a liveness oscillator's "drive True
+    while ``dest != True``" + "drive False while ``dest != False``" is one
+    ``out(dest)`` whose condition reads ``dest`` before writing it, and
+    ``dest`` flips every scan.
 
     A single rule is better expressed by :func:`copy_hold_rung`; this is for the
     multi-rule (oscillating) case.
     """
-    outer = Rung()
-    outer._rows_read_at_entry = True
-    for value, guard in rules:
-        outer.add_branch(copy_hold_rung(value=value, dest=dest, guard=guard))
-    return outer
+    return _guarded_rows([(dest, value, guard) for value, guard in rules], keep=True)
 
 
 def guarded_copy_rung(
     rules: list[tuple[Tag, Any, Condition | Tag]],
 ) -> Rung:
-    """Build one scan-image rung from ordered guarded writes.
+    """Build one rung from ordered guarded writes: the last active write wins.
 
-    Each simulated Boolean destination first returns to ``False``; guarded
-    branches then overwrite it in proposal order. Non-Boolean destinations keep
-    their prior/plant-supplied value when no branch is active. Disabled branches
-    are inert, so the last *active* write wins. The rung is a synthesis bracket
-    (``Rung._rows_read_at_entry``): all guards are solved at rung entry, before
-    any row writes, including when a rule reads the destination it drives.
+    A Boolean destination returns to ``False`` when none of its rules is
+    active; a non-Boolean destination keeps its prior (plant-supplied) value.
+    Every guard means the state the bracket starts from, before any of its
+    writes, including a guard that reads the destination it drives.
+
+    Each instruction reads its conditions when the scan reaches it, as in any
+    user rung, so the rung is laid out so that no guard reads an earlier write
+    of the bracket:
+
+    * Each destination has one writer.  A Boolean destination with constant
+      values is one ``out(dest)`` whose condition folds the ordered rules (a
+      ``True`` rule ORs its guard in, a ``False`` rule ANDs its complement in).
+      Any other destination has one ``copy`` per distinct value, guarded by
+      "the last active rule has this value", so its copies are exclusive.
+    * A destination whose guards read another destination sits above that
+      destination's writer.
+    * A guard that would still read an earlier write (a cycle between
+      destinations, a multi-copy destination whose guards read itself, or a
+      complement with no contact form) is first solved onto an internal
+      ``__frz{n}__{dest}`` bit at the top of the rung, and the writers read
+      that bit instead: decide first, then act, as a ladder programmer would.
     """
-    outer = Rung()
-    outer._rows_read_at_entry = True
+    return _guarded_rows(list(rules), keep=False)
+
+
+_ALWAYS: Any = object()
+_NEVER: Any = object()
+
+
+def _condition_or(term: Any, rest: Any) -> Any:
+    from pyrung.core.condition import AnyCondition
+
+    if term is _ALWAYS or rest is _ALWAYS:
+        return _ALWAYS
+    if term is _NEVER:
+        return rest
+    if rest is _NEVER:
+        return term
+    return AnyCondition(term, rest)
+
+
+def _condition_and(term: Any, rest: Any) -> Any:
+    from pyrung.core.condition import AllCondition
+
+    if term is _NEVER or rest is _NEVER:
+        return _NEVER
+    if term is _ALWAYS:
+        return rest
+    if rest is _ALWAYS:
+        return term
+    return AllCondition(term, rest)
+
+
+def _condition_complement(condition: Any) -> Any | None:
+    """The exact complement of *condition* in contact form, or ``None``.
+
+    Compares, contacts and INT truthiness have a complement contact; ``And`` and
+    ``Or`` complement by De Morgan; a condition may supply ``_complement()``.
+    Edge contacts (they keep memory of their own) and anything else opaque have
+    no complement here, so the caller freezes them onto a bit instead.
+    """
+    from pyrung.core.condition import (
+        AllCondition,
+        AnyCondition,
+        BitCondition,
+        CompareEq,
+        CompareGe,
+        CompareGt,
+        CompareLe,
+        CompareLt,
+        CompareNe,
+        IntTruthyCondition,
+        NormallyClosedCondition,
+    )
     from pyrung.core.tag import TagType
 
-    seen: set[str] = set()
-    for dest, _value, _guard in rules:
-        if dest.name in seen or dest.type != TagType.BOOL:
-            continue
-        seen.add(dest.name)
-        outer.add_branch(copy_hold_rung(value=False, dest=dest))
-    for dest, value, guard in rules:
-        outer.add_branch(copy_hold_rung(value=value, dest=dest, guard=guard))
+    if condition is _ALWAYS:
+        return _NEVER
+    if condition is _NEVER:
+        return _ALWAYS
+    complements: dict[type, type] = {
+        CompareEq: CompareNe,
+        CompareNe: CompareEq,
+        CompareLt: CompareGe,
+        CompareGe: CompareLt,
+        CompareLe: CompareGt,
+        CompareGt: CompareLe,
+    }
+    kind = type(condition)
+    if kind in complements:
+        return complements[kind](condition.tag, condition.value)
+    if kind is BitCondition:
+        return NormallyClosedCondition(condition.tag)
+    if kind is NormallyClosedCondition:
+        return BitCondition(condition.tag)
+    if kind is IntTruthyCondition and condition.tag.type in (TagType.INT, TagType.DINT):
+        return CompareEq(condition.tag, 0)
+    if kind in (AllCondition, AnyCondition):
+        parts: list[Any] = []
+        for part in condition.conditions:
+            flipped = _condition_complement(part)
+            if flipped is None:
+                return None
+            parts.append(flipped)
+        return AnyCondition(*parts) if kind is AllCondition else AllCondition(*parts)
+    complement = getattr(condition, "_complement", None)
+    if callable(complement):
+        return complement()
+    return None
+
+
+def _static_reads(value: Any) -> set[str]:
+    if value is _ALWAYS or value is _NEVER or isinstance(value, (bool, int, float, str)):
+        return set()
+    from pyrung.core.analysis.pdg import _extract_tag_names
+
+    return _extract_tag_names(value, {})
+
+
+def _value_key(value: Any) -> Any:
+    if isinstance(value, (bool, int, float, str)):
+        return ("const", value)
+    return ("id", id(value))
+
+
+def _is_bool_constant(value: Any) -> bool:
+    return isinstance(value, bool) or (type(value) is int and value in (0, 1))
+
+
+@dataclass
+class _DestRules:
+    """One destination's ordered ``(rule index, value, guard)`` rules."""
+
+    dest: Tag
+    rules: list[tuple[int, Any, Any]]
+
+    @property
+    def coil(self) -> bool:
+        from pyrung.core.tag import TagType
+
+        return self.dest.type == TagType.BOOL and all(
+            _is_bool_constant(value) for _index, value, _guard in self.rules
+        )
+
+    def row_count(self, *, keep: bool) -> int:
+        from pyrung.core.tag import TagType
+
+        if self.coil:
+            return 1
+        values = {_value_key(value) for _index, value, _guard in self.rules}
+        if not keep and self.dest.type == TagType.BOOL:
+            values.add(_value_key(False))
+        return len(values)
+
+    def reads(self) -> set[str]:
+        found: set[str] = set()
+        for _index, value, guard in self.rules:
+            found |= _static_reads(guard) | _static_reads(value)
+        return found
+
+
+def _guarded_rows(rules: list[tuple[Tag, Any, Any]], *, keep: bool) -> Rung:
+    """Compile ordered ``(dest, value, guard)`` rules to one rung.
+
+    ``keep`` leaves a destination with no active rule at its value; otherwise a
+    Boolean destination returns to ``False``.  See :func:`guarded_copy_rung`.
+    """
+    from pyrung.core.condition import BitCondition, NormallyClosedCondition, _as_condition
+    from pyrung.core.instruction.coils import OutInstruction, ResetInstruction
+    from pyrung.core.tag import Bool, TagType
+
+    groups: dict[str, _DestRules] = {}
+    for index, (dest, value, guard) in enumerate(rules):
+        group = groups.setdefault(dest.name, _DestRules(dest, []))
+        group.rules.append((index, value, _ALWAYS if guard is None else _as_condition(guard)))
+    reads = {name: group.reads() for name, group in groups.items()}
+
+    # A destination goes above every destination its guards read.  A cycle is
+    # broken at the earliest destination in rule order.
+    order: list[str] = []
+    pending = list(groups)
+    while pending:
+        ready = next(
+            (
+                name
+                for name in pending
+                if not any(name in reads[other] for other in pending if other != name)
+            ),
+            pending[0],
+        )
+        order.append(ready)
+        pending.remove(ready)
+
+    frozen: dict[int, Any] = {}
+    frozen_rows: list[Rung] = []
+    writer_rows: list[Rung] = []
+
+    def freeze(index: int, dest: Tag, guard: Any) -> Any:
+        bit = frozen.get(id(guard))
+        if bit is None:
+            tag = Bool(f"__frz{index}__{dest.name}", retentive=False)
+            frozen_rows.append(_rung_holding(guard, OutInstruction(tag)))
+            bit = frozen[id(guard)] = BitCondition(tag)
+        return bit
+
+    def complement(index: int, dest: Tag, guard: Any) -> Any:
+        negated = _condition_complement(guard)
+        if negated is not None:
+            return negated
+        return NormallyClosedCondition(freeze(index, dest, guard).tag)
+
+    written: set[str] = set()
+    for name in order:
+        group = groups[name]
+        dest = group.dest
+        unsafe = set(written)
+        if group.row_count(keep=keep) > 1:
+            unsafe.add(name)
+        guards = [
+            (index, value, freeze(index, dest, guard) if _static_reads(guard) & unsafe else guard)
+            for index, value, guard in group.rules
+        ]
+
+        if group.coil:
+            power: Any = BitCondition(dest) if keep else _NEVER
+            for index, value, guard in guards:
+                if value:
+                    power = _condition_or(guard, power)
+                elif power is not _NEVER:
+                    power = _condition_and(complement(index, dest, guard), power)
+            if power is _NEVER:
+                writer_rows.append(_rung_holding(None, ResetInstruction(dest)))
+            else:
+                condition = None if power is _ALWAYS else power
+                writer_rows.append(_rung_holding(condition, OutInstruction(dest)))
+        else:
+            buckets: dict[Any, list[Any]] = {}
+            if not keep and dest.type == TagType.BOOL:
+                buckets[_value_key(False)] = [False, _ALWAYS]
+            for index, value, guard in guards:
+                key = _value_key(value)
+                buckets.setdefault(key, [value, _NEVER])
+                for bucket_key, bucket in buckets.items():
+                    if bucket_key == key:
+                        bucket[1] = _condition_or(guard, bucket[1])
+                    elif bucket[1] is not _NEVER:
+                        bucket[1] = _condition_and(complement(index, dest, guard), bucket[1])
+            for value, power in buckets.values():
+                if power is not _NEVER:
+                    condition = None if power is _ALWAYS else power
+                    writer_rows.append(copy_hold_rung(value=value, dest=dest, guard=condition))
+        written.add(name)
+
+    outer = Rung()
+    for row in (*frozen_rows, *writer_rows):
+        outer.add_branch(row)
     return outer
 
 

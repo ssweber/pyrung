@@ -144,9 +144,6 @@ def site_evidence(
     path = [rungs[loc.rung_index]]
     for branch_index in loc.branch_path:
         path.append(path[-1]._branches[branch_index])
-    if any(row._rows_read_at_entry for row in path[:-1]):
-        # A synthesis bracket solves its rows at its entry: not modelled here.
-        return None, ((),), True
     depth = len(path) - 1
     if loc.instruction_index is None:
         match = re.match(r"condition(?:\[(\d+)\])?", loc.arg_path)

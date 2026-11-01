@@ -527,23 +527,13 @@ def _compile_rung_items(
             f"{sp}{branch_var} = ({enabled_expr} and ({local_expr}))",
         ]
 
-    # A synthesis bracket (``_rows_read_at_entry``) solves every direct
-    # branch's contacts here, before any row writes.
-    at_entry = rung._rows_read_at_entry
-    if at_entry:
-        entry_idx = 0
-        for item in rung._execution_items:
-            if isinstance(item, LogicRung):
-                lines.extend(_solve(item, f"_{scope_key}_branch_{entry_idx}"))
-                entry_idx += 1
     branch_idx = 0
     for item in rung._execution_items:
         if isinstance(item, LogicRung):
             branch_var = f"_{scope_key}_branch_{branch_idx}"
             child_scope = f"{scope_key}_b{branch_idx}"
             branch_idx += 1
-            if not at_entry:
-                lines.extend(_solve(item, branch_var))
+            lines.extend(_solve(item, branch_var))
             lines.extend(
                 _compile_rung_items(
                     rung=item,

@@ -59,7 +59,7 @@ class PilotRung:
 
 
 class PilotRungExecutionState(Enum):
-    """One installed rule's status in a frozen rung-entry snapshot."""
+    """One installed rule's status in the state the PILOT holds start from."""
 
     DORMANT = "dormant"
     ELIGIBLE = "eligible"
@@ -332,7 +332,7 @@ class _ExpandedPilotRule:
 
 def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilotRule, ...]:
     """Lower installed rules to the exact ordered branches the runner scans."""
-    from pyrung.core.condition import AllCondition, Condition, _as_condition
+    from pyrung.core.condition import AllCondition, AnyCondition, Condition, _as_condition
 
     class _DemandActive(Condition):
         def __init__(self, demand: Any):
@@ -340,6 +340,9 @@ def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilo
 
         def evaluate(self, ctx: Any) -> bool:
             return bool(self.demand.condition.evaluate(ctx)) is bool(self.demand.value)
+
+        def _complement(self) -> Condition:
+            return _NoDemandActive((self.demand,))
 
     class _NoDemandActive(Condition):
         def __init__(self, demands: tuple[Any, ...]):
@@ -350,6 +353,10 @@ def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilo
                 bool(demand.condition.evaluate(ctx)) is bool(demand.value)
                 for demand in self.demands
             )
+
+        def _complement(self) -> Condition:
+            active = [_DemandActive(demand) for demand in self.demands]
+            return active[0] if len(active) == 1 else AnyCondition(*active)
 
     materialized = list(pilot_rungs)
     progress_by_dest: dict[str, tuple[Any, ...]] = {}
@@ -397,11 +404,14 @@ def _pilot_rung_execution_receipt(
 ) -> PilotOverlayExecution:
     """Classify every installed rule using the compiler's exact expansion.
 
-    All conditions read one frozen rung-entry snapshot, just as
-    :func:`guarded_copy_rung` executes them.  The last active expanded branch
-    for each destination is the effective owner.  Earlier active starts remain
-    eligible, earlier active continuation branches remain continuing, and an
-    operation prevented from starting by a peer's progress is shadowed.
+    All conditions read one snapshot: the state the holds start from.  That is
+    what :func:`guarded_copy_rung` means by every guard, and it lays its rung
+    out (one writer per destination, rules frozen onto bits where a guard would
+    otherwise read an earlier write) so that running it agrees.  The last
+    active expanded rule for each destination is the effective owner.  Earlier
+    active starts remain eligible, earlier active continuation branches remain
+    continuing, and an operation prevented from starting by a peer's progress
+    is shadowed.
     """
     from pyrung.core.analysis.sp_values import _SnapshotView
     from pyrung.core.condition import _as_condition
@@ -445,7 +455,7 @@ def project_pilot_overlay(
     pilot_rungs: Iterable[PilotRung],
     resting: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Project the compiled overlay at one hypothetical rung-entry snapshot.
+    """Project the compiled overlay from one hypothetical starting state.
 
     This is a read of the overlay compiler's existing ownership receipt.  It
     lets route verification ask which temporary holds would still exist at a

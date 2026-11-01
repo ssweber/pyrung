@@ -66,11 +66,6 @@ class Rung:
         # Set by ``.continued()``: the rung is drawn as a further wire of the
         # rung above it (CLICK round-trip).  It is solved as a rung of its own.
         self._use_prior_snapshot = False
-        # Set only by pyrung's own synthesis brackets (core/synthesis.py), never
-        # by the DSL: every direct branch's contacts are solved at rung entry,
-        # before any row writes, so the rules of a guarded hold read one image
-        # and stay exclusive.  User rungs are solved row by row.
-        self._rows_read_at_entry = False
         # ``(memory key, tag)`` of the edge sites this rung's own contacts hold
         # (its row), scanned when the solve reaches the row; built on first
         # scan (pyrung.core.site_memory.build_edge_frames).
@@ -242,25 +237,8 @@ class Rung:
             ctx: Live ScanContext for instruction read-after-write.
             enabled: Whether this rung/branch is powered.
         """
-        if self._rows_read_at_entry:
-            powers = self._solve_rows_at_entry(ctx, enabled)
-            for item in self._execution_items:
-                if isinstance(item, Rung):
-                    item.execute(ctx, powers[id(item)])
-                else:
-                    item.execute(ctx, enabled)
-            return
         for item in self._execution_items:
             if isinstance(item, Rung):
                 item.execute(ctx, item._solve_row(ctx, enabled))
             else:
                 item.execute(ctx, enabled)
-
-    def _solve_rows_at_entry(self, ctx: ScanContext, enabled: bool) -> dict[int, bool]:
-        """Solve every direct branch's own contacts now, before any row runs
-        (a synthesis bracket, ``_rows_read_at_entry``), by ``id(branch)``."""
-        return {
-            id(item): item._solve_row(ctx, enabled)
-            for item in self._execution_items
-            if isinstance(item, Rung)
-        }

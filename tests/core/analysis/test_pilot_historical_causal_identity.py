@@ -178,7 +178,7 @@ def test_deep_cause_resolves_synthetic_rung_in_its_executing_overlay_epoch() -> 
         establishing_scan,
         False,
         True,
-        17,
+        16,
     )
     assert establishing_step.subroutine == "PILOT"
     assert establishing_step.rung_index == 0
