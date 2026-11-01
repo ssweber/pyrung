@@ -82,8 +82,8 @@ def check_owned_bit_coils(program: Program) -> None:
             owner = owners.get(name)
             if owner is not None:
                 raise OwnedBitCoilError(
-                    f"{OWNED_BIT_COIL}: {coil}() writes {name}, the Done bit of a "
-                    f"{owner}() instruction{_where(instr)}. The {owner}() rewrites it "
+                    f"{OWNED_BIT_COIL}: {coil}() writes {name}, the Done bit of "
+                    f"{owner}() (coil{_where(instr)}). The {owner}() rewrites it "
                     f"on every execution; use that instruction's .reset() pin instead "
                     f"of a coil."
                 )
