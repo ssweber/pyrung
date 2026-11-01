@@ -156,7 +156,7 @@ The check looks at contacts: a rung's or continued rung's conditions, a branch's
 
 | Code | Severity | What it detects |
 |---|---|---|
-| `COIL_CONFLICTING_OUTPUT` | Error | Multiple `out`/timer/counter/drum/shift instructions target the same tag from paths that are not provably mutually exclusive. The last writer wins every scan. |
+| `COIL_CONFLICTING_OUTPUT` | Error | Multiple `out`/timer/counter/drum/shift instructions target the same tag from paths that are not provably mutually exclusive. Whichever wrote last wins. |
 | `COIL_STUCK_HIGH` | Warning | A tag is latched but never reset. An `out` inside a skippable subroutine counts as a latch; see [Outputs in skippable subroutines](#outputs-in-skippable-subroutines). |
 | `COIL_STUCK_LOW` | Warning | A tag is reset but never latched anywhere in the program. |
 
