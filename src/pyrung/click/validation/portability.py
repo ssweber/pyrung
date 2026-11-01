@@ -36,6 +36,7 @@ from .findings import (
     CLK_CALC_NESTING_DEPTH,
     CLK_CALC_RANGE_MIXED_BANKS,
     CLK_CALC_RANGE_NOT_CONTIGUOUS,
+    CLK_CALC_SUM_BANK_NOT_AVAILABLE,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FORLOOP_INNER_ONESHOT,
     CLK_FORLOOP_NESTING_DEPTH,
@@ -579,6 +580,10 @@ def _walk_mode_violations(
 # to the addresses CLICK will read.
 
 _BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
+# SUM reads X, Y, C, T, SC, DS, DD, DF, TD, CTD, SD in decimal mode and DH, XD, YD in hex
+# mode.  Only these two banks are out in both.  A bank in the wrong mode needs no check here:
+# TagMap ties a tag's type to its bank, and a mixed calc() gets CLK_CALC_MODE_MIXED.
+_NO_SUM_BANKS = frozenset({"CT", "TXT"})
 # Banks whose CLICK address space has slot gaps (X001..X016, X101..X116, ...).
 _SLOTTED_BANKS = frozenset({"X", "Y"})
 _MDN_MAX_BYTES = 1024
@@ -645,7 +650,14 @@ def _evaluate_range_aggregates(
             )
             continue
         bank = banks[0]
-        if bank in _BIT_BANKS and kind != "sum":
+        if kind == "sum":
+            if bank in _NO_SUM_BANKS:
+                emit(
+                    CLK_CALC_SUM_BANK_NOT_AVAILABLE,
+                    f"SUM over {bank} is not available in CLICK",
+                    "Copy the values into a bank SUM accepts before summing.",
+                )
+        elif bank in _BIT_BANKS:
             emit(
                 CLK_CALC_BIT_RANGE_AGGREGATE,
                 f"{click_name} over bit bank {bank} is not available in CLICK; "
