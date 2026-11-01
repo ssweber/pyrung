@@ -15,6 +15,7 @@ from pyrung.core.state import SystemState
 from pyrung.dap.expressions import And, Compare, Expr, ExpressionParseError, Not, Or
 from pyrung.dap.expressions import compile as compile_condition
 from pyrung.dap.expressions import parse as parse_condition
+from pyrung.dap.internal_tags import visible_tags
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
@@ -114,7 +115,7 @@ def on_variables(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         values = dict(state.tags)
         if current_ctx is not None:
             values.update(getattr(current_ctx, "_tags_pending", {}))
-        return {"variables": adapter._as_dap_variables(values)}, []
+        return {"variables": adapter._as_dap_variables(visible_tags(values))}, []
 
     if ref == adapter.FORCES_SCOPE_REF:
         return {"variables": adapter._as_dap_variables(forces)}, []

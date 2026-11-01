@@ -3814,25 +3814,34 @@ def test_live_trace_body_includes_tag_hints(tmp_path: Path):
     assert plain_hints == {"min": -32768, "max": 32767, "rangeDefault": True}
 
 
+#: Tags pyrung adds itself (a bracket's freeze bit, a harness coupling's timer)
+#: and user tags that only look like them.
+_INTERNAL_TAGS = ("__frz0__N", "__cpl_ond__Fb")
+_LOOKALIKE_TAGS = ("N", "__Mine", "__a__b", "__spare__1", "__init__")
+
+
+def _internal_tags_script() -> str:
+    lines = [
+        "from pyrung.core import Int, PLC, Program, Rung, calc",
+        "",
+        "with Program(strict=False) as prog:",
+    ]
+    for name in _INTERNAL_TAGS + _LOOKALIKE_TAGS:
+        lines += ["    with Rung():", f"        calc(Int({name!r}) + 1, Int({name!r}))"]
+    lines += ["", "runner = PLC(prog)", ""]
+    return "\n".join(lines)
+
+
+def _assert_only_program_tags(names: Any) -> None:
+    shown = set(names)
+    assert set(_LOOKALIKE_TAGS) <= shown, sorted(shown)
+    assert not shown & set(_INTERNAL_TAGS), sorted(shown)
+
+
 def test_trace_and_seek_tag_values_leave_out_internal_tags(tmp_path: Path):
-    # A synthesis bracket's ``__frz{n}__Dest`` bits and a harness's
-    # ``__cpl_*__Fb`` tags are pyrung's bookkeeping, not the program's.
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
-    script = _write_script(
-        tmp_path,
-        "logic.py",
-        "from pyrung.core import Bool, PLC, Program, Rung, out\n"
-        "\n"
-        "with Program(strict=False) as prog:\n"
-        "    with Rung():\n"
-        "        out(Bool('__frz0__Light'))\n"
-        "        out(Bool('__cpl_ond__Fb'))\n"
-        "        out(Bool('__Mine'))\n"
-        "        out(Bool('Light'))\n"
-        "\n"
-        "runner = PLC(prog)\n",
-    )
+    script = _write_script(tmp_path, "logic.py", _internal_tags_script())
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _send_request(adapter, out_stream, seq=2, command="configurationDone")
@@ -3849,10 +3858,63 @@ def test_trace_and_seek_tag_values_leave_out_internal_tags(tmp_path: Path):
     assert live is not None
     assert current is not None
     for values in (live["tagValues"], current["tagValues"], seek["body"]["tags"]):
-        assert values["Light"] == "True"
-        assert values["__Mine"] == "True"
-        assert "__frz0__Light" not in values
-        assert "__cpl_ond__Fb" not in values
+        _assert_only_program_tags(values)
+        assert values["N"] == "1"
+
+
+def test_variables_and_changes_leave_out_internal_tags(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _internal_tags_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+    for seq in (3, 4):
+        _send_request(adapter, out_stream, seq=seq, command="pyrungStepScan")
+        _drain_messages(out_stream)
+
+    variables = _single_response(
+        _send_request(
+            adapter,
+            out_stream,
+            seq=5,
+            command="variables",
+            arguments={"variablesReference": adapter.TAGS_SCOPE_REF},
+        )
+    )["body"]["variables"]
+    _assert_only_program_tags(item["name"] for item in variables)
+
+    entries = _single_response(
+        _send_request(
+            adapter,
+            out_stream,
+            seq=6,
+            command="pyrungTagChanges",
+            arguments={"tags": [*_INTERNAL_TAGS, *_LOOKALIKE_TAGS], "count": 10},
+        )
+    )["body"]["entries"]
+    assert entries
+    for entry in entries:
+        _assert_only_program_tags(entry["changes"])
+
+    # The changes a scan frame carries during Continue.
+    _send_request(adapter, out_stream, seq=7, command="continue")
+    _drain_messages(out_stream)
+    time.sleep(0.05)
+    _send_request(adapter, out_stream, seq=8, command="pause")
+    _drain_messages(out_stream)
+    frames: list[dict[str, Any]] = []
+    for _ in range(200):
+        _drain_internal_events_with_wait(adapter)
+        flushed = _drain_messages(out_stream)
+        frames.extend(_scan_frame_events(flushed))
+        if _stopped_events(flushed):
+            break
+    changed = [frame["body"]["changes"] for frame in frames if frame["body"]["changes"]]
+    assert changed, "Expected a scan frame with changes"
+    for changes in changed:
+        _assert_only_program_tags(change["tag"] for change in changes)
 
 
 def _tag_range_hints_script() -> str:

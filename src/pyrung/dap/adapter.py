@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import queue
-import re
 import sys
 import threading
 import time
@@ -37,6 +36,7 @@ from pyrung.dap.handlers import (
     simulation,
     stack_variables_evaluate,
 )
+from pyrung.dap.internal_tags import visible_tags
 from pyrung.dap.protocol import (
     MessageSequencer,
     make_event,
@@ -52,15 +52,6 @@ class DAPAdapterError(Exception):
 
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
-
-
-#: pyrung's own bookkeeping tags (``__frz3__Dest`` from a synthesis bracket,
-#: ``__cpl_on__Fb`` from a harness coupling): not the program's, so not shown.
-_INTERNAL_TAG_NAME = re.compile(r"__\w+?__")
-
-
-def _is_internal_tag_name(name: str) -> bool:
-    return _INTERNAL_TAG_NAME.match(name) is not None
 
 
 def _settled_rung_event(events: tuple[RungTraceEvent, ...]) -> RungTraceEvent:
@@ -798,11 +789,7 @@ class DAPAdapter:
 
     def _tag_values_body(self, tags: Any) -> dict[str, str]:
         """Formatted values of the program's tags, without pyrung's internal ones."""
-        return {
-            name: self._format_value(value)
-            for name, value in tags.items()
-            if not _is_internal_tag_name(name)
-        }
+        return {name: self._format_value(value) for name, value in visible_tags(tags).items()}
 
     def _format_value(self, value: Any) -> str:
         if isinstance(value, str):
