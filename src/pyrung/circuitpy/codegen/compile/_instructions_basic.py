@@ -46,6 +46,7 @@ from ._primitives import (
     _compile_target_write_lines,
     _compile_value,
     _compute_sequential_reloads,
+    _copy_clamp_condition,
     _copy_converter_target_info,
     _copy_converter_write_lines,
     _timer_dt_to_units_expr,
@@ -486,9 +487,32 @@ def _compile_copy_instruction(
     if instr.convert is not None or fanout:
         return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent)
     source_expr = _compile_value(instr.source, ctx)
-    value_expr = _store_coerce_expr(source_expr, target_type, ctx)
-    enabled_body = _compile_assignment_lines(instr.target, value_expr, ctx, indent=0)
+    source_type = (
+        "CHAR" if isinstance(instr.source, str) else _optional_value_type_name(instr.source)
+    )
+    clamp_cond = _copy_clamp_condition("_copy_value", target_type, source_type)
+    fault_body = _compile_set_out_of_range_fault_body(ctx)
+    if clamp_cond is None or fault_body == ["pass"] or _copy_source_fits(instr.source, target_type):
+        value_expr = _store_coerce_expr(source_expr, target_type, ctx)
+        enabled_body = _compile_assignment_lines(instr.target, value_expr, ctx, indent=0)
+    else:
+        value_expr = _store_coerce_expr("_copy_value", target_type, ctx)
+        enabled_body = [
+            f"_copy_value = {source_expr}",
+            *_compile_assignment_lines(instr.target, value_expr, ctx, indent=0),
+            f"if {clamp_cond}:",
+            *_indent_body(fault_body, 4),
+        ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _copy_source_fits(source: object, target_type: str) -> bool:
+    """True for a literal the store leaves alone, which needs no clamp test."""
+    if type(source) is not int:
+        return False
+    if target_type == "INT":
+        return -32768 <= source <= 32767
+    return -2147483648 <= source <= 2147483647
 
 
 def _compile_copy_converter_instruction(

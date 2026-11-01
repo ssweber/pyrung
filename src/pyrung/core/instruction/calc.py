@@ -108,13 +108,25 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
 def has_domain_limited_func(value: Any, seen: set[int] | None = None) -> bool:
     """True when *value* (a calc expression) can raise
     :class:`~pyrung.core.expression.MathDomainError`: a math function with a
-    domain (``sqrt``, ``log``, ...) or a ``**`` whose exponent may be fractional
-    (``(-8.0) ** 0.5`` has no real value)."""
+    domain (``sqrt``, ``log``, ...), a ``**`` whose exponent may be fractional
+    (``(-8.0) ** 0.5`` has no real value), either of those in a ``randint``
+    bound, or a ``randint`` of equal constants."""
     if seen is None:
         seen = set()
     if id(value) in seen:
         return False
     seen.add(id(value))
+    if isinstance(value, RandIntExpr):
+        # A bare Real tag as a bound leaves both bounds unread.  Equal constants
+        # are the error themselves.  A computed bound is read in the calc too,
+        # where sqrt(N) can raise.
+        if value.real_bounds:
+            return False
+        return (
+            value.equal_bounds
+            or has_domain_limited_func(value.lo, seen)
+            or has_domain_limited_func(value.hi, seen)
+        )
     if isinstance(value, MathFuncExpr) and value.name in DOMAIN_LIMITED_MATH_FUNCS:
         return True
     if isinstance(value, BinaryExpr) and value.symbol == "**" and may_be_float(value.right):
@@ -173,8 +185,8 @@ def cut_int_constants(value: Any) -> Any:
     divides by 0), so a constant outside -32768..32767 is read as its low
     16 bits, signed.  Operands read from memory keep their width.  Returns
     *value* itself when no constant changes, else a copy of the tree with
-    the changed nodes rebuilt.  The bounds of a ``randint()`` are left as
-    written.
+    the changed nodes rebuilt.  The bounds of a ``randint()`` are constants
+    too, each cut on its own: ``randint(70000, 70002)`` draws 4464..4466.
     """
     if isinstance(value, bool):
         return value
@@ -205,6 +217,12 @@ def cut_int_constants(value: Any) -> Any:
         if shifted is value.value and count is value.count:
             return value
         return type(value)(shifted, count, value.func, value.name)
+    if isinstance(value, RandIntExpr):
+        lo = cut_int_constants(value.lo)
+        hi = cut_int_constants(value.hi)
+        if lo is value.lo and hi is value.hi:
+            return value
+        return value.with_cut_bounds(lo, hi)
     return value
 
 
@@ -251,10 +269,11 @@ class CalcInstruction(OneShotMixin, Instruction):
     **REAL overflow:** a result past +/-3.4028235E+38 stores +/-Inf and sets
     the out-of-range flag (``system.fault.out_of_range``, CLICK's SC43), as a
     CLICK's float32 Math does.  An Inf operand follows IEEE 754 (``Inf / 2`` is
-    Inf, ``Inf - Inf`` is NaN); a REAL result that is not finite sets the flag
-    too.  Into an INT, DINT or WORD, a result that is not finite stores 0 and
-    sets the flag; so does a bitwise or shift operation on an Inf or NaN
-    operand, whatever the destination.  The range is checked on the stored
+    Inf, ``Inf - Inf`` is NaN); a REAL result of +/-Inf sets the flag too, and
+    NaN is stored with no flag.  Into an INT, DINT or WORD, a result of +/-Inf
+    stores 0 and sets the flag, and NaN stores 0 with no flag.  A bitwise or
+    shift operation on an Inf or NaN operand stores 0 and sets the flag,
+    whatever the destination.  The range is checked on the stored
     result only: a step of the formula is a 64-bit float (``**`` past it is
     +/-Inf) or an exact integer.
 

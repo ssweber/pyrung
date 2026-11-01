@@ -58,8 +58,8 @@ could plausibly differ, these cases tell the models apart:
   (Result1); bounds cut to 16 bits, signed, like the other constants: 70000 is
   4464, so 2232; clamped to 32767: 16383; CLICK refusing the bounds at paste:
   never fires.  Hardware round 2 (2026-10-31): a CLICK reads 0, none of them,
-  so the Math wrote 0 (as a Math error does) and pyrung (step MATH) reads
-  -30536.  Which flag, if any, comes with it is
+  so the Math wrote 0 (as a Math error does), as pyrung does.  Which flag, if
+  any, comes with it is
   ``faults/rand_wide_bounds_flags``, which finds equal bounds the likely cause.
   CLICK's editor refuses them typed in; a paste gets them through.
 - ``int_math_real_operand_constant`` (probe): the 16-bit cut when the other
@@ -558,7 +558,6 @@ group = Group(
             "/ 2 over a preset 99 reads 0 (Result1)",
             ladder=prove_int_math_rand_wide_bounds,
             expect={"Result1": 0},
-            pending="MATH",
         ),
         case(
             "A Math constant cut to 16 bits beside a REAL operand: DF * 100000 into an Int, "

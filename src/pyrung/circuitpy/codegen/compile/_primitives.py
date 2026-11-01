@@ -252,6 +252,16 @@ def _compile_expression_impl(
         return f"({' + '.join(terms)})"
 
     if isinstance(expr, RandIntExpr):
+        # As RandIntExpr.evaluate: a bare Real tag as a bound reads 0, and equal
+        # constants are 0, with SC46 in a calc.
+        if expr.real_bounds:
+            return "0"
+        if expr.equal_bounds:
+            if not strict:
+                return "0"
+            ctx.mark_helper("_math_func")
+            ctx.mark_helper("_rand_equal_bounds")
+            return "_rand_equal_bounds()"
         lo = hi = ""
         if expr.checks_bounds or not ctx.kernel_runtime:
             lo = _compile_expression_impl(
@@ -957,6 +967,20 @@ def _compile_set_out_of_range_fault_body(ctx: CodegenContext) -> list[str]:
     if fault_symbol is None:
         return ["pass"]
     return [f"{fault_symbol} = True"]
+
+
+def _copy_clamp_condition(value_var: str, dest_type: str, source_type: str | None) -> str | None:
+    """The test that a Copy of *value_var* into *dest_type* stops at a limit, if it can.
+
+    It holds what the store truncates: 32767.5 into an INT stores 32767 without
+    clamping.  +/-Inf passes and NaN compares false, as a clamp pins Inf and
+    stores NaN as 0.  Text converts in the store and never clamps here.
+    """
+    bounds = {"INT": (-32768, 32767), "DINT": (-2147483648, 2147483647)}.get(dest_type)
+    if bounds is None or source_type == "CHAR":
+        return None
+    lower, upper = bounds
+    return f"{value_var} >= {upper + 1} or {value_var} <= {lower - 1}"
 
 
 def _compile_set_address_error_fault_body(ctx: CodegenContext) -> list[str]:

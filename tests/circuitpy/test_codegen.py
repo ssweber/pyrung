@@ -96,7 +96,7 @@ from pyrung.core.condition import (
     NormallyClosedCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.expression import Expression
+from pyrung.core.expression import Expression, log
 from pyrung.core.instruction import Instruction
 from pyrung.core.system_points import system
 
@@ -1624,10 +1624,258 @@ class TestBoardPeripheralsAndRunStop:
         made = {"inf": inf + 0, "-inf": 0 - inf, "nan": inf - inf}[operand]
         return r, [(big * 10, inf), (made, r)]
 
+    @pytest.mark.parametrize("operand,flagged", [("nan", False), ("inf", True), ("-inf", True)])
+    @pytest.mark.parametrize("dest_tag", [Int, Dint, Word])
+    def test_math_non_finite_into_an_integer_is_zero_on_every_backend(
+        self, monkeypatch, operand, flagged, dest_tag
+    ):
+        """A Math of +/-Inf into an integer stores 0 with SC43; of NaN, 0 with no flag."""
+        r, setup = self._non_finite_real(operand)
+        dest = dest_tag("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                calc(r * 2, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=2)
+        assert results == {name: (0, flagged) for name in results}
+
+    @pytest.mark.parametrize("operand,flagged", [("nan", False), ("inf", True), ("-inf", True)])
+    def test_math_non_finite_into_a_real_is_kept_on_every_backend(
+        self, monkeypatch, operand, flagged
+    ):
+        """A Math of +/-Inf into a Real keeps it with SC43; of NaN, keeps it with no flag."""
+        r, setup = self._non_finite_real(operand)
+        dest = Real("Dest", default=7.0)
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                calc(r * 2, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=2)
+        for stored, flag in results.values():
+            assert repr(stored) == repr(
+                {"nan": math.nan, "inf": math.inf, "-inf": -math.inf}[operand]
+            )
+            assert flag is flagged
+
+    @pytest.mark.parametrize(
+        "operand,dest_tag,stored,flagged",
+        [
+            ("inf", Int, 32767, True),
+            ("-inf", Int, -32768, True),
+            ("nan", Int, 0, False),
+            ("inf", Dint, 2147483647, True),
+            ("-inf", Dint, -2147483648, True),
+            ("nan", Dint, 0, False),
+            ("inf", Word, 0, False),
+            ("nan", Word, 0, False),
+        ],
+    )
+    def test_copy_non_finite_on_every_backend(
+        self, monkeypatch, operand, dest_tag, stored, flagged
+    ):
+        """A Copy of +/-Inf clamps with SC43 on an INT or DINT; NaN, or a WORD, stores 0 with none."""
+        r, setup = self._non_finite_real(operand)
+        dest = dest_tag("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                copy(r, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=2)
+        assert results == {name: (stored, flagged) for name in results}
+
+    @pytest.mark.parametrize(
+        "source_tag,value,dest_tag,stored,flagged",
+        [
+            (Dint, 40000, Int, 32767, True),
+            (Dint, -40000, Int, -32768, True),
+            (Dint, 32767, Int, 32767, False),
+            (Real, 32767.5, Int, 32767, False),
+            (Real, -32768.5, Int, -32768, False),
+            (Real, 32768.0, Int, 32767, True),
+            (Real, -32769.0, Int, -32768, True),
+            (Real, 1.0e10, Dint, 2147483647, True),
+            (Dint, 70000, Word, 4464, False),
+        ],
+    )
+    def test_copy_clamp_flag_on_every_backend(
+        self, monkeypatch, source_tag, value, dest_tag, stored, flagged
+    ):
+        """A Copy raises SC43 when the store stops at a limit: not on a truncation or a wrap."""
+        source = source_tag("Source", default=value)
+        dest = dest_tag("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(source, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=1)
+        assert results == {name: (stored, flagged) for name in results}
+
+    @pytest.mark.parametrize("literal,stored,flagged", [(40000, 32767, True), (5, 5, False)])
+    def test_copy_literal_clamp_flag_on_every_backend(self, monkeypatch, literal, stored, flagged):
+        """A literal source clamps and flags as a tag does."""
+        dest = Int("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(literal, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=1)
+        assert results == {name: (stored, flagged) for name in results}
+
+    @pytest.mark.parametrize(
+        "values,flagged", [((40000, 5), True), ((-40000, 5), True), ((1, 5), False)]
+    )
+    def test_blockcopy_clamp_flag_on_every_backend(self, monkeypatch, values, flagged):
+        """A Block Copy raises SC43 if any element clamps, and stores every element."""
+        source = Block("SrcB", TagType.DINT, 1, 2)
+        dest = Block("DstB", TagType.INT, 1, 2)
+        first, second = Int("First"), Int("Second")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                copy(values[0], source[1])
+                copy(values[1], source[2])
+            with Rung(~system.sys.first_scan):
+                blockcopy(source.select(1, 2), dest.select(1, 2))
+                copy(dest[1], first)
+                copy(dest[2], second)
+
+        watch = (first, second, system.fault.out_of_range)
+        results = _on_every_backend(prog, monkeypatch, watch, scans=2)
+        expected = (max(-32768, min(32767, values[0])), values[1], flagged)
+        assert results == {name: expected for name in results}
+
+    def test_fill_clamps_with_no_flag_on_every_backend(self, monkeypatch):
+        """A Fill stops at the limit with no flag: only Single, Block and Pack Copy raise it."""
+        source = Dint("Source", default=40000)
+        dest = Block("DstB", TagType.INT, 1, 2)
+        first, second = Int("First"), Int("Second")
+        with Program(strict=False) as prog:
+            with Rung():
+                fill(source, dest.select(1, 2))
+                copy(dest[1], first)
+                copy(dest[2], second)
+
+        watch = (first, second, system.fault.out_of_range)
+        results = _on_every_backend(prog, monkeypatch, watch, scans=1)
+        assert results == {name: (32767, 32767, False) for name in results}
+
+    @pytest.mark.parametrize("exponential", [False, True])
+    @pytest.mark.parametrize("operand,text", [("inf", "inf"), ("-inf", "-inf"), ("nan", "nan")])
+    def test_copy_non_finite_to_text_on_every_backend(
+        self, monkeypatch, operand, text, exponential
+    ):
+        """A Copy of a non-finite Real to text writes it lowercase, with no flag."""
+        r, setup = self._non_finite_real(operand)
+        chars = Block("Chars", TagType.CHAR, 1, 5)
+        codes = [Int(f"Code{i}") for i in range(1, 6)]
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+                copy("Z", chars[1])
+            with Rung(~system.sys.first_scan):
+                copy(r, chars[1], convert=to_text(exponential=exponential))
+                for i, code in enumerate(codes, start=1):
+                    copy(chars[i], code, convert=to_ascii)
+
+        results = _on_every_backend(prog, monkeypatch, (*codes, system.fault.out_of_range), scans=2)
+        wanted = [ord(ch) for ch in text] + [0] * (5 - len(text))
+        assert results == {name: (*wanted, False) for name in results}
+
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
-    def test_non_finite_randint_bound_is_zero_and_sc43_on_every_backend(self, monkeypatch, operand):
-        """pyrung's choice: a randint() bound holding Inf or NaN makes the calc
-        store 0 with SC43, and the scan runs on, on all three backends."""
+    @pytest.mark.parametrize(
+        "store",
+        [
+            pytest.param(lambda r, chars, reals: copy(r, chars[1]), id="copy"),
+            pytest.param(lambda r, chars, reals: fill(r, chars.select(1, 2)), id="fill"),
+            pytest.param(
+                lambda r, chars, reals: blockcopy(reals.select(1, 2), chars.select(1, 2)),
+                id="blockcopy",
+            ),
+        ],
+    )
+    def test_a_non_finite_real_into_a_char_is_zero_on_every_backend(
+        self, monkeypatch, store, operand
+    ):
+        """No flag and no raise, and the rung runs on."""
+        r, setup = self._non_finite_real(operand)
+        chars = Block("Txt", TagType.CHAR, 1, 2)
+        reals = Block("Vals", TagType.REAL, 1, 2)
+        code = Int("Code", default=7)
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+                copy(r, reals[1])
+                copy(r, reals[2])
+            with Rung(~system.sys.first_scan):
+                store(r, chars, reals)
+                copy(5, after)
+            with Rung(~system.sys.first_scan, chars[1] == "A"):
+                copy(1, code)
+
+        results = _on_every_backend(prog, monkeypatch, (code, *self._FAULTS, after), scans=2)
+        assert results == {name: (7, False, False, False, 5) for name in results}
+
+    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
+    def test_a_copy_of_a_non_finite_real_stores_zero_in_a_char_on_every_backend(
+        self, monkeypatch, operand
+    ):
+        r, setup = self._non_finite_real(operand)
+        ch = Char("Ch", default="A")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                copy(r, ch)
+
+        results = _on_every_backend(prog, monkeypatch, (ch,), scans=2)
+        assert results == {name: (0,) for name in results}
+
+    def test_a_copy_of_a_finite_real_into_a_char_agrees_on_every_backend(self, monkeypatch):
+        r = Real("R", default=66.5)
+        ch = Char("Ch", default="A")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(r, ch)
+
+        results = _on_every_backend(prog, monkeypatch, (ch, *self._FAULTS), scans=1)
+        assert results == {name: (66.5, False, False, False) for name in results}
+
+    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
+    def test_a_non_finite_real_to_binary_faults_on_every_backend(self, monkeypatch, operand):
+        """A code needs an integer: the TXT stays as it was, with SC43, and the rung runs on."""
+        r, setup = self._non_finite_real(operand)
+        ch = Char("Ch", default="A")
+        code = Int("Code", default=7)
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                copy(r, ch, convert=to_binary)
+                copy(5, after)
+            with Rung(~system.sys.first_scan):
+                copy(ch, code, convert=to_ascii)
+
+        results = _on_every_backend(prog, monkeypatch, (code, *self._FAULTS, after), scans=2)
+        faults = tuple(flag.name.endswith("out_of_range") for flag in self._FAULTS)
+        assert results == {name: (ord("A"), *faults, 5) for name in results}
+
+    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
+    def test_non_finite_randint_bound_reads_zero_on_every_backend(self, monkeypatch, operand):
+        """A randint() of a Real reads 0 with no flag, whatever the Real holds."""
         from pyrung.core import randint
 
         r, setup = self._non_finite_real(operand)
@@ -1641,10 +1889,235 @@ class TestBoardPeripheralsAndRunStop:
                 calc(randint(0, r) + 5, dest)
                 copy(5, after)
 
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS, after), scans=2)
+        assert results == {name: (5, False, False, False, 5) for name in results}
+
+    def test_finite_real_randint_bound_reads_zero_on_every_backend(self, monkeypatch):
+        from pyrung.core import randint
+
+        low, high = Real("Low", default=3.0), Real("High", default=5.0)
+        dest = Int("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(low, high), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=2)
+        assert results == {name: (0, False, False, False) for name in results}
+
+    @pytest.mark.parametrize(
+        "bounds,dest_tag", [((7, 7), Int), ((70000, 70000), Int), ((70000, 70000), Dint)]
+    )
+    def test_equal_randint_constants_are_a_math_error_on_every_backend(
+        self, monkeypatch, bounds, dest_tag
+    ):
+        """0 with SC46 alone, and the rung runs on."""
+        from pyrung.core import randint
+
+        dest = dest_tag("Dest", default=7)
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(*bounds) / 2, dest)
+                copy(5, after)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS, after), scans=1)
+        faults = tuple(flag.name.endswith("math_operation_error") for flag in self._FAULTS)
+        assert results == {name: (0, *faults, 5) for name in results}
+
+    def test_equal_randint_constants_outside_calc_are_zero_on_every_backend(self, monkeypatch):
+        from pyrung.core import randint
+
+        copied = Int("Copied", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(randint(7, 7), copied)
+
+        results = _on_every_backend(prog, monkeypatch, (copied, *self._FAULTS), scans=1)
+        assert results == {name: (0, False, False, False) for name in results}
+
+    def test_randint_constants_cut_into_an_int_on_every_backend(self, monkeypatch):
+        """Into an Int the bounds are 4464..4466, cut to 16 bits, with no flag."""
+        from pyrung.core import randint
+
+        dest = Int("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(70000, 70002), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
+        for value, *faults in results.values():
+            assert 4464 <= value <= 4466
+            assert faults == [False, False, False]
+
+    @pytest.mark.parametrize("narrow_first", [True, False], ids=["narrow_first", "wide_first"])
+    def test_one_randint_has_one_draw_per_width_on_every_backend(self, monkeypatch, narrow_first):
+        from pyrung.core import randint
+
+        roll = randint(70000, 70002)
+        narrow, wide = Int("Narrow", default=7), Dint("Wide", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                for dest in (narrow, wide) if narrow_first else (wide, narrow):
+                    calc(roll, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (narrow, wide, *self._FAULTS), scans=3)
+        for low, high, *faults in results.values():
+            assert 4464 <= low <= 4466
+            assert 70000 <= high <= 70002
+            assert faults == [False, False, False]
+
+    @pytest.mark.parametrize(
+        "make, low, high",
+        [
+            pytest.param(lambda n: n / 2, 8, 9, id="division"),
+            pytest.param(lambda n: n**2, 256, 257, id="power"),
+            pytest.param(lambda n: sqrt(n), 4, 5, id="sqrt"),
+        ],
+    )
+    def test_a_computed_randint_bound_draws_on_every_backend(self, monkeypatch, make, low, high):
+        from pyrung.core import randint
+
+        n = Int("N", default=16)
+        dest = Int("Dest")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(make(n), make(n) + 1), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
+        for value, *faults in results.values():
+            assert low <= value <= high
+            assert faults == [False, False, False]
+
+    def test_a_real_inside_a_computed_randint_bound_draws_on_every_backend(self, monkeypatch):
+        from pyrung.core import randint
+
+        r = Real("R", default=3.5)
+        dest = Int("Dest")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(r + 0, 5), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
+        for value, *faults in results.values():
+            assert 3 <= value <= 5
+            assert faults == [False, False, False]
+
+    @pytest.mark.parametrize(
+        "bounds, low, high",
+        [((2.5, 4.5), 2, 4), ((2.5, 2.5), 2, 2)],
+        ids=["different", "equal"],
+    )
+    def test_float_literal_randint_bounds_draw_on_every_backend(
+        self, monkeypatch, bounds, low, high
+    ):
+        from pyrung.core import randint
+
+        dest = Int("Dest", default=9)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(*bounds), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
+        for value, *faults in results.values():
+            assert low <= value <= high
+            assert faults == [False, False, False]
+
+    @pytest.mark.parametrize(
+        "make, tag_type, held",
+        [
+            pytest.param(lambda r, n: r(0, sqrt(n)), Int, -1, id="sqrt"),
+            pytest.param(lambda r, n: r(sqrt(n), 0), Int, -1, id="sqrt-low"),
+            pytest.param(lambda r, n: r(0, log(n)), Int, 0, id="log"),
+            pytest.param(lambda r, n: r(0, n**0.5), Real, -8.0, id="fractional-power"),
+        ],
+    )
+    @pytest.mark.parametrize("dest", [Dint, Int], ids=["into-dint", "into-int"])
+    def test_a_domain_error_in_a_randint_bound_on_every_backend(
+        self, monkeypatch, make, tag_type, held, dest
+    ):
+        """Inside calc the bound is read too: 0 with SC46, and the scan runs on."""
+        from pyrung.core import randint
+
+        n = tag_type("N", default=held)
+        d = dest("D", default=-1)
+        after = Bool("After")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(make(randint, n), d)
+            with Rung():
+                out(after)
+
         results = _on_every_backend(
-            prog, monkeypatch, (dest, system.fault.out_of_range, after), scans=2
+            prog, monkeypatch, (d, system.fault.math_operation_error, after), scans=1
         )
-        assert results == {name: (0, True, 5) for name in results}
+        assert results == {name: (0, True, True) for name in results}
+
+    def test_a_domain_error_in_a_randint_bound_outside_calc_on_every_backend(self, monkeypatch):
+        """Outside calc the same bound reads 0 with no flag."""
+        from pyrung.core import randint
+
+        n = Int("N", default=-1)
+        d = Dint("D", default=-1)
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(randint(0, sqrt(n)), d)
+
+        results = _on_every_backend(
+            prog, monkeypatch, (d, system.fault.math_operation_error), scans=1
+        )
+        assert results == {name: (0, False) for name in results}
+
+    def test_a_char_randint_bound_draws_on_every_backend(self, monkeypatch):
+        from pyrung.core import randint
+
+        lo = Char("Lo", default="3")
+        dest = Int("Dest")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(lo, 5), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
+        for value, *faults in results.values():
+            assert 3 <= value <= 5
+            assert faults == [False, False, False]
+
+    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
+    def test_a_non_finite_computed_randint_bound_on_every_backend(self, monkeypatch, operand):
+        """pyrung's choice: 0 with SC43 in a calc, 0 with no flag outside one."""
+        from pyrung.core import randint
+
+        r, setup = self._non_finite_real(operand)
+        dest = Dint("Dest", default=7)
+        copied = Dint("Copied", default=7)
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                copy(randint(0, r + 0), copied)
+            with Rung(~system.sys.first_scan):
+                calc(randint(0, r + 0) + 5, dest)
+                copy(5, after)
+
+        results = _on_every_backend(
+            prog, monkeypatch, (dest, copied, *self._FAULTS, after), scans=2
+        )
+        faults = tuple(flag.name.endswith("out_of_range") for flag in self._FAULTS)
+        assert results == {name: (0, 0, *faults, 5) for name in results}
+
+    def test_randint_constants_stay_wide_into_a_dint_on_every_backend(self, monkeypatch):
+        from pyrung.core import randint
+
+        dest = Dint("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(70000, 70002), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
+        for value, *faults in results.values():
+            assert 70000 <= value <= 70002
+            assert faults == [False, False, False]
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_non_finite_forloop_count_runs_none_and_sc43_on_every_backend(

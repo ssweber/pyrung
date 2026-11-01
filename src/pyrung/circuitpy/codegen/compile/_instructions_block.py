@@ -36,6 +36,7 @@ from ._primitives import (
     _compile_range_setup,
     _compile_set_out_of_range_fault_body,
     _compile_value,
+    _copy_clamp_condition,
     _range_item_read_expr,
     _range_item_write_expr,
     _search_compare_expr,
@@ -53,6 +54,15 @@ def _compile_blockcopy_instruction(
         return _compile_blockcopy_converter_instruction(instr, enabled_expr, ctx, indent)
     stem = ctx.next_name("blockcopy")
     store_expr = _store_coerce_expr("_raw", _range_type_name(instr.dest), ctx)
+    clamp_cond = _copy_clamp_condition(
+        "_raw", _range_type_name(instr.dest), _range_type_name(instr.source)
+    )
+    fault_body = _compile_set_out_of_range_fault_body(ctx)
+    clamp_lines = (
+        [f"    if {clamp_cond}:", *[f"        {line}" for line in fault_body]]
+        if clamp_cond is not None and fault_body != ["pass"]
+        else []
+    )
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
         instr.source, ctx, stem=f"{stem}_src", include_addresses=False
     )
@@ -70,6 +80,7 @@ def _compile_blockcopy_instruction(
         "    _blockcopy_values.append(_raw)",
         f"for _raw, _dst_idx in zip(_blockcopy_values, {dst_indices}):",
         f"    {_range_item_write_expr(dst_symbol, '_dst_idx', store_expr)}",
+        *clamp_lines,
         *_compile_range_flush(instr.dest, dst_symbol, ctx),
     ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)

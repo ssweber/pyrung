@@ -31,7 +31,7 @@ and DF411..DF420.
   Hardware (2026-11-01) reads 0, 0, 0, 0: both write 0 with no flag at all,
   though RAND ( 7 , 7 ) from constants raises SC46
   (``faults/rand_wide_bounds_flags``).  CLICK's editor refuses DF bounds typed
-  in, so this is what a pasted one does.  pyrung (step MATH) reads 3, 0, 1, 0.
+  in, so this is what a pasted one does.
   ``faults/rand_unequal_bounds`` asks DF bounds that differ.  (Moved here from
   ``faults`` before any CLICK ran it.)
 - ``loop_body_split`` (probe, S5 #4): a For body rung with an instruction above
@@ -179,7 +179,6 @@ group = Group(
             expect={"Result1": 0, "Result2": 0, "Result3": 0, "ErrorCode": 0},
             scans=FAULT_SCANS,
             probe="RAND with a DF bound, finite and +Inf",
-            pending="MATH",
         ),
         case(
             "A For body rung with an instruction above a counter is two body rungs on "

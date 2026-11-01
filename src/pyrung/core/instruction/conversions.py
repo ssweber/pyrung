@@ -156,7 +156,8 @@ def _render_text_from_numeric(
     if source_type == TagType.REAL or isinstance(value, float):
         numeric = float(value)
         if not math.isfinite(numeric):
-            raise ValueError("REAL source is not finite")
+            # CLICK writes these as text, lowercase, with no flag.
+            return "nan" if numeric != numeric else ("inf" if numeric > 0 else "-inf")
         return f"{numeric:.7E}" if exponential else f"{numeric:.7f}"
 
     number = int(value)
@@ -224,6 +225,20 @@ def _store_copy_value_to_tag_type(value: Any, tag: Tag) -> Any:
     return value if storage is None else store_value(value, storage)
 
 
+def _copy_clamps(value: Any, tag: Tag) -> bool:
+    """True when a Copy of the number *value* into *tag* stops at a limit.
+
+    Only an INT or DINT clamps.  +/-Inf clamps; NaN stores 0 and does not.
+    """
+    storage = copy_store_transform(tag.type)
+    if storage is None or storage.kind != "clamp" or not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, float) and not math.isfinite(value):
+        return not math.isnan(value)
+    assert storage.lower is not None and storage.upper is not None
+    return not storage.lower <= int(value) <= storage.upper
+
+
 def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
     """Truncate a value to fit the destination tag's type.
 
@@ -252,15 +267,17 @@ def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
 def _math_out_of_range_for_dest(value: Any, dest: Tag, mode: str) -> bool:
     """Return True if math result exceeds destination storage range.
 
-    A REAL result past +/-3.4028235E+38 (stored as +/-Inf), or one that is
-    not finite (an Inf or NaN operand), is out of range; so is a result that
-    is not finite headed for an integer register (stored as 0).
+    A REAL result past +/-3.4028235E+38 (stored as +/-Inf) or already +/-Inf
+    is out of range; so is +/-Inf headed for an integer register (stored as
+    0).  NaN is in range everywhere: a REAL holds it, an integer stores 0.
     """
     from pyrung.core.tag import TagType
 
+    if isinstance(value, float) and math.isnan(value):
+        return False
     if dest.type == TagType.REAL and mode != "hex":
         return isinstance(value, (int, float)) and not real_in_range(value)
-    if isinstance(value, float) and not math.isfinite(value):
+    if isinstance(value, float) and math.isinf(value):
         return mode == "hex" or dest.type in (TagType.INT, TagType.DINT, TagType.WORD)
 
     try:

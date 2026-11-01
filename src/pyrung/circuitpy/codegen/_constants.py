@@ -47,6 +47,7 @@ _HELPER_ORDER = (
     "_rand_checked",
     "_rand_or_zero",
     "_rand_permissive",
+    "_rand_equal_bounds",
     "_pow",
     "_permissive_op",
     "_cond_elem",

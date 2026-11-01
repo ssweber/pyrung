@@ -16,6 +16,7 @@ from pyrung import (
     Program,
     Rung,
     Timer,
+    Word,
     calc,
     copy,
     count_up,
@@ -2796,6 +2797,356 @@ class TestSelfFeedingChurnExact:
             _until_hit(1_000),
             patch={"K": 7, "Tot": start},
         )
+
+    @pytest.mark.parametrize("start", [32_000, 32_767, 40_000])
+    def test_copy_clamp_faults_as_stepping(self, start: int) -> None:
+        def build() -> Program:
+            from pyrung import latch
+
+            Wide = Dint("Wide")
+            Narrow = Int("Narrow")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    calc(Wide + 7, Wide)
+                with Rung():
+                    copy(Wide, Narrow)
+                with Rung(system.fault.out_of_range):
+                    latch(Bool("FaultSeen"))
+                with Rung():
+                    on_delay(Tmr, 5_000)
+                with Rung(Tmr.Done):
+                    out(Bool("Hit"))
+            return prog
+
+        _assert_fold_is_exact(build, _until_hit(1_000), patch={"Wide": start})
+
+    @staticmethod
+    def _view_of_a_moving_tag(
+        store: Callable[[Any, Any], None],
+        reader: Callable[[Any], None],
+        *,
+        step: int = 7,
+        store_first: bool = False,
+        dest: Any = None,
+    ) -> Callable[[], Program]:
+        """A self-calc viewed by one store, a reader of it, and a slow timer."""
+
+        def build() -> Program:
+            Wide = Dint("Wide")
+            View = Int("View") if dest is None else dest
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                if store_first:
+                    with Rung():
+                        store(Wide, View)
+                with Rung():
+                    calc(Wide + step, Wide)
+                if not store_first:
+                    with Rung():
+                        store(Wide, View)
+                reader(View)
+                with Rung():
+                    on_delay(Tmr, 5_000)
+                with Rung(Tmr.Done):
+                    out(Bool("End"))
+            return prog
+
+        return build
+
+    @pytest.mark.parametrize(
+        "store",
+        [
+            pytest.param(lambda a, b: copy(a, b), id="copy"),
+            pytest.param(lambda a, b: calc(a + 0, b), id="calc"),
+        ],
+    )
+    @pytest.mark.parametrize("store_first", [False, True], ids=["store_below", "store_above"])
+    @pytest.mark.parametrize(
+        "step, start",
+        [
+            pytest.param(7, 32_000, id="up_to_the_limit"),
+            pytest.param(-7, -32_000, id="down_to_the_limit"),
+            pytest.param(7, 40_000, id="starting_past_it"),
+            pytest.param(7, -40_000, id="coming_back_in"),
+        ],
+    )
+    def test_a_store_past_its_range_counts_each_flagged_scan(
+        self, store: Any, store_first: bool, step: int, start: int
+    ) -> None:
+        def reader(_view: Any) -> None:
+            N = Int("N")
+            with Rung(system.fault.out_of_range):
+                calc(N + 1, N)
+
+        build = self._view_of_a_moving_tag(store, reader, step=step, store_first=store_first)
+        plc = _assert_fold_is_exact(
+            build,
+            lambda plc, fold: plc.run_until(Bool("End"), max_cycles=10_000, fold=fold),
+            patch={"Wide": start},
+        )
+        assert plc.state.tags["N"] > 2
+
+    @pytest.mark.parametrize(
+        "store",
+        [
+            pytest.param(lambda a, b: copy(a, b), id="copy"),
+            pytest.param(lambda a, b: calc(a + 0, b), id="calc"),
+        ],
+    )
+    @pytest.mark.parametrize("store_first", [False, True], ids=["store_below", "store_above"])
+    def test_a_rung_on_the_flag_stops_on_the_first_flagged_scan(
+        self, store: Any, store_first: bool
+    ) -> None:
+        def reader(_view: Any) -> None:
+            with Rung(system.fault.out_of_range):
+                out(Bool("Hit"))
+
+        plc = _assert_fold_is_exact(
+            self._view_of_a_moving_tag(store, reader, store_first=store_first),
+            _until_hit(10_000),
+            patch={"Wide": 32_000},
+        )
+        assert plc.state.tags["Wide"] in (32_770, 32_777)
+
+    @pytest.mark.parametrize(
+        "store",
+        [
+            pytest.param(lambda a, b: copy(a, b), id="copy"),
+            pytest.param(lambda a, b: calc(a + 0, b), id="calc"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "stop",
+        [
+            pytest.param(system.fault.out_of_range, id="the_flag"),
+            pytest.param(lambda s: s.tags.get("fault.out_of_range"), id="a_callable"),
+        ],
+    )
+    def test_a_stop_on_the_flag_lands_on_the_first_flagged_scan(
+        self, store: Any, stop: Any
+    ) -> None:
+        plc = _assert_fold_is_exact(
+            self._view_of_a_moving_tag(store, lambda _view: None),
+            lambda plc, fold: plc.run_until(stop, max_cycles=10_000, fold=fold),
+            patch={"Wide": 32_000},
+        )
+        assert plc.state.tags["Wide"] == 32_770
+
+    def test_a_counter_view_past_its_range_counts_each_flagged_scan(self) -> None:
+        def build() -> Program:
+            Cnt = Counter.clone("Cnt")
+            Narrow = Int("Narrow")
+            N = Int("N")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung(system.sys.clock_100ms):
+                    count_up(Cnt, 100_000).reset(Bool("CR"))
+                with Rung():
+                    copy(Cnt.Acc, Narrow)
+                with Rung(system.fault.out_of_range):
+                    calc(N + 1, N)
+                with Rung():
+                    on_delay(Tmr, 5_000)
+                with Rung(Tmr.Done):
+                    out(Bool("Hit"))
+            return prog
+
+        plc = _assert_fold_is_exact(build, _until_hit(10_000), patch={"Cnt_Acc": 32_760})
+        assert plc.state.tags["N"] > 2
+
+    def test_a_view_read_past_its_wrap_stops_as_stepping(self) -> None:
+        def reader(view: Any) -> None:
+            with Rung(view < 0):
+                out(Bool("Hit"))
+
+        plc = _assert_fold_is_exact(
+            self._view_of_a_moving_tag(lambda a, b: calc(a + 0, b), reader),
+            _until_hit(10_000),
+            patch={"Wide": 32_000},
+        )
+        assert plc.state.tags["Wide"] == 32_770
+
+    @pytest.mark.parametrize(
+        "view, limit",
+        [
+            pytest.param("copy", False, id="copy"),
+            pytest.param("calc", True, id="calc"),
+        ],
+    )
+    def test_a_view_nothing_can_tell_apart_keeps_folding(self, view: str, limit: bool) -> None:
+        """A clamped copy read by a comparison is still monotone in its source,
+        and with no reader of the flag only a wrap makes it read differently."""
+
+        def reader(v: Any) -> None:
+            with Rung(v == 32_767):
+                calc(Int("N") + 1, Int("N"))
+
+        store = (lambda a, b: copy(a, b)) if view == "copy" else (lambda a, b: calc(a + 0, b))
+        build = self._view_of_a_moving_tag(store, reader)
+        _assert_fold_is_exact(
+            build,
+            lambda plc, fold: plc.run_until(Bool("End"), max_cycles=10_000, fold=fold),
+            patch={"Wide": 32_000},
+        )
+        plc = PLC(build(), dt=0.010)
+        assert bool(plc._ensure_fold_context().mirror_limits) is limit
+
+    @staticmethod
+    def _copy_into_a_word(step: int, reader: Callable[[Any], None]) -> Callable[[], Program]:
+        def build() -> Program:
+            Wide = Dint("Wide")
+            View = Word("View")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    calc(Wide + step, Wide)
+                with Rung():
+                    copy(Wide, View)
+                reader(View)
+                with Rung():
+                    on_delay(Tmr, 5_000)
+                with Rung(Tmr.Done):
+                    out(Bool("End"))
+            return prog
+
+        return build
+
+    @pytest.mark.parametrize(
+        "step, start",
+        [
+            pytest.param(7, 65_000, id="up-past-65535"),
+            pytest.param(-7, 200, id="down-past-0"),
+            pytest.param(-7, 1_000, id="down-through-the-reader-then-past-0"),
+            pytest.param(7, 70_000, id="starts-past-65535"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "read",
+        [
+            pytest.param(lambda v: v > 100, id="above"),
+            pytest.param(lambda v: v < 100, id="below"),
+            pytest.param(lambda v: v == 65_535, id="top"),
+            pytest.param(lambda v: v == 0, id="bottom"),
+        ],
+    )
+    def test_a_copy_into_a_word_wraps_and_a_comparison_sees_it(
+        self, step: int, start: int, read: Any
+    ) -> None:
+        """A Copy into a Word wraps with no flag, so past its range it reads like no line."""
+
+        def reader(v: Any) -> None:
+            with Rung(read(v)):
+                calc(Int("N") + 1, Int("N"))
+
+        _assert_fold_is_exact(
+            self._copy_into_a_word(step, reader),
+            lambda plc, fold: plc.run_until(Bool("End"), max_cycles=10_000, fold=fold),
+            patch={"Wide": start},
+        )
+
+    def test_a_copy_into_a_word_stops_at_the_first_read_of_its_wrapped_value(self) -> None:
+        def reader(v: Any) -> None:
+            with Rung(v == 1):
+                out(Bool("Hit"))
+
+        folded = _assert_fold_is_exact(
+            self._copy_into_a_word(7, reader), _until_hit(10_000), patch={"Wide": 65_495}
+        )
+        assert folded.state.tags["Wide"] == 65_537
+        assert folded.state.tags["View"] == 1
+
+    def test_a_copy_into_a_word_inside_its_range_still_folds(self) -> None:
+        """The wrap only ends a window at the edge: inside the range they stay long."""
+
+        def reader(v: Any) -> None:
+            with Rung(v > 1_000_000):
+                calc(Int("N") + 1, Int("N"))
+
+        build = self._copy_into_a_word(1, reader)
+        _assert_fold_is_exact(
+            build,
+            lambda plc, fold: plc.run_until(Bool("End"), max_cycles=10_000, fold=fold),
+        )
+        plc = PLC(build(), dt=0.010)
+        ran = 0
+        prepare = plc._prepare_scan
+
+        def counted(*args: Any, **kwargs: Any) -> Any:
+            nonlocal ran
+            ran += 1
+            return prepare(*args, **kwargs)
+
+        setattr(plc, "_prepare_scan", counted)  # noqa: B010
+        plc.run_until(Bool("End"), max_cycles=10_000, fold=True)
+        assert plc.state.scan_id == 500
+        assert plc.state.tags["View"] == 500
+        assert ran < 20
+
+    @pytest.mark.parametrize(
+        "expr_of",
+        [
+            pytest.param(lambda w: w + 0, id="same"),
+            pytest.param(lambda w: 1000 - w, id="negated"),
+            pytest.param(lambda w: w + 5, id="offset"),
+        ],
+    )
+    def test_a_same_width_view_with_the_flag_read_still_folds(self, expr_of: Any) -> None:
+        """Inside its range nothing raises the flag, so the windows stay long."""
+        from pyrung import latch
+
+        def build() -> Program:
+            Wide = Dint("Wide")
+            Same = Dint("Same")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    calc(Wide + 7, Wide)
+                with Rung():
+                    calc(expr_of(Wide), Same)
+                with Rung(Same == 123_456_789):
+                    out(Bool("Never"))
+                with Rung(system.fault.out_of_range):
+                    latch(Bool("FaultSeen"))
+                with Rung():
+                    on_delay(Tmr, 30_000)
+                with Rung(Tmr.Done):
+                    out(Bool("Hit"))
+            return prog
+
+        _assert_fold_is_exact(build, _until_hit(5_000))
+
+        plc = PLC(build(), dt=0.010)
+        ran = 0
+        prepare = plc._prepare_scan
+
+        def counted(*args: Any, **kwargs: Any) -> Any:
+            nonlocal ran
+            ran += 1
+            return prepare(*args, **kwargs)
+
+        setattr(plc, "_prepare_scan", counted)  # noqa: B010
+        plc.run_until(Bool("Hit"), max_cycles=5_000, fold=True)
+        assert plc.state.scan_id == 3_000
+        assert ran < 50
+
+    def test_timer_acc_copied_to_an_int_never_faults(self) -> None:
+        def build() -> Program:
+            Copied = Int("Copied")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Tmr, 5_000)
+                with Rung():
+                    copy(Tmr.Acc, Copied)
+                with Rung(system.fault.out_of_range):
+                    out(Bool("FaultNow"))
+                with Rung(Tmr.Done):
+                    out(Bool("Hit"))
+            return prog
+
+        folded = _assert_fold_is_exact(build, _until_hit(1_000))
+        assert folded.state.tags["FaultNow"] is False
 
     def test_cycle_jump_stops_short_of_a_wrap(self) -> None:
         from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until

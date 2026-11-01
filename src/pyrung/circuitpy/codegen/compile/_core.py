@@ -582,8 +582,8 @@ def _calc_range_condition(value_var: str, dest_type: str, mode: str) -> str | No
     if dest_type == "WORD":
         return f"int({value_var}) < 0 or int({value_var}) > 65535"
     if dest_type == "REAL":
-        # Also true for NaN: a REAL result that is not finite sets the flag.
-        return f"not ({-REAL_MAX!r} <= {value_var} <= {REAL_MAX!r})"
+        # A comparison with NaN is false, so NaN does not set the flag.
+        return f"{value_var} > {REAL_MAX!r} or {value_var} < {-REAL_MAX!r}"
     return None
 
 
@@ -623,7 +623,7 @@ def _compile_calc_instruction(
     range_cond = _calc_range_condition("_calc_value", dest_type, instr.mode)
     if dest_type == "REAL" and instr.mode != "hex":
         # Past CLICK's REAL range the result is +/-Inf, with the out-of-range
-        # flag, as a float32 Math stores it; NaN is kept and flagged too.
+        # flag, as a float32 Math stores it; NaN is kept, with no flag.
         enabled_body.append(f"if {range_cond}:")
         enabled_body.extend(f"    {line}" for line in out_of_range_body if line != "pass")
         enabled_body += [
@@ -635,11 +635,12 @@ def _compile_calc_instruction(
         range_cond = None
     else:
         # An Inf or NaN result (from an Inf or NaN operand) stores 0; into an
-        # integer register it sets the out-of-range flag.
+        # integer register +/-Inf sets the out-of-range flag, and NaN does not.
         flags_non_finite = range_cond is not None and out_of_range_body != ["pass"]
         enabled_body.append("if isinstance(_calc_value, float) and not math.isfinite(_calc_value):")
         if flags_non_finite:
-            enabled_body.extend(f"    {line}" for line in out_of_range_body)
+            enabled_body.append("    if _calc_value == _calc_value:")
+            enabled_body.extend(f"        {line}" for line in out_of_range_body)
         enabled_body.append("    _calc_value = 0")
     if range_cond and out_of_range_body != ["pass"]:
         enabled_body.append(f"if {range_cond}:")

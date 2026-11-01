@@ -661,6 +661,18 @@ def _integer_operand(operand: Expression) -> bool:
     return False
 
 
+def _real_tag_operand(operand: Expression) -> bool:
+    """Whether a ``randint`` bound is a bare ``Real`` tag."""
+    from pyrung.core.tag import TagType
+
+    return isinstance(operand, TagExpr) and operand.tag.type == TagType.REAL
+
+
+def _randint_tag_name(site: int) -> str:
+    """The draw tag of *site*; a negative one is the cut draw of ``~site``."""
+    return f"{RANDINT_TAG_PREFIX}{site}" if site >= 0 else f"{RANDINT_TAG_PREFIX}{~site}.cut"
+
+
 def _operand_span(operand: Expression) -> tuple[int, int] | None:
     """Lowest and highest integer a ``randint`` bound can take, if declared."""
     if isinstance(operand, LiteralExpr):
@@ -686,17 +698,23 @@ class RandIntExpr(Expression):
     ``min``/``max``/``choices``.  Bounds that are tags are read at the start of
     the scan.
 
+    Two forms never reach the draw, both as a CLICK reads them, so a ``patch()``
+    or ``force()`` of their tag changes nothing.  A bare ``Real`` tag as a bound
+    reads 0 with no flag.  Equal integer constants are a math error: 0, with SC46
+    in a ``calc``.  Any other bound is read as an integer; one that evaluates to
+    Inf or NaN is 0, with SC43 in a ``calc``.
+
     A sibling of the other expression classes, never a subclass: no
     ``LiteralExpr`` / ``MathFuncExpr`` arm may treat a draw as a pure function
     of its operands.
     """
 
-    def __init__(self, lo: Expression, hi: Expression) -> None:
+    def __init__(self, lo: Expression, hi: Expression, *, site: int | None = None) -> None:
         from pyrung.core.tag import Tag, TagType
 
         self.lo = lo
         self.hi = hi
-        self.site = next(_randint_site_counter)
+        self.site = next(_randint_site_counter) if site is None else site
         # The draw's range: the bounds themselves when literal, else the hull of
         # what each bound tag declares (a draw never leaves min(lo, hi)..max(lo, hi)).
         lo_span = _operand_span(lo)
@@ -709,23 +727,56 @@ class RandIntExpr(Expression):
             if low < high:
                 bounds["min"], bounds["max"] = low, high
         self.tag = Tag(
-            f"{RANDINT_TAG_PREFIX}{self.site}",
+            _randint_tag_name(self.site),
             TagType.DINT,
             external=True,
             comment="randint draw",
             **bounds,
         )
         _randint_sites[self.tag.name] = self
-        #: Whether a bound can be Inf or NaN (a REAL source): only then does
-        #: the calc reading the draw check the bounds (see :meth:`evaluate`).
+        #: A bare ``Real`` tag as a bound: the site reads 0, whatever it holds.
+        self.real_bounds = _real_tag_operand(lo) or _real_tag_operand(hi)
+        #: Equal integer constants: the site is a math error.
+        self.equal_bounds = (
+            not self.real_bounds
+            and isinstance(lo, LiteralExpr)
+            and isinstance(hi, LiteralExpr)
+            and _integer_operand(lo)
+            and _integer_operand(hi)
+            and lo.value == hi.value
+        )
+        #: Whether a bound can evaluate to Inf or NaN: only then does the calc
+        #: reading the draw check the bounds (see :meth:`evaluate`).
         self.checks_bounds = not (_integer_operand(lo) and _integer_operand(hi))
+
+    def with_cut_bounds(self, lo: Expression, hi: Expression) -> RandIntExpr:
+        """The draw a Math into an Int reads, over *lo* and *hi* cut to 16 bits.
+
+        A second site with its own tag, ``expr.cut_tag``: each destination width
+        has one draw, and a CLICK's pasted RANDs each draw their own.  This
+        expression is not touched, so a Math that keeps the constants, in this
+        Program or another, still draws over them, and the export writes them.
+        The cut site is found by name, so every Math that cuts reads the same one.
+        """
+        site = ~self.site
+        found = _randint_sites.get(_randint_tag_name(site))
+        return RandIntExpr(lo, hi, site=site) if found is None else found
+
+    @property
+    def cut_tag(self) -> Any:
+        """The tag of the draw a Math into an Int reads; ``tag`` if no constant cuts."""
+        from pyrung.core.instruction.calc import cut_int_constants
+
+        return cut_int_constants(self).tag
 
     def draw(self, ctx: ScanContext) -> int:
         """This scan's draw, from the bounds as the scan starts.
 
-        A bound that is Inf or NaN draws the tag's default; the calc reading
-        it stores 0 with SC43 instead (:meth:`evaluate`).
+        A site that reads no draw, or a bound that is Inf or NaN, draws the
+        tag's default; :meth:`evaluate` decides what the site reads instead.
         """
+        if self.real_bounds:
+            return self.tag.default
         lo = self.lo.evaluate(ctx)
         hi = self.hi.evaluate(ctx)
         if not (_finite(lo) and _finite(hi)):
@@ -733,6 +784,10 @@ class RandIntExpr(Expression):
         return randint_draw(self.site, ctx.scan_id, int(lo), int(hi))
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
+        if self.real_bounds:
+            return 0
+        if self.equal_bounds:
+            return _permissive(MathDomainError("randint() bounds are equal"))
         if self.checks_bounds:
             # A bound holding Inf or NaN has no integer range: the calc stores
             # 0 with SC43 (pyrung's choice, not measured on CLICK).
@@ -751,7 +806,10 @@ def randint(lo: Expression | int | Tag, hi: Expression | int | Tag) -> RandIntEx
 
     Use it inside ``calc()``.  Draws are deterministic per scan, so replay, seek
     and fork see the same values; ``patch()`` or ``force()`` the site's tag
-    (``expr.tag``) to choose a draw in a test.
+    (``expr.tag``) to choose a draw in a test.  A bare ``Real`` tag as a bound reads
+    0 with no flag, and equal constants are a math error; each has no draw to choose.
+    Into an ``Int`` a constant bound past 16 bits is cut, and that draw is its own
+    (``expr.cut_tag``).
     """
     return RandIntExpr(_wrap(lo), _wrap(hi))
 
