@@ -29,7 +29,7 @@ def pyrung_to_ladder(
         validate: When True (default), run pre-export checks and round-trip
             verification: the rows must analyze back to the program's outputs,
             and importing them (``ladder_to_pyrung``) must keep each output's
-            condition, pins and condition snapshot.  Set to False to skip
+            condition, pins and CLICK rung.  Set to False to skip
             validation for speed.
 
     Returns:

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import warnings
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 
 from pyrung.click._topology import (
@@ -37,6 +37,7 @@ from pyrung.click._topology import (
     Parallel,
     Series,
     SPNode,
+    as_series_children,
     factor_outputs,
     make_compound,
     trees_equal,
@@ -50,6 +51,7 @@ from pyrung.click.codegen.models import (
     _RawRung,
     _SourceOutput,
 )
+from pyrung.click.codegen.read_order import ReadOrder, shared_limit
 from pyrung.click.codegen.shaping import NOP
 
 # ---------------------------------------------------------------------------
@@ -646,33 +648,44 @@ _trees_equal = trees_equal
 
 def _group_outputs(
     trees: list[tuple[SPNode | None, str, int]],
+    *,
+    order: ReadOrder | None = None,
+    positions: Sequence[int | None] | None = None,
 ) -> tuple[SPNode | None, list[_InstructionInfo], list[int]]:
-    """Group per-output SP trees into top-level condition_tree + instructions."""
+    """Group per-output SP trees into top-level condition_tree + instructions.
+
+    *positions* are the outputs' places in the raw rung (row order; their
+    indices when omitted).  With *order*, a contact stays out of the shared
+    condition where reading it once, at the first output, would read it
+    across a write (see :mod:`~pyrung.click.codegen.read_order`).
+    """
     if not trees:
         return None, [], []
+    places = list(range(len(trees))) if positions is None else list(positions)
 
     if len(trees) == 1:
         tree, af, af_row = trees[0]
-        return tree, [_InstructionInfo(af, None, [])], [af_row]
+        return tree, [_InstructionInfo(af, None, [], position=places[0])], [af_row]
 
     result = factor_outputs([t[0] for t in trees])
+    count = shared_limit(order, [t[0] for t in trees], places, len(result.shared))
 
-    if result.shared:
-        cond_tree = make_compound(result.shared, Series)
+    if count:
+        cond_tree = make_compound(result.shared[:count], Series)
         instructions: list[_InstructionInfo] = []
         af_rows: list[int] = []
-        for idx, (_tree, af, af_row) in enumerate(trees):
-            remaining = result.branches[idx]
+        for idx, (tree, af, af_row) in enumerate(trees):
+            remaining = as_series_children(tree)[count:]
             branch_tree = make_compound(remaining, Series) if remaining else None
-            instructions.append(_InstructionInfo(af, branch_tree, []))
+            instructions.append(_InstructionInfo(af, branch_tree, [], position=places[idx]))
             af_rows.append(af_row)
         return cond_tree, instructions, af_rows
 
     # No shared prefix — each output gets its full tree as branch_tree.
     instructions = []
     af_rows = []
-    for tree, af, af_row in trees:
-        instructions.append(_InstructionInfo(af, tree, []))
+    for idx, (tree, af, af_row) in enumerate(trees):
+        instructions.append(_InstructionInfo(af, tree, [], position=places[idx]))
         af_rows.append(af_row)
     return None, instructions, af_rows
 
@@ -704,7 +717,8 @@ def _split_continued(rung: _AnalyzedRung, raw: _RawRung | None = None) -> list[_
     RTON-style ``on_delay(...).reset(...)`` are terminal in-flow, and their
     reset conditions render inside the call rather than as peer rows, so that
     layout cannot live in one DSL rung. Splitting off the sibling as
-    ``.continued()`` preserves the shared snapshot and stays expressible.
+    ``.continued()`` keeps every output's contacts and stays expressible; a
+    continued rung reads its contacts where it stands, as the CLICK rows do.
 
     The current trigger is still a structural proxy: no shared
     ``condition_tree`` and every instruction carries its own ``branch_tree``.
@@ -722,12 +736,16 @@ def _split_continued(rung: _AnalyzedRung, raw: _RawRung | None = None) -> list[_
 
     # First instruction → primary rung
     first = rung.instructions[0]
+    order = rung.read_order
     result: list[_AnalyzedRung] = [
         _AnalyzedRung(
             comment=rung.comment,
             condition_tree=first.branch_tree,
-            instructions=[_InstructionInfo(first.af_token, None, first.pins)],
+            instructions=[
+                _InstructionInfo(first.af_token, None, first.pins, position=first.position)
+            ],
             is_continued=rung.is_continued,
+            read_order=order,
         )
     ]
 
@@ -738,14 +756,19 @@ def _split_continued(rung: _AnalyzedRung, raw: _RawRung | None = None) -> list[_
             _AnalyzedRung(
                 comment=None,
                 condition_tree=instr.branch_tree,
-                instructions=[_InstructionInfo(instr.af_token, None, instr.pins)],
+                instructions=[
+                    _InstructionInfo(instr.af_token, None, instr.pins, position=instr.position)
+                ],
                 is_continued=True,
+                read_order=order,
             )
         )
     else:
         # Re-group remaining outputs — they may share a prefix (→ branches)
         trees = [(instr.branch_tree, instr.af_token, i) for i, instr in enumerate(remaining)]
-        cond_tree, grouped, _ = _group_outputs(trees)
+        cond_tree, grouped, _ = _group_outputs(
+            trees, order=order, positions=[instr.position for instr in remaining]
+        )
 
         if (
             cond_tree is None
@@ -758,8 +781,13 @@ def _split_continued(rung: _AnalyzedRung, raw: _RawRung | None = None) -> list[_
                     _AnalyzedRung(
                         comment=None,
                         condition_tree=instr.branch_tree,
-                        instructions=[_InstructionInfo(instr.af_token, None, instr.pins)],
+                        instructions=[
+                            _InstructionInfo(
+                                instr.af_token, None, instr.pins, position=instr.position
+                            )
+                        ],
                         is_continued=True,
+                        read_order=order,
                     )
                 )
         else:
@@ -772,6 +800,7 @@ def _split_continued(rung: _AnalyzedRung, raw: _RawRung | None = None) -> list[_
                     condition_tree=cond_tree,
                     instructions=grouped,
                     is_continued=True,
+                    read_order=order,
                 )
             )
 
@@ -996,7 +1025,10 @@ def _analyze_single_rung(
         output_trees.append((tree, af_token, af_row))
 
     # Output Grouping
-    condition_tree, instructions, af_rows = _group_outputs(output_trees)
+    read_order = ReadOrder(
+        [tree for tree, _af, _row in output_trees], [af for _tree, af, _row in output_trees]
+    )
+    condition_tree, instructions, af_rows = _group_outputs(output_trees, order=read_order)
 
     if validate:
         retained_instruction_rows = set(af_rows)
@@ -1083,4 +1115,5 @@ def _analyze_single_rung(
         instructions=instructions,
         role=role,
         source_outputs=source_outputs,
+        read_order=read_order,
     )

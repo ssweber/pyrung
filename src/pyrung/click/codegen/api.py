@@ -87,7 +87,7 @@ def _verify_emitted_logic(
 ) -> None:
     """Fail when the generated code would change the logic the rows wire.
 
-    Compares every output's AF token, full condition, pins and snapshot group
+    Compares every output's AF token, full condition, pins and CLICK rung
     in the source rows against the ``with rung`` / ``with branch`` blocks the
     emitter renders.  Shape changes pass; a lost or added contact does not.
     """
@@ -213,7 +213,7 @@ def ladder_to_pyrung(
             a rung-analysis check that no source contact is silently dropped
             for lack of wiring into an output, and a logic check that every
             output in the generated code keeps the condition, pins and
-            condition snapshot the source rows give it (both raise
+            CLICK rung the source rows give it (both raise
             ``ValueError``). When *False*, a dropped contact only warns and the
             logic check is skipped.
 

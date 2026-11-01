@@ -6,10 +6,15 @@ said without rendering or executing anything.
 
 The check compares logic, not shape.  Each output is reduced to its AF
 token, its full condition (rung contacts and enclosing branch contacts, with
-nested AND/OR flattened) and its pins, and outputs are grouped by the
-condition snapshot they read.  Continued rows coming back as branches, or a
-branch coming back as ``.continued()``, is a shape change and passes.  A
-contact that goes missing does not.
+nested AND/OR flattened) and its pins, and outputs are grouped by the CLICK
+rung (with its continued rungs) they sit in.  Continued rows coming back as
+branches, or a branch coming back as ``.continued()``, is a shape change and
+passes.  A contact that goes missing does not.
+
+Grouping outputs under a shared ``with rung(...)`` or ``with branch(...)``
+reads the shared contacts once, where the group starts; the read-order guard
+(:mod:`~pyrung.click.codegen.read_order`) keeps a contact out of a group where
+that would read it across a write.
 """
 
 from __future__ import annotations
@@ -17,8 +22,16 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
-from pyrung.click._topology import Leaf, Series, SPNode, factor_outputs, make_compound
+from pyrung.click._topology import (
+    Leaf,
+    Series,
+    SPNode,
+    as_series_children,
+    factor_outputs,
+    make_compound,
+)
 from pyrung.click.codegen.models import RungRole, _AnalyzedRung, _InstructionInfo, _PinInfo
+from pyrung.click.codegen.read_order import ReadOrder, shared_limit
 
 NOP = "NOP"
 
@@ -54,10 +67,21 @@ def rung_blocks(rung: _AnalyzedRung) -> tuple[SPNode | None, list[_BlockItem]]:
     condition = rung.condition_tree
     if len(real) == 1 and real[0].branch_tree is not None:
         return series_tree(condition, real[0].branch_tree), [replace(real[0], branch_tree=None)]
-    return condition, _group_blocks([(instr.branch_tree, instr) for instr in real])
+    return condition, _group_blocks([(instr.branch_tree, instr) for instr in real], rung.read_order)
 
 
-def _group_blocks(outputs: list[tuple[SPNode | None, _InstructionInfo]]) -> list[_BlockItem]:
+def _shared_count(
+    group: list[tuple[SPNode | None, _InstructionInfo]], order: ReadOrder | None
+) -> int:
+    """How many leading contacts *group* shares and may read as one branch node."""
+    trees = [tree for tree, _instr in group]
+    shared = len(factor_outputs(trees).shared)
+    return shared_limit(order, trees, [instr.position for _tree, instr in group], shared)
+
+
+def _group_blocks(
+    outputs: list[tuple[SPNode | None, _InstructionInfo]], order: ReadOrder | None = None
+) -> list[_BlockItem]:
     """Recursive shared-prefix factoring of consecutive outputs into branches."""
     items: list[_BlockItem] = []
     index = 0
@@ -73,20 +97,18 @@ def _group_blocks(outputs: list[tuple[SPNode | None, _InstructionInfo]]) -> list
             candidate_tree, _candidate = outputs[stop]
             if candidate_tree is None:
                 break
-            if not factor_outputs([t for t, _item in outputs[index : stop + 1]]).shared:
+            if not _shared_count(outputs[index : stop + 1], order):
                 break
             stop += 1
 
         group = outputs[index:stop]
-        result = factor_outputs([t for t, _item in group])
-        remaining: list[tuple[SPNode | None, _InstructionInfo]] = [
-            (
-                make_compound(result.branches[k], Series) if result.branches[k] else None,
-                group_instr,
-            )
-            for k, (_tree, group_instr) in enumerate(group)
-        ]
-        items.append(_BranchBlock(make_compound(result.shared, Series), _group_blocks(remaining)))
+        count = _shared_count(group, order) if len(group) > 1 else len(as_series_children(tree))
+        remaining: list[tuple[SPNode | None, _InstructionInfo]] = []
+        for group_tree, group_instr in group:
+            rest = as_series_children(group_tree)[count:]
+            remaining.append((make_compound(rest, Series) if rest else None, group_instr))
+        shared = as_series_children(tree)[:count]
+        items.append(_BranchBlock(make_compound(shared, Series), _group_blocks(remaining, order)))
         index = stop
     return items
 
@@ -146,7 +168,7 @@ def _describe(key: _OutputKey) -> str:
 
 
 def _source_snapshots(rungs: list[_AnalyzedRung]) -> list[list[_OutputKey]]:
-    """Outputs per raw source rung (each raw rung reads one snapshot)."""
+    """Outputs per raw source rung."""
     snapshots: list[list[_OutputKey]] = []
     for rung in rungs:
         if rung.source_outputs is None:
@@ -172,7 +194,7 @@ def _walk_blocks(items: list[_BlockItem], context: SPNode | None, out: list[_Out
 
 
 def _emitted_snapshots(rungs: list[_AnalyzedRung]) -> list[list[_OutputKey]]:
-    """Outputs per snapshot as the emitter renders *rungs*."""
+    """Outputs per CLICK rung (a rung and its continued rungs) as the emitter renders *rungs*."""
     snapshots: list[list[_OutputKey]] = []
     for rung in rungs:
         if not rung.is_continued or not snapshots:
@@ -198,7 +220,7 @@ def emitted_logic_mismatch(rungs: list[_AnalyzedRung]) -> str | None:
     """Describe the first logic difference between source rows and emitted code.
 
     Returns ``None`` when every non-NOP output keeps its AF token, its full
-    condition, its pins and its snapshot group.
+    condition, its pins and its CLICK rung.
     """
     expected = _source_snapshots(rungs)
     actual = _emitted_snapshots(rungs)
@@ -221,12 +243,12 @@ def emitted_logic_mismatch(rungs: list[_AnalyzedRung]) -> str | None:
     if len(flat_actual) > len(flat_expected):
         extra = flat_actual[len(flat_expected)][1]
         return f"generated code adds output {_describe(extra)}"
-    # Same outputs, different snapshot grouping.
+    # Same outputs, different rung grouping.
     for index, (exp, act) in enumerate(zip(flat_expected, flat_actual, strict=True)):
         if exp[0] != act[0]:
             return (
-                f"output {index + 1} ({_describe(exp[1])}) reads a different condition "
-                "snapshot than in the source (rung vs .continued() grouping changed)"
+                f"output {index + 1} ({_describe(exp[1])}) lands in a different CLICK rung "
+                "than in the source (rung vs .continued() grouping changed)"
             )
     return "outputs differ from the source"  # pragma: no cover - defensive
 

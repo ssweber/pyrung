@@ -5,10 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NoReturn
 
-from pyrung.click._topology import Leaf, Series, SPNode, factor_outputs, make_compound
+from pyrung.click._topology import (
+    Leaf,
+    Series,
+    SPNode,
+    as_series_children,
+    factor_outputs,
+    make_compound,
+)
 from pyrung.core.condition import AllCondition, AnyCondition, Condition
 from pyrung.core.rung import Rung
 
+from ._solve_order import MovedRead, ReadOrder
 from .instructions import _InstructionMixin
 from .layout import _HEADER, _LayoutMixin, assert_no_column_a_vertical
 from .translator import _TranslatorMixin
@@ -156,7 +164,7 @@ class _LadderExporter(
             )
             next_rung = rungs[rung_index + 1] if rung_index + 1 < len(rungs) else None
             self._check_nop_alone(rung, next_rung, path=base_path)
-            rendered = self._render_rung(rung, path=base_path)
+            rendered = self._render_pieces(rung, path=base_path)
             try:
                 assert_no_column_a_vertical(rendered)
             except ValueError as exc:
@@ -191,11 +199,18 @@ class _LadderExporter(
         return [("#", line) for line in rung.comment.splitlines()]
 
     def _normalize_branching_rung(self, rung: Rung) -> Rung:
-        """Normalize a branching rung into an ordered shared-prefix tree."""
+        """Normalize a branching rung into an ordered shared-prefix tree.
+
+        A contact is factored into a shared node only where that does not read
+        it across a write of the rung (see :mod:`._solve_order`).
+        """
         outputs = self._collect_instruction_trees(rung)
         if not outputs:
             return rung
-        normalized = self._build_normalized_rung_from_trees(outputs)
+        order = ReadOrder(self._program, rung, [instr for _tree, instr in outputs])
+        normalized = self._build_normalized_rung_from_trees(
+            outputs, order=order, members=[(k, 0) for k in range(len(outputs))]
+        )
         normalized._use_prior_snapshot = rung._use_prior_snapshot
         normalized.comment = rung.comment
         return normalized
@@ -243,20 +258,61 @@ class _LadderExporter(
             raise TypeError(f"Expected condition leaf, got {node!r}")
         return node.label.condition
 
+    @staticmethod
+    def _shared_count(
+        trees: list[SPNode | None],
+        members: list[tuple[int, int]] | None,
+        order: ReadOrder | None,
+    ) -> int:
+        """How many leading contacts *trees* share and may read as one node.
+
+        The node is read at the first member's position, so a contact another
+        member reads later in the source stays out of it when a write in
+        between reaches it.
+        """
+        shared = len(factor_outputs(trees).shared)
+        if order is None or members is None or not shared:
+            return shared
+        at = members[0][0]
+        for index in range(shared):
+            for output, offset in members:
+                if order.crossing(output, offset + index, at) is not None:
+                    return index
+        return shared
+
     def _build_normalized_rung_from_trees(
         self,
         outputs: list[tuple[SPNode | None, Any]],
+        *,
+        order: ReadOrder | None = None,
+        members: list[tuple[int, int]] | None = None,
     ) -> Rung:
-        result = factor_outputs([tree for tree, _instruction in outputs])
-        normalized = Rung(*[self._leaf_condition(node) for node in result.shared])
+        """One rung for *outputs* (each with its whole path), prefixes factored.
+
+        *members* gives each output's ``(position in the source rung, contacts
+        of its path already placed above)``, so *order* can keep a contact
+        from being read across a write.
+        """
+        trees = [tree for tree, _instruction in outputs]
+        result = factor_outputs(trees)
+        count = self._shared_count(trees, members, order)
+        if not count and len(outputs) == 1:
+            # A lone output reads its path where it stands; ReadOrder.check
+            # refuses the rung if that crosses a write.
+            count = len(result.shared)
+        shared = result.shared[:count]
+        normalized = Rung(*[self._leaf_condition(node) for node in shared])
 
         remaining_outputs = [
             (
-                self._series_tree(*result.branches[index]),
+                self._series_tree(*as_series_children(tree)[count:]),
                 instruction,
             )
-            for index, (_tree, instruction) in enumerate(outputs)
+            for tree, instruction in outputs
         ]
+        remaining_members = (
+            None if members is None else [(output, offset + count) for output, offset in members]
+        )
 
         index = 0
         while index < len(remaining_outputs):
@@ -271,15 +327,23 @@ class _LadderExporter(
                 candidate_tree, _candidate_instruction = remaining_outputs[stop]
                 if candidate_tree is None:
                     break
-                shared = factor_outputs(
-                    [candidate for candidate, _item in remaining_outputs[index : stop + 1]]
-                ).shared
-                if not shared:
+                group_members = (
+                    None if remaining_members is None else remaining_members[index : stop + 1]
+                )
+                if not self._shared_count(
+                    [candidate for candidate, _item in remaining_outputs[index : stop + 1]],
+                    group_members,
+                    order,
+                ):
                     break
                 stop += 1
 
             normalized.add_branch(
-                self._build_normalized_rung_from_trees(remaining_outputs[index:stop])
+                self._build_normalized_rung_from_trees(
+                    remaining_outputs[index:stop],
+                    order=order,
+                    members=None if remaining_members is None else remaining_members[index:stop],
+                )
             )
             index = stop
 
@@ -322,39 +386,107 @@ class _LadderExporter(
                 source=rung,
             )
 
-    def _check_box_alone(self, rung: Rung, *, path: str) -> None:
-        """Refuse a box with pins that shares its rung's wire with another output.
+    def _export_pieces(self, rung: Rung, *, path: str, continued: bool = True) -> list[Rung]:
+        """The CLICK rungs *rung* exports as, each factored, in solve order.
 
-        CLICK takes all inputs (pins) of a box from the same branch, the rail
-        (C000A), so the box's input wire cannot also feed another output.
+        CLICK takes every input (pin) of a box from one branch (C000A), so a
+        box with pins cannot share its rung's wire with another output.  The
+        rung splits there: the outputs above the box stay on the first CLICK
+        rung, the box starts a CLICK rung of its own, and the outputs below it
+        follow as ``.continued()`` wires of that rung (separate rungs where
+        *continued* is False, in a forloop body).  Every piece repeats the path
+        in front of its outputs.  The split, and any contact factored into a
+        shared node, reads a contact at another point of the solve; the rung
+        is refused when a write of the rung lies in between.
         """
-        outputs: list[tuple[str, Any]] = []
+        if not rung._instructions and not rung._branches:
+            return [rung]
+        if any(type(instr).__name__ == "ForLoopInstruction" for instr in rung._instructions):
+            return [rung]
+        outputs = self._collect_instruction_trees(rung)
+        boxes = (
+            {
+                index
+                for index, (_tree, instr) in enumerate(outputs)
+                if self._pin_specs(instr, path=path)
+            }
+            if len(outputs) > 1
+            else set()
+        )
+        if not boxes and not rung._branches:
+            return [rung]
+        order = ReadOrder(self._program, rung, [instr for _tree, instr in outputs])
+        cuts = sorted({0, len(outputs), *boxes, *(index + 1 for index in boxes)})
+        pieces: list[Rung] = []
+        for number, (start, stop) in enumerate(zip(cuts, cuts[1:], strict=False)):
+            piece = self._build_normalized_rung_from_trees(
+                outputs[start:stop],
+                order=order,
+                members=[(index, 0) for index in range(start, stop)],
+            )
+            if number == 0:
+                piece._use_prior_snapshot = rung._use_prior_snapshot
+                piece.comment = rung.comment
+            else:
+                piece._use_prior_snapshot = continued and start not in boxes
+            piece.source_file = rung.source_file
+            piece.source_line = rung.source_line
+            piece.end_line = rung.end_line
+            pieces.append(piece)
+        moved = order.check(pieces)
+        if moved is not None:
+            self._refuse_moved_read(moved, outputs, boxes, path=path, source=rung)
+        return pieces
 
-        def collect(item: Rung, item_path: str) -> None:
-            for index, instruction in enumerate(item._instructions):
-                outputs.append((f"{item_path}.instruction[{index}]", instruction))
-            for index, child in enumerate(item._branches):
-                collect(child, f"{item_path}.branch[{index}]")
+    def _refuse_moved_read(
+        self,
+        moved: MovedRead,
+        outputs: list[tuple[SPNode | None, Any]],
+        boxes: set[int],
+        *,
+        path: str,
+        source: Rung,
+    ) -> NoReturn:
+        contact = self._condition_signature(moved.contact)
+        writer = type(outputs[moved.writer][1]).__name__
+        tag = moved.tag
+        try:
+            address = self._tag_map.resolve(tag)
+        except (KeyError, TypeError, ValueError):
+            address = tag
+        if address != tag:
+            tag = f"{tag} ({address})"
+        if boxes:
+            box = type(outputs[min(boxes)][1]).__name__
+            message = (
+                f"CLICK needs {box} on a rung of its own (C000A: all inputs (pins) of a box "
+                "instruction must start from the same branch), and each CLICK rung the split "
+                f"makes repeats the contacts in front of its outputs. Contact {contact} would be "
+                f"read again after {writer} on this rung writes {tag}, so it would read "
+                f"another value. Write {tag} on another rung, or give the box a rung of "
+                "its own."
+            )
+        else:
+            message = (
+                f"Contact {contact} cannot be drawn on the row that reads it here: {writer} on "
+                f"this rung writes {tag} between the two. Write {tag} on another "
+                "rung, or give the rows their own contacts."
+            )
+        self._raise_issue(path=path, message=message, source=source)
 
-        collect(rung, path)
-        if len(outputs) < 2:
-            return
-        for instruction_path, instruction in outputs:
-            if self._pin_specs(instruction, path=instruction_path):
-                self._raise_issue(
-                    path=instruction_path,
-                    message=(
-                        f"CLICK refuses {type(instruction).__name__} with other outputs on "
-                        "its rung (C000A: all inputs (pins) of a box instruction must start "
-                        "from the same branch). Give the box a rung of its own; an output below "
-                        "it can go on a continued() rung."
-                    ),
-                    source=instruction,
-                )
+    def _render_pieces(
+        self, rung: Rung, *, path: str, continued: bool = True
+    ) -> list[tuple[str, ...]]:
+        """Render *rung* as the CLICK rungs :meth:`_export_pieces` splits it into."""
+        return [
+            row
+            for piece in self._export_pieces(rung, path=path, continued=continued)
+            for row in self._render_rung(piece, path=path)
+        ]
 
     def _render_rung(self, rung: Rung, *, path: str) -> list[tuple[str, ...]]:
+        """Render one CLICK rung: a piece from :meth:`_export_pieces`, already factored."""
         comment_rows = self._comment_rows(rung)
-        self._check_box_alone(rung, path=path)
 
         if not rung._instructions and not rung._branches:
             # Empty rung (comment-only or bare pass) → emit NOP in AF column.
@@ -394,13 +526,12 @@ class _LadderExporter(
         condition_rows = self._expand_conditions(rung._conditions, path=f"{path}.condition")
 
         if rung._branches:
-            normalized_rung = self._normalize_branching_rung(rung)
             branch_rows = self._render_rung_with_branches(
-                normalized_rung,
+                rung,
                 path=path,
                 first_marker=first_marker,
             )
-            pin_rows = self._branch_pin_rows(normalized_rung, path=path)
+            pin_rows = self._branch_pin_rows(rung, path=path)
             if not branch_rows:
                 return []
             rows = branch_rows + pin_rows
