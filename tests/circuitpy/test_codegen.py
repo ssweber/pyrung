@@ -1623,6 +1623,45 @@ class TestBoardPeripheralsAndRunStop:
         made = {"inf": inf + 0, "-inf": 0 - inf, "nan": inf - inf}[operand]
         return r, [(big * 10, inf), (made, r)]
 
+    @pytest.mark.parametrize("operand,flagged", [("nan", False), ("inf", True), ("-inf", True)])
+    @pytest.mark.parametrize("dest_tag", [Int, Dint, Word])
+    def test_math_non_finite_into_an_integer_is_zero_on_every_backend(
+        self, monkeypatch, operand, flagged, dest_tag
+    ):
+        """A Math of +/-Inf into an integer stores 0 with SC43; of NaN, 0 with no flag."""
+        r, setup = self._non_finite_real(operand)
+        dest = dest_tag("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                calc(r * 2, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=2)
+        assert results == {name: (0, flagged) for name in results}
+
+    @pytest.mark.parametrize("operand,flagged", [("nan", False), ("inf", True), ("-inf", True)])
+    def test_math_non_finite_into_a_real_is_kept_on_every_backend(
+        self, monkeypatch, operand, flagged
+    ):
+        """A Math of +/-Inf into a Real keeps it with SC43; of NaN, keeps it with no flag."""
+        r, setup = self._non_finite_real(operand)
+        dest = Real("Dest", default=7.0)
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                for expr, target in setup:
+                    calc(expr, target)
+            with Rung(~system.sys.first_scan):
+                calc(r * 2, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=2)
+        for stored, flag in results.values():
+            assert repr(stored) == repr(
+                {"nan": math.nan, "inf": math.inf, "-inf": -math.inf}[operand]
+            )
+            assert flag is flagged
+
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_non_finite_randint_bound_is_zero_and_sc43_on_every_backend(self, monkeypatch, operand):
         """pyrung's choice: a randint() bound holding Inf or NaN makes the calc

@@ -597,7 +597,6 @@ group = Group(
             expect={"Result1": 1, "Result2": 1, "Result3": 8, "Result4": 0},
             scans=SCANS,
             probe="Inf and NaN in a Real Math: propagation, flags, compares",
-            pending="SC43",
         ),
         case(
             "A Math of +Inf or NaN into an integer writes 0: +Inf into an Int (Result1 = "
@@ -608,7 +607,6 @@ group = Group(
             expect={"Result1": 0, "Result2": 0, "Result3": 1, "Result4": 5},
             scans=SCANS,
             probe="Math of Inf or NaN into an Int or a DD",
-            pending="SC43",
         ),
         case(
             "A Copy of +Inf or -Inf into an Int clamps and raises SC43, and of NaN writes 0 "
@@ -641,7 +639,6 @@ group = Group(
             expect={"Result1": 4, "Result2": 0, "Result3": 0, "Result4": 1, "ErrorCode": 1},
             scans=SCANS,
             probe="SIN and SQRT of an infinity",
-            pending="MATH",
         ),
         case(
             "RAND with bounds that differ draws between them, its bounds cut to 16 bits, "

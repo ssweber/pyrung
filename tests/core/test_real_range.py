@@ -372,7 +372,7 @@ def test_only_a_real_forloop_count_declares_sc43():
     assert ForLoopInstruction(5, Int("I"))._fault_writes == ()
 
 
-def test_a_nan_result_sets_sc43(runner_factory):
+def test_a_nan_result_sets_no_flag(runner_factory):
     inf = Real("Inf")
     nan = Real("NaN")
     with Program() as program:
@@ -383,7 +383,7 @@ def test_a_nan_result_sets_sc43(runner_factory):
     plc.step()
     tags = plc.current_state.tags
     assert math.isnan(tags["NaN"])
-    assert tags[SC43.name] is True
+    assert tags[SC43.name] is False
 
 
 def test_division_by_zero_of_inf_is_still_zero_and_sc40(runner_factory):

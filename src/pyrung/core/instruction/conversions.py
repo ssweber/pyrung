@@ -252,15 +252,17 @@ def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
 def _math_out_of_range_for_dest(value: Any, dest: Tag, mode: str) -> bool:
     """Return True if math result exceeds destination storage range.
 
-    A REAL result past +/-3.4028235E+38 (stored as +/-Inf), or one that is
-    not finite (an Inf or NaN operand), is out of range; so is a result that
-    is not finite headed for an integer register (stored as 0).
+    A REAL result past +/-3.4028235E+38 (stored as +/-Inf) or already +/-Inf
+    is out of range; so is +/-Inf headed for an integer register (stored as
+    0).  NaN is in range everywhere: a REAL holds it, an integer stores 0.
     """
     from pyrung.core.tag import TagType
 
+    if isinstance(value, float) and math.isnan(value):
+        return False
     if dest.type == TagType.REAL and mode != "hex":
         return isinstance(value, (int, float)) and not real_in_range(value)
-    if isinstance(value, float) and not math.isfinite(value):
+    if isinstance(value, float) and math.isinf(value):
         return mode == "hex" or dest.type in (TagType.INT, TagType.DINT, TagType.WORD)
 
     try:

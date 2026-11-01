@@ -251,10 +251,11 @@ class CalcInstruction(OneShotMixin, Instruction):
     **REAL overflow:** a result past +/-3.4028235E+38 stores +/-Inf and sets
     the out-of-range flag (``system.fault.out_of_range``, CLICK's SC43), as a
     CLICK's float32 Math does.  An Inf operand follows IEEE 754 (``Inf / 2`` is
-    Inf, ``Inf - Inf`` is NaN); a REAL result that is not finite sets the flag
-    too.  Into an INT, DINT or WORD, a result that is not finite stores 0 and
-    sets the flag; so does a bitwise or shift operation on an Inf or NaN
-    operand, whatever the destination.  The range is checked on the stored
+    Inf, ``Inf - Inf`` is NaN); a REAL result of +/-Inf sets the flag too, and
+    NaN is stored with no flag.  Into an INT, DINT or WORD, a result of +/-Inf
+    stores 0 and sets the flag, and NaN stores 0 with no flag.  A bitwise or
+    shift operation on an Inf or NaN operand stores 0 and sets the flag,
+    whatever the destination.  The range is checked on the stored
     result only: a step of the formula is a 64-bit float (``**`` past it is
     +/-Inf) or an exact integer.
 

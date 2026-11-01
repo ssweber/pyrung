@@ -33,11 +33,11 @@ calc(Big * 10, Result)      # Big = 3.0E+38: Result = +Inf, out_of_range on
 calc(Result / 2, Half)      # Half = +Inf: Inf stays Inf
 ```
 
-An Inf or NaN operand follows IEEE 754: `Inf / 2` is Inf, `Inf − Inf` and `sin(Inf)` are NaN, `Inf > 1.0E+38` is true and NaN compares false with everything (`R == R` is false for a NaN). A `calc()` whose result is Inf or NaN sets `out_of_range`.
+An Inf or NaN operand follows IEEE 754: `Inf / 2` is Inf, `Inf − Inf` and `sin(Inf)` are NaN, `Inf > 1.0E+38` is true and NaN compares false with everything (`R == R` is false for a NaN). A `calc()` whose result is ±Inf sets `out_of_range`; one whose result is NaN sets no flag.
 
-Where Inf or NaN meets an integer, pyrung makes a choice of its own, not yet measured on a CLICK:
+Where Inf or NaN meets an integer:
 
-- A `calc()` result that is Inf or NaN stores 0 into an `Int`, `Dint` or `Word`.
+- A `calc()` result of ±Inf stores 0 into an `Int`, `Dint` or `Word` and sets `out_of_range`; NaN stores 0 with no flag.
 - A `copy()` of ±Inf into an `Int` or `Dint` clamps to its limit; NaN, or anything not finite into a `Word`, stores 0.
 - A bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand, or a shift (`<<`, `>>`, `lsh`, `rsh`) by a negative count, makes the `calc()` store 0 and set `out_of_range`.
 - A [`randint()`](#randint) bound that is Inf or NaN makes the `calc()` store 0 and set `out_of_range`.
