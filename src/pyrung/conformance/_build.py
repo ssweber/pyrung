@@ -42,6 +42,10 @@ if TYPE_CHECKING:
 #: 3: slots gained ``Ready``, raised by each case's reset rung.
 LAYOUT_VERSION = 3
 
+#: Findings the export lets through: the suite pastes RAND with DF and equal
+#: bounds, and measures what the editor does with them.
+PASTE_PROBE_FINDINGS = ("CLK_RAND_REAL_BOUND", "CLK_RAND_EQUAL_BOUNDS")
+
 
 @dataclass(frozen=True)
 class GroupBuild:
@@ -127,7 +131,7 @@ class ConformanceProgram:
         # A subroutine left by an earlier export into *out* would be pasted too.
         for stale in (out / "subroutines").glob("*.csv"):
             stale.unlink()
-        bundle = pyrung_to_ladder(self.program, self.tag_map)
+        bundle = pyrung_to_ladder(self.program, self.tag_map, allow=PASTE_PROBE_FINDINGS)
         if drawn:
             bundle = _draw_tees(bundle, self.groups)
         bundle.write(out)
@@ -246,7 +250,9 @@ def build_program(
                     _case_rungs(g.name, cases, slot)
         # Validated export: a case the CLICK exporter rejects fails here, before
         # any wire traffic.  Mark such a case ``in_process_only``.
-        bundle = _draw_tees(pyrung_to_ladder(body, tag_map), [_Drawn(g, cases)])
+        bundle = _draw_tees(
+            pyrung_to_ladder(body, tag_map, allow=PASTE_PROBE_FINDINGS), [_Drawn(g, cases)]
+        )
         if g.in_main:
             # The rungs are main's, and the helper subroutines they call.
             rows = (("main", bundle.main_rows), *bundle.subroutine_rows)

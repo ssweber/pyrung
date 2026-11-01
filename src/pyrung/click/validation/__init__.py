@@ -28,6 +28,7 @@ from .findings import (
     CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
     CLK_EXPR_ONLY_IN_CALC,
+    CLK_FORLOOP_COUNT_BANK,
     CLK_FORLOOP_INNER_ONESHOT,
     CLK_FORLOOP_NESTING_DEPTH,
     CLK_FORLOOP_RETURN_INSIDE,
@@ -47,6 +48,8 @@ from .findings import (
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
     CLK_PTR_POINTER_MUST_BE_DS,
+    CLK_RAND_EQUAL_BOUNDS,
+    CLK_RAND_REAL_BOUND,
     CLK_STATUS_BIT_NOT_PORTABLE,
     CLK_STEP_LIMIT,
     CLK_TILDE_BOOL_CONTACT_ONLY,
@@ -76,10 +79,12 @@ from .identity import _evaluate_address_identity_conflicts
 from .nicknames import _evaluate_nickname_lengths
 from .portability import (
     _evaluate_fact,
+    _evaluate_forloop_count,
     _evaluate_forloop_structure,
     _evaluate_immediate_usage,
     _evaluate_instruction_portability,
     _evaluate_nested_calls,
+    _evaluate_rand_bounds,
     _evaluate_range_aggregates,
     _evaluate_status_bit_usage,
 )
@@ -224,6 +229,8 @@ def validate_click_program(
         findings.extend(_evaluate_range_aggregates(instruction, base_location, mode, resolver))
         findings.extend(_evaluate_timer_preset_overflow(instruction, base_location, tag_map, mode))
         findings.extend(_evaluate_out_variant_unit(instruction, base_location, mode))
+        findings.extend(_evaluate_forloop_count(instruction, base_location, mode, resolver))
+        findings.extend(_evaluate_rand_bounds(instruction, base_location, mode))
 
     active_profile = profile if profile is not None else _load_default_profile()
 
@@ -327,6 +334,9 @@ __all__ = [
     "CLK_FORLOOP_RETURN_INSIDE",
     "CLK_NESTED_CALL",
     "CLK_STATUS_BIT_NOT_PORTABLE",
+    "CLK_FORLOOP_COUNT_BANK",
+    "CLK_RAND_REAL_BOUND",
+    "CLK_RAND_EQUAL_BOUNDS",
     "ClickFinding",
     "ClickValidationReport",
 ]

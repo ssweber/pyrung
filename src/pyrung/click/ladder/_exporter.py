@@ -31,6 +31,8 @@ from .types import (
 from .validator import _RoundTripValidationMixin, _ValidationMixin
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from pyrung.click.tag_map import TagMap
     from pyrung.core.program import Program
 
@@ -45,10 +47,17 @@ class _ConditionLeafKey:
 
 # ---- Public entrypoint ----
 def build_ladder_bundle(
-    tag_map: TagMap, program: Program, *, index: bool = False, validate: bool = True
+    tag_map: TagMap,
+    program: Program,
+    *,
+    index: bool = False,
+    validate: bool = True,
+    allow: Collection[str] = (),
 ) -> LadderBundle:
     """Render a `Program` into deterministic Click ladder CSV row matrices."""
-    return _LadderExporter(tag_map=tag_map, program=program, index=index).export(validate=validate)
+    return _LadderExporter(tag_map=tag_map, program=program, index=index).export(
+        validate=validate, allow=allow
+    )
 
 
 # ---- Orchestrator ----
@@ -88,10 +97,10 @@ class _LadderExporter(
     def _reset_marker_counter(self) -> None:
         self._marker_counter = 0
 
-    def export(self, *, validate: bool = True) -> LadderBundle:
+    def export(self, *, validate: bool = True, allow: Collection[str] = ()) -> LadderBundle:
         try:
             if validate:
-                self._run_precheck()
+                self._run_precheck(allow)
 
             # Main scope always ends with an explicit end() rung.
             rendered_main_rows, main_sources = self._render_scope(

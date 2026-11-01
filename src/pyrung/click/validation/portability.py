@@ -23,8 +23,12 @@ from pyrung.core.instruction.control import (
     ReturnInstruction,
     iter_loop_body_rungs,
 )
-from pyrung.core.memory_block import BlockRange
-from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.memory_block import (
+    BlockRange,
+    IndirectExprRef,
+    IndirectRef,
+)
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation.walker import ProgramLocation
 
 from .findings import (
@@ -38,6 +42,7 @@ from .findings import (
     CLK_CALC_RANGE_NOT_CONTIGUOUS,
     CLK_CALC_SUM_BANK_NOT_AVAILABLE,
     CLK_EXPR_ONLY_IN_CALC,
+    CLK_FORLOOP_COUNT_BANK,
     CLK_FORLOOP_INNER_ONESHOT,
     CLK_FORLOOP_NESTING_DEPTH,
     CLK_FORLOOP_RETURN_INSIDE,
@@ -53,6 +58,8 @@ from .findings import (
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
     CLK_PTR_POINTER_MUST_BE_DS,
+    CLK_RAND_EQUAL_BOUNDS,
+    CLK_RAND_REAL_BOUND,
     CLK_STATUS_BIT_NOT_PORTABLE,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     ClickFinding,
@@ -982,6 +989,99 @@ def _evaluate_forloop_structure(program: Any, mode: ValidationMode) -> list[Clic
                             suggestion="Use break_loop() to leave the loop, then return after it.",
                         )
                     )
+    return findings
+
+
+# The memory types a CLICK For takes its count from (besides a constant).
+_FORLOOP_COUNT_BANKS = ("DS", "DD", "TD", "CTD", "SD")
+
+
+def _evaluate_forloop_count(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    """A For count takes a constant, DS, DD, TD, CTD or SD; a pasted DF stops the PLC."""
+    if not isinstance(instruction, ForLoopInstruction):
+        return []
+    count = instruction.count
+    if not isinstance(count, (Tag, IndirectRef, IndirectExprRef)):
+        return []
+    resolution = resolver.resolve_operand_slots(count)
+    banks = list(dict.fromkeys(slot.memory_type for slot in resolution.slots))
+    bad = [bank for bank in banks if bank not in _FORLOOP_COUNT_BANKS]
+    if not bad:
+        return []
+    location_text = _format_location(_instruction_location(base_location, "instruction.count"))
+    return [
+        ClickFinding(
+            code=CLK_FORLOOP_COUNT_BANK,
+            severity=_route_severity(CLK_FORLOOP_COUNT_BANK, mode),
+            message=(
+                f"forloop count at {location_text} is in {', '.join(bad)}; CLICK takes a "
+                "For count from a constant, DS, DD, TD, CTD or SD, and a pasted DF count "
+                "stops the PLC."
+            ),
+            location=location_text,
+            suggestion="Copy the count into a DS or DD tag and loop on that.",
+        )
+    ]
+
+
+def _collect_rands(expr: Any, out: list[RandIntExpr], seen: set[int]) -> None:
+    if id(expr) in seen or not isinstance(expr, Expression):
+        return
+    seen.add(id(expr))
+    if isinstance(expr, RandIntExpr):
+        out.append(expr)
+    for child in vars(expr).values():
+        _collect_rands(child, out, seen)
+
+
+def _evaluate_rand_bounds(
+    instruction: Any, base_location: ProgramLocation, mode: ValidationMode
+) -> list[ClickFinding]:
+    """CLICK's editor refuses a Real (DF) bound on RAND, and equal constant bounds."""
+    if type(instruction).__name__ != "CalcInstruction":
+        return []
+    rands: list[RandIntExpr] = []
+    _collect_rands(instruction.source_expression, rands, set())
+    if not rands:
+        return []
+    location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
+    findings: list[ClickFinding] = []
+    for rand in rands:
+        if any(isinstance(b, TagExpr) and b.tag.type == TagType.REAL for b in (rand.lo, rand.hi)):
+            findings.append(
+                ClickFinding(
+                    code=CLK_RAND_REAL_BOUND,
+                    severity=_route_severity(CLK_RAND_REAL_BOUND, mode),
+                    message=(
+                        f"randint() at {location_text} has a Real bound; the CLICK editor "
+                        "refuses a DF bound on RAND."
+                    ),
+                    location=location_text,
+                    suggestion="Use constant bounds, or copy the bound into an Int or Dint tag.",
+                )
+            )
+        elif (
+            isinstance(rand.lo, LiteralExpr)
+            and isinstance(rand.hi, LiteralExpr)
+            and rand.lo.value == rand.hi.value
+        ):
+            findings.append(
+                ClickFinding(
+                    code=CLK_RAND_EQUAL_BOUNDS,
+                    severity=_route_severity(CLK_RAND_EQUAL_BOUNDS, mode),
+                    message=(
+                        f"randint({rand.lo.value}, {rand.hi.value}) at {location_text} has "
+                        "equal constant bounds; the CLICK editor refuses them."
+                    ),
+                    location=location_text,
+                    suggestion="Use a plain constant instead of a one-value draw.",
+                )
+            )
     return findings
 
 

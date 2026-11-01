@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from pyrung.click import pyrung_to_ladder
+from pyrung.conformance._build import PASTE_PROBE_FINDINGS
 from tests.conformance import suite
 
 
@@ -62,9 +63,10 @@ def test_workspace_source_exports_byte_identical_ladder(tmp_path: Path, plc_pack
     source = program.export_workspace(workspace)
     main, tags = plc_package(source)
 
-    # What ClickNick's project_to_csv.py does with the workspace source.
+    # The round trip of ClickNick's project_to_csv.py, except that it passes allow=:
+    # the script validates without it and refuses the suite's RAND probes.
     out = tmp_path / "roundtrip"
-    pyrung_to_ladder(main.logic, tags.mapping).write(out)
+    pyrung_to_ladder(main.logic, tags.mapping, allow=PASTE_PROBE_FINDINGS).write(out)
     tags.mapping.to_nickname_file(out / "nicknames.csv", blocks=tags.blocks)
 
     actual = _csv_files(out)

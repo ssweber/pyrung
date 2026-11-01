@@ -8,6 +8,8 @@ from ._exporter import LadderBundle, LadderExportError, build_ladder_bundle
 from .steps import CLICK_STEP_LIMIT, StepEstimate, estimate_steps
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from pyrung.click.tag_map import TagMap
     from pyrung.core.program import Program
 
@@ -18,6 +20,7 @@ def pyrung_to_ladder(
     *,
     index: bool = False,
     validate: bool = True,
+    allow: Collection[str] = (),
 ) -> LadderBundle:
     """Render a Program into Click ladder CSV row matrices.
 
@@ -31,11 +34,14 @@ def pyrung_to_ladder(
             and importing them (``ladder_to_pyrung``) must keep each output's
             condition, pins and CLICK rung.  Set to False to skip
             validation for speed.
+        allow: Finding codes the precheck lets through, for an export that
+            knowingly carries what the CLICK editor refuses (the conformance
+            suite's paste probes).  Other findings still refuse the export.
 
     Returns:
         A LadderBundle containing main and subroutine row matrices.
     """
-    return build_ladder_bundle(tag_map, program, index=index, validate=validate)
+    return build_ladder_bundle(tag_map, program, index=index, validate=validate, allow=allow)
 
 
 __all__ = [

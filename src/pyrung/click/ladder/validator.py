@@ -22,6 +22,8 @@ from .layout import _HEADER
 from .types import Issue, LadderExportError
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from pyrung.click.tag_map import TagMap
     from pyrung.core.program import Program
 
@@ -44,7 +46,7 @@ class _ValidationMixin:
 
         def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn: ...
 
-    def _run_precheck(self) -> None:
+    def _run_precheck(self, allow: Collection[str] = ()) -> None:
         report = self._tag_map.validate(self._program, mode="strict")
         # We intentionally fail on warnings and hints to keep export deterministic.
         findings = [*report.errors, *report.warnings, *report.hints]
@@ -57,7 +59,7 @@ class _ValidationMixin:
                     stacklevel=5,
                 )
         # A nested call is refused below, with its source location.
-        findings = [f for f in findings if f.code not in (CLK_STEP_LIMIT, CLK_NESTED_CALL)]
+        findings = [f for f in findings if f.code not in (CLK_STEP_LIMIT, CLK_NESTED_CALL, *allow)]
         if findings:
             issues: list[Issue] = []
             for finding in findings:

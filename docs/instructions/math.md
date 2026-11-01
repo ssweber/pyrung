@@ -141,6 +141,8 @@ calc(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan 
 - A bare `Real` tag as a bound reads 0 with no flag, whatever it holds. CLICK's editor refuses one, so only a paste gets it onto a CLICK. Any other bound is read as an integer and still draws (`randint(0, N / 2)`, `sqrt(N)`, a float literal); if it evaluates to Inf or NaN the `calc()` stores 0 and sets `out_of_range`.
 - Into an `Int`, each constant bound is cut to 16 bits like any other constant in the formula ([Constants into an INT](#constants-into-an-int)): `randint(70000, 70002)` draws 4464..4466. The same expression into a `Dint` draws 70000..70002, separately: each destination width has its own draw.
 
+The CLICK editor refuses a `DF` bound on `RAND` and refuses equal constant bounds (`randint(7, 7)`). CLICK validation reports them as `CLK_RAND_REAL_BOUND` and `CLK_RAND_EQUAL_BOUNDS`: use constants or an `Int`/`Dint` bound, and a plain constant for a one-value draw.
+
 Draws are deterministic, so the simulation stays replayable. Each `randint` call in the program is one site, and its value is a fixed function of the site and the scan number. Two runs of the same program draw the same sequence; replay, `history.at()`, seek and `fork()` see the values the original run saw; and a fork draws what its parent would have. Restarting (STOP -> RUN, `reboot()`) resets the scan number, so the sequence starts over.
 
 A site's draw is an input: the scan writes it into a hidden tag (`expr.tag`, named `_rand.<n>`) before logic runs. A test chooses a draw the way it sets any input:

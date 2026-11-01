@@ -18,6 +18,7 @@ from pyrung.click.validation import (
     CLK_CALC_RANGE_NOT_CONTIGUOUS,
     CLK_CALC_SUM_BANK_NOT_AVAILABLE,
     CLK_EXPR_ONLY_IN_CALC,
+    CLK_FORLOOP_COUNT_BANK,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
     CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
@@ -29,12 +30,14 @@ from pyrung.click.validation import (
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
     CLK_PTR_POINTER_MUST_BE_DS,
+    CLK_RAND_EQUAL_BOUNDS,
+    CLK_RAND_REAL_BOUND,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     CLK_TIMER_PRESET_OVERFLOW,
     ClickValidationReport,
     validate_click_program,
 )
-from pyrung.core import Block, Bool, Int, Tag, TagType, Timer, immediate, to_value
+from pyrung.core import Block, Bool, Int, Tag, TagType, Timer, forloop, immediate, randint, to_value
 from pyrung.core.program import (
     Program,
     Rung,
@@ -1583,3 +1586,119 @@ class TestTimerPresetOverflow:
         )
         report = validate_click_program(prog, tag_map, mode="warn")
         assert CLK_TIMER_PRESET_OVERFLOW not in _finding_codes(report)
+
+
+class TestForLoopCountAndRandBounds:
+    """What CLICK's editor refuses: a For count outside the allowed banks, RAND bounds."""
+
+    @staticmethod
+    def _for_count(count, mappings, mode="warn"):
+        def logic():
+            with Rung():
+                with forloop(count):
+                    out(y[1])
+
+        return validate_click_program(
+            _build_program(logic), TagMap(mappings, include_system=False), mode=mode
+        )
+
+    def test_real_count_is_refused(self):
+        n = Tag("N", TagType.REAL)
+        report = self._for_count(n, [n.map_to(df[1])], mode="strict")
+        found = [f for f in report.errors if f.code == CLK_FORLOOP_COUNT_BANK]
+        assert len(found) == 1
+        assert "DF" in found[0].message
+        assert found[0].message.isascii()
+        assert (found[0].suggestion or "").isascii()
+
+    def test_real_count_is_a_hint_in_warn_mode(self):
+        n = Tag("N", TagType.REAL)
+        report = self._for_count(n, [n.map_to(df[1])])
+        assert [f.code for f in report.hints] == [CLK_FORLOOP_COUNT_BANK]
+
+    def test_allowed_count_banks_pass(self):
+        cases = [
+            (TagType.INT, ds[1]),
+            (TagType.DINT, dd[1]),
+            (TagType.INT, td[1]),
+            (TagType.DINT, ctd[1]),
+            (TagType.INT, sd[1]),
+        ]
+        for tag_type, address in cases:
+            n = Tag("N", tag_type)
+            report = self._for_count(n, [n.map_to(address)])
+            assert CLK_FORLOOP_COUNT_BANK not in _finding_codes(report), address
+
+    def test_constant_count_passes(self):
+        report = self._for_count(5, [])
+        assert CLK_FORLOOP_COUNT_BANK not in _finding_codes(report)
+
+    def test_other_bank_count_is_refused(self):
+        n = Tag("N", TagType.WORD)
+        report = self._for_count(n, [n.map_to(dh[1])])
+        assert CLK_FORLOOP_COUNT_BANK in _finding_codes(report)
+
+    @staticmethod
+    def _rand(lo, hi, mappings):
+        dest = Tag("Dest", TagType.DINT)
+
+        def logic():
+            with Rung():
+                calc(randint(lo, hi), dest)
+
+        return validate_click_program(
+            _build_program(logic),
+            TagMap([dest.map_to(dd[100]), *mappings], include_system=False),
+            mode="strict",
+        )
+
+    def test_real_bound_is_refused(self):
+        lo = Tag("Lo", TagType.REAL)
+        report = self._rand(lo, 9, [lo.map_to(df[1])])
+        found = [f for f in report.errors if f.code == CLK_RAND_REAL_BOUND]
+        assert found
+        assert found[0].message.isascii()
+
+    def test_real_high_bound_is_refused(self):
+        hi = Tag("Hi", TagType.REAL)
+        report = self._rand(1, hi, [hi.map_to(df[1])])
+        assert CLK_RAND_REAL_BOUND in _finding_codes(report)
+
+    def test_equal_constant_bounds_are_refused(self):
+        report = self._rand(7, 7, [])
+        assert [f.code for f in report.errors] == [CLK_RAND_EQUAL_BOUNDS]
+
+    def test_integer_bounds_pass(self):
+        lo = Tag("Lo", TagType.INT)
+        for args, mappings in (
+            ((7, 9), []),
+            ((70000, 70002), []),
+            ((6, 1), []),
+            ((lo, 9), [lo.map_to(ds[1])]),
+            ((lo, lo), [lo.map_to(ds[1])]),
+        ):
+            codes = _finding_codes(self._rand(*args, mappings))
+            assert CLK_RAND_REAL_BOUND not in codes
+            assert CLK_RAND_EQUAL_BOUNDS not in codes
+
+
+def test_export_refuses_a_real_rand_bound_unless_allowed():
+    from pyrung.click import pyrung_to_ladder
+    from pyrung.click.ladder import LadderExportError
+
+    lo = Tag("Lo", TagType.REAL)
+    dest = Tag("Dest", TagType.DINT)
+
+    def logic():
+        with Rung():
+            calc(randint(lo, 9), dest)
+
+    prog = _build_program(logic)
+    tag_map = TagMap([lo.map_to(df[1]), dest.map_to(dd[100])], include_system=False)
+    try:
+        pyrung_to_ladder(prog, tag_map)
+    except LadderExportError as exc:
+        assert CLK_RAND_REAL_BOUND in str(exc)
+    else:
+        raise AssertionError("export should refuse a Real RAND bound")
+    assert pyrung_to_ladder(prog, tag_map, allow=(CLK_RAND_REAL_BOUND,)).main_rows

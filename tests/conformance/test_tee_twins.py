@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from pyrung.click.ladder import pyrung_to_ladder
-from pyrung.conformance._build import _draw_tees
+from pyrung.conformance._build import PASTE_PROBE_FINDINGS, _draw_tees
 from pyrung.conformance._tee import TeeSpec, draw_tees
 from tests.click.helpers import bundle_logic
 from tests.conformance import suite
@@ -142,7 +142,9 @@ def test_no_exported_row_has_a_vertical_token_in_column_a(part):
     from pyrung.click.ladder.layout import assert_no_column_a_vertical
 
     build = suite.build(part)
-    drawn = _draw_tees(pyrung_to_ladder(build.program, build.tag_map), build.groups)
+    drawn = _draw_tees(
+        pyrung_to_ladder(build.program, build.tag_map, allow=PASTE_PROBE_FINDINGS), build.groups
+    )
     assert_no_column_a_vertical(drawn.main_rows[1:])
     for _name, rows in drawn.subroutine_rows:
         assert_no_column_a_vertical(rows[1:])
