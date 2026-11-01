@@ -3597,7 +3597,7 @@ class TestContinuedRoundTrip:
         )
 
     def test_continued_chain(self):
-        """Three consecutive continued rungs share the same snapshot."""
+        """Three consecutive continued rungs round-trip as a chain."""
         _assert_codegen_body(
             """
             with Program() as p:
