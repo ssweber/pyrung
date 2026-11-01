@@ -991,6 +991,61 @@ def _terminal_landing_causal_reads(
     return tuple(dict.fromkeys(result))
 
 
+def _contacts_read_after_write(
+    top: Any,
+    producer: Any,
+    consumer_path: tuple[int, ...],
+    tag: str,
+) -> list[bool] | None:
+    """For each condition of the branch at *consumer_path* in *top*, whether
+    the scan reads it after *producer* last writes *tag*.
+
+    The rung's own contacts are read when the scan reaches the rung, and each
+    branch's own contacts when the scan reaches that branch.  ``None`` when
+    the rung is not shaped as expected.
+    """
+    from pyrung.core.rung import Rung as _Rung
+    from pyrung.core.validation._common import _resolve_tag_names
+
+    if top is None:
+        return None
+    reads: dict[int, int] = {}
+    last_write: int | None = None
+    last_item: int | None = None
+    position = 0
+
+    def walk(rung: Any) -> None:
+        nonlocal position, last_write, last_item
+        reads[id(rung)] = position
+        position += 1
+        for item in rung._execution_items:
+            if isinstance(item, _Rung):
+                walk(item)
+                continue
+            if rung is producer:
+                last_item = position
+                target = getattr(item, "target", None)
+                if target is not None and tag in _resolve_tag_names(target):
+                    last_write = position
+            position += 1
+
+    walk(top)
+    write = last_write if last_write is not None else last_item
+    if write is None:
+        return None
+    levels = [top]
+    for index in consumer_path:
+        if index >= len(levels[-1]._branches):
+            return None
+        levels.append(levels[-1]._branches[index])
+    flags: list[bool] = []
+    for level in levels:
+        if level._branch_condition_start != len(flags):
+            return None
+        flags.extend([reads[id(level)] > write] * (len(level._conditions) - len(flags)))
+    return flags
+
+
 def expectation_from_selected_path(
     path: tuple[EffectPathStep, ...],
     pdg: ProgramGraph,
@@ -1051,27 +1106,32 @@ def expectation_from_selected_path(
         if consumer_ready and consumer_rung is not None:
             consumer_state = dict(selected_state)
             consumer_state[producer.tag] = producer.value
-            # A consumer branch of the producer's own rung keeps the value
-            # its inherited contacts were first solved with, before the
-            # producer wrote; only its own contacts see the write.  A
+            # A consumer in the producer's own rung reads each contact when
+            # the scan reaches the rung or branch it belongs to, so only the
+            # contacts read after the producer wrote see the write.  A
             # consumer in a later rung sees the write in every contact.
-            same_rung = (
+            after_write = None
+            if (
                 consumer_node is not None
-                and consumer_node.branch_path
                 and consumer_node.rung_index == producer_node.rung_index
                 and consumer_node.subroutine == producer_node.subroutine
-            )
-            local_view = cast("ConditionView", _SnapshotView(consumer_state, {}))
-            inherited_view = (
-                cast("ConditionView", _SnapshotView(selected_state, {}))
-                if same_rung
-                else local_view
-            )
-            local_start = getattr(consumer_rung, "_branch_condition_start", 0)
+            ):
+                after_write = _contacts_read_after_write(
+                    resolve_rung(program, replace(producer_node, branch_path=())),
+                    producer_rung,
+                    consumer_node.branch_path,
+                    producer.tag,
+                )
+            written_view = cast("ConditionView", _SnapshotView(consumer_state, {}))
+            unwritten_view = cast("ConditionView", _SnapshotView(selected_state, {}))
             try:
                 consumer_ready = all(
                     bool(
-                        condition.evaluate(inherited_view if position < local_start else local_view)
+                        condition.evaluate(
+                            written_view
+                            if after_write is None or after_write[position]
+                            else unwritten_view
+                        )
                     )
                     for position, condition in enumerate(consumer_rung._conditions)
                 )
