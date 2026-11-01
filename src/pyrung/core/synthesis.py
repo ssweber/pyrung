@@ -294,10 +294,11 @@ def guarded_copy_rung(
     of the bracket:
 
     * Each destination has one writer.  A Boolean destination whose values
-      are all ``True``/``False`` (or ``1``/``0``) is one ``out(dest)`` whose condition folds the ordered rules (a
-      ``True`` rule ORs its guard in, a ``False`` rule ANDs its complement in).
-      Any other destination has one ``copy`` per distinct value, guarded by
-      "the last active rule has this value", so its copies are exclusive.
+      are all ``True``/``False`` (or ``1``/``0``) is one ``out(dest)`` whose
+      condition folds the ordered rules (a ``True`` rule ORs its guard in, a
+      ``False`` rule ANDs its complement in).  Any other destination has one
+      ``copy`` per distinct value, guarded by "the last active rule has this
+      value", so its copies are exclusive.
     * A destination whose guards read another destination sits above that
       destination's writer.
     * A guard that would still read an earlier write (a cycle between
