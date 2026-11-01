@@ -295,12 +295,10 @@ def test_a_non_finite_bitwise_operand_is_zero_and_sc43(runner_factory, make, val
     assert tags[SC40.name] is False
 
 
-@pytest.mark.parametrize("value", [math.nan, INF, -INF])
+@pytest.mark.parametrize("value", [3.0, math.nan, INF, -INF])
 @pytest.mark.parametrize("which", ["lo", "hi"])
-def test_a_non_finite_randint_bound_is_zero_and_sc43(runner_factory, value, which):
-    """pyrung's choice (no CLICK reading): a draw needs integer bounds, so a
-    bound holding Inf or NaN makes the calc store 0 with SC43, and the scan
-    runs on."""
+def test_a_real_randint_bound_reads_zero_with_no_flag(runner_factory, value, which):
+    """As a CLICK reads RAND of a DF: 0, with no flag, whatever the DF holds."""
     r = Real("R", default=3.0)
     dest = Dint("Dest", default=7)
     after = Int("After")
@@ -311,28 +309,13 @@ def test_a_non_finite_randint_bound_is_zero_and_sc43(runner_factory, value, whic
             copy(1, after)
     plc = runner_factory(program)
     plc.patch({r: value})
-    plc.step()
-    tags = plc.current_state.tags
-    assert tags["Dest"] == 0
-    assert tags["After"] == 1
-    assert tags[SC43.name] is True
-    assert tags[SC40.name] is False
-    plc.step()  # the bound is still not finite on the next scan
-    assert plc.current_state.tags["Dest"] == 0
-
-
-def test_a_finite_real_randint_bound_draws_in_range(runner_factory):
-    r = Real("R", default=3.0)
-    dest = Dint("Dest", default=-1)
-    with Program() as program:
-        with Rung():
-            calc(randint(0, r), dest)
-    plc = runner_factory(program)
-    for _ in range(5):
+    for _ in range(2):
         plc.step()
         tags = plc.current_state.tags
-        assert 0 <= tags["Dest"] <= 3
-        assert tags[SC43.name] is False
+        assert tags["Dest"] == 5
+        assert tags["After"] == 1
+        for flag in (SC40, SC43, SC46):
+            assert tags[flag.name] is False
 
 
 @pytest.mark.parametrize("value", [math.nan, INF, -INF])

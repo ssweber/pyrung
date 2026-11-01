@@ -179,7 +179,6 @@ group = Group(
             expect={"Result1": 0, "Result2": 0, "Result3": 0, "ErrorCode": 0},
             scans=FAULT_SCANS,
             probe="RAND with a DF bound, finite and +Inf",
-            pending="MATH",
         ),
         case(
             "A For body rung with an instruction above a counter is two body rungs on "

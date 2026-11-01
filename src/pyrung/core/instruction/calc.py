@@ -108,13 +108,16 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
 def has_domain_limited_func(value: Any, seen: set[int] | None = None) -> bool:
     """True when *value* (a calc expression) can raise
     :class:`~pyrung.core.expression.MathDomainError`: a math function with a
-    domain (``sqrt``, ``log``, ...) or a ``**`` whose exponent may be fractional
-    (``(-8.0) ** 0.5`` has no real value)."""
+    domain (``sqrt``, ``log``, ...), a ``**`` whose exponent may be fractional
+    (``(-8.0) ** 0.5`` has no real value) or a ``randint`` of equal constants."""
     if seen is None:
         seen = set()
     if id(value) in seen:
         return False
     seen.add(id(value))
+    if isinstance(value, RandIntExpr):
+        # Its bounds are read for the draw, as the scan starts, not in the calc.
+        return value.equal_bounds
     if isinstance(value, MathFuncExpr) and value.name in DOMAIN_LIMITED_MATH_FUNCS:
         return True
     if isinstance(value, BinaryExpr) and value.symbol == "**" and may_be_float(value.right):
@@ -173,8 +176,8 @@ def cut_int_constants(value: Any) -> Any:
     divides by 0), so a constant outside -32768..32767 is read as its low
     16 bits, signed.  Operands read from memory keep their width.  Returns
     *value* itself when no constant changes, else a copy of the tree with
-    the changed nodes rebuilt.  The bounds of a ``randint()`` are left as
-    written.
+    the changed nodes rebuilt.  The bounds of a ``randint()`` are constants
+    too, each cut on its own: ``randint(70000, 70002)`` draws 4464..4466.
     """
     if isinstance(value, bool):
         return value
@@ -205,6 +208,12 @@ def cut_int_constants(value: Any) -> Any:
         if shifted is value.value and count is value.count:
             return value
         return type(value)(shifted, count, value.func, value.name)
+    if isinstance(value, RandIntExpr):
+        lo = cut_int_constants(value.lo)
+        hi = cut_int_constants(value.hi)
+        if lo is value.lo and hi is value.hi:
+            return value
+        return value.with_cut_bounds(lo, hi)
     return value
 
 

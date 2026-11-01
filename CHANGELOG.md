@@ -72,6 +72,7 @@
 
 ### Fixes
 
+- `randint()` reads as a CLICK's RAND: equal constants are a math error (0 with SC46), a `Real` bound reads 0 with no flag whatever it holds, and into an `Int` each constant bound is cut to 16 bits, so `randint(70000, 70002)` draws 4464..4466.
 - A `copy(..., convert=to_text())` of an Inf or NaN `Real` writes it as lowercase text (`inf`, `-inf`, `nan`) with no flag, as a CLICK writes `inf`; it left the text alone and set `out_of_range`.
 - A `copy()` or `blockcopy()` that clamps at an `Int` or `Dint` limit, a `copy()` of ±Inf among them, sets `out_of_range`, as on a CLICK; a NaN stores 0 with no flag, and `fill()` still clamps with none.
 - A `calc()` whose result is NaN sets no flag, into a `Real` (which keeps it) or an integer (which stores 0), as on a CLICK; it set `out_of_range`. A result of ±Inf still sets it.

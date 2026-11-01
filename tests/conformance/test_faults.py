@@ -49,8 +49,7 @@ tells apart:
 - ``copy_clamp_out_of_range`` (probe): a Copy that clamps, 40000 and -40000
   from a DD and 1.0E+10 from a DF into an Int: 32767, -32768, 32767
   (Result1..3; ``numeric/copy_clamps_calc_wraps`` read the clamp), and SC43
-  after each as bits 1, 2 and 4 of Result4.  Adopted (the help): 7.  pyrung
-  (step SC43) clamps without the flag: 0.
+  after each as bits 1, 2 and 4 of Result4.  Adopted (the help): 7.
 - ``rand_wide_bounds_flags`` (probe): the flags of
   ``numeric/int_math_rand_wide_bounds``, which a CLICK read as 0 (2026-10-31).
   RAND ( 70000 , 70000 ) / 2 into an Int preset 99 (Result4), and SC40, SC43
@@ -58,8 +57,7 @@ tells apart:
   ) into Result3, its flags in Result2.  Hardware (2026-11-01) reads 4, 4, 0,
   0: the control fails the same way, a Math error with SC46 alone, so the
   equal bounds look like the error and not the width.  CLICK's editor refuses
-  RAND ( 7 , 7 ) typed in, so this is what a pasted one does.  pyrung (step MATH)
-  wraps 35000 to -30536 with SC43: 2, 0, 7, -30536.
+  RAND ( 7 , 7 ) typed in, so this is what a pasted one does.
 - ``rand_unequal_bounds`` (probe): the same with bounds that differ, as
   ``math/rand_range`` draws 1..6 cleanly.  RAND ( 70000 , 70002 ) / 2 into an
   Int preset 99 (Result4), SC43 and SC46 after it as bits 2 and 4 of Result1;
@@ -68,8 +66,7 @@ tells apart:
   typed in and refuses the DFs, which only a paste gets through.  Hardware
   (2026-11-01) reads 0, 0, 7, 2233, 0: no flag, the DFs write 0 as
   ``paste_risk/rand_real_bounds`` read, and 2233 is half of 4466, so the wide
-  bounds are cut to 16 bits (70000 is 4464).  pyrung (step MATH) wraps 35000 to
-  -30536 with SC43 and draws 3..5 from the DFs: 2, 0, 7..9, -30536..-30535, 3..5.
+  bounds are cut to 16 bits (70000 is 4464).
 - ``rand_real_bounds``: moved to the ``paste_risk`` group (part C), since
   a CLICK may refuse a DF bound at paste; DF461..DF462 stay unused here and
   ``pointer_past_bank_lands`` has its C bits.
@@ -102,32 +99,29 @@ tells apart:
   NaN: Result3 has bit 1 for NaN = NaN, 2 for NaN > 0, 4 for NaN < 0 and 8
   for NaN <> NaN; IEEE compares read 8.  SC43 and SC46 after Inf - Inf are
   bits 1 and 2 of Result4.  Hardware (2026-11-01) reads 1, 1, 8, 0: IEEE, and
-  a Math that produces NaN raises neither flag.  pyrung (step SC43) raises SC43
-  on it: 1, 1, 8, 1.
+  a Math that produces NaN raises neither flag.
 - ``non_finite_math_into_int`` (probe): a Math of +Inf into an Int preset 99
   (Result1), of NaN into an Int (Result2), of +Inf into a DD preset 99
   (Result3: 1 for 0, 2 for 99, 3 for 2147483647, 4 for -2147483648, 5 for
   anything else), and SC43 after each as bits 1, 2 and 4 of Result4.
   Hardware (2026-11-01) reads 0, 0, 1, 5: each writes 0, and NaN raises no
-  SC43.  pyrung (step SC43) raises it on NaN too: 0, 0, 1, 7.
+  SC43.
 - ``copy_non_finite_to_int`` (probe): a Copy of +Inf, -Inf and NaN into an
   Int preset 99 (Result1..3), SC43 after each as bits 1, 2 and 4 of Result4.
   Hardware (2026-11-01) reads 32767, -32768, 0, 3: +Inf and -Inf clamp with
-  SC43, and NaN writes 0 without it.  pyrung (step SC43) converts the same
-  without the flag: 32767, -32768, 0, 0.
+  SC43, and NaN writes 0 without it.
 - ``copy_inf_to_text`` (probe): +Inf copied into TXT401 as text (Copy
   Option 4c), TXT401 seeded ``Z``: Result1 is TXT401's code, Result2 SC43, and
   Result3, Result4 and ErrorCode the codes of TXT402..404.  Hardware
   (2026-11-01) reads 105 and no flag: a lowercase i, not a failure.  Adopted for
-  the rest: ``inf`` and nothing after it, 105, 0, 110, 102, 0.  pyrung (step
-  TEXT) leaves the text alone with SC43: 90, 1, 0, 0, 0.
+  the rest: ``inf`` and nothing after it, 105, 0, 110, 102, 0.
 - ``non_finite_functions`` (probe): SIN ( +Inf ) and SQRT ( -Inf ) into a
   Real preset 1.0: Result1 says what SIN left, 1 for 0, 2 for the preset, 4 for
   NaN, Result2 SC46 and Result3 SC43 after it; Result4 = 1 if SQRT wrote 0,
   ErrorCode SC46 after it.  Hardware (2026-11-01) reads no 0 and no flag from
   SIN, and 0 with SC46 from SQRT, as ``math_error`` reads SQRT ( -4.0 ).
   Adopted for what SIN left, which that reading did not name: NaN, so 4, 0, 0,
-  1, 1.  pyrung (step MATH) also raises SC43 from SIN: 4, 0, 1, 1, 1.
+  1, 1.
 
 Not asked here, because the conformance harness cannot: a Modbus Send or
 Receive whose Slave ID is out of range needs a second Modbus device on the
@@ -552,7 +546,6 @@ group = Group(
             init=_init(2),
             expect={"Result1": 4, "Result2": 4, "Result3": 0, "Result4": 0},
             scans=SCANS,
-            pending="MATH",
             probe="which flag RAND past an Int raises",
         ),
         case(
@@ -654,7 +647,6 @@ group = Group(
             },
             scans=SCANS,
             probe="RAND with bounds that differ: past an Int, from DFs",
-            pending="MATH",
         ),
         case(
             "A pointer past the DD bank does not wrap into it: with DD531 = 1234 and DD532 "

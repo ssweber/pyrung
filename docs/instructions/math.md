@@ -40,7 +40,6 @@ Where Inf or NaN meets an integer:
 - A `calc()` result of ±Inf stores 0 into an `Int`, `Dint` or `Word` and sets `out_of_range`; NaN stores 0 with no flag.
 - A `copy()` of ±Inf into an `Int` or `Dint` clamps to its limit and sets `out_of_range`; NaN, or anything not finite into a `Word`, stores 0 with no flag.
 - A bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand, or a shift (`<<`, `>>`, `lsh`, `rsh`) by a negative count, makes the `calc()` store 0 and set `out_of_range`.
-- A [`randint()`](#randint) bound that is Inf or NaN makes the `calc()` store 0 and set `out_of_range`.
 - A [`forloop()`](program-control.md) whose `Real` count is Inf or NaN runs no iteration and sets `out_of_range`.
 - `unpack_to_words()` of an Inf or NaN `Real` writes its bit pattern: +Inf is 0x7F800000, and a NaN keeps the bits of the operation that made it (`Inf − Inf` on a PC gives 0xFFC00000, a high word of 65472).
 
@@ -136,7 +135,11 @@ calc(randint(1, 6), Die)                 # 1..6 inclusive, a new draw every scan
 calc(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan starts
 ```
 
-`randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them. A `Real` bound is cut toward zero; one holding Inf or NaN makes the `calc()` store 0 and set `system.fault.out_of_range` (SC43), pyrung's choice, not yet measured on a CLICK. Outside `calc()` such a draw is 0 with no flag ([Math outside `calc()`](#math-outside-calc)).
+`randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them. Three things read as they do on a CLICK:
+
+- Equal constants, `randint(7, 7)`, are a math error: the `calc()` stores 0 and sets `system.fault.math_operation_error` (SC46). Tags that happen to hold the same value draw it.
+- A `Real` bound reads 0 with no flag, whatever it holds. CLICK's editor refuses one, so only a paste gets it onto a CLICK.
+- Into an `Int`, each constant bound is cut to 16 bits like any other constant in the formula ([Constants into an INT](#constants-into-an-int)): `randint(70000, 70002)` draws 4464..4466.
 
 Draws are deterministic, so the simulation stays replayable. Each `randint` call in the program is one site, and its value is a fixed function of the site and the scan number. Two runs of the same program draw the same sequence; replay, `history.at()`, seek and `fork()` see the values the original run saw; and a fork draws what its parent would have. Restarting (STOP -> RUN, `reboot()`) resets the scan number, so the sequence starts over.
 

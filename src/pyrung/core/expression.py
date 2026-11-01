@@ -646,21 +646,6 @@ def randint_draw(site: int, scan_id: int, lo: int, hi: int) -> int:
     return lo + z % (hi - lo + 1)
 
 
-def _finite(value: Numeric) -> bool:
-    return not isinstance(value, float) or math.isfinite(value)
-
-
-def _integer_operand(operand: Expression) -> bool:
-    """Whether a ``randint`` bound is an integer literal or integer tag."""
-    from pyrung.core.tag import TagType
-
-    if isinstance(operand, LiteralExpr):
-        return not isinstance(operand.value, float)
-    if isinstance(operand, TagExpr):
-        return operand.tag.type != TagType.REAL
-    return False
-
-
 def _operand_span(operand: Expression) -> tuple[int, int] | None:
     """Lowest and highest integer a ``randint`` bound can take, if declared."""
     if isinstance(operand, LiteralExpr):
@@ -686,17 +671,21 @@ class RandIntExpr(Expression):
     ``min``/``max``/``choices``.  Bounds that are tags are read at the start of
     the scan.
 
+    Two forms never reach the draw, both as a CLICK reads them.  A bound that can
+    be a float (a ``Real`` tag, a float constant) reads 0 with no flag.  Equal
+    integer constants are a math error: 0, with SC46 in a ``calc``.
+
     A sibling of the other expression classes, never a subclass: no
     ``LiteralExpr`` / ``MathFuncExpr`` arm may treat a draw as a pure function
     of its operands.
     """
 
-    def __init__(self, lo: Expression, hi: Expression) -> None:
+    def __init__(self, lo: Expression, hi: Expression, *, site: int | None = None) -> None:
         from pyrung.core.tag import Tag, TagType
 
         self.lo = lo
         self.hi = hi
-        self.site = next(_randint_site_counter)
+        self.site = next(_randint_site_counter) if site is None else site
         # The draw's range: the bounds themselves when literal, else the hull of
         # what each bound tag declares (a draw never leaves min(lo, hi)..max(lo, hi)).
         lo_span = _operand_span(lo)
@@ -716,30 +705,43 @@ class RandIntExpr(Expression):
             **bounds,
         )
         _randint_sites[self.tag.name] = self
-        #: Whether a bound can be Inf or NaN (a REAL source): only then does
-        #: the calc reading the draw check the bounds (see :meth:`evaluate`).
-        self.checks_bounds = not (_integer_operand(lo) and _integer_operand(hi))
+        #: A bound can be a float: the site reads 0, whatever the bounds hold.
+        self.real_bounds = may_be_float(lo) or may_be_float(hi)
+        #: Equal integer constants: the site is a math error.
+        self.equal_bounds = (
+            not self.real_bounds
+            and isinstance(lo, LiteralExpr)
+            and isinstance(hi, LiteralExpr)
+            and lo.value == hi.value
+        )
+        self._cut: RandIntExpr | None = None
+
+    def with_cut_bounds(self, lo: Expression, hi: Expression) -> RandIntExpr:
+        """This site over the bounds of a Math that cuts its constants to 16 bits.
+
+        It keeps the site's number and tag name and takes over the site's draws, so
+        ``patch()`` and ``force()`` of ``expr.tag`` still choose them.  This expression
+        stays as written, for the export, and shares the new tag: a site has one draw
+        a scan, so used in a Math that cuts and one that does not, both read this one.
+        """
+        if self._cut is None:
+            self._cut = RandIntExpr(lo, hi, site=self.site)
+            self.tag = self._cut.tag
+        return self._cut
 
     def draw(self, ctx: ScanContext) -> int:
-        """This scan's draw, from the bounds as the scan starts.
-
-        A bound that is Inf or NaN draws the tag's default; the calc reading
-        it stores 0 with SC43 instead (:meth:`evaluate`).
-        """
-        lo = self.lo.evaluate(ctx)
-        hi = self.hi.evaluate(ctx)
-        if not (_finite(lo) and _finite(hi)):
+        """This scan's draw, from the bounds as the scan starts."""
+        if self.real_bounds:
             return self.tag.default
-        return randint_draw(self.site, ctx.scan_id, int(lo), int(hi))
+        lo = int(self.lo.evaluate(ctx))
+        hi = int(self.hi.evaluate(ctx))
+        return randint_draw(self.site, ctx.scan_id, lo, hi)
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        if self.checks_bounds:
-            # A bound holding Inf or NaN has no integer range: the calc stores
-            # 0 with SC43 (pyrung's choice, not measured on CLICK).
-            # Outside calc the draw reads as 0 instead, with no flag.
-            for bound in (self.lo, self.hi):
-                if not _finite(bound.evaluate(ctx)):
-                    return _permissive(OverflowError("randint() bound is Inf or NaN"))
+        if self.real_bounds:
+            return 0
+        if self.equal_bounds:
+            return _permissive(MathDomainError("randint() bounds are equal"))
         return ctx.get_tag(self.tag.name, self.tag.default)
 
     def __repr__(self) -> str:

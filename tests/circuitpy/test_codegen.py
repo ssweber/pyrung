@@ -1790,9 +1790,8 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: (*wanted, False) for name in results}
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
-    def test_non_finite_randint_bound_is_zero_and_sc43_on_every_backend(self, monkeypatch, operand):
-        """pyrung's choice: a randint() bound holding Inf or NaN makes the calc
-        store 0 with SC43, and the scan runs on, on all three backends."""
+    def test_non_finite_randint_bound_reads_zero_on_every_backend(self, monkeypatch, operand):
+        """A randint() of a Real reads 0 with no flag, whatever the Real holds."""
         from pyrung.core import randint
 
         r, setup = self._non_finite_real(operand)
@@ -1806,10 +1805,78 @@ class TestBoardPeripheralsAndRunStop:
                 calc(randint(0, r) + 5, dest)
                 copy(5, after)
 
-        results = _on_every_backend(
-            prog, monkeypatch, (dest, system.fault.out_of_range, after), scans=2
-        )
-        assert results == {name: (0, True, 5) for name in results}
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS, after), scans=2)
+        assert results == {name: (5, False, False, False, 5) for name in results}
+
+    def test_finite_real_randint_bound_reads_zero_on_every_backend(self, monkeypatch):
+        from pyrung.core import randint
+
+        low, high = Real("Low", default=3.0), Real("High", default=5.0)
+        dest = Int("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(low, high), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=2)
+        assert results == {name: (0, False, False, False) for name in results}
+
+    @pytest.mark.parametrize(
+        "bounds,dest_tag", [((7, 7), Int), ((70000, 70000), Int), ((70000, 70000), Dint)]
+    )
+    def test_equal_randint_constants_are_a_math_error_on_every_backend(
+        self, monkeypatch, bounds, dest_tag
+    ):
+        """0 with SC46 alone, and the rung runs on."""
+        from pyrung.core import randint
+
+        dest = dest_tag("Dest", default=7)
+        after = Int("After")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(*bounds) / 2, dest)
+                copy(5, after)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS, after), scans=1)
+        faults = tuple(flag.name.endswith("math_operation_error") for flag in self._FAULTS)
+        assert results == {name: (0, *faults, 5) for name in results}
+
+    def test_equal_randint_constants_outside_calc_are_zero_on_every_backend(self, monkeypatch):
+        from pyrung.core import randint
+
+        copied = Int("Copied", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(randint(7, 7), copied)
+
+        results = _on_every_backend(prog, monkeypatch, (copied, *self._FAULTS), scans=1)
+        assert results == {name: (0, False, False, False) for name in results}
+
+    def test_randint_constants_cut_into_an_int_on_every_backend(self, monkeypatch):
+        """Into an Int the bounds are 4464..4466, cut to 16 bits, with no flag."""
+        from pyrung.core import randint
+
+        dest = Int("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(70000, 70002), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
+        for value, *faults in results.values():
+            assert 4464 <= value <= 4466
+            assert faults == [False, False, False]
+
+    def test_randint_constants_stay_wide_into_a_dint_on_every_backend(self, monkeypatch):
+        from pyrung.core import randint
+
+        dest = Dint("Dest", default=7)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(randint(70000, 70002), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
+        for value, *faults in results.values():
+            assert 70000 <= value <= 70002
+            assert faults == [False, False, False]
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_non_finite_forloop_count_runs_none_and_sc43_on_every_backend(

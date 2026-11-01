@@ -252,48 +252,40 @@ def _compile_expression_impl(
         return f"({' + '.join(terms)})"
 
     if isinstance(expr, RandIntExpr):
-        lo = hi = ""
-        if expr.checks_bounds or not ctx.kernel_runtime:
-            lo = _compile_expression_impl(
-                expr.lo,
-                ctx,
-                scalar_snapshots=scalar_snapshots,
-                block_snapshots=block_snapshots,
-                strict=strict,
-            )
-            hi = _compile_expression_impl(
-                expr.hi,
-                ctx,
-                scalar_snapshots=scalar_snapshots,
-                block_snapshots=block_snapshots,
-                strict=strict,
-            )
+        # As RandIntExpr.evaluate: a float bound reads 0, and equal constants
+        # are 0, with SC46 in a calc.
+        if expr.real_bounds:
+            return "0"
+        if expr.equal_bounds:
+            if not strict:
+                return "0"
+            ctx.mark_helper("_math_func")
+            ctx.mark_helper("_rand_equal_bounds")
+            return "_rand_equal_bounds()"
         if ctx.kernel_runtime:
             # The runner's input drain wrote this scan's draw into the site tag.
-            draw = _snapshot_tag_symbol(
+            return _snapshot_tag_symbol(
                 expr.tag,
                 ctx,
                 scalar_snapshots=scalar_snapshots,
                 block_snapshots=block_snapshots,
             )
-            if not expr.checks_bounds:
-                return draw
-            # A bound holding Inf or NaN raises OverflowError: the calc stores
-            # 0 with SC43 (RandIntExpr.evaluate).  Outside calc the draw
-            # reads as 0 instead.
-            ctx.mark_helper("_bit_int")
-            helper = "_rand_checked" if strict else "_rand_or_zero"
-            ctx.mark_helper(helper)
-            return f"{helper}({draw}, {lo}, {hi})"
         ctx.uses_random = True
-        if expr.checks_bounds and not strict:
-            ctx.mark_helper("_bit_int")
-            ctx.mark_helper("_rand_permissive")
-            return f"_rand_permissive({lo}, {hi})"
-        # A bound holding Inf or NaN raises OverflowError, so the calc stores
-        # 0 with SC43: int() of Inf raises it, _bit_int turns NaN into it.
-        lo, hi = _bit_int_expr(expr.lo, lo, ctx), _bit_int_expr(expr.hi, hi, ctx)
-        return f"random.randint(min({lo}, {hi}), max({lo}, {hi}))"
+        lo = _compile_expression_impl(
+            expr.lo,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+            strict=strict,
+        )
+        hi = _compile_expression_impl(
+            expr.hi,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+            strict=strict,
+        )
+        return f"random.randint(min(int({lo}), int({hi})), max(int({lo}), int({hi})))"
 
     if isinstance(expr, RangeAggregateExpr):
         return _compile_range_aggregate(

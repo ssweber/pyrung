@@ -2,9 +2,24 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
-from pyrung import Bool, Counter, Int, Program, Rung, Timer, calc, count_up, latch, on_delay
+from pyrung import (
+    Bool,
+    Counter,
+    Dint,
+    Int,
+    Program,
+    Real,
+    Rung,
+    Timer,
+    calc,
+    count_up,
+    latch,
+    on_delay,
+)
 from pyrung.core import forloop, randint
 from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always
 from pyrung.core.compiled_plc import CompiledPLC
@@ -109,6 +124,109 @@ class TestOverride:
         plc = CompiledPLC(logic, dt=0.01)
         plc.patch({draw.tag: 2})
         assert plc.step().tags["Die"] == 2
+
+
+class TestBoundsAsCLICKReadsThem:
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    def test_equal_constants_are_a_math_error(self, factory):
+        die = Int("Die", default=7)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(randint(4, 4), die)
+        state = factory(logic, dt=0.01).step()
+        assert state.tags["Die"] == 0
+        assert state.tags["fault.math_operation_error"] is True
+        assert state.tags["fault.out_of_range"] is False
+
+    def test_only_equal_constants_declare_the_math_error(self):
+        lo = Int("Lo", default=4)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(randint(4, 4), Int("A"))
+                calc(randint(4, 5), Int("B"))
+                calc(randint(lo, lo), Int("C"))
+        faults = [instr._fault_writes for instr in logic.rungs[0]._instructions]
+        assert ["fault.math_operation_error" in writes for writes in faults] == [
+            True,
+            False,
+            False,
+        ]
+
+    def test_equal_tag_bounds_draw_their_value(self):
+        lo = Int("Lo", default=4)
+        die = Int("Die", default=7)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(randint(lo, lo), die)
+        state = PLC(logic, dt=0.01).step()
+        assert state.tags["Die"] == 4
+        assert state.tags["fault.math_operation_error"] is False
+
+    @pytest.mark.parametrize(
+        "bounds,lowest,highest",
+        [
+            ((70000, 70002), 4464, 4466),
+            ((70002, 70000), 4464, 4466),
+            ((65000, 66000), -536, 464),
+        ],
+    )
+    def test_constants_cut_into_an_int(self, bounds, lowest, highest):
+        die = Int("Die")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(randint(*bounds), die)
+        values = _draws(PLC(logic, dt=0.01), "Die", 2000)
+        assert (min(values), max(values)) == (lowest, highest)
+
+    def test_bounds_that_cut_to_one_value_are_a_math_error(self):
+        die = Int("Die", default=7)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(randint(70000, 4464), die)
+        state = PLC(logic, dt=0.01).step()
+        assert state.tags["Die"] == 0
+        assert state.tags["fault.math_operation_error"] is True
+
+    def test_a_tag_bound_keeps_its_width(self):
+        hi = Dint("Hi", default=70000)
+        die = Dint("Die")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(randint(hi, 70000), die)
+        state = PLC(logic, dt=0.01).step()
+        assert state.tags["Die"] == 70000
+        assert state.tags["fault.math_operation_error"] is False
+
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    def test_a_cut_site_still_answers_to_its_tag(self, factory):
+        roll = randint(70000, 70002)
+        die = Int("Die")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(roll, die)
+        plc = factory(logic, dt=0.01)
+        plc.patch({roll.tag: 4465})
+        assert plc.step().tags["Die"] == 4465
+
+    def test_a_cut_site_draws_inside_its_declared_range(self):
+        roll = randint(70000, 70002)
+        die = Int("Die")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(roll, die)
+        assert (roll.tag.min, roll.tag.max) == (4464, 4466)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _draws(PLC(logic, dt=0.01), "Die", 20)
+
+    def test_a_cut_site_exports_as_written(self):
+        roll = randint(70000, 70002)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(roll / 2, Int("Die"))
+        instr = logic.rungs[0]._instructions[0]
+        assert format_expr(instr.source_expression.left) == "randint(70000, 70002)"
+        assert format_expr(instr.expression.left) == "randint(4464, 4466)"
 
 
 class TestReplay:
@@ -220,6 +338,29 @@ class TestProver:
             with Rung():
                 calc(randint(1, 6), die)
         assert isinstance(always(logic, die <= 6), Proven)
+
+    def test_a_cut_draw_stays_in_its_cut_range(self):
+        die = Int("Die", default=4464)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(randint(70000, 70002), die)
+        assert isinstance(always(logic, die <= 4466), Proven)
+        assert isinstance(always(logic, die >= 4464), Proven)
+
+    def test_a_real_bound_reads_zero(self):
+        die = Int("Die")
+        lo = Real("Lo", min=1.0, max=3.0, default=1.0)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(randint(lo, 5), die)
+        assert isinstance(always(logic, die == 0), Proven)
+
+    def test_equal_constants_read_zero_or_stay_intractable(self):
+        die = Int("Die")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(randint(7, 7), die)
+        assert not isinstance(always(logic, die == 0), Counterexample)
 
     def test_undeclared_tag_bound_is_intractable_naming_the_draw(self):
         die, six, lo = Int("Die"), Bool("Six"), Int("Lo")

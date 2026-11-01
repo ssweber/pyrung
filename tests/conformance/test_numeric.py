@@ -558,7 +558,6 @@ group = Group(
             "/ 2 over a preset 99 reads 0 (Result1)",
             ladder=prove_int_math_rand_wide_bounds,
             expect={"Result1": 0},
-            pending="MATH",
         ),
         case(
             "A Math constant cut to 16 bits beside a REAL operand: DF * 100000 into an Int, "
