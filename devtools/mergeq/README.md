@@ -44,7 +44,8 @@ Files: `mergeq.py` (the tool), `hook.py` (PreToolUse guard), `test_hook.py`,
 - **Agents can't start heavy suites, and every test run is timed and killable.** `hook.py`
   (PreToolUse on Bash/PowerShell/Write/Edit, wired in `.claude/settings.json`):
   - refuses non-light stage commands and `[hook].heavy_extra` in subagents, and requires the
-    main session to use `run --heavy` (the lock) or the queue;
+    main session to use `run --heavy` (the lock) or the queue, apart from `[hook].heavy_exempt`
+    in the main session (a conformance run on a real CLICK);
   - rewrites `needs_timeout` commands (pytest) in Bash to
     `mergeq.py run --timeout N --name <agent>@<worktree> -- bash -c '...'`, so each run is a
     named job (`ps`, `reap --name bob-builder@drum`); PowerShell gets a refusal with the fix;

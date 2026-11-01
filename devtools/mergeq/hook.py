@@ -11,7 +11,8 @@ reviewer are never checked, so the Edit tool can always repair hook.py or mergeq
 
 Rules (mergeq.toml [hook]):
 - heavy: every non-light [stages] command plus heavy_extra. Refused for subagents; the main
-  session must run it through `mergeq.py run --heavy` or the queue.
+  session must run it through `mergeq.py run --heavy` or the queue. heavy_exempt takes
+  a main-session command back out, for one whose work happens off this machine.
 - needs_timeout (e.g. pytest): a Bash command is rewritten to run under
   `mergeq.py run --timeout N --name <agent>@<worktree> -- bash -c '<command>'`, so it gets a
   hard timeout and a named, killable process group. PowerShell is refused with the fix.
@@ -202,6 +203,9 @@ def check(event: dict, cfg: dict) -> dict | None:
     if reviewer:
         _check_reviewer_shell(cfg, tool, cmd)
     code = _code_only(cmd)
+    if not subagent:
+        for pattern in hook.get("heavy_exempt", []):
+            code = re.sub(pattern, "", code)
     heavy = next((p.pattern for p in _heavy_patterns(cfg) if p.search(code)), None)
     if heavy:
         if subagent:

@@ -39,6 +39,11 @@ heavy_extra = [
     '\bpytest\b[^;&|]*\s-m\s+\W?conformance',                    # conformance over Modbus (soft PLC)
     '\bpytest\b[^;&|]*--conformance-target',
 ]
+# Main-session commands that match a heavy pattern but do their work off this machine, so they
+# take no lock. Subagents stay refused. A real CLICK runs the ladder; pytest only polls it.
+heavy_exempt = [
+    '\bmake\s+(?=[^;&|]*\bPLC=[^\s;&|])(?![^;&|]*\bTARGET=)(?:[A-Z_]+=\S+\s+)*+test-conformance(?:\s+[A-Z_]+=[^\s;&|]+)*+(?!\s+[\w-]+(\s|$|[;&|]))',
+]
 # Commands that get a hard timeout and a named process group: in Bash they are rewritten to
 # `mergeq.py run --timeout N --name <agent>@<worktree> -- bash -c '...'` (N from a leading
 # `timeout N`, else default_timeout); in PowerShell they are refused with the fix.
