@@ -95,7 +95,7 @@ Useful in test utilities or static analysis scripts that don't need to run scans
 `program.simplified()` resolves each terminal tag's condition chain back to inputs, eliminating intermediate pivots. A 14-rung interlock chain through 10 intermediate tags becomes a two-term Boolean expression over the 8 inputs that actually matter.
 
 ```python
-from pyrung import Bool, Program, rung, branch, out
+from pyrung import And, Bool, Or, Program, rung, out
 
 EStop          = Bool()
 RunPermit      = Bool()
@@ -113,18 +113,12 @@ with Program() as logic:
         out(SafetyOK)
     with rung(RunPermit, SafetyOK):
         out(Permitted)
-    with rung(Permitted):
-        with branch(StartBtn):
-            out(Running)
-        with branch(SealIn):
-            out(Running)
+    with rung(Permitted, Or(StartBtn, SealIn)):
+        out(Running)
     with rung(Running):
         out(SealIn)
-    with rung():
-        with branch(Running, ~EStop):
-            out(MotorOut)
-        with branch(MaintOverride):
-            out(MotorOut)
+    with rung(Or(And(Running, ~EStop), MaintOverride)):
+        out(MotorOut)
 
 forms = logic.simplified()
 ```
@@ -155,11 +149,8 @@ Jog = Bool()
 Motor = Bool()
 
 with Program() as logic:
-    with rung(SafetyOK):
-        with branch(Start):
-            out(Motor)
-        with branch(Jog):
-            out(Motor)
+    with rung(SafetyOK, Or(Start, Jog)):
+        out(Motor)
 
 form = logic.simplified()["Motor"]
 assert SafetyOK in form.permissives
@@ -179,9 +170,9 @@ assert RunPermit not in forms["MotorOut"].permissives  # MaintOverride bypasses 
 `pyrung live` includes the same set in `simplified` output:
 
 ```text
-Motor = And(SafetyOK, Or(Start, Jog))
+Motor = SafetyOK, Or(Start, Jog)
   permissives: SafetyOK
-  (2 writer(s), 0 pivot(s) resolved, depth 0)
+  (1 writer(s), 0 pivot(s) resolved, depth 0)
 ```
 
 These are inferred properties of the current program, not stored tag metadata,
@@ -193,7 +184,7 @@ The simplified form strips away organizational structure — the intermediate ta
 
 ### Branch topology is preserved
 
-Sibling branches produce `And(parent, Or(local₁, local₂))`, not the flat DNF form `Or(And(parent, local₁), And(parent, local₂))`. The series/parallel structure of the original program carries through resolution — shared preconditions appear once, with the distinguishing triggers nested inside.
+Sibling branches that both drive a tag (an `out()`, then a `latch()` below it) produce `And(parent, Or(local₁, local₂))`, not the flat DNF form `Or(And(parent, local₁), And(parent, local₂))`. The series/parallel structure of the original program carries through resolution — shared preconditions appear once, with the distinguishing triggers nested inside.
 
 ### Cycles (seal-in)
 
