@@ -109,15 +109,24 @@ def has_domain_limited_func(value: Any, seen: set[int] | None = None) -> bool:
     """True when *value* (a calc expression) can raise
     :class:`~pyrung.core.expression.MathDomainError`: a math function with a
     domain (``sqrt``, ``log``, ...), a ``**`` whose exponent may be fractional
-    (``(-8.0) ** 0.5`` has no real value) or a ``randint`` of equal constants."""
+    (``(-8.0) ** 0.5`` has no real value), either of those in a ``randint``
+    bound, or a ``randint`` of equal constants."""
     if seen is None:
         seen = set()
     if id(value) in seen:
         return False
     seen.add(id(value))
     if isinstance(value, RandIntExpr):
-        # Its bounds are read for the draw, as the scan starts, not in the calc.
-        return value.equal_bounds
+        # A bare Real tag as a bound leaves both bounds unread.  Equal constants
+        # are the error themselves.  A computed bound is read in the calc too,
+        # where sqrt(N) can raise.
+        if value.real_bounds:
+            return False
+        return (
+            value.equal_bounds
+            or has_domain_limited_func(value.lo, seen)
+            or has_domain_limited_func(value.hi, seen)
+        )
     if isinstance(value, MathFuncExpr) and value.name in DOMAIN_LIMITED_MATH_FUNCS:
         return True
     if isinstance(value, BinaryExpr) and value.symbol == "**" and may_be_float(value.right):

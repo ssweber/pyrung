@@ -96,7 +96,7 @@ from pyrung.core.condition import (
     NormallyClosedCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.expression import Expression
+from pyrung.core.expression import Expression, log
 from pyrung.core.instruction import Instruction
 from pyrung.core.system_points import system
 
@@ -2020,6 +2020,51 @@ class TestBoardPeripheralsAndRunStop:
         for value, *faults in results.values():
             assert low <= value <= high
             assert faults == [False, False, False]
+
+    @pytest.mark.parametrize(
+        "make, tag_type, held",
+        [
+            pytest.param(lambda r, n: r(0, sqrt(n)), Int, -1, id="sqrt"),
+            pytest.param(lambda r, n: r(sqrt(n), 0), Int, -1, id="sqrt-low"),
+            pytest.param(lambda r, n: r(0, log(n)), Int, 0, id="log"),
+            pytest.param(lambda r, n: r(0, n**0.5), Real, -8.0, id="fractional-power"),
+        ],
+    )
+    @pytest.mark.parametrize("dest", [Dint, Int], ids=["into-dint", "into-int"])
+    def test_a_domain_error_in_a_randint_bound_on_every_backend(
+        self, monkeypatch, make, tag_type, held, dest
+    ):
+        """Inside calc the bound is read too: 0 with SC46, and the scan runs on."""
+        from pyrung.core import randint
+
+        n = tag_type("N", default=held)
+        d = dest("D", default=-1)
+        after = Bool("After")
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(make(randint, n), d)
+            with Rung():
+                out(after)
+
+        results = _on_every_backend(
+            prog, monkeypatch, (d, system.fault.math_operation_error, after), scans=1
+        )
+        assert results == {name: (0, True, True) for name in results}
+
+    def test_a_domain_error_in_a_randint_bound_outside_calc_on_every_backend(self, monkeypatch):
+        """Outside calc the same bound reads 0 with no flag."""
+        from pyrung.core import randint
+
+        n = Int("N", default=-1)
+        d = Dint("D", default=-1)
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(randint(0, sqrt(n)), d)
+
+        results = _on_every_backend(
+            prog, monkeypatch, (d, system.fault.math_operation_error), scans=1
+        )
+        assert results == {name: (0, False) for name in results}
 
     def test_a_char_randint_bound_draws_on_every_backend(self, monkeypatch):
         from pyrung.core import randint

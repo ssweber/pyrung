@@ -22,12 +22,14 @@ from pyrung import (
     count_up,
     latch,
     on_delay,
+    out,
 )
 from pyrung.core import forloop, randint
 from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.expression import RandIntExpr, format_expr, randint_draw, sqrt
 from pyrung.core.runner import PLC
+from pyrung.core.system_points import system
 from pyrung.core.tag import Tag
 
 
@@ -543,6 +545,46 @@ class TestProver:
             with Rung():
                 calc(randint(lo, 5), die)
         assert isinstance(always(logic, die == 0), Proven)
+
+    @pytest.mark.parametrize(
+        "make, writes_it",
+        [
+            pytest.param(lambda n: randint(0, sqrt(n)), True, id="sqrt-bound"),
+            pytest.param(lambda n: randint(sqrt(n), 5), True, id="sqrt-low-bound"),
+            pytest.param(lambda n: randint(0, n**0.5), True, id="fractional-power-bound"),
+            pytest.param(lambda n: randint(7, 7), True, id="equal-constants"),
+            pytest.param(lambda n: randint(0, n), False, id="tag-bound"),
+            pytest.param(lambda n: randint(0, n / 2), False, id="division-bound"),
+            pytest.param(lambda n: randint(0, 5), False, id="constants"),
+            pytest.param(lambda n: randint(Real("R"), sqrt(n)), False, id="real-tag-reads-0"),
+        ],
+    )
+    def test_the_math_error_flag_is_written_where_a_bound_can_hit_one(self, make, writes_it):
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(make(Int("N")), Dint("D"))
+        instr = logic.rungs[0]._instructions[0]
+        assert ("fault.math_operation_error" in instr._fault_writes) is writes_it
+
+    def test_a_domain_error_in_a_bound_is_no_proof_the_flag_stays_off(self):
+        """N = -1 sets SC46, so ``always(~B)`` is false and must not be Proven."""
+        n = Int("N", external=True, min=-1, max=1)
+        d, b = Dint("D"), Bool("B")
+
+        def build():
+            with Program(strict=False) as logic:
+                with Rung():
+                    calc(randint(0, sqrt(n)), d)
+                with Rung(system.fault.math_operation_error):
+                    out(b)
+            return logic
+
+        plc = PLC(build())
+        plc.patch({n: -1})
+        plc.step()
+        plc.step()
+        assert plc.state.tags["B"] is True
+        assert not isinstance(always(build(), ~b), Proven)
 
     def test_equal_constants_are_intractable_naming_the_math_error(self):
         die = Int("Die")
