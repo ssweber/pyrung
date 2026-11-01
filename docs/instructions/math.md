@@ -66,7 +66,7 @@ A negative base to a fractional power (`(-8.0) ** 0.5`, or `N ** H` with `H` = 0
 
 ## Math outside `calc()`
 
-An expression evaluated anywhere but `calc()` (a rung condition, a `copy()` source, a `forloop()` count, an index expression such as `DS[I + 1]`) is permissive: an operation that hits a math error gives 0, sets no fault flag and never stops the scan. That covers a division by zero (`/`, `//` or `%`, where `calc()` sets `division_error`), a math function outside its domain, a negative base to a fractional power, a bitwise or shift operation on Inf or NaN or with a negative count, an integer too large for a float meeting a float (`(2 ** E) * 0.5` with `E` = 1100), and a `randint()` bound holding Inf or NaN. A result that IEEE 754 defines passes through: `Big * 10 > 1.0E+38` is true when the product is +Inf. This is pyrung's own rule; a CLICK has no expressions outside Math, and the CLICK validator flags them. Use `calc()` when the flag matters.
+An expression evaluated anywhere but `calc()` (a rung condition, a `copy()` source, a `forloop()` count, an index expression such as `DS[I + 1]`) is permissive: an operation that hits a math error gives 0, sets no fault flag and never stops the scan. That covers a division by zero (`/`, `//` or `%`, where `calc()` sets `division_error`), a math function outside its domain, a negative base to a fractional power, a bitwise or shift operation on Inf or NaN or with a negative count, an integer too large for a float meeting a float (`(2 ** E) * 0.5` with `E` = 1100), and a computed `randint()` bound that evaluates to Inf or NaN. A result that IEEE 754 defines passes through: `Big * 10 > 1.0E+38` is true when the product is +Inf. This is pyrung's own rule; a CLICK has no expressions outside Math, and the CLICK validator flags them. Use `calc()` when the flag matters.
 
 When a value stored as Inf or NaN reaches an instruction's own integer conversion, that instruction's rule applies: a `forloop()` over a `Real` count holding Inf runs no iteration and sets `out_of_range`.
 
@@ -138,8 +138,8 @@ calc(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan 
 `randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them. Three things read as they do on a CLICK:
 
 - Equal constants, `randint(7, 7)`, are a math error: the `calc()` stores 0 and sets `system.fault.math_operation_error` (SC46). Tags that happen to hold the same value draw it.
-- A `Real` bound reads 0 with no flag, whatever it holds. CLICK's editor refuses one, so only a paste gets it onto a CLICK.
-- Into an `Int`, each constant bound is cut to 16 bits like any other constant in the formula ([Constants into an INT](#constants-into-an-int)): `randint(70000, 70002)` draws 4464..4466.
+- A bare `Real` tag as a bound reads 0 with no flag, whatever it holds. CLICK's editor refuses one, so only a paste gets it onto a CLICK. Any other bound is read as an integer and still draws (`randint(0, N / 2)`, `sqrt(N)`, a `Char` tag, a float literal); if it evaluates to Inf or NaN the `calc()` stores 0 and sets `out_of_range`.
+- Into an `Int`, each constant bound is cut to 16 bits like any other constant in the formula ([Constants into an INT](#constants-into-an-int)): `randint(70000, 70002)` draws 4464..4466. The same expression into a `Dint` draws 70000..70002, separately: each destination width has its own draw.
 
 Draws are deterministic, so the simulation stays replayable. Each `randint` call in the program is one site, and its value is a fixed function of the site and the scan number. Two runs of the same program draw the same sequence; replay, `history.at()`, seek and `fork()` see the values the original run saw; and a fork draws what its parent would have. Restarting (STOP -> RUN, `reboot()`) resets the scan number, so the sequence starts over.
 
@@ -152,7 +152,9 @@ plc.patch({roll.tag: 6})                 # next scan draws 6
 plc.force(roll.tag, 3)                   # every scan draws 3 until unforced
 ```
 
-The verifier explores every value a draw can take: `lo..hi` for literal bounds, or the range a bound tag declares (`min`/`max` or `choices`). A bound tag with no declared range makes the result `Intractable`, with a hint naming the draw. `run_for()` and `run_until()` do not skip scans in a program that uses `randint`. `how()` treats a draw like any other input, so a plan may say to wait for a lucky draw or to patch the site's tag.
+A draw whose constant bounds are cut into an `Int` is chosen through `expr.cut_tag` instead. Equal constants and a bare `Real` bound read no draw, so `patch()` and `force()` of their tag change nothing.
+
+The verifier explores every value a draw can take: `lo..hi` for literal bounds, or the range a bound tag declares (`min`/`max` or `choices`). A bound tag with no declared range, or equal constants, makes the result `Intractable`, with a hint naming the draw. `run_for()` and `run_until()` do not skip scans in a program that uses `randint`. `how()` treats a draw like any other input, so a plan may say to wait for a lucky draw or to patch the site's tag.
 
 `randint` is not allowed inside a `forloop()`: every iteration would read the scan's one draw, while CLICK draws again on each execution. On CircuitPython the board calls `random.randint` directly, so its draws are not replayable.
 
