@@ -87,6 +87,7 @@ class _AccSource:
     bidir: bool = False  # CountUp with down_condition — delta sign varies at runtime
     unit: Any = None  # TimeUnit for timed sources; None for counters / synthetic sources.
     acc_max: int = 32767  # Timed sources: the accumulator's clamp (a time drum's DINT is wider).
+    step_name: str | None = None  # A time drum's step register.
     # Self-calc sources: the per-scan step (an int literal, or the name of a tag
     # no rung writes, ``-``-prefixed when subtracted) and the destination's wrap
     # range.  The probe must move the tag by exactly that step, and no skipped
@@ -194,6 +195,11 @@ class _FoldContext:
     def timed_acc_names(self) -> frozenset[str]:
         return frozenset(src.acc_name for src in self.timed_sources)
 
+    @cached_property
+    def timed_step_names(self) -> frozenset[str]:
+        """The step registers of time drums, whose correction clears the accumulator."""
+        return frozenset(src.step_name for src in self.timed_sources if src.step_name is not None)
+
 
 # ── 3. Instruction registry ─────────────────────────────────────────
 
@@ -281,6 +287,7 @@ def _collect_acc_sources(program: Any) -> list[_AccSource]:
                 bidir=bidir,
                 unit=getattr(instr, "unit", None) if timed else None,
                 acc_max=instr._acc_max() if drum else 32767,
+                step_name=instr.current_step.name if drum else None,
             )
     return list(out.values())
 
@@ -1485,9 +1492,12 @@ def _timer_contests(
     and time it again (a second timer instruction on the same Timer, a
     ``copy(0, Tmr.Acc)``, a For loop, a second call into the timer's
     subroutine): the boundary readings stay put while the landing times the
-    whole window in one step.  A live run counts each scan's writes instead
-    (see :meth:`_OrdinaryFoldStrategy.capture`); this static answer is for
-    executors that cannot count them.
+    whole window in one step.  A time drum does the same when another
+    instruction keeps its step register bad: each scan corrects the step and
+    clears the accumulator, so a drum whose step register has another writer
+    is contested too.  A live run counts each scan's writes instead (see
+    :meth:`_OrdinaryFoldStrategy.capture`); this static answer is for executors
+    that cannot count them.
     """
     from pyrung.core.analysis.pdg import _extract_instruction_writes, resolve_rung
     from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
@@ -1563,6 +1573,26 @@ def _timer_contests(
                 continue
             dests, _target_reads, implicit = _extract_instruction_writes(instr, tags)
             if acc in dests or acc in implicit:
+                contested.add(acc)
+                break
+        step = src.step_name
+        if step is None:
+            continue
+        step_block = block_of.get(step)
+        step_writers = set(pdg.writers_of.get(step, ()))
+        step_writers |= {
+            ref.node_index for ref in pdg.indirect_writes if ref.block.name == step_block
+        }
+        if step_writers - {i}:
+            contested.add(acc)
+            continue
+        for instr, _in_loop in walk(rung._instructions if rung is not None else (), False):
+            if type(instr) in registry and any(
+                phase_acc.name == acc for phase_acc, _done, _preset in _instruction_phases(instr)
+            ):
+                continue
+            dests, _target_reads, implicit = _extract_instruction_writes(instr, tags)
+            if step in dests or step in implicit:
                 contested.add(acc)
                 break
     return frozenset(contested)
@@ -2666,8 +2696,8 @@ def _build_fold_context(
     contested_timers = _timer_contests(pdg, program, sources)
     if contested_timers and journal is not None:
         journal.add_note(
-            "fold: timers another instruction also writes, folded only while a scan "
-            "writes each once: " + ", ".join(sorted(contested_timers))
+            "fold: timers (or time drum steps) another instruction also writes, folded "
+            "only while a scan writes each once: " + ", ".join(sorted(contested_timers))
         )
 
     return _FoldContext(
@@ -4475,15 +4505,17 @@ class _OrdinaryFoldStrategy:
 
         A second write in one scan (a reset, then the timing step) leaves the
         boundary readings where they were while the landing scan would time the
-        whole window at once.  Forces are writes around the scan too.  The
-        window's scans run the same writers as the probe: which rungs act is
-        fixed by the plateau guard and the crossings.
+        whole window at once.  Forces are writes around the scan too, and a
+        force on a time drum's step register can keep the drum correcting it,
+        which clears the accumulator.  The window's scans run the same writers
+        as the probe: which rungs act is fixed by the plateau guard and the
+        crossings.
         """
         ctx = self.ctx
         names = ctx.timed_acc_names
         if not names:
             return True
-        if forced is None or not names.isdisjoint(forced):
+        if forced is None or not (names | ctx.timed_step_names).isdisjoint(forced):
             return False
         if acc_writes is None or not names <= acc_writes.keys():
             return not ctx.contested_timers

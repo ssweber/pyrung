@@ -204,9 +204,9 @@ class _DrumBaseInstruction(Instruction):
     A drum writes its outputs when its step moves or its rung comes back, and
     all off as it completes; a scan with nothing to report writes none, so
     another writer's value stays.  A write to the step register is not a move:
-    the next event acts on the register's step.  A bad step corrects to 1
-    with no output write, and a jog edge on a bad step leaves that scan alone
-    (see :meth:`_holds_bad_step`).
+    the next event acts on the register's step.  Correcting a bad step to 1
+    writes no output itself, though a time drum also times on that scan, and
+    a jog edge on a bad step leaves that scan alone (see :meth:`_holds_bad_step`).
     """
 
     ALWAYS_EXECUTES = True
@@ -301,6 +301,19 @@ class _DrumBaseInstruction(Instruction):
         if not (invalid and jog_edge) or reset_active:
             return False
         return not self._jump_lands(jump_edge, jump_target)
+
+    @staticmethod
+    def _note_correction_clears(ctx: ScanContext, accumulator: Tag, acc_value: int) -> None:
+        """Count a time drum's correction as an accumulator write of its own.
+
+        The scan that corrects a bad step times the accumulator and clears it,
+        with one write at the end.  That write leaves the fold's boundary
+        readings where they were, while a landing scan would time the whole
+        window at once and move the drum, so the fold must see a reset and a
+        timing step (see ``fold._timer_contests``).  The value is unchanged:
+        the timing still reads it.
+        """
+        ctx.set_tag(accumulator.name, acc_value)
 
     def _jump_lands(self, jump_edge: bool, jump_target: int | None) -> bool:
         return jump_edge and jump_target is not None and self._step_is_valid(jump_target)
@@ -697,6 +710,8 @@ class TimeDrumInstruction(_DrumBaseInstruction):
                 ctx.set_tag(self.current_step.name, 1)
 
         acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
+        if reset_step_data:
+            self._note_correction_clears(ctx, self.accumulator, acc_value)
         frac_key = f"_frac:{self.accumulator.name}"
         frac = float(ctx.get_memory(frac_key, 0.0))
 
@@ -958,6 +973,8 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
                 ctx.set_tag(self.current_step.name, 1)
 
         acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
+        if reset_step_data:
+            self._note_correction_clears(ctx, self.accumulator, acc_value)
         frac_key = f"_frac:{self.accumulator.name}"
         frac = float(ctx.get_memory(frac_key, 0.0))
 

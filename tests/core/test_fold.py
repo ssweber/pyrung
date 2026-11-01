@@ -3293,6 +3293,119 @@ class TestClockGatedTimeDrum:
         assert folded.state.tags["DDone"]
 
 
+class TestTimedDrumCorrectedEveryScan:
+    """A step register kept bad has a timed drum correct it every scan, which clears
+    the accumulator: the boundary readings stay put, and the scan times and clears
+    with one write.  A landing at the window's dt would time past the preset."""
+
+    @staticmethod
+    def _drum(kind: str) -> Any:
+        from pyrung import time_drum, time_event_drum
+
+        args: dict[str, Any] = {
+            "outputs": [Bool("O1"), Bool("O2")],
+            "pattern": [[1, 0], [0, 1], [1, 1]],
+            "presets": [500, 500, 500],
+            "unit": "ms",
+            "current_step": Int("Step"),
+            "accumulator": Int("DAcc"),
+            "completion_flag": Bool("DDone"),
+        }
+        if kind == "time":
+            return time_drum(**args)
+        return time_event_drum(events=[None, None, None], **args)
+
+    @classmethod
+    def _build(cls, kind: str, writer: str) -> Callable[[], Program]:
+        def build() -> Program:
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Timer.clone("Long"), 60_000)
+                if writer == "above":
+                    with Rung(Bool("Stage")):
+                        copy(0, Int("Step"))
+                with Rung(Bool("En")):
+                    if writer == "same rung":
+                        copy(0, Int("Step"))
+                    cls._drum(kind).reset(Bool("R"))
+                if writer == "below":
+                    with Rung(Bool("Stage")):
+                        copy(0, Int("Step"))
+            return prog
+
+        return build
+
+    @staticmethod
+    def _assert_replay_matches(folded: PLC, stepped: PLC) -> None:
+        for target in (2, 3, 60, 150, folded.state.scan_id - 1, folded.state.scan_id):
+            want = _full_state(stepped.replay_to(target))
+            assert _full_state(folded._replay_seek(target)) == want
+            assert _full_state(folded.replay_to(target)) == want
+
+    @pytest.mark.parametrize("kind", ["time", "time_event"])
+    @pytest.mark.parametrize("writer", ["above", "below", "same rung"])
+    def test_written_bad_every_scan_matches_stepping(self, kind: str, writer: str) -> None:
+        folded, stepped = _folded_and_stepped(
+            self._build(kind, writer), _scans(300), patch={"En": True, "Stage": True}
+        )
+        assert _full_state(folded) == _full_state(stepped)
+        # The correction clears the accumulator every scan, so no step's time is up.
+        assert folded.state.tags["DAcc"] == 0
+        assert folded.state.tags["O1"] is True
+        assert folded.state.tags["O2"] is False
+        self._assert_replay_matches(folded, stepped)
+
+    @pytest.mark.parametrize("kind", ["time", "time_event"])
+    def test_forced_bad_matches_stepping(self, kind: str) -> None:
+        def run(plc: PLC, fold: bool) -> None:
+            plc.force("Step", 0)
+            _run_scans(plc, 300, fold=fold)
+
+        folded, stepped = _folded_and_stepped(self._build(kind, "none"), run, patch={"En": True})
+        assert _full_state(folded) == _full_state(stepped)
+        assert folded.state.tags["O1"] is True
+        self._assert_replay_matches(folded, stepped)
+
+    @pytest.mark.parametrize("kind", ["time", "time_event"])
+    def test_good_step_written_every_scan_still_folds(self, kind: str) -> None:
+        """Only a correction declines: a writer holding a good step leaves the
+        accumulator to time, and the fold's window stays as long as it was."""
+
+        def build() -> Program:
+            with Program(strict=False) as prog:
+                with Rung():
+                    copy(2, Int("Step"))
+                with Rung(Bool("En")):
+                    self._drum(kind).reset(Bool("R"))
+            return prog
+
+        kernel_scans: dict[bool, int] = {}
+
+        def run(plc: PLC, fold: bool) -> None:
+            counter = _count_kernel_scans(plc)
+            _run_scans(plc, 30, fold=fold)
+            kernel_scans[fold] = counter["n"]
+
+        folded, stepped = _folded_and_stepped(build, run, patch={"En": True})
+        assert _full_state(folded) == _full_state(stepped)
+        assert folded.state.tags["DAcc"] == stepped.state.tags["DAcc"] > 0
+        assert kernel_scans[True] < kernel_scans[False]
+
+    def test_program_writing_only_its_own_step_replays_folded(self) -> None:
+        """With no other writer of the step, replay keeps folding the drum."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.fold import _build_fold_context
+
+        def contested(writer: str) -> frozenset[str]:
+            program = self._build("time", writer)()
+            plc = PLC(program, dt=0.010)
+            return _build_fold_context(plc, build_program_graph(program), program).contested_timers
+
+        assert contested("none") == frozenset()
+        for writer in ("above", "below", "same rung"):
+            assert contested(writer) == {"DAcc"}
+
+
 class TestDrumOneTimeScans:
     """A drum's scan can leave every tag as it found it and still not repeat: a
     jog edge on a bad step corrects on the next scan, and a rung coming back
