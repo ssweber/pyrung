@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pyrung import PLC, Int, Program, Rung, calc
+from pyrung.core import compiled_run, scan_trace
 from tests import fold_check
 from tests.fold_check import FoldMismatch
 
@@ -55,6 +56,11 @@ def installed(monkeypatch: pytest.MonkeyPatch):
         (fold, "fold_run_until"),
         (fold, "fold_run_for"),
         (cyclefold, "cycle_fold_until"),
+        (compiled_run, "run_scans"),
+        (compiled_run, "INTERPRETED_PREFIX"),
+        (scan_trace, "MIN_RUN_SCANS"),
+        (scan_trace, "BURST_SIZES"),
+        (scan_trace, "STRICT_SELF_CHECK"),
     ):
         monkeypatch.setattr(mod, name, getattr(mod, name))
     monkeypatch.setattr(fold, "_fold_check_installed", False, raising=False)
@@ -72,9 +78,17 @@ def _overshooting(extra: int):
     return drive
 
 
+def _overshooting_scans(extra: int):
+    drive = _overshooting(extra)
+
+    def run_scans(plc, _scans, predicate, **_kwargs):
+        return drive(plc, predicate)
+
+    return run_scans
+
+
 def test_run_until_through_install_catches_a_late_stop(installed, monkeypatch) -> None:
-    fold, _ = installed
-    monkeypatch.setattr(fold, "fold_run_until", _overshooting(3))
+    monkeypatch.setattr(compiled_run, "run_scans", _overshooting_scans(3))
     fold_check.install()
     plc = _plc()
     with pytest.raises(
@@ -84,8 +98,7 @@ def test_run_until_through_install_catches_a_late_stop(installed, monkeypatch) -
 
 
 def test_run_until_through_install_passes_an_exact_stop(installed, monkeypatch) -> None:
-    fold, _ = installed
-    monkeypatch.setattr(fold, "fold_run_until", _overshooting(0))
+    monkeypatch.setattr(compiled_run, "run_scans", _overshooting_scans(0))
     fold_check.install()
     plc = _plc()
     plc.run_until(lambda s: s.tags["N"] >= 5, max_cycles=100)
