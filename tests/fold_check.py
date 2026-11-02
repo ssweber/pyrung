@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import os
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 MAX_SCANS = int(os.environ.get("FOLD_CHECK_MAX_SCANS", "200000"))
@@ -141,6 +141,17 @@ def _note_skip(reason: str) -> None:
     SKIPS.setdefault(reason, []).append(os.environ.get("PYTEST_CURRENT_TEST", "?").split(" ")[0])
 
 
+def _shared_types() -> tuple[type, ...]:
+    """Immutable-by-contract pyrung objects a predicate refers to: shared, not copied."""
+    from pyrung.core.condition import Condition
+    from pyrung.core.expression import Expression
+    from pyrung.core.memory_block import Block
+    from pyrung.core.program import Program
+    from pyrung.core.tag import Tag
+
+    return (Tag, Condition, Expression, Block, Program)
+
+
 def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], bool] | None:
     """A copy of ``predicate`` whose closure state is private to the twin, or None.
 
@@ -154,6 +165,7 @@ def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], boo
     import types
 
     memo: dict[int, Any] = {}
+    shared_types = _shared_types()
 
     def clone_function(fn: types.FunctionType, memo: dict[int, Any]) -> Any:
         if id(fn) in memo:
@@ -188,6 +200,9 @@ def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], boo
                 cell.cell_contents = copy.deepcopy(contents, memo)
         return new
 
+    for obj in _reachable(predicate, plc, shared_types):
+        if isinstance(obj, shared_types):
+            memo[id(obj)] = obj
     shared = (type(plc),)
     table = copy._deepcopy_dispatch  # type: ignore[attr-defined]
     saved = {t: table.get(t) for t in (types.FunctionType, *shared)}
@@ -206,28 +221,26 @@ def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], boo
                 table[t] = old
 
 
-def _fingerprint(root: Any, plc: Any) -> tuple[Any, ...]:
-    """What a predicate could carry between calls: values reachable from it, flattened.
-
-    Walks closure cells, defaults, the module-level names a function reads, containers
-    and instance attributes (capped).  The runner, modules and classes are not entered.
-    """
+def _reachable(root: Any, plc: Any, stop: tuple[type, ...] = ()) -> Iterator[Any]:
+    """Objects reachable from a predicate: closure cells, defaults, the module-level
+    names a function reads, containers and instance attributes (capped).  The runner,
+    modules and classes are not entered, nor are instances of ``stop`` types."""
     import types
 
-    out: list[Any] = []
     seen: set[int] = set()
     todo = [root]
-    while todo and len(out) < 20000:
+    count = 0
+    while todo and count < 20000:
         obj = todo.pop()
         if id(obj) in seen:
             continue
         seen.add(id(obj))
+        count += 1
         if obj is plc or isinstance(obj, (types.ModuleType, type)):
             continue
-        if obj is None or isinstance(obj, (bool, int, float, str, bytes, complex)):
-            out.append((type(obj).__name__, obj))
+        yield obj
+        if stop and isinstance(obj, stop):
             continue
-        out.append((type(obj).__name__, id(obj) if callable(obj) else 0))
         if isinstance(obj, types.FunctionType):
             todo.extend(c.cell_contents for c in obj.__closure__ or () if _filled(c))
             todo.extend(obj.__defaults__ or ())
@@ -239,14 +252,24 @@ def _fingerprint(root: Any, plc: Any) -> tuple[Any, ...]:
         elif isinstance(obj, types.MethodType):
             todo.append(obj.__self__)
         elif isinstance(obj, dict):
-            out.append(len(obj))
             for k, v in obj.items():
                 todo.extend((k, v))
         elif isinstance(obj, (list, tuple, set, frozenset)):
-            out.append(len(obj))
             todo.extend(obj)
         elif hasattr(obj, "__dict__"):
             todo.extend(vars(obj).values())
+
+
+def _fingerprint(root: Any, plc: Any) -> tuple[Any, ...]:
+    """What a predicate could carry between calls, flattened (shared types excluded)."""
+    out: list[Any] = []
+    for obj in _reachable(root, plc, _shared_types()):
+        if obj is None or isinstance(obj, (bool, int, float, str, bytes, complex)):
+            out.append((type(obj).__name__, obj))
+        elif isinstance(obj, (dict, list, tuple, set, frozenset)):
+            out.append((type(obj).__name__, len(obj)))
+        else:
+            out.append((type(obj).__name__, id(obj) if callable(obj) else 0))
     return tuple(out)
 
 
