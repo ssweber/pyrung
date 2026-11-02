@@ -10,6 +10,7 @@ cannot pass as agreement.
 from __future__ import annotations
 
 import ast
+import random
 from collections import Counter
 from collections.abc import Callable
 from datetime import datetime
@@ -502,6 +503,24 @@ def test_corpus_equals_stepping_between_firings(name: str, fine_loop: None) -> N
     if name not in _NO_COVERAGE_EXPECTED:
         assert counts["loop scans"] > 0, dict(counts)
         assert counts["states compared"] > 0, dict(counts)
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+@pytest.mark.parametrize("name", sorted(CORPUS))
+def test_corpus_under_random_stimulus(name: str, seed: int, fine_loop: None) -> None:
+    """The inputs flip at random scans, so a trace meets states no test author chose."""
+    fill_program, dt, _segments = CORPUS[name]
+    rng = random.Random(f"{name}/{seed}")
+    segments: list[tuple[float, dict[Any, Any]]] = [(0.05 * dt / 0.01, {Run: True})]
+    for _ in range(12):
+        patches: dict[Any, Any] = {}
+        if rng.random() < 0.6:
+            patches[Run] = rng.random() < 0.7
+        if rng.random() < 0.3:
+            patches[Rst] = rng.random() < 0.3
+        segments.append((rng.choice((1, 2, 7, 30, 120, 400)) * dt, patches))
+    counts = _lockstep(_build(fill_program), segments, dt=dt)
+    assert not counts["self check mismatches"]
 
 
 def test_corpus_as_a_whole_mostly_runs_in_the_loop(fine_loop: None) -> None:
