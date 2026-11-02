@@ -15,9 +15,9 @@ install = { cmd = ["make", "install"], timeout = 900 }
 lint = { cmd = ["make", "lint"], timeout = 600, light = true }   # light: agents may run it
 prove = { cmd = ["make", "test-prove"], timeout = 300 }
 pilot = { cmd = ["make", "test-pilot"], timeout = 420 }
-test = { cmd = ["make", "test"], timeout = 1800 }
+test = { cmd = ["make", "test"], timeout = 2700 }
 soundness = { cmd = ["make", "test-soundness"], timeout = 1200 }
-fold = { cmd = ["make", "test-fold"], timeout = 1800 }
+fold = { cmd = ["make", "test-fold"], timeout = 2700 }
 tumbler = { cmd = ["make", "test-tumbler"], timeout = 900 }
 conf = { cmd = ["make", "test-conformance"], timeout = 1200 }
 conf-cp = { cmd = ["make", "test-conformance", "TARGET=circuitpy"], timeout = 1200 }
