@@ -124,7 +124,8 @@ enough: a program whose alarm log indexes `DS` steps through a timer display
 elsewhere in `DS` instead of skipping it.  Give the index tag its range to keep
 the fold, and make the range true, because the fold takes it at its word.  It must
 include the value the index rests at (usually 0, so `choices` is often the right
-form): `never()` refuses a program whose tag sits outside its declared range.
+form): otherwise `never()` can raise or return a counterexample instead of proving
+the property.
 
 ## Injecting inputs
 

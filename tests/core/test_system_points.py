@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 import pytest
 
@@ -543,3 +544,39 @@ def test_fault_address_error_auto_clears_next_scan_when_not_retriggered(
 
     runner.step()
     assert runner.current_state.tags[system.fault.address_error.name] is False
+
+
+class TestSystemPointsStayOutOfBlocks:
+    """A CLICK never holds one in a block, and no fold can see one read through a pointer."""
+
+    @pytest.mark.parametrize(
+        ("point", "bank_type"),
+        [
+            pytest.param(system.rtc.second, TagType.INT, id="rtc-second"),
+            pytest.param(system.sys.clock_1s, TagType.BOOL, id="clock-1s"),
+            pytest.param(system.sys.scan_counter, TagType.INT, id="scan-counter"),
+        ],
+    )
+    def test_map_to_a_block_slot_is_refused(self, point: Any, bank_type: TagType) -> None:
+        bank = Block("Cb", bank_type, 1, 8)
+        with pytest.raises(ValueError, match="can't live in a block"):
+            point.map_to(bank[3])
+        assert bank[3].name == "Cb3"
+
+    def test_a_tag_with_a_system_name_is_the_same_point(self) -> None:
+        with pytest.raises(ValueError, match="can't live in a block"):
+            Int("rtc.second").map_to(Block("Cb", TagType.INT, 1, 8)[3])
+
+    def test_a_block_range_cannot_carry_one(self) -> None:
+        """``Block.map_to`` takes a slot's name, so the name is where it stops."""
+        logical = Block("Sn", TagType.INT, 1, 4)
+        with pytest.raises(ValueError, match="can't live in a block"):
+            logical.slot(3, name="rtc.second")
+        assert logical[3].name == "Sn3"
+
+    def test_other_names_still_map_onto_a_bank(self) -> None:
+        bank = Block("Cb", TagType.INT, 1, 8)
+        name = Int("Cp")
+        name.map_to(bank[3])
+        bank.slot(4, name="Cq")
+        assert (bank[3].name, bank[4].name) == ("Cp", "Cq")
