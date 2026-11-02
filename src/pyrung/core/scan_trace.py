@@ -212,6 +212,8 @@ BURST_SIZES: tuple[int, ...] | None = None
 
 # Accumulated over all runs in this process: loop and real scans, traces, reasons.
 TOTALS: Counter[str] = Counter()
+# Told of each self check mismatch, kept or not: a count cannot say which it was.
+SELF_CHECK_OBSERVERS: list[Callable[[str], None]] = []
 
 
 class Decline(Exception):
@@ -1862,6 +1864,8 @@ class ScanLoop:
 
     def _mismatch(self, difference: str, pending: _PendingCheck) -> None:
         message = f"scan loop self check: {difference}"
+        for observer in SELF_CHECK_OBSERVERS:
+            observer(message)
         if STRICT_SELF_CHECK:
             raise SelfCheckMismatch(f"{message}\nloop:\n{pending.trace.source}")
         logger.warning("%s; stepping the rest of this run", message)

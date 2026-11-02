@@ -24,9 +24,14 @@ have proved nothing about the loop.
 
 A run is skipped, and counted, when the twin cannot reproduce it: an active
 ``when()`` registration or a monitor other than a Harness feedback notifier
-(their callbacks act on the folded runner only), replay mode, a time mode other
-than fixed-step, or a run longer
-than ``FOLD_CHECK_MAX_SCANS`` scans (default 200000).
+(their callbacks act on the folded runner only), replay mode, or a time mode other
+than fixed-step.  A compiled run longer than ``FOLD_CHECK_MAX_SCANS`` scans (default
+200000) is compared at its landing with real compiled scans, and its loop scans
+counted apart from those compared scan by scan.
+
+The summary prints every mismatch of the session with its test and the differing
+fields, since tests that provoke one on purpose catch it and a bare count could
+hide a real one among them.
 """
 
 from __future__ import annotations
@@ -58,11 +63,30 @@ MIN_SHARE_OF_SCANS_IN_THE_LOOP = 0.25
 
 STATS: Counter[str] = Counter()
 SKIPS: dict[str, list[str]] = {}
+# Every mismatch of the session, caught by its test or not, as (test id, message).  A
+# test that provokes one on purpose catches it, so the count alone could hide a real one.
+MISMATCHES: list[tuple[str, str]] = []
+SELF_CHECK_MISMATCHES: list[tuple[str, str]] = []
 _depth = 0
 
 
 class FoldMismatch(AssertionError):
     pass
+
+
+def _test_id() -> str:
+    return os.environ.get("PYTEST_CURRENT_TEST", "?").split(" ")[0]
+
+
+def _mismatch(message: str) -> FoldMismatch:
+    """Count and record a mismatch, and return the exception to raise."""
+    STATS["mismatch"] += 1
+    MISMATCHES.append((_test_id(), message))
+    return FoldMismatch(message)
+
+
+def _note_self_check_mismatch(message: str) -> None:
+    SELF_CHECK_MISMATCHES.append((_test_id(), message))
 
 
 def _skip_reason(plc: Any) -> str | None:
@@ -95,6 +119,11 @@ def _twin(plc: Any) -> Any:
     # base moved to another sim time can read 1 us apart later on.
     twin._set_rtc_internal(plc._rtc_base, plc._rtc_base_sim_time)
     twin._running = plc._running
+    # A set_rtc() before the run is logged under the scan to come: it is shared history.
+    changes = plc._scan_log._rtc_base_changes
+    twin._scan_log._rtc_base_changes.update(
+        {scan: change for scan, change in changes.items() if scan > state.scan_id}
+    )
     return twin
 
 
@@ -149,10 +178,7 @@ def _compare(
     keys = sorted(k for k in a.keys() | b.keys() if a.get(k) != b.get(k))
     diff = ", ".join(f"{k}: folded={a.get(k)!r} stepped={b.get(k)!r}" for k in keys[:8])
     more = f" (+{len(keys) - 8} more)" if len(keys) > 8 else ""
-    STATS["mismatch"] += 1
-    raise FoldMismatch(
-        f"fold-check ({kind}): scan {scan} differs from stepping{where}: {diff}{more}"
-    )
+    raise _mismatch(f"fold-check ({kind}): scan {scan} differs from stepping{where}: {diff}{more}")
 
 
 def _in_range(by_scan: dict[int, Any], start: int, end: int) -> dict[int, Any]:
@@ -204,8 +230,7 @@ def compare_runners(
     if a != b:
         keys = sorted(k for k in a.keys() | b.keys() if a.get(k) != b.get(k))
         diff = ", ".join(f"{k}: folded={a.get(k)!r} stepped={b.get(k)!r}" for k in keys)
-        STATS["mismatch"] += 1
-        raise FoldMismatch(f"fold-check ({kind}): the runner differs at scan {end}: {diff}")
+        raise _mismatch(f"fold-check ({kind}): the runner differs at scan {end}: {diff}")
     for scan, state in ours.items():
         _compare(f"{kind}, checkpoint", scan, state, theirs[scan])
 
@@ -231,8 +256,7 @@ def compare_continuation(kind: str, plc: Any, twin: Any, scans: int = CONTINUE_S
     for _ in range(scans):
         raised_ours, raised_theirs = _one_scan(ours), _one_scan(theirs)
         if raised_ours is not raised_theirs:
-            STATS["mismatch"] += 1
-            raise FoldMismatch(
+            raise _mismatch(
                 f"fold-check ({kind}): past the landing, scan {theirs._state.scan_id}: "
                 f"folded raised {raised_ours}, stepped raised {raised_theirs}"
             )
@@ -274,8 +298,7 @@ def compare_history(kind: str, plc: Any, twin: Any, start: int) -> None:
         for _ in range(FORK_SCANS):
             raised, twin_raised = _one_scan(fork), _one_scan(twin_fork)
             if raised is not twin_raised:
-                STATS["mismatch"] += 1
-                raise FoldMismatch(
+                raise _mismatch(
                     f"fold-check ({kind}): on a fork from scan {middle}: "
                     f"folded raised {raised}, stepped raised {twin_raised}"
                 )
@@ -313,7 +336,7 @@ class _PoisonedState:
 def _note_skip(reason: str) -> None:
     """Count a run (or predicate check) that went unchecked, with the test that ran it."""
     STATS[reason] += 1
-    SKIPS.setdefault(reason, []).append(os.environ.get("PYTEST_CURRENT_TEST", "?").split(" ")[0])
+    SKIPS.setdefault(reason, []).append(_test_id())
 
 
 def _shared_types() -> tuple[type, ...]:
@@ -486,22 +509,27 @@ def _predicate_on_twin(predicate: Callable[[Any], bool], plc: Any, twin: Any) ->
 _RAISED: Any = object()
 
 
-def _compare_with_plain_compiled(plc: Any, twin: Any, n: int, start: int) -> None:
+def _compare_with_plain_compiled(
+    plc: Any, twin: Any, n: int, start: int, predicate: Callable[[Any], bool] | None
+) -> None:
     """Too long to step: the landing against real compiled scans, the floor under the loop.
 
-    A guard this deep (a wrap, an hour's edge) is not reached by any shorter run.
+    A guard this deep (a wrap, an hour's edge) is not reached by any shorter run.  The
+    twin is asked *predicate* on every scan, so an overshoot lands it elsewhere.  Scans
+    between are not compared; the summary counts these apart.
     """
     global _depth
     traces = scan_trace.MAX_TRACES_PER_RUN
     scan_trace.MAX_TRACES_PER_RUN = 0
     _depth += 1
     try:
-        compiled_run.run_scans(twin, n)
+        compiled_run.run_scans(twin, n, predicate)
         _compare("compiled", plc._state.scan_id, plc._state, twin._state)
         compare_runners("compiled", plc, twin, start, playhead_followed=False)
     finally:
         _depth -= 1
         scan_trace.MAX_TRACES_PER_RUN = traces
+    _note_skip("compared at the landing only: too long to step")
     STATS["scans compared with plain compiled"] += n
 
 
@@ -512,6 +540,7 @@ def _checked(
     predicate: Callable[[Any], bool] | None = None,
     *,
     fine: bool = True,
+    compiled_predicate: bool = False,
 ) -> Any:
     global _depth
     if _depth:
@@ -552,11 +581,13 @@ def _checked(
         return result
     if n > MAX_SCANS:
         if kind == "compiled" and n <= MAX_PLAIN_COMPILED_SCANS:
-            _compare_with_plain_compiled(plc, twin, n, start)
+            _compare_with_plain_compiled(plc, twin, n, start, ask if compiled_predicate else None)
+            STATS["loop scans, landing only (a run too long to step)"] += loop_scans
         else:
             _note_skip("skipped: longer than FOLD_CHECK_MAX_SCANS")
+            STATS["loop scans, not compared (a run too long to compare)"] += loop_scans
         return result
-    STATS["loop scans in checked runs"] += loop_scans
+    STATS["loop scans compared scan by scan"] += loop_scans
     if n >= LONG_ENOUGH_FOR_THE_LOOP and kind == "compiled":
         STATS["compiled runs long enough for the loop"] += 1
         STATS["compiled runs long enough, in the loop"] += bool(loop_scans)
@@ -584,8 +615,7 @@ def _checked(
             elif hit is not _RAISED:
                 STATS["predicate scans"] += 1
                 if hit:
-                    STATS["mismatch"] += 1
-                    raise FoldMismatch(
+                    raise _mismatch(
                         f"fold-check ({kind}): stop predicate true at scan {sid}, "
                         f"folded run stopped at {end}"
                     )
@@ -593,8 +623,7 @@ def _checked(
             _compare(kind, sid, produced[sid], twin._state, last_equal)
             last_equal = sid
     if twin._state.scan_id != end:
-        STATS["mismatch"] += 1
-        raise FoldMismatch(
+        raise _mismatch(
             f"fold-check ({kind}): folded run ended at scan {end}, stepping at "
             f"{twin._state.scan_id}"
         )
@@ -629,6 +658,8 @@ def install() -> None:
     setattr(scan_trace, "MIN_RUN_SCANS", 1)  # noqa: B010
     setattr(scan_trace, "BURST_SIZES", _LOOP_BURSTS)  # noqa: B010
     setattr(scan_trace, "STRICT_SELF_CHECK", True)  # noqa: B010
+    if _note_self_check_mismatch not in scan_trace.SELF_CHECK_OBSERVERS:
+        scan_trace.SELF_CHECK_OBSERVERS.append(_note_self_check_mismatch)
 
     def run_scans(runner: Any, scans: int, predicate: Any = None, **kwargs: Any) -> Any:
         # A run too long for the twin is not compared, so it need not fire finely.
@@ -640,6 +671,7 @@ def install() -> None:
                 lambda: compiled_scans(runner, scans, predicate, **kwargs),
                 predicate,
                 fine=scans <= MAX_SCANS,
+                compiled_predicate=predicate is not None and kwargs.get("compiled_predicate", True),
             )
         finally:
             scan_trace.BURST_SIZES = _LOOP_BURSTS
@@ -685,7 +717,7 @@ def vacuous() -> str | None:
             f"(at least {MIN_SHARE_OF_RUNS_IN_THE_LOOP:.0%} expected)"
         )
     scans = STATS["checked scans"]
-    loop_scans = STATS["loop scans in checked runs"]
+    loop_scans = STATS["loop scans compared scan by scan"]
     if loop_scans < scans * MIN_SHARE_OF_SCANS_IN_THE_LOOP:
         return (
             f"of {scans} checked scans, only {loop_scans} ran in the scan loop "
@@ -697,8 +729,10 @@ def vacuous() -> str | None:
 def summary() -> list[str]:
     lines = [f"  {key}: {count}" for key, count in sorted(STATS.items())]
     lines.extend(f"  scan loop, {key}: {count}" for key, count in sorted(scan_trace.TOTALS.items()))
+    lines.extend(f"  MISMATCH in {test}: {message}" for test, message in MISMATCHES)
+    lines.extend(f"  SELF CHECK MISMATCH in {test}: {message}" for test, message in SELF_CHECK_MISMATCHES)
     for reason, tests in sorted(SKIPS.items()):
-        if reason.startswith("predicate skipped"):
+        if reason.startswith(("predicate skipped", "compared at the landing", "skipped: longer")):
             lines.append(f"  {reason}, tests:")
             lines.extend(f"    {t}" for t in sorted(set(tests))[:50])
     return lines
