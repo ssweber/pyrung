@@ -206,11 +206,12 @@ class _FoldContext:
 
         These join the unmodeled coordinates, so each of their value changes
         bounds a window.  An input read between two writes hides its value
-        unless *writes* counts at most one write of it in the probe scan: the
-        plateau guard holds what the scan entered with to what that write left,
-        so a read on either side of it sees the boundary's value, and the
-        window's scans run the same writers (a clock that could wake another is
-        hard, see :func:`_tags_behind_writers`).  A forced input with a writer
+        unless *writes* counts at most one write of it in the scans that stand
+        for the window (a plain fold's probe, or a cycle's observed periods):
+        the guard holds what the scan entered with to what that write left, so
+        a read on either side of it sees the boundary's value, and the window's
+        scans run the same writers (a clock that could wake another is hard, see
+        :func:`_tags_behind_writers`).  A forced input with a writer
         hides its value too: the boundary shows the force, while a rung above a
         reader can still write under it.
         """
@@ -2973,7 +2974,7 @@ def _build_fold_context(
                 | frozen_writes
             ),
             target_names=target_names,
-            protected=_harness_referenced_names(plc) | written_inputs.keys() | behind_writers,
+            protected=_harness_referenced_names(plc) | written_inputs.keys(),
             churn=churn_excluded,
         )
         if time_mirrors is not None and journal is not None:

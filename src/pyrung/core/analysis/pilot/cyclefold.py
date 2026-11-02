@@ -269,6 +269,17 @@ def _bounds_hold_through_period(
     return all(snapshot.get(name) == first.get(name) for snapshot in observed for name in names)
 
 
+def _most_writes_per_scan(
+    scans: Sequence[Mapping[str, int] | None], names: Collection[str]
+) -> dict[str, int]:
+    """The most any of *scans* wrote each of *names*; a scan with no count stands for many."""
+    most = dict.fromkeys(names, 0)
+    for counts in scans:
+        for name in names:
+            most[name] = max(most[name], 2 if counts is None else counts.get(name, 2))
+    return most
+
+
 def _monotone_read_surface(
     cyc: _Cycle,
     state: SystemState,
@@ -279,6 +290,7 @@ def _monotone_read_surface(
     observed: Sequence[Mapping[str, Any]] = (),
     forced: Collection[str] = (),
     callbacks: bool = False,
+    writes: Mapping[str, int] | None = None,
 ) -> tuple[int | None, int] | None:
     """Partition the monotone coordinates by their readable future.
 
@@ -288,7 +300,9 @@ def _monotone_read_surface(
     bounds, resolved from *state*, may not be what its readers read: see
     :func:`_bounds_hold_through_period`.  *observed* is the ring of snapshots
     behind the cycle, *forced* the forced tags, and *callbacks* whether a
-    ``when().do()`` is active.
+    ``when().do()`` is active.  *writes* is the most writes per scan the observed
+    scans made of each input a rung may read between writes: a proven period
+    repeats those scans, so they stand for the ones the jump skips.
 
     For each coordinate, its read surface is the preset (Done flip) plus every
     comparison the program or the armed predicate reads on it.  A coordinate
@@ -319,8 +333,9 @@ def _monotone_read_surface(
     live = 0
     if read_sources is None:
         return None
-    # No per-scan write counts here: a period's scans do not repeat one probe.
-    unmodeled = fold_ctx.unmodeled | read_sources | fold_ctx.hidden_input_coordinates(forced)
+    unmodeled = (
+        fold_ctx.unmodeled | read_sources | fold_ctx.hidden_input_coordinates(forced, writes)
+    )
     for tag, d in cyc.monotone.items():
         if tag in unmodeled:
             return None
@@ -552,6 +567,9 @@ def cycle_fold_until(
         return hit
 
     ring: list[Mapping[str, Any]] = []
+    # What each ring scan wrote of the inputs a rung may read between writes.
+    ring_writes: list[Mapping[str, int] | None] = []
+    plc._acc_write_watch = plc._acc_write_watch | fold_ctx.inputs_between_writes.keys()
     ring_cap = max_period * (min_repeats + 2) + 4
     kernel_scans = 0
     macro_folds = 0
@@ -651,6 +669,7 @@ def cycle_fold_until(
                 if advances is not None:
                     advances.extend(advance.patches)
                 ring.clear()
+                ring_writes.clear()
                 since_detect = 0
                 paused = plc._consume_pause_request()
                 if judge(plc.state) or paused:
@@ -675,8 +694,10 @@ def cycle_fold_until(
                 _EDGE_MEMORY_KEY, edge_memory_on(plc.state)
             )
         )
+        ring_writes.append(plc._last_acc_writes)
         if len(ring) > ring_cap:
             del ring[0]
+            del ring_writes[0]
 
         since_detect += 1
         if since_detect < detect_every:
@@ -711,6 +732,10 @@ def cycle_fold_until(
                 observed=ring[-(cyc.period * min_repeats + 1) :],
                 forced=plc._input_overrides.forces_mutable.keys(),
                 callbacks=active_scan_callbacks,
+                writes=_most_writes_per_scan(
+                    ring_writes[-(cyc.period * min_repeats + 1) :],
+                    fold_ctx.inputs_between_writes.keys(),
+                ),
             )
             if cyc.monotone
             else (None, 0)
@@ -871,6 +896,7 @@ def cycle_fold_until(
         macro_folds += 1
         cycle_folds += 1
         cycle_folded_scans += jump_scans
+        ring_writes.clear()
         ring.clear()  # consecutive gap — re-observe before trusting the cycle again
 
     return _finish(bool(predicate(plc.state)))
