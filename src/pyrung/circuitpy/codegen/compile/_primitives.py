@@ -844,7 +844,7 @@ def _compile_range_setup(
 
     binding = ctx.block_bindings[id(range_value.block)]
     symbol = "tags" if ctx.blockless else ctx.symbol_for_block(range_value.block)
-    helper = ctx.use_window_index_block(binding.block_id)
+    helper = ctx.use_window_addrs_block(binding.block_id)
     name = ctx.next_name(stem)
     start_var = f"_{name}_start"
     end_var = f"_{name}_end"
@@ -865,8 +865,8 @@ def _compile_range_setup(
         lines.append(f"{addrs_var} = []")
     else:
         addrs_var = "[]"
-    lines.append(f"for {addr_var} in range({start_var}, {end_var} + 1):")
-    resolved_expr = f"{helper}(int({addr_var}))"
+    lines.append(f"for {addr_var} in {helper}({start_var}, {end_var}):")
+    resolved_expr = f"{addr_var} - {binding.start}"
     if ctx.blockless:
         name_expr = _block_name_expr(binding.block_id, resolved_expr, ctx)
         lines.append(f"    {idx_var} = {name_expr}")
@@ -1066,7 +1066,7 @@ def _compile_target_write_lines(
 
     binding = ctx.block_bindings[id(target.block)]
     symbol = ctx.symbol_for_block(target.block)
-    helper = ctx.use_window_index_block(binding.block_id)
+    helper = ctx.use_window_addrs_block(binding.block_id)
     name = ctx.next_name("irange")
     start_var = f"_{name}_start"
     end_var = f"_{name}_end"
@@ -1081,9 +1081,8 @@ def _compile_target_write_lines(
         f"{sp}if {start_var} > {end_var}:",
         f'{sp}    raise ValueError("Indirect range start must be <= end")',
         f"{sp}{addr_list} = []",
-        f"{sp}for {addr_var} in range({start_var}, {end_var} + 1):",
-        f"{sp}    {idx_var} = {helper}(int({addr_var}))",
-        f"{sp}    {addr_list}.append({idx_var})",
+        f"{sp}for {addr_var} in {helper}({start_var}, {end_var}):",
+        f"{sp}    {addr_list}.append({addr_var} - {binding.start})",
     ]
     if target.reverse_order:
         lines.append(f"{sp}{addr_list}.reverse()")

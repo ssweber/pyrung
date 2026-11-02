@@ -428,8 +428,9 @@ def _render_index_helpers(
     ``_read_index_*`` (an instruction's source): as above, but -1 past the block,
     which ``_cond_elem`` reads as the type's zero.
 
-    ``_window_index_*`` (an address of a dynamic window): the flag and a raise
-    anywhere outside the block, past it too.
+    ``_window_addrs_*`` (the bounds of a dynamic window): the flag and a raise when
+    a bound is outside the block, past it too; otherwise the window's addresses,
+    without the gaps of a sparse block.
 
     ``_cond_index_*`` (a rung condition): -1 anywhere outside the block, no flag.
     """
@@ -459,14 +460,21 @@ def _render_index_helpers(
         lines.append("        return -1")
         lines.append(f"    return {helper_name}(addr)")
         lines.append("")
-    if binding.block_id in ctx.used_window_index_blocks:
-        lines.append(f"def {ctx.window_index_helper_name(binding.block_id)}(addr):")
+    if binding.block_id in ctx.used_window_addrs_blocks:
+        lines.append(f"def {ctx.window_addrs_helper_name(binding.block_id)}(lo, hi):")
         if fault_global is not None:
             lines.append(f"    global {fault_global}")
-        lines.append(f"    if addr > {binding.end}:")
+        lines.append(f"    if lo < {binding.start} or hi > {binding.end}:")
         lines.extend(fault_line)
-        lines.append(f"        raise IndexError({message})")
-        lines.append(f"    return {helper_name}(addr)")
+        lines.append(
+            f'        raise IndexError(f"Window {{lo}}..{{hi}} out of range for '
+            f'{binding.logical_name} ({binding.start}-{binding.end})")'
+        )
+        if binding.valid_addresses is None:
+            lines.append("    return range(lo, hi + 1)")
+        else:
+            lines.append(f"    valid = {binding.valid_addresses!r}")
+            lines.append("    return [addr for addr in range(lo, hi + 1) if addr in valid]")
         lines.append("")
     if binding.block_id in ctx.used_condition_index_blocks:
         lines.append(f"def {ctx.condition_index_helper_name(binding.block_id)}(addr):")

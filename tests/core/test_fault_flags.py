@@ -48,6 +48,7 @@ from pyrung.core import (
     pack_words,
     reset,
     search,
+    shift,
     system,
     to_ascii,
     to_text,
@@ -706,6 +707,206 @@ def test_a_window_past_its_block_replays_as_it_ran() -> None:
     plc = PLC(prog, dt=0.010)
     plc.step()
     plc.patch({ptr.name: 20})
+    plc.step()
+    live = plc.current_state
+    assert live.tags[hit.name] is True
+    assert plc.replay_to(live.scan_id).state.tags[hit.name] is True
+
+
+# ---- A dynamic window across a sparse block's gap ------------------------------------
+
+_SpU = Block("SpU", TagType.INT, 1, 20, valid_ranges=((1, 5), (11, 20)))
+_SpV = Block("SpV", TagType.INT, 1, 3)
+_SpBits = Block("SpBits", TagType.BOOL, 1, 32, valid_ranges=((1, 4), (9, 32)))
+_SpChars = Block("SpChars", TagType.CHAR, 1, 20, valid_ranges=((1, 5), (11, 20)))
+_SpZero = Int("SpZero", default=0)
+_SpFour = Int("SpFour", default=4)
+_SpFive = Int("SpFive", default=5)
+_SpSeven = Int("SpSeven", default=7)
+_SpEight = Int("SpEight", default=8)
+_SpNine = Int("SpNine", default=9)
+_SpEleven = Int("SpEleven", default=11)
+_SpTwelve = Int("SpTwelve", default=12)
+_SpThirty = Int("SpThirty", default=30)
+_SpWord = Word("SpWord", default=0)
+_SpPacked = Dint("SpPacked", default=0)
+_SpNumber = Int("SpNumber", default=0)
+_SpResult = Int("SpResult", default=55)
+_SpFound = Bool("SpFound")
+_SpCursor = Int("SpCursor", default=0)
+
+
+def _sparse_stage() -> None:
+    copy(1, _SpU[5])
+    copy(2, _SpU[11])
+    copy(3, _SpU[12])
+    copy(0, _SpV[1])
+    copy(0, _SpV[2])
+    copy(0, _SpV[3])
+    reset(_SpBits[4])
+    latch(_SpBits[9])
+    copy("1", _SpChars[5])
+    copy("2", _SpChars[11])
+
+
+#: Each op on a window with a gap in it, the tags that show it ran, and their values.
+_SPARSE_WINDOWS: dict[str, tuple[Callable[[], object], tuple[Any, ...], tuple[Any, ...]]] = {
+    "fill_across": (
+        lambda: fill(9, _SpU.select(_SpFive, _SpTwelve)),
+        (_SpU[5], _SpU[11], _SpU[12]),
+        (9, 9, 9),
+    ),
+    "fill_reversed": (
+        lambda: fill(9, _SpU.select(_SpFive, _SpTwelve).reverse()),
+        (_SpU[5], _SpU[11], _SpU[12]),
+        (9, 9, 9),
+    ),
+    "fill_bound_in_the_gap": (
+        lambda: fill(9, _SpU.select(_SpSeven, _SpTwelve)),
+        (_SpU[5], _SpU[11], _SpU[12]),
+        (1, 9, 9),
+    ),
+    "fill_all_in_the_gap": (
+        lambda: fill(9, _SpU.select(_SpSeven, _SpEight)),
+        (_SpU[5], _SpU[11], _SpU[12]),
+        (1, 2, 3),
+    ),
+    "search_across": (
+        lambda: search(_SpU.select(_SpFive, _SpTwelve) == 2, result=_SpResult, found=_SpFound),
+        (_SpResult, _SpFound),
+        (11, True),
+    ),
+    "search_continuous": (
+        lambda: search(
+            _SpU.select(_SpFive, _SpTwelve) == 2,
+            result=_SpCursor,
+            found=_SpFound,
+            continuous=True,
+        ),
+        (_SpCursor, _SpFound),
+        (11, True),
+    ),
+    "search_text": (
+        lambda: search(
+            _SpChars.select(_SpFive, _SpEleven) == "12", result=_SpResult, found=_SpFound
+        ),
+        (_SpResult, _SpFound),
+        (5, True),
+    ),
+    "search_all_in_the_gap": (
+        lambda: search(_SpU.select(_SpSeven, _SpEight) == 0, result=_SpResult, found=_SpFound),
+        (_SpResult, _SpFound),
+        (-1, False),
+    ),
+    "blockcopy_source": (
+        lambda: blockcopy(_SpU.select(_SpFive, _SpTwelve), _SpV.select(1, 3)),
+        (_SpV[1], _SpV[2], _SpV[3]),
+        (1, 2, 3),
+    ),
+    "blockcopy_source_reversed": (
+        lambda: blockcopy(_SpU.select(_SpFive, _SpTwelve).reverse(), _SpV.select(1, 3)),
+        (_SpV[1], _SpV[2], _SpV[3]),
+        (3, 2, 1),
+    ),
+    "blockcopy_dest": (
+        lambda: (
+            copy(7, _SpV[1]),
+            copy(8, _SpV[2]),
+            copy(9, _SpV[3]),
+            blockcopy(_SpV.select(1, 3), _SpU.select(_SpFive, _SpTwelve)),
+        ),
+        (_SpU[5], _SpU[11], _SpU[12]),
+        (7, 8, 9),
+    ),
+    "pack_words": (
+        lambda: pack_words(_SpU.select(_SpFive, _SpEleven), _SpPacked),
+        (_SpPacked,),
+        (0x0002_0001,),
+    ),
+    "unpack_to_words": (
+        lambda: (
+            copy(0x0004_0003, _SpPacked),
+            unpack_to_words(_SpPacked, _SpU.select(_SpFive, _SpEleven)),
+        ),
+        (_SpU[5], _SpU[11], _SpU[12]),
+        (3, 4, 3),
+    ),
+    "pack_bits": (
+        lambda: pack_bits(_SpBits.select(_SpFour, _SpNine), _SpWord),
+        (_SpWord,),
+        (0b10,),
+    ),
+    "unpack_to_bits": (
+        lambda: (
+            copy(0b01, _SpWord),
+            unpack_to_bits(_SpWord, _SpBits.select(_SpFour, _SpNine)),
+        ),
+        (_SpBits[4], _SpBits[9]),
+        (True, False),
+    ),
+    "pack_text": (
+        lambda: pack_text(_SpChars.select(_SpFive, _SpEleven), _SpNumber),
+        (_SpNumber,),
+        (12,),
+    ),
+}
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize("op_name", list(_SPARSE_WINDOWS))
+def test_a_dynamic_window_skips_a_gap(engine, op_name, monkeypatch) -> None:
+    """As a static ``select()`` does: only a window's outer bounds are checked."""
+    op, watch, values = _SPARSE_WINDOWS[op_name]
+    with Program(strict=False) as prog:
+        with Rung():
+            _sparse_stage()
+        with Rung():
+            op()
+    assert _run(prog, engine, (SC44, SC43, *watch), monkeypatch) == (False, False, *values)
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize(
+    "bounds",
+    [
+        pytest.param((_SpFive, _SpThirty), id="end_past_with_a_gap_inside"),
+        pytest.param((_SpZero, _SpSeven), id="start_below_end_in_the_gap"),
+    ],
+)
+def test_a_sparse_window_with_a_bound_out_of_its_block(engine, bounds, monkeypatch) -> None:
+    with Program(strict=False) as prog:
+        with Rung():
+            _sparse_stage()
+            fill(9, _SpU.select(*bounds))
+    assert _run(prog, engine, (SC44, _SpU[5]), monkeypatch) == (True, 1)
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_a_shift_over_a_window_skips_a_gap(engine, monkeypatch) -> None:
+    clock = Bool("SpClock")
+    with Program(strict=False) as prog:
+        with Rung():
+            _sparse_stage()
+        with Rung():
+            shift(_SpBits.select(_SpFour, _SpNine)).clock(clock).reset(Bool("SpShiftReset"))
+        with Rung():
+            latch(clock)
+    watched = _run(prog, engine, (SC44, _SpBits[4], _SpBits[9]), monkeypatch, scans=2)
+    assert watched == (False, True, False)
+
+
+def test_a_window_across_a_gap_replays_as_it_ran() -> None:
+    ptr = Int("SpPtr", default=1)
+    hit = Bool("SpHit")
+    with Program(strict=False) as prog:
+        with Rung():
+            search(_SpU.select(ptr, ptr + 6) == 7, result=_SpResult, found=hit)
+        with Rung():
+            fill(7, _SpU.select(11, 12))
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+    plc.patch({ptr.name: 5})
+    plc.step()
     plc.step()
     live = plc.current_state
     assert live.tags[hit.name] is True

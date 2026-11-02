@@ -3468,6 +3468,18 @@ class TestFlagsFollowInsideAWindow:
             ),
             pytest.param(
                 lambda ptr: fill(
+                    5,
+                    Block("FoldGap", TagType.INT, 1, 20, valid_ranges=((1, 4), (6, 20))).select(
+                        ptr, ptr + 1
+                    ),
+                ),
+                3,
+                1,
+                False,
+                id="a_window_across_a_gap",
+            ),
+            pytest.param(
+                lambda ptr: fill(
                     Block("FoldTbl", TagType.INT, 1, 4)[ptr],
                     Block("FoldDst", TagType.INT, 1, 2).select(1, 2),
                 ),

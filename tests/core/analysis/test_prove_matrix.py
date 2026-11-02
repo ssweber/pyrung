@@ -2232,6 +2232,35 @@ class TestIndexedAccess:
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "Hit")
 
+    def test_a_search_window_across_a_gap_is_explored_as_the_plc_runs_it(self):
+        """P 5 reaches SP11 across the gap: the window skips it, so Hit latches."""
+        sp = Block("SP", TagType.INT, 1, 20, valid_ranges=((1, 5), (11, 20)))
+        ptr = Int("P5", default=1, external=True, choices={1: "in", 5: "across gap"})
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                search(sp.select(ptr, ptr + 6) == 7, result=Int("Res"), found=hit)
+            with Rung():
+                fill(7, sp.select(11, 12))
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_fill_window_across_a_gap_is_explored_as_the_plc_runs_it(self):
+        sp = Block("SP", TagType.INT, 1, 20, valid_ranges=((1, 5), (11, 20)))
+        ptr = Int("P5", default=1, external=True, choices={1: "in", 5: "across gap"})
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                fill(5, sp.select(ptr, ptr + 6))
+            with Rung(sp[11] == 5):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
     @pytest.mark.parametrize(
         "op",
         [
