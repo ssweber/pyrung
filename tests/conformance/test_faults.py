@@ -8,22 +8,20 @@ CLICK project (``suite.PARTS``).
 
 Each probe runs one instruction (its *op*) once and reads one flag on the
 rung right after it.  A flag that is on shows only that some instruction set
-it: on a CLICK SC40 follows the last Math and SC43 and SC44 the last
-instruction (hardware round 2), while pyrung keeps every flag on to the end
-of the scan, and over the wire the cases start on different scans.  So a
-probe runs its op on the first scan from 3 on which the flag it reads is off
+it: SC40 follows the last Math and SC43 and SC44 the last Copy or Math
+(hardware round 2), and over the wire the cases start on different scans.  So
+a probe runs its op on the first scan from 3 on which the flag it reads is off
 just before the op (:func:`_probe`): a bit (``now``) comes on on that scan
 only, and another (``taken``) latches so the op runs once.  An op whose flag
-an earlier op of the same scan left on waits for the next scan.  On a
-CLICK SC43 and SC44 follow the last instruction and SC40 the last Math, so
-they are mostly off already (each op starts with a Copy), but SC46 stays on
+an earlier op of the same scan left on waits for the next scan.  SC40, SC43
+and SC44 are mostly off already (each op starts with a Copy), but SC46 stays on
 to the end of the scan once a Math error raises it: there the gate is what
 makes a probe of SC46 read its own op.  Two flags after one op are two
 probes, each running the op again: on a CLICK the Math that records the
 first would clear the second.
 Inf and NaN are staged on scan 2 (``_stage_inf``), before any probe.
 Every case has a 40-scan window, more than every probe of the group needs
-when each waits for the one before (pyrung, in-process).
+when each waits for the one before.
 
 The registers are the group's own (``memory.OWNED``): sixteen C bits per
 case from C201, staged DD501..DD600, DF451..DF495 and TXT401..TXT500.  A
@@ -71,17 +69,19 @@ tells apart:
   a CLICK may refuse a DF bound at paste; DF461..DF462 stay unused here and
   ``pointer_past_bank_lands`` has its C bits.
 - ``pointer_past_bank`` (probe): a Copy through a pointer past the DD bank
-  (1001, Result1, preset 99) and below it (-1, Result3), SC43 and SC44 after
-  each as bits 1 and 2 (Result2, ErrorCode).  ``system/address_flag...`` asks
-  it of pointer 0.  Hardware (2026-11-01) reads 1, 0, 99, 2: below the bank is
-  an address error with the destination left alone, as pyrung reads, but 1001
-  writes 1 with no flag.  pyrung (step SYS) reads 99, 2, 99, 2.
-- ``pointer_past_bank_lands`` (probe): what the 1 is.  DD531 = 1234 and DD532 =
-  5678, read through pointers 1531 (Result1) and 1532 (Result2), each over a
-  preset 99, SC43 and SC44 after the first as bits 1 and 2 of Result4, SC44 after
-  the second as Result3.  Hardware (2026-11-01) reads 0, 0, 0, 0: no wrap, and no
-  clamp to DD1000 since 1001 read 1, which leaves memory past the bank.  pyrung
-  (step SYS) reads 99, 99, 1, 2.
+  (1001 and 1533, each over a preset 99) and below it (-1, Result3), SC43 and
+  SC44 after each as bits of Result2 (1 and 2 for 1001, 4 and 8 for 1533) and
+  ErrorCode (1 and 2 for -1).  ``system/address_flag...`` asks it of pointer 0.
+  Below the bank is an address error with the destination left alone.  Past it
+  there is no flag, and Result1 = 1 records only that each read wrote something
+  other than the preset, DD1000's 1000000 (a clamp) and, for 1533, DD533's
+  2000000 (a wrap).  What it wrote is not asked: there is memory past the bank
+  on a CLICK (hardware, 2026-11-01: 1 at DD1001, 0 at DD1531 and DD1532) and
+  none in pyrung, which reads 0.
+- ``pointer_past_bank_lands`` (probe): DD531 = 1234 and DD532 = 5678, read
+  through pointers 1531 (Result1) and 1532 (Result2), each over a preset 99,
+  SC43 and SC44 after the first as bits 1 and 2 of Result4, SC44 after the second
+  as Result3.  Hardware (2026-11-01) reads 0, 0, 0, 0: no wrap.
 - ``power_overflow_is_inf`` (probe): 10.0 ^ 100 and -10.0 ^ 101 into a Real
   preset 1.0, past a float32.  Adopted, as ``numeric/real_overflow...``
   read for a product: +Inf (half of it still past 3.0E+38, Result1 = 1) and
@@ -336,9 +336,12 @@ def prove_pointer_past_bank_lands(slot):
 def prove_pointer_past_bank(slot):
     probe = _Probes(4)
     count_scans(slot, WINDOW)
-    for pointer, dest, flags in (
-        (1001, slot.Result1, slot.Result2),
-        (-1, slot.Result3, slot.ErrorCode),
+    # What a clamp to the bank's end and a wrap into the bank would read.
+    _stage(slot, lambda: copy(1000000, dd[1000]), lambda: copy(2000000, dd[533]))
+    for pointer, dest, flags, first_bit in (
+        (1001, dd[534], slot.Result2, 1),
+        (1533, dd[535], slot.Result2, 4),
+        (-1, slot.Result3, slot.ErrorCode, 1),
     ):
 
         def op(pointer=pointer, dest=dest):
@@ -346,8 +349,17 @@ def prove_pointer_past_bank(slot):
             copy(99, dest)
             copy(dd[slot.Result4], dest)
 
-        for k, flag in enumerate((SC43, SC44)):
-            probe(slot, op, flag, flags, 1 << k)
+        probe(slot, op, SC43, flags, first_bit)
+        probe(slot, op, SC44, flags, first_bit * 2)
+    with Rung(
+        *_end(slot),
+        dd[534] != 99,
+        dd[534] != dd[1000],
+        dd[535] != 99,
+        dd[535] != dd[1000],
+        dd[535] != dd[533],
+    ):
+        copy(1, slot.Result1)
     done(slot, WINDOW)
 
 
@@ -551,14 +563,14 @@ group = Group(
         case(
             "A Copy through a pointer below the DD bank is an address error that leaves its "
             "destination alone: pointer -1 leaves 99 (Result3) and raises SC44, not SC43 "
-            "(ErrorCode = 2); pointer 1001 past it writes 1 (Result1) with no flag "
-            "(Result2 = 0)",
+            "(ErrorCode = 2); pointers 1001 and 1533 past it raise no flag (Result2 = 0) and "
+            "write over the destination, with neither a clamp to DD1000 nor a wrap to DD533 "
+            "(Result1 = 1)",
             ladder=prove_pointer_past_bank,
-            init=_init(4),
+            init=_init(4, dds=[(533, 535), (1000, 1000)]),
             expect={"Result1": 1, "Result2": 0, "Result3": 99, "ErrorCode": 2},
             scans=SCANS,
             probe="a pointer past or below its bank: which flag, is the destination written",
-            pending="SYS",
         ),
         case(
             "A power that overflows a Real stores +/-Inf with SC43: 10.0 ^ 100 is +Inf "
@@ -657,7 +669,6 @@ group = Group(
             expect={"Result1": 0, "Result2": 0, "Result3": 0, "Result4": 0},
             scans=SCANS,
             probe="what a pointer past its bank reads",
-            pending="SYS",
         ),
     ],
 )

@@ -24,7 +24,9 @@ from .conversions import (
 )
 from .resolvers import (
     _fn_name,
+    _set_fault_address_error,
     _set_fault_out_of_range,
+    reads_indexed_element,
     resolve_tag_ctx,
     resolve_tag_or_value_ctx,
 )
@@ -193,10 +195,16 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         OneShotMixin.__init__(self, oneshot)
         self.count = count
         self.idx_tag = idx_tag
+        # Only a For whose count can be Inf or NaN sets SC43, and only one whose
+        # count reads an indexed element can set SC44: the analyses (PDG, prover)
+        # see a flag written where it can be.
+        fault_writes: tuple[str, ...] = ()
         if _count_may_be_non_finite(count):
-            # Only a For whose count can be Inf or NaN sets SC43: the analyses
-            # (PDG, prover) see the flag written where it can be.
-            self._fault_writes = ("fault.out_of_range",)
+            fault_writes = ("fault.out_of_range",)
+        if reads_indexed_element(count):
+            fault_writes = (*fault_writes, "fault.address_error")
+        if fault_writes:
+            self._fault_writes = fault_writes
         self.body: tuple[Instruction | Rung, ...] = tuple(
             body if body is not None else (instructions or ())
         )
@@ -212,7 +220,8 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         """How many times the body runs this scan, reading the count now.
 
         A count that is Inf or NaN (a REAL source) runs no iteration and sets
-        SC43 (``system.fault.out_of_range``), pyrung's choice.
+        SC43 (``system.fault.out_of_range``), pyrung's choice.  One that reads an
+        element below its block runs no iteration and sets SC44.
         """
         try:
             count_value = resolve_tag_or_value_ctx(self.count, ctx)
@@ -220,6 +229,9 @@ class ForLoopInstruction(OneShotMixin, Instruction):
                 return for_loop_iterations(count_value)
         except OverflowError:  # an expression count hit Inf or NaN on the way
             pass
+        except IndexError:
+            _set_fault_address_error(ctx)
+            return 0
         _set_fault_out_of_range(ctx)
         return 0
 

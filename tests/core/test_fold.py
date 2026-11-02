@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from pyrung import (
+    Block,
     Bool,
     Counter,
     Dint,
@@ -15,6 +16,7 @@ from pyrung import (
     Or,
     Program,
     Rung,
+    TagType,
     Timer,
     Word,
     calc,
@@ -25,7 +27,7 @@ from pyrung import (
     out,
     reset,
 )
-from pyrung.core import fall, rise, system
+from pyrung.core import fall, fill, forloop, rise, search, system
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -2830,7 +2832,10 @@ class TestSelfFeedingChurnExact:
         store_first: bool = False,
         dest: Any = None,
     ) -> Callable[[], Program]:
-        """A self-calc viewed by one store, a reader of it, and a slow timer."""
+        """A self-calc viewed by one store, a reader of it, and a slow timer.
+
+        The reader sits right after the store: the self-calc settles the flags.
+        """
 
         def build() -> Program:
             Wide = Dint("Wide")
@@ -2840,12 +2845,13 @@ class TestSelfFeedingChurnExact:
                 if store_first:
                     with Rung():
                         store(Wide, View)
+                    reader(View)
                 with Rung():
                     calc(Wide + step, Wide)
                 if not store_first:
                     with Rung():
                         store(Wide, View)
-                reader(View)
+                    reader(View)
                 with Rung():
                     on_delay(Tmr, 5_000)
                 with Rung(Tmr.Done):
@@ -3289,6 +3295,444 @@ class TestSoftClockEdgesAsRead:
             plc.step()
         for target in (10, 51, 157, 299):
             assert plc._replay_seek(target).state.tags["S"] == plc.replay_to(target).state.tags["S"]
+
+
+class TestFlagsFollowInsideAWindow:
+    """SC40 follows the last Math, SC43 and SC44 the last Copy or Math, so a flag
+    can be up between two rungs and down at the end of the scan.  A window holds
+    each of those readings exactly, or does not fold across a change."""
+
+    SC40 = system.fault.division_error
+    SC43 = system.fault.out_of_range
+    SC44 = system.fault.address_error
+
+    @staticmethod
+    def _flag_readers_around(
+        raises: Callable[[], None],
+        settles: Callable[[], None],
+        flag: Any,
+        *,
+        preset: int = 5_000,
+    ) -> Callable[[], Program]:
+        def build() -> Program:
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    raises()
+                with Rung(flag):
+                    out(Bool("Between"))
+                with Rung():
+                    settles()
+                with Rung(flag):
+                    out(Bool("After"))
+                with Rung():
+                    on_delay(Tmr, preset)
+                with Rung(Tmr.Done):
+                    out(Bool("End"))
+            return prog
+
+        return build
+
+    @staticmethod
+    def _bad_pointer() -> None:
+        copy(1, Block("FoldTbl", TagType.INT, 1, 4)[Int("Below", default=0)])
+
+    @staticmethod
+    def _window_past() -> None:
+        ptr = Int("Past", default=20)
+        fill(5, Block("FoldTbl", TagType.INT, 1, 4).select(ptr, ptr))
+
+    @staticmethod
+    def _fill_value_below() -> None:
+        tbl = Block("FoldTbl", TagType.INT, 1, 4)
+        fill(tbl[Int("Below", default=0)], Block("FoldDst", TagType.INT, 1, 2).select(1, 2))
+
+    @staticmethod
+    def _for_count_below() -> None:
+        with forloop(Block("FoldTbl", TagType.INT, 1, 4)[Int("Below", default=0)]):
+            out(Bool("InLoop"))
+
+    @staticmethod
+    def _search_value_below() -> None:
+        tbl = Block("FoldTbl", TagType.INT, 1, 4)
+        search(
+            Block("FoldDst", TagType.INT, 1, 2).select(1, 2) == tbl[Int("Below", default=0)],
+            result=Int("FoldResult"),
+            found=Bool("FoldFound"),
+        )
+
+    @staticmethod
+    def _until_end(plc: PLC, fold: bool) -> None:
+        plc.run_until(Bool("End"), max_cycles=10_000, fold=fold)
+
+    @pytest.mark.parametrize(
+        "raises, settles, flag, after",
+        [
+            pytest.param(
+                lambda: copy(Dint("Big", default=99_999), Int("Small")),
+                lambda: copy(1, Int("Plain")),
+                SC43,
+                False,
+                id="sc43_cleared_by_a_copy",
+            ),
+            pytest.param(
+                lambda: copy(Dint("Big", default=99_999), Int("Small")),
+                lambda: calc(Int("One", default=1) + 1, Int("Plain")),
+                SC43,
+                False,
+                id="sc43_cleared_by_a_calc",
+            ),
+            pytest.param(
+                lambda: copy(Dint("Big", default=99_999), Int("Small")),
+                lambda: out(Bool("Plain")),
+                SC43,
+                True,
+                id="sc43_left_by_an_out",
+            ),
+            pytest.param(
+                _bad_pointer.__func__,
+                lambda: copy(1, Int("Plain")),
+                SC44,
+                False,
+                id="sc44_cleared_by_a_copy",
+            ),
+            pytest.param(
+                _bad_pointer.__func__,
+                lambda: out(Bool("Plain")),
+                SC44,
+                True,
+                id="sc44_left_by_an_out",
+            ),
+            *(
+                pytest.param(
+                    raises, settles, system.fault.address_error, after, id=f"sc44_{name}_{how}"
+                )
+                for name, raises in (
+                    ("window_past", _window_past.__func__),
+                    ("fill_value_below", _fill_value_below.__func__),
+                    ("for_count_below", _for_count_below.__func__),
+                    ("search_value_below", _search_value_below.__func__),
+                )
+                for how, settles, after in (
+                    ("cleared_by_a_copy", lambda: copy(1, Int("Plain")), False),
+                    ("left_by_an_out", lambda: out(Bool("Plain")), True),
+                )
+            ),
+            pytest.param(
+                lambda: calc(Int("One", default=1) / Int("Zero"), Int("Quotient")),
+                lambda: calc(Int("One", default=1) + 1, Int("Plain")),
+                SC40,
+                False,
+                id="sc40_cleared_by_a_calc",
+            ),
+            pytest.param(
+                lambda: calc(Int("One", default=1) / Int("Zero"), Int("Quotient")),
+                lambda: copy(1, Int("Plain")),
+                SC40,
+                True,
+                id="sc40_left_by_a_copy",
+            ),
+        ],
+    )
+    def test_a_flag_that_holds_still_folds(
+        self, raises: Any, settles: Any, flag: Any, after: bool
+    ) -> None:
+        build = self._flag_readers_around(raises, settles, flag)
+        plc = _assert_fold_is_exact(build, self._until_end)
+        assert plc.state.tags["Between"] is True
+        assert plc.state.tags["After"] is after
+        assert plc.state.tags[flag.name] is after
+
+        counted = PLC(build(), dt=0.010)
+        counted.step()
+        kernel = _count_kernel_scans(counted)
+        self._until_end(counted, True)
+        assert kernel["n"] < 20
+
+    @pytest.mark.parametrize(
+        "faulting, start, step, rises",
+        [
+            pytest.param(
+                lambda ptr: fill(5, Block("FoldTbl", TagType.INT, 1, 4).select(ptr, ptr)),
+                3,
+                1,
+                True,
+                id="a_window_past_the_block",
+            ),
+            pytest.param(
+                lambda ptr: copy(1, Block("FoldTbl", TagType.INT, 1, 4)[ptr]),
+                3,
+                1,
+                False,
+                id="a_pointer_past_the_block",
+            ),
+            pytest.param(
+                lambda ptr: fill(
+                    5,
+                    Block("FoldGap", TagType.INT, 1, 20, valid_ranges=((1, 4), (6, 20))).select(
+                        ptr, ptr + 1
+                    ),
+                ),
+                3,
+                1,
+                False,
+                id="a_window_across_a_gap",
+            ),
+            pytest.param(
+                lambda ptr: fill(
+                    Block("FoldTbl", TagType.INT, 1, 4)[ptr],
+                    Block("FoldDst", TagType.INT, 1, 2).select(1, 2),
+                ),
+                3,
+                -1,
+                True,
+                id="a_fill_value_below_the_block",
+            ),
+            pytest.param(
+                lambda ptr: search(
+                    Block("FoldDst", TagType.INT, 1, 2).select(1, 2)
+                    == Block("FoldTbl", TagType.INT, 1, 4)[ptr],
+                    result=Int("FoldResult"),
+                    found=Bool("FoldFound"),
+                ),
+                3,
+                -1,
+                True,
+                id="a_search_value_below_the_block",
+            ),
+        ],
+    )
+    def test_an_address_a_timer_walks_out_of_its_block(
+        self, faulting: Any, start: int, step: int, rises: bool
+    ) -> None:
+        """The flag turns over mid-run: the landing and a reader see it on the same scan."""
+
+        def build() -> Program:
+            Tmr = Timer.clone("Tmr")
+            ptr = Int("Walk")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Tmr, 3_000)
+                with Rung():
+                    calc(start + step * (Tmr.Acc // 1_000), ptr)
+                with Rung():
+                    faulting(ptr)
+                with Rung(self.SC44):
+                    latch(Bool("Saw"))
+                with Rung(Tmr.Done):
+                    out(Bool("End"))
+            return prog
+
+        plc = _assert_fold_is_exact(build, self._until_end)
+        assert plc.state.tags.get("Saw", False) is rises
+
+    @pytest.mark.parametrize("store_first", [False, True], ids=["store_below", "store_above"])
+    def test_a_moving_store_raises_between_and_a_copy_clears_after(self, store_first: bool) -> None:
+        def reader(_view: Any) -> None:
+            with Rung(self.SC43):
+                out(Bool("Hit"))
+            with Rung():
+                copy(1, Int("Plain"))
+            with Rung(self.SC43):
+                out(Bool("After"))
+
+        plc = _assert_fold_is_exact(
+            TestSelfFeedingChurnExact._view_of_a_moving_tag(
+                lambda a, b: copy(a, b), reader, store_first=store_first
+            ),
+            _until_hit(10_000),
+            patch={"Wide": 32_000},
+        )
+        assert plc.state.tags["Wide"] in (32_770, 32_777)
+        assert plc.state.tags["After"] is False
+
+    @pytest.mark.parametrize("cleared", [False, True], ids=["left_up", "cleared_later"])
+    @pytest.mark.parametrize("store_first", [False, True], ids=["store_below", "store_above"])
+    def test_an_unread_flag_lands_as_stepping_left_it(
+        self, cleared: bool, store_first: bool
+    ) -> None:
+        def later(_view: Any) -> None:
+            if cleared:
+                with Rung():
+                    copy(1, Int("Plain"))
+
+        plc = _assert_fold_is_exact(
+            TestSelfFeedingChurnExact._view_of_a_moving_tag(
+                lambda a, b: copy(a, b), later, store_first=store_first
+            ),
+            self._until_end,
+            patch={"Wide": 32_000},
+        )
+        # A store above the self-calc is settled by it, whatever follows.
+        assert plc.state.tags[self.SC43.name] is (not cleared and not store_first)
+
+    @pytest.mark.parametrize("cleared", [False, True], ids=["left_up", "cleared_later"])
+    @pytest.mark.parametrize(
+        "scans, past", [(2_000, False), (3_000, True)], ids=["inside", "past_it"]
+    )
+    def test_a_timer_view_past_its_range_lands_as_stepping_left_it(
+        self, cleared: bool, scans: int, past: bool
+    ) -> None:
+        """The mirror route: an unread flag the view raises is rebuilt by the landing."""
+
+        def build() -> Program:
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Tmr, 32_000)
+                with Rung():
+                    calc(Tmr.Acc + 10_000, Int("View"))
+                if cleared:
+                    with Rung():
+                        copy(1, Int("Plain"))
+            return prog
+
+        plc = _assert_fold_is_exact(build, _scans(scans), dt=0.010)
+        assert plc.state.tags[self.SC43.name] is (past and not cleared)
+
+    @pytest.mark.parametrize("cleared", [False, True], ids=["left_up", "cleared_later"])
+    def test_a_timer_view_with_a_flag_reader_stops_at_its_range(self, cleared: bool) -> None:
+        """The same view, with the flag read: the window ends where the view leaves its range."""
+
+        def build() -> Program:
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Tmr, 32_000)
+                with Rung():
+                    calc(Tmr.Acc + 10_000, Int("View"))
+                with Rung(self.SC43):
+                    out(Bool("Hit"))
+                if cleared:
+                    with Rung():
+                        copy(1, Int("Plain"))
+                with Rung(self.SC43):
+                    out(Bool("After"))
+            return prog
+
+        plc = _assert_fold_is_exact(build, _until_hit(5_000), dt=0.010)
+        assert plc.state.tags["Hit"] is True
+        assert plc.state.tags["After"] is not cleared
+
+    @pytest.mark.parametrize(
+        "stop",
+        [
+            pytest.param(SC43, id="the_flag"),
+            pytest.param(lambda s: s.tags.get("fault.out_of_range"), id="a_callable"),
+        ],
+    )
+    def test_a_stop_on_a_flag_cleared_later_sees_the_end_of_the_scan(self, stop: Any) -> None:
+        """Up mid-scan, down by the end: a stop on the flag does not fire."""
+        plc = _assert_fold_is_exact(
+            TestSelfFeedingChurnExact._view_of_a_moving_tag(
+                lambda a, b: copy(a, b),
+                lambda _view: copy_rung(Int("Plain")),
+            ),
+            lambda plc, fold: plc.run_until(stop, max_cycles=1_000, fold=fold),
+            patch={"Wide": 32_000},
+        )
+        assert plc.state.tags[self.SC43.name] is False
+
+    @pytest.mark.parametrize("at", [2_000, 3_000])
+    def test_a_writer_that_switches_on_inside_a_window(self, at: int) -> None:
+        """A store that faults turns on at one threshold, a store that clears at another."""
+
+        def build() -> Program:
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Tmr, 5_000)
+                with Rung(Tmr.Acc > 1_000):
+                    copy(Dint("Big", default=99_999), Int("Small"))
+                with Rung(self.SC43):
+                    out(Bool("Between"))
+                with Rung(Tmr.Acc > at):
+                    copy(1, Int("Plain"))
+                with Rung(self.SC43):
+                    calc(Int("Seen") + 1, Int("Seen"))
+                with Rung(Tmr.Done):
+                    out(Bool("End"))
+            return prog
+
+        plc = _assert_fold_is_exact(build, self._until_end)
+        assert plc.state.tags["Seen"] == (at - 1_000) // 10
+
+    @pytest.mark.parametrize("store_first", [False, True], ids=["store_below", "store_above"])
+    def test_a_moving_divisor_raises_for_the_one_scan_it_is_zero(self, store_first: bool) -> None:
+        def build() -> Program:
+            Wide = Dint("Wide")
+            Tmr = Timer.clone("Tmr")
+            with Program(strict=False) as prog:
+                if store_first:
+                    with Rung():
+                        calc(100 / Wide, Int("Quotient"))
+                with Rung():
+                    calc(Wide + 7, Wide)
+                if not store_first:
+                    with Rung():
+                        calc(100 / Wide, Int("Quotient"))
+                with Rung(self.SC40):
+                    calc(Int("Seen") + 1, Int("Seen"))
+                with Rung():
+                    on_delay(Tmr, 5_000)
+                with Rung(Tmr.Done):
+                    out(Bool("End"))
+            return prog
+
+        plc = _assert_fold_is_exact(build, self._until_end, patch={"Wide": -700})
+        # A divide above the self-calc is settled by it before the reader.
+        assert plc.state.tags["Seen"] == (0 if store_first else 1)
+
+    @pytest.mark.parametrize("step, start", [(7, -350), (-7, 350)], ids=["into", "out_of"])
+    def test_a_moving_pointer_crosses_the_low_end_of_its_block(self, step: int, start: int) -> None:
+        def build() -> Program:
+            Wide = Int("Wide")
+            Tmr = Timer.clone("Tmr")
+            table = Block("FoldTbl", TagType.INT, 1, 500, default_factory=lambda _addr: 3)
+            with Program(strict=False) as prog:
+                with Rung():
+                    calc(Wide + step, Wide)
+                with Rung():
+                    copy(table[Wide], Int("Read"))
+                with Rung(self.SC44):
+                    calc(Int("Seen") + 1, Int("Seen"))
+                with Rung():
+                    on_delay(Tmr, 2_000)
+                with Rung(Tmr.Done):
+                    out(Bool("End"))
+            return prog
+
+        plc = _assert_fold_is_exact(build, self._until_end, patch={"Wide": start})
+        assert plc.state.tags["Seen"] > 0
+
+    @pytest.mark.parametrize("read_it", [False, True], ids=["unread", "read"])
+    def test_a_moving_pointer_runs_past_the_high_end_of_its_block(self, read_it: bool) -> None:
+        def build() -> Program:
+            Wide = Int("Wide")
+            Tmr = Timer.clone("Tmr")
+            table = Block("FoldTbl", TagType.INT, 1, 500, default_factory=lambda _addr: 3)
+            with Program(strict=False) as prog:
+                with Rung():
+                    calc(Wide + 7, Wide)
+                with Rung():
+                    copy(table[Wide], Int("Read"))
+                if read_it:
+                    with Rung(Int("Read") == 0):
+                        calc(Int("Seen") + 1, Int("Seen"))
+                with Rung():
+                    on_delay(Tmr, 2_000)
+                with Rung(Tmr.Done):
+                    out(Bool("End"))
+            return prog
+
+        plc = _assert_fold_is_exact(build, self._until_end, patch={"Wide": 100})
+        assert plc.state.tags["Read"] == 0
+        assert plc.state.tags[self.SC44.name] is False
+
+
+def copy_rung(dest: Any) -> None:
+    with Rung():
+        copy(1, dest)
 
 
 class TestUnseenStopsStayExact:

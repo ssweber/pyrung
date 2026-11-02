@@ -31,10 +31,13 @@ from pyrung.core import (
     count_down,
     count_up,
     fill,
+    forloop,
     latch,
     on_delay,
     out,
     rise,
+    search,
+    system,
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -2138,6 +2141,171 @@ class TestIndexedAccess:
         """DS[Ptr * 2] with Ptr in 1..2 reads DS2 and DS4, outside Ptr's range."""
         ptr = Int("Ptr", min=1, max=2)
         logic, hit = _indexed_program(lambda ds: ds[ptr * 2])
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_read_past_the_block_reaches_zero(self):
+        """Ptr 9 past DS1..4 reads 0: the dest's domain holds it, whatever the elements hold."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.prove.classify import (
+            _collect_all_exprs,
+            _collect_structural_domains,
+        )
+
+        ptr = Int("Ptr", external=True, choices={1: "inside", 9: "past"})
+        ds = Block("DS", TagType.INT, 1, 4, default_factory=lambda _addr: 5)
+        n, hit = Int("N", default=5), Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 0):
+                latch(hit)
+
+        graph = build_program_graph(logic)
+        domains = _collect_structural_domains(logic, graph, _collect_all_exprs(logic, graph))
+        assert 0 in domains["N"]
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_read_past_the_block_can_feed_another_pointer(self):
+        """The 0 a past read returns addresses T0, a slot only that read can reach."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.value_sets import _ValueSets
+        from pyrung.core.validation._common import walk_instructions
+
+        start, hit = Bool("Start", external=True), Bool("Hit")
+        ptr = Int("Ptr", external=True, choices={1: "inside", 9: "past"})
+        ds = Block("DS", TagType.INT, 1, 4, default_factory=lambda _addr: 2)
+        table = Block("T", TagType.INT, 0, 3)
+        n, m = Int("N", default=2), Int("M")
+        with Program(strict=False) as logic:
+            with Rung(start):
+                copy(7, table[0])
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung():
+                copy(table[n], m)
+            with Rung(m == 7):
+                latch(hit)
+
+        graph = build_program_graph(logic)
+        values = _ValueSets(
+            list(walk_instructions(logic)),
+            graph.tags,
+            frozenset({ptr.name}),
+            None,
+            follow_indirect_reads=True,
+            declared_inputs=True,
+        )
+        assert 0 in (values.values(n.name) or ())
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_read_below_the_block_keeps_the_dest(self):
+        """Ptr 0 below DS1..4 faults and stores nothing: N never reads 0."""
+        ptr = Int("Ptr", external=True, choices={1: "inside", 0: "below"})
+        ds = Block("DS", TagType.INT, 1, 4, default_factory=lambda _addr: 5)
+        n, hit = Int("N", default=5), Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 0):
+                latch(hit)
+
+        assert isinstance(always(logic, ~hit), Proven)
+
+    def test_a_window_past_the_block_is_an_address_error(self):
+        """Ptr 20 puts U.select(Ptr, Ptr + 1) past U1..10: SC44, so Hit latches."""
+        ptr = Int("Ptr", default=1, external=True, choices={1: "inside", 20: "past"})
+        u = Block("U", TagType.INT, 1, 10)
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                fill(5, u.select(ptr, ptr + 1))
+            with Rung(system.fault.address_error):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_search_window_across_a_gap_is_explored_as_the_plc_runs_it(self):
+        """P 5 reaches SP11 across the gap: the window skips it, so Hit latches."""
+        sp = Block("SP", TagType.INT, 1, 20, valid_ranges=((1, 5), (11, 20)))
+        ptr = Int("P5", default=1, external=True, choices={1: "in", 5: "across gap"})
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                search(sp.select(ptr, ptr + 6) == 7, result=Int("Res"), found=hit)
+            with Rung():
+                fill(7, sp.select(11, 12))
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_fill_window_across_a_gap_is_explored_as_the_plc_runs_it(self):
+        sp = Block("SP", TagType.INT, 1, 20, valid_ranges=((1, 5), (11, 20)))
+        ptr = Int("P5", default=1, external=True, choices={1: "in", 5: "across gap"})
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                fill(5, sp.select(ptr, ptr + 6))
+            with Rung(sp[11] == 5):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    @pytest.mark.parametrize(
+        "op",
+        [
+            pytest.param(lambda tbl, u, ptr: fill(tbl[ptr], u.select(1, 2)), id="fill_value"),
+            pytest.param(
+                lambda tbl, u, ptr: search(
+                    u.select(1, 2) == tbl[ptr], result=Int("Result"), found=Bool("Found")
+                ),
+                id="search_value",
+            ),
+            pytest.param(
+                lambda tbl, u, ptr: search(
+                    u.select(ptr, 2) == 0, result=Int("Result"), found=Bool("Found")
+                ),
+                id="search_window",
+            ),
+        ],
+    )
+    def test_a_read_below_the_block_is_seen_as_an_address_error(self, op):
+        """Each confirms on the interpreter, which sets the flag rather than raising."""
+        ptr = Int("Ptr", default=1, external=True, choices={1: "inside", 0: "below"})
+        tbl = Block("Tbl", TagType.INT, 1, 4)
+        u = Block("U", TagType.INT, 1, 4)
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                op(tbl, u, ptr)
+            with Rung(system.fault.address_error):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_for_count_below_the_block_is_seen_as_an_address_error(self):
+        ptr = Int("Ptr", default=1, external=True, choices={1: "inside", 0: "below"})
+        tbl = Block("Tbl", TagType.INT, 1, 4)
+        hit, coil = Bool("Hit"), Bool("Coil")
+        with Program(strict=False) as logic:
+            with Rung():
+                with forloop(tbl[ptr]):
+                    out(coil)
+            with Rung(system.fault.address_error):
+                latch(hit)
+
         result = always(logic, ~hit)
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "Hit")

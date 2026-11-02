@@ -55,6 +55,11 @@ def _snapshot_tag_symbol(
     if isinstance(tag, ImmediateRef):
         tag = tag.tag
 
+    entry_symbol = ctx.fault_entry_symbols.get(tag.name)
+    if entry_symbol is not None:
+        ctx.fault_entry_reads.add(tag.name)
+        return entry_symbol
+
     block_info = ctx.tag_block_addresses.get(tag.name)
     if block_info is not None and block_snapshots is not None:
         block_id, addr = block_info
@@ -664,6 +669,31 @@ def _copy_converter_write_lines(
     ]
 
 
+def fault_follow_scope(instr: Any, ctx: CodegenContext) -> None:
+    """Open the scope of *instr*'s followed flags, before its body compiles."""
+    ctx.fault_entry_reads = set()
+    ctx.fault_entry_symbols = {
+        name: f"_fault_in_{name.rpartition('.')[2]}" for name in instr._fault_follows
+    }
+
+
+def _fault_follow_lines(instr: Any, ctx: CodegenContext) -> list[str]:
+    """Clear *instr*'s followed flags as it starts: a raise in its body sets them.
+
+    The flag's entry value goes in a local first when the body's source reads it.
+    """
+    entry_symbols = ctx.fault_entry_symbols
+    reads = ctx.fault_entry_reads
+    ctx.fault_entry_symbols = {}
+    ctx.fault_entry_reads = set()
+    lines: list[str] = []
+    for name in instr._fault_follows:
+        if name in reads:
+            lines.append(f"{entry_symbols[name]} = {ctx.symbol_if_referenced(name)}")
+    lines.extend(f"{ctx.symbol_if_referenced(name)} = False" for name in instr._fault_follows)
+    return lines
+
+
 def _compile_guarded_instruction(
     instr: Any,
     enabled_expr: str,
@@ -675,6 +705,7 @@ def _compile_guarded_instruction(
 ) -> list[str]:
     sp = " " * indent
     lines: list[str] = []
+    enabled_body = [*_fault_follow_lines(instr, ctx), *enabled_body]
     if ctx.used_indirect_blocks:
         enabled_body = [
             "try:",
@@ -813,7 +844,7 @@ def _compile_range_setup(
 
     binding = ctx.block_bindings[id(range_value.block)]
     symbol = "tags" if ctx.blockless else ctx.symbol_for_block(range_value.block)
-    helper = ctx.use_indirect_block(binding.block_id)
+    helper = ctx.use_window_addrs_block(binding.block_id)
     name = ctx.next_name(stem)
     start_var = f"_{name}_start"
     end_var = f"_{name}_end"
@@ -829,13 +860,13 @@ def _compile_range_setup(
         f"if {start_var} > {end_var}:",
         '    raise ValueError("Indirect range start must be <= end")',
         f"{indices_var} = []",
-        f"for {addr_var} in range({start_var}, {end_var} + 1):",
     ]
     if include_addresses:
         lines.append(f"{addrs_var} = []")
     else:
         addrs_var = "[]"
-    resolved_expr = f"{helper}(int({addr_var}))"
+    lines.append(f"for {addr_var} in {helper}({start_var}, {end_var}):")
+    resolved_expr = f"{addr_var} - {binding.start}"
     if ctx.blockless:
         name_expr = _block_name_expr(binding.block_id, resolved_expr, ctx)
         lines.append(f"    {idx_var} = {name_expr}")
@@ -1035,7 +1066,7 @@ def _compile_target_write_lines(
 
     binding = ctx.block_bindings[id(target.block)]
     symbol = ctx.symbol_for_block(target.block)
-    helper = ctx.use_indirect_block(binding.block_id)
+    helper = ctx.use_window_addrs_block(binding.block_id)
     name = ctx.next_name("irange")
     start_var = f"_{name}_start"
     end_var = f"_{name}_end"
@@ -1050,9 +1081,8 @@ def _compile_target_write_lines(
         f"{sp}if {start_var} > {end_var}:",
         f'{sp}    raise ValueError("Indirect range start must be <= end")',
         f"{sp}{addr_list} = []",
-        f"{sp}for {addr_var} in range({start_var}, {end_var} + 1):",
-        f"{sp}    {idx_var} = {helper}(int({addr_var}))",
-        f"{sp}    {addr_list}.append({idx_var})",
+        f"{sp}for {addr_var} in {helper}({start_var}, {end_var}):",
+        f"{sp}    {addr_list}.append({addr_var} - {binding.start})",
     ]
     if target.reverse_order:
         lines.append(f"{sp}{addr_list}.reverse()")
@@ -1099,8 +1129,32 @@ def _compile_condition_element_read(
     block_snapshots: dict[int, str] | None,
 ) -> str:
     """A rung condition's read of ``block[addr]``: outside the block it reads 0, no flag."""
-    block_id = id(block)
     index_expr = f"{ctx.use_condition_index_block(binding.block_id)}(int({addr_expr}))"
+    return _element_read_or_default(block, binding, index_expr, ctx, block_snapshots)
+
+
+def _compile_source_element_read(
+    block: Any,
+    binding: Any,
+    addr_expr: str,
+    ctx: CodegenContext,
+    block_snapshots: dict[int, str] | None,
+) -> str:
+    """An instruction's read of ``block[addr]``: past the block 0, no flag; below it
+    the address-error flag and an IndexError (``_read_index_*``)."""
+    index_expr = f"{ctx.use_read_index_block(binding.block_id)}(int({addr_expr}))"
+    return _element_read_or_default(block, binding, index_expr, ctx, block_snapshots)
+
+
+def _element_read_or_default(
+    block: Any,
+    binding: Any,
+    index_expr: str,
+    ctx: CodegenContext,
+    block_snapshots: dict[int, str] | None,
+) -> str:
+    """Read the element at *index_expr*, or the type's zero if it is -1."""
+    block_id = id(block)
     default = _TYPE_DEFAULTS[binding.tag_type]
     if block_snapshots is not None and block_id in block_snapshots:
         ctx.mark_helper("_cond_elem")
@@ -1121,8 +1175,7 @@ def _compile_indirect_value(
     block_snapshots: dict[int, str] | None = None,
     condition: bool = False,
 ) -> str:
-    block_id = id(indirect_ref.block)
-    binding = ctx.block_bindings.get(block_id)
+    binding = ctx.block_bindings.get(id(indirect_ref.block))
     if binding is None:
         raise RuntimeError(f"Missing block binding for indirect ref {indirect_ref.block.name!r}")
     ptr = _compile_value(
@@ -1135,17 +1188,7 @@ def _compile_indirect_value(
         return _compile_condition_element_read(
             indirect_ref.block, binding, ptr, ctx, block_snapshots
         )
-    helper = ctx.use_indirect_block(binding.block_id)
-    index_expr = f"{helper}(int({ptr}))"
-    if block_snapshots is not None and block_id in block_snapshots:
-        block_symbol = block_snapshots[block_id]
-        return f"{block_symbol}[{index_expr}]"
-    if ctx.blockless:
-        name_expr = _block_name_expr(binding.block_id, index_expr, ctx)
-        default = _TYPE_DEFAULTS[binding.tag_type]
-        return f"tags.get({name_expr}, {default!r})"
-    block_symbol = ctx.symbol_for_block(indirect_ref.block)
-    return f"{block_symbol}[{index_expr}]"
+    return _compile_source_element_read(indirect_ref.block, binding, ptr, ctx, block_snapshots)
 
 
 def _compile_value(
@@ -1178,8 +1221,7 @@ def _compile_value(
             condition=condition,
         )
     if isinstance(value, IndirectExprRef):
-        block_id = id(value.block)
-        binding = ctx.block_bindings.get(block_id)
+        binding = ctx.block_bindings.get(id(value.block))
         if binding is None:
             raise RuntimeError(
                 f"Missing block binding for indirect expression ref {value.block.name!r}"
@@ -1193,17 +1235,7 @@ def _compile_value(
         )
         if condition:
             return _compile_condition_element_read(value.block, binding, expr, ctx, block_snapshots)
-        helper = ctx.use_indirect_block(binding.block_id)
-        index_expr = f"{helper}(int({expr}))"
-        if block_snapshots is not None and block_id in block_snapshots:
-            block_symbol = block_snapshots[block_id]
-            return f"{block_symbol}[{index_expr}]"
-        if ctx.blockless:
-            name_expr = _block_name_expr(binding.block_id, index_expr, ctx)
-            default = _TYPE_DEFAULTS[binding.tag_type]
-            return f"tags.get({name_expr}, {default!r})"
-        block_symbol = ctx.symbol_for_block(value.block)
-        return f"{block_symbol}[{index_expr}]"
+        return _compile_source_element_read(value.block, binding, expr, ctx, block_snapshots)
     if isinstance(value, Expression):
         return _compile_expression_impl(
             value,

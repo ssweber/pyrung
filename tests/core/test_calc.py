@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, CompiledPLC, Dint, Int, Program, Real, Rung, calc
+from pyrung.core import PLC, Bool, CompiledPLC, Dint, Int, Program, Real, Rung, calc, out, system
 
 
 class TestCalcInstruction:
@@ -65,10 +65,14 @@ class TestCalcInstruction:
         ByTag = Int("ByTag")
         IntoDint = Dint("IntoDint")
         Low = Int("Low")
+        Flagged = Bool("Flagged")
 
         with Program() as logic:
             with Rung(Enable):
                 calc(Num / 65536, ByConstant)
+            with Rung(system.fault.division_error):
+                out(Flagged)
+            with Rung(Enable):
                 calc(Num / Den, ByTag)
                 calc(Num / 65536, IntoDint)
                 calc(Den * 0 + 65543, Low)
@@ -78,7 +82,8 @@ class TestCalcInstruction:
         runner.step()
         tags = runner.current_state.tags
         assert tags["ByConstant"] == 0
-        assert tags["fault.division_error"] is True
+        assert tags["Flagged"] is True
+        assert tags["fault.division_error"] is False
         assert tags["ByTag"] == -32768
         assert tags["IntoDint"] == -32768
         assert tags["Low"] == 7

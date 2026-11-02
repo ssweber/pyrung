@@ -972,11 +972,12 @@ class TestInstructionCoverage:
         compiled = compile_kernel(prog, blockless=True)
         block_symbol = next(iter(compiled.indirect_block_info))
         helper_name = f"_resolve_index_{block_symbol.lstrip('_') or block_symbol}"
+        read_helper_name = f"_read_index_{block_symbol.lstrip('_') or block_symbol}"
         names_symbol = f"{block_symbol}_names"
 
         assert compiled.blockless is True
         assert f"{names_symbol} = (" in compiled.source
-        assert f"tags.get({names_symbol}[{helper_name}(int(" in compiled.source
+        assert f"_cond_tag_elem(tags, {names_symbol}, {read_helper_name}(int(" in compiled.source
         assert f"tags[{names_symbol}[{helper_name}(int(" in compiled.source
         assert " = blocks[" not in compiled.source
 
@@ -1598,7 +1599,7 @@ class TestBoardPeripheralsAndRunStop:
         inf = Real("InfR")
         odd = Real("OddR")
         dest = Int("Dest", default=7)
-        after = Int("After")
+        after = Bool("After")
         with Program(strict=False) as prog:
             # Scan 0 builds the operand (setting SC43); scan 1 starts with SC43
             # off, so the flag on scan 1 is the bitwise op's.
@@ -1607,12 +1608,12 @@ class TestBoardPeripheralsAndRunStop:
                 calc(inf - inf if operand == "nan" else inf + 0, odd)
             with Rung(~system.sys.first_scan):
                 calc(make(odd), dest)
-                copy(5, after)
+                out(after)
 
         results = _on_every_backend(
             prog, monkeypatch, (dest, system.fault.out_of_range, after), scans=2
         )
-        assert results == {name: (0, True, 5) for name in results}, label
+        assert results == {name: (0, True, True) for name in results}, label
 
     @staticmethod
     def _non_finite_real(operand: str) -> tuple[Real, list]:
@@ -1738,16 +1739,20 @@ class TestBoardPeripheralsAndRunStop:
         source = Block("SrcB", TagType.DINT, 1, 2)
         dest = Block("DstB", TagType.INT, 1, 2)
         first, second = Int("First"), Int("Second")
+        seen = Bool("Seen")
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 copy(values[0], source[1])
                 copy(values[1], source[2])
             with Rung(~system.sys.first_scan):
                 blockcopy(source.select(1, 2), dest.select(1, 2))
+            with Rung(system.fault.out_of_range):
+                out(seen)
+            with Rung(~system.sys.first_scan):
                 copy(dest[1], first)
                 copy(dest[2], second)
 
-        watch = (first, second, system.fault.out_of_range)
+        watch = (first, second, seen)
         results = _on_every_backend(prog, monkeypatch, watch, scans=2)
         expected = (max(-32768, min(32767, values[0])), values[1], flagged)
         assert results == {name: expected for name in results}
@@ -1857,21 +1862,18 @@ class TestBoardPeripheralsAndRunStop:
         """A code needs an integer: the TXT stays as it was, with SC43, and the rung runs on."""
         r, setup = self._non_finite_real(operand)
         ch = Char("Ch", default="A")
-        code = Int("Code", default=7)
-        after = Int("After")
+        after = Bool("After")
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
                     calc(expr, target)
             with Rung(~system.sys.first_scan):
                 copy(r, ch, convert=to_binary)
-                copy(5, after)
-            with Rung(~system.sys.first_scan):
-                copy(ch, code, convert=to_ascii)
+                out(after)
 
-        results = _on_every_backend(prog, monkeypatch, (code, *self._FAULTS, after), scans=2)
+        results = _on_every_backend(prog, monkeypatch, (ch, *self._FAULTS, after), scans=2)
         faults = tuple(flag.name.endswith("out_of_range") for flag in self._FAULTS)
-        assert results == {name: (ord("A"), *faults, 5) for name in results}
+        assert results == {name: ("A", *faults, True) for name in results}
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_non_finite_randint_bound_reads_zero_on_every_backend(self, monkeypatch, operand):
@@ -2089,7 +2091,7 @@ class TestBoardPeripheralsAndRunStop:
         r, setup = self._non_finite_real(operand)
         dest = Dint("Dest", default=7)
         copied = Dint("Copied", default=7)
-        after = Int("After")
+        after = Bool("After")
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
@@ -2098,13 +2100,13 @@ class TestBoardPeripheralsAndRunStop:
                 copy(randint(0, r + 0), copied)
             with Rung(~system.sys.first_scan):
                 calc(randint(0, r + 0) + 5, dest)
-                copy(5, after)
+                out(after)
 
         results = _on_every_backend(
             prog, monkeypatch, (dest, copied, *self._FAULTS, after), scans=2
         )
         faults = tuple(flag.name.endswith("out_of_range") for flag in self._FAULTS)
-        assert results == {name: (0, 0, *faults, 5) for name in results}
+        assert results == {name: (0, 0, *faults, True) for name in results}
 
     def test_randint_constants_stay_wide_into_a_dint_on_every_backend(self, monkeypatch):
         from pyrung.core import randint
@@ -2127,7 +2129,7 @@ class TestBoardPeripheralsAndRunStop:
         iteration and sets SC43, and the scan runs on, on all three backends."""
         r, setup = self._non_finite_real(operand)
         hits = Int("Hits")
-        after = Int("After")
+        after = Bool("After")
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
@@ -2136,12 +2138,12 @@ class TestBoardPeripheralsAndRunStop:
                 with forloop(r):
                     calc(hits + 1, hits)
             with Rung(~system.sys.first_scan):
-                copy(5, after)
+                out(after)
 
         results = _on_every_backend(
             prog, monkeypatch, (hits, system.fault.out_of_range, after), scans=2
         )
-        assert results == {name: (0, True, 5) for name in results}
+        assert results == {name: (0, True, True) for name in results}
 
     def test_finite_real_forloop_count_still_iterates_on_every_backend(self, monkeypatch):
         r = Real("R", default=3.0)

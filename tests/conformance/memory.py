@@ -95,7 +95,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "C": range(901, 1001),
         "T": range(101, 151),
         "CT": range(171, 181),
-        "DD": range(901, 1001),
+        "DD": range(901, 1000),
         "DH": range(401, 411),
     },
     # Math errors (tests/conformance/test_math_error.py).
@@ -111,7 +111,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # Which stores raise a fault flag (tests/conformance/test_faults.py).
     "faults": {
         "C": range(201, 401),
-        "DD": range(501, 601),
+        "DD": (range(501, 601), range(1000, 1001)),
         "DF": range(451, 496),
         "TXT": range(401, 501),
     },

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.copy_converters import CopyConverter
+from pyrung.core.memory_block import PastBankError
 from pyrung.core.storage import check_real_literal
 from pyrung.core.tag import Tag
 
@@ -24,6 +25,7 @@ from .resolvers import (
     _set_fault_out_of_range,
     _termination_char,
     resolve_block_range_tags_ctx,
+    resolve_source_type_tag_ctx,
     resolve_tag_ctx,
     resolve_tag_or_value_ctx,
 )
@@ -49,8 +51,12 @@ class CopyInstruction(OneShotMixin, Instruction):
     SC43) is set; +/-Inf into an INT or DINT clamps the same way, and NaN stores
     0 with no flag. This differs from `CalcInstruction`, which wraps.
 
-    **Pointer errors:** If the pointer resolves to an out-of-range address,
-    the address-error fault flag is set and the copy is skipped.
+    **Pointer errors:** A pointer below its bank sets the address-error fault
+    flag and skips the copy. A pointer past its bank raises no flag: a source
+    there reads as 0 and a destination there drops the write.
+
+    **Fault flags:** Each copy that runs sets or clears the out-of-range and
+    address-error flags by its own result.
 
     Args:
         source: Value to copy from.
@@ -63,6 +69,7 @@ class CopyInstruction(OneShotMixin, Instruction):
     _reads = ("source",)
     _writes = ("dest",)
     _fault_writes = ("fault.address_error", "fault.out_of_range")
+    _fault_follows = _fault_writes
     _conditions = ()
     _structural_fields = ("convert",)
 
@@ -90,8 +97,12 @@ class CopyInstruction(OneShotMixin, Instruction):
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        resolved_target: Tag | None
         try:
             resolved_target = resolve_tag_ctx(self.dest, ctx)
+        except PastBankError:
+            # The write is dropped, with no flag. The source is still read.
+            resolved_target = None
         except IndexError:
             _set_fault_address_error(ctx)
             return
@@ -104,7 +115,8 @@ class CopyInstruction(OneShotMixin, Instruction):
             raise
 
         if self.convert is not None:
-            self._execute_converter_copy(ctx, resolved_target, self.convert)
+            if resolved_target is not None:
+                self._execute_converter_copy(ctx, resolved_target, self.convert)
             return
 
         try:
@@ -119,6 +131,9 @@ class CopyInstruction(OneShotMixin, Instruction):
                 _set_fault_address_error(ctx)
                 return
             raise
+
+        if resolved_target is None:
+            return
 
         # String literal fan-out: "00026" → sequential CHAR tags
         from pyrung.core.tag import TagType
@@ -204,7 +219,7 @@ class CopyInstruction(OneShotMixin, Instruction):
             if isinstance(self.source, Tag):
                 source_tag = self.source
             elif isinstance(self.source, (IndirectRef, IndirectExprRef)):
-                source_tag = resolve_tag_ctx(self.source, ctx)
+                source_tag = resolve_source_type_tag_ctx(self.source, ctx)
             value = resolve_tag_or_value_ctx(self.source, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
@@ -291,6 +306,7 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
     _reads = ("source",)
     _writes = ("dest",)
     _fault_writes = ("fault.address_error", "fault.out_of_range")
+    _fault_follows = _fault_writes
     _conditions = ()
     _structural_fields = ("convert",)
 
@@ -381,7 +397,8 @@ class FillInstruction(OneShotMixin, Instruction):
 
     _reads = ("value",)
     _writes = ("dest",)
-    _fault_writes = ("fault.address_error",)
+    _fault_writes = ("fault.address_error", "fault.out_of_range")
+    _fault_follows = _fault_writes
     _conditions = ()
     _structural_fields = ()
 
@@ -395,11 +412,10 @@ class FillInstruction(OneShotMixin, Instruction):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         try:
             dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
+            value = resolve_tag_or_value_ctx(self.value, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
             return
-
-        value = resolve_tag_or_value_ctx(self.value, ctx)
 
         updates = {}
         for dst_tag in dst_tags:
