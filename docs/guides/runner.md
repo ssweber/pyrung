@@ -122,7 +122,9 @@ A rung that reads a block through an index with no declared range (`DS[Idx]`,
 in that block ends a folded stretch.  One such index anywhere in a block is
 enough: a program whose alarm log indexes `DS` steps through a timer display
 elsewhere in `DS` instead of skipping it.  Give the index tag its range to keep
-the fold, and make the range true, because the fold takes it at its word.
+the fold, and make the range true, because the fold takes it at its word.  It must
+include the value the index rests at (usually 0, so `choices` is often the right
+form): `never()` refuses a program whose tag sits outside its declared range.
 
 ## Injecting inputs
 

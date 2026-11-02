@@ -2737,7 +2737,10 @@ def _build_fold_context(
     )
     analog = _analog_feedback(plc)
     analog_names = frozenset(a.name for a in analog)
-    pointer_read = _slots_read_through_pointers(pdg, program)
+    # Read by the predicate or by a rung the program graph does not list.  No pass
+    # may call one of these unread, frozen, a mirror or churn: this is the one set
+    # they all take.
+    visible_names = target_names | _slots_read_through_pointers(pdg, program)
 
     # Self-feeding churn (a calc reading its own destination) is never simply
     # left out of the plateau guard: the landing must still hold the value
@@ -2748,7 +2751,7 @@ def _build_fold_context(
     churn_excluded: frozenset[str] = frozenset()
 
     if advice is None or advice.has("fold_unread_churn"):
-        terminals = _scan_local_terminal_tags(plc, pdg, target_names | pointer_read) - acc_names
+        terminals = _scan_local_terminal_tags(plc, pdg, visible_names) - acc_names
         churn_excluded |= terminals
         if terminals and journal is not None:
             journal.add_note(
@@ -2759,7 +2762,7 @@ def _build_fold_context(
     modwrap: list[_ModWrap] = []
     if advice is None or advice.has("fold_modwrap_source"):
         tracked: list[str] = []
-        for tag, c, m, value_range in _selfcalc_sources(plc, pdg, program, target_names):
+        for tag, c, m, value_range in _selfcalc_sources(plc, pdg, program, visible_names):
             if tag in acc_names or tag in churn_excluded:
                 continue
             if m is None:
@@ -2800,7 +2803,7 @@ def _build_fold_context(
     mirror_cands: list[tuple[str, str, int, int, bool]] = []
     if advice is None or advice.has("fold_derived_crossings"):
         mirror_cands = _mirror_candidates(
-            plc, pdg, program, target_names, acc_names | modwrap_names
+            plc, pdg, program, visible_names, acc_names | modwrap_names
         )
 
     watch = acc_names | profile_fb_names | modwrap_names
@@ -2845,7 +2848,7 @@ def _build_fold_context(
             + ", ".join(sorted(scan_derived_names))
         )
 
-    protected_names = target_names | pointer_read | _harness_referenced_names(plc)
+    protected_names = visible_names | _harness_referenced_names(plc)
 
     def unread(name: str) -> bool:
         return name not in protected_names and not pdg.all_readers_of.get(name)
@@ -3042,7 +3045,7 @@ def _build_fold_context(
             pdg,
             base_varying,
             window_constant,
-            target_names,
+            visible_names,
             # A crossing resolves from a fold input's boundary value, so a change
             # of one must end the window: it stays in the plateau guard.
             protected=_harness_referenced_names(plc) | written_inputs.keys(),
@@ -3120,7 +3123,7 @@ def _build_fold_context(
                 | churn_excluded
                 | frozen_writes
             ),
-            target_names=target_names,
+            target_names=visible_names,
             protected=_harness_referenced_names(plc) | written_inputs.keys(),
             churn=churn_excluded,
         )
@@ -3165,8 +3168,7 @@ def _build_fold_context(
             s.done_bit
             for s in sources
             if s.done_bit in read_tags
-            or s.done_bit in target_names
-            or s.done_bit in pointer_read
+            or s.done_bit in visible_names
             or pdg.all_readers_of.get(s.done_bit)
         ),
         normal_dt=float(getattr(plc, "_dt", 0.010) or 0.010),

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -40,6 +41,7 @@ from pyrung import (
     out,
     rise,
     subroutine,
+    system,
     time_drum,
 )
 from pyrung.click import ClickBlocks
@@ -1138,6 +1140,163 @@ class TestAReadoutThroughAPointer:
         assert reached
         assert jumped.state.scan_id == expected
         _assert_exact(jumped, make)
+
+
+SECOND = system.rtc.second
+
+
+def _mapped_slot(slots: Any) -> Int:
+    """A name on ``Cb[3]``, which carries the name and not the block."""
+    name = Int("Cp")
+    name.map_to(slots[3])
+    return name
+
+
+def _read_by_contact(slots: Any, index: Int) -> None:
+    with Rung(slots[index] == Int("Want")):
+        latch(Hit)
+
+
+def _clock_copied(slots: Any, index: Int) -> None:
+    with Rung():
+        copy(SECOND, _mapped_slot(slots))
+    _read_by_contact(slots, index)
+
+
+def _clock_calculated(slots: Any, index: Int) -> None:
+    with Rung():
+        calc(SECOND + 1, _mapped_slot(slots))
+    _read_by_contact(slots, index)
+
+
+def _clock_chained(slots: Any, index: Int) -> None:
+    middle = Int("Mid")
+    with Rung():
+        copy(SECOND, middle)
+    with Rung():
+        copy(middle, _mapped_slot(slots))
+    _read_by_contact(slots, index)
+
+
+def _clock_read_in_a_subroutine(slots: Any, index: Int) -> None:
+    with Rung():
+        copy(SECOND, _mapped_slot(slots))
+    with subroutine("Sb"):
+        _read_by_contact(slots, index)
+    with Rung():
+        call("Sb")
+
+
+def _clock_read_in_a_loop(slots: Any, index: Int) -> None:
+    seen = Int("Seen")
+    with Rung():
+        copy(SECOND, _mapped_slot(slots))
+    with Rung():
+        with forloop(1):
+            copy(slots[index], seen)
+    with Rung(seen == Int("Want")):
+        latch(Hit)
+
+
+def _clock_read_gating_an_out(slots: Any, index: Int) -> None:
+    held = Bool("Held")
+    with Rung():
+        copy(SECOND, _mapped_slot(slots))
+    with Rung(slots[index] == Int("Want")):
+        out(held)
+    with Rung(held):
+        latch(Hit)
+
+
+def _clock_in_a_mapped_block(slots: Any, index: Int) -> None:
+    names = Block("Sn", TagType.INT, 1, 4)
+    names.map_to(slots.select(1, 4))
+    with Rung():
+        copy(SECOND, names[3])
+    _read_by_contact(slots, index)
+
+
+CLOCK_ON_A_MAPPED_NAME = [
+    pytest.param(_clock_copied, id="copy"),
+    pytest.param(_clock_calculated, id="calc"),
+    pytest.param(_clock_chained, id="chain"),
+    pytest.param(_clock_read_in_a_subroutine, id="subroutine"),
+    pytest.param(_clock_read_in_a_loop, id="forloop"),
+    pytest.param(_clock_read_gating_an_out, id="gating-out"),
+    pytest.param(_clock_in_a_mapped_block, id="mapped-block"),
+]
+
+
+def _clock_behind_a_pointer(body: Callable[[Any, Int], None], *, cycle: bool) -> Callable[[], PLC]:
+    def make() -> PLC:
+        slots = Block("Cb", TagType.INT, 1, 8)
+        index = Int("Jx", default=3)
+        with Program(strict=False) as prog:
+            if cycle:
+                with Rung(~Tog):
+                    out(Tog)
+            body(slots, index)
+            with Rung():
+                on_delay(T, 400, "s")
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Want": 7})
+        plc.set_rtc(datetime(2026, 1, 5, 12, 0, 0))
+        return plc
+
+    return make
+
+
+class TestAClockCopyThroughAPointer:
+    """A mirror of the clock on a mapped name has a reader only the block can show."""
+
+    @pytest.mark.parametrize("body", CLOCK_ON_A_MAPPED_NAME)
+    def test_run_until_stops_on_the_crossing(self, body: Any) -> None:
+        make = _clock_behind_a_pointer(body, cycle=False)
+        expected = _first_hit(make)
+        assert expected is not None
+        plc = make()
+        plc.run_until(Hit, max_cycles=3_000)
+        assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+    @pytest.mark.parametrize("body", CLOCK_ON_A_MAPPED_NAME)
+    def test_run_for_is_exact(self, body: Any) -> None:
+        make = _clock_behind_a_pointer(body, cycle=False)
+        plc = make()
+        plc.run_for(30.0)
+        _assert_exact(plc, make)
+
+    @pytest.mark.parametrize("body", CLOCK_ON_A_MAPPED_NAME)
+    def test_a_cycle_jump_stops_on_the_crossing(self, body: Any) -> None:
+        make = _clock_behind_a_pointer(body, cycle=True)
+        expected = _first_hit(make)
+        assert expected is not None
+        plc = make()
+        reached, _stats = _jump(plc, _hit, predicate_reads=frozenset({"Hit"}))
+        assert reached
+        assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+    def test_a_declared_index_keeps_the_mirror(self) -> None:
+        """Bounded, the graph lists the reader and the fold takes the clock's ticks."""
+
+        def make() -> PLC:
+            slots = Block("Cb", TagType.INT, 1, 8)
+            with Program(strict=False) as prog:
+                _clock_copied(slots, Int("Jx", default=3, min=1, max=8))
+                with Rung():
+                    on_delay(T, 400, "s")
+            plc = PLC(prog, dt=0.010)
+            plc.patch({"Want": 7})
+            plc.set_rtc(datetime(2026, 1, 5, 12, 0, 0))
+            return plc
+
+        plc = make()
+        scans = _kernel_scans(plc)
+        plc.run_until(Hit, max_cycles=3_000)
+        assert plc.state.scan_id == _first_hit(make)
+        assert scans["n"] < 100
+        _assert_exact(plc, make)
 
 
 class TestOutputsThatStayUnread:
