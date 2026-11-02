@@ -329,6 +329,14 @@ class TestTheSet:
         assert system.rtc.minute.name in moving
 
 
+def _timer_beside_an_oscillator() -> None:
+    # Every scan changes F, so only a cycle jump can skip one.
+    with Rung(F):
+        on_delay(T, preset=9000).reset(R)
+    with Rung(~F):
+        out(F)
+
+
 class TestAMonitor:
     @staticmethod
     def _firings(
@@ -363,6 +371,29 @@ class TestAMonitor:
         assert stepped
         assert _state(folded_plc) == _state(stepped_plc)
 
+    @pytest.mark.parametrize("tag", [F, T.Acc], ids=["oscillator", "accumulator"])
+    def test_on_a_cycle_fires_as_stepped(self, tag: Any) -> None:
+        def run(fold: bool) -> tuple[list[tuple[int, Any, Any]], PLC, dict[str, int]]:
+            plc = _plc(_timer_beside_an_oscillator)
+            fired: list[tuple[int, Any, Any]] = []
+            plc.monitor(tag, lambda cur, prev: fired.append((plc.state.scan_id, prev, cur)))
+            stats: dict[str, int] = {}
+            if fold:
+                cycle_fold_until(
+                    plc, lambda _s: False, budget=600, kernel_budget=False, stats=stats
+                )
+            else:
+                for _ in range(600):
+                    plc.step()
+            return fired, plc, stats
+
+        folded, folded_plc, stats = run(True)
+        stepped, stepped_plc, _ = run(False)
+        assert folded == stepped
+        assert stepped
+        assert stats.get("macro_folds", 0) == 0
+        assert _state(folded_plc) == _state(stepped_plc)
+
     def test_a_callback_counting_into_a_tag_counts_as_stepped(self) -> None:
         def run(fold: bool) -> PLC:
             plc = _plc(_rebuilt_seconds, {"A": True})
@@ -394,6 +425,18 @@ class TestAMonitor:
         folded, kernel_scans = run(True)
         assert folded == run(False)[0]
         assert kernel_scans < 100
+
+
+def _seconds_gated() -> None:
+    _timer()
+    with Rung(A):
+        calc(T.Acc // 1000, Secs)
+
+
+def _acc_view() -> None:
+    _timer()
+    with Rung():
+        calc(T.Acc + 5, Q)
 
 
 class TestADeclaredRead:
@@ -441,6 +484,69 @@ class TestADeclaredRead:
         )
         assert plc.state.scan_id == stepped.state.scan_id
         assert _state(plc) == _state(stepped)
+
+    @pytest.mark.parametrize(
+        ("body", "name", "condition", "value", "patch"),
+        [
+            pytest.param(_seconds_gated, "Secs", Secs >= 3, 3, {"A": True}, id="rebuilt"),
+            pytest.param(_acc_view, "Q", Q >= 3005, 3005, None, id="view-of-a-source"),
+        ],
+    )
+    @pytest.mark.parametrize("given_context", [False, True], ids=["no-context", "given-context"])
+    def test_a_comparison_places_only_a_coordinate(
+        self,
+        body: Body,
+        name: str,
+        condition: Any,
+        value: int,
+        patch: dict[str, Any] | None,
+        given_context: bool,
+    ) -> None:
+        # A comparison ends a window on a source's own value.  One on anything else
+        # ends none, and a view's is on its source, so the read has to stand.
+        def pred(state: Any) -> bool:
+            return state.tags.get(name, 0) >= value
+
+        stepped = self._stepped(body, pred, patch, 1000)
+        assert stepped.state.scan_id == 300
+        plc = _plc(body, patch)
+        cycle_fold_until(
+            plc,
+            pred,
+            budget=1000,
+            kernel_budget=False,
+            predicate_reads=frozenset({name}),
+            extra_comparisons=_extract_condition_crossings(condition),
+            fold_ctx=plc._ensure_fold_context() if given_context else None,
+        )
+        assert plc.state.scan_id == stepped.state.scan_id
+        assert _state(plc) == _state(stepped)
+
+    def test_no_context_guards_the_read_it_was_told_of(self) -> None:
+        # No rung reads Lamp, so a context built blind leaves it out of the plateau
+        # guard: the read would have to be traced, a scan at a time.  Told of the
+        # read, the context guards Lamp and the windows stand.
+        def body() -> None:
+            _timer()
+            with Rung(clk100, G):
+                out(Lamp)
+
+        def pred(state: Any) -> bool:
+            return state.tags.get("Lamp") is True
+
+        plc = _plc(body)
+        stats: dict[str, int] = {}
+        reached = cycle_fold_until(
+            plc,
+            pred,
+            budget=1000,
+            kernel_budget=False,
+            predicate_reads=frozenset({"Lamp"}),
+            stats=stats,
+        )
+        assert reached is False
+        assert stats["kernel_scans"] < 100
+        assert _state(plc) == _state(self._stepped(body, pred, None, 1000))
 
     def test_a_read_nothing_moves_keeps_the_fold(self) -> None:
         plc = _plc(_rebuilt_seconds)

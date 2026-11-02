@@ -483,7 +483,7 @@ def cycle_fold_until(
         # What the predicate reads that a window moves: a comparison places a source
         # (a view's comparison is on its source, not on it), any other read of one
         # bounds a window at its next change, and the rest only a trace can judge.
-        placed = (extra_comparisons or {}).keys() - fold_ctx.mirror_names
+        placed = ((extra_comparisons or {}).keys() & fold_ctx.coordinates) - fold_ctx.mirror_names
         read_sources = fold_ctx.outside_read_sources(predicate_reads - placed)
         if read_sources is None:
             predicate_reads = None
