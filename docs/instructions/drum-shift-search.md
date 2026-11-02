@@ -100,10 +100,10 @@ All three drums follow the same rules:
 - **Jump and jog** act on their rising edges, even while the rung is false. The jog runs first and the jump last, so a jump and a jog on one scan land on the jump's step. A jog on the last step completes the drum, which stays on that step; a further jog there does nothing.
 - **A false rung** pauses the drum: no timing, no event steps, and its outputs stay as they were. They show the step a paused jump or jog took once the rung is true again.
 - **Completion** sets the flag and turns every output off. They stay off until the drum steps forward again, by a jog or by its own event or time. A jump moves the step but leaves them off. Only a reset clears the flag.
-- **A step register out of range** goes to step 1 the next scan the rung is true; a paused drum leaves it alone. The correction writes no output by itself, but a time drum also times on that scan: if step 1 is already finished, the drum moves on and writes the new step's row. A jog edge leaves that scan alone too, and the scan after it corrects the step.
+- **A step register out of range** goes to step 1 the next scan the rung is true; a paused drum leaves it alone. The correction writes no output by itself.
 - A time drum's accumulator is 0 on the scan of every step change: an advance, a jog, a jump, a reset and a correction.
 
-CLICK has not been asked yet whether an event or time step after a jump ends a completion; pyrung takes it that one does, as a jog does.
+After a jump, an event or time step ends a completion, as a jog does.
 
 ### Variadic condition chaining
 
