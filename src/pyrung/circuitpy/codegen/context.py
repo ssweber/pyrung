@@ -220,6 +220,7 @@ class CodegenContext:
     _edge_rows: dict[int, tuple[tuple[str, Any], ...]] = field(default_factory=dict)
     compact_block_map: dict[int, dict[int, int]] = field(default_factory=dict)
     _static_range_layouts: dict[int, StaticRangeLayout] = field(default_factory=dict)
+    _slot_addresses_by_block: dict[int, dict[str, int]] = field(default_factory=dict)
 
     def collect_hw_bindings(self) -> None:
         self.slot_bindings.clear()
@@ -406,6 +407,9 @@ class CodegenContext:
             system.fault.math_operation_error,
         ):
             self.referenced_tags.setdefault(fault_tag.name, fault_tag)
+        # The walk meets a tag before it may meet the block holding it.
+        for tag in list(self.referenced_tags.values()):
+            self._associate_tag_with_known_block(tag)
         self._refresh_board_usage()
 
     def collect_retentive_tags(self) -> None:
@@ -760,9 +764,30 @@ class CodegenContext:
             channel_count=channel_count,
         )
         self.block_bindings[block_id] = binding
-        for addr, tag in block._tag_cache.items():
-            self.tag_block_addresses[tag.name] = (block_id, addr)
         return block_id
+
+    def _slot_addresses(self, binding: BlockBinding) -> dict[str, int]:
+        """The address of each slot of a block, by the name its slot resolves to.
+
+        Memory is keyed by name, so a tag naming a slot is that slot however it
+        got the name: ``map_to``, ``slot(name=...)`` or the same spelling.  Read
+        from the slot configuration, not ``Block._tag_cache``: the cache holds
+        whichever slots something has indexed so far, and an indirect read only
+        indexes a slot when a scan reaches it.  What compiles must not depend on
+        that, or a kernel compiled before the pointer arrives keeps the name and
+        the slot in two cells.
+        """
+        addresses = self._slot_addresses_by_block.get(binding.block_id)
+        if addresses is None:
+            block = binding.block
+            addresses = {}
+            for addr in binding.valid_addresses or range(binding.start, binding.end + 1):
+                # The same precedence as ``Block._get_tag``.
+                mapped = block._mapped_tags.get(addr)
+                name = mapped.name if mapped is not None else block._effective_slot_name(addr)
+                addresses[name] = addr
+            self._slot_addresses_by_block[binding.block_id] = addresses
+        return addresses
 
     def _associate_tag_with_known_block(self, tag: Tag) -> None:
         if tag.name in self.tag_block_addresses or tag.name in self.dict_backed_tag_names:
@@ -778,10 +803,10 @@ class CodegenContext:
         for binding in sorted(
             self.block_bindings.values(), key=lambda b: (b.logical_name, b.block_id)
         ):
-            for addr, cached_tag in binding.block._tag_cache.items():
-                if cached_tag is tag:
-                    self.tag_block_addresses[tag.name] = (binding.block_id, addr)
-                    return
+            addr = self._slot_addresses(binding).get(tag.name)
+            if addr is not None:
+                self.tag_block_addresses[tag.name] = (binding.block_id, addr)
+                return
 
     def _refresh_board_usage(self) -> None:
         names = set(self.referenced_tags)
