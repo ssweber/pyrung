@@ -73,6 +73,7 @@
 
 ### Fixes
 
+- `run_for()`, `run_until()`, a replay seek and `how()` no longer hold a clock-driven value still while a real clock moves: a rung reading a system clock now ends a folded stretch at each edge, so `Rung(F, T.Acc >= 205)` over a blink bit `F` latches on the scan stepping does. A blink indicator (an `out()` of plain contacts, read only by such rungs below it) still folds across the edges; other clock-gated programs run more scans.
 - A `copy(..., convert=to_text())` of an Inf or NaN `Real` writes it as lowercase text (`inf`, `-inf`, `nan`) with no flag, as a CLICK writes `inf`; it left the text alone and set `out_of_range`.
 - A `copy()` or `blockcopy()` that clamps at an `Int` or `Dint` limit sets `out_of_range`, as on a CLICK; `fill()` still clamps with no flag.
 - A `copy()` or `fill()` of a number into a `Char` no longer stops the scan in compiled replay and generated CircuitPython, or `fill()` in the simulator: Inf or NaN stores 0 with no flag, and a finite number is stored as it is (pyrung's choice, not measured on a CLICK). `convert=to_binary` of Inf sets `out_of_range` and leaves the text, where the simulator raised `OverflowError`.

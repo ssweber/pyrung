@@ -117,6 +117,12 @@ A callable predicate is judged on the state it is given (or `runner.state`);
 the fold records which tags it reads.  Anything else it consults, such as
 another runner or `history`, is invisible to the fold.
 
+A rung that reads a system clock (`sys.clock_100ms`, `sys.clock_1s`, ...) ends a
+folded stretch at each of the clock's edges, so a fast clock folds in short hops.
+The exception is a blink indicator: an `out()` on a rung of plain contacts, whose
+bit only drives other such rungs below it.  Its clock costs nothing, and each
+landing rebuilds the bit as stepping would.
+
 A rung that reads a block through an index with no declared range (`DS[Idx]`,
 `Idx` without `min`/`max` or `choices`) can see any element, so a value moving
 in that block ends a folded stretch.  One such index anywhere in a block is
