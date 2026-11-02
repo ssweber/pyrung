@@ -96,6 +96,28 @@ def resolve_tag_ctx(
     return target
 
 
+def reads_indexed_element(value: Any, seen: set[int] | None = None) -> bool:
+    """True when *value* (a source or an expression) reads a block element
+    addressed at scan time (``Tbl[P]``, ``Tbl[Q + 1]``), which can fall below the
+    block."""
+    from pyrung.core.expression import Expression
+    from pyrung.core.memory_block import IndirectExprRef
+    from pyrung.core.memory_block import IndirectRef as IndirectRefType
+
+    if seen is None:
+        seen = set()
+    if id(value) in seen:
+        return False
+    seen.add(id(value))
+    if isinstance(value, (IndirectRefType, IndirectExprRef)):
+        return True
+    if isinstance(value, Expression):
+        return any(reads_indexed_element(child, seen) for child in vars(value).values())
+    if isinstance(value, (list, tuple)):
+        return any(reads_indexed_element(item, seen) for item in value)
+    return False
+
+
 def resolve_source_type_tag_ctx(source: IndirectRef | IndirectExprRef, ctx: ScanContext) -> Tag:
     """A Tag with the type of the element *source* reads.
 

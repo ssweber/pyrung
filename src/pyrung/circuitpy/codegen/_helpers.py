@@ -428,6 +428,9 @@ def _render_index_helpers(
     ``_read_index_*`` (an instruction's source): as above, but -1 past the block,
     which ``_cond_elem`` reads as the type's zero.
 
+    ``_window_index_*`` (an address of a dynamic window): the flag and a raise
+    anywhere outside the block, past it too.
+
     ``_cond_index_*`` (a rung condition): -1 anywhere outside the block, no flag.
     """
     helper_name = ctx.index_helper_name(binding.block_id)
@@ -454,6 +457,15 @@ def _render_index_helpers(
         lines.append(f"def {ctx.read_index_helper_name(binding.block_id)}(addr):")
         lines.append(f"    if addr > {binding.end}:")
         lines.append("        return -1")
+        lines.append(f"    return {helper_name}(addr)")
+        lines.append("")
+    if binding.block_id in ctx.used_window_index_blocks:
+        lines.append(f"def {ctx.window_index_helper_name(binding.block_id)}(addr):")
+        if fault_global is not None:
+            lines.append(f"    global {fault_global}")
+        lines.append(f"    if addr > {binding.end}:")
+        lines.extend(fault_line)
+        lines.append(f"        raise IndexError({message})")
         lines.append(f"    return {helper_name}(addr)")
         lines.append("")
     if binding.block_id in ctx.used_condition_index_blocks:

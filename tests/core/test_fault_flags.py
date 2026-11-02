@@ -5,7 +5,8 @@ clears it.  SC43 (``fault.out_of_range``) and SC44 (``fault.address_error``)
 follow the last Copy or Math.  Nothing else touches them, and an instruction that
 does not run clears nothing.  A pointer below its block is SC44 with the
 destination left alone; past it, there is no flag, a read gets the type's zero
-and a write is dropped.  ``tests/conformance/test_system.py`` and
+and a write is dropped.  A dynamic window out of its block is SC44 on either side,
+with nothing written.  ``tests/conformance/test_system.py`` and
 ``tests/conformance/test_faults.py`` hold what a CLICK read.
 """
 
@@ -115,7 +116,12 @@ def _run(prog: Program, engine: str, watch: tuple[Any, ...], monkeypatch, scans:
         result.code, monkeypatch, _StubBase(), runtime_source=result.runtime, scans=scans
     )
     ctx = _context_for_program(prog, hw)
-    return tuple(namespace[ctx.symbol_for_tag(tag)] for tag in watch)
+
+    def read(symbol: str) -> Any:
+        name, bracket, index = symbol.partition("[")
+        return namespace[name][int(index[:-1])] if bracket else namespace[name]
+
+    return tuple(read(ctx.symbol_for_tag(tag)) for tag in watch)
 
 
 # ---- The registers the faults and the instructions under test use ------------------
@@ -542,3 +548,393 @@ def test_instructions_declare_every_flag_they_follow() -> None:
     for instruction in prog.rungs[0]._instructions:
         assert instruction._fault_follows, type(instruction).__name__
         assert set(instruction._fault_follows) <= set(instruction._fault_writes)
+
+
+# ---- A dynamic window out of its block ----------------------------------------------
+
+_WinU = Block("WinU", TagType.INT, 1, 10)
+_WinV = Block("WinV", TagType.INT, 1, 20)
+_WinBits = Block("WinBits", TagType.BOOL, 1, 32)
+_WinChars = Block("WinChars", TagType.CHAR, 1, 3)
+_WinOne = Int("WinOne", default=1)
+_WinThree = Int("WinThree", default=3)
+_WinFour = Int("WinFour", default=4)
+_WinFive = Int("WinFive", default=5)
+_WinSix = Int("WinSix", default=6)
+_WinTen = Int("WinTen", default=10)
+_WinEleven = Int("WinEleven", default=11)
+_WinTwenty = Int("WinTwenty", default=20)
+_WinThirty = Int("WinThirty", default=30)
+_WinBit30 = Int("WinBit30", default=30)
+_WinBit45 = Int("WinBit45", default=45)
+_WinZero = Int("WinZero", default=0)
+_WinPacked = Dint("WinPacked", default=77)
+_WinWord = Int("WinWord", default=77)
+_WinResult = Int("WinResult", default=55)
+_WinFound = Bool("WinFound")
+
+
+#: Each op with a window out of its block, and the tag and value it must leave alone.
+_WINDOW_OUT: dict[str, tuple[Callable[[], object], Any, Any]] = {
+    "fill_all_past": (lambda: fill(5, _WinU.select(_WinTwenty, _WinThirty)), _WinU[10], 77),
+    "fill_partly_past": (lambda: fill(5, _WinU.select(_WinFive, _WinTwenty)), _WinU[5], 77),
+    "fill_reversed": (lambda: fill(5, _WinU.select(_WinFive, _WinTwenty).reverse()), _WinU[5], 77),
+    "fill_below": (lambda: fill(5, _WinU.select(_WinZero, _WinFive)), _WinU[5], 77),
+    "blockcopy_source": (
+        lambda: blockcopy(_WinU.select(_WinFive, _WinTwenty), _WinV.select(1, 16)),
+        _WinV[1],
+        77,
+    ),
+    "blockcopy_dest": (
+        lambda: blockcopy(_WinV.select(1, 16), _WinU.select(_WinFive, _WinTwenty)),
+        _WinU[5],
+        77,
+    ),
+    "pack_bits": (
+        lambda: pack_bits(_WinBits.select(_WinBit30, _WinBit45), _WinWord),
+        _WinWord,
+        77,
+    ),
+    "unpack_to_bits": (
+        lambda: unpack_to_bits(_WinWord, _WinBits.select(_WinBit30, _WinBit45)),
+        _WinBits[30],
+        True,
+    ),
+    "pack_words": (
+        lambda: pack_words(_WinU.select(_WinTen, _WinEleven), _WinPacked),
+        _WinPacked,
+        77,
+    ),
+    "unpack_to_words": (
+        lambda: unpack_to_words(_WinPacked, _WinU.select(_WinTen, _WinEleven)),
+        _WinU[10],
+        77,
+    ),
+    "pack_text": (
+        lambda: pack_text(_WinChars.select(_WinThree, _WinFour), _WinWord),
+        _WinWord,
+        77,
+    ),
+    "search_result": (
+        lambda: search(_WinU.select(_WinFive, _WinTwenty) == 0, result=_WinResult, found=_WinFound),
+        _WinResult,
+        55,
+    ),
+    "search_found": (
+        lambda: search(_WinU.select(_WinFive, _WinTwenty) == 0, result=_WinResult, found=_WinFound),
+        _WinFound,
+        False,
+    ),
+}
+
+
+def _window_stage() -> None:
+    copy(77, _WinU[5])
+    copy(77, _WinU[10])
+    copy(77, _WinV[1])
+    copy("1", _WinChars[3])
+    latch(_WinBits[30])
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize("op_name", list(_WINDOW_OUT))
+def test_a_window_out_of_its_block_is_an_address_error(engine, op_name, monkeypatch) -> None:
+    """Only a single Copy pointer past its bank was measured: a window stays SC44."""
+    op, untouched, value = _WINDOW_OUT[op_name]
+    with Program(strict=False) as prog:
+        with Rung():
+            _window_stage()
+        with Rung():
+            op()
+    assert _run(prog, engine, (SC44, SC43, untouched), monkeypatch) == (True, False, value)
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_a_window_inside_its_block_runs(engine, monkeypatch) -> None:
+    with Program(strict=False) as prog:
+        with Rung():
+            fill(5, _WinU.select(_WinFive, _WinSix))
+    assert _run(prog, engine, (SC44, _WinU[5], _WinU[6]), monkeypatch) == (False, 5, 5)
+
+
+_SEARCHES: dict[str, tuple[Callable[[], object], int]] = {
+    "numeric": (
+        lambda: search(_WinU.select(_WinFive, _WinTen) == 8, result=_WinResult, found=_WinFound),
+        7,
+    ),
+    "continuous_from_zero": (
+        lambda: search(
+            _WinU.select(_WinFive, _WinTen) == 8,
+            result=Int("WinCursor"),
+            found=_WinFound,
+            continuous=True,
+        ),
+        7,
+    ),
+    "text": (
+        lambda: search(
+            _WinChars.select(_WinOne, _WinThree) == "AB", result=_WinResult, found=_WinFound
+        ),
+        2,
+    ),
+}
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize("name", list(_SEARCHES))
+def test_a_search_over_a_dynamic_window(engine, name, monkeypatch) -> None:
+    op, address = _SEARCHES[name]
+    result = Int("WinCursor") if name.startswith("continuous") else _WinResult
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(8, _WinU[7])
+            copy("A", _WinChars[2])
+            copy("B", _WinChars[3])
+        with Rung():
+            op()
+    assert _run(prog, engine, (result, _WinFound, SC44), monkeypatch) == (address, True, False)
+
+
+def test_a_window_past_its_block_replays_as_it_ran() -> None:
+    ptr = Int("WinPtr", default=1)
+    hit = Bool("WinHit")
+    with Program(strict=False) as prog:
+        with Rung():
+            fill(5, _WinU.select(ptr, ptr + 1))
+        with Rung(SC44):
+            latch(hit)
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+    plc.patch({ptr.name: 20})
+    plc.step()
+    live = plc.current_state
+    assert live.tags[hit.name] is True
+    assert plc.replay_to(live.scan_id).state.tags[hit.name] is True
+
+
+# ---- A source below its block, in the instructions that read it outside a guard ------
+
+
+_SrcTbl = Block("SrcTbl", TagType.INT, 1, 4)
+_SrcChars = Block("SrcChars", TagType.CHAR, 1, 3)
+_SrcU = Block("SrcU", TagType.INT, 1, 4)
+_SrcBelow = Int("SrcBelow", default=0)
+_SrcPast = Int("SrcPast", default=9)
+_SrcOne = Int("SrcOne", default=1)
+_SrcBody = Int("SrcBody", default=-1)
+_SrcResult = Int("SrcResult", default=55)
+_SrcFound = Bool("SrcFound")
+
+
+def _src_stage() -> None:
+    copy(77, _SrcU[1])
+    copy(11, _SrcTbl[1])
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(lambda: _SrcTbl[_SrcBelow], id="pointer"),
+        pytest.param(lambda: _SrcTbl[_SrcBelow + 0], id="index_expression"),
+    ],
+)
+def test_a_fill_value_below_its_block_is_an_address_error(engine, value, monkeypatch) -> None:
+    with Program(strict=False) as prog:
+        with Rung():
+            _src_stage()
+            fill(value(), _SrcU.select(1, 2))
+    assert _run(prog, engine, (SC44, _SrcU[1]), monkeypatch) == (True, 77)
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_a_fill_value_past_its_block_fills_zero(engine, monkeypatch) -> None:
+    with Program(strict=False) as prog:
+        with Rung():
+            _src_stage()
+            fill(_SrcTbl[_SrcPast], _SrcU.select(1, 2))
+    assert _run(prog, engine, (SC44, _SrcU[1]), monkeypatch) == (False, 0)
+
+
+def _count_program(count: Any) -> Program:
+    with Program(strict=False) as prog:
+        with Rung():
+            _src_stage()
+        with Rung():
+            with forloop(count):
+                calc(_SrcBody + 1, _SrcBody)
+    return prog
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize(
+    "count",
+    [
+        pytest.param(lambda: _SrcTbl[_SrcBelow], id="pointer"),
+        pytest.param(lambda: _SrcTbl[_SrcBelow + 0], id="index_expression"),
+    ],
+)
+def test_a_for_count_below_its_block_runs_nothing(engine, count, monkeypatch) -> None:
+    prog = _count_program(count())
+    assert _run(prog, engine, (SC44, _SrcBody), monkeypatch) == (True, -1)
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_a_for_count_inside_its_block_runs(engine, monkeypatch) -> None:
+    prog = _count_program(_SrcTbl[_SrcOne])
+    assert _run(prog, engine, (SC44, _SrcBody), monkeypatch) == (False, 10)
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_a_for_count_past_its_block_reads_zero(engine, monkeypatch) -> None:
+    """The count is 0, with no flag: a For reads a 0 count as it reads any other."""
+    expected = _run(_count_program(_SrcBelow), "interpreted", (SC44, _SrcBody), monkeypatch)
+    prog = _count_program(_SrcTbl[_SrcPast])
+    assert _run(prog, engine, (SC44, _SrcBody), monkeypatch) == expected
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize(
+    "op",
+    [
+        pytest.param(
+            lambda: search(
+                _SrcU.select(1, 2) == _SrcTbl[_SrcBelow], result=_SrcResult, found=_SrcFound
+            ),
+            id="numeric",
+        ),
+        pytest.param(
+            lambda: search(
+                _SrcU.select(1, 2) == _SrcTbl[_SrcBelow + 0], result=_SrcResult, found=_SrcFound
+            ),
+            id="index_expression",
+        ),
+        pytest.param(
+            lambda: search(
+                _SrcChars.select(1, 2) == _SrcChars[_SrcBelow], result=_SrcResult, found=_SrcFound
+            ),
+            id="text",
+        ),
+    ],
+)
+def test_a_search_value_below_its_block_is_an_address_error(engine, op, monkeypatch) -> None:
+    with Program(strict=False) as prog:
+        with Rung():
+            _src_stage()
+            op()
+    assert _run(prog, engine, (SC44, _SrcResult, _SrcFound), monkeypatch) == (True, 55, False)
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_a_search_value_past_its_block_reads_zero(engine, monkeypatch) -> None:
+    with Program(strict=False) as prog:
+        with Rung():
+            _src_stage()
+            search(_SrcU.select(1, 2) == _SrcTbl[_SrcPast], result=_SrcResult, found=_SrcFound)
+    assert _run(prog, engine, (SC44, _SrcResult, _SrcFound), monkeypatch) == (False, 2, True)
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_a_search_that_has_nothing_left_does_not_read_its_value(engine, monkeypatch) -> None:
+    """A continuous search whose last result was a miss stays a miss: no value is read."""
+    missed = Int("SrcMissed", default=-1)
+    with Program(strict=False) as prog:
+        with Rung():
+            search(
+                _SrcU.select(1, 2) == _SrcTbl[_SrcBelow],
+                result=missed,
+                found=_SrcFound,
+                continuous=True,
+            )
+    assert _run(prog, engine, (SC44, missed), monkeypatch) == (False, -1)
+
+
+def test_the_analyses_see_every_flag_a_for_or_a_search_can_set() -> None:
+    def declared(step: Callable[[], object]) -> tuple[str, ...]:
+        with Program(strict=False) as prog:
+            with Rung():
+                step()
+        return tuple(prog.rungs[0]._instructions[0]._fault_writes)
+
+    def a_for(count: Any) -> Callable[[], None]:
+        def step() -> None:
+            with forloop(count):
+                out(_Coil)
+
+        return step
+
+    result = {"result": _SrcResult, "found": _SrcFound}
+    address = ("fault.address_error",)
+    assert declared(a_for(3)) == ()
+    assert declared(a_for(_SrcBelow)) == ()
+    assert declared(a_for(_SrcTbl[_SrcBelow])) == address
+    assert declared(a_for(_SrcTbl[_SrcBelow + 0])) == address
+    assert declared(lambda: search(_SrcU.select(1, 2) == 0, **result)) == ()
+    assert declared(lambda: search(_SrcU.select(1, 2) == _SrcBelow, **result)) == ()
+    assert declared(lambda: search(_SrcU.select(1, 2) == _SrcTbl[_SrcBelow], **result)) == address
+    assert declared(lambda: search(_SrcU.select(_SrcOne, 2) == 0, **result)) == address
+
+
+# ---- A followed flag as a source: each read sees the flag as the instruction found it --
+
+_FlagInt = Int("FlagInt", default=-1)
+_FlagBool = Bool("FlagBool")
+_FlagBools = Block("FlagBools", TagType.BOOL, 1, 2)
+_FlagInts = Block("FlagInts", TagType.INT, 1, 2)
+_FlagIdx = Int("FlagIdx", default=1)
+
+
+def _in_a_for(step: Callable[[Any], object]) -> Callable[[Any], None]:
+    def inner(flag: Any) -> None:
+        with forloop(1):
+            step(flag)
+
+    return inner
+
+
+#: Each place a source can name a flag, and the tag that shows what it read as 0 or 1.
+_FLAG_READS: dict[str, tuple[Callable[[Any], object], Any]] = {
+    "copy_to_bool": (lambda flag: copy(flag, _FlagBool), _FlagBool),
+    "copy_to_int": (lambda flag: copy(flag, _FlagInt), _FlagInt),
+    "copy_into_an_element": (lambda flag: copy(flag, _FlagInts[_FlagIdx]), _FlagInts[1]),
+    "copy_expression": (lambda flag: copy(flag * 1, _FlagInt), _FlagInt),
+    "copy_oneshot": (lambda flag: copy(flag, _FlagInt, oneshot=True), _FlagInt),
+    "copy_in_a_for": (_in_a_for(lambda flag: copy(flag, _FlagInt)), _FlagInt),
+    "calc": (lambda flag: calc(flag * 1, _FlagInt), _FlagInt),
+    "calc_in_a_for": (_in_a_for(lambda flag: calc(flag * 1, _FlagInt)), _FlagInt),
+    "fill_bools": (lambda flag: fill(flag, _FlagBools.select(1, 2)), _FlagBools[2]),
+    "fill_ints": (lambda flag: fill(flag, _FlagInts.select(1, 2)), _FlagInts[2]),
+    "fill_a_dynamic_window": (
+        lambda flag: fill(flag, _FlagInts.select(_FlagIdx, 2)),
+        _FlagInts[2],
+    ),
+}
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize("position", list(_FLAG_READS))
+@pytest.mark.parametrize("fault_name", list(_FAULTS))
+def test_a_source_reads_a_flag_as_its_instruction_found_it(
+    engine, position, fault_name, monkeypatch
+) -> None:
+    flag, fault = _FAULTS[fault_name]
+    read, shown = _FLAG_READS[position]
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(0, _FlagInts[1])
+            copy(0, _FlagInts[2])
+            fault()
+            read(flag)
+    assert bool(_run(prog, engine, (shown,), monkeypatch)[0]) is True
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize("position", list(_FLAG_READS))
+def test_a_source_reads_a_clear_flag_as_clear(engine, position, monkeypatch) -> None:
+    read, shown = _FLAG_READS[position]
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(1, _FlagInts[1])
+            copy(1, _FlagInts[2])
+            read(SC43)
+    assert bool(_run(prog, engine, (shown,), monkeypatch)[0]) is False

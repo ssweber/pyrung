@@ -186,6 +186,7 @@ class CodegenContext:
     # address outside the block as 0 rather than raising.
     used_condition_index_blocks: set[int] = field(default_factory=set)
     used_read_index_blocks: set[int] = field(default_factory=set)
+    used_window_index_blocks: set[int] = field(default_factory=set)
     # While a follow instruction's body compiles (``fault_follow_scope``): what
     # a source reading a followed flag reads, the flag as the instruction found
     # it, since its first line clears the flag.
@@ -684,6 +685,15 @@ class CodegenContext:
         self.used_indirect_blocks.add(block_id)
         self.used_read_index_blocks.add(block_id)
         return self.read_index_helper_name(block_id)
+
+    def window_index_helper_name(self, block_id: int) -> str:
+        return self.index_helper_name(block_id).replace("_resolve_index_", "_window_index_", 1)
+
+    def use_window_index_block(self, block_id: int) -> str:
+        """The helper a dynamic window (``block.select(S, E)``) indexes *block_id* through."""
+        self.used_indirect_blocks.add(block_id)
+        self.used_window_index_blocks.add(block_id)
+        return self.window_index_helper_name(block_id)
 
     def symbol_if_referenced(self, tag_name: str) -> str | None:
         tag = self.referenced_tags.get(tag_name)

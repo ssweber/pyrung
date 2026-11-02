@@ -27,7 +27,7 @@ from pyrung import (
     out,
     reset,
 )
-from pyrung.core import fall, rise, system
+from pyrung.core import fall, fill, forloop, rise, search, system
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -3338,6 +3338,30 @@ class TestFlagsFollowInsideAWindow:
         copy(1, Block("FoldTbl", TagType.INT, 1, 4)[Int("Below", default=0)])
 
     @staticmethod
+    def _window_past() -> None:
+        ptr = Int("Past", default=20)
+        fill(5, Block("FoldTbl", TagType.INT, 1, 4).select(ptr, ptr))
+
+    @staticmethod
+    def _fill_value_below() -> None:
+        tbl = Block("FoldTbl", TagType.INT, 1, 4)
+        fill(tbl[Int("Below", default=0)], Block("FoldDst", TagType.INT, 1, 2).select(1, 2))
+
+    @staticmethod
+    def _for_count_below() -> None:
+        with forloop(Block("FoldTbl", TagType.INT, 1, 4)[Int("Below", default=0)]):
+            out(Bool("InLoop"))
+
+    @staticmethod
+    def _search_value_below() -> None:
+        tbl = Block("FoldTbl", TagType.INT, 1, 4)
+        search(
+            Block("FoldDst", TagType.INT, 1, 2).select(1, 2) == tbl[Int("Below", default=0)],
+            result=Int("FoldResult"),
+            found=Bool("FoldFound"),
+        )
+
+    @staticmethod
     def _until_end(plc: PLC, fold: bool) -> None:
         plc.run_until(Bool("End"), max_cycles=10_000, fold=fold)
 
@@ -3379,6 +3403,21 @@ class TestFlagsFollowInsideAWindow:
                 True,
                 id="sc44_left_by_an_out",
             ),
+            *(
+                pytest.param(
+                    raises, settles, system.fault.address_error, after, id=f"sc44_{name}_{how}"
+                )
+                for name, raises in (
+                    ("window_past", _window_past.__func__),
+                    ("fill_value_below", _fill_value_below.__func__),
+                    ("for_count_below", _for_count_below.__func__),
+                    ("search_value_below", _search_value_below.__func__),
+                )
+                for how, settles, after in (
+                    ("cleared_by_a_copy", lambda: copy(1, Int("Plain")), False),
+                    ("left_by_an_out", lambda: out(Bool("Plain")), True),
+                )
+            ),
             pytest.param(
                 lambda: calc(Int("One", default=1) / Int("Zero"), Int("Quotient")),
                 lambda: calc(Int("One", default=1) + 1, Int("Plain")),
@@ -3409,6 +3448,71 @@ class TestFlagsFollowInsideAWindow:
         kernel = _count_kernel_scans(counted)
         self._until_end(counted, True)
         assert kernel["n"] < 20
+
+    @pytest.mark.parametrize(
+        "faulting, start, step, rises",
+        [
+            pytest.param(
+                lambda ptr: fill(5, Block("FoldTbl", TagType.INT, 1, 4).select(ptr, ptr)),
+                3,
+                1,
+                True,
+                id="a_window_past_the_block",
+            ),
+            pytest.param(
+                lambda ptr: copy(1, Block("FoldTbl", TagType.INT, 1, 4)[ptr]),
+                3,
+                1,
+                False,
+                id="a_pointer_past_the_block",
+            ),
+            pytest.param(
+                lambda ptr: fill(
+                    Block("FoldTbl", TagType.INT, 1, 4)[ptr],
+                    Block("FoldDst", TagType.INT, 1, 2).select(1, 2),
+                ),
+                3,
+                -1,
+                True,
+                id="a_fill_value_below_the_block",
+            ),
+            pytest.param(
+                lambda ptr: search(
+                    Block("FoldDst", TagType.INT, 1, 2).select(1, 2)
+                    == Block("FoldTbl", TagType.INT, 1, 4)[ptr],
+                    result=Int("FoldResult"),
+                    found=Bool("FoldFound"),
+                ),
+                3,
+                -1,
+                True,
+                id="a_search_value_below_the_block",
+            ),
+        ],
+    )
+    def test_an_address_a_timer_walks_out_of_its_block(
+        self, faulting: Any, start: int, step: int, rises: bool
+    ) -> None:
+        """The flag turns over mid-run: the landing and a reader see it on the same scan."""
+
+        def build() -> Program:
+            Tmr = Timer.clone("Tmr")
+            ptr = Int("Walk")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Tmr, 3_000)
+                with Rung():
+                    calc(start + step * (Tmr.Acc // 1_000), ptr)
+                with Rung():
+                    faulting(ptr)
+                with Rung(self.SC44):
+                    latch(Bool("Saw"))
+                with Rung(Tmr.Done):
+                    out(Bool("End"))
+            return prog
+
+        plc = _assert_fold_is_exact(build, self._until_end)
+        assert plc.state.tags.get("Saw", False) is rises
 
     @pytest.mark.parametrize("store_first", [False, True], ids=["store_below", "store_above"])
     def test_a_moving_store_raises_between_and_a_copy_clears_after(self, store_first: bool) -> None:

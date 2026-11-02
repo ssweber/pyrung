@@ -31,10 +31,13 @@ from pyrung.core import (
     count_down,
     count_up,
     fill,
+    forloop,
     latch,
     on_delay,
     out,
     rise,
+    search,
+    system,
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -2213,6 +2216,70 @@ class TestIndexedAccess:
                 latch(hit)
 
         assert isinstance(always(logic, ~hit), Proven)
+
+    def test_a_window_past_the_block_is_an_address_error(self):
+        """Ptr 20 puts U.select(Ptr, Ptr + 1) past U1..10: SC44, so Hit latches."""
+        ptr = Int("Ptr", default=1, external=True, choices={1: "inside", 20: "past"})
+        u = Block("U", TagType.INT, 1, 10)
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                fill(5, u.select(ptr, ptr + 1))
+            with Rung(system.fault.address_error):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    @pytest.mark.parametrize(
+        "op",
+        [
+            pytest.param(lambda tbl, u, ptr: fill(tbl[ptr], u.select(1, 2)), id="fill_value"),
+            pytest.param(
+                lambda tbl, u, ptr: search(
+                    u.select(1, 2) == tbl[ptr], result=Int("Result"), found=Bool("Found")
+                ),
+                id="search_value",
+            ),
+            pytest.param(
+                lambda tbl, u, ptr: search(
+                    u.select(ptr, 2) == 0, result=Int("Result"), found=Bool("Found")
+                ),
+                id="search_window",
+            ),
+        ],
+    )
+    def test_a_read_below_the_block_is_seen_as_an_address_error(self, op):
+        """Each confirms on the interpreter, which sets the flag rather than raising."""
+        ptr = Int("Ptr", default=1, external=True, choices={1: "inside", 0: "below"})
+        tbl = Block("Tbl", TagType.INT, 1, 4)
+        u = Block("U", TagType.INT, 1, 4)
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                op(tbl, u, ptr)
+            with Rung(system.fault.address_error):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_for_count_below_the_block_is_seen_as_an_address_error(self):
+        ptr = Int("Ptr", default=1, external=True, choices={1: "inside", 0: "below"})
+        tbl = Block("Tbl", TagType.INT, 1, 4)
+        hit, coil = Bool("Hit"), Bool("Coil")
+        with Program(strict=False) as logic:
+            with Rung():
+                with forloop(tbl[ptr]):
+                    out(coil)
+            with Rung(system.fault.address_error):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
 
     def test_unbounded_pointer_hint_names_the_offset_range(self):
         """The suggested bounds are pointer values: DS[Ptr + 2] into DS1..2000 is -1..1998."""

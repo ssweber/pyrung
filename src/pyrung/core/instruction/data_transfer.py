@@ -412,11 +412,10 @@ class FillInstruction(OneShotMixin, Instruction):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         try:
             dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
+            value = resolve_tag_or_value_ctx(self.value, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
             return
-
-        value = resolve_tag_or_value_ctx(self.value, ctx)
 
         updates = {}
         for dst_tag in dst_tags:
