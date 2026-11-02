@@ -118,11 +118,15 @@ def _run(prog: Program, engine: str, watch: tuple[Any, ...], monkeypatch, scans:
     )
     ctx = _context_for_program(prog, hw)
 
-    def read(symbol: str) -> Any:
-        name, bracket, index = symbol.partition("[")
+    def read(tag: Any) -> Any:
+        # A slot only a dynamic window reaches is in its block's array, but no rung
+        # names it, so the context has to be told to look for it (the way a Modbus
+        # server's registers are).  A tag in no array still raises here.
+        ctx.ensure_tag_referenced(tag)
+        name, bracket, index = ctx.symbol_for_tag(tag).partition("[")
         return namespace[name][int(index[:-1])] if bracket else namespace[name]
 
-    return tuple(read(ctx.symbol_for_tag(tag)) for tag in watch)
+    return tuple(read(tag) for tag in watch)
 
 
 # ---- The registers the faults and the instructions under test use ------------------
