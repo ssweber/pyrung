@@ -62,6 +62,8 @@ sessions). Brief it with `editors/vscode/pyrung-debug/AGENTS.md` and
   (the queue's lock); up to ~5 builders iterating on targeted tests in parallel.
 - Stage commands, timeouts and presets are in `devtools/mergeq/mergeq.toml`; measured
   durations are in each job's `done/<id>.json` (a full train has run ~45 min).
+- A branch touching `fold.py` or `pilot/cyclefold.py` gates on `lint,prove,pilot,tumbler,fold`,
+  not `fast`: `fast` has no tumbler, and a fold change broke a pilot golden past READY once.
 - Never run `make test-fuzz` or `make bench` in an orchestration session.
 - The conformance stages use the local soft PLC; no agent runs `-m conformance` while a job's
   conf stage runs (the hook refuses it for agents anyway).
