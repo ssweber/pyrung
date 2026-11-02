@@ -17,7 +17,12 @@ from pyrung.circuitpy.codegen._constants import (
     _BOARD_SWITCH_TAG,
     _TYPE_DEFAULTS,
 )
-from pyrung.circuitpy.codegen._util import _first_defined_name, _io_kind, _mangle_symbol
+from pyrung.circuitpy.codegen._util import (
+    _default_literal,
+    _first_defined_name,
+    _io_kind,
+    _mangle_symbol,
+)
 from pyrung.circuitpy.hardware import P1AM
 from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig
@@ -29,6 +34,7 @@ from pyrung.core.expression import (
     Expression,
 )
 from pyrung.core.memory_block import (
+    UNSET,
     Block,
     BlockRange,
     IndirectBlockRange,
@@ -221,6 +227,7 @@ class CodegenContext:
     _edge_rows: dict[int, tuple[tuple[str, Any], ...]] = field(default_factory=dict)
     compact_block_map: dict[int, dict[int, int]] = field(default_factory=dict)
     _static_range_layouts: dict[int, StaticRangeLayout] = field(default_factory=dict)
+    _power_on_literals_by_block: dict[int, dict[int, str]] = field(default_factory=dict)
     _slot_addresses_by_block: dict[int, dict[str, int]] = field(default_factory=dict)
 
     def collect_hw_bindings(self) -> None:
@@ -790,38 +797,85 @@ class CodegenContext:
             self._slot_addresses_by_block[binding.block_id] = addresses
         return addresses
 
-    def block_power_on_values(self, binding: BlockBinding) -> dict[int, Any]:
-        """The slots of a block that do not power on at the type's zero, by address.
+    def _slot_holders(self, binding: BlockBinding) -> dict[int, Tag]:
+        """The tag already known to hold each slot, by address, without indexing any.
 
-        A name holding a slot brings its own default: the engines seed the name,
-        and a pointer reads the same cell.  A slot no referenced name holds powers
-        on as `Block._get_tag` would build it, without indexing it here.
+        A name the program references wins: the engines seed the name, and a pointer
+        reads the same cell.  Otherwise what `Block._get_tag` has cached or would
+        return for a mapped tag.
         """
-        block = binding.block
-        bound = {
-            addr: self.referenced_tags[name].default
-            for name, (block_id, addr) in self.tag_block_addresses.items()
-            if block_id == binding.block_id and name in self.referenced_tags
-        }
-        addresses = (
-            (binding.valid_addresses or range(binding.start, binding.end + 1))
-            if block.default_factory is not None
-            else block._configured_addresses()
-        )
-        zero = repr(_TYPE_DEFAULTS[binding.tag_type])
+        holders: dict[int, Tag] = {**binding.block._mapped_tags, **binding.block._tag_cache}
+        for name, (block_id, addr) in self.tag_block_addresses.items():
+            if block_id == binding.block_id and name in self.referenced_tags:
+                holders[addr] = self.referenced_tags[name]
+        return holders
+
+    def _factory_power_on_values(self, binding: BlockBinding, answered: set[int]) -> dict[int, Any]:
+        """What a block's ``default_factory`` gives the slots nothing else answers for.
+
+        The interpreter asks the factory once, when a scan first reaches a slot, and
+        the cache keeps the answer.  Generated code has to know sooner, so the answer
+        is only taken here from a factory that repeats it.  One that does not (a
+        counter) has no power-on value to copy for a slot not reached yet: those stay
+        at zero, and a slot already reached is in the cache and is not asked about.  A
+        slot the factory raises for stays at zero too; the interpreter cannot read it.
+        """
+        factory = binding.block.default_factory
+        if factory is None:
+            return {}
         values: dict[int, Any] = {}
-        for addr in sorted({*addresses, *bound}):
-            mapped = block._mapped_tags.get(addr)
-            if addr in bound:
-                value = bound[addr]
-            elif mapped is not None:
-                value = mapped.default
-            else:
-                _, value = block._effective_slot_policy(addr)
-            # By spelling: a Bool's False on an INT block is not the block's 0.
-            if value is not None and repr(value) != zero:
-                values[addr] = value
+        for addr in binding.valid_addresses or range(binding.start, binding.end + 1):
+            if addr in answered:
+                continue
+            try:
+                value = factory(addr)
+            except Exception:
+                continue
+            try:
+                if factory(addr) != value:
+                    return {}
+            except Exception:
+                return {}
+            values[addr] = value
         return values
+
+    def block_power_on_literals(self, binding: BlockBinding) -> dict[int, str]:
+        """Source for the slots of a block that do not power on at the type's zero.
+
+        A slot with no holder powers on as `Block._get_tag` would build it.  One no
+        literal can spell stays at zero.
+        """
+        literals = self._power_on_literals_by_block.get(binding.block_id)
+        if literals is not None:
+            return literals
+        block = binding.block
+        holders = self._slot_holders(binding)
+        configured = {
+            addr: block._slot_field(addr, "default", UNSET) for addr in block._slot_config
+        }
+        configured = {addr: value for addr, value in configured.items() if value is not UNSET}
+        values = self._factory_power_on_values(binding, {*holders, *configured})
+        values.update(configured)
+        values.update((addr, tag.default) for addr, tag in holders.items())
+        zero = repr(_TYPE_DEFAULTS[binding.tag_type])
+        literals = {}
+        for addr in sorted(values):
+            literal = _default_literal(values[addr])
+            # By spelling: a Bool's False on an INT block is not the block's 0.
+            if literal is not None and literal != zero:
+                literals[addr] = literal
+        self._power_on_literals_by_block[binding.block_id] = literals
+        return literals
+
+    def block_retentive_overrides(self, binding: BlockBinding) -> dict[int, bool]:
+        """Each slot whose retentive flag may not be its block's, by address."""
+        block = binding.block
+        overrides = {
+            addr: block._slot_field(addr, "retentive", block.retentive)
+            for addr in block._slot_config
+        }
+        overrides.update((addr, tag.retentive) for addr, tag in self._slot_holders(binding).items())
+        return overrides
 
     def _associate_tag_with_known_block(self, tag: Tag) -> None:
         if tag.name in self.tag_block_addresses or tag.name in self.dict_backed_tag_names:

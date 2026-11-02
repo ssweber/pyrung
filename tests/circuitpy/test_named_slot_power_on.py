@@ -7,15 +7,18 @@ the reference; the wire and the retentive save read the array too.
 
 from __future__ import annotations
 
+import builtins
+import enum
+import json
 import struct
 from typing import Any
 
 import pytest
 from pyclickplc.modbus import plc_to_modbus
 
-from pyrung.circuitpy import P1AM, ModbusServerConfig, generate_circuitpy
+from pyrung.circuitpy import P1AM, ModbusServerConfig, RunStopConfig, generate_circuitpy
 from pyrung.click import ClickBlocks, TagMap
-from pyrung.core import PLC, Block, Bool, Int, Program, Real, Rung, TagType, copy, out
+from pyrung.core import PLC, Block, Bool, Dint, Int, Program, Real, Rung, TagType, copy, out
 from tests.circuitpy.test_codegen import _run_single_scan_source
 from tests.core.test_indirect_expr_compare import _StubBase
 
@@ -293,3 +296,471 @@ def test_the_wire_serves_a_name_whatever_was_indexed(monkeypatch: pytest.MonkeyP
 
     namespace = _run(before, monkeypatch)
     assert _wire_read(namespace, "DS", 30) == struct.pack(">BBH", 3, 2, 6)
+
+
+def test_the_wire_refuses_a_cell_no_register_can_hold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Not a crash in ``_mb_handle``: the program keeps running, and the next read works."""
+    for indexed_first in (False, True):
+        blocks = ClickBlocks()
+        name = Dint("Cp", default=100000)
+        name.map_to(blocks.ds[30])
+        if indexed_first:
+            assert blocks.ds[30] is name
+        program = _read_by_name_and_pointer(name, blocks.ds, 30, Dint)
+        tag_map = TagMap({Int("Fill", default=4): blocks.ds[100]}, include_system=False)
+        namespace = _run(_generate(program, tag_map), monkeypatch)
+        assert namespace["_b_DS"][29] == 100000
+        assert _wire_read(namespace, "DS", 30) == bytes([0x83, 2])
+        namespace["_b_DS"][29] = 5
+        assert _wire_read(namespace, "DS", 30) == struct.pack(">BBH", 3, 2, 5)
+
+
+def test_the_wire_refuses_a_slot_default_no_register_can_hold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blocks = ClickBlocks()
+    blocks.ds.slot(30, default=99999)
+    by = Int("By")
+    with Program(strict=False) as program:
+        with Rung():
+            copy(blocks.ds[Int("Jx", default=31)], by)
+    tag_map = TagMap({by: blocks.ds[100]}, include_system=False)
+    namespace = _run(_generate(program, tag_map), monkeypatch)
+    assert _wire_read(namespace, "DS", 30) == bytes([0x83, 2])
+
+
+def test_a_wire_write_beside_a_cell_no_register_can_hold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A one-register write to a DD reads the other half of the cell first."""
+    blocks = ClickBlocks()
+    name = Real("Rz", default=5e9)
+    name.map_to(blocks.dd[30])
+    by = Dint("By")
+    program = _read_by_name_and_pointer(name, blocks.dd, 30, Real)
+    tag_map = TagMap({by: blocks.dd[100]}, include_system=False)
+    namespace = _run(_generate(program, tag_map), monkeypatch)
+    addr, _ = plc_to_modbus("DD", 30)
+    response = namespace["_mb_handle"](_mbap(struct.pack(">BHH", 6, addr, 1)), 12)
+    assert response[7:] == bytes([0x86, 2])
+    assert namespace["_b_DD"][29] == 5e9
+
+
+class _Color(enum.IntEnum):
+    RED = 1
+    BLUE = 2
+
+
+def _read_slot_through_a_pointer(slots: Block, addr: int) -> Program:
+    with Program(strict=False) as program:
+        with Rung():
+            copy(slots[Int("Jx", default=addr)], Int("Seen"))
+    return program
+
+
+def test_an_enum_default_is_seeded_as_its_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    def from_slot() -> Program:
+        slots = Block("Cb", TagType.INT, 1, 8)
+        slots.slot(3, default=_Color.BLUE)
+        return _read_slot_through_a_pointer(slots, 3)
+
+    def from_factory() -> Program:
+        slots = Block("Cb", TagType.INT, 1, 8, default_factory=lambda _addr: _Color.BLUE)
+        return _read_slot_through_a_pointer(slots, 3)
+
+    for build in (from_slot, from_factory):
+        runner = PLC(build(), dt=0.010)
+        runner.step()
+        namespace = _run(_generate(build()), monkeypatch)
+        assert namespace["_t_Seen"] == runner.current_state.tags["Seen"] == 2
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_a_default_no_literal_can_spell_stays_at_zero(
+    value: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only reachable on a slot no scan reaches: the interpreter's tag would refuse it."""
+    slots = Block("Fl", TagType.REAL, 1, 8)
+    slots.slot(5, default=value)
+    namespace = _run(_generate(_read_slot_through_a_pointer(slots, 3)), monkeypatch)
+    assert namespace["_b_Fl"][4] == 0.0
+
+
+def test_a_cached_factory_value_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A slot already reached holds the value the interpreter drew, whatever comes next."""
+    draws = {"count": 0}
+
+    def counter(_addr: int) -> int:
+        draws["count"] += 1
+        return draws["count"]
+
+    slots = Block("Cb", TagType.INT, 1, 8, default_factory=counter)
+    assert slots[3].default == 1
+    program = _read_slot_through_a_pointer(slots, 3)
+
+    first = _generate(program)
+    second = _generate(program)
+    assert first.code == second.code
+    assert [line for line in first.code.splitlines() if line.startswith("_b_Cb")] == [
+        "_b_Cb = [0] * 8",
+        "_b_Cb[2] = 1",
+    ]
+
+    runner = PLC(program, dt=0.010)
+    runner.step()
+    assert _run(first, monkeypatch)["_t_Seen"] == runner.current_state.tags["Seen"] == 1
+
+
+def test_an_impure_factory_is_not_seeded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Its next answer is not a power-on value; such a slot stays at zero, as it always did."""
+    draws = {"count": 0}
+
+    def counter(_addr: int) -> int:
+        draws["count"] += 1
+        return draws["count"]
+
+    slots = Block("Cb", TagType.INT, 1, 8, default_factory=counter)
+    program = _read_slot_through_a_pointer(slots, 3)
+    first = _generate(program)
+    called = draws["count"]
+    second = _generate(program)
+    assert first.code == second.code
+    assert called <= 2, "one repeat is enough to tell"
+    assert _run(first, monkeypatch)["_b_Cb"] == [0] * 8
+
+
+def test_a_partial_factory_seeds_what_it_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The interpreter raises on reaching a slot the factory raises for, so that one is free."""
+
+    def build() -> Program:
+        slots = Block("Cb", TagType.INT, 1, 8, default_factory=lambda addr: {3: 30}[addr])
+        return _read_slot_through_a_pointer(slots, 3)
+
+    runner = PLC(build(), dt=0.010)
+    runner.step()
+    namespace = _run(_generate(build()), monkeypatch)
+    assert namespace["_t_Seen"] == runner.current_state.tags["Seen"] == 30
+    assert namespace["_b_Cb"] == [0, 0, 30, 0, 0, 0, 0, 0]
+
+
+def test_a_factory_that_raises_on_its_second_answer_is_not_seeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = iter([7])
+
+    def once(_addr: int) -> int:
+        return next(calls)
+
+    slots = Block("Cb", TagType.INT, 1, 8, default_factory=once)
+    assert _run(_generate(_read_slot_through_a_pointer(slots, 3)), monkeypatch)["_b_Cb"] == [0] * 8
+
+
+def test_a_pure_factory_generates_the_same_code_whatever_was_indexed() -> None:
+    slots = Block("Cb", TagType.INT, 1, 8, default_factory=lambda addr: addr * 10)
+    program = _read_slot_through_a_pointer(slots, 3)
+    before = _generate(program).code
+    assert slots[3].default == 30
+    assert _generate(program).code == before
+
+
+# -- A restart: the array powers on, then the card's values load over it.
+
+
+def _attach_card(namespace: dict[str, Any], card: dict[str, Any]) -> None:
+    class _Json:
+        @staticmethod
+        def dump(payload: dict[str, Any], _file: object) -> None:
+            card["payload"] = json.loads(json.dumps(payload))
+
+        @staticmethod
+        def load(_file: object) -> dict[str, Any]:
+            return card["payload"]
+
+    class _Os:
+        @staticmethod
+        def rename(_old: str, _new: str) -> None:
+            return None
+
+        @staticmethod
+        def remove(_path: str) -> None:
+            return None
+
+    namespace.update(
+        _sd_available=True,
+        json=_Json,
+        os=_Os,
+        open=lambda *_args, **_kwargs: _Sink(),
+    )
+
+
+@pytest.mark.parametrize("written, expected", [(0, 0), (4, 4), (9, 9)])
+def test_a_retentive_name_loads_over_its_seed_after_a_restart(
+    written: int, expected: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    card: dict[str, Any] = {}
+    namespace = _run(_generate(_tag_map_to(True)), monkeypatch)
+    namespace["_b_Cb"][2] = written
+    _attach_card(namespace, card)
+    namespace["save_memory"]()
+
+    restarted = _run(_generate(_tag_map_to(True)), monkeypatch)
+    assert restarted["_b_Cb"][2] == 9
+    _attach_card(restarted, card)
+    restarted["load_memory"]()
+    assert restarted["_b_Cb"][2] == expected
+
+
+# -- STOP->RUN, driven through ``board.SWITCH``.  Scan 2 writes 7 through the pointer.
+# The switch's debounce takes a scan, so _RUN_STOP_RUN is in STOP for scans 5 and 6.
+
+_RUN_STOP_RUN = [True, True, True, False, False, True, True, True]
+_BOOT_IN_STOP = [False, False, True, True, True]
+
+
+def _scan_with_switch(
+    program: Program,
+    switch: list[bool],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    hw: P1AM | None = None,
+    stub: Any = None,
+) -> dict[str, Any]:
+    """Run the generated code with ``board.SWITCH`` reading ``switch``, one entry per scan."""
+    if hw is None:
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+    result = generate_circuitpy(
+        program,
+        hw,
+        target_scan_ms=10.0,
+        runstop=RunStopConfig(debounce_ms=0, run_when_high=True),
+    )
+    marker = "    scan_start_ns = time.monotonic_ns()"
+    assert marker in result.code
+    code = result.code.replace(marker, f"    __scan_hook(globals())\n{marker}", 1)
+    scans = {"count": 0}
+
+    def hook(namespace: dict[str, Any]) -> None:
+        scans["count"] += 1
+        if "_t_Tr" in namespace:
+            namespace["_t_Tr"] = scans["count"] == 2
+        namespace["_board_switch_io"].value = switch[scans["count"] - 1]
+        if stub is not None:
+            stub.scan = scans["count"]
+
+    monkeypatch.setattr(builtins, "__scan_hook", hook, raising=False)
+    return _run_single_scan_source(
+        code,
+        monkeypatch,
+        _StubBase() if stub is None else stub,
+        runtime_source=result.runtime,
+        scans=len(switch),
+    )
+
+
+def _interpreter_after_stop_run(program: Program) -> Any:
+    runner = PLC(program, dt=0.010)
+    runner.step()
+    runner.patch({"Tr": True})
+    runner.step()
+    runner.step()
+    runner.stop()
+    runner.start()
+    runner.step()
+    return runner.current_state.tags["Seen"]
+
+
+def _written_through_a_pointer(slots: Block, addr: int, *rungs: Any) -> Program:
+    index = Int("Jx", default=addr, retentive=True)
+    with Program(strict=False) as program:
+        with Rung(Bool("Tr", retentive=False)):
+            copy(7, slots[index])
+        with Rung():
+            copy(slots[index], Int("Seen", retentive=False))
+        for source, target in rungs:
+            with Rung():
+                copy(source, target)
+    return program
+
+
+def _pointer_only_slot_default() -> Program:
+    slots = Block("Cb", TagType.INT, 1, 8)
+    slots.slot(3, default=5, retentive=False)
+    return _written_through_a_pointer(slots, 3)
+
+
+def _pointer_only_slot_zero() -> Program:
+    slots = Block("Cb", TagType.INT, 1, 8)
+    slots.slot(3, default=0, retentive=False)
+    return _written_through_a_pointer(slots, 3)
+
+
+def _pointer_only_no_default() -> Program:
+    return _written_through_a_pointer(Block("Cb", TagType.INT, 1, 8), 3)
+
+
+def _pointer_only_on_a_retentive_block() -> Program:
+    slots = Block("Cb", TagType.INT, 1, 8, retentive=True)
+    slots.slot(3, default=5, retentive=False)
+    return _written_through_a_pointer(slots, 3)
+
+
+def _pointer_only_factory() -> Program:
+    slots = Block("Cb", TagType.INT, 1, 8, default_factory=lambda addr: addr * 10)
+    return _written_through_a_pointer(slots, 3)
+
+
+def _named_slot() -> Program:
+    slots = Block("Cb", TagType.INT, 1, 8)
+    name = Int("Cq", default=9, retentive=False)
+    name.map_to(slots[3])
+    return _written_through_a_pointer(slots, 3, (name, Int("By", retentive=False)))
+
+
+def _named_retentive_slot() -> Program:
+    slots = Block("Cb", TagType.INT, 1, 8)
+    name = Int("Cq", default=9, retentive=True)
+    name.map_to(slots[3])
+    return _written_through_a_pointer(slots, 3, (name, Int("By", retentive=False)))
+
+
+def _block_map_pointer_only() -> Program:
+    bank = Block("Dz", TagType.INT, 1, 8)
+    logical = Block("Lg", TagType.INT, 1, 4)
+    logical.slot(2, default=44, retentive=False)
+    logical.map_to(bank.select(3, 6))
+    return _written_through_a_pointer(bank, 4)
+
+
+STOP_RUN_PROGRAMS = [
+    pytest.param(_pointer_only_slot_default, id="pointer-only-default"),
+    pytest.param(_pointer_only_slot_zero, id="pointer-only-zero"),
+    pytest.param(_pointer_only_no_default, id="pointer-only-none"),
+    pytest.param(_pointer_only_on_a_retentive_block, id="non-retentive-on-retentive-block"),
+    pytest.param(_pointer_only_factory, id="factory"),
+    pytest.param(_named_slot, id="named"),
+    pytest.param(_named_retentive_slot, id="named-retentive"),
+    pytest.param(_block_map_pointer_only, id="block-map"),
+]
+
+
+@pytest.mark.parametrize("build", STOP_RUN_PROGRAMS)
+def test_stop_to_run_matches_the_interpreter(build: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    namespace = _scan_with_switch(build(), _RUN_STOP_RUN, monkeypatch)
+    assert namespace["_t_Seen"] == _interpreter_after_stop_run(build())
+
+
+@pytest.mark.parametrize("default", [5, 0])
+def test_a_retentive_slot_keeps_its_value_across_stop_to_run(
+    default: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reached only by a pointer.  The interpreter loses this one, which is its own bug."""
+    slots = Block("Cb", TagType.INT, 1, 8)
+    slots.slot(3, default=default, retentive=True)
+    namespace = _scan_with_switch(_written_through_a_pointer(slots, 3), _RUN_STOP_RUN, monkeypatch)
+    assert namespace["_t_Seen"] == 7
+    assert namespace["_b_Cb"][2] == 7
+
+
+def test_an_input_block_keeps_this_scans_read_at_stop_to_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The read comes before the reset, so a reset would blank the first RUN scan."""
+    hw = P1AM()
+    inputs = hw.slot(1, "P1-08SIM")
+    index = Int("Jx", default=2, retentive=True)
+    with Program(strict=False) as program:
+        with Rung():
+            copy(inputs[index], Bool("Seen", retentive=False))
+
+    class _Reads(_StubBase):
+        def readDiscrete(self, *_args: object, **_kwargs: object) -> int:
+            return 0b10
+
+    namespace = _scan_with_switch(program, _RUN_STOP_RUN, monkeypatch, hw=hw, stub=_Reads())
+    assert namespace["_t_Seen"] is True
+
+
+class _RecordsWrites(_StubBase):
+    def __init__(self) -> None:
+        self.scan = 0
+        self.masks: dict[int, int] = {}
+
+    def readDiscrete(self, *_args: object, **_kwargs: object) -> int:
+        return 0
+
+    def writeDiscrete(self, mask: int, _slot: int) -> None:
+        self.masks[self.scan] = mask
+
+
+def _output_slot_program(*, retentive: bool = False, default: bool = True) -> tuple[P1AM, Program]:
+    hw = P1AM()
+    outputs = hw.slot(1, "P1-08TRS")
+    outputs.slot(2, default=default, retentive=retentive)
+    index = Int("Jx", default=2, retentive=True)
+    with Program(strict=False) as program:
+        with Rung(Bool("Tr", retentive=False)):
+            copy(not default, outputs[index])
+        with Rung():
+            copy(outputs[index], Bool("Seen", retentive=False))
+    return hw, program
+
+
+def _output_masks(switch: list[bool], monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> list[int]:
+    hw, program = _output_slot_program(**kwargs)
+    stub = _RecordsWrites()
+    _scan_with_switch(program, switch, monkeypatch, hw=hw, stub=stub)
+    return [stub.masks[scan] for scan in sorted(stub.masks)]
+
+
+def test_a_pointer_only_output_energises_again_after_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Off in STOP, and back at its power-on True at RUN; scan 2 wrote it False."""
+    assert _output_masks(_RUN_STOP_RUN, monkeypatch) == [2, 0, 0, 0, 0, 0, 2, 2]
+
+
+def test_a_pointer_only_output_energises_after_booting_in_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _output_masks(_BOOT_IN_STOP, monkeypatch) == [0, 0, 0, 2, 2]
+
+
+def test_a_retentive_output_keeps_its_value_across_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scan 2 writes it True; STOP turns the output off, and RUN finds the True again."""
+    masks = _output_masks(_RUN_STOP_RUN, monkeypatch, retentive=True, default=False)
+    assert masks == [0, 2, 2, 2, 0, 0, 2, 2]
+
+
+def _reset_body(program: Program) -> list[str]:
+    hw = P1AM()
+    hw.slot(1, "P1-08SIM")
+    code = generate_circuitpy(
+        program, hw, target_scan_ms=10.0, runstop=RunStopConfig(debounce_ms=0)
+    ).code
+    body = code.split("def _reset_for_run_transition():", 1)[1].split("\ndef ", 1)[0]
+    return [line.strip() for line in body.splitlines() if "_b_Bg" in line or "_i in" in line]
+
+
+def test_the_reset_of_a_big_block_is_small() -> None:
+    plain = Block("Bg", TagType.INT, 1, 65535)
+    assert _reset_body(_read_slot_through_a_pointer(plain, 31)) == [
+        "for _i in range(0, 65535):",
+        "_b_Bg[_i] = 0",
+    ]
+
+    seeded = Block("Bg", TagType.INT, 1, 65535)
+    seeded.slot(31, default=9)
+    seeded.slot(40000, retentive=True, default=8)
+    assert _reset_body(_read_slot_through_a_pointer(seeded, 31)) == [
+        "for _i in range(0, 39999):",
+        "_b_Bg[_i] = 0",
+        "for _i in range(40000, 65535):",
+        "_b_Bg[_i] = 0",
+        "_b_Bg[30] = 9",
+    ]
+
+    retentive = Block("Bg", TagType.INT, 1, 65535, retentive=True)
+    retentive.slot(31, default=9, retentive=False)
+    assert _reset_body(_read_slot_through_a_pointer(retentive, 31)) == [
+        "_b_Bg[30] = 0",
+        "_b_Bg[30] = 9",
+    ]

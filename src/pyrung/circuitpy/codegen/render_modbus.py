@@ -589,14 +589,22 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
             "    if _mapped is None:",
             "        return None",
             "    _bank, _index, _reg_pos = _mapped",
-            "    return _mb_read_reg_plc(_bank, _index, _reg_pos)",
+            # A cell can hold what no register can (a Dint on a DS slot, a NaN):
+            # that read is refused, and the program keeps running.
+            "    try:",
+            "        return _mb_read_reg_plc(_bank, _index, _reg_pos)",
+            "    except Exception:",
+            "        return None",
             "",
             "def _mb_write_reg(addr, val):",
             "    _mapped = _mb_reverse_register(int(addr))",
             "    if _mapped is None:",
             "        return False",
             "    _bank, _index, _reg_pos = _mapped",
-            "    return _mb_write_reg_plc(_bank, _index, _reg_pos, val)",
+            "    try:",
+            "        return _mb_write_reg_plc(_bank, _index, _reg_pos, val)",
+            "    except Exception:",
+            "        return False",
             "",
         ]
     )
