@@ -38,7 +38,7 @@ from pyrung.circuitpy.codegen._util import (
 )
 from pyrung.circuitpy.codegen.compile import compile_rungs
 from pyrung.circuitpy.codegen.compile._primitives import _load_cast_expr
-from pyrung.circuitpy.codegen.context import CodegenContext
+from pyrung.circuitpy.codegen.context import BlockBinding, CodegenContext
 from pyrung.circuitpy.codegen.render_modbus import (
     _render_ethernet_setup,
     _render_modbus_accessors,
@@ -275,20 +275,96 @@ def _tag_is_input_endpoint(ctx: CodegenContext, tag_name: str) -> bool:
     return binding.direction == "input"
 
 
+def _render_slot_runs(symbol: str, runs: list[tuple[int, int, str]], indent: str = "") -> list[str]:
+    """Assign each ``(first index, stop index, literal)``; a run of 3 or more is one loop."""
+    lines: list[str] = []
+    for first, stop, literal in runs:
+        if stop - first < 3:
+            lines.extend(f"{indent}{symbol}[{index}] = {literal}" for index in range(first, stop))
+        else:
+            lines.append(f"{indent}for _i in range({first}, {stop}):")
+            lines.append(f"{indent}    {symbol}[_i] = {literal}")
+    return lines
+
+
+def _render_block_power_on_lines(
+    symbol: str, binding: BlockBinding, literals: dict[int, str], indent: str = ""
+) -> list[str]:
+    """Seed the given slots; contiguous equal values are one run."""
+    runs: list[tuple[int, int, str]] = []
+    for addr, literal in literals.items():
+        index = addr - binding.start
+        if runs and runs[-1][1] == index and runs[-1][2] == literal:
+            runs[-1] = (runs[-1][0], index + 1, literal)
+        else:
+            runs.append((index, index + 1, literal))
+    return _render_slot_runs(symbol, runs, indent)
+
+
+def _render_block_run_reset_lines(binding: BlockBinding, ctx: CodegenContext) -> list[str]:
+    """Put a block's non-retentive slots back at their power-on values, for a STOP->RUN.
+
+    Every slot, not just the named ones: a pointer can have written any of them.  An
+    input block is left alone, as this scan's read has already filled it.
+    """
+    if binding.direction == "input":
+        return []
+    base = binding.block.retentive
+    overrides = ctx.block_retentive_overrides(binding)
+    # Runs of cleared indexes.  The block's own flag covers every slot not overridden,
+    # so a big block costs a line per override, not a line per slot.
+    runs: list[tuple[int, int, str]] = []
+    zero = repr(_TYPE_DEFAULTS[binding.tag_type])
+    first = 0
+    for addr, retentive in sorted(overrides.items()):
+        index = addr - binding.start
+        if base and not retentive:
+            if runs and runs[-1][1] == index:
+                runs[-1] = (runs[-1][0], index + 1, zero)
+            else:
+                runs.append((index, index + 1, zero))
+        elif not base and retentive:
+            if first < index:
+                runs.append((first, index, zero))
+            first = index + 1
+    size = binding.end - binding.start + 1
+    if not base and first < size:
+        runs.append((first, size, zero))
+    symbol = ctx.block_symbols[binding.block_id]
+    lines = _render_slot_runs(symbol, runs, "    ")
+    seeds = {
+        addr: literal
+        for addr, literal in ctx.block_power_on_literals(binding).items()
+        if not overrides.get(addr, base)
+    }
+    lines.extend(_render_block_power_on_lines(symbol, binding, seeds, "    "))
+    return lines
+
+
 def _render_run_transition_reset_lines(ctx: CodegenContext) -> list[str]:
     lines: list[str] = []
     for tag_name in sorted(ctx.referenced_tags):
         tag = ctx.referenced_tags[tag_name]
         if tag.retentive:
             continue
-        if _tag_is_input_endpoint(ctx, tag_name):
+        if tag_name in ctx.tag_block_addresses or _tag_is_input_endpoint(ctx, tag_name):
             continue
         lines.append(f"    {ctx.symbol_for_tag(tag)} = {repr(tag.default)}")
+    for binding in sorted(
+        ctx.emitted_bindings(), key=lambda b: (ctx.block_symbols[b.block_id], b.block_id)
+    ):
+        lines.extend(_render_block_run_reset_lines(binding, ctx))
     return lines
 
 
-def _render_stop_output_clear_lines(ctx: CodegenContext) -> list[str]:
+def _render_stop_output_clear_lines(ctx: CodegenContext) -> tuple[list[str], list[str]]:
+    """Clear the output arrays for the write that turns the modules off.
+
+    Returns the lines before that write and the lines after it: a retentive slot's
+    value outlives STOP, in its array, though its output is off.
+    """
     lines: list[str] = []
+    restore_lines: list[str] = []
     for binding in sorted(
         ctx.emitted_bindings(), key=lambda b: (ctx.block_symbols[b.block_id], b.block_id)
     ):
@@ -297,6 +373,12 @@ def _render_stop_output_clear_lines(ctx: CodegenContext) -> list[str]:
         symbol = ctx.block_symbols[binding.block_id]
         default = _TYPE_DEFAULTS[binding.tag_type]
         size = binding.end - binding.start + 1
+        overrides = ctx.block_retentive_overrides(binding)
+        for index in range(size):
+            if overrides.get(binding.start + index, binding.block.retentive):
+                kept = f"_kept{len(restore_lines)}"
+                lines.append(f"    {kept} = {symbol}[{index}]")
+                restore_lines.append(f"    {symbol}[{index}] = {kept}")
         lines.append(f"    for _i in range({size}):")
         lines.append(f"        {symbol}[_i] = {repr(default)}")
     led_symbol = ctx.symbol_if_referenced(_BOARD_LED_TAG)
@@ -306,7 +388,7 @@ def _render_stop_output_clear_lines(ctx: CodegenContext) -> list[str]:
         channel_symbol = ctx.symbol_if_referenced(channel_tag)
         if channel_symbol is not None:
             lines.append(f"    {channel_symbol} = 0")
-    return lines
+    return lines, restore_lines
 
 
 def _section(label: str) -> str:
@@ -541,6 +623,9 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
         size = binding.end - binding.start + 1
         default = _TYPE_DEFAULTS[binding.tag_type]
         lines.append(f"{symbol} = [{repr(default)}] * {size}")
+        lines.extend(
+            _render_block_power_on_lines(symbol, binding, ctx.block_power_on_literals(binding))
+        )
     lines.append("")
 
     # 6) runtime memory declarations (stubbed persistence state)
@@ -896,10 +981,10 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
         lines.append("def _force_outputs_off():")
         if scalar_symbols:
             lines.append(f"    global {', '.join(sorted(set(scalar_symbols)))}")
-        output_clear_lines = _render_stop_output_clear_lines(ctx)
-        if output_clear_lines:
-            lines.extend(output_clear_lines)
+        output_clear_lines, output_restore_lines = _render_stop_output_clear_lines(ctx)
+        lines.extend(output_clear_lines)
         lines.append("    _write_outputs()")
+        lines.extend(output_restore_lines)
         lines.append("")
 
     address_fault_symbol = ctx.symbol_if_referenced(_FAULT_ADDRESS_ERROR_TAG)

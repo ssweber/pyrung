@@ -288,6 +288,12 @@ def test_yd_mirror_read_and_write(monkeypatch):
     block_symbol = "_b_OutBits"
     out_bits = namespace[block_symbol]
     assert isinstance(out_bits, list)
+    # The slots power on at their default=True, and the wire sees it.
+    resp = namespace["_mb_handle"](_mbap(19, struct.pack(">BHH", 3, 57856, 1)), 12)
+    assert resp is not None
+    assert struct.unpack(">H", resp[-2:])[0] == 0xFFFF
+
+    out_bits[:] = [False] * 16
     out_bits[0] = True
     out_bits[2] = True
     out_bits[15] = True
@@ -339,6 +345,12 @@ def test_xd_mirror_read(monkeypatch):
     block_symbol = "_b_InBits"
     in_bits = namespace[block_symbol]
     assert isinstance(in_bits, list)
+    # The slots power on at their default=True, and the wire sees it.
+    resp = namespace["_mb_handle"](_mbap(29, struct.pack(">BHH", 4, 57344, 1)), 12)
+    assert resp is not None
+    assert struct.unpack(">H", resp[-2:])[0] == 0xFFFF
+
+    in_bits[:] = [False] * 16
     in_bits[0] = True
     in_bits[7] = True
     in_bits[15] = True

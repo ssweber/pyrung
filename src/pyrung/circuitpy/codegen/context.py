@@ -15,8 +15,14 @@ from pyrung.circuitpy.codegen._constants import (
     _BOARD_NEOPIXEL_R_TAG,
     _BOARD_SAVE_MEMORY_CMD_TAG,
     _BOARD_SWITCH_TAG,
+    _TYPE_DEFAULTS,
 )
-from pyrung.circuitpy.codegen._util import _first_defined_name, _io_kind, _mangle_symbol
+from pyrung.circuitpy.codegen._util import (
+    _default_literal,
+    _first_defined_name,
+    _io_kind,
+    _mangle_symbol,
+)
 from pyrung.circuitpy.hardware import P1AM
 from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig
@@ -28,6 +34,7 @@ from pyrung.core.expression import (
     Expression,
 )
 from pyrung.core.memory_block import (
+    UNSET,
     Block,
     BlockRange,
     IndirectBlockRange,
@@ -220,6 +227,8 @@ class CodegenContext:
     _edge_rows: dict[int, tuple[tuple[str, Any], ...]] = field(default_factory=dict)
     compact_block_map: dict[int, dict[int, int]] = field(default_factory=dict)
     _static_range_layouts: dict[int, StaticRangeLayout] = field(default_factory=dict)
+    _power_on_literals_by_block: dict[int, dict[int, str]] = field(default_factory=dict)
+    _slot_addresses_by_block: dict[int, dict[str, int]] = field(default_factory=dict)
 
     def collect_hw_bindings(self) -> None:
         self.slot_bindings.clear()
@@ -406,6 +415,9 @@ class CodegenContext:
             system.fault.math_operation_error,
         ):
             self.referenced_tags.setdefault(fault_tag.name, fault_tag)
+        # The walk meets a tag before it may meet the block holding it.
+        for tag in list(self.referenced_tags.values()):
+            self._associate_tag_with_known_block(tag)
         self._refresh_board_usage()
 
     def collect_retentive_tags(self) -> None:
@@ -760,9 +772,110 @@ class CodegenContext:
             channel_count=channel_count,
         )
         self.block_bindings[block_id] = binding
-        for addr, tag in block._tag_cache.items():
-            self.tag_block_addresses[tag.name] = (block_id, addr)
         return block_id
+
+    def _slot_addresses(self, binding: BlockBinding) -> dict[str, int]:
+        """The address of each slot of a block, by the name its slot resolves to.
+
+        Memory is keyed by name, so a tag naming a slot is that slot however it
+        got the name: ``map_to``, ``slot(name=...)`` or the same spelling.  Read
+        from the slot configuration, not ``Block._tag_cache``: the cache holds
+        whichever slots something has indexed so far, and an indirect read only
+        indexes a slot when a scan reaches it.  What compiles must not depend on
+        that, or a kernel compiled before the pointer arrives keeps the name and
+        the slot in two cells.
+        """
+        addresses = self._slot_addresses_by_block.get(binding.block_id)
+        if addresses is None:
+            block = binding.block
+            addresses = {}
+            for addr in binding.valid_addresses or range(binding.start, binding.end + 1):
+                # The same precedence as ``Block._get_tag``.
+                mapped = block._mapped_tags.get(addr)
+                name = mapped.name if mapped is not None else block._effective_slot_name(addr)
+                addresses[name] = addr
+            self._slot_addresses_by_block[binding.block_id] = addresses
+        return addresses
+
+    def _slot_holders(self, binding: BlockBinding) -> dict[int, Tag]:
+        """The tag already known to hold each slot, by address, without indexing any.
+
+        A name the program references wins: the engines seed the name, and a pointer
+        reads the same cell.  Otherwise what `Block._get_tag` has cached or would
+        return for a mapped tag.
+        """
+        holders: dict[int, Tag] = {**binding.block._mapped_tags, **binding.block._tag_cache}
+        for name, (block_id, addr) in self.tag_block_addresses.items():
+            if block_id == binding.block_id and name in self.referenced_tags:
+                holders[addr] = self.referenced_tags[name]
+        return holders
+
+    def _factory_power_on_values(self, binding: BlockBinding, answered: set[int]) -> dict[int, Any]:
+        """What a block's ``default_factory`` gives the slots nothing else answers for.
+
+        The interpreter asks the factory once, when a scan first reaches a slot, and
+        the cache keeps the answer.  Generated code has to know sooner, so the answer
+        is only taken here from a factory that repeats it.  One that does not (a
+        counter) has no power-on value to copy for a slot not reached yet: those stay
+        at zero, and a slot already reached is in the cache and is not asked about.  A
+        slot the factory raises for stays at zero too; the interpreter cannot read it.
+        """
+        factory = binding.block.default_factory
+        if factory is None:
+            return {}
+        values: dict[int, Any] = {}
+        for addr in binding.valid_addresses or range(binding.start, binding.end + 1):
+            if addr in answered:
+                continue
+            try:
+                value = factory(addr)
+            except Exception:
+                continue
+            try:
+                if factory(addr) != value:
+                    return {}
+            except Exception:
+                return {}
+            values[addr] = value
+        return values
+
+    def block_power_on_literals(self, binding: BlockBinding) -> dict[int, str]:
+        """Source for the slots of a block that do not power on at the type's zero.
+
+        A slot with no holder powers on as `Block._get_tag` would build it.  One no
+        literal can spell stays at zero.
+        """
+        literals = self._power_on_literals_by_block.get(binding.block_id)
+        if literals is not None:
+            return literals
+        block = binding.block
+        holders = self._slot_holders(binding)
+        configured = {
+            addr: block._slot_field(addr, "default", UNSET) for addr in block._slot_config
+        }
+        configured = {addr: value for addr, value in configured.items() if value is not UNSET}
+        values = self._factory_power_on_values(binding, {*holders, *configured})
+        values.update(configured)
+        values.update((addr, tag.default) for addr, tag in holders.items())
+        zero = repr(_TYPE_DEFAULTS[binding.tag_type])
+        literals = {}
+        for addr in sorted(values):
+            literal = _default_literal(values[addr])
+            # By spelling: a Bool's False on an INT block is not the block's 0.
+            if literal is not None and literal != zero:
+                literals[addr] = literal
+        self._power_on_literals_by_block[binding.block_id] = literals
+        return literals
+
+    def block_retentive_overrides(self, binding: BlockBinding) -> dict[int, bool]:
+        """Each slot whose retentive flag may not be its block's, by address."""
+        block = binding.block
+        overrides = {
+            addr: block._slot_field(addr, "retentive", block.retentive)
+            for addr in block._slot_config
+        }
+        overrides.update((addr, tag.retentive) for addr, tag in self._slot_holders(binding).items())
+        return overrides
 
     def _associate_tag_with_known_block(self, tag: Tag) -> None:
         if tag.name in self.tag_block_addresses or tag.name in self.dict_backed_tag_names:
@@ -778,10 +891,10 @@ class CodegenContext:
         for binding in sorted(
             self.block_bindings.values(), key=lambda b: (b.logical_name, b.block_id)
         ):
-            for addr, cached_tag in binding.block._tag_cache.items():
-                if cached_tag is tag:
-                    self.tag_block_addresses[tag.name] = (binding.block_id, addr)
-                    return
+            addr = self._slot_addresses(binding).get(tag.name)
+            if addr is not None:
+                self.tag_block_addresses[tag.name] = (binding.block_id, addr)
+                return
 
     def _refresh_board_usage(self) -> None:
         names = set(self.referenced_tags)

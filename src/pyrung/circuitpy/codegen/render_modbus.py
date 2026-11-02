@@ -94,10 +94,16 @@ def _modbus_backed_slots(ctx: CodegenContext) -> tuple[_ModbusBackedSlot, ...]:
             )
         )
     for name, tag in ctx.referenced_tags.items():
-        block = getattr(tag, "_pyrung_block", None)
+        claim = ctx.tag_block_addresses.get(name)
+        if claim is not None:
+            block, addr = ctx.block_bindings[claim[0]].block, claim[1]
+        else:
+            # No array holds it: a raw register a rung uses (``ds[3901]``) is a
+            # scalar, and only its own tag knows the register.
+            block = getattr(tag, "_pyrung_block", None)
+            addr = getattr(tag, "_pyrung_block_addr", 0)
         if block is None or block.name not in _RAW_BANKS:
             continue
-        addr: int = getattr(tag, "_pyrung_block_addr")  # noqa: B009
         bank, index = parse_address(block._format_tag_name(addr))
         if (bank, index) in served:
             continue
@@ -583,14 +589,22 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
             "    if _mapped is None:",
             "        return None",
             "    _bank, _index, _reg_pos = _mapped",
-            "    return _mb_read_reg_plc(_bank, _index, _reg_pos)",
+            # A cell can hold what no register can (a Dint on a DS slot, a NaN):
+            # that read is refused, and the program keeps running.
+            "    try:",
+            "        return _mb_read_reg_plc(_bank, _index, _reg_pos)",
+            "    except Exception:",
+            "        return None",
             "",
             "def _mb_write_reg(addr, val):",
             "    _mapped = _mb_reverse_register(int(addr))",
             "    if _mapped is None:",
             "        return False",
             "    _bank, _index, _reg_pos = _mapped",
-            "    return _mb_write_reg_plc(_bank, _index, _reg_pos, val)",
+            "    try:",
+            "        return _mb_write_reg_plc(_bank, _index, _reg_pos, val)",
+            "    except Exception:",
+            "        return False",
             "",
         ]
     )

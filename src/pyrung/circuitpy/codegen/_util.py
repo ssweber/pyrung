@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -106,6 +107,23 @@ def _global_line(symbols: list[str], indent: int) -> str | None:
     if not symbols:
         return None
     return f"{' ' * indent}global {', '.join(symbols)}"
+
+
+def _default_literal(value: Any) -> str | None:
+    """Python source for a default, or None for one no literal can spell.
+
+    ``repr`` is not source for every default a slot can carry: an ``IntEnum`` member
+    spells ``<Color.BLUE: 2>``, and ``float("inf")`` spells a bare ``inf``.
+    """
+    if isinstance(value, bool):
+        return repr(value)
+    if isinstance(value, int):
+        return int.__repr__(value)
+    if isinstance(value, float):
+        return float.__repr__(value) if math.isfinite(value) else None
+    if isinstance(value, str):
+        return str.__repr__(value)
+    return None
 
 
 def _ret_defaults_literal(ctx: CodegenContext) -> dict[str, Any]:
