@@ -3022,7 +3022,9 @@ class PLC:
             for name, acc, frac_in, _frac_out in plan.timer_landing:
                 replay.apply_replay_io_write(name, acc)
                 replay._kernel.memory[f"_frac:{name}"] = frac_in
-            replay.step_replay(logical_scans=plan.skip)
+            for name, value in plan.analog_landing:
+                replay.apply_replay_io_write(name, value)
+            replay.step_replay(logical_scans=plan.skip, ordinary_dt=plan.ordinary_dt)
             for name, _acc, _frac_in, frac_out in plan.timer_landing:
                 replay._kernel.memory[f"_frac:{name}"] = frac_out
             kernel_scans += 1

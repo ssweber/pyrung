@@ -467,6 +467,8 @@ def cycle_fold_until(
     """
     from pyrung.core.fold import (
         _acc_totals,
+        _analog_jump,
+        _analog_recurrence,
         _harness_nearest_scan,
         _OrdinaryFoldStrategy,
         _replace_tip_state,
@@ -545,18 +547,21 @@ def cycle_fold_until(
     }
     # Classify over the runner fold's *significant* set: drop the tags it already
     # treats as don't-care for the plateau (resolved-on-read-driven frozen writes,
-    # unread churn, harness feedback) so they don't spuriously break the cycle.
+    # unread churn, analog plants) so they don't spuriously break the cycle.
     # Accumulators stay in — they are the monotone coordinates.
     # Clock mirrors are ignored too: the RTC bound below keeps a jump inside
     # one tick unless their readers are proven off (fold._TimeMirrors).
-    ignore = fold_ctx.frozen_writes | fold_ctx.churn_excluded | fold_ctx.profile_fb_names
+    # A plant's value need not repeat (see _analog_jump); a Pulse's bit does.
+    ignore = fold_ctx.frozen_writes | fold_ctx.churn_excluded | fold_ctx.analog_names
     if fold_ctx.time_mirrors is not None:
         ignore = ignore | fold_ctx.time_mirrors.names
     significant_keys = (frozenset(plc.state.tags) - ignore) | {_EDGE_MEMORY_KEY}
+    tags_seen = len(plc.state.tags)
     # A jump runs no scan: an ignored tag other than a frozen write keeps its
     # pre-jump value until the next scan rebuilds it, so the jumped tip is then
     # not the exact state of its scan.
-    jump_exact = not (ignore - fold_ctx.frozen_writes)
+    # An analog plant is the exception: the jump lands it (see _analog_jump).
+    jump_exact = not (ignore - fold_ctx.frozen_writes - fold_ctx.analog_names)
     ordinary = _OrdinaryFoldStrategy(fold_ctx, extra_comparisons, extra_unmodeled)
     trace_reads = predicate_reads is None
 
@@ -630,7 +635,8 @@ def cycle_fold_until(
             enabled = en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
             if enabled:
                 return False  # an analog coupling is still driving its ramp
-        return True
+        # A disabled ramp can still be decaying.
+        return all(_analog_recurrence(a, snap, dt) is None for a in fold_ctx.analog)
 
     def _within_budget() -> bool:
         used = kernel_scans if kernel_budget else plc.state.scan_id - start_scan
@@ -694,6 +700,11 @@ def cycle_fold_until(
                 _EDGE_MEMORY_KEY, edge_memory_on(plc.state)
             )
         )
+        # A slot a scan touches for the first time joins the state here.  Older
+        # anchors read it as absent, which no period can explain.
+        if len(plc.state.tags) != tags_seen:
+            tags_seen = len(plc.state.tags)
+            significant_keys = significant_keys | (frozenset(plc.state.tags) - ignore)
         ring_writes.append(plc._last_acc_writes)
         if len(ring) > ring_cap:
             del ring[0]
@@ -839,6 +850,43 @@ def cycle_fold_until(
             continue
         if periods_to_jump < 1:
             continue
+        analog_landing: dict[str, Any] = {}
+        if fold_ctx.analog:
+            forced = plc._input_overrides.forces_mutable.keys()
+            read_sources = ordinary.predicate_unmodeled()
+            declared = (predicate_reads or frozenset()) & fold_ctx.analog_names
+            analog_jump = (
+                None
+                if read_sources is None
+                else _analog_jump(
+                    fold_ctx,
+                    ring[-observed:],
+                    cyc.period,
+                    periods_to_jump,
+                    blocked=ignore | cyc.monotone.keys(),
+                    unmodeled=(
+                        ordinary.unmodeled
+                        | read_sources
+                        | fold_ctx.hidden_input_coordinates(
+                            forced,
+                            _most_writes_per_scan(
+                                ring_writes[-observed:], fold_ctx.inputs_between_writes.keys()
+                            ),
+                        )
+                        | (declared - (extra_comparisons or {}).keys())
+                    ),
+                    callbacks=active_scan_callbacks,
+                    forced=forced,
+                    extra_comparisons=extra_comparisons,
+                )
+            )
+            if analog_jump is None:
+                if stats is not None:
+                    stats["analog_declined"] = stats.get("analog_declined", 0) + 1
+                continue
+            periods_to_jump, analog_landing = analog_jump
+            if periods_to_jump < 1:
+                continue
 
         # Patch each monotone acc forward, stamp the skipped scans onto scan_id /
         # timestamp so the acc invariant and every clock phase hold across the gap.
@@ -874,6 +922,7 @@ def cycle_fold_until(
             # Presentation receipt: these are the exact accumulator edits a
             # technician would make to reproduce the proved-safe jump.
             advances.extend(patches.items())
+        patches.update(analog_landing)
         # Direct tip edits, not patches: the landed state is the exact state of
         # its scan, cached and checkpointed as such (a patch would only land on
         # the next scan, and a replay would apply it as an input).

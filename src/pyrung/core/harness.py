@@ -662,11 +662,10 @@ class Harness:
                 )
             elif isinstance(spec, Approach):  # first-order lag toward a constant/setpoint tag
                 toward = spec.toward
-                toward_operand: Any = (
-                    (self._plc._known_tags_by_name.get(toward) or Real(toward))
-                    if isinstance(toward, str)
-                    else toward
-                )
+                toward_operand: Any = toward
+                if isinstance(toward, str):
+                    known_toward = self._plc._known_tags_by_name.get(toward)
+                    toward_operand = Real(toward) if known_toward is None else known_toward
                 plant.extend(
                     analog_approach_rung(
                         enable=enable,
