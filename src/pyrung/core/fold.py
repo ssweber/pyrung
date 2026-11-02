@@ -223,9 +223,6 @@ class _FoldContext:
     landing_rebuilt: frozenset[str] = frozenset()
     # Timed accumulators a scan may write more than once (see _timer_contests).
     contested_timers: frozenset[str] = frozenset()
-    # Edge memory the plateau guard leaves to the clock handling (see
-    # every_scan_clock_edge_keys).
-    clock_edge_memory: frozenset[str] = frozenset()
     # The harness's ``Ramp`` and ``Approach`` plants (see _AnalogFeedback).
     analog: tuple[_AnalogFeedback, ...] = ()
 
@@ -3037,7 +3034,6 @@ def _build_fold_context(
         mirror_limits=tuple(mirror_limits),
         landing_rebuilt=landing_rebuilt,
         contested_timers=contested_timers,
-        clock_edge_memory=every_scan_clock_edge_keys(getattr(plc, "_site_table", None)),
         analog=analog,
     )
 
@@ -4000,15 +3996,16 @@ def _visible_items(state: Any, exclude: frozenset[str]) -> dict[str, Any]:
 EDGE_MEMORY_PREFIXES = ("_edge:", "_drum_")
 
 
-def edge_memory_on(state: Any, exempt: frozenset[str] = frozenset()) -> frozenset[str]:
+def edge_memory_on(state: Any) -> frozenset[str]:
     """The edge sites whose memory (``_edge:e{N}``) holds on in *state*.
 
     An edge contact stores the bit it saw each time its row is scanned, so
     equal tags no longer imply equal edge memory: a scan that saw a bit change
     at a contact leaves the memory changed, and the next scan sees no edge
     there.  A window repeats its probe scan only if the probe left every edge
-    memory as it found it; absent and off read the same.  Keys in *exempt*
-    (see :func:`every_scan_clock_edge_keys`) are left out.
+    memory as it found it; absent and off read the same.  That holds for a contact
+    on a system clock too: the rungs under its edge scan run only on that scan, so a
+    state that scan left unchanged says nothing about the scans after it.
 
     A drum's memory counts too: it writes its outputs on a move or as its rung
     comes back, not every scan, and a jog edge on a bad step changes no tag that
@@ -4019,37 +4016,7 @@ def edge_memory_on(state: Any, exempt: frozenset[str] = frozenset()) -> frozense
     return frozenset(
         key
         for key, value in state.memory.items()
-        if value
-        and isinstance(key, str)
-        and key.startswith(EDGE_MEMORY_PREFIXES)
-        and key not in exempt
-    )
-
-
-def every_scan_clock_edge_keys(site_table: Any) -> frozenset[str]:
-    """Memory keys of the edge sites on a system clock that every scan scans.
-
-    A contact on ``sys.clock_*`` in a main-program row (not a For body) is
-    scanned on every scan, so its memory is the clock as the previous scan
-    read it: a function of the timestamp, which the fold's clock handling
-    already models (an edge-sensitive rung is never plain, so a window ends at
-    each edge of its clock).  The plateau guard leaves those keys to it.  A clock contact in a
-    subroutine, a For body or an overlay is scanned only when something lets
-    it, so what it remembers depends on when it last ran: it stays guarded.
-    """
-    from pyrung.core.site_memory import SITE_EDGE
-    from pyrung.core.system_points import _CLOCK_HALF_PERIODS
-
-    if site_table is None:
-        return frozenset()
-    return frozenset(
-        key
-        for site in site_table.sites
-        if site.site == SITE_EDGE
-        and site.scope == "main"
-        and site.leg != "body"
-        and (_CLOCK_HALF_PERIODS.get(site.tag or "") or 0) > 0
-        for key, _default in site.memory
+        if value and isinstance(key, str) and key.startswith(EDGE_MEMORY_PREFIXES)
     )
 
 
@@ -4724,7 +4691,7 @@ class _OrdinaryFoldStrategy:
             scan_id=state.scan_id,
             timers=timers,
             mods=tuple(state.tags.get(mw.name) for mw in self.ctx.modwrap),
-            edges=edge_memory_on(state, self.ctx.clock_edge_memory),
+            edges=edge_memory_on(state),
             analog=tuple(state.tags.get(a.name, a.default) for a in self.ctx.analog),
         )
 
@@ -4760,7 +4727,7 @@ class _OrdinaryFoldStrategy:
         """
         if not _visible_items_match(state, probe.visible, self.exclude):
             return None
-        if edge_memory_on(state, self.ctx.clock_edge_memory) != probe.edges:
+        if edge_memory_on(state) != probe.edges:
             # The probe saw an edge at some contact (or its memory moved off a
             # bit it last saw): the next scan is not a repeat of it.
             return None

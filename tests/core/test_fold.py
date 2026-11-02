@@ -2408,9 +2408,9 @@ def _scans(n: int) -> Callable[[PLC, bool], None]:
 
 class TestClockEdgeProbe:
     """A scan reads the system clock at its start.  The probe certifying a
-    window must have read the phase the window reads, and the edge scan runs
-    as a genuine probe, so per-scan work under a clock level or edge is never
-    extrapolated from the other phase."""
+    window must have read the phase the window reads, and an edge scan certifies
+    nothing, so per-scan work under a clock level or edge is never extrapolated
+    from the other phase."""
 
     @staticmethod
     def _level_gated(work: str) -> Callable[[], Program]:
@@ -2451,6 +2451,34 @@ class TestClockEdgeProbe:
     @pytest.mark.parametrize("n", [49, 50, 51, 52, 99, 100, 101, 150])
     def test_edge_pulse_stays_on_its_own_scan(self, n: int) -> None:
         _assert_fold_is_exact(self._edge_pulses, _scans(n))
+
+    @staticmethod
+    def _holds_still_only_on_the_edge_scan() -> Program:
+        # The plain rungs swap C every scan; the edge rungs undo that on the scan
+        # that sees the edge, so that one scan leaves the state as it found it.
+        C, D = Int("C"), Int("D")
+        clock = system.sys.clock_1s
+        with Program(strict=False) as prog:
+            with Rung():
+                on_delay(Timer.clone("Tmr"), 30_000)
+            with Rung(C == 0):
+                copy(1, D)
+            with Rung(C == 1):
+                copy(0, D)
+            with Rung():
+                copy(D, C)
+            with Rung(rise(clock), C == 0):
+                copy(1, D)
+            with Rung(rise(clock), C == 1):
+                copy(0, D)
+            with Rung(rise(clock)):
+                copy(D, C)
+        return prog
+
+    @pytest.mark.parametrize("dt", [0.007, 0.01, 0.05])
+    @pytest.mark.parametrize("scans", [800, 801])
+    def test_an_edge_scan_certifies_nothing_after_it(self, dt: float, scans: int) -> None:
+        _assert_fold_is_exact(self._holds_still_only_on_the_edge_scan, _scans(scans), dt=dt)
 
 
 class TestTimerCarryExact:

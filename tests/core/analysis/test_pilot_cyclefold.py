@@ -672,8 +672,7 @@ def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
     without the 32 767 timer-accumulator clamp.  ``Blink`` follows ``clock_1s``
     (full period 1 s = 100 scans at the default dt), so folding must align the
     period to the clock (LCM with the period-2 oscillation = 100): the observed
-    window spans the clock's full cycle and every jump preserves its phase — the
-    runtime form of the soft-clock partition.
+    window spans the clock's full cycle and every jump preserves its phase.
     """
     Osc = Bool("Osc", external=True)
     Ctr = Dint("Ctr")
