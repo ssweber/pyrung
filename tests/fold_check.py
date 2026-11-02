@@ -6,8 +6,13 @@ Before a folded run starts, a twin is built from the same tip state, forces,
 pending patches and synthesis overlay; after the run, the twin steps the same
 number of scans one by one, and every state the folded run itself produced
 (executed scans and landings, as cached) must equal the twin's state at that
-scan: tags and memory exactly, the timestamp to within a microsecond.  A mismatch raises :class:`FoldMismatch` inside the
-test that ran the fold, naming the scan and the differing keys.
+scan: tags and memory exactly, the timestamp to within a microsecond.  A
+run_until-style driver (``fold_run_until``, ``cycle_fold_until``) also hands the twin its stop predicate: if
+it is true on the twin at a scan before the one where the folded run stopped, the fold
+overshot and :class:`FoldMismatch` says so.  A predicate that reads the real runner
+instead of its argument (it would answer about the wrong runner on a twin) or that
+raises on the twin is not asked, and is counted.  A mismatch raises
+:class:`FoldMismatch` inside the test that ran the fold, naming the scan and the differing keys.
 
 A run is skipped, and counted, when the twin cannot reproduce it: an active
 ``when()`` registration or a monitor other than a Harness feedback notifier
@@ -106,7 +111,49 @@ def _compare(
     )
 
 
-def _checked(kind: str, plc: Any, call: Callable[[], Any]) -> Any:
+class _NotTheTwin(Exception):
+    """The predicate touched the real runner's state while the twin was asked."""
+
+
+class _PoisonedState:
+    """Stands in for the real runner's state while a predicate is asked on a twin."""
+
+    def __getattr__(self, name: str) -> Any:
+        raise _NotTheTwin(name)
+
+    def __getitem__(self, key: Any) -> Any:
+        raise _NotTheTwin(str(key))
+
+
+def _predicate_on_twin(predicate: Callable[[Any], bool], plc: Any, twin: Any) -> bool | None:
+    """``predicate`` as the twin sees it, or None when the twin cannot answer it.
+
+    Reuses the fold's own ``_traced_call`` (it swaps the twin's tip for the traced
+    state, so a predicate reading ``twin.state`` works).  The real runner's state is
+    poisoned for the call: a closure over the real runner is detected, not answered.
+    """
+    from pyrung.core.fold import _traced_call
+
+    real = plc._state
+    plc._state = _PoisonedState()
+    try:
+        return _traced_call(predicate, twin)[0]
+    except _NotTheTwin:
+        STATS["predicate skipped: reads the real runner"] += 1
+        return None
+    except Exception:
+        STATS["predicate skipped: raised on the twin"] += 1
+        return None
+    finally:
+        plc._state = real
+
+
+def _checked(
+    kind: str,
+    plc: Any,
+    call: Callable[[], Any],
+    predicate: Callable[[Any], bool] | None = None,
+) -> Any:
     global _depth
     if _depth:
         return call()
@@ -133,9 +180,22 @@ def _checked(kind: str, plc: Any, call: Callable[[], Any]) -> Any:
         sid: entry[0] for sid, entry in plc._recent_state_cache.items() if start < sid <= end
     }
     last_equal = start
+    ask = predicate
     for _ in range(n):
         twin._run_single_scan(consume_pause_request=False)
         sid = twin._state.scan_id
+        if ask is not None and sid < end:
+            hit = _predicate_on_twin(ask, plc, twin)
+            if hit is None:
+                ask = None
+            else:
+                STATS["predicate scans"] += 1
+                if hit:
+                    STATS["mismatch"] += 1
+                    raise FoldMismatch(
+                        f"fold-check ({kind}): stop predicate true at scan {sid}, "
+                        f"folded run stopped at {end}"
+                    )
         if sid in produced:
             _compare(kind, sid, produced[sid], twin._state, last_equal)
             last_equal = sid
@@ -163,13 +223,15 @@ def install() -> None:
     run_until, run_for, cycle = fold.fold_run_until, fold.fold_run_for, cyclefold.cycle_fold_until
 
     def fold_run_until(runner: Any, predicate: Any, *args: Any, **kwargs: Any) -> Any:
-        return _checked("run_until", runner, lambda: run_until(runner, predicate, *args, **kwargs))
+        return _checked(
+            "run_until", runner, lambda: run_until(runner, predicate, *args, **kwargs), predicate
+        )
 
     def fold_run_for(runner: Any, seconds: float, *args: Any, **kwargs: Any) -> Any:
         return _checked("run_for", runner, lambda: run_for(runner, seconds, *args, **kwargs))
 
     def cycle_fold_until(plc: Any, predicate: Any, *args: Any, **kwargs: Any) -> Any:
-        return _checked("cycle", plc, lambda: cycle(plc, predicate, *args, **kwargs))
+        return _checked("cycle", plc, lambda: cycle(plc, predicate, *args, **kwargs), predicate)
 
     setattr(fold, "fold_run_until", fold_run_until)  # noqa: B010
     setattr(fold, "fold_run_for", fold_run_for)  # noqa: B010
