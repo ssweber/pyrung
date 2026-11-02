@@ -23,8 +23,8 @@ from operator import itemgetter
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.bounds import TagConstraint, check_bounds
-from pyrung.core.compiled_plc import CompiledPLC
-from pyrung.core.scan_trace import ScanLoop
+from pyrung.core.compiled_plc import CompiledPLC, absent_scalars
+from pyrung.core.scan_trace import TOTALS, ScanLoop, may_store_a_default
 from pyrung.core.state import SystemState
 from pyrung.core.time_mode import TimeMode
 
@@ -97,10 +97,23 @@ def run_scans(
     if kernel is None:
         _step(plc, scans - used, predicate)
         return plc._state
-    remaining = _run_compiled(plc, kernel, scans - used, predicate)
+    remaining = scans - used
+    while remaining and _kernel_cannot_say_what_it_adds(plc, kernel):
+        ran, stopped = _step(plc, min(remaining, prefix), predicate)
+        TOTALS["interpreted: a tag not in the state may get its default"] += ran
+        remaining -= ran
+        if stopped:
+            return plc._state
+    if remaining:
+        remaining = _run_compiled(plc, kernel, remaining, predicate)
     if remaining:
         _step(plc, remaining, predicate)
     return plc._state
+
+
+def _kernel_cannot_say_what_it_adds(plc: PLC, kernel: CompiledKernel) -> bool:
+    absent = absent_scalars(kernel, plc._state.tags)
+    return may_store_a_default(kernel, absent) or any(name in plc._forces for name in absent)
 
 
 def _run_compiled(

@@ -27,6 +27,7 @@ from pyrung.core.system_points import (
     _DERIVED_TAG_NAMES,
     _MODE_RUN_KEY,
     _SCAN_START_MEMORY,
+    HOOK_BOUND_TAG_NAMES,
     READ_ONLY_SYSTEM_TAG_NAMES,
     RTC_FIELD_TAG_NAMES,
     SCAN_DERIVED_TAG_NAMES,
@@ -41,6 +42,19 @@ from pyrung.core.time_mode import TimeMode
 # Sentinel for "key absent from the previous commit" during the diff below —
 # distinct from any real tag/memory value (including ``None``).
 _MISSING: Any = object()
+
+
+def absent_scalars(compiled: CompiledKernel, tags: Mapping[str, Any]) -> dict[str, Any]:
+    """The scalars of *compiled* that *tags* lacks, with the default a kernel holds them at."""
+    cells = {name for spec in compiled.block_specs.values() for name in spec.tag_names}
+    return {
+        name: tag.default
+        for name, tag in compiled.referenced_tags.items()
+        if name not in tags
+        and name not in cells
+        and name not in _DERIVED_TAG_NAMES
+        and name not in HOOK_BOUND_TAG_NAMES
+    }
 
 
 class _TrackedList(list):
@@ -299,15 +313,11 @@ class CompiledPLC:
         self._initialize_from_state(self._state)
         # A scalar's rung may not have written it yet, though the kernel writes every
         # scalar back on every scan: it stays out of the state until it leaves the
-        # default.  An unseen plant latch, say; stepping leaves it absent until it fires.
+        # default.  An unseen plant latch, say, or a stored system point a rung has not
+        # written; stepping leaves those absent until they fire.  A rung that could
+        # store the default keeps the run interpreted (compiled_run.run_scans).
         self._unseen_scalars: dict[str, Any] = (
-            {
-                t.name: t.default
-                for t in self._known_tags_by_name.values()
-                if t.name not in self._state.tags and t.name not in self._block_element_names
-            }
-            if exact_anchor
-            else {}
+            absent_scalars(self._compiled, self._state.tags) if exact_anchor else {}
         )
         self._extra_commit_tag_names -= self._unseen_scalars.keys()
 

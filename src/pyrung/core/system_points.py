@@ -354,16 +354,16 @@ _SCAN_START_MEMORY = itemgetter(*_SCAN_START_MEMORY_KEYS)
 _SCAN_TIME_MIN_NAME = system.sys.scan_time_min_ms.name
 _SCAN_TIME_MAX_NAME = system.sys.scan_time_max_ms.name
 
-# Everything the scan hooks' quiet checks read, for whoever has to keep them quiet.
-HOOK_TAG_NAMES = frozenset(
+# What the scan hooks bind on a state's first scan, whatever the rungs do.
+HOOK_BOUND_TAG_NAMES = frozenset(
     {
         *_SCAN_START_TAG_NAMES,
-        _SD_EJECT_NAME,
-        _SD_DELETE_ALL_NAME,
         _SCAN_TIME_MIN_NAME,
         _SCAN_TIME_MAX_NAME,
     }
 )
+# Everything the scan hooks' quiet checks read, for whoever has to keep them quiet.
+HOOK_TAG_NAMES = HOOK_BOUND_TAG_NAMES | {_SD_EJECT_NAME, _SD_DELETE_ALL_NAME}
 HOOK_MEMORY_KEYS = frozenset({*_SCAN_START_MEMORY_KEYS, "_dt"})
 
 # Derived points that move with the scan id.

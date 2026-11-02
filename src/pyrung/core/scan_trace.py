@@ -310,6 +310,100 @@ class KernelSource:
             for name in ("_kernel_step_pre", "_kernel_step")
             if name in self.functions
         )
+        self.scalar_writes, self.opaque_tag_writes = _scalar_writes(tree)
+
+
+_NOT_LITERAL = object()
+
+
+def _scalar_writes(tree: ast.Module) -> tuple[dict[str, list[Any]], bool]:
+    """Each scalar's writes in the source: the value stored, where it is a literal.
+
+    Also whether something writes ``tags`` other than through a scalar's own local, which
+    says nothing about which tag it writes.
+    """
+    bodies = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
+    assigned: dict[int, ast.expr] = {}
+    local_of: dict[str, str] = {}
+    for body in bodies:
+        for node in ast.walk(body):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    assigned[id(target)] = node.value
+                    tag = _tag_loaded_by(node.value)
+                    if isinstance(target, ast.Name) and tag is not None:
+                        local_of[target.id] = tag
+    writes: dict[str, list[Any]] = {}
+    opaque = False
+    for body in bodies:
+        for node in ast.walk(body):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                tag = local_of.get(node.id)
+                value = assigned.get(id(node))
+                if tag is not None and (value is None or _tag_loaded_by(value) != tag):
+                    writes.setdefault(tag, []).append(_literal_stored(value))
+            elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store):
+                value = assigned.get(id(node))
+                if not _is_tags(node.value):
+                    continue
+                written_back = (
+                    isinstance(node.slice, ast.Constant)
+                    and isinstance(value, ast.Name)
+                    and local_of.get(value.id) == node.slice.value
+                )
+                opaque = opaque or not written_back
+    return writes, opaque
+
+
+def _is_tags(node: ast.expr) -> bool:
+    return isinstance(node, ast.Name) and node.id == "tags"
+
+
+def _tag_loaded_by(value: ast.expr) -> str | None:
+    if (
+        isinstance(value, ast.Subscript)
+        and _is_tags(value.value)
+        and isinstance(value.slice, ast.Constant)
+        and isinstance(value.slice.value, str)
+    ):
+        return value.slice.value
+    return None
+
+
+def _literal_stored(value: ast.expr | None) -> Any:
+    if isinstance(value, ast.Constant):
+        return value.value
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id.startswith("_store_")
+        and len(value.args) == 1
+        and isinstance(value.args[0], ast.Constant)
+        and type(value.args[0].value) is int
+        # Clamped or wrapped alike by every integer type: it stores itself.
+        and 0 <= value.args[0].value <= 32767
+    ):
+        return value.args[0].value
+    return _NOT_LITERAL
+
+
+def may_store_a_default(kernel: CompiledKernel, absent: Mapping[str, Any]) -> bool:
+    """Whether a scan can store its default into one of the *absent* tags.
+
+    Stepping adds a tag to the state on its first write.  A kernel scan does not say what
+    it wrote, and holds an absent tag at its default, so the first write can be noticed
+    only by the value leaving the default.  A write that stores the default cannot.
+    """
+    if not absent:
+        return False
+    source = _source_of(kernel)
+    if source.opaque_tag_writes:
+        return True
+    for name, default in absent.items():
+        for value in source.scalar_writes.get(name, ()):
+            if type(value) is not type(default) or value == default:
+                return True
+    return False
 
 
 def _describe_function(node: ast.FunctionDef) -> _Function:

@@ -69,6 +69,7 @@ from pyrung.core.scan_trace import (
     build_trace,
 )
 from pyrung.core.system_points import _DERIVED_TAG_NAMES, SYSTEM_TAGS_BY_NAME
+from tests import fold_check
 
 RTC_START = datetime(2026, 3, 14, 15, 9, 26, 500000)
 BURSTS = (1, 1, 2, 1, 3, 7, 1, 1, 97, 1, 2, 1, 317, 1, 1, 5, 1)
@@ -100,28 +101,8 @@ def _plc(program: Program, dt: float) -> PLC:
     return plc
 
 
-def _image(state: Any) -> dict[str, Any]:
-    image = {
-        key: "<NaN>" if isinstance(value, float) and value != value else value
-        for key, value in state.tags.items()
-        if key != "sys.scan_time_current_ms"
-    }
-    image.update(
-        {
-            f"mem:{key}": "<NaN>" if isinstance(value, float) and value != value else value
-            for key, value in state.memory.items()
-        }
-    )
-    return image
-
-
 def _assert_equal(ours: Any, stepped: Any) -> None:
-    a, b = _image(ours), _image(stepped)
-    if a != b:
-        keys = sorted(k for k in a.keys() | b.keys() if a.get(k) != b.get(k))
-        detail = ", ".join(f"{k}: loop={a.get(k)!r} stepped={b.get(k)!r}" for k in keys[:8])
-        raise AssertionError(f"scan {ours.scan_id} differs from stepping: {detail}")
-    assert abs(ours.timestamp - stepped.timestamp) <= 1e-6, ours.scan_id
+    fold_check._compare("compiled", stepped.scan_id, ours, stepped)
 
 
 class _Observed:
@@ -144,14 +125,23 @@ class _Observed:
 
 
 def _step_to(twin: PLC, scan_id: int, seen: dict[int, Any]) -> int:
+    """Scan the twin on as one run does: a stopped runner resumes only at the next call."""
     compared = 0
+    twin._ensure_running()
     while twin.state.scan_id < scan_id:
-        twin.run(1)
+        twin._run_single_scan(consume_pause_request=False)
         ours = seen.get(twin.state.scan_id)
         if ours is not None:
             _assert_equal(ours, twin.state)
             compared += 1
     return compared
+
+
+def _assert_same_runner(plc: PLC, twin: PLC, start: int) -> None:
+    """Everything a commit leaves besides the state, and what reads it later on."""
+    fold_check.compare_runners("compiled", plc, twin, start)
+    fold_check.compare_history("compiled", plc, twin, start)
+    fold_check.compare_continuation("compiled", plc, twin)
 
 
 def _lockstep(
@@ -173,10 +163,12 @@ def _lockstep(
         if patches:
             plc.patch(patches)
             twin.patch(patches)
+        start = plc.state.scan_id
         with _Observed(plc) as observed:
             plc.run_for(seconds)
         compared += _step_to(twin, plc.state.scan_id, observed.states)
         _assert_equal(plc.state, twin.state)
+        _assert_same_runner(plc, twin, start)
     counts = Counter(scan_trace.TOTALS)
     counts.subtract(before)
     counts["states compared"] = compared
@@ -412,6 +404,52 @@ def _corpus_subroutine() -> None:
         on_delay(T, 1_000)
 
 
+def _corpus_rtc_apply() -> None:
+    with Rung(Run):
+        on_delay(T, 2_000)
+    with Rung(rise(T.Done)):
+        copy(10, system.rtc.new_second)
+        copy(5, system.rtc.new_minute)
+        copy(1, system.rtc.new_hour)
+        out(system.rtc.apply_time)
+    with Rung(rise(T.Done)):
+        copy(system.rtc.hour, N)
+    with Rung():
+        copy(system.rtc.hour, M)
+    with Rung():
+        copy(system.rtc.second, Step)
+
+
+def _corpus_rtc_apply_date() -> None:
+    with Rung(Run):
+        on_delay(T, 1_000)
+    with Rung(T.Done):
+        copy(1, system.rtc.new_day)
+        copy(2, system.rtc.new_month)
+        copy(2027, system.rtc.new_year4)
+        out(system.rtc.apply_date)
+    with Rung(Run):
+        on_delay(T1, 3_000)
+    with Rung(T1.Done):
+        copy(2, system.rtc.new_hour)
+        copy(0, system.rtc.new_minute)
+        copy(0, system.rtc.new_second)
+        out(system.rtc.apply_time)
+    with Rung():
+        copy(system.rtc.month, M)
+    with Rung():
+        copy(system.rtc.hour, Step)
+
+
+def _corpus_mode_stop() -> None:
+    with Rung(Run):
+        on_delay(T, 2_000)
+    with Rung(rise(T.Done)):
+        out(system.sys.cmd_mode_stop)
+    with Rung():
+        calc(N + 1, N)
+
+
 def _corpus_forloop() -> None:
     with Rung(Run), forloop(3):
         calc(N + 1, N)
@@ -483,6 +521,9 @@ CORPUS: dict[str, tuple[Callable[[], None], float, list[tuple[float, dict[Any, A
         [(1.0, {Run: True}), (0.2, {Rst: True}), (1.0, {Rst: False}), (0.5, {Run: False})],
     ),
     "forloop": (_corpus_forloop, 0.01, [(5.0, {Run: True})]),
+    "rtc_apply": (_corpus_rtc_apply, 0.01, [(1.0, {Run: True}), (4.0, {}), (1.0, {Run: False})]),
+    "rtc_apply_date": (_corpus_rtc_apply_date, 0.01, [(5.0, {Run: True}), (1.0, {})]),
+    "mode_stop": (_corpus_mode_stop, 0.01, [(1.0, {Run: True}), (4.0, {}), (1.0, {})]),
 }
 
 # Cases where the loop has every right to run nothing: each scan is a decision.
