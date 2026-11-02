@@ -88,7 +88,6 @@ ALL_GROUPS = [
     test_drum_trace.group,
     test_drum_rule.group,
     test_drum_jump.group,
-    test_store_probe.group,
     test_out.group,
     test_loop.group,
     test_coils.group,
@@ -111,6 +110,10 @@ ALL_GROUPS = [
     test_drum_idle.group,
     # Last, so no other group's rung reads SC46 on a scan a Math error raised it.
     test_math_error.group,
+    # After every group: its probes raise SC43 and SC46 on purpose, and a flag
+    # stays up to the end of the scan, so any group after it that reads a flag
+    # would see them (text/to_binary read SC43 on a scan a store probe raised it).
+    test_store_probe.group,
 ]
 
 #: Group names per CLICK project, split to keep each part under
