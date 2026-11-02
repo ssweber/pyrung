@@ -615,3 +615,9 @@ def test_an_in_main_helper_changes_only_the_hash_of_the_case_that_defines_it() -
     edited_two = hashes(1, 2)
     assert edited_two["two"] != base["two"]
     assert edited_two["one"] == base["one"]
+
+
+def test_store_probe_runs_after_every_group_that_reads_a_fault_flag() -> None:
+    """Its probes raise SC43/SC46 on purpose; a flag stays up to scan end, so a group
+    after it would read them (found by the gate on text/to_binary)."""
+    assert suite.ALL_GROUPS[-1].name == "store_probe"
