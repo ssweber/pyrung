@@ -15,6 +15,7 @@ from pyrung.circuitpy.codegen._constants import (
     _BOARD_NEOPIXEL_R_TAG,
     _BOARD_SAVE_MEMORY_CMD_TAG,
     _BOARD_SWITCH_TAG,
+    _TYPE_DEFAULTS,
 )
 from pyrung.circuitpy.codegen._util import _first_defined_name, _io_kind, _mangle_symbol
 from pyrung.circuitpy.hardware import P1AM
@@ -788,6 +789,39 @@ class CodegenContext:
                 addresses[name] = addr
             self._slot_addresses_by_block[binding.block_id] = addresses
         return addresses
+
+    def block_power_on_values(self, binding: BlockBinding) -> dict[int, Any]:
+        """The slots of a block that do not power on at the type's zero, by address.
+
+        A name holding a slot brings its own default: the engines seed the name,
+        and a pointer reads the same cell.  A slot no referenced name holds powers
+        on as `Block._get_tag` would build it, without indexing it here.
+        """
+        block = binding.block
+        bound = {
+            addr: self.referenced_tags[name].default
+            for name, (block_id, addr) in self.tag_block_addresses.items()
+            if block_id == binding.block_id and name in self.referenced_tags
+        }
+        addresses = (
+            (binding.valid_addresses or range(binding.start, binding.end + 1))
+            if block.default_factory is not None
+            else block._configured_addresses()
+        )
+        zero = repr(_TYPE_DEFAULTS[binding.tag_type])
+        values: dict[int, Any] = {}
+        for addr in sorted({*addresses, *bound}):
+            mapped = block._mapped_tags.get(addr)
+            if addr in bound:
+                value = bound[addr]
+            elif mapped is not None:
+                value = mapped.default
+            else:
+                _, value = block._effective_slot_policy(addr)
+            # By spelling: a Bool's False on an INT block is not the block's 0.
+            if value is not None and repr(value) != zero:
+                values[addr] = value
+        return values
 
     def _associate_tag_with_known_block(self, tag: Tag) -> None:
         if tag.name in self.tag_block_addresses or tag.name in self.dict_backed_tag_names:

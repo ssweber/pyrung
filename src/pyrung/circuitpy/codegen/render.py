@@ -38,7 +38,7 @@ from pyrung.circuitpy.codegen._util import (
 )
 from pyrung.circuitpy.codegen.compile import compile_rungs
 from pyrung.circuitpy.codegen.compile._primitives import _load_cast_expr
-from pyrung.circuitpy.codegen.context import CodegenContext
+from pyrung.circuitpy.codegen.context import BlockBinding, CodegenContext
 from pyrung.circuitpy.codegen.render_modbus import (
     _render_ethernet_setup,
     _render_modbus_accessors,
@@ -273,6 +273,28 @@ def _tag_is_input_endpoint(ctx: CodegenContext, tag_name: str) -> bool:
     if binding is None:
         return False
     return binding.direction == "input"
+
+
+def _render_block_power_on_lines(
+    symbol: str, binding: BlockBinding, ctx: CodegenContext
+) -> list[str]:
+    """Seed the slots that do not power on at the type's zero; a run of them is one loop."""
+    runs: list[tuple[int, int, str]] = []
+    for addr, value in ctx.block_power_on_values(binding).items():
+        index = addr - binding.start
+        literal = repr(value)
+        if runs and runs[-1][1] == index and runs[-1][2] == literal:
+            runs[-1] = (runs[-1][0], index + 1, literal)
+        else:
+            runs.append((index, index + 1, literal))
+    lines: list[str] = []
+    for first, stop, literal in runs:
+        if stop - first < 3:
+            lines.extend(f"{symbol}[{index}] = {literal}" for index in range(first, stop))
+        else:
+            lines.append(f"for _i in range({first}, {stop}):")
+            lines.append(f"    {symbol}[_i] = {literal}")
+    return lines
 
 
 def _render_run_transition_reset_lines(ctx: CodegenContext) -> list[str]:
@@ -541,6 +563,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
         size = binding.end - binding.start + 1
         default = _TYPE_DEFAULTS[binding.tag_type]
         lines.append(f"{symbol} = [{repr(default)}] * {size}")
+        lines.extend(_render_block_power_on_lines(symbol, binding, ctx))
     lines.append("")
 
     # 6) runtime memory declarations (stubbed persistence state)
