@@ -3940,10 +3940,6 @@ class TestTimedDrumReadsAnotherStep:
         assert contested(lambda: copy(1, bank[Int("I")]), bank[2]) == {"DAcc"}
         assert contested(lambda: copy(1, bank[2]), bank[2]) == frozenset()
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="a tag written above and below a reader: the fold sees only its boundary value",
-    )
     @pytest.mark.parametrize("reader", ["preset", "comparison"])
     def test_tag_written_around_a_timer_reader(self, reader: str) -> None:
         """The same read-mid-scan hole, with no drum in it: the fold takes a timer's

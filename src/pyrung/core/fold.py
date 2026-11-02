@@ -37,7 +37,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
@@ -164,6 +164,13 @@ class _FoldContext:
     # preset, a stored copy, an edge): their next value change bounds every
     # window they move in (see :func:`_audit_coordinate_reads`).
     unmodeled: frozenset[str] = frozenset()
+    # A written tag a coordinate's crossings resolve -> those coordinates
+    # (see :func:`_written_fold_inputs`), and the ones of them some rung reads
+    # with a write on either side (see :func:`_inputs_read_between_writes`).
+    written_inputs: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    inputs_between_writes: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    # Time drum step registers some other instruction writes too.
+    steps_written_outside: frozenset[str] = frozenset()
     # ``(view, source)`` per affine acc view in ``mirror_names``.
     mirror_sources: tuple[tuple[str, str], ...] = ()
     # ``(source, lo, hi)`` per view whose store can leave its destination's range
@@ -189,6 +196,33 @@ class _FoldContext:
         views = dict(self.mirror_sources)
         out = {views.get(name, name) for name in names}
         return frozenset(out) & (self.acc_names | self.modwrap_names)
+
+    def hidden_input_coordinates(
+        self,
+        forced: Collection[str] | None,
+        writes: Mapping[str, int] | None = None,
+    ) -> frozenset[str]:
+        """Coordinates a scan may compare against a value its boundary does not show.
+
+        These join the unmodeled coordinates, so each of their value changes
+        bounds a window.  An input read between two writes hides its value
+        unless *writes* counts at most one write of it in the probe scan: the
+        plateau guard holds what the scan entered with to what that write left,
+        so a read on either side of it sees the boundary's value, and the
+        window's scans run the same writers (a clock that could wake another is
+        hard, see :func:`_tags_behind_writers`).  A forced input with a writer
+        hides its value too: the boundary shows the force, while a rung above a
+        reader can still write under it.
+        """
+        hidden: set[str] = set()
+        for name, coordinates in self.inputs_between_writes.items():
+            if writes is None or writes.get(name, 2) > 1:
+                hidden |= coordinates
+        if forced:
+            for name, coordinates in self.written_inputs.items():
+                if name in forced:
+                    hidden |= coordinates
+        return frozenset(hidden)
 
     @cached_property
     def timed_sources(self) -> tuple[_AccSource, ...]:
@@ -1482,6 +1516,170 @@ def _time_mirror_analysis(
     )
 
 
+def _operand_tags(value: Any) -> Iterator[str]:
+    """The tags a threshold operand resolves through at a boundary (see _resolve_num).
+
+    A step register is not one of them: its readers are the drum's own business
+    (see :func:`_timer_contests`).  An index or an expression names no tag here,
+    and :func:`_resolve_num` does not resolve one.
+    """
+    from pyrung.core.tag import Tag
+
+    if isinstance(value, _StepPreset):
+        for item in value.values:
+            yield from _operand_tags(item)
+    elif isinstance(value, Tag):
+        yield value.name
+    elif isinstance(value, str):
+        yield value
+
+
+def _prepass_writes(plc: Any) -> frozenset[str]:
+    """What the synthesis overlay's rungs write: they run before the program."""
+    syn = getattr(plc, "_synthesis", None)
+    if syn is None or syn.is_empty():
+        return frozenset()
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.program import Program
+
+    overlay = Program.__new__(Program)
+    overlay.rungs = list(syn.all_rungs())
+    overlay.subroutines = {}
+    return frozenset(build_program_graph(overlay).writers_of)
+
+
+def _written_fold_inputs(
+    pdg: ProgramGraph,
+    sources: Sequence[_AccSource],
+    comparisons: Mapping[str, tuple[tuple[str, Any], ...]],
+    prepass_writes: frozenset[str],
+) -> dict[str, frozenset[str]]:
+    """Each tag a crossing resolves at the boundary, that a rung writes -> its coordinates.
+
+    A window's crossings come from these tags' boundary values: presets (a
+    drum's by step) and comparison operands.  An operand no rung writes reads
+    the same at every point of a scan.
+    """
+    indirect_blocks = {ref.block.name for ref in pdg.indirect_writes}
+
+    def written(name: str) -> bool:
+        if name in prepass_writes or pdg.writers_of.get(name):
+            return True
+        block = getattr(pdg.tags.get(name), "_pyrung_block", None)
+        return block is not None and block.name in indirect_blocks
+
+    found: dict[str, set[str]] = {}
+    for src in sources:
+        for name in _operand_tags(src.preset):
+            if written(name):
+                found.setdefault(name, set()).add(src.acc_name)
+    for coordinate, items in comparisons.items():
+        for _form, operand in items:
+            for name in _operand_tags(operand):
+                if written(name):
+                    found.setdefault(name, set()).add(coordinate)
+    return {name: frozenset(coords) for name, coords in found.items()}
+
+
+def _inputs_read_between_writes(
+    pdg: ProgramGraph,
+    program: Any,
+    inputs: Mapping[str, frozenset[str]],
+    prepass_writes: frozenset[str],
+) -> dict[str, frozenset[str]]:
+    """The written inputs a scan may read as a value no boundary shows.
+
+    A read below every write of a tag sees what the scan ends with, and a read
+    above them what it entered with, which the plateau guard holds to what it
+    ends with.  A read between writes sees neither, so a crossing resolved from
+    the boundary lands on the wrong scan: ``copy(200, P); on_delay(T, P);
+    copy(5000, P)`` times to 200 and shows 5000.  This is the static answer,
+    for every executor; see :meth:`_FoldContext.hidden_input_coordinates` for
+    what a live probe adds.  Over-cap indirect writes have no scan position, so
+    they count as anywhere.
+    """
+    if not inputs:
+        return {}
+    from pyrung.core.analysis.pdg import tags_read_between_writes
+
+    between = tags_read_between_writes(program, pdg, prepass_writes)
+    indirect_blocks = {ref.block.name for ref in pdg.indirect_writes}
+    return {
+        name: coordinates
+        for name, coordinates in inputs.items()
+        if name in between
+        or getattr(getattr(pdg.tags.get(name), "_pyrung_block", None), "name", None)
+        in indirect_blocks
+    }
+
+
+def _tags_behind_writers(pdg: ProgramGraph, names: Collection[str]) -> frozenset[str]:
+    """*names* and every tag that can decide a write of them, through the writers' reads.
+
+    A probe's write count for an input stands for a window only while the writers
+    run as they did in the probe.  A plateau guard holds a stored tag, but a clock
+    is not stored: ``with Rung(clock): copy(200, P)`` above a reader and
+    ``copy(5000, P)`` below it leave every boundary at 5000 whichever phase the
+    clock is in.  So a clock in here ends each window at its edges.
+    """
+    seen: set[str] = set()
+    pending = list(names)
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        writers = set(pdg.writers_of.get(name, ()))
+        block = getattr(pdg.tags.get(name), "_pyrung_block", None)
+        if block is not None:
+            writers.update(
+                ref.node_index for ref in pdg.indirect_writes if ref.block.name == block.name
+            )
+        for index in writers:
+            pending.extend(_node_reads(pdg.rung_nodes[index]))
+    return frozenset(seen)
+
+
+def _steps_written_outside(
+    pdg: ProgramGraph, program: Any, sources: Sequence[_AccSource]
+) -> frozenset[str]:
+    """The time drum step registers an instruction other than their drum writes."""
+    from pyrung.core.analysis.pdg import _extract_instruction_writes, resolve_rung
+
+    registry = _ensure_registry()
+    tags = dict(pdg.tags)
+    indirect_blocks = {ref.block.name for ref in pdg.indirect_writes}
+
+    def walk(instrs: Sequence[Any]) -> Iterator[Any]:
+        for instr in instrs:
+            yield instr
+            yield from walk(getattr(instr, "instructions", None) or ())
+
+    def written_outside(src: _AccSource, step: str) -> bool:
+        block = getattr(pdg.tags.get(step), "_pyrung_block", None)
+        if block is not None and block.name in indirect_blocks:
+            return True
+        for i in pdg.writers_of.get(step, ()):
+            rung = resolve_rung(program, pdg.rung_nodes[i])
+            if rung is None:
+                return True
+            for instr in walk(rung._instructions):
+                if step not in _extract_instruction_writes(instr, tags)[0]:
+                    continue
+                if type(instr) not in registry or not any(
+                    phase_acc.name == src.acc_name
+                    for phase_acc, _done, _preset in _instruction_phases(instr)
+                ):
+                    return True
+        return False
+
+    return frozenset(
+        src.step_name
+        for src in sources
+        if src.step_name is not None and written_outside(src, src.step_name)
+    )
+
+
 def _timer_contests(
     pdg: ProgramGraph,
     program: Any,
@@ -2612,6 +2810,11 @@ def _build_fold_context(
             "fold: windows bounded at each value change of coordinates read "
             "outside a modeled comparison: " + ", ".join(sorted(unmodeled))
         )
+    prepass_writes = _prepass_writes(plc)
+    written_inputs = _written_fold_inputs(pdg, sources, comparisons, prepass_writes)
+    inputs_between_writes = _inputs_read_between_writes(
+        pdg, program, written_inputs, prepass_writes
+    )
 
     # System clocks (sys.clock_1s, …) are pure functions of the timestamp,
     # resolved on read and never stored in state.tags — so the plateau guard
@@ -2636,7 +2839,9 @@ def _build_fold_context(
         | (frozenset(_DERIVED_TAG_NAMES) - {_system.sys.always_on.name})
     )
     clock_half_periods, soft_clocks, sat_clocks = _partition_read_clocks(
-        pdg, clock_disqualifying, acc_names - unmodeled
+        pdg,
+        clock_disqualifying,
+        acc_names - unmodeled - frozenset().union(*inputs_between_writes.values()),
     )
     if condition_clock_reads:
         # A clock read by the run_until condition has no rung body to prove it
@@ -2690,7 +2895,9 @@ def _build_fold_context(
             base_varying,
             window_constant,
             target_names,
-            protected=_harness_referenced_names(plc),
+            # A crossing resolves from a fold input's boundary value, so a change
+            # of one must end the window: it stays in the plateau guard.
+            protected=_harness_referenced_names(plc) | written_inputs.keys(),
         )
         if frozen_writes and journal is not None:
             journal.add_note(
@@ -2726,6 +2933,22 @@ def _build_fold_context(
             landing_rebuilt = landing_rebuilt | syn_rebuilt
             comparisons = _merge_comparisons(comparisons, syn_rung)
             comparisons = _merge_comparisons(comparisons, syn_instr)
+            written_inputs = _written_fold_inputs(pdg, sources, comparisons, prepass_writes)
+            inputs_between_writes = _inputs_read_between_writes(
+                pdg, program, written_inputs, prepass_writes
+            )
+            frozen_writes = frozen_writes - written_inputs.keys()
+
+    behind_writers = _tags_behind_writers(pdg, inputs_between_writes.keys())
+    if behind_writers:
+        from pyrung.core.system_points import _CLOCK_HALF_PERIODS
+
+        gating_clocks = behind_writers & frozenset(_CLOCK_HALF_PERIODS)
+        clock_half_periods = tuple(
+            sorted(set(clock_half_periods) | {_CLOCK_HALF_PERIODS[c] for c in gating_clocks})
+        )
+        soft_clocks = tuple((n, hp) for n, hp in soft_clocks if n not in gating_clocks)
+        sat_clocks = tuple((n, hp, accs) for n, hp, accs in sat_clocks if n not in gating_clocks)
 
     first_scan_name = _system.sys.first_scan.name
     reads_first_scan = any(first_scan_name in _node_reads(node) for node in pdg.rung_nodes)
@@ -2750,7 +2973,7 @@ def _build_fold_context(
                 | frozen_writes
             ),
             target_names=target_names,
-            protected=_harness_referenced_names(plc),
+            protected=_harness_referenced_names(plc) | written_inputs.keys() | behind_writers,
             churn=churn_excluded,
         )
         if time_mirrors is not None and journal is not None:
@@ -2814,6 +3037,9 @@ def _build_fold_context(
         rtc_condition_fields=rtc_condition_fields,
         time_mirrors=time_mirrors,
         unmodeled=unmodeled,
+        written_inputs=written_inputs,
+        inputs_between_writes=inputs_between_writes,
+        steps_written_outside=_steps_written_outside(pdg, program, sources),
         mirror_sources=mirror_sources,
         mirror_limits=tuple(mirror_limits),
         landing_rebuilt=landing_rebuilt,
@@ -4449,9 +4675,10 @@ class _OrdinaryFoldStrategy:
         is the plateau guard: one changed value declines the fold.
 
         Also has *runner* count each timed accumulator's writes in the probe
-        scan, for :meth:`plan` (see :func:`_timer_contests`).
+        scan, and each input read between writes, for :meth:`plan` (see
+        :func:`_timer_contests` and :meth:`_FoldContext.hidden_input_coordinates`).
         """
-        names = self.ctx.timed_acc_names
+        names = self.ctx.timed_acc_names | self.ctx.inputs_between_writes.keys()
         if names and not names <= runner._acc_write_watch:
             runner._acc_write_watch = runner._acc_write_watch | names
         return self.capture_state(runner._state)
@@ -4495,7 +4722,9 @@ class _OrdinaryFoldStrategy:
         the executor's forced tags; without it every RTC tick stays a bound
         and no window with a timer is certified.  *acc_writes* counts each
         timed accumulator's writes in the probe scan; without it a program
-        with a contested timer is not folded (see :func:`_timer_contests`).
+        with a contested timer is not folded (see :func:`_timer_contests`).  It
+        also counts each input read between writes, and without it those inputs
+        bound the window (see :meth:`_FoldContext.hidden_input_coordinates`).
         """
         if not _visible_items_match(state, probe.visible, self.exclude):
             self.inert_soft.clear()
@@ -4522,7 +4751,7 @@ class _OrdinaryFoldStrategy:
             return None
         if _mirror_past_limit(self.ctx, state):
             return None
-        unmodeled = self.unmodeled
+        unmodeled = self.unmodeled | self.ctx.hidden_input_coordinates(forced, acc_writes)
         if self.predicate_reads is not None:
             read_sources = self.predicate_unmodeled()
             if read_sources is None:
