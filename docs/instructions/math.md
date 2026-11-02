@@ -136,13 +136,13 @@ calc(randint(1, 6), Die)                 # 1..6 inclusive, a new draw every scan
 calc(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan starts
 ```
 
-`randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them. Three things read as they do on a CLICK:
+`randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them.
 
-- Equal constants, `randint(7, 7)`, are a math error: the `calc()` stores 0 and sets `system.fault.math_operation_error` (SC46). Tags that happen to hold the same value draw it.
-- A bare `Real` tag as a bound reads 0 with no flag, whatever it holds. CLICK's editor refuses one, so only a paste gets it onto a CLICK. Any other bound is read as an integer and still draws (`randint(0, N / 2)`, `sqrt(N)`, a float literal); if it evaluates to Inf or NaN the `calc()` stores 0 and sets `out_of_range`.
-- Into an `Int`, each constant bound is cut to 16 bits like any other constant in the formula ([Constants into an INT](#constants-into-an-int)): `randint(70000, 70002)` draws 4464..4466. The same expression into a `Dint` draws 70000..70002, separately: each destination width has its own draw.
+- Equal constants, `randint(7, 7)`, are a math error: the `calc()` stores 0 and sets `system.fault.math_operation_error` (SC46). Tags that hold the same value draw it.
+- A bare `Real` tag as a bound reads 0 with no flag, whatever it holds. Any other bound is read as an integer (`randint(0, N / 2)`, `sqrt(N)`, a float literal); one that evaluates to Inf or NaN makes the `calc()` store 0 and set `out_of_range`.
+- Into an `Int`, each constant bound is cut to 16 bits like any constant in the formula ([Constants into an INT](#constants-into-an-int)): `randint(70000, 70002)` draws 4464..4466.
 
-The CLICK editor refuses a `DF` bound on `RAND` and refuses equal constant bounds (`randint(7, 7)`). CLICK validation reports them as `CLK_RAND_REAL_BOUND` and `CLK_RAND_EQUAL_BOUNDS`: use constants or an `Int`/`Dint` bound, and a plain constant for a one-value draw.
+CLICK validation refuses a bare `Real` tag as a bound (`CLK_RAND_REAL_BOUND`) and equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`). Use constants or an `Int`/`Dint` bound, and a plain constant for a one-value draw.
 
 Draws are deterministic, so the simulation stays replayable. Each `randint` call in the program is one site, and its value is a fixed function of the site and the scan number. Two runs of the same program draw the same sequence; replay, `history.at()`, seek and `fork()` see the values the original run saw; and a fork draws what its parent would have. Restarting (STOP -> RUN, `reboot()`) resets the scan number, so the sequence starts over.
 
@@ -155,7 +155,7 @@ plc.patch({roll.tag: 6})                 # next scan draws 6
 plc.force(roll.tag, 3)                   # every scan draws 3 until unforced
 ```
 
-A draw whose constant bounds are cut into an `Int` is chosen through `expr.cut_tag` instead. Equal constants and a bare `Real` bound read no draw, so `patch()` and `force()` of their tag change nothing.
+A draw cut into an `Int` is chosen through `expr.cut_tag` instead. Equal constants and a bare `Real` bound read no draw, so patching or forcing their tag changes nothing.
 
 The verifier explores every value a draw can take: `lo..hi` for literal bounds, or the range a bound tag declares (`min`/`max` or `choices`). A bound tag with no declared range, or equal constants, makes the result `Intractable`, with a hint naming the draw. `run_for()` and `run_until()` do not skip scans in a program that uses `randint`. `how()` treats a draw like any other input, so a plan may say to wait for a lucky draw or to patch the site's tag.
 
@@ -184,5 +184,5 @@ In pyrung the aggregates work anywhere an expression does (`copy()` sources, run
 | `CLK_CALC_RANGE_NOT_CONTIGUOUS` | The range must map to consecutive addresses, low to high (drop `.reverse()`). |
 | `CLK_CALC_RANGE_MIXED_BANKS` | Both ends must be in the same bank. |
 | `CLK_CALC_MEDIAN_RANGE_TOO_LARGE` | `MDN` covers at most 1024 bytes: 512 DS/DH or 256 DD/DF. |
-| `CLK_CALC_BIT_RANGE_AGGREGATE` | Only `SUM` accepts a bit range. |
+| `CLK_CALC_BIT_RANGE_AGGREGATE` | `MAX`, `MIN`, `MDN` and `AVG` refuse a bit range (X, Y, C, T, CT, SC); `SUM` accepts one. |
 | `CLK_CALC_SUM_BANK_NOT_AVAILABLE` | `SUM` reads X, Y, C, T, SC, DS, DD, DF, TD, CTD, or SD in decimal mode, and DH, XD, or YD in hex mode. |

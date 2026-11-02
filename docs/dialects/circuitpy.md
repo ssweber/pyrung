@@ -205,7 +205,7 @@ When `watchdog_ms` is set, the generated code calls `base.config_watchdog()` and
 
 ### Scan timing and overrun detection
 
-The scan loop paces itself to `target_scan_ms` using `time.monotonic_ns()`. If a scan takes longer than the target, the overrun is counted and optionally printed (controlled by `PRINT_SCAN_OVERRUNS` in the generated code).
+The scan loop paces itself to `target_scan_ms` using `time.monotonic_ns()`. If a scan takes longer than the target, the overrun is counted and optionally printed (controlled by `PRINT_SCAN_OVERRUNS` in the generated code). The first scan after boot times from the program's initialization, `load_memory()` included, so its `dt` is the time since the code started.
 
 All scan timing (the `dt` timers accumulate, the clock bits, switch debounce, retentive auto-save, Modbus client timeouts) comes from integer nanoseconds. CircuitPython's floats have about 22 bits of precision, so a float `time.monotonic()` stops resolving milliseconds within hours of uptime (31 ms steps after a day, 250 ms after 11 days), and timers would lose time.
 
