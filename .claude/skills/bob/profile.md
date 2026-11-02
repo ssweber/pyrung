@@ -64,7 +64,16 @@ sessions). Brief it with `editors/vscode/pyrung-debug/AGENTS.md` and
   durations are in each job's `done/<id>.json` (a full train has run ~45 min).
 - A branch touching `fold.py` or `pilot/cyclefold.py` gates on `lint,prove,pilot,tumbler,fold`,
   not `fast`: `fast` has no tumbler, and a fold change broke a pilot golden past READY once.
+- A branch landing outside a train still gates on the `test` stage if it changes anything under
+  `src/`: a codegen fix gated on lint, prove, pilot, tumbler and conf-cp turned two `tests/core`
+  tests red on dev once, and it stayed red until the next `test` run (2026-11-02).
 - Never run `make test-fuzz` or `make bench` in an orchestration session.
+- Any run that exercises pilot or the prover, scratch scripts included, has a memory and time bound
+  (user, 2026-11-02: an unbounded one can OOM the machine). Run it through
+  `mergeq.py run --timeout N`, whose Job Object applies `job_memory_mb`. pytest also has its own
+  `PYTEST_MEMORY_CAP_MB` cap, but a plain `python script.py` or `timeout N` has no memory bound. A
+  change that adds anything accumulating per scan or per search (records, traces, kernels) gives it
+  a cap in the code.
 - The conformance stages use the local soft PLC; no agent runs `-m conformance` while a job's
   conf stage runs (the hook refuses it for agents anyway).
 

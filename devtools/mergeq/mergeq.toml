@@ -7,7 +7,7 @@ worktree_root = "../pyrung-wt"      # `mergeq worktree new <name>` -> <root>/<na
 branch_prefix = "bob/"              # ... on branch <prefix><name>
 lock_file = "../pyrung-wt/.heavy.lock"
 lock_wait = 10800                   # seconds a heavy run waits for the lock
-job_memory_mb = 0                   # cap per job (Windows Job Object); 0 = no cap
+job_memory_mb = 6144                # cap per job (Windows Job Object); 0 = no cap. Largest gate stage peak so far is 850 MB; above pytest's 4096 MB cap so its message names the test
 install = { cmd = ["make", "install"], timeout = 900 }
 
 # Gate stages, cheapest first. A job runs them in this order and stops at the first failure.
