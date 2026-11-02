@@ -37,7 +37,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
@@ -210,8 +210,6 @@ class _FoldContext:
     # with a write on either side (see :func:`_inputs_read_between_writes`).
     written_inputs: Mapping[str, frozenset[str]] = field(default_factory=dict)
     inputs_between_writes: Mapping[str, frozenset[str]] = field(default_factory=dict)
-    # Time drum step registers some other instruction writes too.
-    steps_written_outside: frozenset[str] = frozenset()
     # ``(view, source)`` per affine acc view in ``mirror_names``.
     mirror_sources: tuple[tuple[str, str], ...] = ()
     # ``(source, lo, hi)`` per view whose store can leave its destination's range
@@ -234,6 +232,91 @@ class _FoldContext:
     def coordinates(self) -> frozenset[str]:
         """Every moving value the crossing set tracks for the plateau guard."""
         return self.acc_names | self.modwrap_names | self.mirror_names | self.analog_names
+
+    @cached_property
+    def plateau_excluded(self) -> frozenset[str]:
+        """The tags the plateau guard leaves out: a window moves them by a modeled rule."""
+        return (
+            self.acc_names
+            | self.profile_fb_names
+            | self.churn_excluded
+            | self.modwrap_names
+            | self.mirror_names
+            | self.indicators
+            | (self.time_mirrors.names if self.time_mirrors is not None else frozenset())
+        )
+
+    @cached_property
+    def moves_or_skipped(self) -> frozenset[str]:
+        """Every name a reader outside the rungs cannot watch through a window.
+
+        It moves on the scans a window skips (the plateau guard's exclusions and
+        the plants), or the window leaves it stale for its landing scan to rebuild
+        (:attr:`landing_rebuilt`), or it is a point resolved from the time or the
+        scan id whose changes nothing bounds.  A clock the fold ends windows on,
+        and an ``rtc.*`` field that always ends them, do not move inside one.  A
+        monitor, a stop predicate or a declared read of any of these has to
+        decline, or be carried as one of :attr:`coordinates`: see
+        :meth:`outside_read_sources` and :func:`_scan_callbacks`.
+        """
+        from pyrung.core.system_points import _CLOCK_HALF_PERIODS, _SCAN_DERIVED_NAMES
+
+        # A mirror proof lets a window cross the ticks of the fields the rungs read.
+        ticks_bound = self.rtc_condition_fields if self.time_mirrors else self.rtc_fields
+        return (
+            self.plateau_excluded
+            | self.analog_names
+            | self.landing_rebuilt
+            | frozenset(
+                name
+                for name, half_period in _CLOCK_HALF_PERIODS.items()
+                if half_period not in self.clock_half_periods
+            )
+            | (_SCAN_DERIVED_NAMES - self.scan_derived_names)
+            | (_rtc_field_units().keys() - ticks_bound)
+        )
+
+    def outside_read_sources(self, reads: frozenset[str]) -> frozenset[str] | None:
+        """The coordinates behind what a reader outside the rungs read.
+
+        ``None`` declines the window: the reader read something moving that is not
+        one of :attr:`coordinates`, or the unknowable (the whole map, ``scan_id``,
+        ``timestamp``, memory).  A coordinate can be carried instead: its next value
+        change bounds the window.
+        """
+        if _READ_ALL in reads or any(
+            isinstance(name, str) and name.startswith(_FIELD_READ) for name in reads
+        ):
+            return None
+        moving = reads & self.moves_or_skipped
+        if moving - self.coordinates:
+            return None
+        return self.unmodeled_coordinates(moving)
+
+    @cached_property
+    def modeled_memory(self) -> frozenset[str]:
+        """The scan memory a window moves by a modeled rule: all the rest must hold.
+
+        Each timed source's carry is half of its coordinate, and the landing replays
+        it (see :func:`_timer_landing`).  ``_dt`` is the executor's to set, for the
+        landing scan among others, and what a scan reads of it is the dt the fold
+        already models.
+        """
+        return frozenset(f"_frac:{name}" for name in self.timed_acc_names) | {"_dt"}
+
+    def held_memory(self, state: Any) -> dict[Any, Any]:
+        """``state.memory`` less what a window moves: it must stay as the probe found it.
+
+        A scan is a function of the tags and this memory, so a probe repeats only
+        if it left both where it found them.  Everything counts unless the fold
+        models it (:attr:`modeled_memory`), a key nobody has heard of included.  A
+        scan that fires a one-shot, a toggle, a shift clock edge or an edge contact
+        and restores its tags changes nothing else, and the next scan is not a
+        repeat of it.  Absent is compared as absent, since not every key reads as
+        off when missing (a flasher's idle flag and a drum's event latch start on).
+        """
+        modeled = self.modeled_memory
+        return {key: value for key, value in state.memory.items() if key not in modeled}
 
     def unmodeled_coordinates(self, names: Collection[str]) -> frozenset[str]:
         """The tracked sources behind *names* (a view stands for its source)."""
@@ -849,6 +932,23 @@ def _audit_coordinate_reads(
             unmodeled |= target_reads
         unmodeled |= reads - seen
     return frozenset(unmodeled), rung_cmps, instr_cmps, frozenset(rebuilt)
+
+
+def _fold_context_reads(
+    reads: Collection[str],
+) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+    """Split a stop condition's *reads* into what ``_ensure_fold_context`` takes.
+
+    ``(protected, clocks, scan_derived)``: the tags no pass may exclude from the
+    plateau guard, the clocks that end every window, and the scan-derived signals
+    that disable the fold.
+    """
+    from pyrung.core.system_points import _CLOCK_HALF_PERIODS, scan_derived_names
+
+    names = frozenset(reads)
+    clocks = names & frozenset(_CLOCK_HALF_PERIODS)
+    scan_derived = scan_derived_names(names)
+    return names - clocks - scan_derived, clocks, scan_derived
 
 
 def _merge_comparisons(
@@ -1750,46 +1850,6 @@ def _inputs_read_between_writes(
     }
 
 
-def _steps_written_outside(
-    pdg: ProgramGraph, program: Any, sources: Sequence[_AccSource]
-) -> frozenset[str]:
-    """The time drum step registers an instruction other than their drum writes."""
-    from pyrung.core.analysis.pdg import _extract_instruction_writes, resolve_rung
-
-    registry = _ensure_registry()
-    tags = dict(pdg.tags)
-    indirect_blocks = {ref.block.name for ref in pdg.indirect_writes}
-
-    def walk(instrs: Sequence[Any]) -> Iterator[Any]:
-        for instr in instrs:
-            yield instr
-            yield from walk(getattr(instr, "instructions", None) or ())
-
-    def written_outside(src: _AccSource, step: str) -> bool:
-        block = getattr(pdg.tags.get(step), "_pyrung_block", None)
-        if block is not None and block.name in indirect_blocks:
-            return True
-        for i in pdg.writers_of.get(step, ()):
-            rung = resolve_rung(program, pdg.rung_nodes[i])
-            if rung is None:
-                return True
-            for instr in walk(rung._instructions):
-                if step not in _extract_instruction_writes(instr, tags)[0]:
-                    continue
-                if type(instr) not in registry or not any(
-                    phase_acc.name == src.acc_name
-                    for phase_acc, _done, _preset in _instruction_phases(instr)
-                ):
-                    return True
-        return False
-
-    return frozenset(
-        src.step_name
-        for src in sources
-        if src.step_name is not None and written_outside(src, src.step_name)
-    )
-
-
 def _timer_contests(
     pdg: ProgramGraph,
     program: Any,
@@ -2183,8 +2243,6 @@ def _without_soft_rtc_ticks(ctx: _FoldContext) -> _FoldContext:
     """
     if ctx.time_mirrors is None:
         return ctx
-    from dataclasses import replace
-
     return replace(ctx, time_mirrors=None)
 
 
@@ -2496,18 +2554,18 @@ def _mirror_reads_are_simple(tag: str, pdg: ProgramGraph, program: Any, writer_r
 def _clock_indicators(
     pdg: ProgramGraph,
     program: Any,
-    disqualifying: frozenset[str],
     untouchable: frozenset[str],
 ) -> tuple[frozenset[str], frozenset[str]]:
     """The tags a clock moves that nothing remembering can see, and the clocks only they use.
 
-    A plain rung is contacts over ``out()`` coils, reading nothing that moves inside
-    a window but clocks.  An indicator is fed by a clock through plain rungs; its
-    writers and readers are all plain, every reader sits strictly below every writer,
-    and readers write only indicators.  So each is a function of its scan: the landing
-    scan rebuilds it from the clock's phase there, and no state that outlives a scan
-    depends on it.  It leaves the plateau guard, and a clock read only by plain rungs
-    that write only indicators bounds no window.  Anything else keeps its clock a bound.
+    A plain rung (or branch) is contacts over ``out()`` coils, so what it writes is a
+    function of what its contacts read on that scan, moving or not.  An indicator is
+    fed by a clock through plain rungs; its writers and readers are all plain, every
+    reader sits strictly below every writer, and readers write only indicators.  So
+    each is a function of its scan: the landing scan rebuilds it from the clock's phase
+    there, and no state that outlives a scan depends on it.  It leaves the plateau
+    guard, and a clock read only by plain rungs that write only indicators bounds no
+    window.  Anything else keeps its clock a bound.
 
     Returns ``(clocks, indicators)``.  Every step is a pass over the rungs' reads and
     writes, so the cost stays linear in the size of the program.
@@ -2522,18 +2580,9 @@ def _clock_indicators(
     nodes = pdg.rung_nodes
 
     def is_plain(index: int) -> bool:
-        node = nodes[index]
-        if (
-            node.branch_path
-            or node.data_reads & clocks
-            or node.exclusive_reads & clocks
-            or (node_reads[index] - clocks) & disqualifying
-        ):
-            return False
-        rung = resolve_rung(program, node)
+        rung = resolve_rung(program, nodes[index])
         return (
             rung is not None
-            and not rung._branches
             and all(
                 isinstance(leaf, BitCondition | NormallyClosedCondition)
                 for leaf in _condition_leaves(rung._conditions)
@@ -2904,12 +2953,6 @@ def _build_fold_context(
         indicator_clocks, indicators = _clock_indicators(
             pdg,
             program,
-            acc_names
-            | profile_fb_names
-            | churn_excluded
-            | modwrap_names
-            | frozenset(mirror_names)
-            | (frozenset(_DERIVED_TAG_NAMES) - {_system.sys.always_on.name}),
             visible_names
             | _harness_referenced_names(plc)
             | _opaque_indirect_tags(pdg)
@@ -2973,26 +3016,6 @@ def _build_fold_context(
                 "readers are off: " + ", ".join(sorted(time_mirrors.names))
             )
 
-    # A dormant read stays dormant only while each of its gates is a tag the
-    # plateau guard checks (see _audit_coordinate_reads).
-    unguarded = (
-        acc_names
-        | profile_fb_names
-        | churn_excluded
-        | modwrap_names
-        | frozenset(mirror_names)
-        | indicators
-        | landing_rebuilt
-        | (time_mirrors.names if time_mirrors is not None else frozenset())
-        | frozenset(_DERIVED_TAG_NAMES)
-    )
-    woken = {
-        view_of.get(name, name)
-        for name, sites in dormant.items()
-        if any(gates is not None and gates <= unguarded for gates in sites)
-    }
-    unmodeled = unmodeled | frozenset(woken)
-
     contested_timers = _timer_contests(pdg, program, sources)
     if contested_timers and journal is not None:
         journal.add_note(
@@ -3000,7 +3023,7 @@ def _build_fold_context(
             "only while a scan writes each once: " + ", ".join(sorted(contested_timers))
         )
 
-    return _FoldContext(
+    ctx = _FoldContext(
         sources=tuple(sources),
         acc_names=acc_names,
         comparisons=comparisons,
@@ -3029,13 +3052,21 @@ def _build_fold_context(
         unmodeled=unmodeled,
         written_inputs=written_inputs,
         inputs_between_writes=inputs_between_writes,
-        steps_written_outside=_steps_written_outside(pdg, program, sources),
         mirror_sources=mirror_sources,
         mirror_limits=tuple(mirror_limits),
         landing_rebuilt=landing_rebuilt,
         contested_timers=contested_timers,
         analog=analog,
     )
+    # A dormant read stays dormant only while each of its gates is a tag the
+    # plateau guard checks (see _audit_coordinate_reads).
+    unguarded = ctx.moves_or_skipped | frozenset(_DERIVED_TAG_NAMES)
+    woken = {
+        view_of.get(name, name)
+        for name, sites in dormant.items()
+        if any(gates is not None and gates <= unguarded for gates in sites)
+    }
+    return replace(ctx, unmodeled=unmodeled | frozenset(woken)) if woken else ctx
 
 
 # ── 10. Crossing arithmetic ─────────────────────────────────────────
@@ -3993,33 +4024,6 @@ def _visible_items(state: Any, exclude: frozenset[str]) -> dict[str, Any]:
     return {k: v for k, v in state.tags.items() if k not in exclude}
 
 
-EDGE_MEMORY_PREFIXES = ("_edge:", "_drum_")
-
-
-def edge_memory_on(state: Any) -> frozenset[str]:
-    """The edge sites whose memory (``_edge:e{N}``) holds on in *state*.
-
-    An edge contact stores the bit it saw each time its row is scanned, so
-    equal tags no longer imply equal edge memory: a scan that saw a bit change
-    at a contact leaves the memory changed, and the next scan sees no edge
-    there.  A window repeats its probe scan only if the probe left every edge
-    memory as it found it; absent and off read the same.  That holds for a contact
-    on a system clock too: the rungs under its edge scan run only on that scan, so a
-    state that scan left unchanged says nothing about the scans after it.
-
-    A drum's memory counts too: it writes its outputs on a move or as its rung
-    comes back, not every scan, and a jog edge on a bad step changes no tag that
-    scan and corrects on the next (see ``_DrumBaseInstruction._holds_bad_step``).
-    Either can leave every tag as it found it, and the next scan does not repeat
-    it.
-    """
-    return frozenset(
-        key
-        for key, value in state.memory.items()
-        if value and isinstance(key, str) and key.startswith(EDGE_MEMORY_PREFIXES)
-    )
-
-
 def _visible_items_match(
     state: Any,
     expected: dict[str, Any],
@@ -4414,31 +4418,26 @@ def _do_fold(
     return tuple(patches.items())
 
 
-def _scan_callbacks(runner: Any, moving: frozenset[str] | None = None) -> tuple[bool, bool]:
-    """``(blocks_ordinary, blocks_jumps)`` for the active ``when()`` registrations and monitors.
+def _scan_callbacks(runner: Any, ctx: _FoldContext) -> tuple[bool, bool, bool]:
+    """``(blocks_window, any_when, any_monitor)`` for what is registered and active.
 
-    They are judged after every committed scan, on the state that scan left,
-    so a fold that skips scans cannot honor them: the ordinary fold declines
-    while any ``when()`` registration is active.  A monitor only acts when its
-    tag changes, and on a plateau only the *moving* tags (the fold's excluded
-    coordinates) change on a skipped scan, so with *moving* given only a
-    monitor on one of those blocks the ordinary fold: any other monitored tag
-    holds through the window and sees the changes it sees stepping (a Harness
-    installs one on each bool feedback).  A ``when().do()`` callback acts every scan its
-    condition holds, so a cycle jump that observed whole periods of it may
-    still repeat it; a pause, snapshot or monitor blocks those jumps too.
+    They are judged after every committed scan, on the state that scan left, so a
+    fold that skips scans cannot honor them.  A ``when()`` acts on each scan its
+    condition holds, so any active one blocks every skip.  A monitor only acts when
+    its tag changes, and across an ordinary window only ``ctx.moves_or_skipped``
+    can, so only a monitor on one of those blocks it: any other holds through the
+    window and sees the changes it sees stepping (a Harness installs one on each
+    bool feedback).  A cycle jump moves any tag in the period, so it needs none active.
     """
-    active = [
-        r for r in getattr(runner, "_breakpoints_by_id", {}).values() if r.enabled and not r.removed
-    ]
+    any_when = any(
+        r.enabled and not r.removed for r in getattr(runner, "_breakpoints_by_id", {}).values()
+    )
     live_monitors = [
         r for r in getattr(runner, "_monitors_by_id", {}).values() if r.enabled and not r.removed
     ]
-    monitors = bool(live_monitors)
-    blocks_ordinary = bool(active) or (
-        monitors if moving is None else any(r.tag_name in moving for r in live_monitors)
-    )
-    return blocks_ordinary, monitors or any(r.action != "do" for r in active)
+    moving = ctx.moves_or_skipped
+    blocks_window = any_when or any(r.tag_name in moving for r in live_monitors)
+    return blocks_window, any_when, bool(live_monitors)
 
 
 def _replace_tip_state(
@@ -4573,8 +4572,8 @@ class _FoldProbe:
     timers: tuple[tuple[int, float], ...] = ()
     # Each of ``ctx.modwrap``'s values before the probe scan.
     mods: tuple[Any, ...] = ()
-    # The edge sites whose memory was on before the probe scan.
-    edges: frozenset[str] = frozenset()
+    # What ``ctx.held_memory`` read before the probe scan.
+    memory: Mapping[str, Any] = field(default_factory=dict)
     # Each of ``ctx.analog``'s values before the probe scan.
     analog: tuple[Any, ...] = ()
 
@@ -4632,36 +4631,23 @@ class _OrdinaryFoldStrategy:
         # What an opaque stop predicate read at the latest probe (``None``: no
         # such predicate); the loop sets it (see _traced_call).
         self.predicate_reads: frozenset[str] | None = None
-        self.exclude = (
-            ctx.acc_names
-            | ctx.profile_fb_names
-            | ctx.churn_excluded
-            | ctx.modwrap_names
-            | ctx.mirror_names
-            | ctx.indicators
-            | (ctx.time_mirrors.names if ctx.time_mirrors is not None else frozenset())
-        )
+        self.exclude = ctx.plateau_excluded
 
     def predicate_unmodeled(self) -> frozenset[str] | None:
         """Sources the opaque predicate read, or ``None`` if it read the unknowable.
 
         A tag the plateau guard checks holds still through a window.  A source
         (or a view of one) moves: it is bounded at its next value change.  Any
-        other moving read (another excluded tag, a value the landing rebuilds,
-        ``scan_id``, ``timestamp``, memory, the whole map) declines the window.
+        other read of something moving declines (see
+        :meth:`_FoldContext.outside_read_sources`).
         """
         reads = self.predicate_reads
-        if reads is None:
-            return frozenset()
-        ctx = self.ctx
-        moving = reads & (self.exclude | ctx.landing_rebuilt)
-        if _READ_ALL in reads or any(
-            isinstance(name, str) and name.startswith(_FIELD_READ) for name in reads
-        ):
-            return None
-        if moving - ctx.coordinates:
-            return None
-        return ctx.unmodeled_coordinates(moving)
+        return frozenset() if reads is None else self.ctx.outside_read_sources(reads)
+
+    def read_coordinates(self) -> frozenset[str] | None:
+        """Every coordinate read beyond a comparison, or ``None`` for the unknowable."""
+        read_sources = self.predicate_unmodeled()
+        return None if read_sources is None else self.unmodeled | read_sources
 
     def capture(self, runner: PLC) -> _FoldProbe:
         """Capture the entry side of one normal probe scan.
@@ -4691,7 +4677,7 @@ class _OrdinaryFoldStrategy:
             scan_id=state.scan_id,
             timers=timers,
             mods=tuple(state.tags.get(mw.name) for mw in self.ctx.modwrap),
-            edges=edge_memory_on(state),
+            memory=self.ctx.held_memory(state),
             analog=tuple(state.tags.get(a.name, a.default) for a in self.ctx.analog),
         )
 
@@ -4727,9 +4713,9 @@ class _OrdinaryFoldStrategy:
         """
         if not _visible_items_match(state, probe.visible, self.exclude):
             return None
-        if edge_memory_on(state) != probe.edges:
-            # The probe saw an edge at some contact (or its memory moved off a
-            # bit it last saw): the next scan is not a repeat of it.
+        if self.ctx.held_memory(state) != probe.memory:
+            # The probe left something behind for the next scan, which is then
+            # not a repeat of it.
             return None
         if probe.scan_id == 0 and self.ctx.reads_first_scan:
             # The probe read first_scan True; the window would read it False.
@@ -4744,12 +4730,10 @@ class _OrdinaryFoldStrategy:
             return None
         if _mirror_past_limit(self.ctx, state):
             return None
-        unmodeled = self.unmodeled | self.ctx.hidden_input_coordinates(forced, acc_writes)
-        if self.predicate_reads is not None:
-            read_sources = self.predicate_unmodeled()
-            if read_sources is None:
-                return None
-            unmodeled = unmodeled | read_sources
+        read_coordinates = self.read_coordinates()
+        if read_coordinates is None:
+            return None
+        unmodeled = read_coordinates | self.ctx.hidden_input_coordinates(forced, acc_writes)
         acc_scans = _nearest_acc_crossing(
             self.ctx,
             probe.totals,
@@ -4942,7 +4926,7 @@ class _OrdinaryFoldStrategy:
         capture_sink: Callable[[int, ConditionViewCapture], None] | None = None,
     ) -> _FoldAdvance | None:
         """Fold after a completed probe, or return ``None`` if proof declines."""
-        if _scan_callbacks(runner, self.exclude)[0]:
+        if _scan_callbacks(runner, self.ctx)[0]:
             return None
         harness_scan = _harness_nearest_scan(runner)
         plan = self.plan(

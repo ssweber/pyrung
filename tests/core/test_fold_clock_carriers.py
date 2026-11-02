@@ -20,6 +20,7 @@ from pyrung import (
     Bool,
     Counter,
     Int,
+    Or,
     Program,
     Rung,
     TagType,
@@ -36,6 +37,7 @@ from pyrung import (
     reset,
     return_early,
     rise,
+    run_function,
     subroutine,
 )
 from pyrung.core.runner import PLC
@@ -721,6 +723,170 @@ def _indicator_feeds_latch() -> None:
     _timer()
 
 
+def _blink_in_an_uncalled_subroutine() -> None:
+    # A writer no main rung reaches has no position to sit above its reader.
+    with subroutine("Never"):
+        with Rung(clk100):
+            out(F)
+    with Rung(F):
+        out(Lamp)
+    _timer()
+
+
+def _seal_in_on_a_clock() -> None:
+    # The same rung reads and writes it, so it is no function of its scan.
+    with Rung(Or(clk100, F)):
+        out(F)
+    with Rung(F):
+        out(Lamp)
+    _timer()
+
+
+def _branch_lamp_above_its_writer() -> None:
+    # H reads the F of the scan before.
+    with Rung(Mode):
+        with branch(F):
+            out(H)
+        with branch(clk100):
+            out(F)
+    with Rung(H):
+        out(Lamp)
+    _timer()
+
+
+def _function_over_a_gated_blink(calls: list[int]) -> Body:
+    # The function moves the bit every scan; nothing but the plateau guard can see it.
+    def alternate() -> dict[str, bool]:
+        calls.append(1)
+        return {"v": len(calls) % 2 == 0}
+
+    def body() -> None:
+        _timer()
+        with Rung(G):
+            call("Blink")
+        with subroutine("Blink"):
+            with Rung(clk1s):
+                out(F)
+        with Rung():
+            run_function(alternate, outs={"v": F})
+        with Rung(F):
+            out(Lamp)
+
+    return body
+
+
+def _clock_over_a_counting_branch() -> None:
+    _timer()
+    with Rung(clk100):
+        out(F)
+        with branch(G):
+            calc(N + 1, N)
+
+
+def _blink_in_a_branch_read_below() -> None:
+    _timer()
+    with Rung(G):
+        with branch(clk100):
+            out(F)
+    with Rung(F):
+        out(Lamp)
+
+
+def _branch_reads_a_sibling_coil() -> None:
+    _timer()
+    with Rung(G):
+        with branch(clk100):
+            out(F)
+        with branch(F):
+            out(H)
+    with Rung(H):
+        calc(N + 1, N)
+
+
+def _branch_above_its_writer() -> None:
+    _timer()
+    with Rung(G):
+        with branch(F):
+            out(H)
+        with branch(clk100):
+            out(F)
+    with Rung(H):
+        calc(N + 1, N)
+
+
+def _edge_in_a_branch_under_a_clock() -> None:
+    _timer()
+    with Rung(clk100):
+        out(F)
+        with branch(rise(G)):
+            out(H)
+
+
+def _one_shot_in_a_branch() -> None:
+    _timer()
+    with Rung(clk100):
+        with branch(G):
+            out(F, oneshot=True)
+    with Rung(F):
+        calc(N + 1, N)
+
+
+def _contact_on_an_accumulator() -> None:
+    _timer()
+    with Rung(T.Acc, clk100):
+        out(F)
+    with Rung(F):
+        out(Lamp)
+
+
+def _contact_on_a_wrapping_value() -> None:
+    _timer()
+    with Rung():
+        calc((V + 1) % 7, V)
+    with Rung(V, clk100):
+        out(F)
+    with Rung(F):
+        out(Lamp)
+
+
+def _contact_on_a_rebuilt_view() -> None:
+    _timer()
+    with Rung():
+        calc(T.Acc // 100, V)
+    with Rung(V, clk100):
+        out(F)
+    with Rung(F):
+        out(Lamp)
+
+
+def _contact_on_first_scan() -> None:
+    _timer()
+    with Rung(system.sys.first_scan, clk100):
+        out(F)
+    with Rung(F):
+        calc(N + 1, N)
+
+
+def _contact_on_a_fault_flag() -> None:
+    _timer()
+    with Rung():
+        calc(T.Acc + 30000, V)
+    with Rung(system.fault.out_of_range, clk100):
+        out(F)
+    with Rung(F):
+        calc(N + 1, N)
+
+
+def _contact_on_a_comparison_result() -> None:
+    _timer()
+    with Rung(clk100, X):
+        out(F)
+    with Rung(F):
+        out(Lamp)
+    with Rung(T.Acc >= 2000):
+        out(X)
+
+
 class TestWhatIsNotAnIndicator:
     """Each folds less than an indicator does, or not at all, and stays exact."""
 
@@ -733,11 +899,29 @@ class TestWhatIsNotAnIndicator:
             pytest.param(_one_shot_blink, id="one-shot"),
             pytest.param(_indicator_read_above_its_writer, id="read-above-its-writer"),
             pytest.param(_indicator_feeds_latch, id="feeds-a-latch"),
+            pytest.param(_blink_in_an_uncalled_subroutine, id="uncalled-writer"),
+            pytest.param(_seal_in_on_a_clock, id="seal-in"),
         ],
     )
     def test_stays_exact_with_the_clock_as_a_bound(self, body: Body) -> None:
         assert _kernel_scans(body) > 12
         _assert_exact(body)
+
+    def test_a_branch_read_above_its_writer(self) -> None:
+        _assert_exact(_branch_lamp_above_its_writer, patch={"Mode": True})
+
+    def test_a_second_writer_stays_in_the_guard(self) -> None:
+        # Its moves are not a function of the clock, and a probe scan shows them.
+        def run(fold: bool) -> tuple[int, dict[str, Any]]:
+            calls: list[int] = []
+            plc = _plc(_function_over_a_gated_blink(calls), None)
+            # A monitor on what holds changes nothing here, and tells --fold-check to
+            # leave this run alone: a stepped twin would call the same function.
+            plc.monitor(G, lambda _cur, _prev: None)
+            plc.run_until(lambda _s: False, max_cycles=700, fold=fold)
+            return len(calls), _state(plc)
+
+        assert run(True) == run(False)
 
     @pytest.mark.parametrize("ptr", [1, 2])
     def test_read_through_a_pointer(self, ptr: int) -> None:
@@ -745,6 +929,39 @@ class TestWhatIsNotAnIndicator:
 
     def test_a_latch_on_a_chain_lands_on_its_scan(self) -> None:
         _assert_lands_as_stepped(_indicator_feeds_latch, Hit)
+
+
+class TestAPlainRung:
+    """Contacts over coils are a function of their scan, whatever the contacts read."""
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(_clock_over_a_counting_branch, id="clock-over-a-counting-branch"),
+            pytest.param(_blink_in_a_branch_read_below, id="blink-in-a-branch"),
+            pytest.param(_branch_reads_a_sibling_coil, id="reads-a-sibling-coil"),
+            pytest.param(_branch_above_its_writer, id="above-its-writer"),
+            pytest.param(_edge_in_a_branch_under_a_clock, id="edge-under-a-clock"),
+            pytest.param(_one_shot_in_a_branch, id="one-shot"),
+        ],
+    )
+    def test_in_a_branch(self, body: Body) -> None:
+        _assert_exact(body, patch={"G": True})
+        _assert_exact(body)
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(_contact_on_an_accumulator, id="accumulator"),
+            pytest.param(_contact_on_a_wrapping_value, id="wrapping-value"),
+            pytest.param(_contact_on_a_rebuilt_view, id="rebuilt-view"),
+            pytest.param(_contact_on_first_scan, id="first-scan"),
+            pytest.param(_contact_on_a_fault_flag, id="fault-flag"),
+            pytest.param(_contact_on_a_comparison_result, id="comparison-result"),
+        ],
+    )
+    def test_with_a_contact_on_what_moves(self, body: Body) -> None:
+        _assert_exact(body)
 
 
 def _compare(threshold: int, clock: Any) -> Body:
