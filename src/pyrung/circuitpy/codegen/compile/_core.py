@@ -96,6 +96,7 @@ from ._primitives import (
     _compile_set_out_of_range_fault_body,
     _compile_value,
     _snapshot_tag_symbol,
+    fault_follow_scope,
 )
 
 
@@ -387,6 +388,8 @@ def compile_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
+    if instr._fault_follows:
+        fault_follow_scope(instr, ctx)
     if isinstance(instr, OutInstruction):
         return _compile_out_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, ToggleInstruction):

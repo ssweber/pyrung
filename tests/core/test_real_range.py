@@ -228,10 +228,14 @@ def test_an_inf_operand_follows_ieee(runner_factory):
     half = Real("Half")
     nan = Real("NaN")
     sine = Real("Sine")
+    flagged = Bool("Flagged")
     with Program() as program:
         with Rung():
             calc(big * 10, inf)
             calc(inf / 2, half)
+        with Rung(SC43):
+            out(flagged)
+        with Rung():
             calc(inf - inf, nan)
             calc(sin(inf), sine)
     plc = runner_factory(program)
@@ -241,7 +245,8 @@ def test_an_inf_operand_follows_ieee(runner_factory):
     assert tags["Half"] == INF
     assert math.isnan(tags["NaN"])
     assert math.isnan(tags["Sine"])
-    assert tags[SC43.name] is True
+    assert tags["Flagged"] is True
+    assert tags[SC43.name] is False
     assert tags[SC40.name] is False
 
 
@@ -324,13 +329,13 @@ def test_a_non_finite_forloop_count_runs_no_iteration_and_sc43(runner_factory, v
     holding Inf or NaN runs no iteration, sets SC43, and the scan runs on."""
     r = Real("R", default=3.0)
     hits = Int("Hits")
-    after = Int("After")
+    after = Bool("After")
     with Program() as program:
         with Rung():
             with forloop(r):
                 calc(hits + 1, hits)
         with Rung():
-            copy(1, after)
+            out(after)
     plc = runner_factory(program)
     plc.step()
     assert plc.current_state.tags["Hits"] == 3
@@ -339,7 +344,7 @@ def test_a_non_finite_forloop_count_runs_no_iteration_and_sc43(runner_factory, v
     plc.step()
     tags = plc.current_state.tags
     assert tags["Hits"] == 3
-    assert tags["After"] == 1
+    assert tags["After"] is True
     assert tags[SC43.name] is True
 
 

@@ -21,13 +21,12 @@ instruction of the faulting kind.  Hardware round 1 read 346 right after the
 fault and 0 after a later successful one, so a CLICK flag does not hold to the
 end of the scan.  The adopted model: a flag follows the last instruction, any
 instruction (Result1..3 = 0, 0, 0).  The others: any Math clears it (346, 0,
-0); only an instruction of its own kind (346, 346, 0); pyrung's flag on from
-the fault to the end of the scan (346, 346, 346).  pyrung's is the last, so
-the three cases are ``pending="SYS"``.  hardware round 2, 2026-10-30: SC43 and SC44 follow
-the last instruction (0, 0, 0); SC40 follows the last Math (346, 0, 0), so a
-Copy leaves it as it is.
+0); only an instruction of its own kind (346, 346, 0); a flag on from the
+fault to the end of the scan (346, 346, 346).  hardware round 2, 2026-10-30:
+SC43 and SC44 follow the last instruction (0, 0, 0); SC40 follows the last Math
+(346, 0, 0), so a Copy leaves it as it is.
 
-What else clears a flag (probes, ``pending="SYS"``).  Round 2 tried a Copy and a
+What else clears a flag (probes).  Round 2 tried a Copy and a
 Math only.  Three more cases raise their fault again before each instruction
 under test, so each probe reads the flag right after one instruction and
 nothing else: a fault, the instruction, the probe coil, the next fault, ...
@@ -44,10 +43,10 @@ Result1 is the control, a probe right after the fault with nothing between
   The models were: every instruction that executes clears the flag and an
   open rung does not: 346, 0, 346, 0, 0; only box instructions (Copy, Math,
   timer, counter) clear it: 346, 346, 346, 0, 0; coils too, even unexecuted:
-  346, 0, 0, 0, 0; the flag on to the end of the scan (pyrung): 346 in every
+  346, 0, 0, 0, 0; the flag on to the end of the scan: 346 in every
   field.  Hardware round 2 (2026-10-31): SC44 reads 346 in every field, so a
   coil, an open rung, a TON and a CTU all leave it as it is (only a Copy or a
-  Math clears it, ``address_flag_clears_each_scan``), and pyrung matches.
+  Math clears it, ``address_flag_clears_each_scan``).
   Since then the case records scans 3, 4 and 6 only, which leaves that
   reading as it was and keeps the other SC44 cases' faults out of it.
   SC43 (hardware round 2, 2026-10-31) read 0 in every field, the control
@@ -65,14 +64,14 @@ Result1 is the control, a probe right after the fault with nothing between
   steps on their own bits.  The fault writes a slot field, so the scans are
   recorded in DD961..DD965, on scans 3, 4 and 6 only, and copied into the
   fields once the window ends.
-  Adopted, as SC44 read: only a Copy or a Math clears it, 346 in every field
-  (pyrung reads the same).  Every instruction that executes clears it: 346, 0,
+  Adopted, as SC44 read: only a Copy or a Math clears it, 346 in every field.
+  Every instruction that executes clears it: 346, 0,
   346, 0, 0; and so on, as above.
 - ``division_flag_vs_hex_math`` (SC40, a division by ``Fired``): Result2 after
   a hex-mode Math (WORDs only, no division), Result3 after a Copy, Result4
   after a decimal Math.  Round 2 read Result3 = 346 and Result4 = 0.  Adopted,
   any Math clears it, hex or decimal: 346, 0, 346, 0; a decimal Math only:
-  346, 346, 346, 0.  pyrung: 346 in every field.
+  346, 346, 346, 0.
 
 Scan clock and counter.  ``scan_counter_steps_by_one`` shows SD9 counts every
 scan (7 steps of one over scans 1..8), and ``scan_clock_follows_counter`` that
@@ -243,7 +242,7 @@ def _refault_case(slot, flag, base, fault, steps, records=None, fault_scans_only
     may write a slot field while the window runs.  *fault_scans_only* records
     the fault's own scans (3, 4 and 6) only, so a field that reads 346 cannot
     pick up another case's fault: on the wire the cases start on different
-    scans, and pyrung holds a flag to the end of the scan.
+    scans.
     """
     probes = [c[base + i] for i in range(len(steps))]
     count_scans(slot)
@@ -475,7 +474,6 @@ group = Group(
             init=_fault_init(901),
             expect={"Result1": 346, "Result2": 0, "Result3": 0},
             scans=SCANS,
-            pending="SYS",
         ),
         case(
             "The out-of-range flag SC43 shows the last instruction: overflowing an Int on "
@@ -486,7 +484,6 @@ group = Group(
             init=_fault_init(911),
             expect=_FAULT_EXPECT,
             scans=SCANS,
-            pending="SYS",
         ),
         case(
             "The address-error flag SC44 shows the last instruction: copying through "
@@ -497,7 +494,6 @@ group = Group(
             init=_fault_init(921),
             expect=_FAULT_EXPECT,
             scans=SCANS,
-            pending="SYS",
         ),
         case(
             "The scan counter SD9 goes up by one every scan: over scans 1..8 it steps "
@@ -580,7 +576,6 @@ group = Group(
             init=init_division_flag_vs_hex_math,
             expect={"Result1": 346, "Result2": 0, "Result3": 346, "Result4": 0},
             scans=SCANS,
-            pending="SYS",
             probe="does a hex-mode Math clear SC40",
         ),
     ],

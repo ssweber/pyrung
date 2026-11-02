@@ -2142,6 +2142,78 @@ class TestIndexedAccess:
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "Hit")
 
+    def test_a_read_past_the_block_reaches_zero(self):
+        """Ptr 9 past DS1..4 reads 0: the dest's domain holds it, whatever the elements hold."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.prove.classify import (
+            _collect_all_exprs,
+            _collect_structural_domains,
+        )
+
+        ptr = Int("Ptr", external=True, choices={1: "inside", 9: "past"})
+        ds = Block("DS", TagType.INT, 1, 4, default_factory=lambda _addr: 5)
+        n, hit = Int("N", default=5), Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 0):
+                latch(hit)
+
+        graph = build_program_graph(logic)
+        domains = _collect_structural_domains(logic, graph, _collect_all_exprs(logic, graph))
+        assert 0 in domains["N"]
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_read_past_the_block_can_feed_another_pointer(self):
+        """The 0 a past read returns addresses T0, a slot only that read can reach."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.value_sets import _ValueSets
+        from pyrung.core.validation._common import walk_instructions
+
+        start, hit = Bool("Start", external=True), Bool("Hit")
+        ptr = Int("Ptr", external=True, choices={1: "inside", 9: "past"})
+        ds = Block("DS", TagType.INT, 1, 4, default_factory=lambda _addr: 2)
+        table = Block("T", TagType.INT, 0, 3)
+        n, m = Int("N", default=2), Int("M")
+        with Program(strict=False) as logic:
+            with Rung(start):
+                copy(7, table[0])
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung():
+                copy(table[n], m)
+            with Rung(m == 7):
+                latch(hit)
+
+        graph = build_program_graph(logic)
+        values = _ValueSets(
+            list(walk_instructions(logic)),
+            graph.tags,
+            frozenset({ptr.name}),
+            None,
+            follow_indirect_reads=True,
+            declared_inputs=True,
+        )
+        assert 0 in (values.values(n.name) or ())
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_read_below_the_block_keeps_the_dest(self):
+        """Ptr 0 below DS1..4 faults and stores nothing: N never reads 0."""
+        ptr = Int("Ptr", external=True, choices={1: "inside", 0: "below"})
+        ds = Block("DS", TagType.INT, 1, 4, default_factory=lambda _addr: 5)
+        n, hit = Int("N", default=5), Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 0):
+                latch(hit)
+
+        assert isinstance(always(logic, ~hit), Proven)
+
     def test_unbounded_pointer_hint_names_the_offset_range(self):
         """The suggested bounds are pointer values: DS[Ptr + 2] into DS1..2000 is -1..1998."""
         start, hit = Bool("Start"), Bool("Hit")

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from functools import wraps
 from typing import TYPE_CHECKING, Any
+
+from pyrung.core.memory_block import IndirectExprRef, IndirectRef, PastBankError
+from pyrung.core.tag import Tag
 
 from .base import Instruction, OneShotMixin
 from .conversions import (
@@ -14,9 +19,12 @@ from .conversions import (
     _truncate_to_tag_type,
 )
 from .resolvers import (
+    _set_fault_address_error,
     _set_fault_out_of_range,
     resolve_block_range_tags_ctx,
+    resolve_source_type_tag_ctx,
     resolve_tag_ctx,
+    resolve_tag_or_value_ctx,
 )
 from .utils import (
     assert_tag_type,
@@ -27,11 +35,39 @@ if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
 
 
+# Pack and Unpack are Copy tabs on a CLICK: their flags follow them as Copy's do.
+_COPY_FAULTS = ("fault.address_error", "fault.out_of_range")
+
+
+def _skip_on_bad_pointer(func: Callable[..., None]) -> Callable[..., None]:
+    """A pointer below its bank sets the address-error flag and skips the
+    instruction; one past its bank drops the write with no flag."""
+
+    @wraps(func)
+    def wrapper(self: Any, ctx: ScanContext, enabled: bool) -> None:
+        try:
+            func(self, ctx, enabled)
+        except PastBankError:
+            pass
+        except IndexError:
+            _set_fault_address_error(ctx)
+
+    return wrapper
+
+
+def _unpack_source_tag(source: Tag | IndirectRef | IndirectExprRef, ctx: ScanContext) -> Tag:
+    if isinstance(source, (IndirectRef, IndirectExprRef)):
+        return resolve_source_type_tag_ctx(source, ctx)
+    return resolve_tag_ctx(source, ctx)
+
+
 class PackBitsInstruction(OneShotMixin, Instruction):
     """Pack BOOL tags from a BlockRange into a destination register."""
 
     _reads = ("bit_block",)
     _writes = ("dest",)
+    _fault_writes = _COPY_FAULTS
+    _fault_follows = _COPY_FAULTS
     _conditions = ()
     _structural_fields = ()
 
@@ -41,6 +77,7 @@ class PackBitsInstruction(OneShotMixin, Instruction):
         self.dest = dest
 
     @guard_oneshot_execution
+    @_skip_on_bad_pointer
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         from pyrung.core.tag import TagType
 
@@ -82,6 +119,8 @@ class PackWordsInstruction(OneShotMixin, Instruction):
 
     _reads = ("word_block",)
     _writes = ("dest",)
+    _fault_writes = _COPY_FAULTS
+    _fault_follows = _COPY_FAULTS
     _conditions = ()
     _structural_fields = ()
 
@@ -91,6 +130,7 @@ class PackWordsInstruction(OneShotMixin, Instruction):
         self.dest = dest
 
     @guard_oneshot_execution
+    @_skip_on_bad_pointer
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         from pyrung.core.tag import TagType
 
@@ -129,7 +169,8 @@ class PackTextInstruction(OneShotMixin, Instruction):
 
     _reads = ("source_range",)
     _writes = ("dest",)
-    _fault_writes = ("fault.out_of_range",)
+    _fault_writes = _COPY_FAULTS
+    _fault_follows = _COPY_FAULTS
     _conditions = ()
     _structural_fields = ("allow_whitespace",)
 
@@ -142,12 +183,18 @@ class PackTextInstruction(OneShotMixin, Instruction):
         self.allow_whitespace = bool(allow_whitespace)
 
     @guard_oneshot_execution
+    @_skip_on_bad_pointer
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         from pyrung.core.tag import TagType
 
-        dest_tag = resolve_tag_ctx(self.dest, ctx)
+        # The type only: a pointer in the destination counts once the text parses.
+        dest_type = (
+            self.dest.block._get_tag(self.dest.block.start)
+            if isinstance(self.dest, (IndirectRef, IndirectExprRef))
+            else resolve_tag_ctx(self.dest, ctx)
+        )
         assert_tag_type(
-            dest_tag,
+            dest_type,
             (TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL),
             label="pack_text destination",
         )
@@ -170,11 +217,12 @@ class PackTextInstruction(OneShotMixin, Instruction):
                 return
             if self.allow_whitespace:
                 text = text.strip()
-            parsed = _parse_pack_text_value(text, dest_tag)
+            parsed = _parse_pack_text_value(text, dest_type)
         except (TypeError, ValueError, OverflowError):
             _set_fault_out_of_range(ctx)
             return
 
+        dest_tag = resolve_tag_ctx(self.dest, ctx)
         stored = _store_copy_value_to_tag_type(parsed, dest_tag)
         ctx.set_tag(dest_tag.name, stored)
         if dest_tag.type in {TagType.INT, TagType.DINT} and stored != parsed:
@@ -187,6 +235,8 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
 
     _reads = ("source",)
     _writes = ("bit_block",)
+    _fault_writes = _COPY_FAULTS
+    _fault_follows = _COPY_FAULTS
     _conditions = ()
     _structural_fields = ()
 
@@ -204,10 +254,11 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
         self.bit_block = value
 
     @guard_oneshot_execution
+    @_skip_on_bad_pointer
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         from pyrung.core.tag import TagType
 
-        source_tag = resolve_tag_ctx(self.source, ctx)
+        source_tag = _unpack_source_tag(self.source, ctx)
         assert_tag_type(
             source_tag,
             (TagType.INT, TagType.WORD, TagType.DINT, TagType.REAL),
@@ -221,7 +272,7 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
                 f"unpack_to_bits source width is {width} bits but block has {len(bit_tags)} tags"
             )
 
-        source_value = ctx.get_tag(source_tag.name, source_tag.default)
+        source_value = resolve_tag_or_value_ctx(self.source, ctx)
         if source_tag.type == TagType.REAL:
             bits = _float_to_int_bits(source_value)
         elif source_tag.type in {TagType.INT, TagType.WORD}:
@@ -246,6 +297,8 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
 
     _reads = ("source",)
     _writes = ("word_block",)
+    _fault_writes = _COPY_FAULTS
+    _fault_follows = _COPY_FAULTS
     _conditions = ()
     _structural_fields = ()
 
@@ -263,10 +316,11 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
         self.word_block = value
 
     @guard_oneshot_execution
+    @_skip_on_bad_pointer
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         from pyrung.core.tag import TagType
 
-        source_tag = resolve_tag_ctx(self.source, ctx)
+        source_tag = _unpack_source_tag(self.source, ctx)
         assert_tag_type(
             source_tag,
             (TagType.DINT, TagType.REAL),
@@ -291,7 +345,7 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
             include_tag_name=True,
         )
 
-        source_value = ctx.get_tag(source_tag.name, source_tag.default)
+        source_value = resolve_tag_or_value_ctx(self.source, ctx)
         bits = (
             _float_to_int_bits(source_value)
             if source_tag.type == TagType.REAL

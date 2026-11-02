@@ -16,8 +16,8 @@ from pyrung.circuitpy.codegen._constants import (
     _TYPE_DEFAULTS,
 )
 from pyrung.circuitpy.codegen._helpers import (
-    _render_condition_index_helper,
     _render_helper_defs,
+    _render_index_helpers,
     _with_helper_deps,
 )
 from pyrung.circuitpy.codegen._util import (
@@ -317,35 +317,7 @@ def _render_indirect_helpers(ctx: CodegenContext) -> list[str]:
         (ctx.block_bindings[bid] for bid in ctx.used_indirect_blocks),
         key=lambda b: ctx.index_helper_name(b.block_id),
     ):
-        helper_name = ctx.index_helper_name(binding.block_id)
-        lines.append(f"def {helper_name}(addr):")
-        if fault_sym is not None:
-            lines.append(f"    global {fault_sym}")
-        lines.append(f"    if addr < {binding.start} or addr > {binding.end}:")
-        if fault_sym is not None:
-            lines.append(f"        {fault_sym} = True")
-        lines.append(
-            f'        raise IndexError(f"Address {{addr}} out of range'
-            f" for {binding.logical_name} ({binding.start}-{binding.end})"
-            '")'
-        )
-        if binding.valid_addresses is not None:
-            lines.append(f"    if addr not in {binding.valid_addresses!r}:")
-            if fault_sym is not None:
-                lines.append(f"        {fault_sym} = True")
-            lines.append(
-                f'        raise IndexError(f"Address {{addr}} out of range'
-                f" for {binding.logical_name} ({binding.start}-{binding.end})"
-                '")'
-            )
-        lines.append(f"    return int(addr) - {binding.start}")
-        lines.append("")
-        if binding.block_id in ctx.used_condition_index_blocks:
-            lines.extend(
-                _render_condition_index_helper(
-                    ctx.condition_index_helper_name(binding.block_id), binding
-                )
-            )
+        lines.extend(_render_index_helpers(ctx, binding, fault_sym, fault_sym))
     return lines
 
 

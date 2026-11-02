@@ -28,10 +28,8 @@ tells apart:
   0 over the destination's 77.  A model that skips empty text leaves 77.
 - ``to_value_rejects``: Character Value of a letter is a fault (SC43) and
   leaves the destination alone (77); of NUL it writes 0 over 66 (Result3) and,
-  adopted, raises no fault (Result4 = 0).  pyrung writes 0 for NUL, but its
-  fault flag stays on from the letter earlier in the scan (Result4 = 1), so the
-  case stays ``pending="SYS"`` until a flag follows the last instruction.  A
-  model that stores the code minus 48 reads 17 for the letter.
+  adopted, raises no fault (Result4 = 0).  A model that stores the code minus 48
+  reads 17 for the letter.
 - ``to_text_suppress``: 123 converts to the three characters "123", the rest
   of the TXT range is untouched (90).  A model that pads to the Int's five
   digits reads "00123": 48 where this reads 49, and 50, 51 in the slots this
@@ -79,13 +77,10 @@ tells apart:
   NUL, so its ASCII code is 0 too.  CLICK's Reset coil takes bit memory only
   (X, Y, C, T, CT, SC), so this is pyrung's answer with nothing to compare.
 
-Ordering note: every case fires on one scan and pyrung keeps SC43 on for the rest of
-the scan (a CLICK's flag follows only the last instruction), so the cases that read
-the fault are placed after the ones that expect it clear.  Until the SYS step lands,
-an in-process run cannot tell the expect-1 cases (the clamping ``pack_text_int`` and
-``pack_text_dint``) from a runtime that never faults, since earlier cases already set
-the flag.  The one-scan-per-scenario unit tests in
-``tests/core/test_click_text_semantics.py`` pin the clamp fault itself.
+The flag probes read SC43 on the rung right after the instruction: it follows the last
+Copy or Math, so a fault from an earlier case cannot show there.  The
+one-scan-per-scenario unit tests in ``tests/core/test_click_text_semantics.py`` pin the
+clamp fault itself.
 """
 
 from __future__ import annotations
@@ -524,9 +519,6 @@ group = Group(
             init=init_pack_text_int_fraction,
             expect={"Result1": 12, "Result2": 99, "Result3": 0, "Result4": 1},
         ),
-        # The cases that raise SC43 come last: every case fires on the same scan, so a
-        # fault raised earlier in the subroutine would still be on at a later case's
-        # flag probe (a CLICK's flag follows the last instruction, so there it is not).
         case(
             "Character Value of a letter is refused: the out-of-range fault comes up "
             "(Result2 = 1) and the destination keeps its 77 (Result1); of NUL it writes 0 "
@@ -534,7 +526,6 @@ group = Group(
             ladder=prove_to_value_rejects,
             init=init_to_value_rejects,
             expect={"Result1": 77, "Result2": 1, "Result3": 0, "Result4": 0},
-            pending="SYS",
         ),
         case(
             "Pack text into a WORD parses hex: 00FF is 255, 0010 is 16, ABCD is 0xABCD, and "

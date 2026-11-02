@@ -185,6 +185,12 @@ class CodegenContext:
     # Blocks a rung condition indexes: their ``_cond_index_*`` helper reads an
     # address outside the block as 0 rather than raising.
     used_condition_index_blocks: set[int] = field(default_factory=set)
+    used_read_index_blocks: set[int] = field(default_factory=set)
+    # While a follow instruction's body compiles (``fault_follow_scope``): what
+    # a source reading a followed flag reads, the flag as the instruction found
+    # it, since its first line clears the flag.
+    fault_entry_symbols: dict[str, str] = field(default_factory=dict)
+    fault_entry_reads: set[str] = field(default_factory=set)
     # logical block id -> (bank block id, {logical addr: bank addr}). An aliased
     # block is a named window onto the bank's array, not storage of its own.
     block_alias: dict[int, tuple[int, dict[int, int]]] = field(default_factory=dict)
@@ -669,6 +675,15 @@ class CodegenContext:
         self.used_indirect_blocks.add(block_id)
         self.used_condition_index_blocks.add(block_id)
         return self.condition_index_helper_name(block_id)
+
+    def read_index_helper_name(self, block_id: int) -> str:
+        return self.index_helper_name(block_id).replace("_resolve_index_", "_read_index_", 1)
+
+    def use_read_index_block(self, block_id: int) -> str:
+        """The helper an instruction's source indexes *block_id* through."""
+        self.used_indirect_blocks.add(block_id)
+        self.used_read_index_blocks.add(block_id)
+        return self.read_index_helper_name(block_id)
 
     def symbol_if_referenced(self, tag_name: str) -> str | None:
         tag = self.referenced_tags.get(tag_name)

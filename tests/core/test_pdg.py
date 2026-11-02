@@ -81,7 +81,9 @@ def test_embedded_timer_conditions_and_calc_reads_are_extracted() -> None:
             "Result",
         }
     )
-    assert node.implicit_writes == frozenset({"fault.division_error", "fault.out_of_range"})
+    assert node.implicit_writes == frozenset(
+        {"fault.division_error", "fault.out_of_range", "fault.address_error"}
+    )
 
 
 def test_indirect_ref_unbounded_pointer_expands_full_block() -> None:
