@@ -895,6 +895,40 @@ def test_a_shift_over_a_window_skips_a_gap(engine, monkeypatch) -> None:
     assert watched == (False, True, False)
 
 
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize("clock_default", [False, True], ids=["no_clock_edge", "a_clock_edge"])
+def test_a_shift_with_its_window_in_a_gap_refuses_every_scan(
+    engine, clock_default, monkeypatch
+) -> None:
+    clock = Bool(f"SpGapClock{clock_default}", default=clock_default)
+    with Program(strict=False) as prog:
+        with Rung():
+            _sparse_stage()
+        with Rung():
+            shift(_SpBits.select(_SpFive, _SpEight)).clock(clock).reset(Bool("SpShiftReset"))
+    with pytest.raises(ValueError, match="shift bit_range resolved to an empty range"):
+        _run(prog, engine, (SC44,), monkeypatch)
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_a_shift_refuses_on_the_scan_its_window_moves_into_a_gap(engine, monkeypatch) -> None:
+    start = Int("SpShiftStart", default=1)
+    end = Int("SpShiftEnd", default=4)
+    with Program(strict=False) as prog:
+        with Rung():
+            _sparse_stage()
+        with Rung():
+            shift(_SpBits.select(start, end)).clock(Bool("SpShiftClock")).reset(
+                Bool("SpShiftReset")
+            )
+        with Rung():
+            copy(5, start)
+            copy(8, end)
+    assert _run(prog, engine, (SC44,), monkeypatch, scans=1) == (False,)
+    with pytest.raises(ValueError, match="shift bit_range resolved to an empty range"):
+        _run(prog, engine, (SC44,), monkeypatch, scans=2)
+
+
 def test_a_window_across_a_gap_replays_as_it_ran() -> None:
     ptr = Int("SpPtr", default=1)
     hit = Bool("SpHit")

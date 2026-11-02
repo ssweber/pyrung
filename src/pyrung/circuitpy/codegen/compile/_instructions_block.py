@@ -332,8 +332,18 @@ def _compile_shift_instruction(
     reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
         instr.reset_condition, ctx
     )
+    # A dynamic window wholly in a sparse block's gap: refused every scan, clock or not.
+    empty_check = (
+        [
+            f"if not {range_indices}:",
+            '    raise ValueError("shift bit_range resolved to an empty range")',
+        ]
+        if static_len is None
+        else []
+    )
     lines = [
         *range_setup,
+        *empty_check,
         f"_clock_curr = {clock_expr}",
         f"_clock_prev = bool(_mem.get({key!r}, False))",
         "_rising_edge = _clock_curr and not _clock_prev",
