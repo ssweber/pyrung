@@ -40,9 +40,10 @@ reference area. A fresh `bob-reviewer` reads the result against the same rules.
 
 ## Debugger follow-along review
 
-A branch that changes how rungs evaluate (rung/condition evaluation, executor, scan order,
-edge or site memory, instruction semantics the debugger steps through) gets a second, focused
-`bob-reviewer` alongside the general one (user, 2026-10-31): scope only the debugger, DAP
+A branch that changes how rungs evaluate (rung/condition evaluation, live row solving, executor,
+scan order, edge or site memory) gets a second, focused `bob-reviewer` alongside the general one
+(user, 2026-10-31). What an instruction writes or flags does not need one (user, 2026-11-01):
+the debugger reads those values from the engine. Scope only the debugger, DAP
 server (`src/pyrung/dap/`) and VS Code extension (`editors/vscode/pyrung-debug/`) still
 following evaluation (stepping, condition trace, state panes, time travel, reload, recorded
 sessions). Brief it with `editors/vscode/pyrung-debug/AGENTS.md` and
@@ -50,8 +51,9 @@ sessions). Brief it with `editors/vscode/pyrung-debug/AGENTS.md` and
 
 ## Models
 
-- Builders: Opus for prover / fold / kernel / executor / rung evaluation / multi-layer
-  changes; Sonnet for a single instruction, tests-only or docs-only.
+- Builders: Opus at `effort: high` for prover / fold / kernel / executor / rung evaluation /
+  multi-layer changes (user, 2026-11-01; set it on the spawn, the agent file does not);
+  Sonnet for a single instruction, tests-only or docs-only.
 - Reviewers: Opus for prover/fold/kernel diffs; Sonnet for leaf instructions, tests, docs.
 
 ## Machine budget
