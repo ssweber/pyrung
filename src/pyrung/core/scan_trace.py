@@ -187,7 +187,7 @@ _CLASSIFIED_SYSTEM_TAGS = MOVING_SYSTEM_TAGS | DECLINING_SYSTEM_TAGS | CONSTANT_
 
 # --- Tuning -------------------------------------------------------------------
 
-# Most traces one run may build.  A trace costs far more than a scan.
+# Most traces a run may build, however long.  A trace costs far more than a scan.
 MAX_TRACES_PER_RUN = 64
 # Passes of the moving-set fixed point before giving up.
 MAX_FIXED_POINT_PASSES = 12
@@ -197,8 +197,10 @@ MAX_FIXED_POINT_PASSES = 12
 # for 4 at a time saves a quarter.
 UNPRODUCTIVE_BELOW = 3
 MAX_ATTEMPT_WAIT = 4096
-# A run shorter than this cannot pay back a trace.
-MIN_RUN_SCANS = 256
+# A run shorter than this cannot pay back a trace, and a run earns one more trace for
+# each time it is this long.  Measured on the tumbler, a trace costs 15-25 ms, the work
+# of some 400 real scans, and each scan the loop runs saves about 50 us.
+MIN_RUN_SCANS = 1000
 
 # --- Test modes (tests/fold_check.py and tests/core/test_scan_trace.py) --------
 
@@ -1510,6 +1512,7 @@ class ScanLoop:
         } | {("tags", name) for name in replay._rtc_field_tags}
         self._traces: list[ScanTrace] = []
         self._built = 0
+        self._may_build = min(MAX_TRACES_PER_RUN, 1 + budget // MIN_RUN_SCANS)
         self._pending: _PendingCheck | None = None
         self._just_checked: _PendingCheck | None = None
         self._attempt_wait = 0
@@ -1692,7 +1695,7 @@ class ScanLoop:
     # -- Tracing ----------------------------------------------------------------
 
     def _trace_this_scan(self) -> None:
-        if self._built >= MAX_TRACES_PER_RUN:
+        if self._built >= self._may_build:
             self._note_decline("trace cap")
             return
         self._built += 1
