@@ -124,7 +124,7 @@ def _run_compiled(
     plc._epoch_caches.on_tip_advanced()
     while used < budget:
         try:
-            replay.step_replay()
+            replay.step_replay(defer_flush=not constrained)
         except Exception:
             undone = True
             break

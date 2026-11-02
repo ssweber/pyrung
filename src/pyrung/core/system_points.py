@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from operator import itemgetter
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.tag import Bool, Int, Real, Tag
@@ -323,6 +324,57 @@ _SD_ERROR_MOUNT_FAILURE = 1
 _SD_ERROR_LOAD_FAILURE = 2
 _SD_ERROR_SAVE_FAILURE = 3
 
+# What SystemPointRuntime.on_scan_start() reads and clears, for the check that
+# it would do nothing.  Keep these with the hook.
+_SCAN_START_TAGS = itemgetter(
+    system.fault.division_error.name,
+    system.fault.math_operation_error.name,
+    system.fault.out_of_range.name,
+    system.fault.address_error.name,
+    system.rtc.apply_date_error.name,
+    system.rtc.apply_time_error.name,
+    system.rtc.apply_date.name,
+    system.rtc.apply_time.name,
+    system.sys.cmd_mode_stop.name,
+    system.sys.cmd_watchdog_reset.name,
+)
+# Read with a default and never bound by the hook: absent is off.
+_SD_EJECT_NAME = system.storage.sd.eject_cmd.name
+_SD_DELETE_ALL_NAME = system.storage.sd.delete_all_cmd.name
+_SCAN_START_MEMORY = itemgetter(
+    _MODE_RUN_KEY,
+    _SD_WRITE_STATUS_KEY,
+    _BATTERY_PRESENT_KEY,
+    _SD_READY_KEY,
+    _SD_ERROR_KEY,
+    _SD_ERROR_CODE_KEY,
+)
+_SCAN_TIME_MIN_NAME = system.sys.scan_time_min_ms.name
+_SCAN_TIME_MAX_NAME = system.sys.scan_time_max_ms.name
+
+# Derived points that move with the scan id.
+SCAN_DERIVED_TAG_NAMES = frozenset(
+    {
+        system.sys.first_scan.name,
+        system.sys.scan_counter.name,
+        system.sys.scan_clock_toggle.name,
+    }
+)
+
+# The wall-clock fields, all whole seconds or coarser.
+RTC_FIELD_TAG_NAMES = frozenset(
+    {
+        system.rtc.year4.name,
+        system.rtc.year2.name,
+        system.rtc.month.name,
+        system.rtc.day.name,
+        system.rtc.weekday.name,
+        system.rtc.hour.name,
+        system.rtc.minute.name,
+        system.rtc.second.name,
+    }
+)
+
 
 def _click_weekday(value: datetime) -> int:
     # Click returns Sunday=1 ... Saturday=7.
@@ -484,6 +536,34 @@ class SystemPointRuntime:
             return True, rtc_now.second
 
         return True, 0
+
+    def scan_start_is_quiet(self, tags: Mapping[str, Any], memory: Mapping[str, Any]) -> bool:
+        """Whether :meth:`on_scan_start` would change nothing on a kernel's state.
+
+        Every status and command tag it clears is bound and False, and no
+        memory default is missing.  A compiled scan asks this first because
+        the check costs a few C calls and the hook about twenty Python ones.
+        """
+        try:
+            values = _SCAN_START_TAGS(tags)
+            status = _SCAN_START_MEMORY(memory)
+        except KeyError:
+            return False
+        return (
+            values.count(False) == len(values)
+            and not tags.get(_SD_EJECT_NAME, False)
+            and not tags.get(_SD_DELETE_ALL_NAME, False)
+            and status[0] is True  # mode run
+            and status[1] is False  # SD write status
+        )
+
+    def scan_end_is_quiet(self, tags: Mapping[str, Any], dt: float) -> bool:
+        """Whether :meth:`on_scan_end` would change nothing for a scan of *dt*."""
+        low = tags.get(_SCAN_TIME_MIN_NAME)
+        high = tags.get(_SCAN_TIME_MAX_NAME)
+        if type(low) is not int or type(high) is not int:
+            return False
+        return low <= int(round(dt * 1000)) <= high
 
     def on_scan_start(self, ctx: ScanContext) -> None:
         self._ensure_memory_defaults(ctx)
