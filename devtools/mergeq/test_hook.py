@@ -96,6 +96,15 @@ CASES = [
         REFUSE,
     ),
     ("Bash", "timeout 300 uv run pytest tests/conformance/test_drum.py -q", BUILDER, WRAP),
+    ("Bash", "timeout 300 uv run pytest tests/conformance", BUILDER, REFUSE),
+    ("Bash", "timeout 300 uv run pytest tests/conformance/ -q", BUILDER, REFUSE),
+    ("Bash", "timeout 300 uv run pytest tests/conformance/test_modbus.py -q", BUILDER, REFUSE),
+    (
+        "Bash",
+        'timeout 300 uv run pytest tests/conformance -m "not conformance" -q',
+        BUILDER,
+        WRAP,
+    ),
     ("Bash", "git commit -m 'fix(core): x'", BUILDER, ALLOW),
     ("Write", REPO_FILE, BUILDER, ALLOW),
     # reviewer: allowlist

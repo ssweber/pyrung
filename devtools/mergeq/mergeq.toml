@@ -38,6 +38,8 @@ heavy_extra = [
     '\bmake\s+([^\s;&|]+\s+)*(test-hypothesis|test-fuzz|test-integration)\b',
     '\bpytest\b[^;&|]*\s-m\s+\W?conformance',                    # conformance over Modbus (soft PLC)
     '\bpytest\b[^;&|]*--conformance-target',
+    # the same run without a marker: test_modbus.py, or the directory, which collects it
+    '\bpytest\b(?![^;&|]*\s-m\s)[^;&|]*\btests[/\\]conformance(?:[/\\](?:test_modbus\.py\S*)?)?(?=[\s;&|]|$)',
 ]
 # Main-session commands that match a heavy pattern but do their work off this machine, so they
 # take no lock. Subagents stay refused. A real CLICK runs the ladder; pytest only polls it.
