@@ -7,6 +7,7 @@ BlockRange represents contiguous ranges for block operations.
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Never, cast, overload
@@ -352,7 +353,8 @@ class Block:
     _pyrung_field_uom: str | None = field(default=None, init=False, repr=False)
     _pyrung_click_bg_color: str | None = field(default=None, init=False, repr=False)
 
-    _all_instances: ClassVar[set[Block]] = set()
+    # Weak: a Block must not outlive its program just for being listed here.
+    _all_instances: ClassVar[weakref.WeakSet[Block]] = weakref.WeakSet()
 
     def __post_init__(self):
         Block._all_instances.add(self)

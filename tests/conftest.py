@@ -7,6 +7,7 @@ import os
 import sys
 import threading
 import time
+import weakref
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from typing import Any
@@ -68,7 +69,9 @@ def _memory_cap_tracker(request: pytest.FixtureRequest) -> Iterator[None]:
     _current_test = None
 
 
-_BLOCK_CONFIG_BASELINE: dict[Any, tuple[dict[int, Any], dict[int, Any]]] = {}
+_BLOCK_CONFIG_BASELINE: weakref.WeakKeyDictionary[Any, tuple[dict[int, Any], dict[int, Any]]] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 @pytest.fixture(autouse=True)
