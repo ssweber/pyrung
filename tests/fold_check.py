@@ -53,6 +53,7 @@ MAX_PLAIN_COMPILED_SCANS = 20_000_000
 # Scans a landing is carried on, and scans a fork from inside a range is carried on.
 CONTINUE_SCANS = 5
 FORK_SCANS = 3
+HISTORY_SAMPLES = 4
 # vacuous(): a run this long pays for a trace; below MIN_RUNS_TO_JUDGE of them the
 # session is too small to say (a single test), and the shares are well under what the
 # fold suites reach.
@@ -120,10 +121,17 @@ def _twin(plc: Any) -> Any:
     twin._set_rtc_internal(plc._rtc_base, plc._rtc_base_sim_time)
     twin._running = plc._running
     # A set_rtc() before the run is logged under the scan to come: it is shared history.
-    changes = plc._scan_log._rtc_base_changes
+    log = plc._scan_log
+    changes = log._rtc_base_changes
     twin._scan_log._rtc_base_changes.update(
         {scan: change for scan, change in changes.items() if scan > state.scan_id}
     )
+    twin._scan_log._rtc_origin = log.rtc_base_at(state.scan_id) or (
+        plc._rtc_base,
+        plc._rtc_base_sim_time,
+    )
+    # The twin starts forced, unlike a new runner: its log has to say so.
+    twin._forces_last_recorded = {}
     return twin
 
 
@@ -148,7 +156,9 @@ def _image(state: Any, ignored: frozenset[str] = frozenset()) -> dict[str, Any]:
 # the same bits.  Only these older paths multiply (a fold's macro step, the history
 # seek, which uses it): drift this small reads alike there, and a landing inflates the
 # per-scan diagnostic (see fold._do_fold).
-_MACRO_STEP_KINDS = frozenset({"run_until", "run_for", "cycle", "history"})
+_MACRO_STEP_KINDS = frozenset(
+    {"run_until", "run_for", "cycle", "history", "history, stepped runner"}
+)
 _TIMESTAMP_TOLERANCE = 1e-6
 _MACRO_STEP_IGNORED_TAGS = frozenset({"sys.scan_time_current_ms"})
 
@@ -267,25 +277,37 @@ def compare_continuation(kind: str, plc: Any, twin: Any, scans: int = CONTINUE_S
     compare_runners(f"{kind}, past the landing", ours, theirs, min(base, ours._state.scan_id))
 
 
-def compare_history(kind: str, plc: Any, twin: Any, start: int) -> None:
-    """``history.at`` and ``fork_from`` inside the range, against the stepped runner's.
+def compare_history(kind: str, plc: Any, twin: Any, start: int, truth: dict[int, Any]) -> None:
+    """``history.at`` and ``fork_from`` inside the range, against the states stepped.
 
-    Both rebuild from checkpoints and the scan log, so a commit a range skipped shows
-    up here even if the landing is right.  Asked of a stepped runner too, with its cache
-    emptied, since the seek has gaps of its own that a range must not be blamed for.
-    The seek macro-steps (runner._replay_to_compiled), so its time gets the macro
-    tolerance; a tag or a memory value does not.
+    Both runners rebuild from checkpoints and the scan log, so a commit a range skipped
+    shows up here even if the landing is right.  *truth* holds the twin's states as it
+    stepped them, and the seek is asked of both runners with their caches emptied: the
+    stepped runner too, since a seek that is wrong by itself must not pass by agreeing
+    with itself.  The seek macro-steps (runner._replay_to_compiled), so its time gets
+    the macro tolerance; a tag or a memory value does not.
     """
     end = plc._state.scan_id
     n = end - start
     middle = start + max(1, n // 2)
-    asked = sorted({start + max(1, n // 4), middle, max(start + 1, end - 1)})
     seek_stats = getattr(plc, "_last_replay_seek_stats", None)
-    twin._recent_state_cache.clear()
-    for scan in asked:
+    kept = {
+        runner: (dict(runner._recent_state_cache), dict(runner._replay_slabs))
+        for runner in (plc, twin)
+    }
+    for runner in kept:
+        runner._recent_state_cache.clear()
+        runner._replay_slabs.clear()
+    for scan, state in sorted(truth.items()):
         if plc.history.contains(scan) and twin.history.contains(scan):
-            _compare("history", scan, plc.history.at(scan), twin.history.at(scan))
+            _compare("history", scan, plc.history.at(scan), state)
+            _compare("history, stepped runner", scan, twin.history.at(scan), state)
             STATS["history.at compared"] += 1
+    for runner, (recent, slabs) in kept.items():
+        runner._recent_state_cache.clear()
+        runner._recent_state_cache.update(recent)
+        runner._replay_slabs.clear()
+        runner._replay_slabs.update(slabs)
     # A public fork drops forces and PILOT holds, by contract; the twin has them.
     if (
         plc.history.contains(middle)
@@ -598,9 +620,14 @@ def _checked(
     produced.update({sid: state for sid, state in between_firings.items() if start < sid <= end})
     last_equal = start
     asked = False
+    # Bounded: a handful of the stepped states, for the seek to answer to.
+    truth: dict[int, Any] = {}
+    truth_every = max(1, n // HISTORY_SAMPLES)
     for _ in range(n):
         twin._run_single_scan(consume_pause_request=False)
         sid = twin._state.scan_id
+        if (sid - start) % truth_every == 0 or sid == end - 1:
+            truth[sid] = twin._state
         if ask is not None and sid < end:
             first = not asked
             before = _fingerprint(ask, plc) if first else None
@@ -632,7 +659,7 @@ def _checked(
         _depth += 1
         try:
             compare_runners(kind, plc, twin, start, playhead_followed=followed)
-            compare_history(kind, plc, twin, start)
+            compare_history(kind, plc, twin, start, truth)
             compare_continuation(kind, plc, twin)
         finally:
             _depth -= 1
@@ -730,7 +757,9 @@ def summary() -> list[str]:
     lines = [f"  {key}: {count}" for key, count in sorted(STATS.items())]
     lines.extend(f"  scan loop, {key}: {count}" for key, count in sorted(scan_trace.TOTALS.items()))
     lines.extend(f"  MISMATCH in {test}: {message}" for test, message in MISMATCHES)
-    lines.extend(f"  SELF CHECK MISMATCH in {test}: {message}" for test, message in SELF_CHECK_MISMATCHES)
+    lines.extend(
+        f"  SELF CHECK MISMATCH in {test}: {message}" for test, message in SELF_CHECK_MISMATCHES
+    )
     for reason, tests in sorted(SKIPS.items()):
         if reason.startswith(("predicate skipped", "compared at the landing", "skipped: longer")):
             lines.append(f"  {reason}, tests:")

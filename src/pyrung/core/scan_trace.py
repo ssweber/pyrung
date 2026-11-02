@@ -188,7 +188,7 @@ _CLASSIFIED_SYSTEM_TAGS = MOVING_SYSTEM_TAGS | DECLINING_SYSTEM_TAGS | CONSTANT_
 # --- Tuning -------------------------------------------------------------------
 
 # Most traces a run may build, however long.  A trace costs far more than a scan.
-MAX_TRACES_PER_RUN = 64
+MAX_TRACES_PER_RUN: int = 64
 # Passes of the moving-set fixed point before giving up.
 MAX_FIXED_POINT_PASSES = 12
 # A firing shorter than this did not pay for its attempt, and the next attempt waits,
@@ -1158,10 +1158,23 @@ class _Tracer:
         iterable = self._eval(generator.iter, frame)
         if iterable.local is not None or not isinstance(iterable.concrete, (list, tuple, range)):
             raise Decline("comprehension over an unknown value")
+        # A comprehension's target has a scope of its own: it must not outlive the
+        # comprehension or disturb a local, or a global, of the same name.
+        names = {
+            child.id
+            for child in ast.walk(generator.target)
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store)
+        }
+        if names & frame.function.global_names:
+            raise Decline("comprehension target named as a global")
+        outer = {name: frame.locals[name] for name in names if name in frame.locals}
         results = []
         for item in iterable.concrete:
             self._store(generator.target, _wrapped(item), frame)
             results.append(self._eval(node.elt, frame))
+        for name in names:
+            frame.locals.pop(name, None)
+        frame.locals.update(outer)
         return _Value(results)
 
     def _call(self, node: ast.Call, frame: _Frame) -> _Value:
@@ -1459,11 +1472,13 @@ def _render_loop(tracer: _Tracer) -> ScanTrace:
         "def _scan_loop(tags, blocks, memory, ts, dt, limit, rtc_fields):",
         "    used = 0",
     ]
-    lines += [f"    {array} = blocks[{symbol!r}]" for symbol, array in arrays.items()]
-    lines += [f"    {load}" for load in loads]
     if needs_rtc:
         lines += ["    rtc_from = math.inf", "    rtc_until = -math.inf"]
-    lines += ["    try:", "        while used < limit:"]
+    lines.append("    try:")
+    # In the try: a state that lost a key since the trace is a scan for the kernel.
+    lines += [f"        {array} = blocks[{symbol!r}]" for symbol, array in arrays.items()]
+    lines += [f"        {load}" for load in loads]
+    lines.append("        while used < limit:")
     if needs_rtc:
         lines += [
             "            if not rtc_from <= ts < rtc_until:",

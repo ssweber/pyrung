@@ -10,6 +10,9 @@ reducing object allocation from O(instructions) to O(1) per scan.
 
 from __future__ import annotations
 
+import builtins
+import dis
+import inspect
 import logging
 import math
 import time
@@ -23,14 +26,14 @@ from datetime import datetime, timedelta
 from itertools import count
 
 logger = logging.getLogger(__name__)
-from types import MappingProxyType
+from types import CodeType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, TypeGuard, TypeVar, cast
 
 from pyrsistent import PMap, pmap
 
 from pyrung.core.analysis.causal.models import Transition
 from pyrung.core.bounds import BoundsViolation, TagConstraint, build_constraint_index, check_bounds
-from pyrung.core.compiled_plc import CompiledPLC
+from pyrung.core.compiled_plc import CompiledPLC, absent_scalars
 from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ConditionView, RungId, ScanContext
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent, TraceEvent
@@ -53,13 +56,14 @@ from pyrung.core.state import SystemState
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
     _MODE_RUN_KEY,
+    _SCAN_TIME_MIN_NAME,
     READ_ONLY_SYSTEM_TAG_NAMES,
     SYSTEM_TAGS_BY_NAME,
     SystemPointRuntime,
 )
 from pyrung.core.time_mode import TimeMode
 from pyrung.core.trace_formatter import TraceFormatter
-from pyrung.core.validation._common import _collect_write_sites
+from pyrung.core.validation._common import _collect_write_sites, walk_instructions
 from pyrung.core.validation.readonly_write import _any_write_targets
 
 if TYPE_CHECKING:
@@ -437,8 +441,66 @@ def _program_writes_read_only_system_tags(program: Any) -> bool:
     return False
 
 
+def _global_names(code: CodeType) -> tuple[set[str], set[str]]:
+    """The global names *code* and the code nested in it read, and those it binds."""
+    read: set[str] = set()
+    bound: set[str] = set()
+    for instruction in dis.get_instructions(code):
+        if instruction.opname in ("LOAD_GLOBAL", "LOAD_NAME"):
+            read.add(instruction.argval)
+        elif instruction.opname in ("STORE_GLOBAL", "DELETE_GLOBAL"):
+            bound.add(instruction.argval)
+    for constant in code.co_consts:
+        if isinstance(constant, CodeType):
+            inner_read, inner_bound = _global_names(constant)
+            read |= inner_read
+            bound |= inner_bound
+    return read, bound
+
+
+def _means_the_same_in_a_kernel(fn: Any) -> bool:
+    """Whether a kernel's copy of a ``run_function`` body acts as the function does.
+
+    A kernel embeds the source, not the function, and its names resolve in the kernel's
+    module.  Closure cells and the function's module are not there: reading one raises,
+    which is the lucky case, while a ``global`` store lands in the kernel's module and
+    nobody ever knows.  A wrapper's source is not even what runs.  Stepping calls the
+    function itself, so a function that is not self-contained steps.
+    """
+    if not inspect.isfunction(fn) or fn.__closure__ or hasattr(fn, "__wrapped__"):
+        return False
+    read, bound = _global_names(fn.__code__)
+    if bound:
+        return False
+    function_globals = fn.__globals__
+    for name in read:
+        if name == "math" and function_globals.get(name) is math:
+            continue  # Every kernel imports it.
+        if name in function_globals or not hasattr(builtins, name):
+            return False
+    return True
+
+
+def _program_calls_what_a_kernel_cannot_copy(program: Any) -> bool:
+    from pyrung.core.instruction.control import (
+        EnabledFunctionCallInstruction,
+        FunctionCallInstruction,
+    )
+    from pyrung.core.program import Program
+
+    if not isinstance(program, Program):
+        return False
+    return any(
+        isinstance(instruction, FunctionCallInstruction | EnabledFunctionCallInstruction)
+        and not _means_the_same_in_a_kernel(instruction._fn)
+        for instruction in walk_instructions(program)
+    )
+
+
 def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
-    if isinstance(exc, NotImplementedError):
+    if isinstance(exc, NotImplementedError | NameError):
+        # NameError: a copied def needs a name at definition time (a decorator, a
+        # default or an annotation from the function's module).
         return True
     if not isinstance(exc, ValueError | TypeError):
         return False
@@ -448,6 +510,7 @@ def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
         for needle in (
             "requires generate_circuitpy",
             "Could not inspect source for callable",
+            "Callable source is not inspectable",
             "Unsupported",
         )
     )
@@ -952,7 +1015,8 @@ class EpochQuery:
         return self._runner()._replay_pilot_rung_write_projection_at(scan_id)
 
     def rtc_at(self, state: SystemState) -> datetime:
-        return self._runner()._system_runtime._rtc_now(state)
+        runner = self._runner()
+        return runner._replay_rtc_at_state(state, runner._scan_log)
 
     def cause(
         self,
@@ -2537,7 +2601,7 @@ class PLC:
         slab_end = scan_id
 
         positioned_with_fold = False
-        kernel = self._compiled_replay_supported_kernel()
+        kernel = self._replay_kernel_from(anchor_scan)
         if slab_start > anchor_scan + 1 and kernel is not None:
             # History ownership has already selected the immutable execution
             # epoch that ran this scan. Its synthesis brackets are therefore
@@ -2684,9 +2748,9 @@ class PLC:
         by the synthesis overlay (``plant`` + ``holds`` + user rungs).
 
         Synthesis is *logic*, so replay re-derives it by compiling it into the
-        replay kernel — bool TON/TOF compile natively, an opaque analog
-        ``run_function`` trips ``has_io_gaps`` and falls back to interpreted
-        replay (which re-installs synthesis via ``fork_onto``).  This is the
+        replay kernel — bool TON/TOF compile natively, an opaque ``run_function``
+        a kernel cannot copy falls back to interpreted replay (which re-installs
+        synthesis via ``fork_onto``).  This is the
         *soft* root; deploy (Click / CircuitPython) and ``prove`` compile the
         **bare** ``self._program`` instead — the brackets never reach a
         controller or the verifier.
@@ -2720,7 +2784,9 @@ class PLC:
         if self._time_mode != TimeMode.FIXED_STEP or self._program is None:
             self._compiled_replay_kernel = False
             return None
-        if _program_writes_read_only_system_tags(self._program):
+        if _program_writes_read_only_system_tags(
+            self._program
+        ) or _program_calls_what_a_kernel_cannot_copy(self._soft_exec_program()):
             self._compiled_replay_kernel = False
             return None
         # Compile the synthesis pre-pass (``plant`` + ``holds`` — the leading
@@ -2891,13 +2957,19 @@ class PLC:
     def _replay_rtc_at_state(
         self,
         state: SystemState,
-        log: ScanLogSnapshot,
+        log: ScanLogSnapshot | ScanLog,
     ) -> datetime:
-        rtc_scan = max((sid for sid in log.rtc_base_changes if sid <= state.scan_id), default=None)
-        if rtc_scan is None:
-            return self._system_runtime._rtc_now(state)
-        base, base_sim_time = log.rtc_base_changes[rtc_scan]
+        base, base_sim_time = self._replay_rtc_base_at_state(state, log)
         return base + timedelta(seconds=float(state.timestamp) - base_sim_time)
+
+    def _replay_rtc_base_at_state(
+        self,
+        state: SystemState,
+        log: ScanLogSnapshot | ScanLog,
+    ) -> tuple[datetime, float]:
+        """The RTC base *state* ran on: a later change must not reach back to it."""
+        recorded = log.rtc_base_at(state.scan_id)
+        return (self._rtc_base, self._rtc_base_sim_time) if recorded is None else recorded
 
     def _replay_to_interpreted(self, target_scan_id: int) -> PLC:
         """Reconstruct historical state by forking and replaying the scan log.
@@ -2942,6 +3014,37 @@ class PLC:
 
         return replay
 
+    def _replay_kernel_from(self, scan_id: int) -> CompiledKernel | None:
+        """The kernel, if it can rebuild every key of the scans after *scan_id*'s checkpoint.
+
+        Stepping adds a tag to the state on its first write.  A kernel holds an absent
+        tag at its default and notices the first write only by the value leaving it, so
+        a rung, patch or force that may store the default into a tag the checkpoint lacks
+        replays interpreted.  compiled_run.run_scans holds a live run to the same rule.
+
+        A rung reading the scan time minimum: the first scan's hook takes the scan time
+        when the tag is absent, and a kernel has the tag, at 0, so it would stay 0.
+        """
+        kernel = self._compiled_replay_supported_kernel()
+        if kernel is None:
+            return None
+        anchor = self._nearest_checkpoint_at_or_before(scan_id)
+        state = self._checkpoints[anchor] if anchor is not None else self._initial_state
+        if _SCAN_TIME_MIN_NAME in kernel.referenced_tags and _SCAN_TIME_MIN_NAME not in state.tags:
+            return None
+        absent = absent_scalars(kernel, state.tags)
+        if not absent:
+            return kernel
+        from pyrung.core.scan_trace import may_store_a_default
+
+        if may_store_a_default(kernel, absent):
+            return None
+        log = self._scan_log.snapshot()
+        for named in (*log.patches_by_scan.values(), *log.force_changes_by_scan.values()):
+            if not absent.keys().isdisjoint(named):
+                return None
+        return kernel
+
     def _replay_to_compiled(
         self,
         target_scan_id: int,
@@ -2964,9 +3067,7 @@ class PLC:
             compiled=kernel,
             exact_anchor=True,
         )
-        replay._set_rtc_internal(
-            self._system_runtime._rtc_now(anchor_state), anchor_state.timestamp
-        )
+        replay._set_rtc_internal(*self._replay_rtc_base_at_state(anchor_state, log))
         if anchor is not None:
             replay._input_overrides._forces.clear()
             replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
@@ -3109,7 +3210,7 @@ class PLC:
                 f"({log_base}); those scans have been trimmed"
             )
 
-        kernel = self._compiled_replay_supported_kernel()
+        kernel = self._replay_kernel_from(target_scan_id)
         if kernel is None:
             return self._replay_to_interpreted(target_scan_id)
         return self._replay_to_compiled(target_scan_id, kernel)
@@ -3139,7 +3240,7 @@ class PLC:
                 f"target_scan_id {target_scan_id} predates the log horizon "
                 f"({self._scan_log.base_scan}); those scans have been trimmed"
             )
-        kernel = self._compiled_replay_supported_kernel()
+        kernel = self._replay_kernel_from(target_scan_id)
         if kernel is None:
             replay = self._replay_to_interpreted(target_scan_id)
             anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
@@ -3481,9 +3582,7 @@ class PLC:
             compiled=kernel,
             exact_anchor=True,
         )
-        replay._set_rtc_internal(
-            self._system_runtime._rtc_now(anchor_state), anchor_state.timestamp
-        )
+        replay._set_rtc_internal(*self._replay_rtc_base_at_state(anchor_state, log))
         if anchor is not None:
             replay._input_overrides._forces.clear()
             replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
@@ -3575,7 +3674,7 @@ class PLC:
         return results
 
     def _replay_range(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
-        kernel = self._compiled_replay_supported_kernel()
+        kernel = self._replay_kernel_from(start_scan_id)
         if kernel is None:
             return self._replay_range_interpreted(start_scan_id, end_scan_id)
         return self._replay_range_compiled(start_scan_id, end_scan_id, kernel)
@@ -3830,10 +3929,14 @@ class PLC:
         """
         if self._replay_mode:
             return
+        previous = (self._rtc_base, self._rtc_base_sim_time)
         self._set_rtc_internal(value, sim_time)
         self._causal_lineage.invalidate_current_epoch()
         self._scan_log.record_rtc_base_change(
-            self._state.scan_id + 1 if scan_id is None else scan_id, value, float(sim_time)
+            self._state.scan_id + 1 if scan_id is None else scan_id,
+            value,
+            float(sim_time),
+            previous=previous,
         )
 
     def _record_lifecycle(self, kind: LifecycleKind, value: bool | None = None) -> None:

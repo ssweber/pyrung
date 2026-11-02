@@ -3,8 +3,10 @@
 Nothing is skipped: every scan executes, so a run cannot land anywhere stepping
 would not.  A run starts interpreted and moves to the kernel only once it has
 run long enough for that to pay.  It stays interpreted when something has to
-watch each scan (a ``when()``, a monitor, a callable stop predicate), and when
-the program has no kernel.
+watch each scan (a ``when()``, a monitor, a callable stop predicate), when the
+program has no kernel (a ``run_function`` a kernel cannot copy among the reasons),
+and while a kernel could not say what the scan adds to the state: a rung may store
+a default into a tag the state does not have yet.
 
 Compiled scans record no causal timelines.  Their range goes in the runner's
 fold windows, as the fold's macro steps do.

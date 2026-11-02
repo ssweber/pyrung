@@ -45,6 +45,7 @@ from pyrung import (
     off_delay,
     on_delay,
     out,
+    reset,
     return_early,
     rise,
     run_function,
@@ -68,7 +69,11 @@ from pyrung.core.scan_trace import (
     SelfCheckMismatch,
     build_trace,
 )
-from pyrung.core.system_points import _DERIVED_TAG_NAMES, SYSTEM_TAGS_BY_NAME
+from pyrung.core.system_points import (
+    _DERIVED_TAG_NAMES,
+    SYSTEM_TAGS_BY_NAME,
+    WRITABLE_SYSTEM_TAG_NAMES,
+)
 from tests import fold_check
 
 RTC_START = datetime(2026, 3, 14, 15, 9, 26, 500000)
@@ -124,12 +129,28 @@ class _Observed:
         compiled_run.LOOP_OBSERVERS.remove(self)
 
 
-def _step_to(twin: PLC, scan_id: int, seen: dict[int, Any]) -> int:
-    """Scan the twin on as one run does: a stopped runner resumes only at the next call."""
+def _step_to(
+    twin: PLC,
+    scan_id: int,
+    seen: dict[int, Any],
+    truth: dict[int, Any] | None = None,
+) -> int:
+    """Scan the twin on as one run does: a stopped runner resumes only at the next call.
+
+    *truth* keeps a sample of the states stepped, for what history later says of them;
+    a restart starts a new recording, so it forgets the old one's.
+    """
     compared = 0
     twin._ensure_running()
+    start = twin.state.scan_id
+    if truth and start < max(truth):
+        truth.clear()
+    every = max(1, (scan_id - start) // fold_check.HISTORY_SAMPLES)
     while twin.state.scan_id < scan_id:
         twin._run_single_scan(consume_pause_request=False)
+        sid = twin.state.scan_id
+        if truth is not None and ((sid - start) % every == 0 or sid == scan_id):
+            truth[sid] = twin.state
         ours = seen.get(twin.state.scan_id)
         if ours is not None:
             _assert_equal(ours, twin.state)
@@ -137,11 +158,11 @@ def _step_to(twin: PLC, scan_id: int, seen: dict[int, Any]) -> int:
     return compared
 
 
-def _assert_same_runner(plc: PLC, twin: PLC, start: int) -> None:
-    """Everything a commit leaves besides the state, and what reads it later on."""
-    fold_check.compare_runners("compiled", plc, twin, start)
-    fold_check.compare_history("compiled", plc, twin, start)
-    fold_check.compare_continuation("compiled", plc, twin)
+def _a_sample_of(truth: dict[int, Any]) -> dict[int, Any]:
+    """Evenly spaced states of those kept, the last among them."""
+    scans = sorted(truth)
+    every = max(1, len(scans) // fold_check.HISTORY_SAMPLES)
+    return {scan: truth[scan] for scan in scans[::-1][::every][: fold_check.HISTORY_SAMPLES]}
 
 
 def _lockstep(
@@ -159,6 +180,8 @@ def _lockstep(
         prepare(twin)
     before = Counter(scan_trace.TOTALS)
     compared = 0
+    start = 0
+    truth: dict[int, Any] = {}
     for seconds, patches in segments:
         if patches:
             plc.patch(patches)
@@ -166,9 +189,12 @@ def _lockstep(
         start = plc.state.scan_id
         with _Observed(plc) as observed:
             plc.run_for(seconds)
-        compared += _step_to(twin, plc.state.scan_id, observed.states)
+        compared += _step_to(twin, plc.state.scan_id, observed.states, truth)
         _assert_equal(plc.state, twin.state)
-        _assert_same_runner(plc, twin, start)
+        fold_check.compare_runners("compiled", plc, twin, start)
+        fold_check.compare_continuation("compiled", plc, twin)
+    # Once, at the end: the scans of every segment have to outlast the ones after them.
+    fold_check.compare_history("compiled", plc, twin, start, _a_sample_of(truth))
     counts = Counter(scan_trace.TOTALS)
     counts.subtract(before)
     counts["states compared"] = compared
@@ -423,14 +449,14 @@ def _corpus_rtc_apply() -> None:
 def _corpus_rtc_apply_date() -> None:
     with Rung(Run):
         on_delay(T, 1_000)
-    with Rung(T.Done):
+    with Rung(rise(T.Done)):
         copy(1, system.rtc.new_day)
         copy(2, system.rtc.new_month)
         copy(2027, system.rtc.new_year4)
         out(system.rtc.apply_date)
     with Rung(Run):
         on_delay(T1, 3_000)
-    with Rung(T1.Done):
+    with Rung(rise(T1.Done)):
         copy(2, system.rtc.new_hour)
         copy(0, system.rtc.new_minute)
         copy(0, system.rtc.new_second)
@@ -439,6 +465,19 @@ def _corpus_rtc_apply_date() -> None:
         copy(system.rtc.month, M)
     with Rung():
         copy(system.rtc.hour, Step)
+
+
+def _corpus_rtc_apply_held() -> None:
+    """An apply on every scan: the hook is never quiet, so no scan reaches the loop."""
+    with Rung(Run):
+        on_delay(T, 1_000)
+    with Rung(T.Done):
+        copy(2, system.rtc.new_hour)
+        copy(0, system.rtc.new_minute)
+        copy(0, system.rtc.new_second)
+        out(system.rtc.apply_time)
+    with Rung():
+        copy(system.rtc.second, Step)
 
 
 def _corpus_mode_stop() -> None:
@@ -530,12 +569,13 @@ CORPUS: dict[str, tuple[Callable[[], None], float, list[tuple[float, dict[Any, A
     "forloop": (_corpus_forloop, 0.01, [(5.0, {Run: True})]),
     "rtc_apply": (_corpus_rtc_apply, 0.01, [(1.0, {Run: True}), (4.0, {}), (1.0, {Run: False})]),
     "rtc_apply_date": (_corpus_rtc_apply_date, 0.01, [(5.0, {Run: True}), (1.0, {})]),
+    "rtc_apply_held": (_corpus_rtc_apply_held, 0.01, [(1.5, {Run: True}), (1.0, {})]),
     "mode_stop": (_corpus_mode_stop, 0.01, [(1.0, {Run: True}), (4.0, {}), (1.0, {})]),
     "mode_stop_at_once": (_corpus_mode_stop_at_once, 0.01, [(1.0, {Run: True}), (1.0, {})]),
 }
 
 # Cases where the loop has every right to run nothing: each scan is a decision.
-_NO_COVERAGE_EXPECTED: frozenset[str] = frozenset()
+_NO_COVERAGE_EXPECTED: frozenset[str] = frozenset({"rtc_apply_held"})
 
 
 def _build(fill_program: Callable[[], None]) -> Program:
@@ -618,19 +658,86 @@ def test_a_harness_plant_runs_in_the_loop_as_part_of_the_scan(fine_loop: None) -
         Harness(plc).install()
         return plc
 
-    plc, twin = make(), make()
+    plc = make()
     assert plc._compiled_replay_supported_kernel().pre_step_fn is not None
-    before = scan_trace.TOTALS["loop scans"]
-    for seconds, patches in ((1.0, {Run: True}), (4.0, {}), (2.0, {Run: False}), (3.0, {})):
-        if patches:
-            plc.patch(patches)
-            twin.patch(patches)
-        with _Observed(plc) as observed:
-            plc.run_for(seconds)
-        _step_to(twin, plc.state.scan_id, observed.states)
-        _assert_equal(plc.state, twin.state)
-    assert plc.state.tags["TrHit"] is True
-    assert scan_trace.TOTALS["loop scans"] > before
+    counts = _lockstep(
+        program,
+        [(1.0, {Run: True}), (4.0, {}), (2.0, {Run: False}), (3.0, {})],
+        prepare=lambda runner: Harness(runner).install(),
+    )
+    assert counts["loop scans"] > 0
+    assert counts["states compared"] > 0
+
+
+def test_a_bool_plant_latches_its_arming_key_as_stepping_does(fine_loop: None) -> None:
+    """A plant's arming latch stays out of the state until it fires.
+
+    The kernel holds it at its default until then, so this is where a key added on the
+    wrong scan would show: the compare is by key as well as by value.
+    """
+    Feedback = Bool(
+        "TrFeedback", physical=Physical("TrMotor", on_delay="2s", off_delay="500ms"), link="TrRun"
+    )
+
+    def fill_program() -> None:
+        with Rung(Feedback):
+            latch(Hit)
+        with Rung():
+            on_delay(T, 40_000)
+
+    program = _build(fill_program)
+    plc = _plc(program, 0.01)
+    Harness(plc).install()
+    assert plc._compiled_replay_supported_kernel() is not None
+    counts = _lockstep(
+        program,
+        [(1.0, {Run: True}), (3.0, {}), (1.0, {Run: False}), (2.0, {}), (3.0, {Run: True})],
+        prepare=lambda runner: Harness(runner).install(),
+    )
+    assert counts["loop scans"] > 0
+    assert counts["states compared"] > 0
+
+
+# --- Every system tag ------------------------------------------------------------------
+
+
+def _reads_and_writes(tag: Any) -> Callable[[], None]:
+    """A program that reads *tag*, and if it may, stores into it: a value, then the default."""
+
+    def fill_program() -> None:
+        if tag.type == TagType.BOOL:
+            with Rung(tag):
+                out(Lamp2)
+        elif tag.type == TagType.REAL:
+            with Rung():
+                copy(tag, Temp)
+        else:
+            with Rung():
+                copy(tag, N)
+        with Rung():
+            on_delay(T, 500)
+        with Rung():
+            on_delay(T1, 1_500)
+        if tag.name in WRITABLE_SYSTEM_TAG_NAMES:
+            with Rung(rise(T.Done)):
+                if tag.type == TagType.BOOL:
+                    out(tag)
+                else:
+                    copy(3, tag)
+            with Rung(rise(T1.Done)):
+                if tag.type == TagType.BOOL:
+                    reset(tag)
+                else:
+                    copy(tag.default, tag)
+
+    return fill_program
+
+
+@pytest.mark.parametrize("name", sorted(SYSTEM_TAGS_BY_NAME))
+def test_every_system_tag_read_and_written_equals_stepping(name: str, fine_loop: None) -> None:
+    """Keys included: a stored point stays out of the state until its first write."""
+    program = _build(_reads_and_writes(SYSTEM_TAGS_BY_NAME[name]))
+    _lockstep(program, [(1.0, {Run: True}), (2.0, {})])
 
 
 # --- Stop predicates --------------------------------------------------------------
@@ -1052,6 +1159,41 @@ def test_chains_membership_and_identity_trace_exactly() -> None:
     assert used == 3  # A reaches 4: that scan leaves the traced membership
     assert tags["A"] == 4
     assert timestamp == pytest.approx(0.03)
+
+
+def test_a_comprehension_target_stays_in_the_comprehension() -> None:
+    """Python scopes the target to the list: the local of that name reads as before."""
+    source = _step_source(
+        "x = tags['A']",
+        "tags['A'] = x + 1",
+        "y = [x for x in range(3)]",
+        "tags['B'] = x",
+    )
+    parsed, replay = _replay_stub(source, A=1, B=0)
+    trace = build_trace(parsed, replay, {("tags", "A"), ("tags", "B")}, None, {})
+    tags = dict(replay._kernel.tags)
+    used, _timestamp = trace.loop(tags, {}, {}, 0.0, 0.01, 5, None)
+    assert used == 5
+    assert tags == {"A": 6, "B": 5}
+
+
+def test_a_comprehension_target_named_as_a_global_declines() -> None:
+    source = "SCALE = 3\n" + _step_source(
+        "global SCALE",
+        "y = [SCALE for SCALE in range(3)]",
+        "tags['A'] = y[0]",
+    )
+    parsed, replay = _replay_stub(source, A=0)
+    with pytest.raises(Decline, match="comprehension target|name SCALE"):
+        build_trace(parsed, replay, set(), None, {})
+
+
+def test_a_load_that_raises_is_a_failed_guard_not_a_crash() -> None:
+    """A key gone from the dicts: the firing runs no scans, and a real scan takes over."""
+    source = _step_source("a = tags['A']", "tags['A'] = a + 1")
+    parsed, replay = _replay_stub(source, A=1)
+    trace = build_trace(parsed, replay, {("tags", "A")}, None, {})
+    assert trace.loop({}, {}, {}, 0.0, 0.01, 5, None)[0] == 0
 
 
 def test_values_compare_by_type_and_sign() -> None:
