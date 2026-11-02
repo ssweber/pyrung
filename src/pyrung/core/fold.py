@@ -628,6 +628,49 @@ def _audit_condition(
     return seen
 
 
+def _reads_through_pointers(coords: frozenset[str]) -> Callable[[Any], set[str]]:
+    """A lookup of what a condition or operand reads of *coords* by an unbounded index.
+
+    The program graph cannot name the element ``block[ptr]`` reads, so a coordinate
+    in that block shows no reader.  This goes by the block's occupants, which also
+    covers a slot no rung names and a tag mapped onto the block.  An index the
+    graph does bound is left to its names.
+    """
+    from pyrung.core.analysis.pdg import (
+        _indirect_expr_tags,
+        _indirect_ref_tags,
+        _visit_indirect_refs,
+    )
+    from pyrung.core.memory_block import IndirectRef
+
+    occupants: dict[int, frozenset[str]] = {}
+
+    def reads(obj: Any) -> set[str]:
+        found: set[str] = set()
+
+        def visit(ref: Any) -> None:
+            block = ref.block
+            bounded = (
+                _indirect_ref_tags(block, ref.pointer)
+                if isinstance(ref, IndirectRef)
+                else _indirect_expr_tags(block, ref.expr)
+            )
+            if bounded is not None:
+                return
+            names = occupants.get(id(block))
+            if names is None:
+                names = coords.intersection(
+                    block._effective_slot_name(addr) for addr in range(block.start, block.end + 1)
+                )
+                occupants[id(block)] = names
+            found.update(names)
+
+        _visit_indirect_refs(obj, visit, set())
+        return found
+
+    return reads
+
+
 def _audit_coordinate_reads(
     pdg: ProgramGraph,
     program: Any,
@@ -635,6 +678,7 @@ def _audit_coordinate_reads(
     modeled_writes: dict[str, frozenset[str]],
     unread: Callable[[str], bool] = lambda _name: False,
     dormant: dict[str, list[frozenset[str] | None]] | None = None,
+    pointer_coords: frozenset[str] = frozenset(),
 ) -> tuple[
     frozenset[str],
     dict[str, list[tuple[str, Any]]],
@@ -663,6 +707,10 @@ def _audit_coordinate_reads(
     did, so the edge, and the one-shot, never fire inside it; the caller
     confirms ``X`` is guarded by the plateau.
 
+    A read through an unbounded pointer names no element, so each of
+    *pointer_coords* in the indexed block counts as read there, under the same
+    rules, except that it is never a comparison the crossing set can place.
+
     Returns ``(unmodeled, rung_cmps, instruction_cmps, rebuilt)``: the
     comparisons found in rung conditions and in instruction conditions
     (resets, count-down legs, drum events), which the rung condition scan does
@@ -685,22 +733,27 @@ def _audit_coordinate_reads(
     instr_cmps: dict[str, list[tuple[str, Any]]] = {}
     if not coords:
         return frozenset(), rung_cmps, instr_cmps, frozenset()
+    through_pointers = _reads_through_pointers(pointer_coords) if pointer_coords else None
     for node in pdg.rung_nodes:
         reads = (node.own_condition_reads | node.data_reads | node.exclusive_reads) & coords
-        if not reads:
+        if not reads and through_pointers is None:
             continue
         rung = _resolve_rung(program, node)
         if rung is None:
-            unmodeled |= reads
+            unmodeled |= reads | pointer_coords
             continue
         seen: set[str] = set()
         for cond in rung._conditions:
             seen |= _audit_condition(cond, coords, tags, rung_cmps, unmodeled)
+            if through_pointers is not None:
+                unmodeled |= through_pointers(cond)
         # forloop body-rung contacts are read inside the scan like any rung's.
         for loop in _nested_instructions(rung._instructions):
             for body_rung in getattr(loop, "body_rungs", ()):
                 for cond in body_rung._conditions[body_rung._branch_condition_start :]:
                     seen |= _audit_condition(cond, coords, tags, rung_cmps, unmodeled)
+                    if through_pointers is not None:
+                        unmodeled |= through_pointers(cond)
         gates: frozenset[str] = frozenset()
         top_level = dormant is not None and node.scope == "main" and not node.branch_path
         if top_level:
@@ -720,6 +773,8 @@ def _audit_coordinate_reads(
                 seen |= _audit_condition(
                     getattr(instr, field_name, None), coords, tags, instr_cmps, unmodeled
                 )
+                if through_pointers is not None:
+                    unmodeled |= through_pointers(getattr(instr, field_name, None))
             own = (
                 {acc.name for acc, _done, _preset in _instruction_phases(instr)}
                 if type(instr) in registry
@@ -732,7 +787,10 @@ def _audit_coordinate_reads(
             exclusive = getattr(cls, "_exclusive_fields", ())
             instr_reads: set[str] = set()
             for field_name in (*getattr(cls, "_reads", ()), *exclusive):
-                field_reads = _extract_tag_names(getattr(instr, field_name, None), tags)
+                field = getattr(instr, field_name, None)
+                field_reads = _extract_tag_names(field, tags)
+                if through_pointers is not None:
+                    field_reads |= through_pointers(field)
                 instr_reads |= field_reads
                 field_reads &= coords
                 seen |= field_reads
@@ -2842,6 +2900,7 @@ def _build_fold_context(
         modeled_writes,
         unread,
         dormant,
+        analog_names,
     )
     if flag_stale:
         # No reader of the flag those views raise: the landing scan rebuilds it.
@@ -4523,23 +4582,19 @@ def _analog_bounds(
 
 
 def _analog_walk(
-    steps: Sequence[Callable[[Any], Any] | None],
+    step: Callable[[Any], Any],
     v: Any,
     n: int,
     bounds: Sequence[tuple[str, float]],
 ) -> int | None:
     """The first of the next *n* scans that reads a crossed comparison on the value.
 
-    *steps* repeat, one per scan of a period.  A plant runs before the main
-    pass, so scan ``i`` reads the value its own plant pass left.  Leaving the
-    value's range counts, as that scan sets a fault flag.  ``None``: no such scan.
+    A plant runs before the main pass, so scan ``i`` reads the value its own
+    plant pass left.  Leaving the value's range counts, as that scan sets a fault
+    flag.  ``None``: no such scan.
     """
     truths = [(form, k, _cmp_truth(v, form, k)) for form, k in bounds]
-    period = len(steps)
     for i in range(1, n + 1):
-        step = steps[(i - 1) % period]
-        if step is None:
-            continue
         v = step(v)
         if v is None:
             return i
@@ -4549,80 +4604,11 @@ def _analog_walk(
     return None
 
 
-def _analog_position(steps: Sequence[Callable[[Any], Any] | None], v: Any, n: int) -> Any:
+def _analog_position(step: Callable[[Any], Any], v: Any, n: int) -> Any:
     """The value after *n* scans (within the range :func:`_analog_walk` certified)."""
-    period = len(steps)
-    for i in range(n):
-        step = steps[i % period]
-        if step is not None:
-            v = step(v)
+    for _ in range(n):
+        v = step(v)
     return v
-
-
-def _analog_jump(
-    ctx: _FoldContext,
-    observed: Sequence[Mapping[str, Any]],
-    period: int,
-    periods: int,
-    *,
-    blocked: Collection[str],
-    unmodeled: Collection[str],
-    callbacks: bool,
-    forced: Collection[str],
-    extra_comparisons: Mapping[str, tuple[tuple[str, Any], ...]] | None = None,
-) -> tuple[int, dict[str, Any]] | None:
-    """How far a cycle jump may go with its plants moving, and where they land.
-
-    *observed* is the ring of scans behind the cycle.  A plant's value stays out
-    of the ring (it need not repeat), so each observed scan must instead show the
-    recurrence at work, and a skipped scan runs the plant under its inputs in the
-    same phase of the period.  While the value moves, every reader has to be a
-    comparison whose truth holds through *observed* and the walk; the jump ends
-    a whole period before the first scan that would read it crossed.  *blocked*
-    are tags the ring does not vouch for.
-
-    Returns the whole periods allowed and the plants' landing values, or ``None``
-    to decline.
-    """
-    from types import SimpleNamespace
-
-    dt = ctx.normal_dt
-    phases = observed[-period - 1 : -1]
-    moving: list[tuple[_AnalogFeedback, list[Callable[[Any], Any] | None], Any]] = []
-    for plant in ctx.analog:
-        if not plant.inputs.isdisjoint(blocked):
-            return None
-        if plant.name in forced:
-            continue
-        name, default = plant.name, plant.default
-        for before, after in zip(observed, observed[1:], strict=False):
-            v0, v1 = before.get(name, default), after.get(name, default)
-            step = _analog_recurrence(plant, before, dt)
-            if (v0 if step is None else step(v0)) != v1:
-                return None  # some other writer, or a value the model does not match
-        v = observed[-1].get(name, default)
-        steps = [_analog_recurrence(plant, phase, dt) for phase in phases]
-        if all(step is None or step(v) == v for step in steps):
-            continue
-        if name in unmodeled or callbacks:
-            return None
-        anchor = SimpleNamespace(tags=observed[-1])
-        bounds = _analog_bounds(plant, ctx, anchor, extra_comparisons)
-        if bounds is None:
-            return None
-        for snap in observed:
-            if _analog_bounds(plant, ctx, SimpleNamespace(tags=snap), extra_comparisons) != bounds:
-                return None  # an operand moves through the period
-            value = snap.get(name, default)
-            if any(_cmp_truth(value, f, k) != _cmp_truth(v, f, k) for f, k in bounds):
-                return None  # already read both ways: the period depends on it
-        first = _analog_walk(steps, v, periods * period, bounds)
-        if first is not None:
-            periods = min(periods, (first - 1) // period)
-        moving.append((plant, steps, v))
-    return periods, {
-        plant.name: _analog_position(steps, v, periods * period) for plant, steps, v in moving
-    }
 
 
 def _do_fold(
@@ -5193,12 +5179,12 @@ class _OrdinaryFoldStrategy:
                 return None
             if any(_cmp_truth(before, f, k) != _cmp_truth(after, f, k) for f, k in bounds):
                 return None
-            first = _analog_walk((step,), after, skip, bounds)
+            first = _analog_walk(step, after, skip, bounds)
             if first is not None:
                 skip = first - 1
             moving.append((plant, step, after))
         landing = tuple(
-            (plant.name, _analog_position((step,), after, skip - 1))
+            (plant.name, _analog_position(step, after, skip - 1))
             for plant, step, after in moving
             if skip > 1
         )

@@ -2,7 +2,8 @@
 
 A ``Ramp`` or ``Approach`` plant moves its value every scan, so a window has to end
 where a rung would read that value crossed and land the value where stepping leaves
-it.  A value nothing can see, or one that has settled, keeps folding.
+it.  A value nothing can see, or one that has settled, keeps folding.  A value still
+moving does not repeat, so a cycle jump declines and the run steps.
 
 A slot absent from the state when a cycle fold starts joins it on the first scan
 that touches it; the ring has to watch it from then on.
@@ -26,15 +27,20 @@ from pyrung import (
     TagType,
     Timer,
     blockcopy,
+    branch,
     calc,
+    call,
     copy,
+    forloop,
     latch,
     on_delay,
     out,
     rise,
+    subroutine,
 )
+from pyrung.click import ClickBlocks
 from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
-from pyrung.core.harness import Harness
+from pyrung.core.harness import Coupling, Harness
 from pyrung.core.physical import Approach, Physical, Pulse, Ramp
 from pyrung.core.runner import PLC
 
@@ -313,16 +319,39 @@ class TestFeedbackKeepsFolding:
         assert counter["n"] < 50
         _assert_exact(plc, make)
 
-    def test_a_cycle_jump_runs_with_a_far_comparison(self) -> None:
-        make = lambda: _plant(RAMP, _latch_at(1e30), toggle=True)  # noqa: E731
+    def test_a_cycle_jump_runs_over_a_settled_plant(self) -> None:
+        make = lambda: _plant(Approach(0.0, 0.3), _latch_at(1e30), toggle=True)  # noqa: E731
+        plc = make()
+        _reached, stats = _jump(plc, _hit, budget=3_000, predicate_reads=frozenset({"Hit"}))
+        assert stats["cycle_folded_scans"] > 2_500
+        _assert_exact(plc, make)
+
+    def test_a_cycle_jump_runs_beside_a_plant_at_rest(self) -> None:
+        def enable() -> None:
+            with Rung(Bool("Never")):
+                out(Enable)
+
+        make = lambda: _plant(RAMP, _latch_at(1e30), toggle=True, enable=enable)  # noqa: E731
+        plc = make()
+        _reached, stats = _jump(plc, _hit, budget=3_000, predicate_reads=frozenset({"Hit"}))
+        assert stats["cycle_folded_scans"] > 2_500
+        _assert_exact(plc, make)
+
+    def test_a_cycle_jump_runs_over_a_plant_that_repeats_with_it(self) -> None:
+        def enable() -> None:
+            with Rung(Tog):
+                out(Enable)
+
+        ramp = Ramp(up=1.0, down=-1.0)
+        make = lambda: _plant(ramp, _latch_at(1e30), toggle=True, enable=enable)  # noqa: E731
         plc = make()
         _reached, stats = _jump(plc, _hit, budget=3_000, predicate_reads=frozenset({"Hit"}))
         assert stats["cycle_folded_scans"] > 2_500
         _assert_exact(plc, make)
 
 
-class TestCycleJumpOverAnalogFeedback:
-    """A jump walks the plant through each skipped scan, and stops short of a crossing."""
+class TestCycleOverAMovingPlant:
+    """A plant still moving does not repeat, so the cycle is not jumped and the run steps."""
 
     @pytest.mark.parametrize(("profile", "threshold"), PROFILES)
     def test_jump_lands_on_the_crossing(self, profile: Any, threshold: float) -> None:
@@ -332,17 +361,17 @@ class TestCycleJumpOverAnalogFeedback:
         reached, stats = _jump(plc, _hit, predicate_reads=frozenset({"Hit"}))
         assert reached
         assert plc.state.scan_id == expected
-        assert stats["cycle_folded_scans"] > 0
+        assert stats["cycle_folded_scans"] == 0
         _assert_exact(plc, make)
 
-    def test_jump_carries_the_plant_with_no_crossing(self) -> None:
+    def test_the_plant_is_exact_with_no_crossing(self) -> None:
         make = lambda: _plant(RAMP, _latch_at(1e30), toggle=True)  # noqa: E731
         plc = make()
         _jump(plc, _hit, predicate_reads=frozenset({"Hit"}))
         assert plc.state.tags["Temp"] == pytest.approx(0.01 * (plc.state.scan_id - 1))
         _assert_exact(plc, make)
 
-    def test_enable_toggled_by_the_cycle_is_walked_by_phase(self) -> None:
+    def test_an_enable_toggled_by_the_cycle_is_exact(self) -> None:
         def enable() -> None:
             with Rung(Tog):
                 out(Enable)
@@ -377,6 +406,305 @@ class TestCycleJumpOverAnalogFeedback:
         reached, _stats = _jump(plc, _hit, predicate_reads=frozenset({"Hit"}))
         assert reached
         assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+
+class TestDeclaredPredicateOnTheFeedback:
+    """A declared read of a plant with no comparison leaves only its value to go by."""
+
+    @staticmethod
+    def _past_five(state: Any) -> bool:
+        return state.tags.get("Temp", 0.0) >= 5.0
+
+    @pytest.mark.parametrize("toggle", [False, True])
+    def test_it_ends_the_run_on_the_crossing(self, toggle: bool) -> None:
+        make = lambda: _plant(RAMP, _latch_at(1e30), toggle=toggle)  # noqa: E731
+        stepped = make()
+        while not self._past_five(stepped.state):
+            stepped.step()
+        plc = make()
+        reached, _stats = _jump(plc, self._past_five, predicate_reads=frozenset({"Temp"}))
+        assert reached
+        assert plc.state.scan_id == stepped.state.scan_id
+        assert _tags(plc) == _tags(stepped)
+
+    def test_a_comparison_from_the_caller_keeps_it_folding(self) -> None:
+        make = lambda: _plant(RAMP, _latch_at(1e30))  # noqa: E731
+        stepped = make()
+        while not self._past_five(stepped.state):
+            stepped.step()
+        plc = make()
+        counter = _kernel_scans(plc)
+        reached, _stats = _jump(
+            plc,
+            self._past_five,
+            predicate_reads=frozenset({"Temp"}),
+            extra_comparisons={"Temp": (("ge", 5.0),)},
+        )
+        assert reached
+        assert plc.state.scan_id == stepped.state.scan_id
+        assert counter["n"] < 50
+        assert _tags(plc) == _tags(stepped)
+
+
+def _banked(
+    reader: Callable[[Any, Int], None],
+    *,
+    toggle: bool = False,
+    named: bool = True,
+    size: int = 8,
+    slot: int = 2,
+    profile: Any = RAMP,
+    enable: bool = True,
+) -> Callable[[], PLC]:
+    """A plant in a block slot, *reader*'s rungs, and a far timer.
+
+    With *named* a far comparison names the slot, which is what declares the
+    plant; otherwise an override adds it and no rung names the slot.
+    """
+
+    def make() -> PLC:
+        bank = Block("Bk", TagType.REAL, 1, size)
+        if named:
+            bank.slot(slot, physical=Physical("S", profile=profile), link="Enable")
+        pointer = Int("Idx", default=slot)
+        with Program(strict=False) as prog:
+            if toggle:
+                with Rung(~Tog):
+                    out(Tog)
+            if enable:
+                with Rung():
+                    out(Enable)
+            else:
+                with Rung(Bool("Never")):
+                    out(Enable)
+            reader(bank, pointer)
+            if named:
+                with Rung(bank[slot] >= 1e30):
+                    out(Bool("Far"))
+            with Rung():
+                on_delay(T, 40, "s")
+        plc = PLC(prog, dt=0.010)
+        harness = Harness(plc)
+        if not named:
+            physical = Physical("S", profile=profile)
+            harness.set_overrides({f"Bk{slot}": Coupling("Enable", f"Bk{slot}", physical)})
+        harness.install()
+        return plc
+
+    return make
+
+
+def _compare_through(bank: Any, pointer: Int) -> None:
+    with Rung(bank[pointer] >= 5.0):
+        latch(Hit)
+
+
+def _compare_through_a_bounded_pointer(bank: Any, _pointer: Int) -> None:
+    with Rung(bank[Int("Bounded", default=2, min=1, max=4)] >= 5.0):
+        latch(Hit)
+
+
+def _copy_through(bank: Any, pointer: Int) -> None:
+    with Rung():
+        copy(bank[pointer], Shown)
+    with Rung(Shown >= 5.0):
+        latch(Hit)
+
+
+def _compare_in_a_loop(bank: Any, _pointer: Int) -> None:
+    with Rung():
+        with forloop(4) as loop:
+            with Rung(bank[loop.idx + 1] >= 5.0):
+                latch(Hit)
+
+
+def _compare_through_two_pointers(bank: Any, pointer: Int) -> None:
+    with Rung(bank[pointer + Int("Off")] >= 5.0):
+        latch(Hit)
+
+
+def _compare_on_a_branch(bank: Any, pointer: Int) -> None:
+    with Rung():
+        with branch(bank[pointer] >= 5.0):
+            latch(Hit)
+
+
+def _compare_in_a_subroutine(bank: Any, pointer: Int) -> None:
+    with subroutine("ReadBank"):
+        with Rung(bank[pointer] >= 5.0):
+            latch(Hit)
+    with Rung():
+        call("ReadBank")
+
+
+POINTER_READERS = [
+    pytest.param(_compare_through, id="compare"),
+    pytest.param(_compare_through_a_bounded_pointer, id="bounded"),
+    pytest.param(_copy_through, id="copy"),
+    pytest.param(_compare_in_a_loop, id="loop"),
+    pytest.param(_compare_through_two_pointers, id="two-pointers"),
+    pytest.param(_compare_on_a_branch, id="branch"),
+    pytest.param(_compare_in_a_subroutine, id="subroutine"),
+]
+
+
+class TestPlantReadThroughAPointer:
+    """``B[Idx]`` names no slot, so the read goes by the block the plant lives in."""
+
+    @pytest.mark.parametrize("reader", POINTER_READERS)
+    def test_run_until_lands_on_the_read(self, reader: Any) -> None:
+        make = _banked(reader)
+        expected = _first_hit(make)
+        plc = make()
+        plc.run_until(Hit, max_cycles=800)
+        assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+    @pytest.mark.parametrize("reader", POINTER_READERS)
+    def test_a_cycle_does_not_carry_it_past_the_read(self, reader: Any) -> None:
+        make = _banked(reader, toggle=True)
+        expected = _first_hit(make)
+        plc = make()
+        reached, _stats = _jump(plc, _hit, predicate_reads=frozenset({"Hit"}))
+        assert reached
+        assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+    def test_a_slot_no_rung_names(self) -> None:
+        make = _banked(_compare_through, named=False)
+        expected = _first_hit(make)
+        plc = make()
+        plc.run_until(Hit, max_cycles=800)
+        assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+    def test_a_block_too_big_to_list(self) -> None:
+        make = _banked(_compare_through_two_pointers, size=2_000, slot=1_500)
+        expected = _first_hit(make)
+        plc = make()
+        plc.run_until(Hit, max_cycles=800)
+        assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+    def test_a_timer_behind_the_read_runs_exact(self) -> None:
+        def reader(bank: Any, pointer: Int) -> None:
+            with Rung(bank[pointer] >= 5.0):
+                on_delay(Win, 99, "s")
+            with Rung(Win.Acc > 0):
+                latch(Hit)
+
+        make = _banked(reader)
+        plc = make()
+        plc.run_for(8.0)
+        assert plc.state.tags["Hit"] is True
+        _assert_exact(plc, make)
+
+    def test_an_instruction_condition_runs_exact(self) -> None:
+        def reader(bank: Any, pointer: Int) -> None:
+            with Rung():
+                on_delay(Win, 99, "s").reset(bank[pointer] >= 5.0)
+
+        make = _banked(reader)
+        plc = make()
+        plc.run_for(8.0)
+        _assert_exact(plc, make)
+        ref = _stepped(make, plc.state.scan_id)
+        assert plc.state.memory.get("_frac:Win_Acc") == ref.state.memory.get("_frac:Win_Acc")
+
+    def test_compiled_replay_seek_matches(self) -> None:
+        def reader(bank: Any, pointer: Int) -> None:
+            with Rung(bank[pointer] >= 14.5):
+                latch(Hit)
+
+        plc = _banked(reader)()
+        for _ in range(1_600):
+            plc.step()
+        for target in (1_449, 1_460, 1_599):
+            seek = plc._replay_seek(target)
+            ref = plc.replay_to(target)
+            stats = plc._last_replay_seek_stats
+            assert stats["kernel_scans"] == stats["logical_scans"]
+            assert seek.state.scan_id == ref.state.scan_id
+            assert _tags(seek) == _tags(ref)
+
+    @pytest.mark.parametrize("kind", ["int", "real"])
+    def test_a_tag_mapped_onto_the_bank(self, kind: str) -> None:
+        def make() -> PLC:
+            blocks = ClickBlocks()
+            if kind == "int":
+                bank = blocks.ds
+                ramp = Physical("S", profile=Ramp(up=130.0))
+                temp: Any = Int("Mapped", physical=ramp, link="Enable")
+                threshold: float = 500
+            else:
+                bank = blocks.df
+                temp = Real("Mapped", physical=Physical("S", profile=RAMP), link="Enable")
+                threshold = 5.0
+            temp.map_to(bank[2])
+            pointer = Int("Idx", default=2)
+            with Program(strict=False) as prog:
+                with Rung():
+                    out(Enable)
+                with Rung(bank[pointer] >= threshold):
+                    latch(Hit)
+                with Rung():
+                    on_delay(T, 40, "s")
+            plc = PLC(prog, dt=0.010)
+            Harness(plc).install()
+            return plc
+
+        expected = _first_hit(make)
+        plc = make()
+        plc.run_until(Hit, max_cycles=800)
+        assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+
+class TestPointerReadsKeepFolding:
+    """A pointer that cannot show a moving plant is not a reason to step."""
+
+    @staticmethod
+    def _folds(make: Callable[[], PLC]) -> None:
+        plc = make()
+        counter = _kernel_scans(plc)
+        plc.run_for(8.0)
+        assert counter["n"] < 50
+        _assert_exact(plc, make)
+
+    def test_a_read_nothing_can_see(self) -> None:
+        def reader(bank: Any, pointer: Int) -> None:
+            with Rung():
+                copy(bank[pointer], Shown)
+
+        self._folds(_banked(reader))
+
+    def test_a_pointer_into_another_block(self) -> None:
+        def reader(_bank: Any, pointer: Int) -> None:
+            other = Block("Ot", TagType.REAL, 1, 8)
+            with Rung(other[pointer] >= 5.0):
+                latch(Hit)
+
+        self._folds(_banked(reader))
+
+    def test_a_write_through_a_pointer(self) -> None:
+        def reader(bank: Any, pointer: Int) -> None:
+            with Rung(Bool("Never")):
+                copy(0.0, bank[pointer])
+
+        self._folds(_banked(reader))
+
+    def test_a_settled_plant(self) -> None:
+        self._folds(_banked(_compare_through, profile=Approach(0.0, 0.3)))
+
+    def test_a_plant_at_rest(self) -> None:
+        self._folds(_banked(_compare_through, enable=False))
+
+    def test_a_settled_plant_under_a_cycle_jumps(self) -> None:
+        make = _banked(_compare_through, profile=Approach(0.0, 0.3), toggle=True)
+        plc = make()
+        _reached, stats = _jump(plc, _hit, predicate_reads=frozenset({"Hit"}))
+        assert stats["cycle_folded_scans"] > 2_500
         _assert_exact(plc, make)
 
 

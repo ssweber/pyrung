@@ -467,7 +467,6 @@ def cycle_fold_until(
     """
     from pyrung.core.fold import (
         _acc_totals,
-        _analog_jump,
         _analog_recurrence,
         _harness_nearest_scan,
         _OrdinaryFoldStrategy,
@@ -547,12 +546,12 @@ def cycle_fold_until(
     }
     # Classify over the runner fold's *significant* set: drop the tags it already
     # treats as don't-care for the plateau (resolved-on-read-driven frozen writes,
-    # unread churn, analog plants) so they don't spuriously break the cycle.
+    # unread churn) so they don't spuriously break the cycle.
     # Accumulators stay in — they are the monotone coordinates.
     # Clock mirrors are ignored too: the RTC bound below keeps a jump inside
     # one tick unless their readers are proven off (fold._TimeMirrors).
-    # A plant's value need not repeat (see _analog_jump); a Pulse's bit does.
-    ignore = fold_ctx.frozen_writes | fold_ctx.churn_excluded | fold_ctx.analog_names
+    # A plant stays in: one that moves does not repeat, so no cycle is found.
+    ignore = fold_ctx.frozen_writes | fold_ctx.churn_excluded
     if fold_ctx.time_mirrors is not None:
         ignore = ignore | fold_ctx.time_mirrors.names
     significant_keys = (frozenset(plc.state.tags) - ignore) | {_EDGE_MEMORY_KEY}
@@ -560,9 +559,14 @@ def cycle_fold_until(
     # A jump runs no scan: an ignored tag other than a frozen write keeps its
     # pre-jump value until the next scan rebuilds it, so the jumped tip is then
     # not the exact state of its scan.
-    # An analog plant is the exception: the jump lands it (see _analog_jump).
-    jump_exact = not (ignore - fold_ctx.frozen_writes - fold_ctx.analog_names)
-    ordinary = _OrdinaryFoldStrategy(fold_ctx, extra_comparisons, extra_unmodeled)
+    jump_exact = not (ignore - fold_ctx.frozen_writes)
+    # A plant the predicate is declared to read, with no comparison to end a window on.
+    declared_plants = (predicate_reads or frozenset()) & fold_ctx.analog_names
+    ordinary = _OrdinaryFoldStrategy(
+        fold_ctx,
+        extra_comparisons,
+        extra_unmodeled | (declared_plants - (extra_comparisons or {}).keys()),
+    )
     trace_reads = predicate_reads is None
 
     def judge(state: SystemState) -> bool:
@@ -850,43 +854,11 @@ def cycle_fold_until(
             continue
         if periods_to_jump < 1:
             continue
-        analog_landing: dict[str, Any] = {}
-        if fold_ctx.analog:
-            forced = plc._input_overrides.forces_mutable.keys()
-            read_sources = ordinary.predicate_unmodeled()
-            declared = (predicate_reads or frozenset()) & fold_ctx.analog_names
-            analog_jump = (
-                None
-                if read_sources is None
-                else _analog_jump(
-                    fold_ctx,
-                    ring[-observed:],
-                    cyc.period,
-                    periods_to_jump,
-                    blocked=ignore | cyc.monotone.keys(),
-                    unmodeled=(
-                        ordinary.unmodeled
-                        | read_sources
-                        | fold_ctx.hidden_input_coordinates(
-                            forced,
-                            _most_writes_per_scan(
-                                ring_writes[-observed:], fold_ctx.inputs_between_writes.keys()
-                            ),
-                        )
-                        | (declared - (extra_comparisons or {}).keys())
-                    ),
-                    callbacks=active_scan_callbacks,
-                    forced=forced,
-                    extra_comparisons=extra_comparisons,
-                )
-            )
-            if analog_jump is None:
-                if stats is not None:
-                    stats["analog_declined"] = stats.get("analog_declined", 0) + 1
-                continue
-            periods_to_jump, analog_landing = analog_jump
-            if periods_to_jump < 1:
-                continue
+        # A plant that repeats through the ring holds only while what it reads
+        # does, and the ring does not vouch for these.
+        carried = ignore | cyc.monotone.keys()
+        if any(not plant.inputs.isdisjoint(carried) for plant in fold_ctx.analog):
+            continue
 
         # Patch each monotone acc forward, stamp the skipped scans onto scan_id /
         # timestamp so the acc invariant and every clock phase hold across the gap.
@@ -922,7 +894,6 @@ def cycle_fold_until(
             # Presentation receipt: these are the exact accumulator edits a
             # technician would make to reproduce the proved-safe jump.
             advances.extend(patches.items())
-        patches.update(analog_landing)
         # Direct tip edits, not patches: the landed state is the exact state of
         # its scan, cached and checkpointed as such (a patch would only land on
         # the next scan, and a replay would apply it as an input).
