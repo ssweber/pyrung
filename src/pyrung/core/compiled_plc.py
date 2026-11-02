@@ -269,10 +269,15 @@ class CompiledPLC:
         # A state saved before edge memory was per contact (``_prev:X``).
         self._state = migrate_legacy_edge_memory(self._state, site_table_of(program))
         self._extra_commit_tag_names: set[str] = set()
+        # A state handed in is exact: a block cell it lacks stays absent, as it
+        # does stepping, and the kernel's array holds the default meanwhile.
+        anchored = initial_state is not None
         seed = {
             t.name: t.default
             for t in self._known_tags_by_name.values()
-            if t.name not in self._state.tags and self._should_seed_tag(t.name)
+            if t.name not in self._state.tags
+            and self._should_seed_tag(t.name)
+            and not (anchored and t.name in self._block_element_names)
         }
         if seed:
             self._state = self._state.with_tags(seed)

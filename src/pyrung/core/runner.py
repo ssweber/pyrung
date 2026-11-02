@@ -4736,10 +4736,15 @@ class PLC:
             The final SystemState after reaching the target time.
         """
         self._ensure_running()
-        if fold and self._logic:
-            from pyrung.core.fold import fold_run_for
+        if fold and self._logic and self._time_mode == TimeMode.FIXED_STEP:
+            from pyrung.core.compiled_run import run_scans
+            from pyrung.core.fold import _stepped_scans_until
 
-            return fold_run_for(self, seconds, fold_ctx=self._ensure_fold_context())
+            scans = _stepped_scans_until(
+                self._state.timestamp, self._state.timestamp + seconds, self._dt
+            )
+            if scans is not None:
+                return run_scans(self, scans) if scans else self._state
         target_time = self._state.timestamp + seconds
         while self._state.timestamp < target_time:
             self._consume_pause_request()
@@ -4772,71 +4777,19 @@ class PLC:
         Returns:
             The state that matched the condition, or final state if max reached.
         """
-        extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None
-        protected_reads: frozenset[str] = frozenset()
-        clock_reads: frozenset[str] = frozenset()
-        scan_derived: frozenset[str] = frozenset()
-        normalized: Any = None
-        if self._is_fn_predicate(conditions):
+        opaque = self._is_fn_predicate(conditions)
+        if opaque:
             predicate = conditions[0]
         else:
             predicate = self._compile_condition_predicate(*conditions, method="run_until")  # ty: ignore[invalid-argument-type]
-            from pyrung.core.condition import _as_condition, _normalize_and_condition
-            from pyrung.core.fold import (
-                _extract_condition_crossings,
-                _extract_condition_reads,
-                _fold_context_reads,
-            )
-
-            normalized = _normalize_and_condition(
-                *conditions,
-                coerce=_as_condition,
-                empty_error="run_until() requires at least one condition",
-                group_empty_error="run_until() condition group cannot be empty",
-            )
-            extra_comparisons = _extract_condition_crossings(normalized)
-            # The condition's tags become fold-protected reads: a bump on a
-            # churn-excluded / indicator tag must break the plateau, and a
-            # condition-read clock or scan-derived signal must bound the fold
-            # even when no program rung reads it.
-            protected_reads, clock_reads, scan_derived = _fold_context_reads(
-                _extract_condition_reads(normalized)
-            )
         self._ensure_running()
-        if fold and self._logic:
-            from pyrung.core.fold import (
-                _condition_read_audit,
-                _merge_comparisons,
-                _without_soft_rtc_ticks,
-                fold_run_until,
-            )
+        if fold and self._logic and self._time_mode == TimeMode.FIXED_STEP:
+            from pyrung.core.compiled_run import run_scans
 
-            fold_ctx = self._ensure_fold_context(protected_reads, clock_reads, scan_derived)
-            opaque = self._is_fn_predicate(conditions)
-            extra_unmodeled: frozenset[str] = frozenset()
-            traced = opaque
-            if opaque:
-                # A callable may read a clock copy the fold cannot see.
-                fold_ctx = _without_soft_rtc_ticks(fold_ctx)
-            else:
-                from pyrung.core.analysis.pdg import indexed_blocks
-
-                # Coordinates the condition reads other than by a comparison
-                # (an expression, a contact) bound every window they move in.
-                extra_unmodeled, found = _condition_read_audit((normalized,), fold_ctx)
-                extra_comparisons = _merge_comparisons(extra_comparisons or {}, found)
-                # An index (``DS[Idx]``) names no element statically: trace
-                # which ones the condition reads, as for a callable.
-                traced = bool(indexed_blocks(normalized))
-            return fold_run_until(
-                self,
-                predicate,
-                max_cycles=max_cycles,
-                fold_ctx=fold_ctx,
-                extra_comparisons=extra_comparisons,
-                extra_unmodeled=extra_unmodeled,
-                trace_reads=traced,
-            )
+            if max_cycles <= 0:
+                return self._state
+            # A callable may read anything, the runner included: it steps.
+            return run_scans(self, max_cycles, predicate, compiled_predicate=not opaque)
         for _ in range(max_cycles):
             self._consume_pause_request()
             self._run_single_scan(consume_pause_request=False)

@@ -387,6 +387,7 @@ def _checked(
 def install() -> None:
     """Wrap the fold entry points (idempotent)."""
     import pyrung.core.analysis.pilot.cyclefold as cyclefold
+    import pyrung.core.compiled_run as compiled_run
     import pyrung.core.fold as fold
 
     if getattr(fold, "_fold_check_installed", False):
@@ -394,6 +395,19 @@ def install() -> None:
     setattr(fold, "_fold_check_installed", True)  # noqa: B010
 
     run_until, run_for, cycle = fold.fold_run_until, fold.fold_run_for, cyclefold.cycle_fold_until
+    compiled_scans = compiled_run.run_scans
+    # Send every run through the kernel: a short run is the common test.
+    setattr(compiled_run, "INTERPRETED_PREFIX", 1)  # noqa: B010
+
+    def run_scans(runner: Any, scans: int, predicate: Any = None, **kwargs: Any) -> Any:
+        return _checked(
+            "compiled",
+            runner,
+            lambda: compiled_scans(runner, scans, predicate, **kwargs),
+            predicate,
+        )
+
+    setattr(compiled_run, "run_scans", run_scans)  # noqa: B010
 
     def fold_run_until(runner: Any, predicate: Any, *args: Any, **kwargs: Any) -> Any:
         return _checked(
