@@ -20,6 +20,7 @@ import pytest
 from pyrung import (
     Block,
     Bool,
+    Counter,
     Int,
     Program,
     Real,
@@ -31,12 +32,15 @@ from pyrung import (
     calc,
     call,
     copy,
+    count_down,
+    count_up,
     forloop,
     latch,
     on_delay,
     out,
     rise,
     subroutine,
+    time_drum,
 )
 from pyrung.click import ClickBlocks
 from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
@@ -409,6 +413,194 @@ class TestCycleOverAMovingPlant:
         _assert_exact(plc, make)
 
 
+def _counter() -> Any:
+    counter = Counter.clone("C")
+    with Rung(Tog):
+        count_up(counter, 99999).reset(Bool("R"))
+    return counter.Acc
+
+
+def _down_counter() -> Any:
+    counter = Counter.clone("C")
+    with Rung(Tog):
+        count_down(counter, -99999).reset(Bool("R"))
+    return counter.Acc
+
+
+def _timer() -> Any:
+    timer = Timer.clone("Q")
+    with Rung():
+        on_delay(timer, 900, "s")
+    return timer.Acc
+
+
+def _drum() -> Any:
+    acc = Int("DAcc")
+    with Rung():
+        time_drum(
+            outputs=[Bool("O1"), Bool("O2")],
+            presets=[900, 900],
+            unit="s",
+            pattern=[[1, 0], [0, 1]],
+            current_step=Int("Step"),
+            accumulator=acc,
+            completion_flag=Bool("DDone"),
+        ).reset(Bool("R"))
+    return acc
+
+
+def _on_an_accumulator(
+    source: Callable[[], Any],
+    feedback: str,
+    profile: Any,
+    threshold: float,
+    *,
+    mirrored: bool = False,
+) -> Callable[[], PLC]:
+    """A plant writing an accumulator under a cycle the toggle keeps repeating."""
+
+    def make() -> PLC:
+        with Program(strict=False) as prog:
+            with Rung(~Tog):
+                out(Tog)
+            with Rung():
+                out(Enable)
+            acc = source()
+            shown = acc
+            if mirrored:
+                shown = Int("Mir")
+                with Rung():
+                    copy(acc, shown)
+            with Rung(shown >= threshold):
+                latch(Hit)
+            with Rung():
+                on_delay(T, 40, "s")
+        plc = PLC(prog, dt=0.010)
+        harness = Harness(plc)
+        harness.set_overrides(
+            {feedback: Coupling("Enable", feedback, Physical("S", profile=profile))}
+        )
+        harness.install()
+        return plc
+
+    return make
+
+
+FAST_APPROACH = Approach(30000.0, 0.1)
+SHORT_APPROACH = Approach(5000.0, 0.2)
+STEEP_RAMP = Ramp(up=100.0)
+ACCUMULATOR_PLANTS = [
+    pytest.param(_counter, "C_Acc", FAST_APPROACH, 20000, id="counter-approach"),
+    pytest.param(_counter, "C_Acc", SHORT_APPROACH, 4000, id="counter-short-approach"),
+    pytest.param(_counter, "C_Acc", STEEP_RAMP, 800, id="counter-ramp"),
+    pytest.param(_down_counter, "C_Acc", FAST_APPROACH, 20000, id="down-counter-approach"),
+    pytest.param(_timer, "Q_Acc", FAST_APPROACH, 20000, id="timer-approach"),
+    pytest.param(_timer, "Q_Acc", STEEP_RAMP, 800, id="timer-ramp"),
+    pytest.param(_drum, "DAcc", FAST_APPROACH, 20000, id="drum-approach"),
+    pytest.param(_drum, "DAcc", STEEP_RAMP, 800, id="drum-ramp"),
+]
+
+
+class TestPlantOnAnAccumulator:
+    """A plant on an accumulator is no constant rate, so a jump never extrapolates it."""
+
+    @pytest.mark.parametrize(("source", "feedback", "profile", "threshold"), ACCUMULATOR_PLANTS)
+    def test_the_cycle_steps_to_the_crossing(
+        self, source: Any, feedback: str, profile: Any, threshold: float
+    ) -> None:
+        make = _on_an_accumulator(source, feedback, profile, threshold)
+        expected = _first_hit(make)
+        assert expected is not None
+        plc = make()
+        reached, stats = _jump(plc, _hit, predicate_reads=frozenset({"Hit"}))
+        assert reached
+        assert plc.state.scan_id == expected
+        assert stats["cycle_folded_scans"] == 0
+        _assert_exact(plc, make)
+
+    @pytest.mark.parametrize(
+        ("source", "feedback"),
+        [
+            pytest.param(_counter, "C_Acc", id="counter"),
+            pytest.param(_timer, "Q_Acc", id="timer"),
+            pytest.param(_drum, "DAcc", id="drum"),
+        ],
+    )
+    def test_a_copy_of_it_steps_too(self, source: Any, feedback: str) -> None:
+        make = _on_an_accumulator(source, feedback, SHORT_APPROACH, 4000, mirrored=True)
+        expected = _first_hit(make)
+        assert expected is not None
+        plc = make()
+        reached, stats = _jump(plc, _hit, predicate_reads=frozenset({"Hit"}))
+        assert reached
+        assert plc.state.scan_id == expected
+        assert stats["cycle_folded_scans"] == 0
+        _assert_exact(plc, make)
+
+    @pytest.mark.parametrize(("source", "feedback", "profile", "threshold"), ACCUMULATOR_PLANTS)
+    def test_a_plain_fold_lands_on_the_crossing(
+        self, source: Any, feedback: str, profile: Any, threshold: float
+    ) -> None:
+        make = _on_an_accumulator(source, feedback, profile, threshold)
+        expected = _first_hit(make)
+        plc = make()
+        plc.run_until(Hit, max_cycles=3_000)
+        assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+
+class TestAPlantLinkedToAnAccumulator:
+    """A plant at rest repeats, and its link on an accumulator bounds the jump to it."""
+
+    @staticmethod
+    def _make(link: str, source: Callable[[], Any], threshold: float) -> Callable[[], PLC]:
+        def make() -> PLC:
+            temp = Real("Temp", physical=Physical("S", profile=Ramp(up=1.0, down=-0.5)), link=link)
+            with Program(strict=False) as prog:
+                with Rung(~Tog):
+                    out(Tog)
+                source()
+                with Rung(temp >= threshold):
+                    latch(Hit)
+            plc = PLC(prog, dt=0.010)
+            Harness(plc).install()
+            return plc
+
+        return make
+
+    @pytest.mark.parametrize(
+        ("link", "source", "threshold", "first", "jumped"),
+        [
+            pytest.param("C_Acc:300", _counter, 0.005, 600, 590, id="counter"),
+            pytest.param("C_Acc:50", _counter, 0.01, 100, 90, id="counter-near"),
+            pytest.param("Q_Acc:5", _timer, 0.5, 550, 490, id="timer"),
+        ],
+    )
+    def test_the_jump_reaches_the_link(
+        self, link: str, source: Any, threshold: float, first: int, jumped: int
+    ) -> None:
+        make = self._make(link, source, threshold)
+        assert _first_hit(make) == first
+        plc = make()
+        reached, stats = _jump(plc, _hit, predicate_reads=frozenset({"Hit"}))
+        assert reached
+        assert plc.state.scan_id == first
+        assert stats["cycle_folded_scans"] == jumped
+        _assert_exact(plc, make)
+
+    def test_the_plant_is_exact_after_the_link_passes(self) -> None:
+        make = self._make("C_Acc:300", _counter, 1e30)
+        plc = make()
+        _jump(plc, _hit, budget=2_600, predicate_reads=frozenset({"Hit"}))
+        reference = _stepped(make, plc.state.scan_id)
+        assert _tags(plc) == _tags(reference)
+        assert plc.state.tags["Temp"] != 0.0
+        for _ in range(5):
+            plc.step()
+            reference.step()
+        assert _tags(plc) == _tags(reference)
+
+
 class TestDeclaredPredicateOnTheFeedback:
     """A declared read of a plant with no comparison leaves only its value to go by."""
 
@@ -706,6 +898,289 @@ class TestPointerReadsKeepFolding:
         _reached, stats = _jump(plc, _hit, predicate_reads=frozenset({"Hit"}))
         assert stats["cycle_folded_scans"] > 2_500
         _assert_exact(plc, make)
+
+
+def _behind_a_pointer(
+    writer: Callable[[Any], None],
+    *,
+    plant: bool = True,
+    kind: TagType = TagType.REAL,
+) -> Callable[[], PLC]:
+    """*writer* fills ``Cb[3]`` and rungs read that slot as ``Cb[Jx]``."""
+
+    def make() -> PLC:
+        slots = Block("Cb", kind, 1, 8)
+        index = Int("Jx", default=3)
+        with Program(strict=False) as prog:
+            if plant:
+                with Rung():
+                    out(Enable)
+            writer(slots)
+            with Rung(slots[index] >= 5):
+                latch(Hit)
+            with Rung(slots[index] >= 5):
+                on_delay(Timer.clone("Q"), 99, "s")
+            with Rung():
+                on_delay(T, 40, "s")
+        plc = PLC(prog, dt=0.010)
+        Harness(plc).install()
+        return plc
+
+    return make
+
+
+def _copy_a_plant_through_a_pointer(slots: Any) -> None:
+    bank = Block("Bk", TagType.REAL, 1, 8)
+    bank.slot(2, physical=Physical("S", profile=Ramp(up=1.0)), link="Enable")
+    with Rung():
+        copy(bank[Int("Idx", default=2)], slots[3])
+    with Rung(bank[2] >= 1e30):
+        out(Bool("Far"))
+
+
+def _copy_a_plant_slot(slots: Any) -> None:
+    bank = Block("Bk", TagType.REAL, 1, 8)
+    bank.slot(2, physical=Physical("S", profile=Ramp(up=1.0)), link="Enable")
+    with Rung():
+        copy(bank[2], slots[3])
+    with Rung(bank[2] >= 1e30):
+        out(Bool("Far"))
+
+
+def _copy_a_plant(slots: Any) -> None:
+    with Rung():
+        copy(_temp(Ramp(up=1.0)), slots[3])
+
+
+def _copy_an_accumulator(slots: Any) -> None:
+    timer = Timer.clone("D")
+    with Rung():
+        on_delay(timer, 90, "s")
+    with Rung():
+        copy(timer.Acc, slots[3])
+
+
+def _count_in_a_slot(slots: Any) -> None:
+    with Rung():
+        calc(slots[3] + 1, slots[3])
+
+
+REBUILT_THROUGH_A_POINTER = [
+    pytest.param(_copy_a_plant_through_a_pointer, True, TagType.REAL, id="plant-by-pointer"),
+    pytest.param(_copy_a_plant_slot, True, TagType.REAL, id="plant-slot"),
+    pytest.param(_copy_a_plant, True, TagType.REAL, id="plant-tag"),
+    pytest.param(_copy_an_accumulator, False, TagType.INT, id="timer"),
+    pytest.param(_count_in_a_slot, False, TagType.INT, id="self-calc"),
+]
+
+
+class TestOutputReadThroughAPointer:
+    """A slot a pointer can reach has a reader, whatever writes it and however."""
+
+    @pytest.mark.parametrize(("writer", "plant", "kind"), REBUILT_THROUGH_A_POINTER)
+    def test_run_until_stops_on_the_crossing(self, writer: Any, plant: bool, kind: TagType) -> None:
+        make = _behind_a_pointer(writer, plant=plant, kind=kind)
+        expected = _first_hit(make, budget=4_000)
+        assert expected is not None
+        plc = make()
+        plc.run_until(Hit, max_cycles=4_000)
+        assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+    @pytest.mark.parametrize(("writer", "plant", "kind"), REBUILT_THROUGH_A_POINTER)
+    def test_run_for_is_exact(self, writer: Any, plant: bool, kind: TagType) -> None:
+        make = _behind_a_pointer(writer, plant=plant, kind=kind)
+        plc = make()
+        plc.run_for(30.0)
+        _assert_exact(plc, make)
+
+    @pytest.mark.parametrize(("writer", "plant", "kind"), REBUILT_THROUGH_A_POINTER)
+    def test_a_cycle_jump_stops_on_the_crossing(
+        self, writer: Any, plant: bool, kind: TagType
+    ) -> None:
+        make = _behind_a_pointer(writer, plant=plant, kind=kind)
+        expected = _first_hit(make, budget=4_000)
+        plc = make()
+        reached, _stats = _jump(plc, _hit, budget=4_000, predicate_reads=frozenset({"Hit"}))
+        assert reached
+        assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+    def test_a_mapped_accumulator(self) -> None:
+        def make() -> PLC:
+            blocks = ClickBlocks()
+            timer = Timer.clone("D")
+            timer.Acc.map_to(blocks.ds[5])
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(timer, 90, "s")
+                with Rung(blocks.ds[Int("Jx", default=5)] >= 5):
+                    latch(Hit)
+                with Rung():
+                    on_delay(T, 40, "s")
+            return PLC(prog, dt=0.010)
+
+        expected = _first_hit(make, budget=4_000)
+        assert expected == 500
+        plc = make()
+        plc.run_until(Hit, max_cycles=4_000)
+        assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+    def test_copies_a_value_walks_through(self) -> None:
+        """Each copy reads the slot the next one writes, so a value takes scans to arrive."""
+
+        def make() -> PLC:
+            slots = Block("Cb", TagType.INT, 1, 8)
+            index = Int("Jx", default=1)
+            timer = Timer.clone("D")
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(timer, 5, "s")
+                with Rung(slots[index + 3] >= 7):
+                    latch(Hit)
+                with Rung():
+                    copy(slots[index + 2], slots[4])
+                with Rung():
+                    copy(slots[index + 1], slots[3])
+                with Rung():
+                    copy(slots[index], slots[2])
+                with Rung(timer.Done):
+                    copy(7, slots[1])
+                with Rung():
+                    on_delay(T, 40, "s")
+            return PLC(prog, dt=0.010)
+
+        expected = _first_hit(make, budget=4_000)
+        assert expected is not None
+        plc = make()
+        plc.run_until(Hit, max_cycles=4_000)
+        assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+    def test_a_range_through_a_pointer(self) -> None:
+        def make() -> PLC:
+            slots = Block("Cb", TagType.INT, 1, 8)
+            shown = Block("Od", TagType.INT, 1, 2)
+            index = Int("Jx", default=3)
+            with Program(strict=False) as prog:
+                _copy_an_accumulator(slots)
+                with Rung():
+                    blockcopy(slots.select(index, index + 1), shown.select(1, 2))
+                with Rung(shown[1] >= 5):
+                    latch(Hit)
+                with Rung():
+                    on_delay(T, 40, "s")
+            return PLC(prog, dt=0.010)
+
+        expected = _first_hit(make, budget=4_000)
+        assert expected == 500
+        plc = make()
+        plc.run_until(Hit, max_cycles=4_000)
+        assert plc.state.scan_id == expected
+        _assert_exact(plc, make)
+
+
+def _readout_behind_a_pointer(*, cycle: bool, gated: bool, through_copy: bool) -> Callable[[], PLC]:
+    """``calc(Total - Timer.Acc, Cb[3])`` read as ``Cb[Jx]``: a display of a slow timer."""
+
+    def make() -> PLC:
+        slots = Block("Cb", TagType.INT, 1, 8)
+        index = Int("Jx", default=3)
+        total = Int("TotalT", default=60)
+        go = Bool("Go", default=True)
+        toggle = Bool("Tog")
+        timer = Timer.clone("D")
+        with Program(strict=False) as prog:
+            if cycle:
+                with Rung(~toggle):
+                    out(toggle)
+            with Rung():
+                on_delay(timer, 90, "min")
+            with Rung(go) if gated else Rung():
+                calc(total - timer.Acc, slots[3])
+            if through_copy:
+                seen = Int("Seen")
+                with Rung():
+                    copy(slots[index], seen)
+                with Rung(seen != 0, seen <= 58):
+                    latch(Hit)
+            else:
+                with Rung(slots[index] != 0, slots[index] <= 58):
+                    latch(Hit)
+            with Rung():
+                on_delay(T, 90, "min")
+        return PLC(prog, dt=0.1)
+
+    return make
+
+
+class TestAReadoutThroughAPointer:
+    """Its value holds longer than a cycle's ring is long, so only the reader can stop a jump."""
+
+    @pytest.mark.parametrize("cycle", [False, True], ids=["plain", "cycling"])
+    @pytest.mark.parametrize("gated", [False, True], ids=["always", "gated"])
+    @pytest.mark.parametrize("through_copy", [False, True], ids=["contact", "copied"])
+    def test_a_stop_lands_on_the_crossing(
+        self, cycle: bool, gated: bool, through_copy: bool
+    ) -> None:
+        make = _readout_behind_a_pointer(cycle=cycle, gated=gated, through_copy=through_copy)
+        expected = _first_hit(make, budget=2_000)
+        assert expected is not None
+
+        plain = make()
+        plain.run_until(Hit, max_cycles=2_000)
+        assert plain.state.scan_id == expected
+        _assert_exact(plain, make)
+
+        jumped = make()
+        reached, _stats = _jump(jumped, _hit, budget=2_000, predicate_reads=frozenset({"Hit"}))
+        assert reached
+        assert jumped.state.scan_id == expected
+        _assert_exact(jumped, make)
+
+
+class TestOutputsThatStayUnread:
+    """A pointer that cannot show the output is not a reason to step."""
+
+    @staticmethod
+    def _folds(reader: Callable[[Any], None]) -> None:
+        def make() -> PLC:
+            slots = Block("Cb", TagType.INT, 1, 8)
+            with Program(strict=False) as prog:
+                _copy_an_accumulator(slots)
+                reader(slots)
+                with Rung():
+                    on_delay(T, 40, "s")
+            return PLC(prog, dt=0.010)
+
+        plc = make()
+        counter = _kernel_scans(plc)
+        plc.run_for(8.0)
+        assert counter["n"] < 50
+        _assert_exact(plc, make)
+
+    def test_a_write_through_a_pointer(self) -> None:
+        def reader(slots: Any) -> None:
+            with Rung(Bool("Never")):
+                copy(0, slots[Int("Jx", default=3)])
+
+        self._folds(reader)
+
+    def test_a_pointer_into_another_block(self) -> None:
+        def reader(_slots: Any) -> None:
+            other = Block("Ot", TagType.INT, 1, 8)
+            with Rung(other[Int("Jx", default=3)] >= 5):
+                latch(Hit)
+
+        self._folds(reader)
+
+    def test_a_bounded_pointer_short_of_the_output(self) -> None:
+        def reader(slots: Any) -> None:
+            with Rung(slots[Int("Jx", default=5, min=5, max=6)] >= 5):
+                latch(Hit)
+
+        self._folds(reader)
 
 
 class TestBoolFeedbackUnderACycleJump:

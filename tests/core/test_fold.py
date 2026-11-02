@@ -4239,13 +4239,7 @@ class TestReadsOutsideTheCrossings:
 class TestIndexedDisplays:
     """A display written to a block element is not provably unread when some
     index into that block (``DS[Idx]``, Idx unbounded) names no element the
-    program graph can see: a window must not leave it stale.
-
-    The program-index cases are a documented gap (runner guide, "Folding"):
-    marking every element of such a block read costs the burner most of its
-    folds, since its alarm historian indexes DS with unbounded pointers.  The
-    fix needs pointer bounds from their writers, or the probe scan recording
-    which elements an index resolved to."""
+    program graph can see: a window must not leave it stale."""
 
     @staticmethod
     def _program(reader: str) -> Program:
@@ -4269,7 +4263,6 @@ class TestIndexedDisplays:
                     latch(Bool("Hit"))
         return prog
 
-    @pytest.mark.xfail(strict=True, reason="unbounded index into a landing-rebuilt display")
     @pytest.mark.parametrize("reader", ["contact", "copy"])
     def test_program_index_reads_the_display(self, reader: str) -> None:
         def run(plc: PLC, fold: bool) -> None:

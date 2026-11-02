@@ -536,8 +536,11 @@ def cycle_fold_until(
         return _fall_back_to_runner_fold()
     max_period = max(max_period, period_multiple_of * 4)
 
-    monotone_allowed = frozenset(
-        s.acc_name for s in fold_ctx.sources if s.kind == "up" and not s.bidir
+    # A plant writes its own value every scan, so even on an accumulator it is no
+    # constant rate: it stays out, and a jump never extrapolates it.
+    monotone_allowed = (
+        frozenset(s.acc_name for s in fold_ctx.sources if s.kind == "up" and not s.bidir)
+        - fold_ctx.analog_names
     )
     monotone_quanta = {
         source.acc_name: source.unit.dt_to_units(dt)
@@ -853,11 +856,6 @@ def cycle_fold_until(
             # A pause, snapshot or monitor must be judged on every scan.
             continue
         if periods_to_jump < 1:
-            continue
-        # A plant that repeats through the ring holds only while what it reads
-        # does, and the ring does not vouch for these.
-        carried = ignore | cyc.monotone.keys()
-        if any(not plant.inputs.isdisjoint(carried) for plant in fold_ctx.analog):
             continue
 
         # Patch each monotone acc forward, stamp the skipped scans onto scan_id /

@@ -117,11 +117,12 @@ A callable predicate is judged on the state it is given (or `runner.state`);
 the fold records which tags it reads.  Anything else it consults, such as
 another runner or `history`, is invisible to the fold.
 
-One known gap: a value copied from a timer or counter into a block element
-nothing reads by name (`calc(Tmr.Acc // 1000, DS[5])`) can be left stale inside
-a folded stretch when a rung reads it back through an index with no declared
-range (`DS[Idx]`, `Idx` without `min`/`max` or `choices`).  Give the index tag
-its range, or run with `fold=False`.
+A rung that reads a block through an index with no declared range (`DS[Idx]`,
+`Idx` without `min`/`max` or `choices`) can see any element, so a value moving
+in that block ends a folded stretch.  One such index anywhere in a block is
+enough: a program whose alarm log indexes `DS` steps through a timer display
+elsewhere in `DS` instead of skipping it.  Give the index tag its range to keep
+the fold, and make the range true, because the fold takes it at its word.
 
 ## Injecting inputs
 

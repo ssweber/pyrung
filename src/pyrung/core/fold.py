@@ -628,13 +628,13 @@ def _audit_condition(
     return seen
 
 
-def _reads_through_pointers(coords: frozenset[str]) -> Callable[[Any], set[str]]:
+def _reads_through_pointers(coords: frozenset[str] | None = None) -> Callable[[Any], set[str]]:
     """A lookup of what a condition or operand reads of *coords* by an unbounded index.
 
-    The program graph cannot name the element ``block[ptr]`` reads, so a coordinate
-    in that block shows no reader.  This goes by the block's occupants, which also
+    The program graph cannot name the element ``block[ptr]`` reads, so a slot of
+    that block shows no reader.  This goes by the block's occupants, which also
     covers a slot no rung names and a tag mapped onto the block.  An index the
-    graph does bound is left to its names.
+    graph does bound is left to its names.  ``None`` keeps every occupant.
     """
     from pyrung.core.analysis.pdg import (
         _indirect_expr_tags,
@@ -659,9 +659,10 @@ def _reads_through_pointers(coords: frozenset[str]) -> Callable[[Any], set[str]]
                 return
             names = occupants.get(id(block))
             if names is None:
-                names = coords.intersection(
+                slots = (
                     block._effective_slot_name(addr) for addr in range(block.start, block.end + 1)
                 )
+                names = frozenset(slots) if coords is None else coords.intersection(slots)
                 occupants[id(block)] = names
             found.update(names)
 
@@ -669,6 +670,39 @@ def _reads_through_pointers(coords: frozenset[str]) -> Callable[[Any], set[str]]
         return found
 
     return reads
+
+
+def _slots_read_through_pointers(pdg: ProgramGraph, program: Any) -> frozenset[str]:
+    """Every slot of a block some rung reads through an unbounded index.
+
+    These have readers the program graph does not list, so no pass may call one
+    unread.  A write through such an index reads nothing.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+
+    if not pdg.pointer_uses and not pdg.opaque_index_blocks:
+        return frozenset()
+    through_pointers = _reads_through_pointers()
+    found: set[str] = set()
+    for node in pdg.rung_nodes:
+        rung = _resolve_rung(program, node)
+        if rung is None:
+            found |= _opaque_indirect_tags(pdg)
+            continue
+        for cond in rung._conditions:
+            found |= through_pointers(cond)
+        for instr in _nested_instructions(rung._instructions):
+            for body_rung in getattr(instr, "body_rungs", ()):
+                for cond in body_rung._conditions[body_rung._branch_condition_start :]:
+                    found |= through_pointers(cond)
+            cls = type(instr)
+            for field_name in (
+                *getattr(cls, "_conditions", ()),
+                *getattr(cls, "_reads", ()),
+                *getattr(cls, "_exclusive_fields", ()),
+            ):
+                found |= through_pointers(getattr(instr, field_name, None))
+    return frozenset(found)
 
 
 def _audit_coordinate_reads(
@@ -2703,6 +2737,7 @@ def _build_fold_context(
     )
     analog = _analog_feedback(plc)
     analog_names = frozenset(a.name for a in analog)
+    pointer_read = _slots_read_through_pointers(pdg, program)
 
     # Self-feeding churn (a calc reading its own destination) is never simply
     # left out of the plateau guard: the landing must still hold the value
@@ -2713,7 +2748,7 @@ def _build_fold_context(
     churn_excluded: frozenset[str] = frozenset()
 
     if advice is None or advice.has("fold_unread_churn"):
-        terminals = _scan_local_terminal_tags(plc, pdg, target_names) - acc_names
+        terminals = _scan_local_terminal_tags(plc, pdg, target_names | pointer_read) - acc_names
         churn_excluded |= terminals
         if terminals and journal is not None:
             journal.add_note(
@@ -2810,7 +2845,7 @@ def _build_fold_context(
             + ", ".join(sorted(scan_derived_names))
         )
 
-    protected_names = target_names | _harness_referenced_names(plc)
+    protected_names = target_names | pointer_read | _harness_referenced_names(plc)
 
     def unread(name: str) -> bool:
         return name not in protected_names and not pdg.all_readers_of.get(name)
@@ -2900,7 +2935,7 @@ def _build_fold_context(
         modeled_writes,
         unread,
         dormant,
-        analog_names,
+        acc_names | modwrap_names | frozenset(mirror_names) | analog_names,
     )
     if flag_stale:
         # No reader of the flag those views raise: the landing scan rebuilds it.
@@ -3131,6 +3166,7 @@ def _build_fold_context(
             for s in sources
             if s.done_bit in read_tags
             or s.done_bit in target_names
+            or s.done_bit in pointer_read
             or pdg.all_readers_of.get(s.done_bit)
         ),
         normal_dt=float(getattr(plc, "_dt", 0.010) or 0.010),
