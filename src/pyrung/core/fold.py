@@ -125,6 +125,49 @@ class _ModWrap:
 
 
 @dataclass(frozen=True)
+class _AnalogFeedback:
+    """A ``Ramp`` or ``Approach`` plant: a stored value its rungs integrate each scan.
+
+    The rungs read ``sys.dt``, and no edit makes one scan at an aggregate ``dt``
+    land where ``n`` ordinary scans do: float rounding differs, and a first-order
+    ``Approach`` overshoots its setpoint.  So a fold walks the recurrence
+    (:func:`_analog_recurrence`) to find where the value goes and which
+    comparison it crosses, and lands it with a scan at the ordinary ``dt``.
+    """
+
+    name: str
+    tag: Any
+    en_name: str
+    en_default: Any
+    trigger: Any
+    # ``Ramp``: the per-second rates, and the latch that wakes the decay rung.
+    up: float = 0.0
+    down: float = 0.0
+    armed: str | None = None
+    # ``Approach``: the first-order rate and the setpoint (a constant or a Tag).
+    rate: float | None = None
+    toward: Any = None
+
+    @property
+    def default(self) -> Any:
+        return self.tag.default
+
+    @cached_property
+    def inputs(self) -> frozenset[str]:
+        """The tags a plant's firing and rate depend on, which must hold still.
+
+        Not ``armed``: only the enable can set it, and the decay rung reads it
+        only with the enable off, so it holds while the enable does.
+        """
+        from pyrung.core.tag import Tag
+
+        names = {self.en_name}
+        if isinstance(self.toward, Tag):
+            names.add(self.toward.name)
+        return frozenset(names)
+
+
+@dataclass(frozen=True)
 class _FoldContext:
     """Static priors for the time-fold loop, built once per PLC."""
 
@@ -185,17 +228,23 @@ class _FoldContext:
     # Edge memory the plateau guard leaves to the clock handling (see
     # every_scan_clock_edge_keys).
     clock_edge_memory: frozenset[str] = frozenset()
+    # The harness's ``Ramp`` and ``Approach`` plants (see _AnalogFeedback).
+    analog: tuple[_AnalogFeedback, ...] = ()
+
+    @cached_property
+    def analog_names(self) -> frozenset[str]:
+        return frozenset(a.name for a in self.analog)
 
     @cached_property
     def coordinates(self) -> frozenset[str]:
         """Every moving value the crossing set tracks for the plateau guard."""
-        return self.acc_names | self.modwrap_names | self.mirror_names
+        return self.acc_names | self.modwrap_names | self.mirror_names | self.analog_names
 
     def unmodeled_coordinates(self, names: Collection[str]) -> frozenset[str]:
         """The tracked sources behind *names* (a view stands for its source)."""
         views = dict(self.mirror_sources)
         out = {views.get(name, name) for name in names}
-        return frozenset(out) & (self.acc_names | self.modwrap_names)
+        return frozenset(out) & (self.acc_names | self.modwrap_names | self.analog_names)
 
     def hidden_input_coordinates(
         self,
@@ -579,6 +628,83 @@ def _audit_condition(
     return seen
 
 
+def _reads_through_pointers(coords: frozenset[str] | None = None) -> Callable[[Any], set[str]]:
+    """A lookup of what a condition or operand reads of *coords* by an unbounded index.
+
+    The program graph cannot name the element ``block[ptr]`` reads, so a slot of
+    that block shows no reader.  This goes by the block's occupants, which also
+    covers a slot no rung names and a tag mapped onto the block.  An index the
+    graph does bound is left to its names.  ``None`` keeps every occupant.
+    """
+    from pyrung.core.analysis.pdg import (
+        _indirect_expr_tags,
+        _indirect_ref_tags,
+        _visit_indirect_refs,
+    )
+    from pyrung.core.memory_block import IndirectRef
+
+    occupants: dict[int, frozenset[str]] = {}
+
+    def reads(obj: Any) -> set[str]:
+        found: set[str] = set()
+
+        def visit(ref: Any) -> None:
+            block = ref.block
+            bounded = (
+                _indirect_ref_tags(block, ref.pointer)
+                if isinstance(ref, IndirectRef)
+                else _indirect_expr_tags(block, ref.expr)
+            )
+            if bounded is not None:
+                return
+            names = occupants.get(id(block))
+            if names is None:
+                slots = (
+                    block._effective_slot_name(addr) for addr in range(block.start, block.end + 1)
+                )
+                names = frozenset(slots) if coords is None else coords.intersection(slots)
+                occupants[id(block)] = names
+            found.update(names)
+
+        _visit_indirect_refs(obj, visit, set())
+        return found
+
+    return reads
+
+
+def _slots_read_through_pointers(pdg: ProgramGraph, program: Any) -> frozenset[str]:
+    """Every slot of a block some rung reads through an unbounded index.
+
+    These have readers the program graph does not list, so no pass may call one
+    unread.  A write through such an index reads nothing.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+
+    if not pdg.pointer_uses and not pdg.opaque_index_blocks:
+        return frozenset()
+    through_pointers = _reads_through_pointers()
+    found: set[str] = set()
+    for node in pdg.rung_nodes:
+        rung = _resolve_rung(program, node)
+        if rung is None:
+            found |= _opaque_indirect_tags(pdg)
+            continue
+        for cond in rung._conditions:
+            found |= through_pointers(cond)
+        for instr in _nested_instructions(rung._instructions):
+            for body_rung in getattr(instr, "body_rungs", ()):
+                for cond in body_rung._conditions[body_rung._branch_condition_start :]:
+                    found |= through_pointers(cond)
+            cls = type(instr)
+            for field_name in (
+                *getattr(cls, "_conditions", ()),
+                *getattr(cls, "_reads", ()),
+                *getattr(cls, "_exclusive_fields", ()),
+            ):
+                found |= through_pointers(getattr(instr, field_name, None))
+    return frozenset(found)
+
+
 def _audit_coordinate_reads(
     pdg: ProgramGraph,
     program: Any,
@@ -586,6 +712,7 @@ def _audit_coordinate_reads(
     modeled_writes: dict[str, frozenset[str]],
     unread: Callable[[str], bool] = lambda _name: False,
     dormant: dict[str, list[frozenset[str] | None]] | None = None,
+    pointer_coords: frozenset[str] = frozenset(),
 ) -> tuple[
     frozenset[str],
     dict[str, list[tuple[str, Any]]],
@@ -614,6 +741,10 @@ def _audit_coordinate_reads(
     did, so the edge, and the one-shot, never fire inside it; the caller
     confirms ``X`` is guarded by the plateau.
 
+    A read through an unbounded pointer names no element, so each of
+    *pointer_coords* in the indexed block counts as read there, under the same
+    rules, except that it is never a comparison the crossing set can place.
+
     Returns ``(unmodeled, rung_cmps, instruction_cmps, rebuilt)``: the
     comparisons found in rung conditions and in instruction conditions
     (resets, count-down legs, drum events), which the rung condition scan does
@@ -636,22 +767,27 @@ def _audit_coordinate_reads(
     instr_cmps: dict[str, list[tuple[str, Any]]] = {}
     if not coords:
         return frozenset(), rung_cmps, instr_cmps, frozenset()
+    through_pointers = _reads_through_pointers(pointer_coords) if pointer_coords else None
     for node in pdg.rung_nodes:
         reads = (node.own_condition_reads | node.data_reads | node.exclusive_reads) & coords
-        if not reads:
+        if not reads and through_pointers is None:
             continue
         rung = _resolve_rung(program, node)
         if rung is None:
-            unmodeled |= reads
+            unmodeled |= reads | pointer_coords
             continue
         seen: set[str] = set()
         for cond in rung._conditions:
             seen |= _audit_condition(cond, coords, tags, rung_cmps, unmodeled)
+            if through_pointers is not None:
+                unmodeled |= through_pointers(cond)
         # forloop body-rung contacts are read inside the scan like any rung's.
         for loop in _nested_instructions(rung._instructions):
             for body_rung in getattr(loop, "body_rungs", ()):
                 for cond in body_rung._conditions[body_rung._branch_condition_start :]:
                     seen |= _audit_condition(cond, coords, tags, rung_cmps, unmodeled)
+                    if through_pointers is not None:
+                        unmodeled |= through_pointers(cond)
         gates: frozenset[str] = frozenset()
         top_level = dormant is not None and node.scope == "main" and not node.branch_path
         if top_level:
@@ -671,6 +807,8 @@ def _audit_coordinate_reads(
                 seen |= _audit_condition(
                     getattr(instr, field_name, None), coords, tags, instr_cmps, unmodeled
                 )
+                if through_pointers is not None:
+                    unmodeled |= through_pointers(getattr(instr, field_name, None))
             own = (
                 {acc.name for acc, _done, _preset in _instruction_phases(instr)}
                 if type(instr) in registry
@@ -683,7 +821,10 @@ def _audit_coordinate_reads(
             exclusive = getattr(cls, "_exclusive_fields", ())
             instr_reads: set[str] = set()
             for field_name in (*getattr(cls, "_reads", ()), *exclusive):
-                field_reads = _extract_tag_names(getattr(instr, field_name, None), tags)
+                field = getattr(instr, field_name, None)
+                field_reads = _extract_tag_names(field, tags)
+                if through_pointers is not None:
+                    field_reads |= through_pointers(field)
                 instr_reads |= field_reads
                 field_reads &= coords
                 seen |= field_reads
@@ -2594,6 +2735,12 @@ def _build_fold_context(
     profile_fb_names: frozenset[str] = (
         frozenset(c.fb_name for c in h._profile_couplings) if h is not None else frozenset()
     )
+    analog = _analog_feedback(plc)
+    analog_names = frozenset(a.name for a in analog)
+    # Read by the predicate or by a rung the program graph does not list.  No pass
+    # may call one of these unread, frozen, a mirror or churn: this is the one set
+    # they all take.
+    visible_names = target_names | _slots_read_through_pointers(pdg, program)
 
     # Self-feeding churn (a calc reading its own destination) is never simply
     # left out of the plateau guard: the landing must still hold the value
@@ -2604,7 +2751,7 @@ def _build_fold_context(
     churn_excluded: frozenset[str] = frozenset()
 
     if advice is None or advice.has("fold_unread_churn"):
-        terminals = _scan_local_terminal_tags(plc, pdg, target_names) - acc_names
+        terminals = _scan_local_terminal_tags(plc, pdg, visible_names) - acc_names
         churn_excluded |= terminals
         if terminals and journal is not None:
             journal.add_note(
@@ -2615,7 +2762,7 @@ def _build_fold_context(
     modwrap: list[_ModWrap] = []
     if advice is None or advice.has("fold_modwrap_source"):
         tracked: list[str] = []
-        for tag, c, m, value_range in _selfcalc_sources(plc, pdg, program, target_names):
+        for tag, c, m, value_range in _selfcalc_sources(plc, pdg, program, visible_names):
             if tag in acc_names or tag in churn_excluded:
                 continue
             if m is None:
@@ -2656,7 +2803,7 @@ def _build_fold_context(
     mirror_cands: list[tuple[str, str, int, int, bool]] = []
     if advice is None or advice.has("fold_derived_crossings"):
         mirror_cands = _mirror_candidates(
-            plc, pdg, program, target_names, acc_names | modwrap_names
+            plc, pdg, program, visible_names, acc_names | modwrap_names
         )
 
     watch = acc_names | profile_fb_names | modwrap_names
@@ -2701,7 +2848,7 @@ def _build_fold_context(
             + ", ".join(sorted(scan_derived_names))
         )
 
-    protected_names = target_names | _harness_referenced_names(plc)
+    protected_names = visible_names | _harness_referenced_names(plc)
 
     def unread(name: str) -> bool:
         return name not in protected_names and not pdg.all_readers_of.get(name)
@@ -2780,15 +2927,18 @@ def _build_fold_context(
     }
     modeled_writes.update({name: frozenset({name}) for name in modwrap_names})
     modeled_writes.update({m: frozenset({a}) for m, a in mirror_sources})
+    # A plant's own calc reads its value; the recurrence is that read.
+    modeled_writes.update({name: frozenset({name}) for name in analog_names})
 
     dormant: dict[str, list[frozenset[str] | None]] = {}
     unmodeled_raw, rung_cmps, instr_cmps, landing_rebuilt = _audit_coordinate_reads(
         pdg,
         program,
-        acc_names | modwrap_names | frozenset(mirror_names),
+        acc_names | modwrap_names | frozenset(mirror_names) | analog_names,
         modeled_writes,
         unread,
         dormant,
+        acc_names | modwrap_names | frozenset(mirror_names) | analog_names,
     )
     if flag_stale:
         # No reader of the flag those views raise: the landing scan rebuilds it.
@@ -2895,7 +3045,7 @@ def _build_fold_context(
             pdg,
             base_varying,
             window_constant,
-            target_names,
+            visible_names,
             # A crossing resolves from a fold input's boundary value, so a change
             # of one must end the window: it stays in the plateau guard.
             protected=_harness_referenced_names(plc) | written_inputs.keys(),
@@ -2973,7 +3123,7 @@ def _build_fold_context(
                 | churn_excluded
                 | frozen_writes
             ),
-            target_names=target_names,
+            target_names=visible_names,
             protected=_harness_referenced_names(plc) | written_inputs.keys(),
             churn=churn_excluded,
         )
@@ -3018,7 +3168,7 @@ def _build_fold_context(
             s.done_bit
             for s in sources
             if s.done_bit in read_tags
-            or s.done_bit in target_names
+            or s.done_bit in visible_names
             or pdg.all_readers_of.get(s.done_bit)
         ),
         normal_dt=float(getattr(plc, "_dt", 0.010) or 0.010),
@@ -3046,6 +3196,7 @@ def _build_fold_context(
         landing_rebuilt=landing_rebuilt,
         contested_timers=contested_timers,
         clock_edge_memory=every_scan_clock_edge_keys(getattr(plc, "_site_table", None)),
+        analog=analog,
     )
 
 
@@ -3776,7 +3927,7 @@ def _nearest_timer_crossing(
 
 
 def _timer_landing(
-    moves: Sequence[_TimerMove], skip: int, normal_dt: float
+    moves: Sequence[_TimerMove], skip: int, normal_dt: float, *, ordinary_dt: bool = False
 ) -> tuple[tuple[str, int, float, float], ...] | None:
     """Pre- and post-landing timer edits that make the macro scan exact.
 
@@ -3787,6 +3938,9 @@ def _timer_landing(
     set to the recurrence's own.  Returns ``(acc_name, acc, frac_in,
     frac_out)`` per timer, or ``None`` if no such carry exists (it would take
     a window of about 2**51 timer units).
+
+    With *ordinary_dt* the landing scan runs at ``normal_dt`` and needs only the
+    carry the last folded scan starts from.
     """
     if skip <= 1 or not moves:
         return ()
@@ -3797,6 +3951,9 @@ def _timer_landing(
         units = move.quantum + frac_last
         increment = int(units)
         frac_out = units - increment
+        if ordinary_dt:
+            out.append((move.src.acc_name, acc_last, frac_last, frac_out))
+            continue
         landing_units = move.src.unit.dt_to_units(landing_dt)
         for bias in (0.5, 0.25, 0.75):
             frac_in = (increment + bias) - landing_units
@@ -4330,6 +4487,168 @@ def _fold_patches(
     return patches
 
 
+def _analog_feedback(plc: PLC) -> tuple[_AnalogFeedback, ...]:
+    """The installed harness's ``Ramp`` and ``Approach`` plants.
+
+    Mirrors what :meth:`Harness._refresh_synthesis` lowers, down to the tags it
+    falls back on.  ``Pulse`` is not here: it is real timers driving a bit.
+    """
+    from pyrung.core.physical import Approach, Ramp
+    from pyrung.core.tag import Real
+
+    h = plc._harness
+    if h is None:
+        return ()
+    known = plc._known_tags_by_name
+    out: list[_AnalogFeedback] = []
+    for c in h._profile_couplings:
+        spec = c.profile
+        en_tag = known.get(c.en_name)
+        if en_tag is None or not isinstance(spec, (Ramp, Approach)):
+            continue
+        tag = known.get(c.fb_name)
+        if tag is None:
+            tag = Real(c.fb_name)
+        if isinstance(spec, Ramp):
+            out.append(
+                _AnalogFeedback(
+                    name=c.fb_name,
+                    tag=tag,
+                    en_name=c.en_name,
+                    en_default=en_tag.default,
+                    trigger=c.trigger_value,
+                    up=spec.up,
+                    down=spec.down,
+                    armed=f"__cpl_armed__{c.fb_name}" if spec.down != 0.0 else None,
+                )
+            )
+        else:
+            toward = spec.toward
+            if isinstance(toward, str):
+                toward = known[toward] if toward in known else Real(toward)
+            out.append(
+                _AnalogFeedback(
+                    name=c.fb_name,
+                    tag=tag,
+                    en_name=c.en_name,
+                    en_default=en_tag.default,
+                    trigger=c.trigger_value,
+                    rate=spec.rate,
+                    toward=toward,
+                )
+            )
+    return tuple(out)
+
+
+def _analog_recurrence(
+    plant: _AnalogFeedback, tags: Mapping[str, Any], dt: float
+) -> Callable[[Any], Any] | None:
+    """One scan of *plant* with its inputs as in *tags*: value in, value out.
+
+    ``None`` when no plant rung fires.  The returned step gives ``None`` for a
+    result that would set a fault flag or store NaN, where a window has to end.
+    It evaluates as the plant's ``calc`` does, operand order included, so that
+    a value agrees to the last bit; a caller checks it against an observed scan.
+    """
+    from pyrung.core.instruction.conversions import (
+        _math_out_of_range_for_dest,
+        _truncate_to_tag_type,
+    )
+    from pyrung.core.storage import REAL_MAX
+    from pyrung.core.tag import Tag, TagType
+
+    en = tags.get(plant.en_name, plant.en_default)
+    on = en == plant.trigger if plant.trigger is not None else bool(en)
+    if plant.rate is None:
+        if on:
+            inc = plant.up * dt
+        elif plant.armed is not None and tags.get(plant.armed, False):
+            inc = plant.down * dt
+        else:
+            return None
+
+        def raw(v: Any) -> Any:
+            return v + inc
+
+    else:
+        if not on:
+            return None
+        rate = plant.rate
+        toward = plant.toward
+        if isinstance(toward, Tag):
+            toward = tags.get(toward.name, toward.default)
+
+        def raw(v: Any) -> Any:
+            return v + rate * (toward - v) * dt
+
+    tag = plant.tag
+
+    if tag.type is TagType.REAL:
+        # The plain form of the one below, as a walk runs it once per skipped scan.
+        def real_step(v: Any) -> Any:
+            value = raw(v)
+            return value if -REAL_MAX <= value <= REAL_MAX else None
+
+        return real_step
+
+    def step(v: Any) -> Any:
+        value = raw(v)
+        if value != value or _math_out_of_range_for_dest(value, tag, "decimal"):
+            return None
+        return _truncate_to_tag_type(value, tag)
+
+    return step
+
+
+def _analog_bounds(
+    plant: _AnalogFeedback,
+    ctx: _FoldContext,
+    state: Any,
+    extra_comparisons: Mapping[str, tuple[tuple[str, Any], ...]] | None,
+) -> list[tuple[str, float]] | None:
+    """The comparisons read on *plant*, resolved in *state* (``None``: unresolvable)."""
+    cmps = ctx.comparisons.get(plant.name, ())
+    if extra_comparisons:
+        cmps = cmps + tuple(extra_comparisons.get(plant.name, ()))
+    resolved: list[tuple[str, float]] = []
+    for form, operand in cmps:
+        k = _resolve_num(operand, state)
+        if k is None:
+            return None
+        resolved.append((form, k))
+    return resolved
+
+
+def _analog_walk(
+    step: Callable[[Any], Any],
+    v: Any,
+    n: int,
+    bounds: Sequence[tuple[str, float]],
+) -> int | None:
+    """The first of the next *n* scans that reads a crossed comparison on the value.
+
+    A plant runs before the main pass, so scan ``i`` reads the value its own
+    plant pass left.  Leaving the value's range counts, as that scan sets a fault
+    flag.  ``None``: no such scan.
+    """
+    truths = [(form, k, _cmp_truth(v, form, k)) for form, k in bounds]
+    for i in range(1, n + 1):
+        v = step(v)
+        if v is None:
+            return i
+        for form, k, truth in truths:
+            if _cmp_truth(v, form, k) != truth:
+                return i
+    return None
+
+
+def _analog_position(step: Callable[[Any], Any], v: Any, n: int) -> Any:
+    """The value after *n* scans (within the range :func:`_analog_walk` certified)."""
+    for _ in range(n):
+        v = step(v)
+    return v
+
+
 def _do_fold(
     runner: PLC,
     skip: int,
@@ -4341,6 +4660,8 @@ def _do_fold(
     capture_kernel_scan: _CaptureDecision = False,
     capture_sink: Callable[[int, ConditionViewCapture], None] | None = None,
     timer_landing: Sequence[tuple[str, int, float, float]] = (),
+    analog_landing: Sequence[tuple[str, Any]] = (),
+    ordinary_dt: bool = False,
 ) -> tuple[tuple[str, Any], ...]:
     """Fold ``skip`` pure-accumulation scans into one real step.
 
@@ -4357,6 +4678,10 @@ def _do_fold(
     memory) resolves as it would stepping.  It commits one normal step later,
     at ``T0 + skip * dt``.
 
+    With *ordinary_dt* (an analog plant fires, see :class:`_AnalogFeedback`) it
+    also runs at the ordinary ``dt``: *timer_landing* then only positions each
+    timer, and *analog_landing* each plant, where the last folded scan finds it.
+
     Uses ``_run_single_scan(consume_pause_request=False)`` so the caller
     retains control over pause consumption.
     """
@@ -4372,6 +4697,7 @@ def _do_fold(
         # them twice), and a timer in the synthesis plant runs before the
         # patch drain.
         edits: dict[str, Any] = dict(patches)
+        edits.update(analog_landing)
         if timer_landing:
             edits.update({name: acc for name, acc, _fi, _fo in timer_landing})
             positioned = positioned.set(
@@ -4384,7 +4710,7 @@ def _do_fold(
         _replace_tip_state(runner, positioned, edits or None)
         runner._landing_commit_dt = ctx.normal_dt
         runner._landing_scan_id = pre_landing.scan_id + skip
-    runner._dt_override_for_next_scan = skip * ctx.normal_dt
+    runner._dt_override_for_next_scan = ctx.normal_dt if ordinary_dt else skip * ctx.normal_dt
     try:
         runner._run_single_scan(
             consume_pause_request=False,
@@ -4580,6 +4906,8 @@ class _FoldProbe:
     mods: tuple[Any, ...] = ()
     # The edge sites whose memory was on before the probe scan.
     edges: frozenset[str] = frozenset()
+    # Each of ``ctx.analog``'s values before the probe scan.
+    analog: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -4608,6 +4936,10 @@ class _FoldPlan:
     # ``(acc_name, acc, frac_in, frac_out)`` timer edits around the landing
     # scan (see _timer_landing).
     timer_landing: tuple[tuple[str, int, float, float], ...] = ()
+    # ``(name, value)`` analog plant edits, and whether a plant fires, so that
+    # the landing scan must run at the ordinary dt (see _AnalogFeedback).
+    analog_landing: tuple[tuple[str, Any], ...] = ()
+    ordinary_dt: bool = False
 
 
 class _OrdinaryFoldStrategy:
@@ -4695,6 +5027,7 @@ class _OrdinaryFoldStrategy:
             timers=timers,
             mods=tuple(state.tags.get(mw.name) for mw in self.ctx.modwrap),
             edges=edge_memory_on(state, self.ctx.clock_edge_memory),
+            analog=tuple(state.tags.get(a.name, a.default) for a in self.ctx.analog),
         )
 
     def plan(
@@ -4816,9 +5149,18 @@ class _OrdinaryFoldStrategy:
             rtc_gap = self._rtc_gap(state, probe, rtc_at, skip, forced)
             if rtc_gap is not None:
                 skip = min(skip, rtc_gap)
+        analog_landing: tuple[tuple[str, Any], ...] = ()
+        ordinary_dt = False
+        if skip is not None and self.ctx.analog:
+            window = self._analog_window(state, probe, skip, unmodeled, forced)
+            if window is None:
+                return None
+            skip, ordinary_dt, analog_landing = window
         if skip is None or skip < min_skip:
             return None
-        timer_landing = _timer_landing(timer_moves, skip, self.ctx.normal_dt)
+        timer_landing = _timer_landing(
+            timer_moves, skip, self.ctx.normal_dt, ordinary_dt=ordinary_dt
+        )
         if timer_landing is None:
             return None
         return _FoldPlan(
@@ -4827,7 +5169,64 @@ class _OrdinaryFoldStrategy:
             promoted=promoted,
             pre_fold_timestamp=state.timestamp,
             timer_landing=timer_landing,
+            analog_landing=analog_landing,
+            ordinary_dt=ordinary_dt,
         )
+
+    def _analog_window(
+        self,
+        state: SystemState,
+        probe: _FoldProbe,
+        skip: int,
+        unmodeled: Collection[str],
+        forced: Collection[str] | None,
+    ) -> tuple[int, bool, tuple[tuple[str, Any], ...]] | None:
+        """Bound a window of *skip* scans by the analog plants, and place them.
+
+        A plant at rest or settled (a scan leaves its value alone) only asks for
+        a landing at the ordinary ``dt`` if it fires.  One still moving is walked:
+        the probe must have run the recurrence, every reader must be a comparison
+        the crossing set places, and the window ends before the first scan that
+        would read one crossed.  Returns the window, whether a plant fires, and
+        each moving plant's value before the landing scan; ``None`` to decline.
+        """
+        ctx = self.ctx
+        dt = ctx.normal_dt
+        ordinary_dt = False
+        moving: list[tuple[_AnalogFeedback, Callable[[Any], Any], Any]] = []
+        for plant, before in zip(ctx.analog, probe.analog, strict=True):
+            if not plant.inputs.isdisjoint(self.exclude):
+                return None  # the plateau guard does not hold what the plant reads
+            after = state.tags.get(plant.name, plant.default)
+            step = _analog_recurrence(plant, state.tags, dt)
+            if step is None:
+                if after != before:
+                    return None
+                continue
+            ordinary_dt = True
+            if forced is not None and plant.name in forced:
+                continue  # pinned: a scan reads the force whatever the plant wrote
+            if step(before) != after:
+                return None  # another writer, or a value the model does not match
+            if step(after) == after:
+                continue
+            if plant.name in unmodeled:
+                return None
+            bounds = _analog_bounds(plant, ctx, state, self.extra_comparisons)
+            if bounds is None:
+                return None
+            if any(_cmp_truth(before, f, k) != _cmp_truth(after, f, k) for f, k in bounds):
+                return None
+            first = _analog_walk(step, after, skip, bounds)
+            if first is not None:
+                skip = first - 1
+            moving.append((plant, step, after))
+        landing = tuple(
+            (plant.name, _analog_position(step, after, skip - 1))
+            for plant, step, after in moving
+            if skip > 1
+        )
+        return skip, ordinary_dt, landing
 
     def _sole_timer_writes(
         self, forced: Collection[str] | None, acc_writes: Mapping[str, int] | None
@@ -4935,6 +5334,8 @@ class _OrdinaryFoldStrategy:
             capture_kernel_scan=capture_kernel_scan,
             capture_sink=capture_sink,
             timer_landing=plan.timer_landing,
+            analog_landing=plan.analog_landing,
+            ordinary_dt=plan.ordinary_dt,
         )
         return self.finish(runner._state, probe, plan, patches=patches)
 

@@ -21,6 +21,7 @@ from pyrung.core.tag import (
     Tag,
     TagType,
     _normalize_choices,
+    refuse_system_point_in_block,
 )
 
 if TYPE_CHECKING:
@@ -582,6 +583,8 @@ class Block:
         field_name: str,
         new_value: Any,
     ) -> None:
+        if field_name == "name":
+            refuse_system_point_in_block(new_value, self.name, addr)
         entry = self._slot_config.get(addr)
         if entry is None:
             entry = SlotConfig()

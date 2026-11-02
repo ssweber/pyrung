@@ -535,7 +535,7 @@ class CompiledPLC:
         self._sync_runtime_flags_from_state()
         return self._state
 
-    def step_replay(self, *, logical_scans: int = 1) -> None:
+    def step_replay(self, *, logical_scans: int = 1, ordinary_dt: bool = False) -> None:
         """Run one lightweight replay step, possibly as a certified macro scan.
 
         ``logical_scans > 1`` is reserved for the shared fold proof.  The
@@ -543,6 +543,8 @@ class CompiledPLC:
         memory land where the equivalent ordinary scans would have left them.
         The macro scan resolves time-derived reads (system clocks, ``rtc.*``)
         at the timestamp the last of those ordinary scans would have read.
+        With *ordinary_dt* it executes at the normal ``dt`` instead, standing for
+        only the last of them (see ``fold._AnalogFeedback``).
         """
         if logical_scans < 1:
             raise ValueError("logical_scans must be >= 1")
@@ -550,6 +552,7 @@ class CompiledPLC:
 
         normal_dt = self._dt
         effective_dt = logical_scans * normal_dt
+        scan_dt = normal_dt if ordinary_dt else effective_dt
         scan_time_extrema = {
             name: self._kernel.tags.get(name, _MISSING)
             for name in (
@@ -557,7 +560,7 @@ class CompiledPLC:
                 system.sys.scan_time_max_ms.name,
             )
         }
-        self._dt = effective_dt
+        self._dt = scan_dt
         start_timestamp = self._kernel.timestamp
         # The last of the folded ordinary scans starts ``logical_scans - 1``
         # normal steps in; this one macro scan stands in for it.
@@ -574,8 +577,8 @@ class CompiledPLC:
         try:
             self._system_runtime.on_scan_start(scan_ctx)
 
-            if self._kernel.memory.get("_dt") != effective_dt:
-                ctx.set_memory("_dt", effective_dt)
+            if self._kernel.memory.get("_dt") != scan_dt:
+                ctx.set_memory("_dt", scan_dt)
 
             self._materialize_system_tags(ctx)
 

@@ -467,6 +467,7 @@ def cycle_fold_until(
     """
     from pyrung.core.fold import (
         _acc_totals,
+        _analog_recurrence,
         _harness_nearest_scan,
         _OrdinaryFoldStrategy,
         _replace_tip_state,
@@ -535,8 +536,11 @@ def cycle_fold_until(
         return _fall_back_to_runner_fold()
     max_period = max(max_period, period_multiple_of * 4)
 
-    monotone_allowed = frozenset(
-        s.acc_name for s in fold_ctx.sources if s.kind == "up" and not s.bidir
+    # A plant writes its own value every scan, so even on an accumulator it is no
+    # constant rate: it stays out, and a jump never extrapolates it.
+    monotone_allowed = (
+        frozenset(s.acc_name for s in fold_ctx.sources if s.kind == "up" and not s.bidir)
+        - fold_ctx.analog_names
     )
     monotone_quanta = {
         source.acc_name: source.unit.dt_to_units(dt)
@@ -545,19 +549,27 @@ def cycle_fold_until(
     }
     # Classify over the runner fold's *significant* set: drop the tags it already
     # treats as don't-care for the plateau (resolved-on-read-driven frozen writes,
-    # unread churn, harness feedback) so they don't spuriously break the cycle.
+    # unread churn) so they don't spuriously break the cycle.
     # Accumulators stay in — they are the monotone coordinates.
     # Clock mirrors are ignored too: the RTC bound below keeps a jump inside
     # one tick unless their readers are proven off (fold._TimeMirrors).
-    ignore = fold_ctx.frozen_writes | fold_ctx.churn_excluded | fold_ctx.profile_fb_names
+    # A plant stays in: one that moves does not repeat, so no cycle is found.
+    ignore = fold_ctx.frozen_writes | fold_ctx.churn_excluded
     if fold_ctx.time_mirrors is not None:
         ignore = ignore | fold_ctx.time_mirrors.names
     significant_keys = (frozenset(plc.state.tags) - ignore) | {_EDGE_MEMORY_KEY}
+    tags_seen = len(plc.state.tags)
     # A jump runs no scan: an ignored tag other than a frozen write keeps its
     # pre-jump value until the next scan rebuilds it, so the jumped tip is then
     # not the exact state of its scan.
     jump_exact = not (ignore - fold_ctx.frozen_writes)
-    ordinary = _OrdinaryFoldStrategy(fold_ctx, extra_comparisons, extra_unmodeled)
+    # A plant the predicate is declared to read, with no comparison to end a window on.
+    declared_plants = (predicate_reads or frozenset()) & fold_ctx.analog_names
+    ordinary = _OrdinaryFoldStrategy(
+        fold_ctx,
+        extra_comparisons,
+        extra_unmodeled | (declared_plants - (extra_comparisons or {}).keys()),
+    )
     trace_reads = predicate_reads is None
 
     def judge(state: SystemState) -> bool:
@@ -630,7 +642,8 @@ def cycle_fold_until(
             enabled = en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
             if enabled:
                 return False  # an analog coupling is still driving its ramp
-        return True
+        # A disabled ramp can still be decaying.
+        return all(_analog_recurrence(a, snap, dt) is None for a in fold_ctx.analog)
 
     def _within_budget() -> bool:
         used = kernel_scans if kernel_budget else plc.state.scan_id - start_scan
@@ -694,6 +707,11 @@ def cycle_fold_until(
                 _EDGE_MEMORY_KEY, edge_memory_on(plc.state)
             )
         )
+        # A slot a scan touches for the first time joins the state here.  Older
+        # anchors read it as absent, which no period can explain.
+        if len(plc.state.tags) != tags_seen:
+            tags_seen = len(plc.state.tags)
+            significant_keys = significant_keys | (frozenset(plc.state.tags) - ignore)
         ring_writes.append(plc._last_acc_writes)
         if len(ring) > ring_cap:
             del ring[0]

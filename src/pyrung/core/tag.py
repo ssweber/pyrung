@@ -105,6 +105,17 @@ def _normalize_choices(
     return normalized or None
 
 
+def refuse_system_point_in_block(name: str, block_name: str, addr: int) -> None:
+    """Raise if *name* is a system point: the runtime owns it, and no block holds one."""
+    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+
+    if name in SYSTEM_TAGS_BY_NAME:
+        raise ValueError(
+            f"Cannot put {name!r} in {block_name}[{addr}]: the name is reserved for "
+            "system points, and a system point can't live in a block."
+        )
+
+
 @dataclass(frozen=True)
 class MappingEntry:
     """Logical-to-hardware mapping declaration used by TagMap."""
@@ -375,11 +386,13 @@ class Tag:
         ``block[addr]`` returns this tag directly.  The registration
         survives ``Block.reset()`` (which only clears slot overrides
         and the tag cache), so cached module imports remain correct
-        across test boundaries.
+        across test boundaries.  A system point can't be one: see
+        `refuse_system_point_in_block`.
         """
         block = getattr(target, "_pyrung_block", None)
         if block is not None:
             addr: int = getattr(target, "_pyrung_block_addr")  # noqa: B009
+            refuse_system_point_in_block(self.name, block.name, addr)
             existing = block._mapped_tags.get(addr)
             if existing is not None and existing is not self and existing.name != self.name:
                 raise ValueError(

@@ -6,6 +6,12 @@ from pyrung.click import ClickBlocks, TagMap
 blocks = ClickBlocks()
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = blocks
 
+
+def _rests_at_0(values: range) -> dict[int, str]:
+    """Hand-written index choices: a regen drops them, and test_pointer_ranges.py says so."""
+    return {0: "Rest", **{value: str(value) for value in values}}
+
+
 # --- Tags ---
 td.slot(11, name="A_CTmr_Prd_Clearing_Th")
 td.slot(13, name="A_CTmr_Prd_Starting_Th")
@@ -377,10 +383,11 @@ ds.slot(117, name="Ref_State_COMPLETED", default=17)
 ds.slot(121, name="z_AckAlarm_ack_idx")
 ds.slot(122, name="z_WarnAlarm_ack_idx")
 ds.slot(123, name="z_AckAndClearAllAlm_loop")
-ds.slot(124, name="z_AckAndClearAllAlm_idx")
+# Leaves these when z_AckAndClearAllAlm_loop wraps, about 32667 scans into Clearing.
+ds.slot(124, name="z_AckAndClearAllAlm_idx", choices=_rests_at_0(range(201, 301)))
 ds.slot(125, name="z_AckAndClearAllAlm_eval")
 ds.slot(131, name="sm__loopindex")
-ds.slot(132, name="sm_JMP__target_ds_idx")
+ds.slot(132, name="sm_JMP__target_ds_idx", choices=_rests_at_0(range(150, 168)))
 ds.slot(133, name="sm__where2jump")
 ds.slot(134, name="sm_isCmdValid__dh_base")
 ds.slot(141, name="sm_isStateEnbl_mask_idx")
@@ -403,16 +410,16 @@ ds.slot(164, name="sm__JUMPUNSUSPNDNG2EXEC", default=6)
 ds.slot(165, name="sm__JUMPRESETTING2IDLE", default=4)
 ds.slot(166, name="sm__JUMPCOMPLTNG2COMPLTD", default=17)
 ds.slot(167, name="sm__JUMPCOMPLETED2IDLE", default=4)
-ds.slot(171, name="AlmHistorian__id_idx")
-ds.slot(172, name="AlmHistorian__subid_idx")
-ds.slot(173, name="AlmHistorian__stepid_idx")
-ds.slot(174, name="AlmHistorian__val_idx")
-ds.slot(175, name="AlmHistorian__cat_idx")
-ds.slot(176, name="AlmHistorian__MMDD_idx")
-ds.slot(177, name="AlmHistorian__hhmm_idx")
-ds.slot(178, name="AlmHistorian__ss_idx")
-ds.slot(179, name="AlmHistorian__ack_idx")
-ds.slot(180, name="AlmHistorian__status_idx")
+ds.slot(171, name="AlmHistorian__id_idx", choices=_rests_at_0(range(3001, 3992, 10)))
+ds.slot(172, name="AlmHistorian__subid_idx", choices=_rests_at_0(range(3002, 3993, 10)))
+ds.slot(173, name="AlmHistorian__stepid_idx", choices=_rests_at_0(range(3003, 3994, 10)))
+ds.slot(174, name="AlmHistorian__val_idx", choices=_rests_at_0(range(3004, 3995, 10)))
+ds.slot(175, name="AlmHistorian__cat_idx", choices=_rests_at_0(range(3005, 3996, 10)))
+ds.slot(176, name="AlmHistorian__MMDD_idx", choices=_rests_at_0(range(3006, 3997, 10)))
+ds.slot(177, name="AlmHistorian__hhmm_idx", choices=_rests_at_0(range(3007, 3998, 10)))
+ds.slot(178, name="AlmHistorian__ss_idx", choices=_rests_at_0(range(3008, 3999, 10)))
+ds.slot(179, name="AlmHistorian__ack_idx", choices=_rests_at_0(range(3009, 4000, 10)))
+ds.slot(180, name="AlmHistorian__status_idx", choices=_rests_at_0(range(201, 301)))
 ds.slot(181, name="AlmHistorian_Id2Record")
 ds.slot(182, name="AlmHistorian_ManualRecor")
 ds.slot(183, name="AlmHistorian__bit2status")
