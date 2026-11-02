@@ -60,9 +60,7 @@ with rung():
 
 The count can be a positive literal or a tag, read once when the loop starts.
 As on CLICK, a tag count is read as an unsigned 16-bit number: -1 runs 65535
-iterations (a scan of a second or more on a CLICK), and 0 runs none. Whether
-CLICK runs 0 or 65536 iterations for a count of 0 is not yet confirmed on
-hardware; pyrung runs none (`pyrung.core.instruction.control.FOR_ZERO_COUNT_ITERATIONS`).
+iterations (a scan of a second or more on a CLICK), and 0 runs none.
 A `Real` count holding Inf or NaN runs no iteration and sets
 `system.fault.out_of_range` (SC43), pyrung's choice: a CLICK For takes an
 integer count, so this has no hardware answer.
