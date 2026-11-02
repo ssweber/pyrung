@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from pyrung.core.state import SystemState
 
 # The ring snapshot's coordinate for every edge site's memory (not a tag name).
-_EDGE_MEMORY_KEY = "_edge:*"
+_SCAN_MEMORY_KEY = "_memory:*"
 
 
 @dataclass(frozen=True)
@@ -172,8 +172,7 @@ def detect_cycle(
 
     Requiring the deltas to hold over ``min_repeats`` periods is the
     observe-before-skip guard: a transient that has not yet settled into a clean
-    cycle is rejected, exactly as the runner fold only marks a clock inert after
-    observing a full period unchanged.  ``P = 1`` with an empty *monotone* is the
+    cycle is rejected.  ``P = 1`` with an empty *monotone* is the
     ordinary plateau; ``P = 1`` with one monotone tag is the ordinary accumulator
     ramp — both already handled by the runner fold, so callers invoke this only
     once that fold has stalled.
@@ -239,17 +238,14 @@ def _bounds_hold_through_period(
     fold_ctx: _FoldContext,
     observed: Sequence[Mapping[str, Any]],
     forced: Collection[str],
-    callbacks: bool,
 ) -> bool:
     """Whether every scan of a period reads the bounds its anchor state shows.
 
     A jump bounds a coordinate by its preset and comparison operands, and a drum
     picks its preset by its step, all from one state.  That state stands for the
     period only if they hold still through it (a step swapped each scan times to
-    two presets), and shows what a reader read only if nothing writes around it.
-    A forced step can hide a write above the drum.  So can a callback's patch,
-    which the scan drains before a reader and overwrites below it, on any input
-    with a writer: the snapshots show only the writer's value.
+    two presets), and shows what a reader read only if nothing writes around it:
+    a forced step can hide a write above the drum.
     """
     from pyrung.core.fold import _operand_tags
 
@@ -258,11 +254,9 @@ def _bounds_hold_through_period(
         names.update(_operand_tags(operand))
     step = src.step_name
     if step is not None:
-        if step in forced or (callbacks and step in fold_ctx.steps_written_outside):
+        if step in forced:
             return False
         names.add(step)
-    if callbacks and not fold_ctx.written_inputs.keys().isdisjoint(names):
-        return False
     if not observed:
         return True
     first = observed[0]
@@ -289,20 +283,18 @@ def _monotone_read_surface(
     *,
     observed: Sequence[Mapping[str, Any]] = (),
     forced: Collection[str] = (),
-    callbacks: bool = False,
     writes: Mapping[str, int] | None = None,
 ) -> tuple[int | None, int] | None:
     """Partition the monotone coordinates by their readable future.
 
     A coordinate some read reaches outside the comparisons (the program's,
-    ``fold_ctx.unmodeled``, or the predicate's, *read_sources*; ``None`` when
+    ``fold_ctx.unmodeled``, or the stop condition's, *read_sources*; ``None`` when
     the predicate read something unknowable) fails closed.  So does one whose
     bounds, resolved from *state*, may not be what its readers read: see
     :func:`_bounds_hold_through_period`.  *observed* is the ring of snapshots
-    behind the cycle, *forced* the forced tags, and *callbacks* whether a
-    ``when().do()`` is active.  *writes* is the most writes per scan the observed
-    scans made of each input a rung may read between writes: a proven period
-    repeats those scans, so they stand for the ones the jump skips.
+    behind the cycle and *forced* the forced tags.  *writes* is the most writes per
+    scan the observed scans made of each input a rung may read between writes: a
+    proven period repeats those scans, so they stand for the ones the jump skips.
 
     For each coordinate, its read surface is the preset (Done flip) plus every
     comparison the program or the armed predicate reads on it.  A coordinate
@@ -350,7 +342,7 @@ def _monotone_read_surface(
         cmps = fold_ctx.comparisons.get(tag, ())
         if extra_comparisons:
             cmps = cmps + extra_comparisons.get(tag, ())
-        if not _bounds_hold_through_period(src, cmps, fold_ctx, observed, forced, callbacks):
+        if not _bounds_hold_through_period(src, cmps, fold_ctx, observed, forced):
             return None
         cur = totals.get(tag)
         if isinstance(cur, bool) or not isinstance(cur, (int, float)):
@@ -460,7 +452,11 @@ def cycle_fold_until(
     fresh observation). *extra_unmodeled* names coordinates the predicate reads
     other than by a comparison; with undeclared *predicate_reads* its reads are
     traced at every judgement (``fold._traced_call``), and either keeps a jump
-    from carrying a coordinate it read. Fails closed everywhere it cannot certify a jump. The
+    from carrying a coordinate it read.  Declared reads protect themselves: with no
+    *fold_ctx* the context is built to guard them, and a given context that moves
+    one the predicate has no comparison for gets the predicate traced instead.  Any
+    active ``when()`` or monitor stops the jumps (see ``fold._scan_callbacks``).
+    Fails closed everywhere it cannot certify a jump. The
     public work metrics are ``kernel_scans`` and ``macro_folds``, with
     ``logical_scans`` and ``skipped_scans`` derived alongside the diagnostic
     breakdown.
@@ -468,6 +464,7 @@ def cycle_fold_until(
     from pyrung.core.fold import (
         _acc_totals,
         _analog_recurrence,
+        _fold_context_reads,
         _harness_nearest_scan,
         _OrdinaryFoldStrategy,
         _replace_tip_state,
@@ -476,13 +473,22 @@ def cycle_fold_until(
         _scan_callbacks,
         _traced_call,
         _without_soft_rtc_ticks,
-        edge_memory_on,
         fold_run_until,
     )
 
     if fold_ctx is None:
-        fold_ctx = plc._ensure_fold_context()
+        fold_ctx = plc._ensure_fold_context(*_fold_context_reads(predicate_reads or ()))
     assert fold_ctx is not None
+    if predicate_reads is not None:
+        # What the predicate reads that a window moves: a comparison places a source
+        # (a view's comparison is on its source, not on it), any other read of one
+        # bounds a window at its next change, and the rest only a trace can judge.
+        placed = ((extra_comparisons or {}).keys() & fold_ctx.coordinates) - fold_ctx.mirror_names
+        read_sources = fold_ctx.outside_read_sources(predicate_reads - placed)
+        if read_sources is None:
+            predicate_reads = None
+        else:
+            extra_unmodeled = frozenset(extra_unmodeled) | read_sources
     mirrors = fold_ctx.time_mirrors
     if mirrors is not None and (predicate_reads is None or predicate_reads & mirrors.names):
         # The predicate may read a clock copy (its reads are undeclared, or
@@ -516,14 +522,10 @@ def cycle_fold_until(
     # so the observed window spans each clock's whole cycle (its net effect is
     # captured) and every whole-period jump preserves each clock's phase (exact
     # timestamp + same phase ⇒ rise()/fall() memory stays consistent across the
-    # skip).  This is the runtime form of the soft-clock partition: instead of
-    # statically proving an edge inert, we observe a full clock cycle and confirm
-    # the net change is boundary-stable or a certified accumulator.
-    read_hps = [
-        *fold_ctx.clock_half_periods,
-        *(hp for _n, hp in fold_ctx.soft_clocks),
-        *(hp for _n, hp, _a in fold_ctx.sat_clocks),
-    ]
+    # skip).  We observe a full clock cycle and confirm the net change is
+    # boundary-stable or a certified accumulator.  An indicator's clock bounds no
+    # window but still aligns the period: that keeps a jump exact for the indicator.
+    read_hps = [*fold_ctx.clock_half_periods, *fold_ctx.indicator_half_periods]
     period_multiple_of = 1
     for hp in read_hps:
         full_scans = 2.0 * hp / dt
@@ -548,28 +550,22 @@ def cycle_fold_until(
         if source.acc_name in monotone_allowed and source.timed and source.unit is not None
     }
     # Classify over the runner fold's *significant* set: drop the tags it already
-    # treats as don't-care for the plateau (resolved-on-read-driven frozen writes,
-    # unread churn) so they don't spuriously break the cycle.
+    # treats as don't-care for the plateau (clock-driven indicators, unread churn)
+    # so they don't spuriously break the cycle.
     # Accumulators stay in — they are the monotone coordinates.
     # Clock mirrors are ignored too: the RTC bound below keeps a jump inside
     # one tick unless their readers are proven off (fold._TimeMirrors).
     # A plant stays in: one that moves does not repeat, so no cycle is found.
-    ignore = fold_ctx.frozen_writes | fold_ctx.churn_excluded
+    ignore = fold_ctx.indicators | fold_ctx.churn_excluded
     if fold_ctx.time_mirrors is not None:
         ignore = ignore | fold_ctx.time_mirrors.names
-    significant_keys = (frozenset(plc.state.tags) - ignore) | {_EDGE_MEMORY_KEY}
+    significant_keys = (frozenset(plc.state.tags) - ignore) | {_SCAN_MEMORY_KEY}
     tags_seen = len(plc.state.tags)
-    # A jump runs no scan: an ignored tag other than a frozen write keeps its
+    # A jump runs no scan: an ignored tag other than an indicator keeps its
     # pre-jump value until the next scan rebuilds it, so the jumped tip is then
     # not the exact state of its scan.
-    jump_exact = not (ignore - fold_ctx.frozen_writes)
-    # A plant the predicate is declared to read, with no comparison to end a window on.
-    declared_plants = (predicate_reads or frozenset()) & fold_ctx.analog_names
-    ordinary = _OrdinaryFoldStrategy(
-        fold_ctx,
-        extra_comparisons,
-        extra_unmodeled | (declared_plants - (extra_comparisons or {}).keys()),
-    )
+    jump_exact = not (ignore - fold_ctx.indicators)
+    ordinary = _OrdinaryFoldStrategy(fold_ctx, extra_comparisons, extra_unmodeled)
     trace_reads = predicate_reads is None
 
     def judge(state: SystemState) -> bool:
@@ -607,8 +603,8 @@ def cycle_fold_until(
     # settle before the plateau test, and ordinary arbitration runs immediately
     # before the first cycle-certification attempt on that same scan.
     since_ordinary_probe = 0
-    active_scan_callbacks, blocking_callbacks = _scan_callbacks(plc)
-    ordinary_eligible = not active_scan_callbacks
+    _, active_whens, active_monitors = _scan_callbacks(plc, fold_ctx)
+    ordinary_eligible = not (active_whens or active_monitors)
     if kernel_budget is None:
         kernel_budget = bool(plc._synthesis is not None and getattr(plc._synthesis, "holds", ()))
     start_scan = plc.state.scan_id
@@ -699,12 +695,12 @@ def cycle_fold_until(
         # corrective rungs do not turn a live timer into a false sterile cycle.
         # The persistent-map update keeps the immutable tag image structurally
         # shared and replaces only the owner-coordinate readings.
-        # Edge memory joins the snapshot as one coordinate: a period whose
-        # anchors differ in any edge site's memory is no limit cycle (a jump
-        # would land with memory the skipped scans would have changed).
+        # Scan memory joins the snapshot as one coordinate: a period whose anchors
+        # differ in any of it is no limit cycle (a jump would land with memory the
+        # skipped scans would have changed).
         ring.append(
             plc.state.tags.update(_acc_totals(plc.state, fold_ctx.sources)).set(
-                _EDGE_MEMORY_KEY, edge_memory_on(plc.state)
+                _SCAN_MEMORY_KEY, fold_ctx.held_memory(plc.state)
             )
         )
         # A slot a scan touches for the first time joins the state here.  Older
@@ -718,7 +714,9 @@ def cycle_fold_until(
             del ring_writes[0]
 
         since_detect += 1
-        if since_detect < detect_every:
+        if since_detect < detect_every or active_whens:
+            # A when() acts on what the ring may not show (a patch a writer overwrites
+            # before the snapshot), so it can prove no cycle, sterile or not.
             continue
         since_detect = 0
 
@@ -746,10 +744,9 @@ def cycle_fold_until(
                 plc.state,
                 fold_ctx,
                 extra_comparisons,
-                ordinary.predicate_unmodeled(),
+                ordinary.read_coordinates(),
                 observed=ring[-(cyc.period * min_repeats + 1) :],
                 forced=plc._input_overrides.forces_mutable.keys(),
-                callbacks=active_scan_callbacks,
                 writes=_most_writes_per_scan(
                     ring_writes[-(cyc.period * min_repeats + 1) :],
                     fold_ctx.inputs_between_writes.keys(),
@@ -852,8 +849,8 @@ def cycle_fold_until(
                 break
             room = (hi - value) // per_period if per_period > 0 else (value - lo) // -per_period
             periods_to_jump = min(periods_to_jump, room)
-        if blocking_callbacks:
-            # A pause, snapshot or monitor must be judged on every scan.
+        if active_monitors:
+            # A monitor must be judged on every scan.
             continue
         if periods_to_jump < 1:
             continue

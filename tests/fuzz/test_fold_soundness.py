@@ -1,25 +1,19 @@
-"""Fold soundness fuzzer — saturated-heartbeat and frozen-rung shapes.
+"""Fold soundness fuzzer: saturated-heartbeat and stable-input shapes.
 
 **Saturated heartbeat:**  A system clock gating a rung that reads an accumulator
-through a comparison is exactly the family `_runtime_soft_clocks` promotes soft
-once the comparison saturates (`fold._comparisons_saturated`).  Before saturation
-the clock must stay bound (every edge honored); after, its edges may be skipped —
-but only while the gated output stays frozen, which the observe-before-skip
-plateau guard re-confirms each window.
+through a comparison that saturates partway up the ramp.  The clock ends every
+window, before and after the comparison settles.
 
-**Frozen-rung writes:**  A clock-gated rung whose inputs are *structurally*
-unreachable from any varying tag (accumulators, churn, etc.), and whose writes
-are read only by rungs after it, has those writes excluded from the plateau
-guard (``_frozen_rung_writes``): the landing scan rebuilds their exact stepped
-value, so clock edges no longer break the plateau window.  Every tag, frozen or
-not, must still be bit-equal to scan-by-scan.
+**Stable-input rungs:**  Clock-gated rungs over external inputs beside one over
+the accumulator.  None is an indicator (an edge contact remembers), so every clock
+edge ends a window; every tag must still be bit-equal to scan-by-scan.
 
 Both families compare the whole tag image exactly, timer accumulators
 included: a fold replays each timer's per-scan carry recurrence.
 
-Reproducer on failure: the drawn ``spec`` is the reproducer — it is printed via
+Reproducer on failure: the drawn ``spec`` is the reproducer: it is printed via
 ``note`` and embedded in the assertion message, and ``_build(spec)`` /
-``_build_frozen(spec)`` reconstructs the exact program.
+``_build_stable(spec)`` reconstructs the exact program.
 """
 
 from __future__ import annotations
@@ -42,7 +36,7 @@ _BODY = ["calc", "coil"]
 @st.composite
 def _heartbeat_spec(draw: st.DrawFn) -> dict:
     """A saturated-heartbeat program: a ramping timer/counter, a clock-gated
-    rung reading its accumulator through one comparison, and a frozen-input
+    rung reading its accumulator through one comparison, and a stable-input
     body.  The threshold sits strictly below the preset so the comparison
     saturates partway up the ramp (the interesting window)."""
     src = draw(st.sampled_from(_SRC))
@@ -171,24 +165,23 @@ def test_saturated_heartbeat_fold_is_bit_equal() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Frozen-rung write exclusion
+# Rungs over stable inputs
 # ---------------------------------------------------------------------------
 
-_FROZEN_BODY = ["calc", "coil"]
-_N_FROZEN = [1, 2, 3]
+_STABLE_BODY = ["calc", "coil"]
+_N_STABLE = [1, 2, 3]
 
 
 @st.composite
-def _frozen_write_spec(draw: st.DrawFn) -> dict:
-    """A program mixing frozen and non-frozen clock-gated rungs.
+def _stable_input_spec(draw: st.DrawFn) -> dict:
+    """A program mixing stable-input and accumulator-reading clock-gated rungs.
 
     - A ramping timer/counter advancing to Done.
     - One clock-gated rung reading the accumulator through a comparison
-      (non-frozen — makes the clock hard).
-    - One or more clock-gated rungs reading only external inputs (frozen).
+      (its clock ends every window).
+    - One or more clock-gated rungs reading only external inputs.
 
-    The frozen rungs' writes are excluded from the plateau guard; non-frozen
-    tags must stay bit-equal to scan-by-scan.
+    Every tag must stay bit-equal to scan-by-scan.
     """
     src = draw(st.sampled_from(_SRC))
     if src == "timer":
@@ -196,7 +189,7 @@ def _frozen_write_spec(draw: st.DrawFn) -> dict:
     else:
         # Counts of the 100 ms clock (a counter counts rising edges).
         preset = draw(st.integers(min_value=20, max_value=200))
-    n_frozen = draw(st.sampled_from(_N_FROZEN))
+    n_stable = draw(st.sampled_from(_N_STABLE))
     return {
         "src": src,
         "preset": preset,
@@ -206,20 +199,20 @@ def _frozen_write_spec(draw: st.DrawFn) -> dict:
         "dt": draw(st.sampled_from([0.005, 0.010, 0.020])),
         "a": draw(st.integers(min_value=0, max_value=50)),
         "b": draw(st.integers(min_value=0, max_value=50)),
-        "n_frozen": n_frozen,
-        "frozen_bodies": [draw(st.sampled_from(_FROZEN_BODY)) for _ in range(n_frozen)],
+        "n_stable": n_stable,
+        "stable_bodies": [draw(st.sampled_from(_STABLE_BODY)) for _ in range(n_stable)],
     }
 
 
-def _build_frozen(spec: dict):
-    """Build a program with mixed frozen/non-frozen clock-gated rungs."""
+def _build_stable(spec: dict):
+    """Build a program with mixed stable-input and accumulator-reading clock-gated rungs."""
     Enable = Bool("Enable", external=True)
     A = Int("A", external=True)
     B = Int("B", external=True)
     AccView = Int("AccView")
     clock_tag = getattr(system.sys, spec["clock"])
 
-    frozen_tags: list[str] = []
+    stable_tags: list[str] = []
 
     with Program(strict=False) as prog:
         if spec["src"] == "timer":
@@ -233,38 +226,38 @@ def _build_frozen(spec: dict):
             with Rung(Enable, system.sys.clock_100ms):
                 count_up(src, spec["preset"]).reset(Reset)
 
-        # Non-frozen rung: reads accumulator → makes clock hard
+        # Reads the accumulator: its clock ends every window
         with Rung(rise(clock_tag), _cmp(src.Acc, spec["form"], spec["threshold"])):
             calc(src.Acc, AccView)
 
-        # Frozen rungs: read only external inputs
-        for i, body in enumerate(spec["frozen_bodies"]):
+        # Read only external inputs
+        for i, body in enumerate(spec["stable_bodies"]):
             if body == "calc":
-                tag = Int(f"Frozen{i}")
-                frozen_tags.append(f"Frozen{i}")
+                tag = Int(f"Stable{i}")
+                stable_tags.append(f"Stable{i}")
                 with Rung(rise(clock_tag)):
                     calc(A + B + i, tag)
             else:
                 tag = Bool(f"FBeat{i}")
-                frozen_tags.append(f"FBeat{i}")
+                stable_tags.append(f"FBeat{i}")
                 with Rung(rise(clock_tag)):
                     out(tag)
 
-    return prog, src.Done, frozenset(frozen_tags)
+    return prog, src.Done, frozenset(stable_tags)
 
 
-def _run_frozen(spec: dict, *, fold: bool) -> dict:
-    prog, done, _frozen = _build_frozen(spec)
+def _run_stable(spec: dict, *, fold: bool) -> dict:
+    prog, done, _stable = _build_stable(spec)
     plc = PLC(prog, dt=spec["dt"])
     plc.patch({"Enable": True, "A": spec["a"], "B": spec["b"]})
     plc.run_until(done, max_cycles=40_000, fold=fold)
     return dict(plc.state.tags)
 
 
-def test_frozen_write_exclusion_is_bit_equal() -> None:
-    """Frozen and non-frozen tags alike must be bit-equal to scan-by-scan."""
+def test_stable_input_rungs_are_bit_equal() -> None:
+    """Every tag must be bit-equal to scan-by-scan."""
 
-    @given(spec=_frozen_write_spec())
+    @given(spec=_stable_input_spec())
     @settings(max_examples=MAX_EXAMPLES, deadline=None)
     @example(
         spec={
@@ -276,13 +269,13 @@ def test_frozen_write_exclusion_is_bit_equal() -> None:
             "dt": 0.010,
             "a": 3,
             "b": 4,
-            "n_frozen": 2,
-            "frozen_bodies": ["calc", "coil"],
+            "n_stable": 2,
+            "stable_bodies": ["calc", "coil"],
         }
     )
     def inner(spec: dict) -> None:
-        folded = _run_frozen(spec, fold=True)
-        stepped = _run_frozen(spec, fold=False)
+        folded = _run_stable(spec, fold=True)
+        stepped = _run_stable(spec, fold=False)
         if folded != stepped:
             diffs = {
                 k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))

@@ -488,21 +488,10 @@ class TestSystemClockFold:
 
 
 # ---------------------------------------------------------------------------
-# Inert resolved-on-read signal fold tests (DESIGN — currently xfail).
-#
-# A resolved-on-read signal (sys.clock_*, sys.scan_clock_toggle,
-# sys.scan_counter) is invisible to the plateau guard, so today reading one
-# either *caps* every fold at the signal's edge (clocks) or *disables* the
-# fold outright (scan-derived).  But a rung gated by such a signal whose body
-# reads only window-frozen state recomputes the *same result* at every edge —
-# it is inert, and the fold should be able to skip past those edges instead of
-# landing on each one.
-#
-# The soundness oracle stays the existing plateau guard: land once per window
-# to flush a pending recompute, and only generalize the observed inertness
-# across the window when the gated rung reads frozen state only.  See the
-# investigation notes for the full design.  These tests assert the *target*
-# behavior and xfail until it lands; the correctness halves already hold today.
+# Resolved-on-read signals (sys.clock_*, sys.scan_clock_toggle,
+# sys.scan_counter) are invisible to the plateau guard.  A rung reading a clock
+# ends the window at each of its edges, unless it only drives an indicator (see
+# test_fold_clock_carriers.py); a scan-derived signal disables the fold outright.
 # ---------------------------------------------------------------------------
 
 
@@ -525,19 +514,17 @@ def _count_kernel_scans(plc: PLC) -> dict[str, int]:
     return counter
 
 
-class TestInertSignalFold:
-    """Fold should skip edges of resolved-on-read signals whose gated rung is
-    inert (recomputes a frozen result), not land on / disable for every one."""
-
-    # ── Phase 1: soft clocks ────────────────────────────────────────────
+class TestResolvedOnReadSignalFold:
+    """A rung reading a resolved-on-read signal: the run lands where stepping
+    does, and still folds between the signal's edges where it can."""
 
     @staticmethod
     def _clock_heartbeat_program(preset_ms: int = 100_000) -> Program:
         """Never-completing timer plateau + a 1 s heartbeat that recomputes a
-        value from frozen external inputs only (the AlarmExtent pattern).
+        value from stable external inputs only (the AlarmExtent pattern).
 
         The timer's Done is read so the plateau has a (far) crossing for the
-        fold to target once the heartbeat clock is confirmed inert."""
+        fold to target."""
         Enable = Bool("Enable", external=True)
         Tmr = Timer.clone("Tmr")
         Done = Bool("Done")
@@ -553,7 +540,7 @@ class TestInertSignalFold:
                 calc(A + B, Extent)
         return prog
 
-    def test_inert_clock_heartbeat_folds_past_edges(self) -> None:
+    def test_clock_heartbeat_folds_between_edges(self) -> None:
         prog = self._clock_heartbeat_program()
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True, "A": 3, "B": 4})
@@ -567,18 +554,15 @@ class TestInertSignalFold:
         plc_nofold.step()
         plc_nofold.run_for(30.0, fold=False)
 
-        # Correctness (holds today): the heartbeat settles Extent to A + B.
+        # The heartbeat settles Extent to A + B.
         assert plc_fold.state.tags["Extent"] == 7
         assert plc_fold.state.tags["Extent"] == plc_nofold.state.tags["Extent"]
-        # Efficiency (fails today): the clock cap currently lands on every
-        # 0.5 s half-period edge (~60 over 30 s, ~2 kernel scans each). An inert
-        # heartbeat should collapse the whole span into a handful of passes.
-        assert counter["n"] <= 12
+        # Each 0.5 s half-period ends a window (~60 over 30 s, a few kernel
+        # scans each), against 3000 scans stepped.
+        assert counter["n"] <= 250
 
-    def test_inert_clock_heartbeat_flushes_after_input_change(self) -> None:
-        # Soundness guard (must hold today AND after): skipping inert edges may
-        # not freeze a stale value.  When the frozen inputs change, the next
-        # window must still land once to flush the pending recompute.
+    def test_clock_heartbeat_flushes_after_input_change(self) -> None:
+        # A later edge recomputes from the changed inputs.
         prog = self._clock_heartbeat_program()
         plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True, "A": 3, "B": 4})
@@ -592,9 +576,8 @@ class TestInertSignalFold:
 
     @staticmethod
     def _mixed_clock_program(preset_ms: int = 100_000) -> Program:
-        """clock_1s read by BOTH an inert recompute and a self-referential
-        tick.  The shared clock must stay 'hard' — the live tick still fires
-        on every edge — so the soft classification is strictly per-clock."""
+        """clock_1s read by BOTH a stable recompute and a self-referential
+        tick: the tick fires on every rising edge."""
         Enable = Bool("Enable", external=True)
         Tmr = Timer.clone("Tmr")
         A = Int("A", external=True)
@@ -605,14 +588,12 @@ class TestInertSignalFold:
             with Rung(Enable):
                 on_delay(Tmr, preset_ms, "ms")
             with Rung(rise(system.sys.clock_1s)):
-                calc(A + B, Extent)  # inert (frozen inputs)
+                calc(A + B, Extent)  # stable inputs
             with Rung(rise(system.sys.clock_1s)):
-                calc(Ticks + 1, Ticks)  # live (self-referential)
+                calc(Ticks + 1, Ticks)  # self-referential
         return prog
 
     def test_clock_shared_by_live_rung_stays_bounded(self) -> None:
-        # Regression guard (must hold today AND after): an over-eager soft
-        # classification would skip edges the live tick needs.
         prog = self._mixed_clock_program()
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True, "A": 3, "B": 4})
@@ -628,242 +609,59 @@ class TestInertSignalFold:
         assert plc_fold.state.tags["Ticks"] == plc_nofold.state.tags["Ticks"]
         assert plc_fold.state.tags["Extent"] == 7
 
-    # ── Phase 2: inert scan_clock_toggle no longer disables fold ─────────
+
+class TestClockBesideAComparison:
+    """A heartbeat clock gating a rung that also reads an accumulator through a
+    comparison.  Its clock ends every window, before and after the comparison
+    settles, and each pulse lands on the scan stepping puts it."""
 
     @staticmethod
-    def _toggle_heartbeat_program(preset_ms: int = 100_000) -> Program:
-        """Timer plateau + a scan_clock_toggle heartbeat over frozen inputs.
-        Reading scan_clock_toggle disables the fold today; an inert recompute
-        should not."""
-        Enable = Bool("Enable", external=True)
-        Tmr = Timer.clone("Tmr")
-        Done = Bool("Done")
-        A = Int("A", external=True)
-        B = Int("B", external=True)
-        Extent = Int("Extent")
-        with Program() as prog:
-            with Rung(Enable):
-                on_delay(Tmr, preset_ms, "ms")
-            with Rung(Tmr.Done):
-                out(Done)
-            with Rung(rise(system.sys.scan_clock_toggle)):
-                calc(A + B, Extent)
-        return prog
+    def _heartbeat(gate: Callable[[Timer], Any]) -> Callable[[], Program]:
+        def build() -> Program:
+            Enable = Bool("Enable", external=True)
+            Tmr = Timer.clone("Tmr")
+            with Program() as prog:
+                with Rung(Enable):
+                    on_delay(Tmr, 1_000_000, "ms")
+                with Rung(rise(system.sys.clock_1s), gate(Tmr)):
+                    out(Bool("Beat"))
+            return prog
 
-    @pytest.mark.xfail(reason="inert scan-toggle fold not yet implemented", strict=True)
-    def test_inert_scan_toggle_does_not_disable_fold(self) -> None:
-        prog = self._toggle_heartbeat_program()
-        plc_fold = PLC(prog, dt=0.010)
-        plc_fold.patch({"Enable": True, "A": 3, "B": 4})
-        plc_fold.step()
-        counter = _count_kernel_scans(plc_fold)
-        plc_fold.run_for(5.0, fold=True)  # 500 scans
+        return build
 
-        # Correctness (holds today): scan-by-scan still settles Extent.
-        assert plc_fold.state.tags["Extent"] == 7
-        # Efficiency (fails today): reading scan_clock_toggle disables the fold
-        # entirely → ~500 kernel scans. Inert recompute should collapse it.
-        assert counter["n"] <= 12
+    @pytest.mark.parametrize("n", [40, 49, 50, 51, 99, 100, 101, 150, 151, 1000])
+    def test_a_pulse_lands_as_stepped_either_side_of_the_threshold(self, n: int) -> None:
+        build = self._heartbeat(lambda tmr: tmr.Acc > 100)
+        _assert_fold_is_exact(build, _scans(n), patch={"Enable": True})
 
-    # ── Phase 3: scan_counter as a virtual monotonic crossing ────────────
+    @pytest.mark.parametrize("threshold", [100, 300, 1000])
+    def test_an_equality_gate_lands_as_stepped(self, threshold: int) -> None:
+        build = self._heartbeat(lambda tmr: tmr.Acc == threshold)
+        _assert_fold_is_exact(build, _scans(400), patch={"Enable": True})
 
-    @staticmethod
-    def _scan_counter_tick_program(preset_ms: int = 100_000, threshold: int = 250) -> Program:
-        """Timer plateau + a tick gated on a single scan_counter crossing.
-        scan_counter is monotonic in scan_id, so ``== threshold`` is a
-        closed-form crossing the fold should land on directly."""
-        Enable = Bool("Enable", external=True)
-        Tmr = Timer.clone("Tmr")
-        Ticks = Int("Ticks")
-        with Program() as prog:
-            with Rung(Enable):
-                on_delay(Tmr, preset_ms, "ms")
-            with Rung(system.sys.scan_counter == threshold):
-                calc(Ticks + 1, Ticks)
-        return prog
+    def test_the_clock_still_bounds_the_window_past_the_threshold(self) -> None:
+        def first_pulse_after_settling(fold: bool) -> int:
+            Beat = Bool("Beat")
+            plc = PLC(self._heartbeat(lambda tmr: tmr.Acc > 100)(), dt=0.010)
+            plc.patch({"Enable": True})
+            plc.step()
+            plc.run_for(5.0, fold=fold)
+            plc.run_until(Beat, max_cycles=1000, fold=fold)
+            return plc.state.scan_id
 
-    @pytest.mark.xfail(reason="scan_counter virtual-crossing fold not yet implemented", strict=True)
-    def test_scan_counter_crossing_folds_to_threshold(self) -> None:
-        prog = self._scan_counter_tick_program(threshold=250)
-        plc_fold = PLC(prog, dt=0.010)
-        plc_fold.patch({"Enable": True})
-        plc_fold.step()
-        counter = _count_kernel_scans(plc_fold)
-        plc_fold.run_for(5.0, fold=True)  # 500 scans; crosses scan_counter == 250
-
-        prog2 = self._scan_counter_tick_program(threshold=250)
-        plc_nofold = PLC(prog2, dt=0.010)
-        plc_nofold.patch({"Enable": True})
-        plc_nofold.step()
-        plc_nofold.run_for(5.0, fold=False)
-
-        # Correctness (holds today): the crossing fires exactly once.
-        assert plc_fold.state.tags["Ticks"] == plc_nofold.state.tags["Ticks"] == 1
-        # Efficiency (fails today): reading scan_counter disables the fold →
-        # ~500 kernel scans. The crossing arithmetic should land near scan 250.
-        assert counter["n"] <= 12
-
-
-class TestComparisonsSaturated:
-    """Step 1 primitive: `_comparisons_saturated` decides when a monotone
-    source's contribution to a set of comparisons is frozen for the rest of the
-    window (every read comparison has already made its final transition).
-
-    This is the value-aware test the clock partition is currently blind to: an
-    accumulator that has crossed every threshold a rung reads on it stops being
-    'live' for that rung even though its raw value keeps changing."""
-
-    def _saturated(self, progress, kind, cmps):
-        from pyrung.core.fold import _comparisons_saturated
-
-        return _comparisons_saturated(progress, kind, cmps)
-
-    def test_up_gt_already_crossed_is_saturated(self) -> None:
-        # Tmr.Acc at 300, rung reads `Acc > 100`: permanently true, won't re-flip.
-        assert self._saturated(300.0, "up", [("gt", 100.0)]) is True
-
-    def test_up_gt_not_yet_crossed_is_live(self) -> None:
-        # Acc at 50 < 100: the comparison still flips at 100 — not frozen.
-        assert self._saturated(50.0, "up", [("gt", 100.0)]) is False
-
-    def test_up_gt_exactly_at_threshold_is_live(self) -> None:
-        # At exactly 100, `> 100` is still false and flips true at 101.
-        assert self._saturated(100.0, "up", [("gt", 100.0)]) is False
-
-    def test_up_ge_at_threshold_is_saturated(self) -> None:
-        assert self._saturated(100.0, "up", [("ge", 100.0)]) is True
-
-    def test_up_lt_past_threshold_is_saturated(self) -> None:
-        # `Acc < 100` with Acc at 300: permanently false going up.
-        assert self._saturated(300.0, "up", [("lt", 100.0)]) is True
-
-    def test_up_lt_below_threshold_is_live(self) -> None:
-        # `Acc < 100` with Acc at 50: still true, flips false at 100.
-        assert self._saturated(50.0, "up", [("lt", 100.0)]) is False
-
-    def test_eq_is_never_saturated(self) -> None:
-        # eq has a fall the progress arithmetic does not model — stay conservative.
-        assert self._saturated(300.0, "up", [("eq", 100.0)]) is False
-
-    def test_ne_is_never_saturated(self) -> None:
-        assert self._saturated(300.0, "up", [("ne", 100.0)]) is False
-
-    def test_all_must_be_saturated(self) -> None:
-        # One live comparison taints the whole set.
-        assert self._saturated(300.0, "up", [("gt", 100.0), ("lt", 1000.0)]) is False
-        assert self._saturated(1500.0, "up", [("gt", 100.0), ("gt", 1000.0)]) is True
-
-    def test_empty_is_vacuously_saturated(self) -> None:
-        assert self._saturated(42.0, "up", []) is True
-
-    def test_down_counter_below_threshold_is_saturated(self) -> None:
-        # Count-down Acc 100→0; progress = -Acc (monotone up).  `Acc < 10`
-        # becomes permanently true once Acc drops below 10.
-        assert self._saturated(-5.0, "down", [("lt", 10.0)]) is True
-
-    def test_down_counter_above_threshold_is_live(self) -> None:
-        assert self._saturated(-50.0, "down", [("lt", 10.0)]) is False
-
-
-class TestClockSoftBySaturation:
-    """Step 2: a heartbeat clock gating a rung that reads an accumulator only
-    through a comparison is statically *hard* (it reads an accumulator), but is
-    rescuable — once that comparison saturates, the gated logic recomputes an
-    identical result at every edge, so the clock can be promoted soft at runtime.
-
-    `_build_fold_context` records such clocks in `ctx.sat_clocks`; the runtime
-    classifier `_runtime_soft_clocks` promotes them only while every required
-    comparison is saturated."""
-
-    @staticmethod
-    def _saturated_heartbeat_program(preset_ms: int = 1_000_000) -> tuple[Program, Timer]:
-        """A 1 s heartbeat gating on `Tmr.Acc > 100`, with the timer ramping to
-        a far preset so the comparison saturates long before completion."""
-        Enable = Bool("Enable", external=True)
-        Tmr = Timer.clone("Tmr")
-        Beat = Bool("Beat")
-        with Program() as prog:
-            with Rung(Enable):
-                on_delay(Tmr, preset_ms, "ms")
-            with Rung(rise(system.sys.clock_1s), Tmr.Acc > 100):
-                out(Beat)
-        return prog, Tmr
-
-    def test_saturatable_clock_recorded_and_not_static_soft(self) -> None:
-        prog, _ = self._saturated_heartbeat_program()
-        plc = PLC(prog, dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        ctx = plc._ensure_fold_context()
-
-        clock = system.sys.clock_1s.name
-        # Statically hard (gated rung reads Tmr_Acc) — not in the plain soft set.
-        assert clock not in {name for name, _hp in ctx.soft_clocks}
-        # But recorded as rescuable, with its accumulator requirement attached.
-        sat = {name: accs for name, _hp, accs in ctx.sat_clocks}
-        assert clock in sat
-        assert "Tmr_Acc" in sat[clock]
-
-    def test_runtime_promotion_flips_at_threshold(self) -> None:
-        from pyrung.core.fold import _runtime_soft_clocks
-
-        prog, tmr = self._saturated_heartbeat_program()
-        plc = PLC(prog, dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        ctx = plc._ensure_fold_context()
-        clock = system.sys.clock_1s.name
-
-        # Before Acc crosses 100, the comparison can still flip → not promoted.
-        plc.run_until(tmr.Acc >= 50, max_cycles=500, fold=False)
-        assert clock not in _runtime_soft_clocks(ctx, plc.state)
-
-        # Past 100, `Acc > 100` is permanently true → promoted soft.
-        plc.run_until(tmr.Acc >= 150, max_cycles=500, fold=False)
-        assert clock in _runtime_soft_clocks(ctx, plc.state)
-
-    @staticmethod
-    def _eq_heartbeat_program(preset_ms: int = 1_000_000) -> tuple[Program, Timer]:
-        Enable = Bool("Enable", external=True)
-        Tmr = Timer.clone("Tmr")
-        Beat = Bool("Beat")
-        with Program() as prog:
-            with Rung(Enable):
-                on_delay(Tmr, preset_ms, "ms")
-            with Rung(rise(system.sys.clock_1s), Tmr.Acc == 100):
-                out(Beat)
-        return prog, Tmr
-
-    def test_eq_comparison_never_promoted(self) -> None:
-        from pyrung.core.fold import _runtime_soft_clocks
-
-        prog, tmr = self._eq_heartbeat_program()
-        plc = PLC(prog, dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        ctx = plc._ensure_fold_context()
-        clock = system.sys.clock_1s.name
-
-        # Even far past the threshold, an `== 100` gate is never frozen by the
-        # conservative saturation test — the clock stays bound.
-        plc.run_until(tmr.Acc >= 300, max_cycles=500, fold=False)
-        assert clock not in _runtime_soft_clocks(ctx, plc.state)
+        assert first_pulse_after_settling(True) == first_pulse_after_settling(False)
 
 
 class TestClockSaturationFold:
-    """Step 3: the fold loop honors a saturation-rescuable clock — bounding on
-    it like a hard clock until its accumulator comparison saturates AND an edge
-    is observed inert, then skipping the rest of the window.
-
-    The oracle is bit-equality with scan-by-scan: the value-aware promotion may
-    only ever *speed up* a run that already lands the right values."""
+    """A heartbeat gated on a comparison that saturates partway up the ramp.  The
+    oracle is equality with scan-by-scan; folding stays between the clock's edges."""
 
     @staticmethod
     def _stable_saturated_program(preset_ms: int = 1_000_000) -> Program:
         """A far-off timer plateau plus a 1 s heartbeat gated on a *saturating*
         accumulator comparison (`Tmr.Acc > 100`).  Once the timer passes 100 ms
-        the gate is permanently true and the recompute (`A + B`, frozen inputs)
-        is constant — the heartbeat is inert and its clock is promotable."""
+        the gate is permanently true and the recompute (`A + B`, stable inputs)
+        is constant."""
         Enable = Bool("Enable", external=True)
         Tmr = Timer.clone("Tmr")
         Done = Bool("Done")
@@ -879,7 +677,7 @@ class TestClockSaturationFold:
                 calc(A + B, Extent)
         return prog
 
-    def test_saturated_heartbeat_folds_past_edges(self) -> None:
+    def test_saturated_heartbeat_folds_between_edges(self) -> None:
         prog = self._stable_saturated_program()
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True, "A": 3, "B": 4})
@@ -893,19 +691,18 @@ class TestClockSaturationFold:
         plc_nofold.step()
         plc_nofold.run_for(30.0, fold=False)
 
-        # Correctness (fails now: the unbounded sat-clock skips the heartbeat).
-        # Extent is the saturation oracle — bit-equal to scan-by-scan.  Tmr_Acc
-        # folds to a *time* boundary (run_for), so it drifts up to one dt from
-        # the scan-by-scan accumulation, same as test_unread_timer_folds_*.
+        # Extent is bit-equal to scan-by-scan.  Tmr_Acc folds to a *time* boundary
+        # (run_for), so it drifts up to one dt from the scan-by-scan accumulation,
+        # same as test_unread_timer_folds_*.
         assert plc_fold.state.tags["Extent"] == 7
         assert plc_fold.state.tags["Extent"] == plc_nofold.state.tags["Extent"]
         assert abs(plc_fold.state.tags["Tmr_Acc"] - plc_nofold.state.tags["Tmr_Acc"]) <= 10
-        # Efficiency: once saturated + observed inert, the ~60 half-edges over
-        # 30 s collapse into a handful of real passes.
-        assert counter["n"] <= 15
+        # Each of the ~60 half-periods over 30 s ends a window, a few kernel
+        # scans each, against 3000 scans stepped.
+        assert counter["n"] <= 250
 
     def test_saturated_heartbeat_flushes_after_input_change(self) -> None:
-        # Soundness: skipping inert edges must not freeze a stale recompute.
+        # A later edge recomputes from the changed inputs.
         prog = self._stable_saturated_program()
         plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True, "A": 3, "B": 4})
@@ -920,8 +717,7 @@ class TestClockSaturationFold:
     @staticmethod
     def _live_before_saturation_program(preset_ms: int = 1_000_000) -> Program:
         """The heartbeat writes a *moving* value derived from the accumulator,
-        so before saturation each edge genuinely differs.  The clock must stay
-        bound until the comparison settles — no edge may be skipped early."""
+        so before saturation each edge genuinely differs: no edge may be skipped."""
         Enable = Bool("Enable", external=True)
         Tmr = Timer.clone("Tmr")
         Bucket = Int("Bucket")
@@ -934,7 +730,7 @@ class TestClockSaturationFold:
                 out(Bucket)
         return prog
 
-    def test_unsaturated_sat_clock_stays_bounded(self) -> None:
+    def test_the_clock_bounds_the_window_before_saturation(self) -> None:
         prog = self._live_before_saturation_program()
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True})
@@ -958,9 +754,8 @@ class TestClockPulseFoldRegression:
     - the edge memory of a contact on a resolved-on-read clock surviving a big
       fold step (a clock is a pure function of the timestamp, so the next scan
       must compare against its value one *normal* dt before the landing);
-    - the inert classification needing a *full period* (both a rise and a fall)
-      before skipping, so a rise()-gated pulse — inert at falls, live at rises —
-      is never wrongly skipped;
+    - a rise()-gated pulse that does nothing at falls and fires at rises: a fall
+      must not excuse the next rise;
     - landing *strictly before* an edge that falls on an exact integer of scans.
     """
 
@@ -1001,9 +796,9 @@ class TestClockPulseFoldRegression:
         folded, stepped = self._both("timer", 17_261, 1, "clock_500ms", 0.01)
         assert folded == stepped
 
-    def test_counter_pulse_inert_at_fall(self) -> None:
+    def test_counter_pulse_quiet_at_fall(self) -> None:
         # clock toggles every half-period; the rung pulses only on the rise, so
-        # the intervening fall is inert — it must not mark the clock skippable.
+        # nothing moves at the intervening fall.
         folded, stepped = self._both("counter", 200, 13, "clock_500ms", 0.02)
         assert folded == stepped
 
@@ -1108,125 +903,108 @@ class TestAffineAccumulatorViews:
 
 
 # ---------------------------------------------------------------------------
-# Frozen-rung write exclusion
+# Rungs that hold still across a window, and those that do not
 # ---------------------------------------------------------------------------
 
 
-class TestFrozenRungWrites:
-    """Rungs whose entire input surface is unreachable from base-varying tags
-    produce identical output across a plateau.  Their writes are excluded from
-    the plateau visibility check so clock-gated recomputations don't break the
-    fold window."""
+def _run_until_exact(
+    build: Callable[[], Program], condition: Callable[[], Any], patch: dict[str, Any]
+) -> PLC:
+    """Fold and step to *condition*; both land on one scan with one state."""
 
-    def test_clock_gated_rung_with_stable_inputs_is_frozen(self) -> None:
-        """A rung gated by rise(clock) that reads only external inputs (never
-        varying during a fold) has its writes excluded from the plateau guard."""
-        from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.fold import _build_fold_context
+    def run(plc: PLC, fold: bool) -> None:
+        plc.run_until(condition(), max_cycles=20_000, fold=fold)
 
-        Sensor = Bool("Sensor", external=True)
-        Indicator = Bool("Indicator")
-        Enable = Bool("Enable", external=True)
-        Tmr = Timer.clone("Tmr")
+    return _assert_fold_is_exact(build, run, patch=patch)
 
-        with Program() as prog:
-            with Rung(Enable):
-                on_delay(Tmr, 1000, "ms")
-            with Rung(rise(system.sys.clock_1s), Sensor):
-                out(Indicator)
 
-        plc = PLC(prog, dt=0.010)
-        pdg = build_program_graph(prog)
-        ctx = _build_fold_context(plc, pdg, prog)
+class TestRungsAcrossAWindow:
+    """A rung whose reads hold still across a plateau folds; one that moves, or a
+    clock it reads, ends the window where stepping would see the change."""
 
-        assert "Indicator" in ctx.frozen_writes
+    def test_clock_gated_rung_with_stable_inputs_pulses_as_stepped(self) -> None:
+        """An edge-gated rung is not an indicator: each pulse lands exactly, and
+        the run still folds between the clock's edges."""
 
-    def test_rung_reading_accumulator_is_not_frozen(self) -> None:
-        """A rung that reads an accumulator (varying tag) must not be frozen."""
-        from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.fold import _build_fold_context
+        def build() -> Program:
+            with Program() as prog:
+                with Rung(Bool("Enable", external=True)):
+                    on_delay(Timer.clone("Tmr"), 100_000, "ms")
+                with Rung(rise(system.sys.clock_1s), Bool("Sensor", external=True)):
+                    out(Bool("Indicator"))
+            return prog
 
-        Enable = Bool("Enable", external=True)
-        Tmr = Timer.clone("Tmr")
-        Done = Bool("Done")
+        patch = {"Enable": True, "Sensor": True}
+        for n in (99, 100, 101, 1000):
+            _assert_fold_is_exact(build, _scans(n), patch=patch)
+        _run_until_exact(build, lambda: Bool("Indicator"), patch)
 
-        with Program() as prog:
-            with Rung(Enable):
-                on_delay(Tmr, 1000, "ms")
-            with Rung(Tmr.Done):
-                out(Done)
+        plc = PLC(build(), dt=0.010)
+        plc.patch(patch)
+        plc.step()
+        counter = _count_kernel_scans(plc)
+        plc.run_until(lambda _s: False, max_cycles=3000, fold=True)
+        assert counter["n"] <= 250
 
-        plc = PLC(prog, dt=0.010)
-        pdg = build_program_graph(prog)
-        ctx = _build_fold_context(plc, pdg, prog)
+    def test_rung_reading_a_timer_bit_lands_on_its_crossing(self) -> None:
+        def build() -> Program:
+            Tmr = Timer.clone("Tmr")
+            with Program() as prog:
+                with Rung(Bool("Enable", external=True)):
+                    on_delay(Tmr, 1000, "ms")
+                with Rung(Tmr.Done):
+                    out(Bool("Done"))
+            return prog
 
-        assert "Done" not in ctx.frozen_writes
+        folded = _run_until_exact(build, lambda: Bool("Done"), {"Enable": True})
+        assert folded.state.tags["Tmr_Acc"] == 1000
 
-    def test_transitively_non_frozen_via_varying_writer(self) -> None:
-        """If a tag is written by both a frozen rung and a non-frozen rung,
-        it must not appear in frozen_writes."""
-        from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.fold import _build_fold_context
+    @pytest.mark.parametrize("sensor", [False, True])
+    def test_tag_with_a_stable_writer_and_a_moving_one(self, sensor: bool) -> None:
+        """The moving writer is the last word: the landing shows it."""
 
-        Enable = Bool("Enable", external=True)
-        Tmr = Timer.clone("Tmr")
-        Flag = Bool("Flag")
-        Sensor = Bool("Sensor", external=True)
+        def build() -> Program:
+            Tmr = Timer.clone("Tmr")
+            Flag = Bool("Flag")
+            with Program() as prog:
+                with Rung(Bool("Enable", external=True)):
+                    on_delay(Tmr, 1000, "ms")
+                with Rung(Bool("Sensor", external=True)):
+                    out(Flag)
+                with Rung(Tmr.Done):
+                    out(Flag)
+            return prog
 
-        with Program() as prog:
-            with Rung(Enable):
-                on_delay(Tmr, 1000, "ms")
-            with Rung(Sensor):
-                out(Flag)
-            with Rung(Tmr.Done):
-                out(Flag)
+        patch = {"Enable": True, "Sensor": sensor}
+        for n in (99, 100, 101, 150):
+            _assert_fold_is_exact(build, _scans(n), patch=patch)
 
-        plc = PLC(prog, dt=0.010)
-        pdg = build_program_graph(prog)
-        ctx = _build_fold_context(plc, pdg, prog)
+    def test_chain_off_a_stored_input_holds_and_folds(self) -> None:
+        def build() -> Program:
+            Mid, Final = Bool("Mid"), Bool("Final")
+            with Program() as prog:
+                with Rung(Bool("Enable", external=True)):
+                    on_delay(Timer.clone("Tmr"), 100_000, "ms")
+                with Rung(Bool("Sensor", external=True)):
+                    out(Mid)
+                with Rung(Mid):
+                    out(Final)
+            return prog
 
-        assert "Flag" not in ctx.frozen_writes
+        patch = {"Enable": True, "Sensor": True}
+        folded = _assert_fold_is_exact(build, _scans(2000), patch=patch)
+        assert folded.state.tags["Final"] is True
 
-    def test_downstream_of_frozen_is_also_frozen(self) -> None:
-        """A rung reading only frozen outputs and external inputs is itself
-        frozen — transitivity through the write→read chain."""
-        from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.fold import _build_fold_context
+        plc = PLC(build(), dt=0.010)
+        plc.patch(patch)
+        plc.step()
+        counter = _count_kernel_scans(plc)
+        plc.run_until(lambda _s: False, max_cycles=2000, fold=True)
+        assert counter["n"] <= 12
 
-        Sensor = Bool("Sensor", external=True)
-        Mid = Bool("Mid")
-        Final = Bool("Final")
-        Enable = Bool("Enable", external=True)
-        Tmr = Timer.clone("Tmr")
-
-        with Program() as prog:
-            with Rung(Enable):
-                on_delay(Tmr, 1000, "ms")
-            with Rung(Sensor):
-                out(Mid)
-            with Rung(Mid):
-                out(Final)
-
-        plc = PLC(prog, dt=0.010)
-        pdg = build_program_graph(prog)
-        ctx = _build_fold_context(plc, pdg, prog)
-
-        assert "Mid" in ctx.frozen_writes
-        assert "Final" in ctx.frozen_writes
-
-    def test_frozen_writes_excluded_from_plateau_guard(self) -> None:
-        """End-to-end: a clock-gated frozen rung doesn't break the fold.
-
-        The clock gates two rungs: one reads the accumulator (non-frozen,
-        makes the clock hard) and one reads only external inputs (frozen).
-        Without frozen-write exclusion, the non-frozen rung's reads would
-        make BOTH rungs' writes break the plateau.  With it, the frozen
-        rung's writes are excluded so the plateau survives for the non-frozen
-        rung's identical writes (that rung is also stable in this test, but
-        the clock being hard is what we're testing)."""
-        from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.fold import _build_fold_context
-
+    def test_clock_gated_rungs_end_each_window_and_still_fold(self) -> None:
+        """End-to-end: the clock gates a rung over external inputs and one over the
+        accumulator.  Each 0.5 s half-period ends a window, with folding between."""
         Sensor = Bool("Sensor", external=True)
         Indicator = Bool("Indicator")
         AccView = Int("AccView")
@@ -1234,26 +1012,19 @@ class TestFrozenRungWrites:
         Tmr = Timer.clone("Tmr")
         Done = Bool("Done")
 
-        with Program() as prog:
-            with Rung(Enable):
-                on_delay(Tmr, 5000, "ms")
-            with Rung(Tmr.Done):
-                out(Done)
-            # Clock-gated rung reading only externals → frozen
-            with Rung(rise(system.sys.clock_1s), Sensor):
-                out(Indicator)
-            # Clock-gated rung reading the accumulator → NOT frozen
-            # (makes clock_1s a hard clock)
-            with Rung(rise(system.sys.clock_1s)):
-                calc(Tmr.Acc, AccView)
+        def build() -> Program:
+            with Program() as prog:
+                with Rung(Enable):
+                    on_delay(Tmr, 5000, "ms")
+                with Rung(Tmr.Done):
+                    out(Done)
+                with Rung(rise(system.sys.clock_1s), Sensor):
+                    out(Indicator)
+                with Rung(rise(system.sys.clock_1s)):
+                    calc(Tmr.Acc, AccView)
+            return prog
 
-        plc = PLC(prog, dt=0.010)
-        pdg = build_program_graph(prog)
-        ctx = _build_fold_context(plc, pdg, prog)
-
-        assert "Indicator" in ctx.frozen_writes
-        assert "AccView" not in ctx.frozen_writes
-
+        plc = PLC(build(), dt=0.010)
         plc.patch({"Enable": True, "Sensor": True})
         plc.step()
         counter = _count_kernel_scans(plc)
@@ -1261,36 +1032,44 @@ class TestFrozenRungWrites:
 
         assert plc.state.tags["Done"] is True
         assert plc.state.tags["Tmr_Acc"] == 5000
-        # Hard clock still bounds the fold at each 0.5 s half-period edge,
-        # but fewer total scans than scanning every cycle.
         assert counter["n"] < 500
+        _run_until_exact(build, lambda: Tmr.Done, {"Enable": True, "Sensor": True})
 
-    def test_target_names_not_frozen(self) -> None:
-        """Tags listed as targets are never excluded, even if structurally
-        frozen, so the predicate always sees their true value."""
-        from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.fold import _build_fold_context
+    @pytest.mark.parametrize("form", ["tag", "negated", "callable"])
+    def test_a_stop_condition_on_an_indicator_lands_on_its_scan(self, form: str) -> None:
+        """A condition reads the bit, so its clock ends the window as for a rung."""
+        Lamp = Bool("Lamp")
 
-        Sensor = Bool("Sensor", external=True)
-        Result = Bool("Result")
-        Enable = Bool("Enable", external=True)
-        Tmr = Timer.clone("Tmr")
+        def build() -> Program:
+            with Program() as prog:
+                with Rung(system.sys.clock_100ms):
+                    out(Lamp)
+                with Rung(Lamp):
+                    out(Bool("Lamp2"))
+                with Rung():
+                    on_delay(Timer.clone("Tmr"), 100_000, "ms")
+            return prog
 
-        with Program() as prog:
-            with Rung(Enable):
-                on_delay(Tmr, 1000, "ms")
-            with Rung(Sensor):
-                out(Result)
+        def run(fold: bool, start: int) -> PLC:
+            plc = PLC(build(), dt=0.010)
+            for _ in range(start):
+                plc.step()
+            if form == "tag":
+                plc.run_until(Lamp, max_cycles=1000, fold=fold)
+            elif form == "negated":
+                plc.run_until(~Lamp, max_cycles=1000, fold=fold)
+            else:
+                plc.run_until(lambda s: not s.tags.get("Lamp2"), max_cycles=1000, fold=fold)
+            return plc
 
-        plc = PLC(prog, dt=0.010)
-        pdg = build_program_graph(prog)
-        ctx = _build_fold_context(plc, pdg, prog, target_names=frozenset({"Result"}))
-
-        assert "Result" not in ctx.frozen_writes
+        for start in (3, 7, 12, 14):
+            folded, stepped = run(True, start), run(False, start)
+            assert folded.state.scan_id == stepped.state.scan_id
+            assert _plain_tags(folded) == _plain_tags(stepped)
 
 
 # ---------------------------------------------------------------------------
-# Frozen-rung soundness: self-feeding, scan-varying, and back-edge reads
+# Soundness when a value moves every scan: self-feeding and back-edge reads
 # ---------------------------------------------------------------------------
 
 
@@ -1403,7 +1182,7 @@ def _started(shape: Callable[[], Any]) -> tuple[PLC, Bool, Timer]:
     return plc, hit, tmr
 
 
-class TestFrozenRungSoundness:
+class TestScanVaryingValuesAreExact:
     """Folded and stepped runs land on the same scan with bit-equal state when
     a rung's value moves every scan without any accumulator reaching it."""
 
@@ -1439,15 +1218,15 @@ class TestFrozenRungSoundness:
             (_back_edge_chain, "Stage3"),
         ],
     )
-    def test_scan_varying_write_is_not_frozen(self, shape: Callable[[], Any], tag: str) -> None:
-        from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.fold import _build_fold_context
+    def test_scan_varying_write_lands_as_stepped(self, shape: Callable[[], Any], tag: str) -> None:
+        for scans in (37, 38, 601):
+            folded, _hit, _tmr = _started(shape)
+            folded.run_until(lambda _s: False, max_cycles=scans, fold=True)
+            stepped, _hit2, _tmr2 = _started(shape)
+            stepped.run_until(lambda _s: False, max_cycles=scans, fold=False)
 
-        prog, _hit, _tmr = _gated_hit_program(shape)
-        plc = PLC(prog, dt=0.010)
-        ctx = _build_fold_context(plc, build_program_graph(prog), prog)
-
-        assert tag not in ctx.frozen_writes
+            assert folded.state.scan_id == stepped.state.scan_id
+            assert folded.state.tags[tag] == stepped.state.tags[tag]
 
     @pytest.mark.parametrize("form", ["sum", "math", "shift"])
     def test_self_reference_seen_through_function_expressions(self, form: str) -> None:
@@ -1516,17 +1295,16 @@ def _not_first_scan_counter_program() -> tuple[Program, Bool]:
 
 
 class TestFirstScanWindowConstant:
-    def test_first_scan_init_and_its_readers_are_frozen(self) -> None:
-        from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.fold import _build_fold_context, _window_constant_names
-
-        prog, _hit = _first_scan_init_program()
+    def test_first_scan_init_does_not_stop_the_fold(self) -> None:
+        """The init rung reads first_scan False in every window scan, so its copy
+        holds still; the clock beside it ends each window, with folding between."""
+        prog, hit = _first_scan_init_program()
         plc = PLC(prog, dt=0.010)
-        ctx = _build_fold_context(plc, build_program_graph(prog), prog)
-
-        assert system.sys.first_scan.name in _window_constant_names()
-        assert ctx.reads_first_scan
-        assert {"Init", "Blink"} <= ctx.frozen_writes
+        plc.step()
+        counter = _count_kernel_scans(plc)
+        plc.run_until(hit, max_cycles=10_000)
+        assert plc.state.scan_id == 500
+        assert counter["n"] < 100
 
     @pytest.mark.parametrize("warm", [False, True], ids=["from_scan_0", "after_step"])
     def test_first_scan_init_folded_matches_stepped(self, warm: bool) -> None:
@@ -1543,28 +1321,29 @@ class TestFirstScanWindowConstant:
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
 
-    def test_frozen_first_scan_reader_skips_clock_edges(self) -> None:
-        """Blink toggles on clock_1s edges.  Frozen, it no longer breaks a
-        plateau on each edge, so the run takes fewer kernel scans than with
-        Blink in the guard."""
-        from dataclasses import replace
+    def test_a_first_scan_latch_on_an_indicator_rung_skips_clock_edges(self) -> None:
+        """The stored gate holds still, so the blink beside it stays an indicator
+        and a run past many of its edges takes a handful of kernel scans."""
 
-        def kernel_scans(freeze: bool) -> int:
-            prog, hit = _first_scan_init_program()
-            plc = PLC(prog, dt=0.010)
-            plc.step()
-            ctx = plc._ensure_fold_context(frozenset({hit.name}))
-            if not freeze:
-                cache = plc._fold_context_cache
-                assert cache is not None
-                for key, value in list(cache.items()):
-                    cache[key] = replace(value, frozen_writes=frozenset())
-            assert "Blink" in ctx.frozen_writes
-            counter = _count_kernel_scans(plc)
-            plc.run_until(hit, max_cycles=10_000)
-            return counter["n"]
+        def build() -> Program:
+            Armed, Lamp = Bool("Armed"), Bool("Lamp")
+            with Program(strict=False) as prog:
+                with Rung(system.sys.first_scan):
+                    latch(Armed)
+                with Rung(system.sys.clock_1s, Armed):
+                    out(Lamp)
+                with Rung():
+                    on_delay(Timer.clone("Tmr"), 100_000)
+            return prog
 
-        assert kernel_scans(True) < kernel_scans(False)
+        folded = _assert_fold_is_exact(build, _scans(2000))
+        assert folded.state.tags["Armed"] is True
+
+        plc = PLC(build(), dt=0.010)
+        plc.step()
+        counter = _count_kernel_scans(plc)
+        plc.run_until(lambda _s: False, max_cycles=2000, fold=True)
+        assert counter["n"] <= 12
 
     def test_probe_at_scan_zero_does_not_certify_a_fold(self) -> None:
         """Scan 0 reads first_scan True; scans 1.. read False.  With every tag
@@ -1840,15 +1619,13 @@ class TestFoldLandingTime:
         )
 
 
-class TestSoftClockInertCount:
-    """A soft clock is confirmed inert only by toggles that scans executed.
-
-    A probe that reads just before a clock edge commits a state past it; that
-    edge has not run.  Counting it once let a ``rise(clock_1s)`` rung, gated by a
-    just-saturated timer comparison, be skipped for the rest of the ramp.
+class TestAClockEdgeAfterTheProbe:
+    """A probe that reads just before a clock edge commits a state past it; that
+    edge has not run.  A ``rise(clock_1s)`` rung, gated by a just-saturated timer
+    comparison, still fires on it.
     """
 
-    def test_unexecuted_edge_is_not_counted_inert(self) -> None:
+    def test_an_edge_after_the_probe_still_fires(self) -> None:
         def run(fold: bool) -> PLC:
             Enable = Bool("Enable", external=True)
             A, B, Extent = Int("A", external=True), Int("B", external=True), Int("Extent")
@@ -2558,9 +2335,9 @@ def _scans(n: int) -> Callable[[PLC, bool], None]:
 
 class TestClockEdgeProbe:
     """A scan reads the system clock at its start.  The probe certifying a
-    window must have read the phase the window reads, and the edge scan runs
-    as a genuine probe, so per-scan work under a clock level or edge is never
-    extrapolated from the other phase."""
+    window must have read the phase the window reads, and an edge scan certifies
+    nothing, so per-scan work under a clock level or edge is never extrapolated
+    from the other phase."""
 
     @staticmethod
     def _level_gated(work: str) -> Callable[[], Program]:
@@ -2601,6 +2378,34 @@ class TestClockEdgeProbe:
     @pytest.mark.parametrize("n", [49, 50, 51, 52, 99, 100, 101, 150])
     def test_edge_pulse_stays_on_its_own_scan(self, n: int) -> None:
         _assert_fold_is_exact(self._edge_pulses, _scans(n))
+
+    @staticmethod
+    def _holds_still_only_on_the_edge_scan() -> Program:
+        # The plain rungs swap C every scan; the edge rungs undo that on the scan
+        # that sees the edge, so that one scan leaves the state as it found it.
+        C, D = Int("C"), Int("D")
+        clock = system.sys.clock_1s
+        with Program(strict=False) as prog:
+            with Rung():
+                on_delay(Timer.clone("Tmr"), 30_000)
+            with Rung(C == 0):
+                copy(1, D)
+            with Rung(C == 1):
+                copy(0, D)
+            with Rung():
+                copy(D, C)
+            with Rung(rise(clock), C == 0):
+                copy(1, D)
+            with Rung(rise(clock), C == 1):
+                copy(0, D)
+            with Rung(rise(clock)):
+                copy(D, C)
+        return prog
+
+    @pytest.mark.parametrize("dt", [0.007, 0.01, 0.05])
+    @pytest.mark.parametrize("scans", [800, 801])
+    def test_an_edge_scan_certifies_nothing_after_it(self, dt: float, scans: int) -> None:
+        _assert_fold_is_exact(self._holds_still_only_on_the_edge_scan, _scans(scans), dt=dt)
 
 
 class TestTimerCarryExact:
@@ -3247,12 +3052,9 @@ class TestFoldLandingCheckpoint:
             }
 
 
-class TestSoftClockEdgesAsRead:
-    """A soft clock is confirmed inert only from edges a genuine scan read.
-
-    At a ``dt`` of a half-period or more, one scan crosses several edges but
-    an edge rung sees only the two reads; counting crossed edges confirmed a
-    ``rise()`` clock inert after a single falling scan and dropped every rise.
+class TestClockEdgesAsRead:
+    """At a ``dt`` of a half-period or more, one scan crosses several edges but
+    an edge rung sees only the two reads: only those count as a rise or a fall.
     """
 
     @staticmethod
@@ -4062,8 +3864,7 @@ class TestResetPulseInProbe:
 
 class TestClockGatedTimeDrum:
     """A time drum reads its accumulator every scan it times, so a clock
-    gating it is bounded at every edge like a gated timer's, not confirmed
-    inert from edges where the hidden accumulator merely paused."""
+    gating it is bounded at every edge like a gated timer's."""
 
     @staticmethod
     def _shape(gate: bool) -> Callable[[], Program]:

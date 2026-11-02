@@ -187,7 +187,7 @@ def _active_hold_soak(soak_ms: int = 5000, wd_ms: int = 200) -> Program:
     is the active-hold soak: a long dwell whose health depends on a sub-cycle that
     must run every scan, exactly the burner rotate case in miniature.
     """
-    Osc = Bool("Osc", external=True)
+    Osc = Bool("Osc")
     Soak = Timer.clone("Soak")
     WD = Timer.clone("WD")
     Done = Bool("Done")
@@ -199,16 +199,9 @@ def _active_hold_soak(soak_ms: int = 5000, wd_ms: int = 200) -> Program:
             on_delay(WD, wd_ms, "ms").reset(Osc)
         with Rung(Soak.Done):
             out(Done)
+        with Rung(~Osc):
+            out(Osc)
     return prog
-
-
-def _install_oscillator(plc: PLC, tag: str):
-    """Flip *tag* every scan via a runner-native reactive patch (period-2)."""
-
-    def _act(s) -> None:  # noqa: ANN001
-        plc.patch({tag: not s.tags.get(tag, False)})
-
-    return plc.when(lambda s: True).do(_act)
 
 
 class TestCycleFoldBitEqual:
@@ -378,14 +371,12 @@ class TestCycleFoldBitEqual:
         # Reference: pure scan-by-scan (fold=False), oscillation running.
         ref = PLC(_active_hold_soak())
         ref.step()
-        _install_oscillator(ref, "Osc")
         ref.run_until(lambda s: s.tags.get("Done") is True, max_cycles=20000, fold=False)
         assert ref.state.tags.get("Done") is True
 
         # Cycle-fold: same setup, folds the soak.
         cf = PLC(_active_hold_soak())
         cf.step()
-        _install_oscillator(cf, "Osc")
         stats: dict[str, int] = {}
         advances: list[tuple[str, int | float]] = []
         reached = cycle_fold_until(
@@ -418,13 +409,12 @@ class TestCycleFoldBitEqual:
         # The whole point: folding must NOT let the kept-reset watchdog accumulate.
         cf = PLC(_active_hold_soak(soak_ms=5000, wd_ms=200))
         cf.step()
-        _install_oscillator(cf, "Osc")
         cycle_fold_until(cf, lambda s: s.tags.get("Done") is True, budget=20000)
         # WD stayed reset throughout (acc never approached its 200 ms preset).
         assert cf.state.tags.get("WD") in (None, False)
 
     def test_subtick_timer_progress_is_not_misread_as_a_sterile_cycle(self) -> None:
-        Osc = Bool("SubtickOsc", external=True)
+        Osc = Bool("SubtickOsc")
         Soak = Timer.clone("SubtickSoak")
         Done = Bool("SubtickDone")
         Mirror = Bool("SubtickMirror")
@@ -435,15 +425,15 @@ class TestCycleFoldBitEqual:
                 on_delay(Soak, 2, "s")
             with Rung(Soak.Done):
                 out(Done)
+            with Rung(~Osc):
+                out(Osc)
 
         ref = PLC(program, dt=0.010)
         ref.step()
-        _install_oscillator(ref, Osc.name)
         ref.run_until(lambda s: s.tags.get(Done.name) is True, max_cycles=1_000, fold=False)
 
         cf = PLC(program, dt=0.010)
         cf.step()
-        _install_oscillator(cf, Osc.name)
         stats: dict[str, int] = {}
         reached = cycle_fold_until(
             cf,
@@ -460,7 +450,7 @@ class TestCycleFoldBitEqual:
         assert stats["macro_folds"] >= 1
 
     def test_minute_timer_roundoff_still_folds_bit_equal(self) -> None:
-        Osc = Bool("MinuteOsc", external=True)
+        Osc = Bool("MinuteOsc")
         Soak = Timer.clone("MinuteSoak")
         Done = Bool("MinuteDone")
         Mirror = Bool("MinuteMirror")
@@ -471,15 +461,15 @@ class TestCycleFoldBitEqual:
                 on_delay(Soak, 2, "min")
             with Rung(Soak.Done):
                 out(Done)
+            with Rung(~Osc):
+                out(Osc)
 
         ref = PLC(program, dt=0.010)
         ref.step()
-        _install_oscillator(ref, Osc.name)
         ref.run_until(Done, max_cycles=20_000, fold=False)
 
         folded = PLC(program, dt=0.010)
         folded.step()
-        _install_oscillator(folded, Osc.name)
         stats: dict[str, int] = {}
         reached = cycle_fold_until(
             folded,
@@ -539,7 +529,7 @@ class TestCycleFoldBitEqual:
         assert folded.state.tags[Long.Acc.name] == ref.state.tags[Long.Acc.name]
 
     def test_subtick_time_drum_uses_its_current_step_preset(self) -> None:
-        Osc = Bool("DrumOsc", external=True)
+        Osc = Bool("DrumOsc")
         Auto = Bool("DrumAuto", external=True)
         Reset = Bool("DrumReset", external=True)
         Step = Int("DrumStep")
@@ -560,12 +550,13 @@ class TestCycleFoldBitEqual:
                     accumulator=Acc,
                     completion_flag=Done,
                 ).reset(Reset)
+            with Rung(~Osc):
+                out(Osc)
 
         def run(*, fold: bool) -> tuple[PLC, dict[str, int]]:
             plc = PLC(program, dt=0.010)
             plc.patch({Auto.name: True})
             plc.step()
-            _install_oscillator(plc, Osc.name)
             stats: dict[str, int] = {}
             if fold:
                 cycle_fold_until(
@@ -672,10 +663,9 @@ def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
     without the 32 767 timer-accumulator clamp.  ``Blink`` follows ``clock_1s``
     (full period 1 s = 100 scans at the default dt), so folding must align the
     period to the clock (LCM with the period-2 oscillation = 100): the observed
-    window spans the clock's full cycle and every jump preserves its phase — the
-    runtime form of the soft-clock partition.
+    window spans the clock's full cycle and every jump preserves its phase.
     """
-    Osc = Bool("Osc", external=True)
+    Osc = Bool("Osc")
     Ctr = Dint("Ctr")
     WD = Timer.clone("WD")
     Done = Bool("Done")
@@ -690,6 +680,8 @@ def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
             out(Blink)
         with Rung(Ctr >= soak_counts):
             out(Done)
+        with Rung(~Osc):
+            out(Osc)
     return prog
 
 
@@ -697,13 +689,11 @@ class TestCycleFoldAcrossClocks:
     def test_bit_equal_across_a_read_system_clock(self) -> None:
         ref = PLC(_clocked_active_hold_soak())
         ref.step()
-        _install_oscillator(ref, "Osc")
         ref.run_until(lambda s: s.tags.get("Done") is True, max_cycles=200000, fold=False)
         assert ref.state.tags.get("Done") is True
 
         cf = PLC(_clocked_active_hold_soak())
         cf.step()
-        _install_oscillator(cf, "Osc")
         stats: dict[str, int] = {}
         reached = cycle_fold_until(
             cf, lambda s: s.tags.get("Done") is True, budget=200000, stats=stats
@@ -722,7 +712,6 @@ class TestCycleFoldAcrossClocks:
         def run(soak_counts: int) -> int:
             cf = PLC(_clocked_active_hold_soak(soak_counts=soak_counts))
             cf.step()
-            _install_oscillator(cf, "Osc")
             stats: dict[str, int] = {}
             cycle_fold_until(cf, lambda s: s.tags.get("Done") is True, budget=100000, stats=stats)
             assert cf.state.tags.get("Done") is True

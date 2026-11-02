@@ -3029,7 +3029,6 @@ class PLC:
                 replay._kernel.memory[f"_frac:{name}"] = frac_out
             kernel_scans += 1
             state = replay._materialize_replay_state()
-            strategy.finish(state, probe, plan)
             scan_id = state.scan_id + 1
 
         for event in lifecycle_by_scan.get(target_scan_id + 1, []):
@@ -4783,7 +4782,11 @@ class PLC:
         else:
             predicate = self._compile_condition_predicate(*conditions, method="run_until")  # ty: ignore[invalid-argument-type]
             from pyrung.core.condition import _as_condition, _normalize_and_condition
-            from pyrung.core.fold import _extract_condition_crossings, _extract_condition_reads
+            from pyrung.core.fold import (
+                _extract_condition_crossings,
+                _extract_condition_reads,
+                _fold_context_reads,
+            )
 
             normalized = _normalize_and_condition(
                 *conditions,
@@ -4793,15 +4796,12 @@ class PLC:
             )
             extra_comparisons = _extract_condition_crossings(normalized)
             # The condition's tags become fold-protected reads: a bump on a
-            # churn-excluded / frozen-write tag must break the plateau, and a
+            # churn-excluded / indicator tag must break the plateau, and a
             # condition-read clock or scan-derived signal must bound the fold
             # even when no program rung reads it.
-            from pyrung.core.system_points import _CLOCK_HALF_PERIODS, scan_derived_names
-
-            reads = _extract_condition_reads(normalized)
-            clock_reads = reads & frozenset(_CLOCK_HALF_PERIODS)
-            scan_derived = scan_derived_names(reads)
-            protected_reads = reads - clock_reads - scan_derived
+            protected_reads, clock_reads, scan_derived = _fold_context_reads(
+                _extract_condition_reads(normalized)
+            )
         self._ensure_running()
         if fold and self._logic:
             from pyrung.core.fold import (

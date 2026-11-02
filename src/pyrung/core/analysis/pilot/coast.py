@@ -180,8 +180,11 @@ def _fold_metadata(
     Watched tags are always protected even without a condition — a receipt
     cannot record a transition the fold skipped.
     """
-    from pyrung.core.fold import _extract_condition_crossings, _extract_condition_reads
-    from pyrung.core.system_points import _CLOCK_HALF_PERIODS, scan_derived_names
+    from pyrung.core.fold import (
+        _extract_condition_crossings,
+        _extract_condition_reads,
+        _fold_context_reads,
+    )
 
     crossings: dict[str, tuple[tuple[str, Any], ...]] = {}
     reads: set[str] = set()
@@ -202,9 +205,7 @@ def _fold_metadata(
         reads |= condition_reads
         predicate_reads |= condition_reads
 
-    clock_reads = frozenset(reads) & frozenset(_CLOCK_HALF_PERIODS)
-    scan_derived = scan_derived_names(reads)
-    protected = frozenset(reads) - clock_reads - scan_derived
+    protected, clock_reads, scan_derived = _fold_context_reads(reads)
     return (
         crossings or None,
         protected,

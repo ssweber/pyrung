@@ -654,11 +654,11 @@ class TestRebuiltOnTheClock:
         assert stepped.state.tags["Hit"] is True
         assert _state(folded) == _state(stepped)
 
-    def test_the_context_keeps_it_in_the_plateau_guard(self) -> None:
-        program = _program(_rebuilt_on_the_clock(_comparison_reader, 3000, 20_000))()
-        plc = PLC(program, dt=0.01)
-        ctx = _build_fold_context(plc, build_program_graph(program), program)
-        assert "P" not in ctx.frozen_writes
+    def test_a_mid_run_edge_shows_in_the_input(self) -> None:
+        """The value moves only at the edge: a landing on either side shows it."""
+        body = _rebuilt_on_the_clock(_comparison_reader, 3000, 20_000)
+        for scans in (49, 50, 51, 99, 100, 101):
+            _assert_exact(body, scans, patch={"P": 20_000})
 
 
 class TestAClockWakesAWriterTheProbeDidNotCount:
@@ -690,7 +690,6 @@ class TestAClockWakesAWriterTheProbeDidNotCount:
         program = _program(self._body(_comparison_reader, system.sys.clock_1s, True))()
         ctx = _build_fold_context(PLC(program), build_program_graph(program), program)
         assert 0.5 in ctx.clock_half_periods
-        assert "sys.clock_1s" not in dict(ctx.soft_clocks)
 
     def test_it_still_folds_between_the_edges(self) -> None:
         """The phase with one write folds; the phase with two steps."""
