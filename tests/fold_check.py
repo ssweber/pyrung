@@ -33,6 +33,7 @@ MAX_SCANS = int(os.environ.get("FOLD_CHECK_MAX_SCANS", "200000"))
 _IGNORED_TAGS = frozenset({"sys.scan_time_current_ms"})
 
 STATS: Counter[str] = Counter()
+SKIPS: dict[str, list[str]] = {}
 _depth = 0
 
 
@@ -111,18 +112,150 @@ def _compare(
     )
 
 
-class _NotTheTwin(Exception):
-    """The predicate touched the real runner's state while the twin was asked."""
+class _NotTheTwin(BaseException):
+    """The predicate touched the real runner's state while the twin was asked.
+
+    A BaseException so a predicate's own ``except Exception`` cannot swallow it; the
+    poison also sets a flag that is tested after the call.
+    """
 
 
 class _PoisonedState:
     """Stands in for the real runner's state while a predicate is asked on a twin."""
 
+    def __init__(self) -> None:
+        object.__setattr__(self, "touched", False)
+
     def __getattr__(self, name: str) -> Any:
+        object.__setattr__(self, "touched", True)
         raise _NotTheTwin(name)
 
     def __getitem__(self, key: Any) -> Any:
+        object.__setattr__(self, "touched", True)
         raise _NotTheTwin(str(key))
+
+
+def _note_skip(reason: str) -> None:
+    """Count a run (or predicate check) that went unchecked, with the test that ran it."""
+    STATS[reason] += 1
+    SKIPS.setdefault(reason, []).append(os.environ.get("PYTEST_CURRENT_TEST", "?").split(" ")[0])
+
+
+def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], bool] | None:
+    """A copy of ``predicate`` whose closure state is private to the twin, or None.
+
+    A stateful predicate (a call counter, a recorder, ``rise()``'s edge memory) must
+    not be advanced by the twin's extra calls, and must meet the twin's scans from the
+    state it had when the folded run began.  So it is deep-copied before the folded
+    run starts (functions included, cell by cell); the runner itself is shared, not
+    copied.  An uncopyable predicate is not asked.
+    """
+    import copy
+    import types
+
+    memo: dict[int, Any] = {}
+
+    def clone_function(fn: types.FunctionType, memo: dict[int, Any]) -> Any:
+        if id(fn) in memo:
+            return memo[id(fn)]
+        cells = None
+        if fn.__closure__ is not None:
+            cells = tuple(types.CellType() for _ in fn.__closure__)
+        # Module-level names the function reads are state too: it gets a private
+        # globals dict holding copies of just those names.
+        names: set[str] = set()
+        todo = [fn.__code__]
+        while todo:
+            code = todo.pop()
+            names.update(code.co_names)
+            todo.extend(c for c in code.co_consts if isinstance(c, types.CodeType))
+        private: dict[str, Any] = {"__builtins__": fn.__globals__.get("__builtins__", {})}
+        private["__name__"] = fn.__globals__.get("__name__", "")
+        new = types.FunctionType(fn.__code__, private, fn.__name__, fn.__defaults__, cells)
+        memo[id(fn)] = new
+        for name in names:
+            if name in fn.__globals__:
+                private[name] = copy.deepcopy(fn.__globals__[name], memo)
+        new.__kwdefaults__ = copy.deepcopy(fn.__kwdefaults__, memo)
+        new.__defaults__ = copy.deepcopy(fn.__defaults__, memo)
+        new.__dict__.update(copy.deepcopy(fn.__dict__, memo))
+        if cells is not None and fn.__closure__ is not None:
+            for old, cell in zip(fn.__closure__, cells, strict=True):
+                try:
+                    contents = old.cell_contents
+                except ValueError:
+                    continue
+                cell.cell_contents = copy.deepcopy(contents, memo)
+        return new
+
+    shared = (type(plc),)
+    table = copy._deepcopy_dispatch  # type: ignore[attr-defined]
+    saved = {t: table.get(t) for t in (types.FunctionType, *shared)}
+    table[types.FunctionType] = clone_function
+    for t in shared:
+        table[t] = lambda x, memo: x
+    try:
+        return copy.deepcopy(predicate, memo)
+    except Exception:
+        return None
+    finally:
+        for t, old in saved.items():
+            if old is None:
+                table.pop(t, None)
+            else:
+                table[t] = old
+
+
+def _fingerprint(root: Any, plc: Any) -> tuple[Any, ...]:
+    """What a predicate could carry between calls: values reachable from it, flattened.
+
+    Walks closure cells, defaults, the module-level names a function reads, containers
+    and instance attributes (capped).  The runner, modules and classes are not entered.
+    """
+    import types
+
+    out: list[Any] = []
+    seen: set[int] = set()
+    todo = [root]
+    while todo and len(out) < 20000:
+        obj = todo.pop()
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if obj is plc or isinstance(obj, (types.ModuleType, type)):
+            continue
+        if obj is None or isinstance(obj, (bool, int, float, str, bytes, complex)):
+            out.append((type(obj).__name__, obj))
+            continue
+        out.append((type(obj).__name__, id(obj) if callable(obj) else 0))
+        if isinstance(obj, types.FunctionType):
+            todo.extend(c.cell_contents for c in obj.__closure__ or () if _filled(c))
+            todo.extend(obj.__defaults__ or ())
+            codes = [obj.__code__]
+            while codes:
+                code = codes.pop()
+                todo.extend(obj.__globals__[n] for n in code.co_names if n in obj.__globals__)
+                codes.extend(c for c in code.co_consts if isinstance(c, types.CodeType))
+        elif isinstance(obj, types.MethodType):
+            todo.append(obj.__self__)
+        elif isinstance(obj, dict):
+            out.append(len(obj))
+            for k, v in obj.items():
+                todo.extend((k, v))
+        elif isinstance(obj, (list, tuple, set, frozenset)):
+            out.append(len(obj))
+            todo.extend(obj)
+        elif hasattr(obj, "__dict__"):
+            todo.extend(vars(obj).values())
+    return tuple(out)
+
+
+def _filled(cell: Any) -> bool:
+    try:
+        _ = cell.cell_contents
+    except ValueError:
+        return False
+    return True
 
 
 def _predicate_on_twin(predicate: Callable[[Any], bool], plc: Any, twin: Any) -> bool | None:
@@ -131,21 +264,26 @@ def _predicate_on_twin(predicate: Callable[[Any], bool], plc: Any, twin: Any) ->
     Reuses the fold's own ``_traced_call`` (it swaps the twin's tip for the traced
     state, so a predicate reading ``twin.state`` works).  The real runner's state is
     poisoned for the call: a closure over the real runner is detected, not answered.
+    A predicate that raises is unknown on this scan only (``False`` is not assumed).
     """
     from pyrung.core.fold import _traced_call
 
     real = plc._state
-    plc._state = _PoisonedState()
+    poison = _PoisonedState()
+    plc._state = poison
     try:
-        return _traced_call(predicate, twin)[0]
+        hit = _traced_call(predicate, twin)[0]
     except _NotTheTwin:
-        STATS["predicate skipped: reads the real runner"] += 1
         return None
     except Exception:
-        STATS["predicate skipped: raised on the twin"] += 1
-        return None
+        STATS["predicate raised on a twin scan"] += 1
+        return _RAISED
     finally:
         plc._state = real
+    return None if poison.touched else hit
+
+
+_RAISED: Any = object()
 
 
 def _checked(
@@ -159,10 +297,15 @@ def _checked(
         return call()
     reason = _skip_reason(plc)
     if reason is not None:
-        STATS[f"skipped: {reason}"] += 1
+        _note_skip(f"skipped: {reason}")
         return call()
     start = plc._state.scan_id
     twin = _twin(plc)
+    ask = None
+    if predicate is not None:
+        ask = _isolated(predicate, plc)
+        if ask is None:
+            _note_skip("predicate skipped: not copyable")
     _depth += 1
     try:
         result = call()
@@ -174,21 +317,28 @@ def _checked(
         STATS["no scans"] += 1
         return result
     if n > MAX_SCANS:
-        STATS["skipped: longer than FOLD_CHECK_MAX_SCANS"] += 1
+        _note_skip("skipped: longer than FOLD_CHECK_MAX_SCANS")
         return result
     produced = {
         sid: entry[0] for sid, entry in plc._recent_state_cache.items() if start < sid <= end
     }
     last_equal = start
-    ask = predicate
+    asked = False
     for _ in range(n):
         twin._run_single_scan(consume_pause_request=False)
         sid = twin._state.scan_id
         if ask is not None and sid < end:
+            first = not asked
+            before = _fingerprint(ask, plc) if first else None
             hit = _predicate_on_twin(ask, plc, twin)
-            if hit is None:
+            asked = True
+            if first and hit is not None and _fingerprint(ask, plc) != before:
+                _note_skip("predicate skipped: carries state between calls")
                 ask = None
-            else:
+            elif hit is None:
+                _note_skip("predicate skipped: reads the real runner")
+                ask = None
+            elif hit is not _RAISED:
                 STATS["predicate scans"] += 1
                 if hit:
                     STATS["mismatch"] += 1
@@ -246,4 +396,9 @@ def wall_budget(seconds: float) -> float:
 
 
 def summary() -> list[str]:
-    return [f"  {key}: {count}" for key, count in sorted(STATS.items())]
+    lines = [f"  {key}: {count}" for key, count in sorted(STATS.items())]
+    for reason, tests in sorted(SKIPS.items()):
+        if reason.startswith("predicate skipped"):
+            lines.append(f"  {reason}, tests:")
+            lines.extend(f"    {t}" for t in sorted(set(tests))[:50])
+    return lines
