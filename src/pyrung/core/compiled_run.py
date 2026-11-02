@@ -139,7 +139,8 @@ def _run_compiled(
         compiled=kernel,
         exact_anchor=True,
     )
-    replay._set_rtc_internal(plc._system_runtime._rtc_now(start), start.timestamp)
+    # The base itself: a timedelta rounds, so a moved base can read 1 us apart.
+    replay._set_rtc_internal(plc._rtc_base, plc._rtc_base_sim_time)
     replay._input_overrides._forces.update(plc._input_overrides.forces)
 
     interval = plc._checkpoint_interval
@@ -162,7 +163,7 @@ def _run_compiled(
             if checkpoint or LOOP_OBSERVERS:
                 settled = replay._materialize_replay_state()
                 if checkpoint:
-                    _install(plc, settled, _replace_tip_state)
+                    _install(plc, replay, settled, _replace_tip_state)
                 for observer in LOOP_OBSERVERS:
                     observer(plc, settled)
             continue
@@ -185,7 +186,7 @@ def _run_compiled(
         state = replay._materialize_replay_state()
         settled = state
         if checkpoint:
-            _install(plc, state, _replace_tip_state)
+            _install(plc, replay, state, _replace_tip_state)
         if predicate is not None and predicate(state):
             loop.stop_held()
             break
@@ -195,7 +196,7 @@ def _run_compiled(
     elif settled.scan_id != replay._kernel.scan_id:
         settled = replay._materialize_replay_state()
     if settled.scan_id != plc._state.scan_id:
-        _install(plc, settled, _replace_tip_state)
+        _install(plc, replay, settled, _replace_tip_state)
     if settled.scan_id >= first_scan_id:
         plc._record_fold_landing(first_scan_id)
         plc._bounds_violations = {}
@@ -249,11 +250,21 @@ class _BoundsWatch:
         return bool(check_bounds(values, self._constrained))
 
 
-def _install(plc: PLC, state: SystemState, replace_tip: Callable) -> None:
-    """Make *state* the tip: cached, checkpointed on its interval, and history trimmed."""
+def _install(plc: PLC, replay: CompiledPLC, state: SystemState, replace_tip: Callable) -> None:
+    """Make *state* the tip, with all a commit leaves on the runner.
+
+    Its RTC applies are recorded under their own scans, it is cached, checkpointed
+    on its interval, history is trimmed, and the run flags read from it.  Applies of
+    scans past *state* wait: if those scans are undone, the replay's goes with them.
+    """
     previous_tip = plc._state.scan_id
+    applied = replay.rtc_applied
+    while applied and applied[0][0] <= state.scan_id:
+        scan_id, base, base_sim_time = applied.pop(0)
+        plc._set_rtc_and_record(base, base_sim_time, scan_id=scan_id)
     replace_tip(plc, state)
     plc._record_fold_landing()
     plc._apply_history_retention(state.scan_id)
+    plc._sync_runtime_flags_from_state()
     if plc._playhead == previous_tip:
         plc._playhead = state.scan_id

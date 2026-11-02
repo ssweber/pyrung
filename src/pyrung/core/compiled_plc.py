@@ -241,11 +241,14 @@ class CompiledPLC:
         self._rtc_fields: dict[str, Any] = {}
         self._rtc_fields_from = math.inf
         self._rtc_fields_until = -math.inf
+        # What a scan's RTC apply did: (scan id, base, base sim time), for a runner
+        # that owns the record of it (compiled_run).
+        self.rtc_applied: list[tuple[int, datetime, float]] = []
         self._system_runtime = SystemPointRuntime(
             time_mode_getter=lambda: self._time_mode,
             fixed_step_dt_getter=lambda: self._dt,
             rtc_now_getter=self._rtc_at_sim_time,
-            rtc_setter=self._set_rtc_internal,
+            rtc_setter=self._apply_rtc,
         )
         self._input_overrides = InputOverrideManager(
             is_read_only=self._system_runtime.is_read_only,
@@ -942,6 +945,10 @@ class CompiledPLC:
         if value.tzinfo is None:
             return value
         return value.astimezone().replace(tzinfo=None)
+
+    def _apply_rtc(self, value: datetime, sim_time: float) -> None:
+        self._set_rtc_internal(value, sim_time)
+        self.rtc_applied.append((self._kernel.scan_id + 1, value, float(sim_time)))
 
     def _set_rtc_internal(self, value: datetime, sim_time: float) -> None:
         self._rtc_base = value

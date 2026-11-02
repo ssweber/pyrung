@@ -3801,7 +3801,9 @@ class PLC:
         self._rtc_base = value
         self._rtc_base_sim_time = float(sim_time)
 
-    def _set_rtc_and_record(self, value: datetime, sim_time: float) -> None:
+    def _set_rtc_and_record(
+        self, value: datetime, sim_time: float, *, scan_id: int | None = None
+    ) -> None:
         """Set RTC base and record the change for replay.
 
         Used for user-initiated (``set_rtc()``) and in-scan
@@ -3809,6 +3811,9 @@ class PLC:
         callback) paths.  Internal lifecycle paths (reboot,
         stop-to-run) use ``_set_rtc_internal`` directly; the lifecycle
         event itself implies the RTC transition at replay time.
+
+        *scan_id* is the scan the change belongs to, the next one by default.  A
+        compiled range, which applied it some scans ago, says which.
 
         No-op in replay mode — the log's ``rtc_base_changes`` entry is
         load-bearing, and ``replay_to`` applies it via
@@ -3819,7 +3824,9 @@ class PLC:
             return
         self._set_rtc_internal(value, sim_time)
         self._causal_lineage.invalidate_current_epoch()
-        self._scan_log.record_rtc_base_change(self._state.scan_id + 1, value, float(sim_time))
+        self._scan_log.record_rtc_base_change(
+            self._state.scan_id + 1 if scan_id is None else scan_id, value, float(sim_time)
+        )
 
     def _record_lifecycle(self, kind: LifecycleKind, value: bool | None = None) -> None:
         self._scan_log.record_lifecycle(

@@ -450,6 +450,13 @@ def _corpus_mode_stop() -> None:
         calc(N + 1, N)
 
 
+def _corpus_mode_stop_at_once() -> None:
+    with Rung(Run):
+        out(system.sys.cmd_mode_stop)
+    with Rung():
+        calc(N + 1, N)
+
+
 def _corpus_forloop() -> None:
     with Rung(Run), forloop(3):
         calc(N + 1, N)
@@ -524,6 +531,7 @@ CORPUS: dict[str, tuple[Callable[[], None], float, list[tuple[float, dict[Any, A
     "rtc_apply": (_corpus_rtc_apply, 0.01, [(1.0, {Run: True}), (4.0, {}), (1.0, {Run: False})]),
     "rtc_apply_date": (_corpus_rtc_apply_date, 0.01, [(5.0, {Run: True}), (1.0, {})]),
     "mode_stop": (_corpus_mode_stop, 0.01, [(1.0, {Run: True}), (4.0, {}), (1.0, {})]),
+    "mode_stop_at_once": (_corpus_mode_stop_at_once, 0.01, [(1.0, {Run: True}), (1.0, {})]),
 }
 
 # Cases where the loop has every right to run nothing: each scan is a decision.
