@@ -172,8 +172,7 @@ def detect_cycle(
 
     Requiring the deltas to hold over ``min_repeats`` periods is the
     observe-before-skip guard: a transient that has not yet settled into a clean
-    cycle is rejected, exactly as the runner fold only marks a clock inert after
-    observing a full period unchanged.  ``P = 1`` with an empty *monotone* is the
+    cycle is rejected.  ``P = 1`` with an empty *monotone* is the
     ordinary plateau; ``P = 1`` with one monotone tag is the ordinary accumulator
     ramp — both already handled by the runner fold, so callers invoke this only
     once that fold has stalled.
@@ -516,14 +515,10 @@ def cycle_fold_until(
     # so the observed window spans each clock's whole cycle (its net effect is
     # captured) and every whole-period jump preserves each clock's phase (exact
     # timestamp + same phase ⇒ rise()/fall() memory stays consistent across the
-    # skip).  This is the runtime form of the soft-clock partition: instead of
-    # statically proving an edge inert, we observe a full clock cycle and confirm
-    # the net change is boundary-stable or a certified accumulator.
-    read_hps = [
-        *fold_ctx.clock_half_periods,
-        *(hp for _n, hp in fold_ctx.soft_clocks),
-        *(hp for _n, hp, _a in fold_ctx.sat_clocks),
-    ]
+    # skip).  We observe a full clock cycle and confirm the net change is
+    # boundary-stable or a certified accumulator.  An indicator's clock bounds no
+    # window but still aligns the period: that keeps a jump exact for the indicator.
+    read_hps = [*fold_ctx.clock_half_periods, *fold_ctx.indicator_half_periods]
     period_multiple_of = 1
     for hp in read_hps:
         full_scans = 2.0 * hp / dt
@@ -548,21 +543,21 @@ def cycle_fold_until(
         if source.acc_name in monotone_allowed and source.timed and source.unit is not None
     }
     # Classify over the runner fold's *significant* set: drop the tags it already
-    # treats as don't-care for the plateau (resolved-on-read-driven frozen writes,
-    # unread churn) so they don't spuriously break the cycle.
+    # treats as don't-care for the plateau (clock-driven indicators, unread churn)
+    # so they don't spuriously break the cycle.
     # Accumulators stay in — they are the monotone coordinates.
     # Clock mirrors are ignored too: the RTC bound below keeps a jump inside
     # one tick unless their readers are proven off (fold._TimeMirrors).
     # A plant stays in: one that moves does not repeat, so no cycle is found.
-    ignore = fold_ctx.frozen_writes | fold_ctx.churn_excluded
+    ignore = fold_ctx.indicators | fold_ctx.churn_excluded
     if fold_ctx.time_mirrors is not None:
         ignore = ignore | fold_ctx.time_mirrors.names
     significant_keys = (frozenset(plc.state.tags) - ignore) | {_EDGE_MEMORY_KEY}
     tags_seen = len(plc.state.tags)
-    # A jump runs no scan: an ignored tag other than a frozen write keeps its
+    # A jump runs no scan: an ignored tag other than an indicator keeps its
     # pre-jump value until the next scan rebuilds it, so the jumped tip is then
     # not the exact state of its scan.
-    jump_exact = not (ignore - fold_ctx.frozen_writes)
+    jump_exact = not (ignore - fold_ctx.indicators)
     # A plant the predicate is declared to read, with no comparison to end a window on.
     declared_plants = (predicate_reads or frozenset()) & fold_ctx.analog_names
     ordinary = _OrdinaryFoldStrategy(

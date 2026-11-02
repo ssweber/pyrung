@@ -3029,7 +3029,6 @@ class PLC:
                 replay._kernel.memory[f"_frac:{name}"] = frac_out
             kernel_scans += 1
             state = replay._materialize_replay_state()
-            strategy.finish(state, probe, plan)
             scan_id = state.scan_id + 1
 
         for event in lifecycle_by_scan.get(target_scan_id + 1, []):
@@ -4793,7 +4792,7 @@ class PLC:
             )
             extra_comparisons = _extract_condition_crossings(normalized)
             # The condition's tags become fold-protected reads: a bump on a
-            # churn-excluded / frozen-write tag must break the plateau, and a
+            # churn-excluded / indicator tag must break the plateau, and a
             # condition-read clock or scan-derived signal must bound the fold
             # even when no program rung reads it.
             from pyrung.core.system_points import _CLOCK_HALF_PERIODS, scan_derived_names

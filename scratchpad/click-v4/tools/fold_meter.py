@@ -88,7 +88,7 @@ def install() -> None:
     def build(*a, **k):
         ctx = orig_build(*a, **k)
         M["contexts"] += 1
-        M["frozen"] |= set(ctx.frozen_writes)
+        M["frozen"] |= set(ctx.indicators)
         return ctx
 
     F._build_fold_context = build

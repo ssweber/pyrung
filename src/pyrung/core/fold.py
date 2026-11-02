@@ -184,13 +184,11 @@ class _FoldContext:
     mirror_names: frozenset[str] = frozenset()
     clock_half_periods: tuple[float, ...] = ()
     scan_derived_names: frozenset[str] = frozenset()
-    soft_clocks: tuple[tuple[str, float], ...] = ()
-    # Clocks held hard *only* because a gated rung reads an accumulator through a
-    # comparison.  Each entry pairs the clock with its half-period and the
-    # accumulators whose comparisons must all be saturated before the clock may
-    # be promoted soft at runtime (see _runtime_soft_clocks).
-    sat_clocks: tuple[tuple[str, float, frozenset[str]], ...] = ()
-    frozen_writes: frozenset[str] = frozenset()
+    # Tags a clock moves that nothing remembering can see (see _clock_indicators):
+    # out of the plateau guard, and the half-periods of the clocks that drive only
+    # them, for a cycle to align to.  Those clocks bound no window.
+    indicators: frozenset[str] = frozenset()
+    indicator_half_periods: tuple[float, ...] = ()
     # Some rung reads ``sys.first_scan``: a probe scan run at scan 0 sees it True
     # while the window after it sees False, so such a probe cannot certify a fold.
     reads_first_scan: bool = False
@@ -259,8 +257,8 @@ class _FoldContext:
         for the window (a plain fold's probe, or a cycle's observed periods):
         the guard holds what the scan entered with to what that write left, so
         a read on either side of it sees the boundary's value, and the window's
-        scans run the same writers (a clock that could wake another is hard, see
-        :func:`_tags_behind_writers`).  A forced input with a writer
+        scans run the same writers (a clock read by a writer, or by anything
+        behind one, ends the window at its edges).  A forced input with a writer
         hides its value too: the boundary shows the force, while a rung above a
         reader can still write under it.
         """
@@ -1755,33 +1753,6 @@ def _inputs_read_between_writes(
     }
 
 
-def _tags_behind_writers(pdg: ProgramGraph, names: Collection[str]) -> frozenset[str]:
-    """*names* and every tag that can decide a write of them, through the writers' reads.
-
-    A probe's write count for an input stands for a window only while the writers
-    run as they did in the probe.  A plateau guard holds a stored tag, but a clock
-    is not stored: ``with Rung(clock): copy(200, P)`` above a reader and
-    ``copy(5000, P)`` below it leave every boundary at 5000 whichever phase the
-    clock is in.  So a clock in here ends each window at its edges.
-    """
-    seen: set[str] = set()
-    pending = list(names)
-    while pending:
-        name = pending.pop()
-        if name in seen:
-            continue
-        seen.add(name)
-        writers = set(pdg.writers_of.get(name, ()))
-        block = getattr(pdg.tags.get(name), "_pyrung_block", None)
-        if block is not None:
-            writers.update(
-                ref.node_index for ref in pdg.indirect_writes if ref.block.name == block.name
-            )
-        for index in writers:
-            pending.extend(_node_reads(pdg.rung_nodes[index]))
-    return frozenset(seen)
-
-
 def _steps_written_outside(
     pdg: ProgramGraph, program: Any, sources: Sequence[_AccSource]
 ) -> frozenset[str]:
@@ -2220,49 +2191,12 @@ def _without_soft_rtc_ticks(ctx: _FoldContext) -> _FoldContext:
     return replace(ctx, time_mirrors=None)
 
 
-def _window_constant_names() -> frozenset[str]:
-    """Resolved-on-read system names that cannot move inside a fold window.
-
-    Fixed configuration, plus the system clocks, whose edges the fold bounds
-    on its own (``_scans_to_clock_edge``), plus ``first_scan``.  Every other
-    derived name can change between two scans of a window: the scan-id
-    signals, the scan-time and ``dt`` readouts (which the one landing scan
-    inflates), the RTC fields and the SD status.
-
-    ``first_scan`` resolves as ``scan_id == 0``.  Every fold is certified
-    after a genuine probe scan (``_FoldPlan``), so its window starts at
-    ``scan_id >= 1``; and :meth:`_OrdinaryFoldStrategy.plan` declines a probe
-    that itself ran at scan 0 when the program reads ``first_scan``
-    (``_FoldContext.reads_first_scan``).  The probe and every scan of the
-    window therefore read ``first_scan`` as False.
-    """
-    from pyrung.core.system_points import _CLOCK_HALF_PERIODS
-    from pyrung.core.system_points import system as _system
-
-    sys_ = _system.sys
-    firmware = _system.firmware
-    return frozenset(_CLOCK_HALF_PERIODS) | {
-        sys_.always_on.name,
-        sys_.first_scan.name,
-        sys_.mode_switch_run.name,
-        sys_.mode_run.name,
-        sys_.fixed_scan_mode.name,
-        sys_.battery_present.name,
-        sys_.scan_time_fixed_setup_ms.name,
-        sys_.interrupt_scan_time_ms.name,
-        firmware.main_ver_low.name,
-        firmware.main_ver_high.name,
-        firmware.sub_ver_low.name,
-        firmware.sub_ver_high.name,
-    }
-
-
 def _opaque_indirect_tags(pdg: ProgramGraph) -> frozenset[str]:
     """Block slots some rung may read or write through an unbounded pointer.
 
     The PDG cannot name the element an unbounded ``block[ptr]`` touches, so its
     reader and writer sets for that block are incomplete.  Every known slot of
-    such a block is reported here so the frozen-write pass can refuse it.
+    such a block is reported here so the indicator rule can refuse it.
     """
     opaque_blocks: set[str] = set(pdg.opaque_index_blocks)
     for use in pdg.pointer_uses:
@@ -2324,83 +2258,6 @@ def _node_scan_context(
                     pos[i] = p
                     changed = True
     return reads, pos
-
-
-def _frozen_rung_writes(
-    pdg: ProgramGraph,
-    base_varying: frozenset[str],
-    window_constant: frozenset[str],
-    target_names: frozenset[str],
-    protected: frozenset[str] = frozenset(),
-) -> frozenset[str]:
-    """Tags whose value is rebuilt, identically, inside every scan of a plateau.
-
-    Excluding such a tag from the plateau guard lets the fold skip through
-    clock-gated recomputations that would otherwise break the window.  The
-    exclusion is sound only when the landing scan recomputes the tag's exact
-    stepped value from window-constant inputs, so a tag is frozen only when:
-
-    * no varying input reaches its writers.  *varying* is seeded with
-      *base_varying* (accumulators, churn, mirrors, scan-varying system names)
-      and propagated through rung read->write edges to a fixed point;
-    * every rung that reads it runs strictly after every rung that writes it.
-      A read of the scan-entry value (a self-read like ``calc(f(X), X)``, a
-      seal-in, or a rung reading a tag written further down the scan) makes the
-      value depend on the previous scan, which the one landing scan cannot
-      replay;
-    * it is not a target, not *protected*, and not a slot an unbounded pointer
-      may reach.
-
-    *window_constant* names are stripped from reads: they are resolved on read,
-    never stored, and cannot move inside a fold window.  Anything uncertain
-    keeps the tag in the guard, where a change it makes declines the fold.
-    """
-    reads, pos = _node_scan_context(pdg)
-    reads = [r - window_constant for r in reads]
-    nodes = pdg.rung_nodes
-
-    varying: set[str] = set(base_varying)
-    changed = True
-    while changed:
-        changed = False
-        for i, node in enumerate(nodes):
-            if not reads[i] & varying:
-                continue
-            for w in node.all_writes:
-                if w not in varying:
-                    varying.add(w)
-                    changed = True
-
-    writer_pos: dict[str, set[int]] = {}
-    unplaced: set[str] = set()
-    for i, node in enumerate(nodes):
-        for w in node.all_writes:
-            writer_pos.setdefault(w, set()).update(pos[i])
-            if not pos[i]:
-                unplaced.add(w)
-    reader_min: dict[str, int] = {}
-    for i in range(len(nodes)):
-        if not pos[i]:
-            continue
-        first = min(pos[i])
-        for r in reads[i]:
-            if r not in reader_min or first < reader_min[r]:
-                reader_min[r] = first
-
-    excluded = set(varying) | target_names | protected | _opaque_indirect_tags(pdg) | unplaced
-    frozen: set[str] = set()
-    for node in nodes:
-        for w in node.writes:
-            if w in excluded or w in frozen:
-                continue
-            written_at = writer_pos.get(w)
-            if not written_at:
-                continue
-            first_read = reader_min.get(w)
-            if first_read is not None and max(written_at) >= first_read:
-                continue
-            frozen.add(w)
-    return frozenset(frozen)
 
 
 # ── 7. Self-calc sources ────────────────────────────────────────────
@@ -2639,70 +2496,105 @@ def _mirror_reads_are_simple(tag: str, pdg: ProgramGraph, program: Any, writer_r
 # ── 9. Context assembly ─────────────────────────────────────────────
 
 
-def _partition_read_clocks(
+def _clock_indicators(
     pdg: ProgramGraph,
+    program: Any,
     disqualifying: frozenset[str],
-    acc_names: frozenset[str],
-) -> tuple[
-    tuple[float, ...], tuple[tuple[str, float], ...], tuple[tuple[str, float, frozenset[str]], ...]
-]:
-    """Split the system clocks the program reads into hard, soft, and rescuable.
+    untouchable: frozenset[str],
+) -> tuple[frozenset[str], frozenset[str]]:
+    """The tags a clock moves that nothing remembering can see, and the clocks only they use.
 
-    A clock is *soft* (inert-eligible) when every rung reading it uses it only
-    as a gate and reads nothing else that varies within a plateau window — so
-    the gated logic recomputes an identical result at every edge.  A clock read
-    as data, or read alongside a window-varying tag (excluded churn, a mirror,
-    or another resolved-on-read signal), is *hard*: bound on every edge.
+    A plain rung is contacts over ``out()`` coils, reading nothing that moves inside
+    a window but clocks.  An indicator is fed by a clock through plain rungs; its
+    writers and readers are all plain, every reader sits strictly below every writer,
+    and readers write only indicators.  So each is a function of its scan: the landing
+    scan rebuilds it from the clock's phase there, and no state that outlives a scan
+    depends on it.  It leaves the plateau guard, and a clock read only by plain rungs
+    that write only indicators bounds no window.  Anything else keeps its clock a bound.
 
-    Between those two sits a *rescuable* clock: hard **only** because a gated
-    rung reads an accumulator through a comparison (never as data, never beside a
-    non-accumulator disqualifier).  Such a clock is value-blind-hard today, but
-    the moment those comparisons saturate the gated logic recomputes identically
-    — so it is returned separately, tagged with the accumulators that must
-    saturate, for the loop to promote soft at runtime (see _runtime_soft_clocks).
-
-    Returns ``(hard_half_periods, soft_clocks, sat_clocks)``.  Misclassifying a
-    clock soft costs nothing for soundness — the runtime plateau guard only ever
-    marks an edge inert after *observing* it leave the visible state unchanged.
+    Returns ``(clocks, indicators)``.  Every step is a pass over the rungs' reads and
+    writes, so the cost stays linear in the size of the program.
     """
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.condition import BitCondition, NormallyClosedCondition
+    from pyrung.core.instruction.coils import OutInstruction
     from pyrung.core.system_points import _CLOCK_HALF_PERIODS
 
-    clock_names = frozenset(_CLOCK_HALF_PERIODS)
-    read_clocks: set[str] = set()
-    unconditional: set[str] = set()
-    req_accs: dict[str, set[str]] = {}
-    for node in pdg.rung_nodes:
-        reads = node.condition_reads | node.data_reads | node.exclusive_reads
-        node_clocks = reads & clock_names
-        if not node_clocks:
-            continue
-        read_clocks |= node_clocks
-        body_reads = node.data_reads | node.exclusive_reads
-        for c in node_clocks:
-            if c in body_reads:
-                unconditional.add(c)  # clock read as data — never rescuable
-                continue
-            dq = (reads - {c}) & disqualifying
-            if not dq:
-                continue  # soft contribution from this node
-            # Rescuable only if every disqualifier here is an accumulator read
-            # purely through a comparison.  A non-accumulator disqualifier, or an
-            # accumulator read as data, makes this node's recompute genuinely
-            # live — the clock is unconditionally hard.
-            if (dq - acc_names) or (dq & acc_names & body_reads):
-                unconditional.add(c)
-                continue
-            req_accs.setdefault(c, set()).update(dq & acc_names)
+    clocks = frozenset(_CLOCK_HALF_PERIODS)
+    node_reads, positions = _node_scan_context(pdg)
+    nodes = pdg.rung_nodes
 
-    hard = unconditional
-    sat = {c: accs for c, accs in req_accs.items() if c not in hard and accs}
-    soft = read_clocks - hard - set(sat)
-    hard_half_periods = tuple(sorted({_CLOCK_HALF_PERIODS[c] for c in hard}))
-    soft_clocks = tuple(sorted((c, _CLOCK_HALF_PERIODS[c]) for c in soft))
-    sat_clocks = tuple(
-        sorted((c, _CLOCK_HALF_PERIODS[c], frozenset(accs)) for c, accs in sat.items())
-    )
-    return hard_half_periods, soft_clocks, sat_clocks
+    def is_plain(index: int) -> bool:
+        node = nodes[index]
+        if (
+            node.branch_path
+            or node.data_reads & clocks
+            or node.exclusive_reads & clocks
+            or (node_reads[index] - clocks) & disqualifying
+        ):
+            return False
+        rung = resolve_rung(program, node)
+        return (
+            rung is not None
+            and not rung._branches
+            and all(
+                isinstance(leaf, BitCondition | NormallyClosedCondition)
+                for leaf in _condition_leaves(rung._conditions)
+            )
+            # A one-shot coil remembers.
+            and all(
+                isinstance(instr, OutInstruction) and not instr._oneshot
+                for instr in rung._instructions
+            )
+        )
+
+    plain = [is_plain(i) for i in range(len(nodes))]
+    readers: dict[str, list[int]] = {}
+    writers: dict[str, list[int]] = {}
+    for i, node in enumerate(nodes):
+        for name in node_reads[i]:
+            readers.setdefault(name, []).append(i)
+        for name in node.all_writes:
+            writers.setdefault(name, []).append(i)
+
+    # Forward from the plain rungs on a clock, through the plain rungs that read them.
+    fed: set[str] = set()
+    pending = [i for name in clocks for i in readers.get(name, ()) if plain[i]]
+    while pending:
+        for name in nodes[pending.pop()].all_writes - fed:
+            fed.add(name)
+            pending.extend(i for i in readers.get(name, ()) if plain[i])
+
+    # Each tag is judged once on its own rungs; then a tag that stops being an
+    # indicator takes with it whatever feeds it, as that now reaches memory.
+    def fails_alone(name: str) -> bool:
+        if name in untouchable:
+            return True
+        written = writers.get(name, ())
+        read = readers.get(name, ())
+        if not all(plain[i] for i in written) or not all(plain[i] for i in read):
+            return True
+        if not all(positions[i] for i in written):
+            return True
+        read_at = [p for i in read for p in positions[i]]
+        return bool(read_at) and max(p for i in written for p in positions[i]) >= min(read_at)
+
+    indicators = set(fed)
+    pending_tags = [name for name in fed if fails_alone(name)]
+    while pending_tags:
+        name = pending_tags.pop()
+        if name in indicators:
+            indicators.discard(name)
+            for i in writers.get(name, ()):
+                pending_tags.extend(node_reads[i] & indicators)
+
+    irrelevant: set[str] = set()
+    tied: set[str] = set()
+    for i, node in enumerate(nodes):
+        (irrelevant if plain[i] and node.all_writes <= indicators else tied).update(
+            node_reads[i] & clocks
+        )
+    return frozenset(irrelevant - tied), frozenset(indicators)
 
 
 def _build_fold_context(
@@ -2722,7 +2614,7 @@ def _build_fold_context(
     guard.  *condition_clock_reads* are system clocks a ``run_until``
     condition reads that the program's rungs may not: resolved on read and
     never stored, they are invisible to the plateau guard, so each is
-    bounded as an unconditionally *hard* clock edge (never soft/inert).
+    bounded at each of its edges.
     *condition_scan_derived* likewise disables folding entirely — a
     scan-id-derived signal read by the condition changes every scan.
     *advice* gates the fold-kind passes (``None`` = all enabled);
@@ -2738,7 +2630,7 @@ def _build_fold_context(
     analog = _analog_feedback(plc)
     analog_names = frozenset(a.name for a in analog)
     # Read by the predicate or by a rung the program graph does not list.  No pass
-    # may call one of these unread, frozen, a mirror or churn: this is the one set
+    # may call one of these unread, an indicator, a mirror or churn: this is the one set
     # they all take.
     visible_names = target_names | _slots_read_through_pointers(pdg, program)
 
@@ -2967,94 +2859,8 @@ def _build_fold_context(
         pdg, program, written_inputs, prepass_writes
     )
 
-    # System clocks (sys.clock_1s, …) are pure functions of the timestamp,
-    # resolved on read and never stored in state.tags — so the plateau guard
-    # and the crossing arithmetic are both blind to them.  A rung that reads one
-    # (level or via rise()/fall()) flips on the clock's edge; folding past that
-    # edge would silently drop the firing.  Bound the fold to each read clock's
-    # edges — but split them: a clock read *only* as a gate by rungs whose
-    # bodies read nothing that varies within a plateau window recomputes the
-    # same result at every edge, so once the runtime plateau confirms one edge
-    # inert the rest can be skipped (see the inert_soft handling in the loops).
-    # Anything that varies within a window — an accumulator, excluded churn, a
-    # mirror, another resolved-on-read signal — keeps its clock hard.
-    from pyrung.core.system_points import _DERIVED_TAG_NAMES
+    from pyrung.core.system_points import _CLOCK_HALF_PERIODS, _DERIVED_TAG_NAMES
     from pyrung.core.system_points import system as _system
-
-    clock_disqualifying = (
-        acc_names
-        | profile_fb_names
-        | churn_excluded
-        | modwrap_names
-        | frozenset(mirror_names)
-        | (frozenset(_DERIVED_TAG_NAMES) - {_system.sys.always_on.name})
-    )
-    clock_half_periods, soft_clocks, sat_clocks = _partition_read_clocks(
-        pdg,
-        clock_disqualifying,
-        acc_names - unmodeled - frozenset().union(*inputs_between_writes.values()),
-    )
-    if condition_clock_reads:
-        # A clock read by the run_until condition has no rung body to prove it
-        # inert — every edge is a potential landing, so it is unconditionally
-        # hard, demoted out of soft/rescuable if the program also reads it.
-        from pyrung.core.system_points import _CLOCK_HALF_PERIODS
-
-        cond_clocks = condition_clock_reads & frozenset(_CLOCK_HALF_PERIODS)
-        if cond_clocks:
-            clock_half_periods = tuple(
-                sorted(set(clock_half_periods) | {_CLOCK_HALF_PERIODS[c] for c in cond_clocks})
-            )
-            soft_clocks = tuple((n, hp) for n, hp in soft_clocks if n not in cond_clocks)
-            sat_clocks = tuple((n, hp, accs) for n, hp, accs in sat_clocks if n not in cond_clocks)
-            if journal is not None:
-                journal.add_note(
-                    "fold: bounded by run_until-condition clock edge(s): "
-                    + ", ".join(sorted(cond_clocks))
-                )
-    if journal is not None:
-        if clock_half_periods:
-            journal.add_note(
-                "fold: bounded by hard system-clock edges (half-periods s): "
-                + ", ".join(str(hp) for hp in clock_half_periods)
-            )
-        if soft_clocks:
-            journal.add_note(
-                "fold: soft (inert-eligible) clocks tracked per window: "
-                + ", ".join(name for name, _hp in soft_clocks)
-            )
-        if sat_clocks:
-            journal.add_note(
-                "fold: saturation-rescuable clocks (promoted soft once their "
-                "accumulator comparisons settle): "
-                + ", ".join(name for name, _hp, _accs in sat_clocks)
-            )
-
-    frozen_writes: frozenset[str] = frozenset()
-    if advice is None or advice.has("fold_frozen_writes"):
-        window_constant = _window_constant_names()
-        base_varying = (
-            acc_names
-            | modwrap_names
-            | frozenset(mirror_names)
-            | profile_fb_names
-            | churn_excluded
-            | (frozenset(_DERIVED_TAG_NAMES) - window_constant)
-        )
-        frozen_writes = _frozen_rung_writes(
-            pdg,
-            base_varying,
-            window_constant,
-            visible_names,
-            # A crossing resolves from a fold input's boundary value, so a change
-            # of one must end the window: it stays in the plateau guard.
-            protected=_harness_referenced_names(plc) | written_inputs.keys(),
-        )
-        if frozen_writes and journal is not None:
-            journal.add_note(
-                "fold: frozen-rung writes excluded from plateau guard: "
-                + ", ".join(sorted(frozen_writes))
-            )
 
     # The synthesis overlay's plant rungs are real on/off-delay timers (bool
     # feedback); register their accumulators as fold sources so a coupling's
@@ -3088,18 +2894,55 @@ def _build_fold_context(
             inputs_between_writes = _inputs_read_between_writes(
                 pdg, program, written_inputs, prepass_writes
             )
-            frozen_writes = frozen_writes - written_inputs.keys()
 
-    behind_writers = _tags_behind_writers(pdg, inputs_between_writes.keys())
-    if behind_writers:
-        from pyrung.core.system_points import _CLOCK_HALF_PERIODS
-
-        gating_clocks = behind_writers & frozenset(_CLOCK_HALF_PERIODS)
-        clock_half_periods = tuple(
-            sorted(set(clock_half_periods) | {_CLOCK_HALF_PERIODS[c] for c in gating_clocks})
+    # System clocks (sys.clock_1s, ...) are pure functions of the timestamp,
+    # resolved on read and never stored in state.tags, so the plateau guard and the
+    # crossing arithmetic are both blind to them.  A rung that reads one (level or
+    # via rise()/fall()) flips on the clock's edge, so every clock read ends a window
+    # at its edges, unless all it drives is an indicator.
+    read_clocks = frozenset(name for name in _CLOCK_HALF_PERIODS if pdg.all_readers_of.get(name))
+    indicators: frozenset[str] = frozenset()
+    indicator_clocks: frozenset[str] = frozenset()
+    if read_clocks and (advice is None or advice.has("fold_indicators")):
+        indicator_clocks, indicators = _clock_indicators(
+            pdg,
+            program,
+            acc_names
+            | profile_fb_names
+            | churn_excluded
+            | modwrap_names
+            | frozenset(mirror_names)
+            | (frozenset(_DERIVED_TAG_NAMES) - {_system.sys.always_on.name}),
+            visible_names
+            | _harness_referenced_names(plc)
+            | _opaque_indirect_tags(pdg)
+            # A crossing resolves from a fold input's boundary value, so a change of
+            # one must end the window: it stays in the plateau guard.
+            | written_inputs.keys(),
         )
-        soft_clocks = tuple((n, hp) for n, hp in soft_clocks if n not in gating_clocks)
-        sat_clocks = tuple((n, hp, accs) for n, hp, accs in sat_clocks if n not in gating_clocks)
+    # A clock the run_until condition reads has no rung to prove anything about.
+    condition_clocks = condition_clock_reads & frozenset(_CLOCK_HALF_PERIODS)
+    bounding_clocks = (read_clocks - indicator_clocks) | condition_clocks
+    clock_half_periods = tuple(sorted({_CLOCK_HALF_PERIODS[c] for c in bounding_clocks}))
+    indicator_half_periods = tuple(
+        sorted({_CLOCK_HALF_PERIODS[c] for c in indicator_clocks - bounding_clocks})
+    )
+    if journal is not None:
+        if condition_clocks:
+            journal.add_note(
+                "fold: bounded by run_until-condition clock edge(s): "
+                + ", ".join(sorted(condition_clocks))
+            )
+        if clock_half_periods:
+            journal.add_note(
+                "fold: bounded by system-clock edges (half-periods s): "
+                + ", ".join(str(hp) for hp in clock_half_periods)
+            )
+        if indicators:
+            journal.add_note(
+                "fold: clock-driven indicators rebuilt by the landing scan, excluded from "
+                "plateau guard: " + ", ".join(sorted(indicators))
+            )
 
     first_scan_name = _system.sys.first_scan.name
     reads_first_scan = any(first_scan_name in _node_reads(node) for node in pdg.rung_nodes)
@@ -3110,7 +2953,7 @@ def _build_fold_context(
         journal.add_note("fold: bounded by RTC field ticks: " + ", ".join(sorted(rtc_fields)))
 
     time_mirrors: _TimeMirrors | None = None
-    if rtc_fields and (advice is None or advice.has("fold_frozen_writes")):
+    if rtc_fields and (advice is None or advice.has("fold_time_mirrors")):
         time_mirrors = _time_mirror_analysis(
             pdg,
             program,
@@ -3121,7 +2964,7 @@ def _build_fold_context(
                 | frozenset(mirror_names)
                 | profile_fb_names
                 | churn_excluded
-                | frozen_writes
+                | indicators
             ),
             target_names=visible_names,
             protected=_harness_referenced_names(plc) | written_inputs.keys(),
@@ -3141,7 +2984,7 @@ def _build_fold_context(
         | churn_excluded
         | modwrap_names
         | frozenset(mirror_names)
-        | frozen_writes
+        | indicators
         | landing_rebuilt
         | (time_mirrors.names if time_mirrors is not None else frozenset())
         | frozenset(_DERIVED_TAG_NAMES)
@@ -3180,9 +3023,8 @@ def _build_fold_context(
         mirror_names=frozenset(mirror_names),
         clock_half_periods=clock_half_periods,
         scan_derived_names=scan_derived_names,
-        soft_clocks=soft_clocks,
-        sat_clocks=sat_clocks,
-        frozen_writes=frozen_writes,
+        indicators=indicators,
+        indicator_half_periods=indicator_half_periods,
         reads_first_scan=reads_first_scan,
         rtc_fields=rtc_fields,
         rtc_condition_fields=rtc_condition_fields,
@@ -3242,7 +3084,7 @@ def _extract_condition_reads(condition: Any) -> frozenset[str]:
     operands on comparison right sides, and both legs of ``ArithAtom``
     compounds.  The caller threads the set into the fold context as
     protected reads (``target_names``), so a condition tag classified as
-    churn-excluded or frozen-write cannot be folded past.  A junk name
+    churn-excluded or an indicator cannot be folded past.  A junk name
     (a Char *value* operand that happens to be a string) is harmless —
     protection only ever narrows folding, never unsounds it.
     """
@@ -3383,32 +3225,6 @@ def _crossed_between(before: float, after: float, target: float, strict: bool) -
     if strict:
         return (before > target) != (after > target)
     return (before >= target) != (after >= target)
-
-
-def _comparisons_saturated(progress: float, kind: str, cmps: Sequence[tuple[str, float]]) -> bool:
-    """True iff every comparison in *cmps* has made its final transition already.
-
-    A monotone source at *progress* (the ``_acc_totals`` value — count-down
-    accumulators negated, so the coordinate always increases) contributes a
-    *frozen* boolean to a comparison once that comparison can no longer flip for
-    the rest of the window.  When this holds for every comparison a rung reads on
-    the source, the source's raw value keeps changing but its logical effect on
-    that rung is constant — so a clock gating the rung need not stay bound to it.
-
-    ``eq``/``ne`` are treated conservatively as *never* saturated (a value
-    sitting at the threshold still has its fall ahead); excluding them keeps
-    the predicate sound at the cost of a missed fold.
-
-    Empty *cmps* is vacuously saturated (the caller only passes comparison reads;
-    a raw data read of the source is disqualifying upstream, never reaches here).
-    """
-    for form, k in cmps:
-        if form in ("eq", "ne"):
-            return False
-        target, strict = _progress_bound(kind, form, k)
-        if _scans_to_cross(progress, 1.0, target, strict) is not None:
-            return False
-    return True
 
 
 def _scans_to_uncross(pa: float, delta: float, target: float, strict: bool) -> int | None:
@@ -4216,9 +4032,8 @@ def every_scan_clock_edge_keys(site_table: Any) -> frozenset[str]:
     A contact on ``sys.clock_*`` in a main-program row (not a For body) is
     scanned on every scan, so its memory is the clock as the previous scan
     read it: a function of the timestamp, which the fold's clock handling
-    already models (an edge-sensitive rung sees the pair of reads one ``dt``
-    apart, see :func:`_mark_inert_soft`; windows end at a hard clock's edges).
-    The plateau guard leaves those keys to it.  A clock contact in a
+    already models (an edge-sensitive rung is never plain, so a window ends at
+    each edge of its clock).  The plateau guard leaves those keys to it.  A clock contact in a
     subroutine, a For body or an overlay is scanned only when something lets
     it, so what it remembers depends on when it last ran: it stays guarded.
     """
@@ -4276,65 +4091,6 @@ def _harness_nearest_scan(plc: PLC) -> int | None:
     return None
 
 
-def _acc_comparisons_saturated_now(
-    ctx: _FoldContext,
-    state: Any,
-    totals: dict[str, float],
-    kinds: dict[str, str],
-    acc: str,
-) -> bool:
-    """Resolve *acc*'s comparison thresholds against *state* and test saturation.
-
-    Returns ``False`` when the accumulator has no recorded comparison (no
-    evidence to promote on) or any threshold is currently unresolvable.
-    """
-    progress = totals.get(acc)
-    if progress is None:
-        return False
-    cmps_raw = ctx.comparisons.get(acc, ())
-    if not cmps_raw:
-        return False
-    resolved: list[tuple[str, float]] = []
-    for form, operand in cmps_raw:
-        kv = _resolve_num(operand, state)
-        if kv is None:
-            return False
-        resolved.append((form, kv))
-    return _comparisons_saturated(progress, kinds.get(acc, "up"), resolved)
-
-
-def _runtime_soft_clocks(ctx: _FoldContext, state: Any) -> frozenset[str]:
-    """Saturation-rescuable clocks (``ctx.sat_clocks``) safe to treat soft now.
-
-    A rescuable clock is promoted only while *every* accumulator it requires has
-    settled past all comparisons read on it — the same value-aware judgment the
-    static partition is blind to.  The promotion is still backstopped by the
-    loop's observe-before-skip guard, so a wrong promotion only costs a probe
-    scan, never a dropped edge.
-    """
-    if not ctx.sat_clocks:
-        return frozenset()
-    totals = _acc_totals(state, ctx.sources)
-    kinds = {s.acc_name: s.kind for s in ctx.sources}
-    promoted: set[str] = set()
-    for name, _hp, accs in ctx.sat_clocks:
-        if all(_acc_comparisons_saturated_now(ctx, state, totals, kinds, acc) for acc in accs):
-            promoted.add(name)
-    return frozenset(promoted)
-
-
-def _window_soft_clocks(
-    ctx: _FoldContext, promoted: frozenset[str]
-) -> tuple[tuple[str, float], ...]:
-    """Soft (inert-eligible) clocks for this window: the always-soft set plus any
-    saturation-rescuable clock currently promoted by ``_runtime_soft_clocks``."""
-    if not ctx.sat_clocks:
-        return ctx.soft_clocks
-    return ctx.soft_clocks + tuple(
-        (name, hp) for name, hp, _accs in ctx.sat_clocks if name in promoted
-    )
-
-
 def _clock_reads_in_phase(t: float, dt: float, hp: float) -> int:
     """How many consecutive scans reading at ``t, t + dt, ...`` see the clock's phase at ``t``.
 
@@ -4357,8 +4113,6 @@ def _clock_reads_in_phase(t: float, dt: float, hp: float) -> int:
 def _scans_to_clock_edge(
     ctx: _FoldContext,
     state: Any,
-    inert_soft: frozenset[str] = frozenset(),
-    promoted: frozenset[str] = frozenset(),
     probe_timestamp: float | None = None,
 ) -> int | None:
     """Largest fold skip whose scans all read a bounding clock in one phase.
@@ -4374,28 +4128,16 @@ def _scans_to_clock_edge(
     * every window scan, the landing scan included, must read before the
       next edge.  The landing state itself sits on or past the edge, so the
       next genuine scan is the edge scan and runs as an ordinary probe (where
-      a per-edge change breaks the plateau and is never wrongly marked inert).
+      a per-edge change breaks the plateau).
 
     ``0`` means don't fold.  ``None`` means nothing is read that needs bounding.
-
-    Hard clocks always bound the fold.  Soft (inert-eligible) clocks bound it
-    only until the loop confirms an edge inert and adds them to *inert_soft*;
-    thereafter their edges are skipped for the rest of the plateau window.  A
-    saturation-rescuable clock (``ctx.sat_clocks``) is hard while *not* in
-    *promoted* — its accumulator comparison can still flip — and joins the soft
-    pool once *promoted*, so it too needs one observed-inert edge before skipping.
 
     Scan-id-derived signals (``scan_clock_toggle``/``scan_counter``) change
     every scan, so a read of either forces ``0``: the fold may not skip.
     """
     if ctx.scan_derived_names:
         return 0
-    half_periods = list(ctx.clock_half_periods)
-    # Rescuable clocks that have *not* saturated yet are hard this window.
-    half_periods.extend(hp for name, hp, _accs in ctx.sat_clocks if name not in promoted)
-    half_periods.extend(
-        hp for name, hp in _window_soft_clocks(ctx, promoted) if name not in inert_soft
-    )
+    half_periods = ctx.clock_half_periods
     if not half_periods or ctx.normal_dt <= 0:
         return None
     from pyrung.core.system_points import clock_phase
@@ -4408,46 +4150,6 @@ def _scans_to_clock_edge(
         gap = _clock_reads_in_phase(t, ctx.normal_dt, hp)
         best = gap if best is None else min(best, gap)
     return best
-
-
-def _mark_inert_soft(
-    ctx: _FoldContext,
-    inert_soft: set[str],
-    inert_run: dict[str, int],
-    read_ts: float,
-    promoted: frozenset[str] = frozenset(),
-) -> None:
-    """Record the clock edges one genuine probe scan saw; confirm a clock inert once both did.
-
-    The caller invokes this only after the visible state was observed
-    unchanged across the probe scan, which read the clocks at *read_ts*; the
-    scan before it read them one normal ``dt`` earlier.  An edge-sensitive
-    rung (``rise(clock)`` / ``fall(clock)``) sees exactly that pair of reads,
-    so the probe shows one polarity inert when the two reads differ.  A clock
-    joins *inert_soft* only after both a rise and a fall were seen inert
-    (``inert_run`` holds the polarities seen: 1 rise, 2 fall); the loop clears
-    it whenever the plateau breaks.
-
-    Edges the clock crossed between two reads are never counted: at a ``dt``
-    of a half-period or more one scan can cross several, and stepping sees
-    only the reads.  A clock whose reads never differ is never confirmed, and
-    keeps bounding the fold.  Promoted saturation-rescuable clocks are
-    inert-eligible on the same terms.
-    """
-    from pyrung.core.system_points import clock_high
-
-    dt = ctx.normal_dt
-    for name, hp in _window_soft_clocks(ctx, promoted):
-        if name in inert_soft:
-            continue
-        before = clock_high(read_ts - dt, hp)
-        now = clock_high(read_ts, hp)
-        if before == now:
-            continue
-        seen = inert_run.get(name, 0) | (1 if now else 2)
-        inert_run[name] = seen
-        if seen == 3:
-            inert_soft.add(name)
 
 
 def _fold_patches(
@@ -4931,8 +4633,6 @@ class _FoldPlan:
 
     skip: int
     after_totals: dict[str, float]
-    promoted: frozenset[str]
-    pre_fold_timestamp: float
     # ``(acc_name, acc, frac_in, frac_out)`` timer edits around the landing
     # scan (see _timer_landing).
     timer_landing: tuple[tuple[str, int, float, float], ...] = ()
@@ -4971,11 +4671,9 @@ class _OrdinaryFoldStrategy:
             | ctx.churn_excluded
             | ctx.modwrap_names
             | ctx.mirror_names
-            | ctx.frozen_writes
+            | ctx.indicators
             | (ctx.time_mirrors.names if ctx.time_mirrors is not None else frozenset())
         )
-        self.inert_soft: set[str] = set()
-        self.inert_run: dict[str, int] = {}
 
     def predicate_unmodeled(self) -> frozenset[str] | None:
         """Sources the opaque predicate read, or ``None`` if it read the unknowable.
@@ -5003,8 +4701,8 @@ class _OrdinaryFoldStrategy:
 
         ``visible`` omits only coordinates whose evolution has a separate,
         statically certified projection (accumulators, modular self-calcs,
-        affine views, proven unobservable/frozen writes, and clock mirrors the
-        landing scan rebuilds, see :class:`_TimeMirrors`). Everything else
+        affine views, indicators, and clock mirrors the landing scan rebuilds,
+        see :class:`_TimeMirrors`). Everything else
         is the plateau guard: one changed value declines the fold.
 
         Also has *runner* count each timed accumulator's writes in the probe
@@ -5061,22 +4759,16 @@ class _OrdinaryFoldStrategy:
         bound the window (see :meth:`_FoldContext.hidden_input_coordinates`).
         """
         if not _visible_items_match(state, probe.visible, self.exclude):
-            self.inert_soft.clear()
-            self.inert_run.clear()
             return None
         if edge_memory_on(state, self.ctx.clock_edge_memory) != probe.edges:
             # The probe saw an edge at some contact (or its memory moved off a
             # bit it last saw): the next scan is not a repeat of it.
-            self.inert_soft.clear()
-            self.inert_run.clear()
             return None
         if probe.scan_id == 0 and self.ctx.reads_first_scan:
             # The probe read first_scan True; the window would read it False.
             # Its unchanged state proves nothing about the window's scans.
             return None
 
-        promoted = _runtime_soft_clocks(self.ctx, state)
-        _mark_inert_soft(self.ctx, self.inert_soft, self.inert_run, probe.timestamp, promoted)
         after_totals, after_timers = _acc_readings(state, self.ctx.sources)
         timer_moves = _timer_moves(self.ctx, probe.timers, after_timers)
         if timer_moves is None:
@@ -5116,13 +4808,7 @@ class _OrdinaryFoldStrategy:
             if gap >= 0:
                 skip = min(skip, gap) if skip is not None else gap
 
-        clock_gap = _scans_to_clock_edge(
-            self.ctx,
-            state,
-            frozenset(self.inert_soft),
-            promoted,
-            probe.timestamp,
-        )
+        clock_gap = _scans_to_clock_edge(self.ctx, state, probe.timestamp)
         if clock_gap is not None:
             skip = min(skip, clock_gap) if skip is not None else clock_gap
         if timer_moves:
@@ -5166,8 +4852,6 @@ class _OrdinaryFoldStrategy:
         return _FoldPlan(
             skip=skip,
             after_totals=after_totals,
-            promoted=promoted,
-            pre_fold_timestamp=state.timestamp,
             timer_landing=timer_landing,
             analog_landing=analog_landing,
             ordinary_dt=ordinary_dt,
@@ -5279,24 +4963,6 @@ class _OrdinaryFoldStrategy:
             return gap
         return _scans_to_rtc_tick(ctx, state, probe.timestamp, rtc_at, hard)
 
-    def finish(
-        self,
-        state: SystemState,
-        probe: _FoldProbe,
-        plan: _FoldPlan,
-        *,
-        patches: tuple[tuple[str, Any], ...] = (),
-    ) -> _FoldAdvance:
-        """Update window-local clock evidence after an executor lands *plan*.
-
-        A landing reads no clock edge that is not yet confirmed inert (the
-        window stops before it), so it only ever clears the evidence.
-        """
-        if not _visible_items_match(state, probe.visible, self.exclude):
-            self.inert_soft.clear()
-            self.inert_run.clear()
-        return _FoldAdvance(logical_scans=plan.skip, patches=patches)
-
     def try_fold(
         self,
         runner: PLC,
@@ -5337,7 +5003,7 @@ class _OrdinaryFoldStrategy:
             analog_landing=plan.analog_landing,
             ordinary_dt=plan.ordinary_dt,
         )
-        return self.finish(runner._state, probe, plan, patches=patches)
+        return _FoldAdvance(logical_scans=plan.skip, patches=patches)
 
 
 # ── 13. Runner integration ──────────────────────────────────────────

@@ -362,7 +362,7 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
                 stats.cycle_calls.append(dict(call_stats))
             if fold_ctx is not None:
                 ignore = (
-                    fold_ctx.frozen_writes
+                    fold_ctx.indicators
                     | fold_ctx.churn_excluded
                     | fold_ctx.profile_fb_names
                 )
