@@ -43,6 +43,9 @@ from pyrung.core.analysis.pilot.overlay import PilotRung, fork_with_pilot_rungs
 from pyrung.core.fold import _build_fold_context
 from pyrung.core.runner import PLC
 from pyrung.core.system_points import system
+from tests.core.scan_loop_counts import NEVER, ScansOutsideLoop
+
+pytestmark = pytest.mark.usefixtures("loop_from_first_scan")
 
 P = Int("P")
 Hit = Bool("Hit")
@@ -92,7 +95,7 @@ def _run(
     plc.step()
     if then:
         plc.patch(then)
-    plc.run_until(lambda _s: False, max_cycles=scans, fold=fold)
+    plc.run_until(NEVER, max_cycles=scans, fold=fold)
     return plc
 
 
@@ -114,15 +117,8 @@ def _kernel_scans(
     if patch:
         plc.patch(patch)
     plc.step()
-    counter = {"n": 0}
-    original = plc._run_single_scan
-
-    def wrapped(**options: Any) -> Any:
-        counter["n"] += 1
-        return original(**options)
-
-    plc._run_single_scan = wrapped  # ty: ignore[invalid-assignment]
-    plc.run_until(lambda _s: False, max_cycles=scans, fold=True)
+    counter = ScansOutsideLoop(plc)
+    plc.run_until(NEVER, max_cycles=scans, fold=True)
     assert plc.state.scan_id >= scans
     return counter["n"]
 
@@ -400,7 +396,7 @@ class TestReplaySeek:
         if patch:
             plc.patch(patch)
         plc.step()
-        plc.run_until(lambda _s: False, max_cycles=self.TOTAL, fold=False)
+        plc.run_until(NEVER, max_cycles=self.TOTAL, fold=False)
         return plc, plc._replay_seek(self.TARGET), plc.replay_to(self.TARGET)
 
     @pytest.mark.parametrize("reader", [_timer_reader, _comparison_reader, _time_drum])
@@ -420,9 +416,9 @@ class TestReplaySeek:
 
         plc = PLC(_program(body)(), dt=0.01)
         plc.step()
-        plc.run_until(lambda _s: False, max_cycles=5, fold=False)
+        plc.run_until(NEVER, max_cycles=5, fold=False)
         plc.patch({"Mode": True})
-        plc.run_until(lambda _s: False, max_cycles=self.TOTAL, fold=False)
+        plc.run_until(NEVER, max_cycles=self.TOTAL, fold=False)
         assert _state(plc._replay_seek(self.TARGET)) == _state(plc.replay_to(self.TARGET))
 
     def test_one_write_above_still_folds(self) -> None:
@@ -547,10 +543,10 @@ class TestHoldAboveTheProgram:
 
     def test_a_held_operand_with_a_writer_below_the_reader(self) -> None:
         def stepped(plc: PLC) -> None:
-            plc.run_until(lambda _s: False, max_cycles=700, fold=False)
+            plc.run_until(NEVER, max_cycles=700, fold=False)
 
         def folded(plc: PLC) -> None:
-            plc.run_until(lambda _s: False, max_cycles=700, fold=True)
+            plc.run_until(NEVER, max_cycles=700, fold=True)
 
         def cycle(plc: PLC) -> None:
             cycle_fold_until(plc, lambda _s: False, budget=700, kernel_budget=False)
@@ -647,7 +643,7 @@ class TestRebuiltOnTheClock:
             plc.set_rtc(datetime(2026, 1, 1))
             plc.patch({"P": 20_000})
             plc.step()
-            plc.run_until(lambda _s: False, max_cycles=800, fold=fold)
+            plc.run_until(NEVER, max_cycles=800, fold=fold)
             return plc
 
         folded, stepped = run(True), run(False)
@@ -713,7 +709,7 @@ class TestAClockWakesAWriterTheProbeDidNotCount:
             plc.set_rtc(datetime(2026, 1, 1))
             plc.patch({"P": 30_000})
             plc.step()
-            plc.run_until(lambda _s: False, max_cycles=800, fold=fold)
+            plc.run_until(NEVER, max_cycles=800, fold=fold)
             return plc
 
         folded, stepped = run(True), run(False)

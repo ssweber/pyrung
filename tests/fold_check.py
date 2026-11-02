@@ -14,6 +14,14 @@ instead of its argument (it would answer about the wrong runner on a twin) or th
 raises on the twin is not asked, and is counted.  A mismatch raises
 :class:`FoldMismatch` inside the test that ran the fold, naming the scan and the differing keys.
 
+The guarded scan loop runs in a finer mode here: it fires a few scans at a time
+(``scan_trace.BURST_SIZES``), and each state it leaves between firings is compared
+with the twin too, so an intermediate scan cannot diverge unseen.  A self check
+mismatch raises, and every short run traces (``scan_trace.MIN_RUN_SCANS``).  The
+summary counts the scans the loop ran and why it declined; a session that checks
+compiled runs while the loop never fires fails (:func:`vacuous`), since it would
+have proved nothing about the loop.
+
 A run is skipped, and counted, when the twin cannot reproduce it: an active
 ``when()`` registration or a monitor other than a Harness feedback notifier
 (their callbacks act on the folded runner only), replay mode, a time mode other
@@ -28,7 +36,12 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from typing import Any
 
+import pyrung.core.compiled_run as compiled_run
+import pyrung.core.scan_trace as scan_trace
+
 MAX_SCANS = int(os.environ.get("FOLD_CHECK_MAX_SCANS", "200000"))
+# Firing sizes for the loop: short ones to compare often, long ones to reach far.
+_LOOP_BURSTS = (1, 1, 2, 1, 3, 7, 1, 1, 97, 1, 2, 1, 317, 1, 1, 997, 1, 1, 5, 1)
 # Per-scan diagnostics a landing legitimately inflates (see fold._do_fold).
 _IGNORED_TAGS = frozenset({"sys.scan_time_current_ms"})
 
@@ -258,6 +271,8 @@ def _reachable(root: Any, plc: Any, stop: tuple[type, ...] = ()) -> Iterator[Any
             todo.extend(obj)
         elif hasattr(obj, "__dict__"):
             todo.extend(vars(obj).values())
+        elif hasattr(obj, "__slots__"):
+            todo.extend(getattr(obj, name) for name in obj.__slots__ if hasattr(obj, name))
 
 
 def _fingerprint(root: Any, plc: Any) -> tuple[Any, ...]:
@@ -314,6 +329,8 @@ def _checked(
     plc: Any,
     call: Callable[[], Any],
     predicate: Callable[[Any], bool] | None = None,
+    *,
+    fine: bool = True,
 ) -> Any:
     global _depth
     if _depth:
@@ -330,10 +347,22 @@ def _checked(
         if ask is None:
             _note_skip("predicate skipped: not copyable")
     _depth += 1
+    between_firings: dict[int, Any] = {}
+
+    def observe(runner: Any, state: Any) -> None:
+        if runner is plc:
+            between_firings[state.scan_id] = state
+
+    if fine:
+        compiled_run.LOOP_OBSERVERS.append(observe)
+    loop_scans_before = scan_trace.TOTALS["loop scans"]
     try:
         result = call()
     finally:
         _depth -= 1
+        if fine:
+            compiled_run.LOOP_OBSERVERS.remove(observe)
+    STATS["loop scans in checked runs"] += scan_trace.TOTALS["loop scans"] - loop_scans_before
     end = plc._state.scan_id
     n = end - start
     if n <= 0:
@@ -345,6 +374,8 @@ def _checked(
     produced = {
         sid: entry[0] for sid, entry in plc._recent_state_cache.items() if start < sid <= end
     }
+    STATS["states between loop firings"] += len(between_firings)
+    produced.update({sid: state for sid, state in between_firings.items() if start < sid <= end})
     last_equal = start
     asked = False
     for _ in range(n):
@@ -387,7 +418,6 @@ def _checked(
 def install() -> None:
     """Wrap the fold entry points (idempotent)."""
     import pyrung.core.analysis.pilot.cyclefold as cyclefold
-    import pyrung.core.compiled_run as compiled_run
     import pyrung.core.fold as fold
 
     if getattr(fold, "_fold_check_installed", False):
@@ -398,14 +428,24 @@ def install() -> None:
     compiled_scans = compiled_run.run_scans
     # Send every run through the kernel: a short run is the common test.
     setattr(compiled_run, "INTERPRETED_PREFIX", 1)  # noqa: B010
+    # Every run in the loop, finely, and a self check mismatch is a failure.
+    setattr(scan_trace, "MIN_RUN_SCANS", 1)  # noqa: B010
+    setattr(scan_trace, "BURST_SIZES", _LOOP_BURSTS)  # noqa: B010
+    setattr(scan_trace, "STRICT_SELF_CHECK", True)  # noqa: B010
 
     def run_scans(runner: Any, scans: int, predicate: Any = None, **kwargs: Any) -> Any:
-        return _checked(
-            "compiled",
-            runner,
-            lambda: compiled_scans(runner, scans, predicate, **kwargs),
-            predicate,
-        )
+        # A run too long for the twin is not compared, so it need not fire finely.
+        scan_trace.BURST_SIZES = _LOOP_BURSTS if scans <= MAX_SCANS else None
+        try:
+            return _checked(
+                "compiled",
+                runner,
+                lambda: compiled_scans(runner, scans, predicate, **kwargs),
+                predicate,
+                fine=scans <= MAX_SCANS,
+            )
+        finally:
+            scan_trace.BURST_SIZES = _LOOP_BURSTS
 
     setattr(compiled_run, "run_scans", run_scans)  # noqa: B010
 
@@ -432,8 +472,17 @@ def wall_budget(seconds: float) -> float:
     return seconds * 10 if getattr(fold, "_fold_check_installed", False) else seconds
 
 
+def vacuous() -> str | None:
+    """Why this session proved nothing about the loop, or None."""
+    checked = STATS["checked: compiled"]
+    if checked >= 100 and not STATS["loop scans in checked runs"]:
+        return f"{checked} compiled runs checked, and the scan loop ran no scan in any of them"
+    return None
+
+
 def summary() -> list[str]:
     lines = [f"  {key}: {count}" for key, count in sorted(STATS.items())]
+    lines.extend(f"  scan loop, {key}: {count}" for key, count in sorted(scan_trace.TOTALS.items()))
     for reason, tests in sorted(SKIPS.items()):
         if reason.startswith("predicate skipped"):
             lines.append(f"  {reason}, tests:")

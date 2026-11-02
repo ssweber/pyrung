@@ -49,6 +49,9 @@ from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
 from pyrung.core.harness import Coupling, Harness
 from pyrung.core.physical import Approach, Physical, Pulse, Ramp
 from pyrung.core.runner import PLC
+from tests.core.scan_loop_counts import ScansOutsideLoop
+
+pytestmark = pytest.mark.usefixtures("loop_from_first_scan")
 
 Enable, Hit, Tog = Bool("Enable"), Bool("Hit"), Bool("Tog")
 Shown = Real("Shown")
@@ -130,16 +133,8 @@ def _first_hit(make: Callable[[], PLC], budget: int = 3_000) -> int | None:
     return None
 
 
-def _kernel_scans(plc: PLC) -> dict[str, int]:
-    counter = {"n": 0}
-    original = plc._run_single_scan
-
-    def wrapped(**options: Any) -> Any:
-        counter["n"] += 1
-        return original(**options)
-
-    plc._run_single_scan = wrapped  # ty: ignore[invalid-assignment]
-    return counter
+def _kernel_scans(plc: PLC) -> ScansOutsideLoop:
+    return ScansOutsideLoop(plc)
 
 
 def _jump(plc: PLC, predicate: Any, budget: int = 3_000, **kwargs: Any) -> tuple[bool, dict]:

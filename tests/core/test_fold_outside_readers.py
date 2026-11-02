@@ -40,6 +40,9 @@ from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
 from pyrung.core.fold import _extract_condition_crossings
 from pyrung.core.runner import PLC
 from pyrung.core.system_points import system
+from tests.core.scan_loop_counts import NEVER
+
+pytestmark = pytest.mark.usefixtures("loop_from_first_scan")
 
 clk100 = system.sys.clock_100ms
 
@@ -189,9 +192,9 @@ class TestAProbeThatLeftMemoryBehind:
     )
     def test_a_one_shot_that_rearms_on_a_timer(self, body: Body) -> None:
         stepped = _plc(body)
-        stepped.run_until(lambda _s: False, max_cycles=1000, fold=False)
+        stepped.run_until(NEVER, max_cycles=1000, fold=False)
         folded = _plc(body)
-        folded.run_until(lambda _s: False, max_cycles=1000, fold=True)
+        folded.run_until(NEVER, max_cycles=1000, fold=True)
         assert folded.state.scan_id == stepped.state.scan_id
         assert _state(folded) == _state(stepped)
 
@@ -216,9 +219,9 @@ class TestAProbeThatLeftMemoryBehind:
     def test_an_edge_raised_from_below(self, body: Body) -> None:
         def run(fold: bool) -> PLC:
             plc = _plc(body)
-            plc.run_until(lambda _s: False, max_cycles=20, fold=False)
+            plc.run_until(NEVER, max_cycles=20, fold=False)
             plc.patch({"G": True})
-            plc.run_until(lambda _s: False, max_cycles=1000, fold=fold)
+            plc.run_until(NEVER, max_cycles=1000, fold=fold)
             return plc
 
         stepped, folded = run(False), run(True)
@@ -228,7 +231,7 @@ class TestAProbeThatLeftMemoryBehind:
     def test_a_timer_alone_still_folds(self) -> None:
         plc = _plc(_timer)
         counter = _count_kernel_scans(plc)
-        plc.run_until(lambda _s: False, max_cycles=700, fold=True)
+        plc.run_until(NEVER, max_cycles=700, fold=True)
         assert counter["n"] < 60
 
     def test_memory_nobody_has_heard_of_counts(self) -> None:
@@ -350,7 +353,7 @@ class TestAMonitor:
         plc = _plc(body, patch)
         fired: list[tuple[int, Any, Any]] = []
         plc.monitor(tag, lambda cur, prev: fired.append((plc.state.scan_id, prev, cur)))
-        plc.run_until(lambda _s: False, max_cycles=scans, fold=fold)
+        plc.run_until(NEVER, max_cycles=scans, fold=fold)
         return fired, plc
 
     @pytest.mark.parametrize(
@@ -398,7 +401,7 @@ class TestAMonitor:
         def run(fold: bool) -> PLC:
             plc = _plc(_rebuilt_seconds, {"A": True})
             plc.monitor(Secs, lambda _c, _p: plc.patch({"N": plc.state.tags.get("N", 0) + 1}))
-            plc.run_until(lambda _s: False, max_cycles=1000, fold=fold)
+            plc.run_until(NEVER, max_cycles=1000, fold=fold)
             return plc
 
         folded, stepped = run(True), run(False)
@@ -419,12 +422,14 @@ class TestAMonitor:
             fired: list[int] = []
             plc.monitor(Hit, lambda _c, _p: fired.append(plc.state.scan_id))
             counter = _count_kernel_scans(plc)
-            plc.run_until(lambda _s: False, max_cycles=700, fold=fold)
+            plc.run_until(NEVER, max_cycles=700, fold=fold)
             return fired, counter["n"]
 
         folded, kernel_scans = run(True)
-        assert folded == run(False)[0]
-        assert kernel_scans < 100
+        stepped, stepped_scans = run(False)
+        assert folded == stepped
+        # A monitor watches every scan: the run steps.
+        assert kernel_scans == stepped_scans
 
 
 def _seconds_gated() -> None:

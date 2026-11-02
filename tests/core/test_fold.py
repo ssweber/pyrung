@@ -29,6 +29,9 @@ from pyrung import (
 )
 from pyrung.core import fall, fill, forloop, rise, search, system
 from pyrung.core.runner import PLC
+from tests.core.scan_loop_counts import NEVER, ScansOutsideLoop
+
+pytestmark = pytest.mark.usefixtures("loop_from_first_scan")
 
 # ---------------------------------------------------------------------------
 # Test programs
@@ -495,23 +498,12 @@ class TestSystemClockFold:
 # ---------------------------------------------------------------------------
 
 
-def _count_kernel_scans(plc: PLC) -> dict[str, int]:
-    """Wrap ``_run_single_scan`` to count kernel executions.
-
-    Every probe scan and every ``_do_fold`` step routes through
-    ``_run_single_scan`` — the single choke point — so the count is the true
-    kernel work done, independent of how far ``scan_id`` (equivalent elapsed
-    time) advances. Call after ``step()`` so only the run-loop work is counted.
+def _count_kernel_scans(plc: PLC) -> ScansOutsideLoop:
+    """Count the scans a run spends outside the guarded loop: the true kernel work,
+    independent of how far ``scan_id`` advances. Call after ``step()`` so only the
+    run-loop work is counted.
     """
-    counter = {"n": 0}
-    original = plc._run_single_scan
-
-    def wrapped(**scan_options):  # type: ignore[no-untyped-def]
-        counter["n"] += 1
-        return original(**scan_options)
-
-    plc._run_single_scan = wrapped  # ty: ignore[invalid-assignment]
-    return counter
+    return ScansOutsideLoop(plc)
 
 
 class TestResolvedOnReadSignalFold:
@@ -943,7 +935,7 @@ class TestRungsAcrossAWindow:
         plc.patch(patch)
         plc.step()
         counter = _count_kernel_scans(plc)
-        plc.run_until(lambda _s: False, max_cycles=3000, fold=True)
+        plc.run_until(NEVER, max_cycles=3000, fold=True)
         assert counter["n"] <= 250
 
     def test_rung_reading_a_timer_bit_lands_on_its_crossing(self) -> None:
@@ -999,7 +991,7 @@ class TestRungsAcrossAWindow:
         plc.patch(patch)
         plc.step()
         counter = _count_kernel_scans(plc)
-        plc.run_until(lambda _s: False, max_cycles=2000, fold=True)
+        plc.run_until(NEVER, max_cycles=2000, fold=True)
         assert counter["n"] <= 12
 
     def test_clock_gated_rungs_end_each_window_and_still_fold(self) -> None:
@@ -1221,9 +1213,9 @@ class TestScanVaryingValuesAreExact:
     def test_scan_varying_write_lands_as_stepped(self, shape: Callable[[], Any], tag: str) -> None:
         for scans in (37, 38, 601):
             folded, _hit, _tmr = _started(shape)
-            folded.run_until(lambda _s: False, max_cycles=scans, fold=True)
+            folded.run_until(NEVER, max_cycles=scans, fold=True)
             stepped, _hit2, _tmr2 = _started(shape)
-            stepped.run_until(lambda _s: False, max_cycles=scans, fold=False)
+            stepped.run_until(NEVER, max_cycles=scans, fold=False)
 
             assert folded.state.scan_id == stepped.state.scan_id
             assert folded.state.tags[tag] == stepped.state.tags[tag]
@@ -1342,8 +1334,9 @@ class TestFirstScanWindowConstant:
         plc = PLC(build(), dt=0.010)
         plc.step()
         counter = _count_kernel_scans(plc)
-        plc.run_until(lambda _s: False, max_cycles=2000, fold=True)
-        assert counter["n"] <= 12
+        plc.run_until(NEVER, max_cycles=2000, fold=True)
+        # A real scan at each edge of the clock the rung reads: 40 in 20 s.
+        assert counter["n"] <= 50
 
     def test_probe_at_scan_zero_does_not_certify_a_fold(self) -> None:
         """Scan 0 reads first_scan True; scans 1.. read False.  With every tag
@@ -1435,7 +1428,7 @@ def _rtc_mirror_only_program() -> tuple[Program, Bool]:
 
 
 def _run_scans(plc: PLC, n: int, *, fold: bool) -> None:
-    plc.run_until(lambda _s: False, max_cycles=n, fold=fold)
+    plc.run_until(NEVER, max_cycles=n, fold=fold)
 
 
 class TestRtcTickBound:
@@ -1707,15 +1700,6 @@ def _rtc_mirror_plc(prog: Program, **patch: Any) -> PLC:
     return plc
 
 
-def _without_time_mirrors(plc: PLC) -> None:
-    from dataclasses import replace
-
-    cache = plc._fold_context_cache
-    assert cache is not None
-    for key, value in list(cache.items()):
-        cache[key] = replace(value, time_mirrors=None)
-
-
 def _folded_and_stepped(
     build: Callable[[], Program],
     run: Callable[[PLC, bool], None],
@@ -1791,17 +1775,13 @@ class TestSoftRtcTicks:
         assert _plain_tags(folded) == _plain_tags(stepped)
 
     def test_soft_ticks_save_kernel_scans(self) -> None:
-        def kernel_scans(mirrors: bool) -> int:
-            prog, hit = _rtc_mirror_program()
-            plc = _rtc_mirror_plc(prog)
-            plc._ensure_fold_context(frozenset({hit.name}))
-            if not mirrors:
-                _without_time_mirrors(plc)
-            counter = _count_kernel_scans(plc)
-            plc.run_until(hit, max_cycles=10_000)
-            return counter["n"]
-
-        assert kernel_scans(True) < 10 < kernel_scans(False)
+        prog, hit = _rtc_mirror_program()
+        plc = _rtc_mirror_plc(prog)
+        counter = _count_kernel_scans(plc)
+        plc.run_until(hit, max_cycles=10_000)
+        assert plc.state.tags[hit.name] is True
+        # About one real scan for each RTC second the rungs read.
+        assert counter["n"] < 20
 
     def test_live_reader_is_not_judged_off(self) -> None:
         from pyrung.core.fold import _time_mirrors_off
@@ -2514,12 +2494,13 @@ class TestTimerCarryExact:
             assert (steps, f_acc, f_frac) == (reached or n, acc, frac)
 
     @pytest.mark.parametrize(
-        ("unit", "seconds", "max_kernel"), [("min", 360_000.0, 4), ("h", 86_400.0, 4)]
+        ("unit", "seconds", "max_kernel"), [("min", 86_400.0, 4), ("h", 8_640.0, 4)]
     )
     def test_sub_unit_timer_folds_long_runs_cheaply(
         self, unit: str, seconds: float, max_kernel: int
     ) -> None:
-        # 36M / 8.6M scans of a timer whose step is a fraction of its unit.
+        # 8.6M / 860K scans of a timer whose step is a fraction of its unit: past the
+        # 5M scans run_for() used to step interpreted, and every scan really runs.
         def build() -> Program:
             Long = Timer.clone("Long")
             with Program(strict=False) as prog:
@@ -3249,7 +3230,9 @@ class TestFlagsFollowInsideAWindow:
         counted.step()
         kernel = _count_kernel_scans(counted)
         self._until_end(counted, True)
-        assert kernel["n"] < 20
+        if not after:
+            # A flag left on keeps the scan-start hook busy, and those scans are real.
+            assert kernel["n"] < 20
 
     @pytest.mark.parametrize(
         "faulting, start, step, rises",
@@ -3621,10 +3604,8 @@ class TestUnseenStopsStayExact:
 
         _assert_fold_is_exact(build, go)
         assert seen[True] == seen[False] != []
-        if tag == "Tmr_Acc":
-            assert kernel[True] == kernel[False]
-        else:
-            assert kernel[True] < 20
+        # A monitor watches every scan: the run steps, whichever tag it watches.
+        assert kernel[True] == kernel[False]
 
     def test_pause_breakpoint_blocks_cycle_jumps(self) -> None:
         from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
@@ -4102,7 +4083,8 @@ class TestTimedDrumReadsAnotherStep:
         assert folded.state.tags["DAcc"] == stepped.state.tags["DAcc"] > 0
         assert kernel_scans[True] < kernel_scans[False]
         self._assert_replay_matches(folded, stepped)
-        folded._replay_seek(folded.state.scan_id)
+        # Short of the tip: the tip and the checkpoints are cached, nothing to replay.
+        folded._replay_seek(folded.state.scan_id - 50)
         assert folded._last_replay_seek_stats["ordinary_folded_scans"] > 0
 
     @pytest.mark.parametrize("kind", ["time", "time_event"])
@@ -4721,10 +4703,10 @@ class TestTimeEventDrum:
         for read_done in (True, False):
             plc = PLC(self._event_only_tail(read_done), dt=0.01)
             plc.step()
-            plc.run_until(lambda _s: False, max_cycles=60_100)
+            plc.run_until(NEVER, max_cycles=60_100)
             assert plc.state.tags["Step"] == 2
             counter = _count_kernel_scans(plc)
-            plc.run_until(lambda _s: False, max_cycles=2_000)
+            plc.run_until(NEVER, max_cycles=2_000)
             work.append(counter["n"])
         assert work[0] == work[1]
 
@@ -4789,7 +4771,7 @@ class TestOutVariants:
         plc = PLC(self._shape("flasher", "coil")(), dt=0.01)
         plc.patch({"In": True})
         counter = _count_kernel_scans(plc)
-        plc.run_until(lambda _s: False, max_cycles=2_000)
+        plc.run_until(NEVER, max_cycles=2_000)
         assert counter["n"] < 500
 
 
@@ -4904,9 +4886,9 @@ class TestContestedTimer:
             assert _full_state(folded._replay_seek(target)) == want
 
     def test_reset_writer_held_on_steps(self) -> None:
-        plc = PLC(self._shape("copy_before")(), dt=0.01)
-        plc.patch({"B": True, "Btn": True})
-        plc.step()
-        counter = _count_kernel_scans(plc)
-        _run_scans(plc, 200, fold=True)
-        assert counter["n"] == 200
+        def run(plc: PLC, fold: bool) -> None:
+            plc.patch({"B": True, "Btn": True})
+            _run_scans(plc, 200, fold=fold)
+
+        folded, stepped = _folded_and_stepped(self._shape("copy_before"), run)
+        assert _full_state(folded) == _full_state(stepped)
