@@ -17,12 +17,12 @@ closed.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeGuard
 
 if TYPE_CHECKING:
-    from pyrung.core.fold import _FoldContext
+    from pyrung.core.fold import _AccSource, _FoldContext
     from pyrung.core.runner import PLC
     from pyrung.core.state import SystemState
 
@@ -233,18 +233,76 @@ def detect_cycle(
 # ── Crossing bound (in period units) ─────────────────────────────────
 
 
+def _bounds_hold_through_period(
+    src: _AccSource,
+    comparisons: tuple[tuple[str, Any], ...],
+    fold_ctx: _FoldContext,
+    observed: Sequence[Mapping[str, Any]],
+    forced: Collection[str],
+    callbacks: bool,
+) -> bool:
+    """Whether every scan of a period reads the bounds its anchor state shows.
+
+    A jump bounds a coordinate by its preset and comparison operands, and a drum
+    picks its preset by its step, all from one state.  That state stands for the
+    period only if they hold still through it (a step swapped each scan times to
+    two presets), and shows what a reader read only if nothing writes around it.
+    A forced step can hide a write above the drum.  So can a callback's patch,
+    which the scan drains before a reader and overwrites below it, on any input
+    with a writer: the snapshots show only the writer's value.
+    """
+    from pyrung.core.fold import _operand_tags
+
+    names = set(_operand_tags(src.preset))
+    for _form, operand in comparisons:
+        names.update(_operand_tags(operand))
+    step = src.step_name
+    if step is not None:
+        if step in forced or (callbacks and step in fold_ctx.steps_written_outside):
+            return False
+        names.add(step)
+    if callbacks and not fold_ctx.written_inputs.keys().isdisjoint(names):
+        return False
+    if not observed:
+        return True
+    first = observed[0]
+    return all(snapshot.get(name) == first.get(name) for snapshot in observed for name in names)
+
+
+def _most_writes_per_scan(
+    scans: Sequence[Mapping[str, int] | None], names: Collection[str]
+) -> dict[str, int]:
+    """The most any of *scans* wrote each of *names*; a scan with no count stands for many."""
+    most = dict.fromkeys(names, 0)
+    for counts in scans:
+        for name in names:
+            most[name] = max(most[name], 2 if counts is None else counts.get(name, 2))
+    return most
+
+
 def _monotone_read_surface(
     cyc: _Cycle,
     state: SystemState,
     fold_ctx: _FoldContext,
     extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
     read_sources: frozenset[str] | None = frozenset(),
+    *,
+    observed: Sequence[Mapping[str, Any]] = (),
+    forced: Collection[str] = (),
+    callbacks: bool = False,
+    writes: Mapping[str, int] | None = None,
 ) -> tuple[int | None, int] | None:
     """Partition the monotone coordinates by their readable future.
 
     A coordinate some read reaches outside the comparisons (the program's,
     ``fold_ctx.unmodeled``, or the predicate's, *read_sources*; ``None`` when
-    the predicate read something unknowable) fails closed.
+    the predicate read something unknowable) fails closed.  So does one whose
+    bounds, resolved from *state*, may not be what its readers read: see
+    :func:`_bounds_hold_through_period`.  *observed* is the ring of snapshots
+    behind the cycle, *forced* the forced tags, and *callbacks* whether a
+    ``when().do()`` is active.  *writes* is the most writes per scan the observed
+    scans made of each input a rung may read between writes: a proven period
+    repeats those scans, so they stand for the ones the jump skips.
 
     For each coordinate, its read surface is the preset (Done flip) plus every
     comparison the program or the armed predicate reads on it.  A coordinate
@@ -275,7 +333,9 @@ def _monotone_read_surface(
     live = 0
     if read_sources is None:
         return None
-    unmodeled = fold_ctx.unmodeled | read_sources
+    unmodeled = (
+        fold_ctx.unmodeled | read_sources | fold_ctx.hidden_input_coordinates(forced, writes)
+    )
     for tag, d in cyc.monotone.items():
         if tag in unmodeled:
             return None
@@ -286,6 +346,11 @@ def _monotone_read_surface(
         # A drum with other step writers may be timing to a step this state does
         # not show (see fold._timer_contests), so its preset is not known here.
         if src.step_name is not None and tag in fold_ctx.contested_timers:
+            return None
+        cmps = fold_ctx.comparisons.get(tag, ())
+        if extra_comparisons:
+            cmps = cmps + extra_comparisons.get(tag, ())
+        if not _bounds_hold_through_period(src, cmps, fold_ctx, observed, forced, callbacks):
             return None
         cur = totals.get(tag)
         if isinstance(cur, bool) or not isinstance(cur, (int, float)):
@@ -304,9 +369,6 @@ def _monotone_read_surface(
         if preset is not None:
             bounds.append((preset, False))  # Done flips at acc ≥ preset
         n_preset = len(bounds)
-        cmps = fold_ctx.comparisons.get(tag, ())
-        if extra_comparisons:
-            cmps = cmps + extra_comparisons.get(tag, ())
         for form, operand in cmps:
             kv = _resolve_num(operand, state)
             if kv is None:
@@ -505,6 +567,9 @@ def cycle_fold_until(
         return hit
 
     ring: list[Mapping[str, Any]] = []
+    # What each ring scan wrote of the inputs a rung may read between writes.
+    ring_writes: list[Mapping[str, int] | None] = []
+    plc._acc_write_watch = plc._acc_write_watch | fold_ctx.inputs_between_writes.keys()
     ring_cap = max_period * (min_repeats + 2) + 4
     kernel_scans = 0
     macro_folds = 0
@@ -604,6 +669,7 @@ def cycle_fold_until(
                 if advances is not None:
                     advances.extend(advance.patches)
                 ring.clear()
+                ring_writes.clear()
                 since_detect = 0
                 paused = plc._consume_pause_request()
                 if judge(plc.state) or paused:
@@ -628,8 +694,10 @@ def cycle_fold_until(
                 _EDGE_MEMORY_KEY, edge_memory_on(plc.state)
             )
         )
+        ring_writes.append(plc._last_acc_writes)
         if len(ring) > ring_cap:
             del ring[0]
+            del ring_writes[0]
 
         since_detect += 1
         if since_detect < detect_every:
@@ -656,7 +724,18 @@ def cycle_fold_until(
             continue
         surface = (
             _monotone_read_surface(
-                cyc, plc.state, fold_ctx, extra_comparisons, ordinary.predicate_unmodeled()
+                cyc,
+                plc.state,
+                fold_ctx,
+                extra_comparisons,
+                ordinary.predicate_unmodeled(),
+                observed=ring[-(cyc.period * min_repeats + 1) :],
+                forced=plc._input_overrides.forces_mutable.keys(),
+                callbacks=active_scan_callbacks,
+                writes=_most_writes_per_scan(
+                    ring_writes[-(cyc.period * min_repeats + 1) :],
+                    fold_ctx.inputs_between_writes.keys(),
+                ),
             )
             if cyc.monotone
             else (None, 0)
@@ -817,6 +896,7 @@ def cycle_fold_until(
         macro_folds += 1
         cycle_folds += 1
         cycle_folded_scans += jump_scans
+        ring_writes.clear()
         ring.clear()  # consecutive gap — re-observe before trusting the cycle again
 
     return _finish(bool(predicate(plc.state)))

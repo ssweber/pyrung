@@ -9,12 +9,14 @@ from typing import Any
 import pytest
 
 from pyrung import (
+    Block,
     Bool,
     Counter,
     Dint,
     Int,
     Program,
     Rung,
+    TagType,
     Timer,
     calc,
     copy,
@@ -1107,3 +1109,470 @@ class TestCycleJumpReadsTheIntegerAccumulator:
         assert stats["cycle_folds"] >= 1
         assert plc.state.scan_id == ref.state.scan_id
         assert plc.state.tags == ref.state.tags
+
+
+def _jump_and_step(
+    build: Any,
+    *,
+    budget: int = 300,
+    first: dict[str, Any] | None = None,
+    force: tuple[str, Any] | None = None,
+    react: Any = None,
+) -> tuple[PLC, PLC, dict[str, int]]:
+    """The same run under the cycle fold and stepped; a ``react`` runs every scan."""
+
+    def make() -> PLC:
+        plc = PLC(build(), dt=0.010)
+        plc.patch(first or {})
+        if force:
+            plc.force(*force)
+        plc.step()
+        if react:
+            plc.when(lambda _s: True).do(lambda s: react(plc, s))
+        return plc
+
+    ref = make()
+    for _ in range(budget):
+        ref.step()
+    plc = make()
+    stats: dict[str, int] = {}
+    cycle_fold_until(plc, lambda _s: False, budget=budget, kernel_budget=False, stats=stats)
+    return plc, ref, stats
+
+
+def _assert_same_tags(plc: PLC, ref: PLC) -> None:
+    assert plc.state.scan_id == ref.state.scan_id
+    keys = {k for k in plc.state.tags.keys() | ref.state.tags.keys() if not k.startswith("sys.")}
+    assert {k: plc.state.tags.get(k) for k in keys} == {k: ref.state.tags.get(k) for k in keys}
+
+
+class TestCycleJumpDrumStep:
+    """A jump resolves a drum's preset from one state's step.  That state stands
+    for the period only if nothing writes the step around the drum's read."""
+
+    @staticmethod
+    def _program(
+        presets: tuple[int, int, int] = (200, 5000, 5000),
+        kind: str = "time",
+        above: int | None = None,
+        below: int | None = None,
+    ) -> Any:
+        def build() -> Program:
+            O1, O2, Flag, Step = Bool("O1"), Bool("O2"), Bool("Flag"), Int("Step")
+            N, En, R = Int("N"), Bool("En"), Bool("R")
+            args: dict[str, Any] = {
+                "outputs": [O1, O2],
+                "pattern": [[1, 0], [0, 1], [1, 1]],
+                "presets": list(presets),
+                "current_step": Step,
+                "completion_flag": Flag,
+                "accumulator": Int("DAcc"),
+                "unit": "ms",
+            }
+            with Program(strict=False) as prog:
+                with Rung():
+                    on_delay(Timer.clone("Long"), 60_000)
+                if above is not None:
+                    with Rung():
+                        copy(above, Step)
+                with Rung(En):
+                    if kind == "time":
+                        time_drum(**args).reset(R)
+                    else:
+                        time_event_drum(events=[None, None, None], **args).reset(R)
+                if below is not None:
+                    with Rung():
+                        copy(below, Step)
+                with Rung(O2):
+                    calc(N + 1, N)
+                with Rung(Flag):
+                    on_delay(Timer.clone("Rd"), 60_000)
+            return prog
+
+        return build
+
+    @pytest.mark.parametrize("kind", ["time", "event"])
+    def test_a_force_over_a_write_above_the_drum(self, kind: str) -> None:
+        plc, ref, _stats = _jump_and_step(
+            self._program(kind=kind, above=1), first={"En": True}, force=("Step", 3)
+        )
+        _assert_same_tags(plc, ref)
+        assert ref.state.tags["N"] > 200
+
+    @pytest.mark.parametrize("kind", ["time", "event"])
+    def test_a_callback_patch_over_a_write_below_the_drum(self, kind: str) -> None:
+        plc, ref, _stats = _jump_and_step(
+            self._program((5000, 5000, 200), kind, below=1),
+            first={"En": True},
+            react=lambda plc, _s: plc.patch({"Step": 3}),
+        )
+        _assert_same_tags(plc, ref)
+        assert ref.state.tags["Rd_Acc"] > 2000
+
+    @pytest.mark.parametrize("presets", [(5000, 5000, 200), (200, 5000, 5000)])
+    @pytest.mark.parametrize("first", [1, 3])
+    @pytest.mark.parametrize("budget", [101, 150, 151, 300, 301])
+    def test_a_step_swapped_every_scan(
+        self, presets: tuple[int, int, int], first: int, budget: int
+    ) -> None:
+        def swap(plc: PLC, state: Any) -> None:
+            plc.patch({"Step": 1 if state.tags.get("Step") == 3 else 3})
+
+        plc, ref, _stats = _jump_and_step(
+            self._program(presets), budget=budget, first={"En": True, "Step": first}, react=swap
+        )
+        _assert_same_tags(plc, ref)
+
+    def test_a_step_nothing_writes_still_jumps(self) -> None:
+        """The decline stops where the step moves: a jump on a plain drum still lands."""
+
+        def build() -> Program:
+            Tog = Bool("Tog")
+            with Program(strict=False) as prog:
+                with Rung(~Tog):
+                    out(Tog)
+                with Rung(Bool("En")):
+                    time_drum(
+                        outputs=[Bool("O1"), Bool("O2")],
+                        pattern=[[1, 0], [0, 1]],
+                        presets=[20_000, 5000],
+                        current_step=Int("Step"),
+                        completion_flag=Bool("Flag"),
+                        accumulator=Int("DAcc"),
+                        unit="ms",
+                    ).reset(Bool("R"))
+            return prog
+
+        plc, ref, stats = _jump_and_step(build, budget=1500, first={"En": True})
+        _assert_same_tags(plc, ref)
+        assert stats["cycle_folds"] >= 1
+
+
+class TestCycleJumpWrittenInputs:
+    """The same read, with the tag written around it: the jump's bound comes from
+    what a boundary shows, and the period's scans read something else."""
+
+    @staticmethod
+    def _timer(above: int | None, below: int | None, comparison: bool = False) -> Any:
+        def build() -> Program:
+            Tog, P, T, Hit = Bool("Tog"), Int("P"), Timer.clone("T"), Bool("Hit")
+            with Program(strict=False) as prog:
+                with Rung(~Tog):
+                    out(Tog)
+                if above is not None:
+                    with Rung():
+                        copy(above, P)
+                if comparison:
+                    with Rung():
+                        on_delay(T, 30_000)
+                    with Rung(T.Acc >= P):
+                        latch(Hit)
+                else:
+                    with Rung():
+                        on_delay(T, P)
+                    with Rung(T.Done):
+                        latch(Hit)
+                if below is not None:
+                    with Rung():
+                        copy(below, P)
+                with Rung(Bool("Hit")):
+                    calc(Int("Since") + 1, Int("Since"))
+            return prog
+
+        return build
+
+    @pytest.mark.parametrize("comparison", [False, True], ids=["preset", "comparison"])
+    def test_written_around_the_reader(self, comparison: bool) -> None:
+        plc, ref, _stats = _jump_and_step(self._timer(200, 5000, comparison))
+        _assert_same_tags(plc, ref)
+        assert ref.state.tags["Hit"] is True
+
+    @pytest.mark.parametrize("comparison", [False, True], ids=["preset", "comparison"])
+    def test_written_on_one_side_still_jumps(self, comparison: bool) -> None:
+        for above, below in ((20_000, None), (None, 20_000)):
+            plc, ref, stats = _jump_and_step(
+                self._timer(above, below, comparison), budget=1500, first={"P": 20_000}
+            )
+            _assert_same_tags(plc, ref)
+            assert stats["cycle_folds"] >= 1
+
+    def test_a_force_over_a_write_above_the_reader(self) -> None:
+        plc, ref, _stats = _jump_and_step(self._timer(200, None), force=("P", 5000))
+        _assert_same_tags(plc, ref)
+        assert ref.state.tags["Hit"] is True
+
+    def test_a_callback_patch_over_a_write_below_the_reader(self) -> None:
+        plc, ref, _stats = _jump_and_step(
+            self._timer(None, 5000), first={"P": 200}, react=lambda plc, _s: plc.patch({"P": 200})
+        )
+        _assert_same_tags(plc, ref)
+        assert ref.state.tags["Hit"] is True
+
+    @pytest.mark.parametrize("first", [(200, 5000), (5000, 200)], ids=["low", "high"])
+    def test_an_operand_that_alternates_through_the_period(self, first: tuple[int, int]) -> None:
+        """Two writers, one per phase of the cycle: every boundary but one phase lies."""
+
+        def build() -> Program:
+            Tog, P, T, Hit = Bool("Tog"), Int("P"), Timer.clone("T"), Bool("Hit")
+            with Program(strict=False) as prog:
+                with Rung(~Tog):
+                    out(Tog)
+                with Rung(Tog):
+                    copy(first[0], P)
+                with Rung(~Tog):
+                    copy(first[1], P)
+                with Rung():
+                    on_delay(T, 30_000)
+                with Rung(T.Acc >= P):
+                    latch(Hit)
+                with Rung(Bool("Hit")):
+                    calc(Int("Since") + 1, Int("Since"))
+            return prog
+
+        plc, ref, _stats = _jump_and_step(build)
+        _assert_same_tags(plc, ref)
+        assert ref.state.tags["Hit"] is True
+
+    @pytest.mark.parametrize("what", ["preset", "comparison"])
+    def test_a_counter_bound_written_around_its_reader(self, what: str) -> None:
+        def build() -> Program:
+            Tog, P, Ctr, Hit = Bool("Tog"), Int("P"), Counter.clone("Ctr"), Bool("Hit")
+            with Program(strict=False) as prog:
+                with Rung(~Tog):
+                    out(Tog)
+                with Rung():
+                    copy(20, P)
+                with Rung(Tog):
+                    if what == "preset":
+                        count_up(Ctr, P).reset(Bool("CR"))
+                    else:
+                        count_up(Ctr, 20_000).reset(Bool("CR"))
+                if what == "preset":
+                    with Rung(Ctr.Done):
+                        latch(Hit)
+                else:
+                    with Rung(Ctr.Acc >= P):
+                        latch(Hit)
+                with Rung():
+                    copy(5000, P)
+                with Rung(Bool("Hit")):
+                    calc(Int("Since") + 1, Int("Since"))
+            return prog
+
+        plc, ref, _stats = _jump_and_step(build)
+        _assert_same_tags(plc, ref)
+        assert ref.state.tags["Hit"] is True
+
+
+class TestCycleJumpCountsInputWrites:
+    """A tag a rung may read between writes: a cycle jump counts its writes over
+    the scans it observed, which a proven period repeats.  At most one write per
+    scan, with the value held at every boundary, and every read sees that value."""
+
+    BIG = Block("CwBig", TagType.INT, 1, 2000)
+
+    @staticmethod
+    def _indirect(
+        above: int | None = None,
+        below: int | None = None,
+        writer_on: bool = False,
+    ) -> Any:
+        """A 2-scan cycle with a preset in a block a rung writes through a pointer."""
+
+        def build() -> Program:
+            Big = TestCycleJumpCountsInputWrites.BIG
+            Tog, T, Hit = Bool("Tog"), Timer.clone("T"), Bool("Hit")
+            Ptr, Cmd = Int("Ptr"), Bool("Cmd")
+            with Program(strict=False) as prog:
+                with Rung(~Tog):
+                    out(Tog)
+                if above is not None:
+                    with Rung():
+                        copy(above, Big[5])
+                with Rung():
+                    on_delay(T, Big[5])
+                with Rung(T.Done):
+                    latch(Hit)
+                if below is not None:
+                    with Rung():
+                        copy(below, Big[Ptr])
+                with Rung(*(() if writer_on else (Cmd,))):
+                    copy(9, Big[Int("Ptr2")])
+            return prog
+
+        return build
+
+    def test_an_idle_indirect_writer_still_jumps(self) -> None:
+        name = self.BIG[5].name
+        plc, ref, stats = _jump_and_step(self._indirect(), budget=2500, first={name: 20_000})
+        _assert_same_tags(plc, ref)
+        assert ref.state.tags["Hit"] is True
+        assert stats["cycle_folds"] >= 1
+        assert stats["cycle_folded_scans"] >= 1500
+
+    def test_an_indirect_write_of_another_slot_still_jumps(self) -> None:
+        name = self.BIG[5].name
+        plc, ref, stats = _jump_and_step(
+            self._indirect(writer_on=True),
+            budget=2500,
+            first={name: 20_000, "Ptr2": 7},
+        )
+        _assert_same_tags(plc, ref)
+        assert stats["cycle_folds"] >= 1
+
+    def test_an_indirect_write_around_the_reader_declines(self) -> None:
+        plc, ref, stats = _jump_and_step(
+            self._indirect(above=200, below=5000), budget=300, first={"Ptr": 5}
+        )
+        _assert_same_tags(plc, ref)
+        assert ref.state.tags["Hit"] is True
+        assert stats["cycle_folds"] == 0
+
+    def test_a_pointer_walking_onto_the_input(self) -> None:
+        def build() -> Program:
+            Big = self.BIG
+            Tog, T, Hit, Ptr = Bool("Tog"), Timer.clone("T"), Bool("Hit"), Int("Ptr")
+            with Program(strict=False) as prog:
+                with Rung(~Tog):
+                    out(Tog)
+                with Rung():
+                    calc(Ptr + 1, Ptr)
+                with Rung():
+                    on_delay(T, Big[50])
+                with Rung(T.Done):
+                    latch(Hit)
+                with Rung(Ptr >= 1):
+                    copy(20, Big[Ptr])
+            return prog
+
+        plc, ref, _stats = _jump_and_step(build, budget=1500, first={self.BIG[50].name: 20_000})
+        _assert_same_tags(plc, ref)
+        assert ref.state.tags["Hit"] is True
+
+    @staticmethod
+    def _gated(above: str, below: str) -> Any:
+        """A cycle with writers around the reader, on the toggle's phases."""
+
+        def build() -> Program:
+            Tog, P, T, Hit = Bool("Tog"), Int("P"), Timer.clone("T"), Bool("Hit")
+            gate = {"on": Tog, "off": ~Tog, "never": Bool("Never")}
+            with Program(strict=False) as prog:
+                with Rung(~Tog):
+                    out(Tog)
+                with Rung(gate[above]):
+                    copy(2000, P)
+                with Rung():
+                    on_delay(T, P)
+                with Rung(T.Done):
+                    latch(Hit)
+                with Rung(gate[below]):
+                    copy(5000, P)
+            return prog
+
+        return build
+
+    def test_idle_writers_around_the_reader_jump(self) -> None:
+        plc, ref, stats = _jump_and_step(
+            self._gated("never", "never"), budget=3000, first={"P": 28_000}
+        )
+        _assert_same_tags(plc, ref)
+        assert ref.state.tags["Hit"] is True
+        assert stats["cycle_folds"] >= 1
+        assert stats["cycle_folded_scans"] >= 2000
+
+    @pytest.mark.parametrize(
+        ("above", "below"),
+        [("on", "on"), ("off", "off"), ("on", "off"), ("off", "on")],
+    )
+    def test_writes_in_only_some_scans_of_the_period(self, above: str, below: str) -> None:
+        plc, ref, stats = _jump_and_step(self._gated(above, below), budget=700)
+        _assert_same_tags(plc, ref)
+        assert ref.state.tags["Hit"] is True
+        if above == below:
+            # One scan of the period writes twice, and it is the scan that counts.
+            assert stats["cycle_folds"] == 0
+
+    def test_a_writer_woken_by_the_timer_itself(self) -> None:
+        def build() -> Program:
+            Tog, P, T, Hit = Bool("Tog"), Int("P"), Timer.clone("T"), Bool("Hit")
+            with Program(strict=False) as prog:
+                with Rung(~Tog):
+                    out(Tog)
+                with Rung(T.Acc >= 1000):
+                    copy(200, P)
+                with Rung():
+                    on_delay(T, P)
+                with Rung(T.Done):
+                    latch(Hit)
+                with Rung(T.Acc >= 1000):
+                    copy(5000, P)
+            return prog
+
+        plc, ref, _stats = _jump_and_step(build, budget=2500, first={"P": 20_000})
+        _assert_same_tags(plc, ref)
+        assert ref.state.tags["Hit"] is True
+
+    @staticmethod
+    def _mirror_program() -> Program:
+        """Clock mirrors, an indirect writer that stores one when asked, and a preset
+        in the block it writes: the writer's cone reaches the mirrors."""
+        Big = TestCycleJumpCountsInputWrites.BIG
+        Tog, T, Hit = Bool("Tog"), Timer.clone("T"), Bool("Hit")
+        Sec, Blink, Cmd, Ptr = Int("CwSec"), Bool("Blink"), Bool("Cmd"), Int("Ptr")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(system.rtc.second, Sec)
+            with Rung(~Tog):
+                out(Tog)
+            with Rung(system.sys.clock_1s):
+                out(Blink)
+            with Rung():
+                on_delay(T, Big[5])
+            with Rung(T.Done):
+                latch(Hit)
+            with Rung(Cmd):
+                copy(Sec, Big[Ptr])
+        return prog
+
+    @classmethod
+    def _mirror_plc(cls) -> PLC:
+        from datetime import datetime
+
+        plc = PLC(cls._mirror_program(), dt=0.010)
+        plc.set_rtc(datetime(2026, 3, 1, 12, 59, 50, 250_000))
+        plc.patch({cls.BIG[5].name: 30_000, "Ptr": 5})
+        plc.step()
+        return plc
+
+    def test_a_writer_storing_a_clock_mirror_leaves_the_mirrors_ignored(self) -> None:
+        plc = self._mirror_plc()
+        assert plc._ensure_fold_context().time_mirrors is not None
+        ref = self._mirror_plc()
+        for _ in range(1500):
+            ref.step()
+        stats: dict[str, int] = {}
+        cycle_fold_until(
+            plc,
+            lambda _s: False,
+            budget=1500,
+            kernel_budget=False,
+            predicate_reads=frozenset(),
+            stats=stats,
+        )
+        assert stats["cycle_folds"] >= 1
+        assert plc.state.scan_id == ref.state.scan_id
+        assert plc.state.tags == ref.state.tags
+
+    def test_the_mirror_writer_waking_after_a_jump(self) -> None:
+        plc, ref = self._mirror_plc(), self._mirror_plc()
+        for leg, cmd in ((1500, False), (1500, True)):
+            for runner in (plc, ref):
+                runner.patch({"Cmd": cmd})
+            for _ in range(leg):
+                ref.step()
+            cycle_fold_until(
+                plc, lambda _s: False, budget=leg, kernel_budget=False, predicate_reads=frozenset()
+            )
+            assert plc.state.scan_id == ref.state.scan_id
+            assert plc.state.tags == ref.state.tags
+        assert ref.state.tags["Hit"] is True
