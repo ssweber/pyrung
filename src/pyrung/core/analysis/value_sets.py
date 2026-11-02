@@ -266,8 +266,11 @@ class _ValueSets:
         block = ref.block
         out: set[Any] = set()
         for addr in addresses:
-            if not block.start <= addr <= block.end:
-                continue  # an out-of-range read faults and stores nothing
+            if addr > block.end:
+                out.add(block._type_default())  # a read past the block reads zero
+                continue
+            if addr < block.start:
+                continue  # a read below the block faults and stores nothing
             tag = block._get_tag(addr)
             if tag.name in lookup:
                 domain = lookup[tag.name]

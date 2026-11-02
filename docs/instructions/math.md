@@ -49,7 +49,7 @@ pyrung checks the range when `calc()` stores its result, not at each step of the
 
 ## Division
 
-- Division by zero produces result = 0 and sets `system.fault.division_error`.
+- Division by zero produces result = 0 and sets `system.fault.division_error`. The next `calc()` to run clears it unless it divides by zero too, so read the flag on the next rung; a `copy()` leaves it.
 - Integer division truncates toward zero: `−7 / 2 = −3`.
 
 ## Math errors
@@ -91,7 +91,8 @@ For CLICK portability, do not mix WORD and non-WORD math in the same `calc()` ex
 | Counter accumulator | Clamps at DINT min/max |
 | REAL past ±3.4028235E+38 | ±Inf; `calc()` sets `system.fault.out_of_range` |
 | Division by zero | Result = 0, `system.fault.division_error` set |
-| Indexed source outside its block (`calc(DS[Ptr], D)`) | Nothing written, `system.fault.address_error` set |
+| Indexed source below its block (`calc(DS[Ptr], D)`) | Nothing written, `system.fault.address_error` set |
+| Indexed source past its block | Reads the type's zero value, no flag |
 | Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | Result = 0, `system.fault.math_operation_error` set for the scan |
 
 ## Range aggregates

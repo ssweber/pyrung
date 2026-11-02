@@ -536,7 +536,7 @@ def test_fault_address_error_auto_clears_next_scan_when_not_retriggered(
             copy(DS[Pointer], CH[1], oneshot=True, convert=to_binary)
 
     runner = runner_factory(program)
-    runner.patch({"Enable": True, "Pointer": 999})
+    runner.patch({"Enable": True, "Pointer": 0})
     runner.step()
     assert runner.current_state.tags[system.fault.address_error.name] is True
     assert runner.current_state.tags.get(system.fault.out_of_range.name, False) is False

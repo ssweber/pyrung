@@ -39,7 +39,7 @@ def resolve_tag_or_value_ctx(
     """
     # Import here to avoid circular imports
     from pyrung.core.expression import Expression
-    from pyrung.core.memory_block import IndirectExprRef
+    from pyrung.core.memory_block import IndirectExprRef, PastBankError
     from pyrung.core.memory_block import IndirectRef as IndirectRefType
 
     # Check for immediate wrapper first.
@@ -48,13 +48,13 @@ def resolve_tag_or_value_ctx(
     # Check for Expression first (includes TagExpr)
     if isinstance(source, Expression):
         return source.evaluate(ctx)
-    # Check for IndirectExprRef
-    if isinstance(source, IndirectExprRef):
-        resolved_tag = source.resolve_ctx(ctx)
-        return ctx.get_tag(resolved_tag.name, resolved_tag.default)
-    # Check for IndirectRef
-    if isinstance(source, IndirectRefType):
-        resolved_tag = source.resolve_ctx(ctx)
+    # Check for IndirectExprRef or IndirectRef
+    if isinstance(source, (IndirectExprRef, IndirectRefType)):
+        try:
+            resolved_tag = source.resolve_ctx(ctx)
+        except PastBankError:
+            # pyrung has no memory past a bank: the read is the type's zero.
+            return source.block._type_default()
         return ctx.get_tag(resolved_tag.name, resolved_tag.default)
     # Check for Tag
     if isinstance(source, Tag):
@@ -94,6 +94,21 @@ def resolve_tag_ctx(
         return target.value
     # Regular Tag
     return target
+
+
+def resolve_source_type_tag_ctx(source: IndirectRef | IndirectExprRef, ctx: ScanContext) -> Tag:
+    """A Tag with the type of the element *source* reads.
+
+    Past its bank there is no element, and the read is the type's zero: the
+    bank's first element carries the type.  Read the value through
+    ``resolve_tag_or_value_ctx``, not from this Tag.
+    """
+    from pyrung.core.memory_block import PastBankError
+
+    try:
+        return source.resolve_ctx(ctx)
+    except PastBankError:
+        return source.block._get_tag(source.block.start)
 
 
 def resolve_tag_name_ctx(
@@ -166,28 +181,33 @@ def resolve_coil_targets_ctx(
     )
 
 
+def _raise_fault(ctx: ScanContext, name: str) -> None:
+    ctx._set_tag_internal(name, True)
+    ctx._raised_faults.add(name)
+
+
 def _set_fault_out_of_range(ctx: ScanContext) -> None:
     from pyrung.core.system_points import system
 
-    ctx._set_tag_internal(system.fault.out_of_range.name, True)
+    _raise_fault(ctx, system.fault.out_of_range.name)
 
 
 def _set_fault_division_error(ctx: ScanContext) -> None:
     from pyrung.core.system_points import system
 
-    ctx._set_tag_internal(system.fault.division_error.name, True)
+    _raise_fault(ctx, system.fault.division_error.name)
 
 
 def _set_fault_math_operation_error(ctx: ScanContext) -> None:
     from pyrung.core.system_points import system
 
-    ctx._set_tag_internal(system.fault.math_operation_error.name, True)
+    _raise_fault(ctx, system.fault.math_operation_error.name)
 
 
 def _set_fault_address_error(ctx: ScanContext) -> None:
     from pyrung.core.system_points import system
 
-    ctx._set_tag_internal(system.fault.address_error.name, True)
+    _raise_fault(ctx, system.fault.address_error.name)
 
 
 def _sequential_tags(start_tag: Tag, count: int) -> list[Tag]:

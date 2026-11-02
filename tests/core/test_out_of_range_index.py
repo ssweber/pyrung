@@ -2,10 +2,11 @@
 
 In a rung condition such an element reads as 0 (the type's zero), with no
 fault flag and the scan carrying on: the same rule as any other expression
-outside ``calc``. ``copy()`` and ``calc()`` with an out-of-range source set
-``fault.address_error`` and write nothing. Every form must behave the same in
-the interpreted runtime, the compiled kernel (legacy and blockless) and the
-generated CircuitPython code.
+outside ``calc``.  ``copy()`` and ``calc()`` read a source past its block as 0
+with no flag, and a source below it sets ``fault.address_error`` and writes
+nothing.  Every form must behave the same in the interpreted runtime, the
+compiled kernel (legacy and blockless) and the generated CircuitPython code.
+``tests/core/test_fault_flags.py`` has the instructions' rule on all of them.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from pyrung.core import (
     copy,
     latch,
     out,
+    system,
 )
 from pyrung.core.analysis.prove import Counterexample, Proven, never
 from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
@@ -349,71 +351,117 @@ def test_bank_aliased_block_reads_zero_outside_range(
 def _build_reads() -> tuple[Program, dict[str, Any]]:
     Tbl = Block("Tbl", TagType.INT, 1, 10)
     P = Int("P")
+    N = Int("N")
     Q = Int("Q")
     Z = Int("Z")
-    names = ("D_copy_ptr", "D_copy_expr", "D_calc_ptr", "D_calc_expr", "D_calc_div0", "D_calc_sum")
+    names = (
+        "D_copy_past",
+        "D_copy_past_expr",
+        "D_calc_past",
+        "D_calc_past_expr",
+        "D_copy_below",
+        "D_copy_below_expr",
+        "D_calc_below",
+        "D_calc_below_expr",
+        "D_calc_div0",
+        "D_calc_sum",
+    )
     dests = {name: Int(name) for name in names}
+    # What the address-error flag read right after each instruction.
+    flags = {name: Bool(f"Flag_{name}") for name in names}
+    sources = {
+        "D_copy_past": lambda dest: copy(Tbl[P], dest),
+        "D_copy_past_expr": lambda dest: copy(Tbl[Q + 100], dest),
+        "D_calc_past": lambda dest: calc(Tbl[P], dest),
+        "D_calc_past_expr": lambda dest: calc(Tbl[Q + 100], dest),
+        "D_copy_below": lambda dest: copy(Tbl[N], dest),
+        "D_copy_below_expr": lambda dest: copy(Tbl[Q - 5], dest),
+        "D_calc_below": lambda dest: calc(Tbl[N], dest),
+        "D_calc_below_expr": lambda dest: calc(Tbl[Q - 5], dest),
+        "D_calc_div0": lambda dest: calc(Tbl[Q // Z], dest),
+        "D_calc_sum": lambda dest: calc(Tbl[Q + 0], dest),
+    }
 
     with Program(strict=False) as prog:
         with Rung():
             for i in range(1, 11):
                 copy(_tbl(i), Tbl[i])
             copy(50, P)
+            copy(0, N)
             copy(5, Q)
             copy(0, Z)
             for dest in dests.values():
                 copy(7, dest)
-        with Rung():
-            copy(Tbl[P], dests["D_copy_ptr"])
-            copy(Tbl[Q + 100], dests["D_copy_expr"])
-            calc(Tbl[P], dests["D_calc_ptr"])
-            calc(Tbl[Q + 100], dests["D_calc_expr"])
-            calc(Tbl[Q // Z], dests["D_calc_div0"])
-            calc(Tbl[Q + 0], dests["D_calc_sum"])
+        for name, instruction in sources.items():
+            with Rung():
+                instruction(dests[name])
+            with Rung(system.fault.address_error):
+                out(flags[name])
+            if name == "D_calc_div0":
+                with Rung(system.fault.division_error):
+                    out(Bool("Div0"))
 
     tags: dict[str, Any] = dict(dests)
-    tags["fault.address_error"] = Bool("fault.address_error")
-    tags["fault.division_error"] = Bool("fault.division_error")
+    tags.update({flag.name: flag for flag in flags.values()})
+    tags["Div0"] = Bool("Div0")
     return prog, tags
 
 
 @pytest.mark.parametrize("engine", _ENGINES)
-def test_copy_and_calc_out_of_range_source_set_address_error(engine: str, monkeypatch) -> None:
+def test_copy_and_calc_source_outside_its_block(engine: str, monkeypatch) -> None:
     prog, tags = _build_reads()
     actual = _first_scan(prog, engine, tags, monkeypatch)
 
-    # Out of range: nothing written; in range: the element. A division by zero
-    # in calc's own index is calc's division error (0 and its flag), as any
-    # division in calc is.
+    # Past the block: the type's zero, no flag.  Below it: nothing written and
+    # the flag.  In range: the element.  A division by zero in calc's own index
+    # is calc's division error (0 and its flag), as any division in calc is, and
+    # the index it gives, 0, is below the block.
     assert {name: actual[name] for name in tags if name.startswith("D_")} == {
-        "D_copy_ptr": 7,
-        "D_copy_expr": 7,
-        "D_calc_ptr": 7,
-        "D_calc_expr": 7,
+        "D_copy_past": 0,
+        "D_copy_past_expr": 0,
+        "D_calc_past": 0,
+        "D_calc_past_expr": 0,
+        "D_copy_below": 7,
+        "D_copy_below_expr": 7,
+        "D_calc_below": 7,
+        "D_calc_below_expr": 7,
         "D_calc_div0": 0,
         "D_calc_sum": _tbl(5),
     }
-    assert bool(actual["fault.address_error"]) is True
-    assert bool(actual["fault.division_error"]) is True
+    assert {name: bool(actual[f"Flag_{name}"]) for name in tags if name.startswith("D_")} == {
+        "D_copy_past": False,
+        "D_copy_past_expr": False,
+        "D_calc_past": False,
+        "D_calc_past_expr": False,
+        "D_copy_below": True,
+        "D_copy_below_expr": True,
+        "D_calc_below": True,
+        "D_calc_below_expr": True,
+        "D_calc_div0": False,
+        "D_calc_sum": False,
+    }
+    assert bool(actual["Div0"]) is True
 
 
-def test_calc_fault_writes_name_address_error_only_for_indexed_sources() -> None:
+def test_every_calc_declares_the_flags_it_follows() -> None:
     Tbl = Block("Tbl", TagType.INT, 1, 10)
     P = Int("P")
     Q = Int("Q")
     D = Int("D")
     R = Real("R")
 
-    def fault_writes(instruction: CalcInstruction) -> tuple[str, ...]:
-        return tuple(instruction._fault_writes)
-
-    plain = fault_writes(CalcInstruction(Q + 1, D))
-    assert "fault.address_error" not in plain
-    for source in (Tbl[P], Tbl[Q + 100]):
-        writes = fault_writes(CalcInstruction(source, D))
-        assert "fault.address_error" in writes
-        assert set(plain) <= set(writes)
-    assert "fault.address_error" not in fault_writes(CalcInstruction(Q * 2, R))
+    for instruction in (
+        CalcInstruction(Q + 1, D),
+        CalcInstruction(Tbl[P], D),
+        CalcInstruction(Tbl[Q + 100], D),
+        CalcInstruction(Q * 2, R),
+    ):
+        assert set(instruction._fault_follows) == {
+            "fault.division_error",
+            "fault.out_of_range",
+            "fault.address_error",
+        }
+        assert set(instruction._fault_follows) <= set(instruction._fault_writes)
 
 
 def test_condition_trace_marks_out_of_range_element() -> None:

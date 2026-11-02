@@ -14,7 +14,12 @@ if TYPE_CHECKING:
 
 
 def guard_oneshot_execution(func: F) -> F:
-    """Skip execute calls when one-shot state says not to run."""
+    """Skip execute calls when one-shot state says not to run.
+
+    An instruction that does run settles the flags in its ``_fault_follows``:
+    set if it raised them, clear if not.  It reads them as it found them, so a
+    source naming one of those flags sees the value before this instruction.
+    """
 
     @wraps(func)
     def wrapper(self: Any, ctx: ScanContext, enabled: bool, *args: Any, **kwargs: Any) -> Any:
@@ -27,7 +32,16 @@ def guard_oneshot_execution(func: F) -> F:
             if ctx.get_memory(key, False):
                 return None
             ctx.set_memory(key, True)
-        return func(self, ctx, enabled, *args, **kwargs)
+        follows = self._fault_follows
+        if not follows:
+            return func(self, ctx, enabled, *args, **kwargs)
+        raised = ctx._raised_faults
+        raised.clear()
+        result = func(self, ctx, enabled, *args, **kwargs)
+        for name in follows:
+            if name not in raised and ctx._get_tag_internal(name, False):
+                ctx._set_tag_internal(name, False)
+        return result
 
     return cast(F, wrapper)
 

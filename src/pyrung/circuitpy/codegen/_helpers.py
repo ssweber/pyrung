@@ -375,8 +375,9 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    raise ValueError(op)",
         "",
     ],
-    # A rung condition reads an element outside its block as 0 (no flag):
-    # ``_cond_index_*`` gives -1 for such an address.
+    # A read with no element there gets the type's zero: ``_cond_index_*`` (a
+    # rung condition) and ``_read_index_*`` (an instruction's source past its
+    # bank) give -1 for such an address.
     "_cond_elem": [
         "def _cond_elem(seq, i, default):",
         "    if i < 0:",
@@ -415,21 +416,55 @@ def _with_helper_deps(used: Iterable[str]) -> set[str]:
     return needed
 
 
-def _render_condition_index_helper(name: str, binding: Any) -> list[str]:
-    """``_cond_index_*`` for one block: the offset of *addr*, or -1 outside it.
+def _render_index_helpers(
+    ctx: Any, binding: Any, fault_symbol: str | None, fault_global: str | None
+) -> list[str]:
+    """The helpers that turn an address in *binding*'s block into an offset.
 
-    A rung condition reads an element outside its block as 0, with no fault
-    flag (``_cond_elem``); instructions index through ``_resolve_index_*``,
-    which sets the address-error flag and raises.
+    ``_resolve_index_*`` (an instruction's destination): below the block or in a
+    gap it sets the address-error flag and raises.  Past the block it raises with
+    no flag, and the instruction's guard drops the write.
+
+    ``_read_index_*`` (an instruction's source): as above, but -1 past the block,
+    which ``_cond_elem`` reads as the type's zero.
+
+    ``_cond_index_*`` (a rung condition): -1 anywhere outside the block, no flag.
     """
-    lines = [f"def {name}(addr):"]
-    lines.append(f"    if addr < {binding.start} or addr > {binding.end}:")
-    lines.append("        return -1")
+    helper_name = ctx.index_helper_name(binding.block_id)
+    message = (
+        f'f"Address {{addr}} out of range for {binding.logical_name}'
+        f' ({binding.start}-{binding.end})"'
+    )
+    lines = [f"def {helper_name}(addr):"]
+    if fault_global is not None:
+        lines.append(f"    global {fault_global}")
+    fault_line = [f"        {fault_symbol} = True"] if fault_symbol is not None else []
+    lines.append(f"    if addr < {binding.start}:")
+    lines.extend(fault_line)
+    lines.append(f"        raise IndexError({message})")
+    lines.append(f"    if addr > {binding.end}:")
+    lines.append(f"        raise IndexError({message})")
     if binding.valid_addresses is not None:
         lines.append(f"    if addr not in {binding.valid_addresses!r}:")
-        lines.append("        return -1")
+        lines.extend(fault_line)
+        lines.append(f"        raise IndexError({message})")
     lines.append(f"    return int(addr) - {binding.start}")
     lines.append("")
+    if binding.block_id in ctx.used_read_index_blocks:
+        lines.append(f"def {ctx.read_index_helper_name(binding.block_id)}(addr):")
+        lines.append(f"    if addr > {binding.end}:")
+        lines.append("        return -1")
+        lines.append(f"    return {helper_name}(addr)")
+        lines.append("")
+    if binding.block_id in ctx.used_condition_index_blocks:
+        lines.append(f"def {ctx.condition_index_helper_name(binding.block_id)}(addr):")
+        lines.append(f"    if addr < {binding.start} or addr > {binding.end}:")
+        lines.append("        return -1")
+        if binding.valid_addresses is not None:
+            lines.append(f"    if addr not in {binding.valid_addresses!r}:")
+            lines.append("        return -1")
+        lines.append(f"    return int(addr) - {binding.start}")
+        lines.append("")
     return lines
 
 

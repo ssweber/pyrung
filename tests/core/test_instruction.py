@@ -1828,7 +1828,7 @@ class TestCopyTextModifiers:
         Pointer = Int("Pointer")
         CH = Block("CH", TagType.CHAR, 1, 10)
         instr = CopyInstruction(DS[Pointer], CH[1], convert=to_binary)
-        new_state = execute(instr, SystemState().with_tags({"Pointer": 999}))
+        new_state = execute(instr, SystemState().with_tags({"Pointer": 0}))
 
         assert new_state.tags["fault.address_error"] is True
         assert new_state.tags.get("fault.out_of_range", False) is False

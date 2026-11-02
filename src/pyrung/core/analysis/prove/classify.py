@@ -1556,7 +1556,8 @@ def _domain_from_indirect_source(
     - an in-range element with a known domain contributes that domain;
     - an in-range element that is never written contributes its slot
       default (its value is then constant);
-    - an out-of-range index faults the copy, which leaves the target
+    - an index past the block reads the type's zero;
+    - an index below the block faults the copy, which leaves the target
       unwritten — it retains a prior value, so only the target's own
       default is genuinely new (retention is otherwise closed under the
       structural fixed point that unions every writer).
@@ -1585,7 +1586,10 @@ def _domain_from_indirect_source(
     for raw_addr in index_domain:
         if isinstance(raw_addr, bool) or not isinstance(raw_addr, int):
             return None
-        if raw_addr < block.start or raw_addr > block.end:
+        if raw_addr > block.end:
+            values.add(block._type_default())
+            continue
+        if raw_addr < block.start:
             values.add(target.default)
             continue
         element_name = block._effective_slot_name(raw_addr)

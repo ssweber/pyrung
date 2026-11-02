@@ -552,7 +552,7 @@ def _receive_case() -> Program:
 
 
 _COPY_FAULTS = frozenset({"fault.address_error", "fault.out_of_range"})
-_CALC_FAULTS = frozenset({"fault.division_error", "fault.out_of_range"})
+_CALC_FAULTS = frozenset({"fault.division_error", "fault.out_of_range", "fault.address_error"})
 
 
 GRAPH_CASES: tuple[GraphCase, ...] = (
@@ -710,7 +710,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"FillEnable"}),
         data_reads=frozenset({"FillSource"}),
         writes=frozenset({"FillDest1", "FillDest2"}),
-        implicit_writes=frozenset({"fault.address_error"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "pack_bits",
@@ -719,6 +719,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"PackBitsEnable"}),
         data_reads=frozenset({"PackBits1", "PackBits2"}),
         writes=frozenset({"PackedBits"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "pack_words",
@@ -727,6 +728,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"PackWordsEnable"}),
         data_reads=frozenset({"PackWords1", "PackWords2"}),
         writes=frozenset({"PackedWords"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "pack_text",
@@ -735,7 +737,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"PackTextEnable"}),
         data_reads=frozenset({"PackTextChars1", "PackTextChars2"}),
         writes=frozenset({"ParsedText"}),
-        implicit_writes=frozenset({"fault.out_of_range"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "unpack_to_bits",
@@ -744,6 +746,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"UnpackBitsEnable"}),
         data_reads=frozenset({"UnpackBitsSource"}),
         writes=frozenset({"UnpackBits1", "UnpackBits2"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "unpack_to_words",
@@ -752,6 +755,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"UnpackWordsEnable"}),
         data_reads=frozenset({"UnpackWordsSource"}),
         writes=frozenset({"UnpackWords1", "UnpackWords2"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "calc",

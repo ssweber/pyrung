@@ -261,6 +261,14 @@ _TYPE_DEFAULTS: dict[TagType, Any] = {
 }
 
 
+class PastBankError(IndexError):
+    """A pointer past the end of its block.
+
+    Not an address error: instructions raise no flag for it.  A read gives the
+    type's zero and a write is dropped.
+    """
+
+
 @dataclass(eq=False)
 class Block:
     """Factory for creating Tags from a typed memory region.
@@ -802,8 +810,13 @@ class Block:
         return any(lo <= addr <= hi for lo, hi in self.valid_ranges)
 
     def _validate_address(self, addr: int) -> None:
-        if addr < self.start or addr > self.end:
+        if addr < self.start:
             raise IndexError(
+                f"Address {addr} out of range for {self.name} block "
+                f"(valid: {self.start}-{self.end})"
+            )
+        if addr > self.end:
+            raise PastBankError(
                 f"Address {addr} out of range for {self.name} block "
                 f"(valid: {self.start}-{self.end})"
             )
@@ -1450,7 +1463,8 @@ class IndirectRef:
             Concrete Tag at the resolved address.
 
         Raises:
-            IndexError: If resolved address is out of range.
+            IndexError: If resolved address is out of range (``PastBankError``
+                past the end of the block).
         """
         ptr_value = ctx.get_tag(self.pointer.name, self.pointer.default)
         self.block._validate_address(ptr_value)
@@ -1465,8 +1479,9 @@ class IndirectRef:
 
         An address outside the block reads as the type's zero (``0``,
         ``0.0``, ``False``) with no fault flag: a condition never stops the
-        scan.  Instructions resolve through ``resolve_ctx`` instead, which
-        raises, and set the address-error flag.
+        scan.  Instructions resolve through ``resolve_ctx`` instead: below the
+        block they set the address-error flag, past it they read the type's
+        zero and drop a write, with no flag (``PastBankError``).
         """
         tag = self.block._element_or_none(self.address_ctx(ctx))
         if tag is None:
@@ -1546,7 +1561,8 @@ class IndirectExprRef:
             Concrete Tag at the computed address.
 
         Raises:
-            IndexError: If resolved address is out of range.
+            IndexError: If resolved address is out of range (``PastBankError``
+                past the end of the block).
         """
         addr = int(self.expr.evaluate(ctx))
         self.block._validate_address(addr)

@@ -738,8 +738,8 @@ def test_compiled_plc_matches_plc_for_indirect_copy_converter_address_fault() ->
     plc = PLC(program, dt=0.010)
     compiled = CompiledPLC(program, dt=0.010)
 
-    plc.patch({"Enable": True, "Pointer": 999})
-    compiled.patch({"Enable": True, "Pointer": 999})
+    plc.patch({"Enable": True, "Pointer": 0})
+    compiled.patch({"Enable": True, "Pointer": 0})
     plc.step()
     compiled.step()
 
