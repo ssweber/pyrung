@@ -3684,12 +3684,20 @@ class PLC:
             preserve_rtc_continuity=self._battery_present,
         )
         self._running = True
+        self._reset_recording()
+        return self._state
+
+    def _reset_recording(self) -> None:
+        """Start a fresh recording rooted at scan 0, which a reset has just returned to.
+
+        The scan ids to come would alias every sparse channel of the old log (patches,
+        forces, rtc_base_changes, dts), so history replayed the old run's entries.
+        """
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=0)
         self._checkpoints = {}
         self._epoch_caches.on_recording_reset()
         self._forces_last_recorded = {}
         self._this_scan_drained_patches = {}
-        return self._state
 
     def set_rtc(self, value: datetime) -> None:
         """Set the current RTC value for the runner."""
@@ -3899,6 +3907,7 @@ class PLC:
             mode_run=True,
             preserve_rtc_continuity=True,
         )
+        self._reset_recording()
         self._forces.update(kept_forces)
         self._running = True
 
@@ -3912,7 +3921,9 @@ class PLC:
         self._this_scan_drained_patches = {}
 
     def _ensure_running(self) -> None:
-        if not self._running:
+        # A replay walks one recording, and a restart ends a recording: a stop inside
+        # it scanned on until a later call, which is past the end of this log.
+        if not self._running and not self._replay_mode:
             self._stop_to_run_transition()
 
     def _sync_runtime_flags_from_state(self) -> None:

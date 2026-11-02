@@ -141,6 +141,7 @@ def _run_compiled(
     )
     # The base itself: a timedelta rounds, so a moved base can read 1 us apart.
     replay._set_rtc_internal(plc._rtc_base, plc._rtc_base_sim_time)
+    replay.rtc_applied = []
     replay._input_overrides._forces.update(plc._input_overrides.forces)
 
     interval = plc._checkpoint_interval
@@ -258,7 +259,7 @@ def _install(plc: PLC, replay: CompiledPLC, state: SystemState, replace_tip: Cal
     scans past *state* wait: if those scans are undone, the replay's goes with them.
     """
     previous_tip = plc._state.scan_id
-    applied = replay.rtc_applied
+    applied = replay.rtc_applied or []
     while applied and applied[0][0] <= state.scan_id:
         scan_id, base, base_sim_time = applied.pop(0)
         plc._set_rtc_and_record(base, base_sim_time, scan_id=scan_id)
