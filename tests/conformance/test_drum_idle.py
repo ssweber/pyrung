@@ -1,12 +1,12 @@
 """S6 drum probes, a drum not reached: the ``drum_idle`` group (rungs in main).
 
-Part E of the CLICK project (``suite.PARTS``).  CLICK has no nested call, so
+Part G of the CLICK project (``suite.PARTS``).  CLICK has no nested call, so
 the group's rungs run in the main program (``in_main``), and the first case's
 drums live in a subroutine main does not call on some scans.  A drum that is
 not reached on a scan keeps its rung memory, so when it is reached again the
 rung has not "come back" and writes no row.  Each case runs a time drum and a
-time & event drum, moved to step 2 with B on on scan 1, B reset on scan 3, and
-not reached on scans 3..4.  Snapshots as in ``test_drum_rule`` (``S`` then
+time & event drum, moved to step 2 with B on (the time drum on scan 1, the other on
+scan 2, see ``test_drum_rule``), B reset on scan 3, and not reached on scans 3..4.  Snapshots as in ``test_drum_rule`` (``S`` then
 ``4 * flag + 2 * B + A``, the time drum's above the time & event drum's), on
 scans 2, 4, 5 and 6: 2222, 2020 and then pyrung reads 2020 (Result4,
 ErrorCode) when the drums are reached again on scan 5: a reset output stays
@@ -58,10 +58,10 @@ RES = Resources(
 
 
 def _drive(slot: Any, p: Pair, skip: Any) -> None:
-    """Both drums move to step 2 on scan 1; the drums are not reached on scans 3..4,
+    """Both drums are on step 2 by scan 2; the drums are not reached on scans 3..4,
     when B is reset (above the drums)."""
     on_scans(slot, p.jog, 1)
-    on_scans(slot, p.events[0], 1)
+    on_scans(slot, p.events[0], 2)
     with Rung(slot.Scratch >= 3, slot.Scratch <= 4):
         out(skip)
     with Rung(slot.Scratch == 3):

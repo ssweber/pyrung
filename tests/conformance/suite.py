@@ -4,7 +4,7 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
-The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as five
+The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as six
 projects, one part each (``PARTS``; there is no part D)::
 
     make conformance-export PART=A OUT=path/to/a
@@ -12,6 +12,7 @@ projects, one part each (``PARTS``; there is no part D)::
     make conformance-export PART=C OUT=path/to/c
     make conformance-export PART=E OUT=path/to/e
     make conformance-export PART=F OUT=path/to/f
+    make conformance-export PART=G OUT=path/to/g
 
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
@@ -43,9 +44,11 @@ from tests.conformance import (
     test_cont_box,
     test_counters,
     test_drum,
+    test_drum_close,
     test_drum_idle,
     test_drum_jump,
     test_drum_rule,
+    test_drum_settle,
     test_drum_trace,
     test_faults,
     test_flag_probe,
@@ -90,6 +93,8 @@ ALL_GROUPS = [
     test_drum_trace.group,
     test_drum_rule.group,
     test_drum_jump.group,
+    test_drum_settle.group,
+    test_drum_close.group,
     test_out.group,
     test_loop.group,
     test_coils.group,
@@ -126,7 +131,7 @@ ALL_GROUPS = [
 #: Group names per CLICK project, split to keep each part under
 #: ``PART_STEP_BUDGET``: A and B the instructions, C how a rung is solved
 #: (solve order, edges, loops) with the paste probes, E the drum traces and the
-#: fault-flag probes.  Every group is in exactly one part.  The registers
+#: fault-flag probes, G the S6 drum probes.  Every group is in exactly one part.  The registers
 #: are the manifest's either way, so a group's subroutine is the same in its
 #: part as in the whole project.
 PARTS: dict[str, tuple[str, ...]] = {
@@ -158,16 +163,12 @@ PARTS: dict[str, tuple[str, ...]] = {
         "for_count",
     ),
     # A drum's state scan by scan and the fault-flag probes, which outgrew
-    # the budget left in parts A and C, and the S6 drum probes: the drum rule
-    # on time and time & event drums.  ``drum_idle`` (a drum not reached; a For
-    # body may be refused at paste) is the part's last group.
-    "E": (
-        "drum_trace",
-        "drum_rule",
-        "drum_jump",
-        "faults",
-        "drum_idle",
-    ),
+    # the budget left in parts A and C.
+    "E": ("drum_trace", "faults"),
+    # The S6 drum probes: the drum rule on time and time & event drums, out of
+    # part E when ``drum_settle`` left it no room.  ``drum_idle`` (a drum not
+    # reached; a For body may be refused at paste) is the part's last group.
+    "G": ("drum_rule", "drum_jump", "drum_settle", "drum_close", "drum_idle"),
     # The S6 store probes (RAND bounds and destinations, Inf and NaN into text
     # and Words, a Real into a TXT, a clamping Fill): a project of their own,
     # since part E has no room left and the editor may refuse a RAND bound form

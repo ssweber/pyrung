@@ -8,8 +8,8 @@
 # Blocks end below DS3901: DS3901..DS4500 is raw staging (tests/conformance/memory.py).
 
 [groups.rungs]
-base = 101 # Conf_Rungs: DS101..DS300
-slots = 19
+base = 101 # Conf_Rungs: DS101..DS220; DS221..DS300 went to drum_close
+slots = 11
 
 [groups.rungs.cases]
 memory_is_immediate = 1
@@ -25,8 +25,8 @@ nop_rung_takes_snapshot = 10 # retired: CLICK deletes a NOP row that shares its 
 box_leg_reads_rows_above = 11 # retired: CLICK does not allow it (C000A: all inputs (pins) of a box must start from the same branch)
 
 [groups.math]
-base = 301 # Conf_Math: DS301..DS500
-slots = 19
+base = 301 # Conf_Math: DS301..DS390; DS391..DS500 went to drum_settle
+slots = 8
 
 [groups.math.cases]
 avg_mdn_positive = 1
@@ -442,12 +442,12 @@ output_reset_while_running = 5
 step_written_while_running = 6
 step_written_while_paused = 7
 
-# S6 probes (parts E and F).  The DS blocks sit in staging DS that no group's cases use
+# S6 probes (parts G and F).  The DS blocks sit in staging DS that no group's cases use
 # (tests/conformance/memory.py, STAGING_DS): between the text, block, search and
 # math groups' staged registers and past faults' block.
 
 [groups.drum_idle]
-base = 3871 # Conf_DrumIdle: DS3871..DS3900; part E, a drum not reached; rungs in main
+base = 3871 # Conf_DrumIdle: DS3871..DS3900; part G, a drum not reached; rungs in main
 slots = 2
 
 [groups.drum_idle.cases]
@@ -455,7 +455,7 @@ uncalled_subroutine = 1
 drum_in_skipped_loop = 2
 
 [groups.drum_rule]
-base = 3933 # Conf_DrumRule: DS3933..DS3992; part E, the drum rule on time and time & event drums
+base = 3933 # Conf_DrumRule: DS3933..DS3992; part G, the drum rule on time and time & event drums
 slots = 5
 
 [groups.drum_rule.cases]
@@ -479,7 +479,7 @@ real_into_text_and_fill = 6
 rand_bound_forms = 7
 
 [groups.drum_jump]
-base = 4439 # Conf_DrumJump: DS4439..DS4498; part E, jog, jump and pause on time and time & event drums
+base = 4439 # Conf_DrumJump: DS4439..DS4498; part G, jog, jump and pause on time and time & event drums
 slots = 5
 
 [groups.drum_jump.cases]
@@ -488,3 +488,33 @@ jump_with_jog_and_to_own_step = 2
 jump_after_completion = 3
 completed_drum_fires_again = 4
 acc_through_jog_completion = 5
+
+# On math's unused slots: no hash holds a block's size, so math's cases are untouched.
+[groups.drum_settle]
+base = 391 # Conf_DrumSettle: DS391..DS500; part G, what the S6 drum probes left open
+slots = 10
+
+[groups.drum_settle.cases]
+te_event_on_return_scan = 1
+te_event_after_reset = 2
+te_event_on_entry = 3
+te_level_from_scan_1 = 4
+te_event_with_acc_staged = 5
+after_jump_jog_alone = 6
+acc_in_completed_drum = 7
+event_drum_after_completion = 8
+correction_with_acc_staged = 9
+
+# On rungs' unused slots: no hash holds a block's size, so rungs' cases are untouched.
+[groups.drum_close]
+base = 221 # Conf_DrumClose: DS221..DS300; part G, what the fix of the drums has to know
+slots = 7
+
+[groups.drum_close.cases]
+return_scan_ticks = 1
+flag_cleared_from_outside = 2
+flag_set_from_outside = 3
+return_after_jog_back = 4
+return_after_jump = 5
+return_scan_moves = 6
+te_acc_by_step_kind = 7

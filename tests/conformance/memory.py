@@ -49,7 +49,9 @@ BANKS: Mapping[str, int] = {
 #: Raw DS a case stages in (a contiguous source range, a search table, ...)
 #: lives in this area.  No manifest block may overlap a DS range a group owns;
 #: the registers inside it that no group's cases use are free for the S6 probes'
-#: blocks (``drum_idle``, ``drum_rule``, ``store_probe``, ``drum_jump``).
+#: blocks (``drum_idle``, ``drum_rule``, ``store_probe``, ``drum_jump``);
+#: ``drum_settle``'s block sits on the slots ``math`` never used, DS391..DS500,
+#: and ``drum_close``'s on those ``rungs`` never used, DS221..DS300.
 STAGING_DS = range(3901, 4501)
 
 #: Raw memory each group owns, by bank: a range, or a tuple of ranges for a
@@ -85,6 +87,19 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DD": range(681, 689),
         "DS": range(4399, 4401),
     },
+    "drum_settle": {
+        "C": (range(1852, 1901), range(582, 661)),
+        "T": range(359, 377),
+        "DD": range(718, 754),
+        "DS": (range(4208, 4223), range(4227, 4231)),
+    },
+    # What drum_settle left for the fix (tests/conformance/test_drum_close.py).
+    "drum_close": {
+        "C": (range(702, 751), range(969, 1001), range(414, 451), range(27, 51)),
+        "T": (range(271, 299), range(377, 401)),
+        "DD": range(754, 810),
+        "DS": (range(4332, 4343), range(4352, 4363), range(4372, 4383)),
+    },
     "store_probe": {
         "C": (range(1661, 1701), range(1781, 1801)),
         "DD": range(611, 641),
@@ -108,7 +123,8 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "past_write": {"C": range(1381, 1383), "DS": range(4226, 4227)},
     # A drum's state scan by scan (tests/conformance/test_drum_trace.py).
     "drum_trace": {"C": range(51, 101)},
-    "out": {"C": range(1801, 1901), "T": range(301, 351)},
+    # C1852..C1900 are drum_settle's (the out cases stop at C1851).
+    "out": {"C": range(1801, 1852), "T": range(301, 351)},
     "loop": {"C": range(1701, 1751), "T": range(201, 251), "CT": range(201, 251)},
     "timers": {"C": range(1471, 1501), "T": range(1, 101)},
     # C1331..C1380, C1381..C1382 and CT147 are the fault-flag probes' (the counters
@@ -132,13 +148,23 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "shift": {"C": range(1001, 1110)},
     "search": {
         "C": range(851, 901),
-        "DS": (range(4203, 4226), range(4227, 4395)),  # DS4226: past_write's pointer
+        # DS4226: past_write's pointer; DS4208..DS4222, DS4227..DS4230: drum_settle's;
+        # DS4332..DS4342, DS4352..DS4362, DS4372..DS4382: drum_close's.
+        "DS": (
+            range(4203, 4208),
+            range(4223, 4226),
+            range(4231, 4332),
+            range(4343, 4352),
+            range(4363, 4372),
+            range(4383, 4395),
+        ),
         "DD": range(401, 501),
         "DF": range(301, 401),
         "TXT": range(201, 301),
     },
     "system": {
-        "C": range(901, 1001),
+        # C969..C1000 are drum_close's.
+        "C": range(901, 969),
         "T": range(101, 151),
         "CT": range(171, 181),
         "DD": range(901, 1000),
@@ -147,11 +173,18 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # Math errors (tests/conformance/test_math_error.py).
     "math_error": {"DF": range(401, 411)},
     # A subroutine called twice a scan (tests/conformance/test_call_twice.py).
-    "call_twice": {"C": range(701, 751)},
+    # C702..C750 are drum_close's.
+    "call_twice": {"C": range(701, 702)},
     # Solve order within a rung (tests/conformance/test_solve_order.py).
-    "solve_order": {"C": range(501, 701), "T": range(151, 161), "CT": range(161, 171)},
+    # C582..C660 are drum_settle's (the solve_order cases use none of them).
+    "solve_order": {
+        "C": (range(501, 582), range(661, 701)),
+        "T": range(151, 161),
+        "CT": range(161, 171),
+    },
     # Row solve, round 3 (tests/conformance/test_row_solve.py).
-    "row_solve": {"C": (range(401, 451), range(1, 51)), "CT": range(191, 196)},
+    # C414..C450 and C27..C50 are drum_close's.
+    "row_solve": {"C": (range(401, 414), range(1, 27)), "CT": range(191, 196)},
     # A box on a continued wire (tests/conformance/test_cont_box.py).
     "cont_box": {"C": range(451, 501), "CT": range(181, 191)},
     # Which stores raise a fault flag (tests/conformance/test_faults.py).

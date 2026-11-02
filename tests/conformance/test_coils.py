@@ -43,6 +43,9 @@ The round 2 probes, each answered as the expectation adopts:
 - ``edge_in_false_rung_branch``: the same question for edge contacts in the
   branches of a rung whose rail contact is open.  Scanned: 0 and 0.
   Powered: 5 and 8.
+  Both were asked again on 2026-11-02, reading scanned: until then their gate had
+  two Out rungs, the second writing it off on scan 5, so it was on only on scan 8,
+  when a powered memory reads 0 and 0 as well.
 - ``edge_on_first_scan``: a bit an unconditional rung turns on from the first
   scan, read by a rise contact below it.  Edge memory that starts off at
   STOP->RUN fires on the first scan and latches a flag (Result1 = 1, adopted);
@@ -54,7 +57,7 @@ The round 2 probes, each answered as the expectation adopts:
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, branch, calc, copy, fall, latch, out, reset, rise, system
+from pyrung.core import Or, Rung, branch, calc, copy, fall, latch, out, reset, rise, system
 from tests.conformance.memory import c
 from tests.conformance.scans import WINDOW, count_scans, done, edges, firings, scans_for, trace
 
@@ -140,12 +143,10 @@ def prove_latch_reset_sticky(slot):
 
 
 def _gated_bit(slot, bit, gate):
-    """*bit* on for scans 3..6; *gate* on for scans 5 and 8 only."""
+    """*bit* on for scans 3..6; *gate* on for scans 5 and 8 only, from one rung."""
     with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 6):
         out(bit)
-    with Rung(slot.Cmd != 0, slot.Scratch == 5):
-        out(gate)
-    with Rung(slot.Cmd != 0, slot.Scratch == 8):
+    with Rung(slot.Cmd != 0, Or(slot.Scratch == 5, slot.Scratch == 8)):
         out(gate)
 
 

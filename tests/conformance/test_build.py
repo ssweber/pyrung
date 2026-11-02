@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import replace
 
 import pytest
@@ -26,10 +27,11 @@ from pyrung.conformance import (
     record_confirmations,
     run,
 )
-from pyrung.conformance._ladder import case_comment
-from pyrung.conformance._slot import DS_LAST, slot_register
-from pyrung.core import PLC, Rung, calc, copy
+from pyrung.conformance._ladder import case_comment, emit_case
+from pyrung.conformance._slot import DS_LAST, make_slot, slot_register
+from pyrung.core import PLC, Program, Rung, calc, copy
 from pyrung.core.system_points import system
+from pyrung.core.validation._common import _collect_write_sites
 from tests.conformance import memory, suite
 
 ds = ClickBlocks().ds
@@ -140,7 +142,28 @@ def test_groups_live_at_fixed_ds_registers() -> None:
     assert m.resolve(rungs.slot[3].ErrorCode.name) == "DS138"
     assert rungs.register(3, "ErrorCode") == 138
     assert rungs.span == (111, 10 * max(i for i, _ in rungs.cases))
-    assert rungs.layout.last_register == 300
+    assert rungs.layout.last_register == 220
+
+
+#: Cases whose question is two always-writing instructions on one bit.
+DOUBLE_WRITERS_ON_PURPOSE = {"rungs/last_rung_wins_shared_coil"}
+
+
+def test_one_always_writing_instruction_to_a_bit() -> None:
+    """A second Out rung turns the bit off on the first's scans, and every target agrees,
+    so nothing else fails: ``coils/edge_behind_open_contact`` could not tell its answers
+    apart this way.  CLICK warns (C1001) at paste, which is too late."""
+    doubled: list[str] = []
+    for group in suite.ALL_GROUPS:
+        for c in group.cases:
+            label = f"{group.name}/{c.id}"
+            if label in DOUBLE_WRITERS_ON_PURPOSE:
+                continue
+            with Program(strict=False) as program:
+                emit_case("", c, make_slot(1, name="Doubled"), 1)
+            sites = Counter(site.target_name for site in _collect_write_sites(program))
+            doubled += [f"{label}: {tag}" for tag, count in sites.items() if count > 1]
+    assert not doubled, doubled
 
 
 def test_slots_come_from_the_manifest_not_case_order() -> None:

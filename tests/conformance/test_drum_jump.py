@@ -1,18 +1,16 @@
 """S6 drum probes, jog, jump and pause: the ``drum_jump`` group (subroutine ``Conf_DrumJump``).
 
-Part E of the CLICK project (``suite.PARTS``).  The snapshots are those of
+Part G of the CLICK project (``suite.PARTS``).  The snapshots are those of
 ``test_drum_rule`` (two digits a drum, ``S`` then ``4 * flag + 2 * B + A``,
 the time drum's above the time & event drum's), taken on a time drum and a
 time & event drum side by side.  The expectations are what pyrung reads, the
 S5 drum rule extended to the two kinds (docs/instructions/drum-shift-search.md);
 a snapshot that reads otherwise on a CLICK is an answer.
 
-- ``paused_jog_cases`` (probe): scenario A, a jog on the last step while the rung
-  is false (scans 3..5): the flag comes on at once and the outputs stand until
-  the rung returns, 2626 on scan 4 (Result2), then every output off when it
-  returns on scan 6, 2424 (Result3).  A drum that ignores the paused jog reads
-  2222 then 2222; one that turns the outputs off at once reads 2424 on scan 4.
-  Scenario B, a jog rising on a bad step (5, written on scan 3) while the rung is
+- ``paused_jog_cases`` (answered 2026-11-02, pending DRUM): scenario A, a jog on the
+  last step while the rung is false (scans 3..5) completes the drum at once with its
+  outputs off, 2424 on scan 4 (Result2) and on scan 6 when the rung returns (Result3).
+  pyrung has the outputs stand until the rung returns, 2626 on scan 4.  Scenario B, a jog rising on a bad step (5, written on scan 3) while the rung is
   false (scans 3..6): the jog is dropped, so when the rung returns on scan 7 the
   drum corrects to step 1 and writes its row, 1111 (Result4), and stays, 1111
   (ErrorCode).  A jog that is kept moves it on, reading 2222 or 2424.
@@ -23,29 +21,26 @@ a snapshot that reads otherwise on a CLICK is an answer.
   already on (2, with B reset above the drums on scan 4): it counts as a move
   and writes the row, 2222 (Result4, ErrorCode); a drum that ignores it reads
   2020.
-- ``jump_after_completion`` (probe): scenario A, a 2-step drum completed by a jog
-  on scan 3, then a jump to step 1 on scan 5: the step moves but the outputs
-  stay off, flag on, 1414 (Result2), and a jog with a jump on scan 7 (jog
-  forward, jump back to 1) ends the all-off state and writes step 1's row with
-  the flag still on, 1515 (Result3); 1414 again says the jog does not end it
-  there.  Scenario B, after the same jump (1414, Result4), step 1's own end
-  (the time drum's Acc staged past its 2 s preset, the other's event) ends the
-  completion: step 2's row, flag still on, 2626 (ErrorCode).  CHANGELOG: "not
-  yet probed on a CLICK"; a drum that stays all-off reads 1414.
-- ``completed_drum_fires_again`` (probe): both drums complete on scan 3 (the time
-  drum by Acc staged past its 2 s preset, the other by its level event), 2424
-  (Result2).  B turned on from outside on scan 4 stays on while the drums fire
-  again (their time and event still true) and rewrite only the flag: 2626
-  (Result3, Result4, ErrorCode).  A drum that writes every output off again
-  reads 2424 throughout.
-- ``acc_through_jog_completion`` (probe): a time drum with Acc 900 staged on scan
-  2 is jogged on its last step on scan 3: the completion keeps the accumulator,
-  Acc / 100 = 9 (Result2; 0 if it is cleared), and the accumulator keeps
-  counting, which it does on 3 to 5 of scans 4..8 (Result3 = 5 in-process; 0
-  if it holds).  A second drum is given step 5 and a jog (the hold scan) on
-  scan 3 with Acc 900 staged above it: the hold scan does not tick the
-  accumulator, so Acc - 900 = 0 (Result4; more if it ticks), and the next
-  scan's correction clears it, Acc 0 (ErrorCode).
+- ``jump_after_completion`` (answered 2026-11-02, pending DRUM): scenario A, a 2-step
+  drum completed by a jog on scan 3, then a jump to step 1 on scan 5: the step moves
+  but the outputs stay off, flag on, 1414 (Result2), and a jog with a jump on scan 7
+  leaves it, 1414 (Result3), the jump beating the jog.  Scenario B, after the same jump
+  (1414, Result4), step 1's own end (the time drum's Acc staged past its 2 s preset, the
+  other's event) does not move it either, 1414 (ErrorCode).  pyrung reads 1515 and
+  2626.  ``drum_settle/after_jump_jog_alone`` asks what a jog alone does there.
+- ``completed_drum_fires_again`` (probe): both drums complete on scan 4 (the time
+  drum by Acc staged past its 2 s preset, the other by its level event, on from scan
+  4; it reaches step 2 on scan 2, see ``test_drum_rule``), 2424 (Result2).  B turned on
+  from outside on scan 5 stays on while the drums fire again (their time and event
+  still true) and rewrite only the flag: 2626 (Result3, Result4, ErrorCode).  A drum
+  that writes every output off again reads 2424 throughout.
+- ``acc_through_jog_completion`` (answered 2026-11-02, pending DRUM): a time drum with
+  Acc 900 staged on scan 2 is jogged on its last step on scan 3: the completion keeps
+  the accumulator, Acc / 100 = 9 (Result2), and it then holds, moving on none of scans
+  4..8 (Result3 = 0; pyrung counts on, 3 to 5).  A second drum is given step 5 and a
+  jog (the hold scan) on scan 3 with Acc 900 staged above it: the hold scan does not
+  tick the accumulator, so Acc - 900 = 0 (Result4), and the next scan's correction
+  keeps it, 900..999 (ErrorCode, 910 on the CLICK; pyrung clears it, 0).
 
 The cases own C1110..C1200 and C1401..C1470, T251..T270, DD661..DD680 and the DS
 the group's rigs name (``memory.OWNED``).
@@ -192,22 +187,22 @@ def prove_completed_drum_fires_again(slot):
 
     def above(p: Pair) -> None:
         on_scans(slot, p.jog, 1)
-        on_scans(slot, p.events[0], 1)
-        # The last step's event is a level, on from scan 3.
-        with Rung(slot.Scratch >= 3):
+        on_scans(slot, p.events[0], 2)
+        # The last step's event is a level, on from scan 4.
+        with Rung(slot.Scratch >= 4):
             out(p.events[1])
         # An output turned on from outside after the completion.
-        with Rung(slot.Scratch == 4):
+        with Rung(slot.Scratch == 5):
             latch(p.time.b)
             latch(p.event.b)
 
     p = r.pair(0, jog=True, presets=[30000, 2000], above=above)
     track_both(slot, p)
-    put(slot, 2, 2500, p.time.acc)
-    snap(slot, p, 3, slot.Result2)
-    snap(slot, p, 4, slot.Result3)
-    snap(slot, p, 5, slot.Result4)
-    snap(slot, p, 6, slot.ErrorCode)
+    put(slot, 3, 2500, p.time.acc)
+    snap(slot, p, 4, slot.Result2)
+    snap(slot, p, 5, slot.Result3)
+    snap(slot, p, 6, slot.Result4)
+    snap(slot, p, 7, slot.ErrorCode)
     done(slot)
 
 
@@ -248,14 +243,13 @@ group = Group(
     [
         case(
             "A paused drum takes a jog on its last step and drops one on a bad step: a "
-            "jog on the last step while paused sets the flag at once with the outputs "
-            "standing (2626, Result2) and turns them off when the rung returns (2424, "
-            "Result3); a jog on step 5 while paused is dropped, so the returning rung "
-            "corrects to step 1 and writes its row (1111, Result4, ErrorCode)",
+            "jog on the last step while paused completes it at once with every output off "
+            "(2424, Result2, Result3); a jog on step 5 while paused is dropped, so the "
+            "returning rung corrects to step 1 and writes its row (1111, Result4, ErrorCode)",
             ladder=prove_paused_jog_cases,
-            expect={"Result2": 2626, "Result3": 2424, "Result4": 1111, "ErrorCode": 1111},
+            expect={"Result2": 2424, "Result3": 2424, "Result4": 1111, "ErrorCode": 1111},
             scans=SCANS,
-            probe="time and time & event drums: paused jog on the last step, on a bad step",
+            pending="DRUM",
         ),
         case(
             "A jump beats a jog on the last step and counts when it lands on the step "
@@ -269,19 +263,19 @@ group = Group(
             probe="time and time & event drums: jog on the last step with a jump, jump to own step",
         ),
         case(
-            "A jump leaves a completed drum all-off, a jog forward with a jump ends that, "
-            "and the drum's own time or event does too: completed, then a jump to step 1 "
-            "reads 1414 (Result2), and a jog with a jump reads 1515 (Result3); another "
-            "pair after the same jump reads 1414 (Result4) and, once step 1's time is "
-            "up or its event is on, step 2's row with the flag still on (2626, ErrorCode)",
+            "A jump leaves a completed drum all-off, and neither a jog with a jump nor the "
+            "drum's own time or event ends that: completed, then a jump to step 1 reads "
+            "1414 (Result2), a jog with a jump 1414 (Result3); another pair after the same "
+            "jump reads 1414 (Result4) and 1414 with step 1's time up or its event on "
+            "(ErrorCode)",
             ladder=prove_jump_after_completion,
-            expect={"Result2": 1414, "Result3": 1515, "Result4": 1414, "ErrorCode": 2626},
+            expect={"Result2": 1414, "Result3": 1414, "Result4": 1414, "ErrorCode": 1414},
             scans=SCANS,
-            probe="time and time & event drums: what ends a completion after a jump",
+            pending="DRUM",
         ),
         case(
             "A completed drum that fires again rewrites only the flag: both complete on "
-            "scan 3 (2424, Result2), B turned on from outside on scan 4 stays on while "
+            "scan 4 (2424, Result2), B turned on from outside on scan 5 stays on while "
             "the time and the level event stay true (2626, Result3, Result4, ErrorCode)",
             ladder=prove_completed_drum_fires_again,
             expect={"Result2": 2424, "Result3": 2626, "Result4": 2626, "ErrorCode": 2626},
@@ -289,15 +283,15 @@ group = Group(
             probe="time and time & event drums: a completed drum firing again",
         ),
         case(
-            "A time drum's accumulator survives a jog completion and keeps counting, and "
-            "a jog-hold scan does not tick it: Acc 900 staged, then jogged on the last "
-            "step, reads 9 hundreds (Result2) and moves on 3 to 5 of 5 scans (Result3); "
-            "a jog on a bad step with Acc 900 staged leaves it 900 (Result4 = 0 over "
-            "900) and the correction clears it (ErrorCode = 0)",
+            "A time drum's accumulator holds through a jog completion, and a jog-hold scan "
+            "does not tick it nor its correction clear it: Acc 900 staged, then jogged on "
+            "the last step, reads 9 hundreds (Result2) and moves on no scan after (Result3 "
+            "= 0); a jog on a bad step with Acc 900 staged leaves it 900 (Result4 = 0 over "
+            "900) and the next scan's correction keeps it (ErrorCode in 900..999)",
             ladder=prove_acc_through_jog_completion,
-            expect={"Result2": 9, "Result3": range(3, 6), "Result4": 0, "ErrorCode": 0},
+            expect={"Result2": 9, "Result3": 0, "Result4": 0, "ErrorCode": range(900, 1000)},
             scans=SCANS,
-            probe="time drum: Acc through a jog completion, and on a jog-hold scan",
+            pending="DRUM",
         ),
     ],
 )

@@ -1,6 +1,6 @@
 """S6 drum probes, the rule: the ``drum_rule`` group (subroutine ``Conf_DrumRule``).
 
-Part E of the CLICK project (``suite.PARTS``).  S5 read the drum rule on event
+Part G of the CLICK project (``suite.PARTS``).  S5 read the drum rule on event
 drums (``drum_trace``); these ask the same of ``time_drum`` and
 ``time_event_drum``.  Each scenario runs one of each on the same inputs
 (``drum_rig.Pair``) and records them together: a drum's state at the end of a
@@ -20,7 +20,11 @@ it): a drum writes its outputs when its step moves or its rung comes back, not
 on every scan, and a write to its step register is not a move.  A snapshot
 that reads otherwise on a CLICK is an answer for that kind of drum.
 
-- ``writes_on_move_only`` (probe): both drums on step 2 with B on from scan 1.
+The time & event drum is moved on scan 2 and the time drum on scan 1: a one-scan
+event on scan 1 did not move it on a CLICK (2026-11-02), which ``drum_settle`` asks
+of its own, and every scenario here starts from step 2.
+
+- ``writes_on_move_only`` (probe): both drums on step 2 with B on from scan 2.
   Scenario A: B reset above the drums on scan 3 stays off, 2020 on scans 3 and
   4 (Result2, Result3); a drum that writes its row every scan reads 2222.
   Scenario B: step 1 written to both registers on scan 3 leaves B on, 1212
@@ -93,11 +97,11 @@ RES = Resources(
 )
 
 
-def _up_from_scan_1(slot: Any, p: Pair, *more: int) -> None:
-    """Both drums are moved to step 2 on scan 1 (and again on *more*): the time
-    drum by its jog, the time & event drum by its step 1 event."""
+def _up_to_step_2(slot: Any, p: Pair, *more: int) -> None:
+    """Both drums are on step 2 by scan 2 (and move again on *more*): the time drum
+    by its jog on scan 1, the time & event drum by its step 1 event on scan 2."""
     on_scans(slot, p.jog, 1, *more)
-    on_scans(slot, p.events[0], 1, *more)
+    on_scans(slot, p.events[0], 2, *more)
 
 
 def prove_writes_on_move_only(slot):
@@ -105,7 +109,7 @@ def prove_writes_on_move_only(slot):
     count_scans(slot)
 
     def a_above(p: Pair) -> None:
-        _up_from_scan_1(slot, p)
+        _up_to_step_2(slot, p)
         with Rung(slot.Scratch == 3):
             reset(p.time.b)
             reset(p.event.b)
@@ -114,7 +118,7 @@ def prove_writes_on_move_only(slot):
     track_both(slot, a)
 
     def b_above(p: Pair) -> None:
-        _up_from_scan_1(slot, p, 5)
+        _up_to_step_2(slot, p, 5)
         put(slot, 3, 1, p.time.step)
         put(slot, 3, 1, p.event.step)
 
@@ -132,7 +136,7 @@ def prove_writes_on_return(slot):
     count_scans(slot)
 
     def a_above(p: Pair) -> None:
-        _up_from_scan_1(slot, p)
+        _up_to_step_2(slot, p)
         with Rung(slot.Scratch >= 3, slot.Scratch <= 4):
             from pyrung.core import out
 
@@ -144,7 +148,7 @@ def prove_writes_on_return(slot):
     track_both(slot, a)
 
     def b_above(p: Pair) -> None:
-        _up_from_scan_1(slot, p)
+        _up_to_step_2(slot, p)
         put(slot, 3, 5, p.time.step)
         put(slot, 3, 5, p.event.step)
 
