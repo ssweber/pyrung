@@ -201,7 +201,14 @@ class CompiledPLC:
         dt: float = 0.010,
         compiled: CompiledKernel | None = None,
         keep_forces_on_run: bool = False,
+        exact_anchor: bool = False,
     ) -> None:
+        """Start from *initial_state*, or a fresh state.
+
+        *exact_anchor* says *initial_state* comes from a runner, which seeds every tag
+        it knows: a tag it lacks is one stepping has not written yet, and stays absent.
+        Without it, every tag the program knows is seeded with its default.
+        """
         from pyrung.circuitpy.codegen.render_kernel import compile_kernel
         from pyrung.core.program import Program
 
@@ -276,12 +283,11 @@ class CompiledPLC:
         # A state saved before edge memory was per contact (``_prev:X``).
         self._state = migrate_legacy_edge_memory(self._state, site_table_of(program))
         self._extra_commit_tag_names: set[str] = set()
-        # A state handed in is exact: a tag it lacks stays absent, as it does
-        # stepping, and the kernel holds the default meanwhile.
-        anchored = initial_state is not None
+        # An exact anchor's missing tags stay absent, as they do stepping, and the
+        # kernel holds the default meanwhile.
         seed = (
             {}
-            if anchored
+            if exact_anchor
             else {
                 t.name: t.default
                 for t in self._known_tags_by_name.values()
@@ -300,7 +306,7 @@ class CompiledPLC:
                 for t in self._known_tags_by_name.values()
                 if t.name not in self._state.tags and t.name not in self._block_element_names
             }
-            if anchored
+            if exact_anchor
             else {}
         )
         self._extra_commit_tag_names -= self._unseen_scalars.keys()

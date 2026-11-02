@@ -2962,6 +2962,7 @@ class PLC:
             initial_state=anchor_state,
             dt=self._dt,
             compiled=kernel,
+            exact_anchor=True,
         )
         replay._set_rtc_internal(
             self._system_runtime._rtc_now(anchor_state), anchor_state.timestamp
@@ -3478,6 +3479,7 @@ class PLC:
             initial_state=anchor_state,
             dt=self._dt,
             compiled=kernel,
+            exact_anchor=True,
         )
         replay._set_rtc_internal(
             self._system_runtime._rtc_now(anchor_state), anchor_state.timestamp
@@ -3539,6 +3541,7 @@ class PLC:
             initial_state=positioned.state,
             dt=self._dt,
             compiled=kernel,
+            exact_anchor=True,
         )
         replay._set_rtc_internal(
             positioned._rtc_at_sim_time(positioned.state.timestamp),

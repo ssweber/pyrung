@@ -124,6 +124,7 @@ def _run_compiled(
         initial_state=start,
         dt=plc._dt,
         compiled=kernel,
+        exact_anchor=True,
     )
     replay._set_rtc_internal(plc._system_runtime._rtc_now(start), start.timestamp)
     replay._input_overrides._forces.update(plc._input_overrides.forces)
