@@ -93,12 +93,27 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "TXT": range(521, 546),
         "DS": range(4499, 4500),
     },
+    # The fault-flag model's unmeasured choices (tests/conformance/test_flag_probe.py,
+    # test_past_bank_write.py); their memory is what the counters group and the free
+    # tails of the DD, DF, DH and TXT banks leave.
+    "flag_probe": {
+        "C": range(1331, 1381),
+        "T": range(181, 182),
+        "CT": range(147, 148),
+        "DD": range(689, 718),
+        "DF": range(430, 434),
+        "DH": range(417, 422),
+        "TXT": range(501, 503),
+    },
+    "past_write": {"C": range(1381, 1383), "DS": range(4226, 4227)},
     # A drum's state scan by scan (tests/conformance/test_drum_trace.py).
     "drum_trace": {"C": range(51, 101)},
     "out": {"C": range(1801, 1901), "T": range(301, 351)},
     "loop": {"C": range(1701, 1751), "T": range(201, 251), "CT": range(201, 251)},
     "timers": {"C": range(1471, 1501), "T": range(1, 101)},
-    "counters": {"C": range(1301, 1401), "CT": range(1, 151)},
+    # C1331..C1380, C1381..C1382 and CT147 are the fault-flag probes' (the counters
+    # cases use none of them).
+    "counters": {"C": (range(1301, 1331), range(1383, 1401)), "CT": range(1, 147)},
     "coils": {"C": range(1501, 1601)},
     "numeric": {"DD": range(101, 201), "DF": range(101, 201), "DH": range(201, 301)},
     "text": {
@@ -117,7 +132,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "shift": {"C": range(1001, 1110)},
     "search": {
         "C": range(851, 901),
-        "DS": range(4203, 4395),
+        "DS": (range(4203, 4226), range(4227, 4395)),  # DS4226: past_write's pointer
         "DD": range(401, 501),
         "DF": range(301, 401),
         "TXT": range(201, 301),

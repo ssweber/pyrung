@@ -617,7 +617,14 @@ def test_an_in_main_helper_changes_only_the_hash_of_the_case_that_defines_it() -
     assert edited_two["one"] == base["one"]
 
 
-def test_store_probe_runs_after_every_group_that_reads_a_fault_flag() -> None:
-    """Its probes raise SC43/SC46 on purpose; a flag stays up to scan end, so a group
-    after it would read them (found by the gate on text/to_binary)."""
-    assert suite.ALL_GROUPS[-1].name == "store_probe"
+def test_flag_raising_probes_run_after_every_group_that_reads_a_fault_flag() -> None:
+    """The store probes and flag probes raise SC40/SC43/SC44/SC46 on purpose; a flag
+    stays up to scan end, so a group after them would read them (found by the gate on
+    text/to_binary).  ``past_write`` is last so a part can leave it out."""
+    assert [g.name for g in suite.ALL_GROUPS[-3:]] == [
+        "store_probe",
+        "flag_probe",
+        "past_write",
+    ]
+    # Nothing depends on past_write: a part without it is a part.
+    assert suite.PARTS["F"][-1] == "past_write"

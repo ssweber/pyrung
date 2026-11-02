@@ -48,6 +48,7 @@ from tests.conformance import (
     test_drum_rule,
     test_drum_trace,
     test_faults,
+    test_flag_probe,
     test_for_count,
     test_loop,
     test_loop_call,
@@ -55,6 +56,7 @@ from tests.conformance import (
     test_math_error,
     test_numeric,
     test_out,
+    test_past_bank_write,
     test_paste_risk,
     test_ret_branch,
     test_row_solve,
@@ -114,6 +116,11 @@ ALL_GROUPS = [
     # stays up to the end of the scan, so any group after it that reads a flag
     # would see them (text/to_binary read SC43 on a scan a store probe raised it).
     test_store_probe.group,
+    # After the store probes too: they raise flags on purpose (and leave them up to
+    # the end of the scan), so no group that reads one may run after them.
+    test_flag_probe.group,
+    # The last group: it writes past the DD bank on a CLICK and may be left out.
+    test_past_bank_write.group,
 ]
 
 #: Group names per CLICK project, split to keep each part under
@@ -165,7 +172,10 @@ PARTS: dict[str, tuple[str, ...]] = {
     # and Words, a Real into a TXT, a clamping Fill): a project of their own,
     # since part E has no room left and the editor may refuse a RAND bound form
     # at paste (``rand_bound_forms``, the group's last case).
-    "F": ("store_probe",),
+    # The fault-flag probes (flag_probe) follow, and ``past_write``, which
+    # writes past the DD bank on a CLICK, is the project's last group so it can be
+    # left out: nothing depends on it.
+    "F": ("store_probe", "flag_probe", "past_write"),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

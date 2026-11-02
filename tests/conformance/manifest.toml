@@ -270,35 +270,30 @@ out_of_range_int_vs_other_instructions = 14
 
 # Retired groups: each stopped the PLC on one math error.  A CLICK keeps running
 # (hardware round 1), so the seven errors are one case of math_error.  The
-# blocks stay reserved, never reused.
+# blocks stay reserved, never reused -- except DS2901..DS2980, the first four
+# (stop_sqrt, stop_ln0, stop_ln_neg, stop_log0): no CLICK project
+# ever held them as groups with more than a retired case, and the staging area has
+# no 70 registers left in one run, so the part F probes (flag_probe,
+# past_write) take them.  Their case lines are gone with the entries:
+# sqrt_negative, ln_zero, ln_negative, log_zero were slot 1 each.
 
-[groups.stop_sqrt]
-base = 2901 # Conf_StopSqrt: DS2901..DS2920; retired
+[groups.flag_probe]
+base = 2901 # Conf_FlagProbe: DS2901..DS2960; part F, the fault-flag model's unmeasured choices
+slots = 5
+
+[groups.flag_probe.cases]
+bulk_ops_clear_flags = 1
+oneshot_that_does_not_fire = 2
+boxes_leave_flags = 3
+source_flag_is_read_before_the_copy_settles = 4
+source_flag_in_a_math = 5
+
+[groups.past_write]
+base = 2961 # Conf_PastWrite: DS2961..DS2980; part F, last: WRITES PAST THE DD BANK, can be left out
 slots = 1
 
-[groups.stop_sqrt.cases]
-sqrt_negative = 1 # retired: one case of math_error/math_errors_do_not_stop
-
-[groups.stop_ln0]
-base = 2921 # Conf_StopLn0: DS2921..DS2940; retired
-slots = 1
-
-[groups.stop_ln0.cases]
-ln_zero = 1 # retired: one case of math_error/math_errors_do_not_stop
-
-[groups.stop_ln_neg]
-base = 2941 # Conf_StopLnNeg: DS2941..DS2960; retired
-slots = 1
-
-[groups.stop_ln_neg.cases]
-ln_negative = 1 # retired: one case of math_error/math_errors_do_not_stop
-
-[groups.stop_log0]
-base = 2961 # Conf_StopLog0: DS2961..DS2980; retired
-slots = 1
-
-[groups.stop_log0.cases]
-log_zero = 1 # retired: one case of math_error/math_errors_do_not_stop
+[groups.past_write.cases]
+past_bank_write = 1
 
 [groups.stop_log_neg]
 base = 2981 # Conf_StopLogNeg: DS2981..DS3000; retired
