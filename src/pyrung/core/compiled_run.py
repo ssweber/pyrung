@@ -8,6 +8,12 @@ the program has no kernel.
 
 Compiled scans record no causal timelines.  Their range goes in the runner's
 fold windows, as the fold's macro steps do.
+
+Between real scans, the guarded loop of :mod:`pyrung.core.scan_trace` runs the
+scans that repeat the one before.  Its scans end in the same kernel state a real
+scan would leave, so everything here treats them alike: a compiled stop predicate
+and the bounds watch are guards inside it, which fail before the scan that would
+matter commits.
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.bounds import TagConstraint, check_bounds
 from pyrung.core.compiled_plc import CompiledPLC
-
+from pyrung.core.scan_trace import ScanLoop
 from pyrung.core.state import SystemState
 from pyrung.core.time_mode import TimeMode
 
@@ -30,6 +36,10 @@ if TYPE_CHECKING:
 # compile and keep their causal records; tests/fold_check.py lowers this to send
 # every run through the kernel.
 INTERPRETED_PREFIX = 1000
+
+# Test mode: each is called with the runner and the materialized state after each
+# firing of the guarded loop, so the scans between exits can be compared with stepping.
+LOOP_OBSERVERS: list[Callable[[PLC, SystemState], None]] = []
 
 
 def _someone_watches_each_scan(plc: PLC) -> bool:
@@ -126,16 +136,33 @@ def _run_compiled(
     settled = start  # the last state known exact, and where a failed run resumes
     used = 0
     undone = False
+    loop = ScanLoop(replay, kernel, budget, predicate, plc._constrained_tags)
     plc._epoch_caches.on_tip_advanced()
     while used < budget:
+        # Stop the loop at each checkpoint: it has to be installed on its scan.
+        to_checkpoint = interval - replay._kernel.scan_id % interval
+        ran = loop.advance(min(budget - used, to_checkpoint))
+        if ran:
+            used += ran
+            checkpoint = replay._kernel.scan_id % interval == 0
+            if checkpoint or LOOP_OBSERVERS:
+                settled = replay._materialize_replay_state()
+                if checkpoint:
+                    _install(plc, settled, _replace_tip_state)
+                for observer in LOOP_OBSERVERS:
+                    observer(plc, settled)
+            continue
         try:
             replay.step_replay(defer_flush=True)
         except Exception:
+            loop.real_scan_failed("raised")
             undone = True
             break
         if bounds is not None and bounds.moved() and bounds.violated():
+            loop.real_scan_failed("left bounds")
             undone = True
             break
+        loop.real_scan_ran()
         used += 1
         scan_id = replay._kernel.scan_id
         checkpoint = scan_id % interval == 0
@@ -146,7 +173,9 @@ def _run_compiled(
         if checkpoint:
             _install(plc, state, _replace_tip_state)
         if predicate is not None and predicate(state):
+            loop.stop_held()
             break
+    loop.finish()
     if undone:
         used = settled.scan_id - start.scan_id
     elif settled.scan_id != replay._kernel.scan_id:
@@ -178,9 +207,7 @@ class _BoundsWatch:
         # (names, itemgetter, source): the getter always yields a tuple.
         self._groups: list[tuple[tuple[str, ...], Callable[[Any], Any], Any]] = []
         if scalars:
-            self._groups.append(
-                (tuple(scalars), itemgetter(*scalars, scalars[0]), kernel.tags)
-            )
+            self._groups.append((tuple(scalars), itemgetter(*scalars, scalars[0]), kernel.tags))
         for symbol, entries in cells.items():
             indices = [index for _name, index in entries]
             self._groups.append(

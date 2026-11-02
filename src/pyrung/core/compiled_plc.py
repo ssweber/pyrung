@@ -22,17 +22,17 @@ from pyrung.core.kernel import CompiledKernel, ReplayKernel
 from pyrung.core.site_memory import migrate_legacy_edge_memory, site_table_of
 from pyrung.core.state import SystemState
 from pyrung.core.system_points import (
-    _SCAN_START_MEMORY,
-    _CLOCK_HALF_PERIODS,
-    RTC_FIELD_TAG_NAMES,
-    SCAN_DERIVED_TAG_NAMES,
-    clock_high,
     _BATTERY_PRESENT_KEY,
+    _CLOCK_HALF_PERIODS,
     _DERIVED_TAG_NAMES,
     _MODE_RUN_KEY,
+    _SCAN_START_MEMORY,
     READ_ONLY_SYSTEM_TAG_NAMES,
+    RTC_FIELD_TAG_NAMES,
+    SCAN_DERIVED_TAG_NAMES,
     SYSTEM_TAGS_BY_NAME,
     SystemPointRuntime,
+    clock_high,
     system,
 )
 from pyrung.core.tag import Tag
@@ -276,19 +276,34 @@ class CompiledPLC:
         # A state saved before edge memory was per contact (``_prev:X``).
         self._state = migrate_legacy_edge_memory(self._state, site_table_of(program))
         self._extra_commit_tag_names: set[str] = set()
-        # A state handed in is exact: a block cell it lacks stays absent, as it
-        # does stepping, and the kernel's array holds the default meanwhile.
+        # A state handed in is exact: a tag it lacks stays absent, as it does
+        # stepping, and the kernel holds the default meanwhile.
         anchored = initial_state is not None
-        seed = {
-            t.name: t.default
-            for t in self._known_tags_by_name.values()
-            if t.name not in self._state.tags
-            and self._should_seed_tag(t.name)
-            and not (anchored and t.name in self._block_element_names)
-        }
+        seed = (
+            {}
+            if anchored
+            else {
+                t.name: t.default
+                for t in self._known_tags_by_name.values()
+                if t.name not in self._state.tags and self._should_seed_tag(t.name)
+            }
+        )
         if seed:
             self._state = self._state.with_tags(seed)
         self._initialize_from_state(self._state)
+        # A scalar's rung may not have written it yet, though the kernel writes every
+        # scalar back on every scan: it stays out of the state until it leaves the
+        # default.  An unseen plant latch, say; stepping leaves it absent until it fires.
+        self._unseen_scalars: dict[str, Any] = (
+            {
+                t.name: t.default
+                for t in self._known_tags_by_name.values()
+                if t.name not in self._state.tags and t.name not in self._block_element_names
+            }
+            if anchored
+            else {}
+        )
+        self._extra_commit_tag_names -= self._unseen_scalars.keys()
 
     @property
     def current_state(self) -> SystemState:
@@ -595,9 +610,7 @@ class CompiledPLC:
         )
         scan_ctx = cast(ScanContext, ctx)
         try:
-            if not self._system_runtime.scan_start_is_quiet(
-                self._kernel.tags, self._kernel.memory
-            ):
+            if not self._system_runtime.scan_start_is_quiet(self._kernel.tags, self._kernel.memory):
                 self._system_runtime.on_scan_start(scan_ctx)
 
             if self._kernel.memory.get("_dt") != scan_dt:
@@ -723,7 +736,9 @@ class CompiledPLC:
         self._extra_commit_tag_names.update(
             name
             for name in tags
-            if name not in self._block_element_names and name not in _DERIVED_TAG_NAMES
+            if name not in self._block_element_names
+            and name not in _DERIVED_TAG_NAMES
+            and name not in self._unseen_scalars
         )
         self._kernel_tag_count = len(tags)
 
@@ -754,15 +769,21 @@ class CompiledPLC:
                 }
             tags.update(self._steady_system_values)
         if self._rtc_field_tags:
-            timestamp = self._kernel.timestamp
-            if not self._rtc_fields_from <= timestamp < self._rtc_fields_until:
-                # The fields are whole seconds: they hold until the next tick.
-                # Recompute a little early, so rounding never carries them over.
-                self._rtc_fields = {n: resolve(n, scan_ctx)[1] for n in self._rtc_field_tags}
-                now = self._rtc_at_sim_time(timestamp)
-                self._rtc_fields_from = timestamp
-                self._rtc_fields_until = timestamp + 1.0 - now.microsecond / 1e6 - 2e-6
-            tags.update(self._rtc_fields)
+            tags.update(self._rtc_fields_at(ctx)[0])
+
+    def _rtc_fields_at(self, ctx: _KernelRuntimeContext) -> tuple[dict[str, Any], float, float]:
+        """The RTC fields at ``ctx.timestamp``, and the times they are good from and until."""
+        timestamp = ctx.timestamp
+        if not self._rtc_fields_from <= timestamp < self._rtc_fields_until:
+            # The fields are whole seconds: they hold until the next tick.
+            # Recompute a little early, so rounding never carries them over.
+            resolve = self._system_runtime.resolve
+            scan_ctx = cast(ScanContext, ctx)
+            self._rtc_fields = {n: resolve(n, scan_ctx)[1] for n in self._rtc_field_tags}
+            now = self._rtc_at_sim_time(timestamp)
+            self._rtc_fields_from = timestamp
+            self._rtc_fields_until = timestamp + 1.0 - now.microsecond / 1e6 - 2e-6
+        return self._rtc_fields, self._rtc_fields_from, self._rtc_fields_until
 
     def _should_seed_tag(self, name: str) -> bool:
         return name not in self._block_element_names or name in self._materialized_block_tag_names
@@ -795,6 +816,11 @@ class CompiledPLC:
         live = self._live_block_tags
         evolver = self._state.tags.evolver()
         tags = self._kernel.tags
+        if self._unseen_scalars:
+            for name, default in list(self._unseen_scalars.items()):
+                if tags.get(name, default) != default:
+                    del self._unseen_scalars[name]
+                    self._extra_commit_tag_names.add(name)
         committed: dict[str, Any] = {}
         for name in prev_dict:
             value = tags.get(name, _MISSING)
@@ -884,6 +910,7 @@ class CompiledPLC:
             )
         )
         self._state = next_state
+        self._unseen_scalars = {}
         self._initialize_from_state(self._state)
         self._set_rtc_internal(rtc_after_reset, self._state.timestamp)
         self._pending_patches.clear()

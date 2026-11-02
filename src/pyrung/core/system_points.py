@@ -326,7 +326,7 @@ _SD_ERROR_SAVE_FAILURE = 3
 
 # What SystemPointRuntime.on_scan_start() reads and clears, for the check that
 # it would do nothing.  Keep these with the hook.
-_SCAN_START_TAGS = itemgetter(
+_SCAN_START_TAG_NAMES = (
     system.fault.division_error.name,
     system.fault.math_operation_error.name,
     system.fault.out_of_range.name,
@@ -338,10 +338,11 @@ _SCAN_START_TAGS = itemgetter(
     system.sys.cmd_mode_stop.name,
     system.sys.cmd_watchdog_reset.name,
 )
+_SCAN_START_TAGS = itemgetter(*_SCAN_START_TAG_NAMES)
 # Read with a default and never bound by the hook: absent is off.
 _SD_EJECT_NAME = system.storage.sd.eject_cmd.name
 _SD_DELETE_ALL_NAME = system.storage.sd.delete_all_cmd.name
-_SCAN_START_MEMORY = itemgetter(
+_SCAN_START_MEMORY_KEYS = (
     _MODE_RUN_KEY,
     _SD_WRITE_STATUS_KEY,
     _BATTERY_PRESENT_KEY,
@@ -349,8 +350,21 @@ _SCAN_START_MEMORY = itemgetter(
     _SD_ERROR_KEY,
     _SD_ERROR_CODE_KEY,
 )
+_SCAN_START_MEMORY = itemgetter(*_SCAN_START_MEMORY_KEYS)
 _SCAN_TIME_MIN_NAME = system.sys.scan_time_min_ms.name
 _SCAN_TIME_MAX_NAME = system.sys.scan_time_max_ms.name
+
+# Everything the scan hooks' quiet checks read, for whoever has to keep them quiet.
+HOOK_TAG_NAMES = frozenset(
+    {
+        *_SCAN_START_TAG_NAMES,
+        _SD_EJECT_NAME,
+        _SD_DELETE_ALL_NAME,
+        _SCAN_TIME_MIN_NAME,
+        _SCAN_TIME_MAX_NAME,
+    }
+)
+HOOK_MEMORY_KEYS = frozenset({*_SCAN_START_MEMORY_KEYS, "_dt"})
 
 # Derived points that move with the scan id.
 SCAN_DERIVED_TAG_NAMES = frozenset(

@@ -5053,7 +5053,9 @@ def fold_run_until(
     return runner._state
 
 
-def _stepped_scans_until(start: float, target: float, dt: float) -> int | None:
+def _stepped_scans_until(
+    start: float, target: float, dt: float, *, max_scans: int = 5_000_000
+) -> int | None:
     """Scans an unfolded ``run_for`` takes from *start* to reach *target*.
 
     Stepping advances the timestamp by repeated ``+ dt``; a fold lands at
@@ -5063,7 +5065,7 @@ def _stepped_scans_until(start: float, target: float, dt: float) -> int | None:
     gives the exact scan count instead.  ``None`` for an unusable *dt* or an
     implausibly long span.
     """
-    if dt <= 0 or not math.isfinite(dt) or (target - start) / dt > 5_000_000:
+    if dt <= 0 or not math.isfinite(dt) or (target - start) / dt > max_scans:
         return None
     t = start
     n = 0

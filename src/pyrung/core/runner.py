@@ -184,6 +184,33 @@ class _BreakpointRegistration:
     removed: bool = False
 
 
+# Longest run_for() counted in advance, at a few tens of ns a scan.  Past this it steps.
+_RUN_FOR_MAX_COUNTED_SCANS = 500_000_000
+
+
+class _ConditionPredicate:
+    """A ``run_until()`` / ``when()`` condition with no edges: stateless."""
+
+    __slots__ = ("_condition", "_context")
+
+    guard_edges: tuple[Any, ...] = ()
+
+    def __init__(self, condition: Any, context: Callable[[SystemState], Any]) -> None:
+        self._condition = condition
+        self._context = context
+
+    def __call__(self, state: SystemState) -> bool:
+        return self._condition.evaluate(self._context(state))
+
+    @property
+    def guard_condition(self) -> Any:
+        return self._condition
+
+    @staticmethod
+    def guard_last_seen() -> Mapping[str, bool]:
+        return {}
+
+
 class _EdgePredicate:
     """A ``run_until()`` / ``when()`` condition holding ``rise()`` / ``fall()``.
 
@@ -231,6 +258,17 @@ class _EdgePredicate:
         hit = bool(self._condition.evaluate(ctx))
         self._last_seen.update(self._bits(ctx))
         return hit
+
+    @property
+    def guard_condition(self) -> Any:
+        return self._condition
+
+    @property
+    def guard_edges(self) -> tuple[Any, ...]:
+        return self._edges
+
+    def guard_last_seen(self) -> Mapping[str, bool]:
+        return self._last_seen
 
 
 class _RunnerHandle:
@@ -4076,11 +4114,7 @@ class PLC:
         # turns on.
         condition, edges = private_edges(normalized, method)
         if not edges:
-
-            def _predicate(state: SystemState) -> bool:
-                return normalized.evaluate(_context(state))
-
-            return _predicate
+            return _ConditionPredicate(normalized, _context)
 
         return _EdgePredicate(condition, edges, _context, lambda: self._state)
 
@@ -4734,8 +4768,9 @@ class PLC:
 
         Args:
             seconds: Minimum simulation time to advance.
-            fold: When True (default), fold past timer/counter plateaus
-                instead of stepping scan-by-scan.
+            fold: When True (default), a long run goes through the compiled kernel
+                and its guarded loop, which run every scan without recording
+                causal timelines. False steps every scan interpreted.
 
         Returns:
             The final SystemState after reaching the target time.
@@ -4746,7 +4781,10 @@ class PLC:
             from pyrung.core.fold import _stepped_scans_until
 
             scans = _stepped_scans_until(
-                self._state.timestamp, self._state.timestamp + seconds, self._dt
+                self._state.timestamp,
+                self._state.timestamp + seconds,
+                self._dt,
+                max_scans=_RUN_FOR_MAX_COUNTED_SCANS,
             )
             if scans is not None:
                 return run_scans(self, scans) if scans else self._state
@@ -4776,8 +4814,10 @@ class PLC:
         Args:
             conditions: Condition expressions or a single callable predicate.
             max_cycles: Maximum scans before giving up (default 10000).
-            fold: When True (default), fold past timer/counter plateaus
-                instead of stepping scan-by-scan.
+            fold: When True (default), a long run goes through the compiled kernel
+                and its guarded loop, which run every scan without recording
+                causal timelines. False, or a callable predicate, steps every scan
+                interpreted.
 
         Returns:
             The state that matched the condition, or final state if max reached.

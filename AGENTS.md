@@ -44,6 +44,8 @@ src/pyrung/
 │   ├── rung.py          # Rung DSL, condition evaluation
 │   ├── runner.py        # Engine plus first-class causal Epoch lineage (step, seek, fork)
 │   ├── kernel.py        # Compiled execution kernel
+│   ├── compiled_run.py  # run_for/run_until on the kernel: interpreted prefix, checkpoints, stops
+│   ├── scan_trace.py    # Guarded scan loop traced from the kernel source (soundness argument in its docstring)
 │   ├── condition.py     # Condition combinators (And, Or, rise, fall, comparisons)
 │   ├── expression.py    # Expression tree for conditions/calc
 │   ├── history.py       # Time travel, scan log access
