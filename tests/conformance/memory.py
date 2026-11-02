@@ -46,47 +46,78 @@ BANKS: Mapping[str, int] = {
     "TXT": 1000,
 }
 
-#: Raw DS a case stages in (a contiguous source range, a search table, ...).
-#: No manifest block may reach it.
+#: Raw DS a case stages in (a contiguous source range, a search table, ...)
+#: lives in this area.  No manifest block may overlap a DS range a group owns;
+#: the registers inside it that no group's cases use are free for the S6 probes'
+#: blocks (``drum_idle``, ``drum_rule``, ``store_probe``, ``drum_jump``).
 STAGING_DS = range(3901, 4501)
 
 #: Raw memory each group owns, by bank: a range, or a tuple of ranges for a
 #: group that outgrew its first one.  A group listed before it has cases is
 #: reserved for the group that will have them.
 OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
-    "rungs": {"C": range(1601, 1701), "CT": range(151, 161)},
+    "rungs": {"C": range(1601, 1661), "CT": range(151, 161)},
     "math": {
-        "DS": range(4401, 4501),
+        "DS": range(4401, 4439),
         "DD": range(1, 101),
         "DF": range(1, 101),
         "DH": range(1, 101),
     },
     "drum": {"C": (range(1901, 2001), range(801, 851)), "T": range(401, 501)},
+    # S6 probes (tests/conformance/test_drum_rule.py, test_drum_jump.py,
+    # test_drum_idle.py, test_store_probe.py).  Their C, T, DD and DS come from
+    # what the groups around them leave unused.
+    "drum_rule": {
+        "C": (range(101, 201), range(771, 801)),
+        "T": range(161, 181),
+        "DD": range(641, 661),
+        "DS": range(4191, 4202),
+    },
+    "drum_jump": {
+        "C": (range(1110, 1201), range(1401, 1471)),
+        "T": range(251, 271),
+        "DD": range(661, 681),
+        "DS": (range(3993, 4001), range(4202, 4203), range(4395, 4399), range(4500, 4501)),
+    },
+    "drum_idle": {
+        "C": range(1751, 1781),
+        "T": range(351, 359),
+        "DD": range(681, 689),
+        "DS": range(4399, 4401),
+    },
+    "store_probe": {
+        "C": (range(1661, 1701), range(1781, 1801)),
+        "DD": range(611, 641),
+        "DF": range(421, 430),
+        "DH": range(411, 417),
+        "TXT": range(521, 546),
+        "DS": range(4499, 4500),
+    },
     # A drum's state scan by scan (tests/conformance/test_drum_trace.py).
     "drum_trace": {"C": range(51, 101)},
-    "out": {"C": range(1801, 1901), "T": range(301, 401)},
-    "loop": {"C": range(1701, 1801), "T": range(201, 301), "CT": range(201, 251)},
-    "timers": {"C": range(1401, 1501), "T": range(1, 101)},
+    "out": {"C": range(1801, 1901), "T": range(301, 351)},
+    "loop": {"C": range(1701, 1751), "T": range(201, 251), "CT": range(201, 251)},
+    "timers": {"C": range(1471, 1501), "T": range(1, 101)},
     "counters": {"C": range(1301, 1401), "CT": range(1, 151)},
     "coils": {"C": range(1501, 1601)},
     "numeric": {"DD": range(101, 201), "DF": range(101, 201), "DH": range(201, 301)},
     "text": {
         "TXT": (range(1, 201), range(301, 401)),
-        "DS": range(3901, 4001),
+        "DS": range(3901, 3933),
         "DD": range(301, 401),
         "DH": range(301, 401),
     },
     "block": {
         "C": range(1201, 1301),
-        "DS": range(4001, 4201),
+        "DS": range(4001, 4111),
         "DD": range(201, 301),
         "DF": range(201, 301),
         "DH": range(101, 201),
     },
-    "shift": {"C": range(1001, 1201)},
+    "shift": {"C": range(1001, 1110)},
     "search": {
         "C": range(851, 901),
-        "DS": range(4201, 4401),
+        "DS": range(4203, 4395),
         "DD": range(401, 501),
         "DF": range(301, 401),
         "TXT": range(201, 301),

@@ -84,11 +84,16 @@ def test_owned_memory_is_disjoint_and_inside_clicks_banks() -> None:
 
 def test_owned_ds_is_staging_and_no_group_block_reaches_it() -> None:
     staging = memory.STAGING_DS
+    owned_ds: set[int] = set()
     for group, banks in memory.OWNED.items():
         for owned in memory.ranges(banks.get("DS", ())):
             assert staging.start <= owned.start and owned.stop <= staging.stop, group
+            owned_ds.update(owned)
+    # A block may sit in the staging area on registers no group owns (the S6
+    # probes' blocks do), never on registers a group stages in.
     for layout in load_manifest(suite.MANIFEST_PATH).groups.values():
-        assert layout.last_register < staging.start, layout
+        block = range(layout.base, layout.last_register + 1)
+        assert not owned_ds.intersection(block), layout
 
 
 def test_parts_split_the_suite_into_projects_with_their_own_layout() -> None:
