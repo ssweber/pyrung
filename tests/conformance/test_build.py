@@ -84,11 +84,16 @@ def test_owned_memory_is_disjoint_and_inside_clicks_banks() -> None:
 
 def test_owned_ds_is_staging_and_no_group_block_reaches_it() -> None:
     staging = memory.STAGING_DS
+    owned_ds: set[int] = set()
     for group, banks in memory.OWNED.items():
         for owned in memory.ranges(banks.get("DS", ())):
             assert staging.start <= owned.start and owned.stop <= staging.stop, group
+            owned_ds.update(owned)
+    # A block may sit in the staging area on registers no group owns (the S6
+    # probes' blocks do), never on registers a group stages in.
     for layout in load_manifest(suite.MANIFEST_PATH).groups.values():
-        assert layout.last_register < staging.start, layout
+        block = range(layout.base, layout.last_register + 1)
+        assert not owned_ds.intersection(block), layout
 
 
 def test_parts_split_the_suite_into_projects_with_their_own_layout() -> None:
@@ -610,3 +615,16 @@ def test_an_in_main_helper_changes_only_the_hash_of_the_case_that_defines_it() -
     edited_two = hashes(1, 2)
     assert edited_two["two"] != base["two"]
     assert edited_two["one"] == base["one"]
+
+
+def test_flag_raising_probes_run_after_every_group_that_reads_a_fault_flag() -> None:
+    """The store probes and flag probes raise SC40/SC43/SC44/SC46 on purpose; a flag
+    stays up to scan end, so a group after them would read them (found by the gate on
+    text/to_binary).  ``past_write`` is last so a part can leave it out."""
+    assert [g.name for g in suite.ALL_GROUPS[-3:]] == [
+        "store_probe",
+        "flag_probe",
+        "past_write",
+    ]
+    # Nothing depends on past_write: a part without it is a part.
+    assert suite.PARTS["F"][-1] == "past_write"

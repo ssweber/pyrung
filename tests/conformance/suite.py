@@ -4,13 +4,14 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
-The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as four
+The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as five
 projects, one part each (``PARTS``; there is no part D)::
 
     make conformance-export PART=A OUT=path/to/a
     make conformance-export PART=B OUT=path/to/b
     make conformance-export PART=C OUT=path/to/c
     make conformance-export PART=E OUT=path/to/e
+    make conformance-export PART=F OUT=path/to/f
 
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
@@ -42,8 +43,12 @@ from tests.conformance import (
     test_cont_box,
     test_counters,
     test_drum,
+    test_drum_idle,
+    test_drum_jump,
+    test_drum_rule,
     test_drum_trace,
     test_faults,
+    test_flag_probe,
     test_for_count,
     test_loop,
     test_loop_call,
@@ -51,6 +56,7 @@ from tests.conformance import (
     test_math_error,
     test_numeric,
     test_out,
+    test_past_bank_write,
     test_paste_risk,
     test_ret_branch,
     test_row_solve,
@@ -58,6 +64,7 @@ from tests.conformance import (
     test_search,
     test_shift,
     test_solve_order,
+    test_store_probe,
     test_system,
     test_text,
     test_timers,
@@ -81,6 +88,8 @@ ALL_GROUPS = [
     test_math.group,
     test_drum.group,
     test_drum_trace.group,
+    test_drum_rule.group,
+    test_drum_jump.group,
     test_out.group,
     test_loop.group,
     test_coils.group,
@@ -99,8 +108,19 @@ ALL_GROUPS = [
     test_cont_box.group,
     test_for_count.group,
     test_paste_risk.group,
+    # A drum in a For body may be refused at paste: after the groups CLICK has run.
+    test_drum_idle.group,
     # Last, so no other group's rung reads SC46 on a scan a Math error raised it.
     test_math_error.group,
+    # After every group: its probes raise SC43 and SC46 on purpose, and a flag
+    # stays up to the end of the scan, so any group after it that reads a flag
+    # would see them (text/to_binary read SC43 on a scan a store probe raised it).
+    test_store_probe.group,
+    # After the store probes too: they raise flags on purpose (and leave them up to
+    # the end of the scan), so no group that reads one may run after them.
+    test_flag_probe.group,
+    # The last group: it writes past the DD bank on a CLICK and may be left out.
+    test_past_bank_write.group,
 ]
 
 #: Group names per CLICK project, split to keep each part under
@@ -138,8 +158,24 @@ PARTS: dict[str, tuple[str, ...]] = {
         "for_count",
     ),
     # A drum's state scan by scan and the fault-flag probes, which outgrew
-    # the budget left in parts A and C.
-    "E": ("drum_trace", "faults"),
+    # the budget left in parts A and C, and the S6 drum probes: the drum rule
+    # on time and time & event drums.  ``drum_idle`` (a drum not reached; a For
+    # body may be refused at paste) is the part's last group.
+    "E": (
+        "drum_trace",
+        "drum_rule",
+        "drum_jump",
+        "faults",
+        "drum_idle",
+    ),
+    # The S6 store probes (RAND bounds and destinations, Inf and NaN into text
+    # and Words, a Real into a TXT, a clamping Fill): a project of their own,
+    # since part E has no room left and the editor may refuse a RAND bound form
+    # at paste (``rand_bound_forms``, the group's last case).
+    # The fault-flag probes (flag_probe) follow, and ``past_write``, which
+    # writes past the DD bank on a CLICK, is the project's last group so it can be
+    # left out: nothing depends on it.
+    "F": ("store_probe", "flag_probe", "past_write"),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
