@@ -13,7 +13,11 @@ fold windows, as the fold's macro steps do.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from operator import itemgetter
+from typing import TYPE_CHECKING, Any
+
+from pyrung.core.bounds import TagConstraint, check_bounds
+from pyrung.core.compiled_plc import CompiledPLC
 
 from pyrung.core.state import SystemState
 from pyrung.core.time_mode import TimeMode
@@ -101,7 +105,6 @@ def _run_compiled(
     is undone: the tip stays at the last state materialized and the scans from
     there on step interpreted, which raises or warns exactly as stepping does.
     """
-    from pyrung.core.compiled_plc import CompiledPLC
     from pyrung.core.fold import _replace_tip_state
 
     start = plc._state
@@ -116,19 +119,21 @@ def _run_compiled(
     replay._input_overrides._forces.update(plc._input_overrides.forces)
 
     interval = plc._checkpoint_interval
-    constrained = plc._constrained_tags
-    kernel_tags = replay._kernel.tags
+    bounds = _BoundsWatch(replay, plc._constrained_tags) if plc._constrained_tags else None
+    if bounds is not None and bounds.violated():
+        # A value already out of range: a scan rewriting it warns, unseen here.
+        return budget
     settled = start  # the last state known exact, and where a failed run resumes
     used = 0
     undone = False
     plc._epoch_caches.on_tip_advanced()
     while used < budget:
         try:
-            replay.step_replay(defer_flush=not constrained)
+            replay.step_replay(defer_flush=True)
         except Exception:
             undone = True
             break
-        if constrained and _may_violate_bounds(kernel_tags, constrained):
+        if bounds is not None and bounds.moved() and bounds.violated():
             undone = True
             break
         used += 1
@@ -139,29 +144,75 @@ def _run_compiled(
         state = replay._materialize_replay_state()
         settled = state
         if checkpoint:
-            _install(plc, state, first_scan_id, _replace_tip_state)
-            first_scan_id = scan_id + 1
+            _install(plc, state, _replace_tip_state)
         if predicate is not None and predicate(state):
             break
     if undone:
         used = settled.scan_id - start.scan_id
     elif settled.scan_id != replay._kernel.scan_id:
         settled = replay._materialize_replay_state()
+    if settled.scan_id != plc._state.scan_id:
+        _install(plc, settled, _replace_tip_state)
     if settled.scan_id >= first_scan_id:
-        _install(plc, settled, first_scan_id, _replace_tip_state)
+        plc._record_fold_landing(first_scan_id)
+        plc._bounds_violations = {}
     return budget - used if undone else 0
 
 
-def _may_violate_bounds(tags: dict, constrained: dict) -> bool:
-    from pyrung.core.bounds import check_bounds
+class _BoundsWatch:
+    """Notice a constrained tag changing, at the cost of a few C calls a scan.
 
-    return bool(check_bounds({n: tags[n] for n in constrained if n in tags}, constrained))
+    The kernel does not report writes, so an in-range rewrite goes unseen.  It
+    cannot warn, and the watch starts from values known to be in range.
+    """
+
+    def __init__(self, replay: CompiledPLC, constrained: dict[str, TagConstraint]) -> None:
+        kernel = replay._kernel
+        self._constrained = constrained
+        scalars = [n for n in constrained if n in kernel.tags and n not in replay._block_pos]
+        cells: dict[str, list[tuple[str, int]]] = {}
+        for name in constrained:
+            position = replay._block_pos.get(name)
+            if position is not None:
+                cells.setdefault(position[0], []).append((name, position[1]))
+        # (names, itemgetter, source): the getter always yields a tuple.
+        self._groups: list[tuple[tuple[str, ...], Callable[[Any], Any], Any]] = []
+        if scalars:
+            self._groups.append(
+                (tuple(scalars), itemgetter(*scalars, scalars[0]), kernel.tags)
+            )
+        for symbol, entries in cells.items():
+            indices = [index for _name, index in entries]
+            self._groups.append(
+                (
+                    tuple(name for name, _index in entries),
+                    itemgetter(*indices, indices[0]),
+                    kernel.blocks[symbol],
+                )
+            )
+        self._seen = [get(source) for _names, get, source in self._groups]
+
+    def moved(self) -> bool:
+        now = [get(source) for _names, get, source in self._groups]
+        if now == self._seen:
+            return False
+        self._seen = now
+        return True
+
+    def violated(self) -> bool:
+        values = {
+            name: value
+            for (names, _get, _source), seen in zip(self._groups, self._seen, strict=True)
+            for name, value in zip(names, seen, strict=False)
+        }
+        return bool(check_bounds(values, self._constrained))
 
 
-def _install(plc: PLC, state: SystemState, first_scan_id: int, replace_tip: Callable) -> None:
-    """Make *state* the tip, standing for the scans from *first_scan_id* on."""
+def _install(plc: PLC, state: SystemState, replace_tip: Callable) -> None:
+    """Make *state* the tip: cached, checkpointed on its interval, and history trimmed."""
     previous_tip = plc._state.scan_id
     replace_tip(plc, state)
-    plc._record_fold_landing(first_scan_id)
+    plc._record_fold_landing()
+    plc._apply_history_retention(state.scan_id)
     if plc._playhead == previous_tip:
         plc._playhead = state.scan_id

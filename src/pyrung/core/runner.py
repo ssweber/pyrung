@@ -4444,10 +4444,26 @@ class PLC:
         if not is_fold_landing:
             self._cache_state(self._state)
 
-        # Retention-policy auto-trim, piggybacked on checkpoint cadence.
+        if is_checkpoint:
+            self._apply_history_retention(new_scan_id)
+
+        # Keep playhead following newest state unless manually moved.
+        if self._playhead == previous_tip_scan_id:
+            self._playhead = self._state.scan_id
+
+        if before_callbacks is not None:
+            before_callbacks()
+        if not self._replay_mode:
+            self._evaluate_monitors(previous_state=previous_state, current_state=self._state)
+            self._evaluate_breakpoints(state=self._state)
+        self._sync_runtime_flags_from_state()
+
+    def _apply_history_retention(self, new_scan_id: int) -> None:
+        """Retention-policy auto-trim, piggybacked on checkpoint cadence."""
+        if new_scan_id % self._checkpoint_interval != 0 or new_scan_id <= 0:
+            return
         if (
             self._history_retention_scans is not None
-            and is_checkpoint
             and new_scan_id > self._history_retention_scans
         ):
             horizon = new_scan_id - self._history_retention_scans
@@ -4464,17 +4480,6 @@ class PLC:
                 extra_cp = self._nearest_checkpoint_at_or_after(extra_horizon)
                 if extra_cp is not None:
                     self._trim_history_before(extra_cp)
-
-        # Keep playhead following newest state unless manually moved.
-        if self._playhead == previous_tip_scan_id:
-            self._playhead = self._state.scan_id
-
-        if before_callbacks is not None:
-            before_callbacks()
-        if not self._replay_mode:
-            self._evaluate_monitors(previous_state=previous_state, current_state=self._state)
-            self._evaluate_breakpoints(state=self._state)
-        self._sync_runtime_flags_from_state()
 
     def _evaluate_monitors(
         self, *, previous_state: SystemState, current_state: SystemState
