@@ -301,19 +301,6 @@ class _TranslatorMixin:
             source=condition,
         )
 
-    def _operand_length(self, operand: Any, *, path: str, source: Any) -> int:
-        if isinstance(operand, Tag):
-            return 1
-        if isinstance(operand, BlockRange):
-            return len(list(operand.tags()))
-        self._raise_issue(
-            path=path,
-            message=(
-                "Automatic count inference is only supported for Tag and BlockRange operands."
-            ),
-            source=source,
-        )
-
     def _render_condition_value(self, value: Any, *, path: str, source: Any) -> str:
         if isinstance(value, Condition):
             self._raise_issue(
