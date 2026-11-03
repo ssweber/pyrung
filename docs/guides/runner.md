@@ -276,11 +276,13 @@ Every scan from 0 to the current tip is addressable.  Recent scans are served
 from an in-memory state cache (byte-bounded, default 100 MB); older scans are
 reconstructed on demand from the scan log and checkpoints.
 
-A folded `run_until()` or `run_for()` computes a steady stretch of scans in one
-step.  History still serves each of those scans, replaying them on demand, but
-recorded `cause()` and `effect()` raise `ValueError` for a scan inside such a
-stretch: its transitions were never recorded one by one.  Rerun with
-`fold=False` to explain it.
+A long `run_until()` or `run_for()` runs compiled and records no rung firings.
+History still serves each of those scans, replaying them on demand, and the
+first `cause()`, `effect()`, `cold_rungs()` or `hot_rungs()` to reach them steps
+them again for their records, so the answer is the one stepping gives.  A question
+that would step more than 250,000 scans raises `UnrecordedScansError` and names
+the range: ask over less (`since=`, or an earlier scan), or pass `fold=False` to
+record the run as it goes.
 
 `previous_transition()` returns the latest matching recorded transition, or
 `None`. It uses compressed history indexes where available, independent of

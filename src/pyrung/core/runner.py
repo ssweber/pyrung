@@ -55,7 +55,7 @@ from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
-from pyrung.core.rung_firings import RungFiringTimelines
+from pyrung.core.rung_firings import SETTLE_SCAN_LIMIT, RungFiringTimelines, UnrecordedScansError
 from pyrung.core.scan_log import LifecycleEvent, LifecycleKind, ScanLog, ScanLogSnapshot
 from pyrung.core.site_memory import bind_logic_list, migrate_legacy_edge_memory
 from pyrung.core.state import SystemState
@@ -951,9 +951,10 @@ class Epoch:
     rung_firing_timelines: RungFiringTimelines[int]
     committed_tag_timelines: RungFiringTimelines[str]
     node_firing_timelines: RungFiringTimelines[RungId]
-    # ``(first, last)`` scan ranges a live fold ran as one step, clipped to
-    # the interval: recorded cause()/effect() refuse scans inside them.
-    fold_windows: tuple[tuple[int, int], ...]
+    # ``(first, last)`` scan ranges that ran without records, clipped to the
+    # interval.  Shared with the epoch's query runner: settling empties it, once
+    # for every fork that holds this epoch.
+    fold_windows: list[tuple[int, int]]
     synthesis: Any | None
     plant_changes: tuple[tuple[int, list[Any]], ...]
     program: Any | None
@@ -1020,7 +1021,7 @@ class Epoch:
             rung_firing_timelines=plc._rung_firing_timelines.snapshot(up_to=last_scan),
             committed_tag_timelines=plc._committed_tag_timelines.snapshot(up_to=last_scan),
             node_firing_timelines=plc._node_firing_timelines.snapshot(up_to=last_scan),
-            fold_windows=tuple(
+            fold_windows=list(
                 (max(first, first_scan), min(last, last_scan))
                 for first, last in plc._fold_windows
                 if first <= last_scan and last >= first_scan
@@ -1099,7 +1100,7 @@ class EpochQuery:
         runner._rung_firing_timelines = epoch.rung_firing_timelines
         runner._committed_tag_timelines = epoch.committed_tag_timelines
         runner._node_firing_timelines = epoch.node_firing_timelines
-        runner._fold_windows = list(epoch.fold_windows)
+        runner._fold_windows = epoch.fold_windows
         runner._causal_initial_tags = dict(epoch.causal_initial_tags)
         runner._causal_lineage = CausalLineage(runner)
         runner._set_rtc_internal(epoch.rtc_base, epoch.rtc_base_sim_time)
@@ -1897,6 +1898,7 @@ class PLC:
         causal execution consumers retain the exact writer occurrence.
         """
         target = self._playhead if scan_id is None else scan_id
+        self._settle_compiled_ranges(target, target)
         owner = self._causal_lineage.owner_at(target)
         return owner.rung_firing_timelines.at(target) if owner is not None else pmap()
 
@@ -1909,6 +1911,7 @@ class PLC:
         exclusively in :meth:`rung_firings`.
         """
         target = self._playhead if scan_id is None else scan_id
+        self._settle_compiled_ranges(target, target)
         owner = self._causal_lineage.owner_at(target)
         return owner.node_firing_timelines.at(target) if owner is not None else pmap()
 
@@ -2206,7 +2209,7 @@ class PLC:
                 program=self._program,
             )
 
-        self._refuse_folded_scan(scan, "cause")
+        self._settle_compiled_ranges(since, scan)
         from pyrung.core.analysis.causal import recorded_cause
 
         cause_history = (
@@ -2303,7 +2306,7 @@ class PLC:
                 **kwargs,
             )
 
-        self._refuse_folded_scan(scan, "effect")
+        self._settle_compiled_ranges(scan, None)
         from pyrung.core.analysis.causal import recorded_effect
 
         return recorded_effect(
@@ -2320,30 +2323,60 @@ class PLC:
             node_runs_fn=self._replay_rung_runs_at,
         )
 
-    def _refuse_folded_scan(self, scan: int | None, verb: str) -> None:
-        """Raise if *scan* is one a live fold computed in a single macro step.
+    def _settle_compiled_ranges(self, first: int | None = None, last: int | None = None) -> None:
+        """Give the scans in *first*..*last* that ran without records their records.
 
-        ``history`` materializes such scans by replay, but the recorded
-        causal index holds one entry for the whole window (at its last
-        scan), so a transition inside it cannot be explained exactly.  A
-        fork inherits its ancestors' windows through their sealed epochs.
+        A plain compiled run commits states and no index, which is its whole speed.  The
+        first question that reaches such a scan pays for it, by stepping it again from the
+        nearest checkpoint: the answer is then what a stepped run recorded, because it is
+        one.  An epoch's ranges settle once, for every fork that holds it.
         """
-        if scan is None:
-            return
-        from bisect import bisect_right
-
         lineage = self._causal_lineage
-        for windows in (self._fold_windows, *(e.fold_windows for e in lineage.sealed_epochs)):
-            i = bisect_right(windows, (scan, math.inf)) - 1
-            if i < 0:
+        owners = [self] if self._fold_windows else []
+        for epoch in lineage.sealed_epochs:
+            if epoch.fold_windows:
+                owners.append(lineage._query_for(epoch)._runner())
+        if not owners:
+            return
+        low = -math.inf if first is None else first
+        high = math.inf if last is None else last
+        asked = [
+            (owner, (max(start, low), min(end, high)))
+            for owner in owners
+            for start, end in owner._fold_windows
+            if start <= high and end >= low
+        ]
+        if not asked:
+            return
+        scans = sum(end - start + 1 for _owner, (start, end) in asked)
+        if scans > SETTLE_SCAN_LIMIT:
+            raise UnrecordedScansError(asked[0][1][0], asked[-1][1][1], scans)
+        for owner, (start, end) in asked:
+            owner._settle_window(start, end)
+
+    def _settle_window(self, first: int, last: int) -> None:
+        anchor = self._nearest_checkpoint_at_or_before(first - 1)
+        replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
+        for scan_id in range(anchor_scan_id + 1, last + 1):
+            self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
+            replay.step()
+        for mine, theirs in (
+            (self._rung_firing_timelines, replay._rung_firing_timelines),
+            (self._committed_tag_timelines, replay._committed_tag_timelines),
+            (self._node_firing_timelines, replay._node_firing_timelines),
+        ):
+            mine.replace_range(theirs, first, last)
+        self._causal_lineage.invalidate_current_epoch()
+        remaining: list[tuple[int, int]] = []
+        for start, end in self._fold_windows:
+            if end < first or start > last:
+                remaining.append((start, end))
                 continue
-            first, last = windows[i]
-            if first <= scan <= last:
-                raise ValueError(
-                    f"{verb}(): scan {scan} was folded (scans {first}..{last} ran as one "
-                    f"step), so its transitions were not recorded one by one; rerun with "
-                    f"fold=False to explain it"
-                )
+            if start < first:
+                remaining.append((start, first - 1))
+            if end > last:
+                remaining.append((last + 1, end))
+        self._fold_windows[:] = remaining
 
     def why(self, *tags: Tag | str) -> CausalChain:
         """Explain how tags reached their current values from a snapshot.
@@ -2943,7 +2976,9 @@ class PLC:
         self._rung_firing_timelines.trim_before(scan_id)
         self._committed_tag_timelines.trim_before(scan_id)
         self._node_firing_timelines.trim_before(scan_id)
-        self._fold_windows = [w for w in self._fold_windows if w[1] >= scan_id]
+        self._fold_windows = [
+            (max(first, scan_id), last) for first, last in self._fold_windows if last >= scan_id
+        ]
         for cp in [k for k in self._checkpoints if k < scan_id]:
             del self._checkpoints[cp]
         self._plant_changes = [c for c in self._plant_changes if c[0] >= scan_id]
@@ -4585,14 +4620,18 @@ class PLC:
         The landing state is the exact state of the scan it lands on, so
         history may serve it, and a replay may anchor on it, as on any
         stepped scan.  *first_scan_id* is the first scan the landing stands
-        for; recorded ``cause()`` / ``effect()`` refuse the window.  A tip
-        that is not *exact* (a cycle jump leaves tags it ignores to the next
-        scan) only registers the window: history replays that scan instead.
+        for and has no records: a question that reaches the range settles it.
+        A tip that is not *exact* (a cycle jump leaves tags it ignores to the
+        next scan) only registers the window: history replays that scan instead.
         """
         state = self._state
         scan_id = state.scan_id
         if first_scan_id is not None and first_scan_id <= scan_id:
-            self._fold_windows.append((first_scan_id, scan_id))
+            windows = self._fold_windows
+            if windows and windows[-1][1] == first_scan_id - 1:
+                windows[-1] = (windows[-1][0], scan_id)
+            else:
+                windows.append((first_scan_id, scan_id))
         if not exact:
             return
         self._cache_state(state)

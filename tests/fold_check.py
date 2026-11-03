@@ -31,7 +31,10 @@ counted apart from those compared scan by scan.
 
 A coast is compared like a compiled run: exactly, and with the runner around the state,
 since both run real scans and the loop.  Its stretches fire finely here too, and it asks
-for one as soon as it can, so a short coast still reaches the loop.
+for one as soon as it can, so a short coast still reaches the loop.  What it leaves in the
+firing indexes must match what stepping leaves (:func:`compare_records`), where a stretch
+is allowed one thing: a value column may say ``Unknown``, and a column that does may say a
+tag varied where it did not.
 
 A compiled run is also held to what was asked of it: it lands on the scans asked for,
 or short of them only where stepping's stop predicate holds.  The runner around the state
@@ -56,6 +59,7 @@ from contextlib import contextmanager
 from typing import Any
 
 import pyrung.core.compiled_run as compiled_run
+import pyrung.core.rung_firings as rung_firings
 import pyrung.core.scan_trace as scan_trace
 
 MAX_SCANS = int(os.environ.get("FOLD_CHECK_MAX_SCANS", "200000"))
@@ -365,6 +369,107 @@ def compare_runners(kind: str, plc: Any, twin: Any, start: int) -> None:
         raise _mismatch(f"fold-check ({kind}): the runner differs at scan {end}: {diff}")
     for scan, state in ours.items():
         _compare(f"{kind}, checkpoint", scan, state, theirs[scan])
+
+
+def _touching(ranges: Any, first: int, last: int) -> list[Any]:
+    return [r for r in ranges if r.start_scan_id <= last and r.end_scan_id >= first]
+
+
+def _spans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
+    """Scan ranges clipped to *first*..*last*, joined where they touch."""
+    spans: list[tuple[int, int]] = []
+    for r in _touching(ranges, first, last):
+        low, high = max(r.start_scan_id, first), min(r.end_scan_id, last)
+        if spans and spans[-1][1] == low - 1:
+            spans[-1] = (spans[-1][0], high)
+        else:
+            spans.append((low, high))
+    return spans
+
+
+def _column_at(ranges: Any, scan: int) -> Any:
+    """A column's value at *scan*; a scan no range covers is a scan with no write."""
+    for r in ranges:
+        if r.start_scan_id <= scan <= r.end_scan_id:
+            return rung_firings._value_at(r, scan)
+    return rung_firings._MISSING_WRITE
+
+
+def _column_differs(ours: Any, theirs: Any, first: int, last: int) -> int | None:
+    """Scan where two value columns differ, ``Unknown`` on ours agreeing with anything.
+
+    Between range boundaries each side is constant, alternating or arithmetic, so the
+    two scans at each end of a stretch of no boundary settle the whole of it.
+    """
+    ours, theirs = _touching(ours, first, last), _touching(theirs, first, last)
+    cuts = sorted(
+        {first, last + 1}
+        | {r.start_scan_id for r in (*ours, *theirs) if first < r.start_scan_id <= last}
+        | {r.end_scan_id + 1 for r in (*ours, *theirs) if first < r.end_scan_id + 1 <= last}
+    )
+    for low, stop in zip(cuts, cuts[1:], strict=False):
+        high = stop - 1
+        for scan in sorted({low, min(low + 1, high), max(high - 1, low), high}):
+            mine = _column_at(ours, scan)
+            if mine is rung_firings._UNKNOWN_VALUE:
+                continue
+            stepped = _column_at(theirs, scan)
+            if stepped is rung_firings._UNKNOWN_VALUE:
+                continue  # a fragmented column, where each counted its own values
+            if _exact(mine) != _exact(stepped):
+                return scan
+    return None
+
+
+def _unknown_scans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
+    return _spans([r for r in ranges if isinstance(r.payload, rung_firings.Unknown)], first, last)
+
+
+def compare_records(kind: str, plc: Any, twin: Any, start: int) -> None:
+    """What scans after *start* left in the firing indexes, against what stepping left."""
+    end = plc._state.scan_id
+    first = start + 1
+    if end < first:
+        return
+    for name, ours, theirs in (
+        ("rung", plc._rung_firing_timelines, twin._rung_firing_timelines),
+        ("node", plc._node_firing_timelines, twin._node_firing_timelines),
+        ("committed", plc._committed_tag_timelines, twin._committed_tag_timelines),
+    ):
+        for key in ours._fired_ranges.keys() | theirs._fired_ranges.keys():
+            a = _spans(ours._fired_ranges.get(key, ()), first, end)
+            b = _spans(theirs._fired_ranges.get(key, ()), first, end)
+            if a != b:
+                raise _mismatch(
+                    f"fold-check ({kind}): {name} {key!r} fired on {a[:6]}, stepped on {b[:6]}"
+                )
+        for key in ours._value_timelines.keys() | theirs._value_timelines.keys():
+            a = ours._value_timelines.get(key, ())
+            b = theirs._value_timelines.get(key, ())
+            scan = _column_differs(a, b, first, end)
+            if scan is not None:
+                raise _mismatch(
+                    f"fold-check ({kind}): {name} {key!r} at scan {scan}: "
+                    f"{_column_at(a, scan)!r}, stepped {_column_at(b, scan)!r}"
+                )
+            STATS["record cells Unknown"] += sum(
+                high - low + 1 for low, high in _unknown_scans(a, first, end)
+            )
+        for key in ours._varied_ranges.keys() | theirs._varied_ranges.keys():
+            a = _spans(ours._varied_ranges.get(key, ()), first, end)
+            b = _spans(theirs._varied_ranges.get(key, ()), first, end)
+            if a == b:
+                continue
+            # Saying it varied asks a reader to replay, so only an Unknown may say it.
+            unknown = _unknown_scans(ours._value_timelines.get(key, ()), first, end)
+            mine = {scan for low, high in a for scan in range(low, high + 1)}
+            stepped = {scan for low, high in b for scan in range(low, high + 1)}
+            allowed = {scan for low, high in unknown for scan in range(low, high + 1)}
+            if stepped - mine or mine - stepped - allowed:
+                raise _mismatch(
+                    f"fold-check ({kind}): {name} {key!r} varied on {a[:6]}, stepped on {b[:6]}"
+                )
+    STATS[f"records compared: {kind}"] += 1
 
 
 def _one_scan(plc: Any) -> type[BaseException] | None:
@@ -944,6 +1049,8 @@ def _checked(
         _depth += 1
         try:
             compare_runners(kind, plc, twin, start)
+            if kind == "coast":
+                compare_records(kind, plc, twin, start)
             compare_history(kind, plc, twin, start, truth)
             compare_continuation(kind, plc, twin)
         finally:

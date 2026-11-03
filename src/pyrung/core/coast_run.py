@@ -30,6 +30,18 @@ constants, which is cheaper than asking every path.
 A coast's memo is bounded (kernels, paths per kernel, loops per path) and scoped to
 what it serves.  A search gets one of its own, so what it costs does not depend on
 what ran before it.
+
+Records
+-------
+
+A stretch leaves the same index a stepped run does, so look-back needs no idea it was
+there.  The guards held, so the rungs that fired are the ones that fired on the path's
+own interpreted scan: the scan right after the trace, from the state it was traced on.
+A path fires only once it has that capture.  What a rung attempted comes from there
+too, unless it stored a moving value: a tag stored once moves as the tag does, and
+otherwise that column says ``Unknown`` for that range, which readers treat as "ask a
+replay".  Committed values come from the moves: a tag changes only by a checked delta,
+an exact flip or a float ramp, and a ramp's values say ``Unknown``.
 """
 
 from __future__ import annotations
@@ -51,6 +63,7 @@ from pyrung.core.scan_trace import (
     ScanLoop,
     ScanTrace,
     _record_block_writes,
+    attempted_stores,
     coast_loop,
     coast_moves,
     moving_tags,
@@ -88,6 +101,15 @@ class _Loop:
 
 
 @dataclass(eq=False)
+class _Capture:
+    """What one interpreted scan of a path recorded, by rung and by subroutine rung."""
+
+    columns: tuple[dict[Any, tuple[dict[str, Any], frozenset[str]]], ...]
+    # Those with nothing moving in them, which every scan of the path repeats.
+    settled: tuple[dict[Any, tuple[dict[str, Any], frozenset[str]]], ...]
+
+
+@dataclass(eq=False)
 class _Path:
     """A trace a coast may fire, what it has written of it, and what tends to follow."""
 
@@ -96,6 +118,11 @@ class _Path:
     # value still appears in the state, the first time.
     written: frozenset[str]
     moves: CoastMoves
+    # The moved and held tags with their cells, to read where a stretch left them.
+    ending: tuple[tuple[str, tuple[Any, ...]], ...]
+    stores: dict[str, tuple[int, int]]
+    # rung and node -> (writes, varied), from the path's interpreted scan.  None until it ran.
+    capture: _Capture | None = None
     loops: dict[tuple[frozenset[str], frozenset[str]], _Loop] = field(default_factory=dict)
     # Paths that followed this one, most recent first, each with the constants to check.
     successors: list[tuple[_Path, tuple[tuple[tuple[Any, ...], Any], ...]]] = field(
@@ -109,6 +136,10 @@ class _KernelPaths:
     paths: list[_Path] = field(default_factory=list)  # most recently fired last
     seeds: set[tuple[Any, ...]] = field(default_factory=set)
     off: str | None = None
+    # One object per distinct column, so paths that agree share it and compare by identity.
+    interned: dict[Any, tuple[dict[str, Any], frozenset[str]]] = field(default_factory=dict)
+    # The columns a set of paths have in common, as a stretch moves between them.
+    common: dict[frozenset[_Path], tuple[frozenset[Any], ...]] = field(default_factory=dict)
 
 
 @dataclass(eq=False)
@@ -182,6 +213,7 @@ class _CoastLoop(ScanLoop):
         self._may_build = 1  # a stretch ends at the scan it traces
         self._kernel_paths = paths
         self._memo = memo
+        self.learned: _Path | None = None
         paths.seeds |= self._seeds
         self._seeds = paths.seeds
         paths.off = self._off
@@ -227,21 +259,152 @@ class _CoastLoop(ScanLoop):
                 and path.moves == moves
             ):
                 self._memo.counts["traces of a known path"] += 1
+                self.learned = path
                 return
-        written = set(moving_tags(plan, names).values())
+        moving = moving_tags(plan, names)
+        written = set(moving.values())
         for symbol, cells in trace.block_writes:
             written.update(
                 names[symbol][index] for index in cells if index in names.get(symbol, {})
             )
-        kept.append(_Path(trace, frozenset(written), moves))
+        wanted = {name for name, _delta in moves.moved} | set(moves.held)
+        ending = tuple((name, key) for key, name in moving.items() if name in wanted)
+        stores = {
+            # One attempt at a tag that does not move: what it computes is what the tag holds.
+            tag: (total, 0 if total == 1 and tag not in written else symbolic)
+            for tag, (total, symbolic) in attempted_stores(plan, names).items()
+        }
+        self.learned = _Path(trace, frozenset(written), moves, ending, stores)
+        kept.append(self.learned)
         if len(kept) > MAX_PATHS:
-            _forget(kept, kept[0])
+            _forget(kept, kept[0], self._kernel_paths)
 
 
-def _forget(paths: list[_Path], path: _Path) -> None:
+def _forget(paths: list[_Path], path: _Path, kernel_paths: _KernelPaths) -> None:
     paths.remove(path)
     for other in paths:
         other.successors = [entry for entry in other.successors if entry[0] is not path]
+    kernel_paths.common.clear()
+
+
+def _capture_of(plc: PLC, path: _Path, kernel_paths: _KernelPaths, scan_id: int) -> _Capture:
+    """Take a path's columns from the interpreted scan just run on it."""
+    moving = {tag for tag, (_total, symbolic) in path.stores.items() if symbolic}
+    interned = kernel_paths.interned
+    columns = []
+    settled = []
+    for timelines in (plc._rung_firing_timelines, plc._node_firing_timelines):
+        these: dict[Any, tuple[dict[str, Any], frozenset[str]]] = {}
+        still: dict[Any, tuple[dict[str, Any], frozenset[str]]] = {}
+        for key, recorded in timelines.at(scan_id).items():
+            writes = dict(recorded)
+            varied = frozenset(tag for tag in writes if timelines.varied_on(key, tag, scan_id))
+            # By repr, or 1 and True would be one column.
+            identity = (key, repr(sorted(writes.items())), varied)
+            column = interned.setdefault(identity, (writes, varied))
+            these[key] = column
+            if not (moving & writes.keys()):
+                still[key] = column
+        columns.append(these)
+        settled.append(still)
+    return _Capture(tuple(columns), tuple(settled))
+
+
+def _column(
+    path: _Path, column: tuple[dict[str, Any], frozenset[str]], ends: dict[str, Any], count: int
+) -> tuple[dict[str, Any], frozenset[str], dict[str, int], set[str]]:
+    """What one rung's capture says over *count* scans: values, varied, deltas, unknowns."""
+    writes, varied = column
+    deltas = dict(path.moves.moved)
+    held = set(path.moves.held)
+    values = dict(writes)
+    moving: dict[str, int] = {}
+    unknown: set[str] = set()
+    for tag in writes:
+        total, symbolic = path.stores.get(tag, (0, 0))
+        if not symbolic:
+            continue  # every attempt on this path is a constant
+        if total == 1 and tag in deltas and tag in ends:
+            values[tag] = ends[tag] - deltas[tag] * (count - 1)
+            moving[tag] = deltas[tag]
+        elif total == 1 and tag in held and tag in ends:
+            values[tag] = ends[tag]
+        else:
+            # Which attempt a rung made, or its value on a later scan, no one capture says.
+            unknown.add(tag)
+            if total > 1:
+                varied |= {tag}
+    return values, varied, moving, unknown
+
+
+def _common_columns(
+    segments: list[_Segment], kernel_paths: _KernelPaths
+) -> tuple[frozenset[Any], ...]:
+    """The columns every path of these segments repeats unchanged, by rung and node."""
+    paths = frozenset(segment.path for segment in segments)
+    if len(paths) == 1:
+        capture = segments[0].path.capture
+        assert capture is not None
+        return tuple(frozenset(still) for still in capture.settled)
+    found = kernel_paths.common.get(paths)
+    if found is None:
+        result = []
+        for level in range(2):
+            ordered = iter(paths)
+            first = next(ordered).capture
+            assert first is not None
+            common = dict(first.settled[level])
+            for path in ordered:
+                assert path.capture is not None
+                other = path.capture.settled[level]
+                common = {k: v for k, v in common.items() if other.get(k) is v}
+            result.append(frozenset(common))
+        found = tuple(result)
+        if len(kernel_paths.common) >= 256:
+            kernel_paths.common.clear()
+        kernel_paths.common[paths] = found
+    return found
+
+
+def _record_segments(plc: PLC, segments: list[_Segment], kernel_paths: _KernelPaths) -> None:
+    """Write what a stretch's scans did into the three timelines a stepped run writes."""
+    if not segments:
+        return
+    start = segments[0].first
+    total = sum(segment.count for segment in segments)
+    # A stretch that ran through several paths without a gap: a rung they all repeat
+    # goes in once, which is most of them under a bang-bang hold.
+    common = _common_columns(segments, kernel_paths)
+    first_capture = segments[0].path.capture
+    assert first_capture is not None
+    for level, timelines in enumerate((plc._rung_firing_timelines, plc._node_firing_timelines)):
+        here = common[level]
+        for key in here:
+            writes, varied = first_capture.columns[level][key]
+            timelines.append_repeated(key, start, total, writes, varied)
+        for segment in segments:
+            capture = segment.path.capture
+            assert capture is not None
+            for key, column in capture.columns[level].items():
+                if key in here:
+                    continue
+                values, varied, deltas, unknown = _column(
+                    segment.path, column, segment.ends, segment.count
+                )
+                timelines.append_repeated(
+                    key, segment.first, segment.count, values, varied, deltas, unknown
+                )
+    committed = plc._committed_tag_timelines
+    for segment in segments:
+        moves = segment.path.moves
+        first, count, ends = segment.first, segment.count, segment.ends
+        for name, delta in moves.moved:
+            base = ends[name] - delta * (count - 1)
+            committed.append_repeated(name, first, count, {name: base}, deltas={name: delta})
+        for name in moves.free:
+            committed.append_repeated(name, first, count, {name: 0.0}, unknown={name})
+        for name, _before, after in moves.flips:
+            committed.append(name, first, {name: after})
 
 
 def _note_successor(first: _Path, then: _Path) -> None:
@@ -262,6 +425,16 @@ def _note_successor(first: _Path, then: _Path) -> None:
     )
     successors.insert(0, (then, check))
     del successors[MAX_SUCCESSORS:]
+
+
+@dataclass(eq=False, slots=True)
+class _Segment:
+    """Scans of one path in a stretch, and where they left the tags it moves."""
+
+    path: _Path
+    first: int
+    count: int
+    ends: dict[str, Any]
 
 
 class _NotDeclared(Exception):
@@ -346,20 +519,21 @@ def _try_stretch(
     watched: frozenset[str],
     limit: int,
     deadline: Callable[[], bool] | None,
-) -> int:
-    """Run loop scans from the tip while a known path covers each; return how many.
+) -> tuple[int, _Path | None]:
+    """Run loop scans from the tip while a known path covers each.
 
-    A scan no known path covers is traced here, so its next occurrence stays in the
-    loop, and left for the coast to run interpreted.
+    Returns how many, and the path of the scan to come if one wants its capture.  A scan
+    no known path covers is traced here, so its next occurrence stays in the loop, and
+    left for the coast to run interpreted.
     """
     overrides = plc._input_overrides
     if overrides.pending_patches or overrides.forces:
-        return 0
+        return 0, None
     if _kernel_cannot_say_what_it_adds(plc, kernel):
-        return 0
+        return 0, None
     paths = _paths_for(memo, kernel)
     if paths.off is not None:
-        return 0
+        return 0, None
     start = plc._state
     replay = CompiledPLC(
         plc._soft_exec_program(),
@@ -372,10 +546,10 @@ def _try_stretch(
     replay.rtc_applied = []
     constrained = plc._constrained_tags
     if constrained and _BoundsWatch(replay, constrained).violated():
-        return 0
+        return 0, None
     loop = _CoastLoop(replay, kernel, paths, constrained, memo)
     if loop._off is not None:
-        return 0
+        return 0, None
 
     declared = reads if reads is not None else frozenset()
     seen = _Seen({name: start.tags[name] for name in declared if name in start.tags}, declared)
@@ -392,11 +566,11 @@ def _try_stretch(
 
     state_kernel = replay._kernel
     interval = plc._checkpoint_interval
-    first_scan_id = start.scan_id + 1
     loops: dict[int, _Loop | None] = {}
     total = 0
     previous: _Path | None = None
     burst = 0
+    segments: list[_Segment] = []
 
     def fire(path: _Path) -> int:
         """Fire *path* for what its loop allows, or not at all."""
@@ -427,6 +601,14 @@ def _try_stretch(
             stop,
         )
         if used:
+            segments.append(
+                _Segment(
+                    path,
+                    state_kernel.scan_id + 1,
+                    used,
+                    {name: _cell_value(state_kernel, key) for name, key in path.ending},
+                )
+            )
             state_kernel.scan_id += used
             state_kernel.timestamp = timestamp
             _record_block_writes(path.trace, state_kernel.blocks)
@@ -443,7 +625,9 @@ def _try_stretch(
         fired: _Path | None = None
         if previous is not None:
             for candidate, check in previous.successors:
-                if any(not same(_cell_value(state_kernel, key), value) for key, value in check):
+                if candidate.capture is None or any(
+                    not same(_cell_value(state_kernel, key), value) for key, value in check
+                ):
                     continue
                 if fire(candidate):
                     fired = candidate
@@ -452,7 +636,7 @@ def _try_stretch(
         if fired is None:
             for position in range(len(kept) - 1, -1, -1):
                 candidate = kept[position]
-                if not candidate.trace.holds(replay, None):
+                if candidate.capture is None or not candidate.trace.holds(replay, None):
                     continue
                 if fire(candidate):
                     fired = candidate
@@ -463,10 +647,11 @@ def _try_stretch(
             # What the state does next, no path knows.  Whatever has run is settled now,
             # since the trace's check steps the kernel past it.
             if total:
-                _land(plc, replay, first_scan_id)
+                _record_segments(plc, segments, paths)
+                _land(plc, replay)
             loop.learn(previous or (kept[-1] if kept else None))
             loop.finish()
-            return total
+            return total, loop.learned
         if previous is not None:
             _note_successor(previous, fired)
         previous = fired
@@ -475,19 +660,22 @@ def _try_stretch(
         if checkpoint or compiled_run.LOOP_OBSERVERS:
             state = replay._materialize_replay_state()
             if checkpoint:
+                _record_segments(plc, segments, paths)
+                segments = []
                 _install(plc, replay, state)
             for observer in compiled_run.LOOP_OBSERVERS:
                 observer(plc, state)
     loop.finish()
     if total:
-        _land(plc, replay, first_scan_id)
-    return total
+        _record_segments(plc, segments, paths)
+        _land(plc, replay)
+    return total, None
 
 
-def _land(plc: PLC, replay: CompiledPLC, first_scan_id: int) -> None:
+def _land(plc: PLC, replay: CompiledPLC) -> None:
     if plc._state.scan_id != replay._kernel.scan_id:
         _install(plc, replay, replay._materialize_replay_state())
-    plc._record_fold_landing(first_scan_id)
+    plc._record_fold_landing()
     plc._bounds_violations = {}
     plc._epoch_caches.on_tip_advanced()
 
@@ -562,6 +750,7 @@ def coast_until(
     wait = ENTRY_WAIT
     since = 0
     fails = 0
+    learned: _Path | None = None
     while plc.state.scan_id - start_scan < budget:
         if deadline is not None and deadline():
             break
@@ -570,6 +759,13 @@ def coast_until(
         plc._run_single_scan(consume_pause_request=False)
         note(plc._state.scan_id)
         since += 1
+        if learned is not None:
+            assert kernel is not None
+            if learned.capture is None:
+                learned.capture = _capture_of(
+                    plc, learned, _paths_for(memo, kernel), plc._state.scan_id
+                )
+            learned = None
         paused = plc._consume_pause_request()
         hit = bool(predicate(plc.state))
         if hit or paused:
@@ -595,7 +791,7 @@ def coast_until(
                 continue
             watched = monitored | {str(name) for name in traced}
         assert kernel is not None
-        used = _try_stretch(plc, kernel, memo, predicate, reads, watched, limit, deadline)
+        used, learned = _try_stretch(plc, kernel, memo, predicate, reads, watched, limit, deadline)
         if used:
             stretches += 1
             stretched += used

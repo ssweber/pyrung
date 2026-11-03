@@ -235,6 +235,7 @@ class History:
             return None
 
         plc = self._plc
+        plc._settle_compiled_ranges(oldest, cursor)
         pdg = plc._ensure_pdg() if plc._logic else None
         initial_tags = plc._causal_initial_tags
         while cursor > oldest:

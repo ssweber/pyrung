@@ -28,6 +28,8 @@ from pyrung import (
     reset,
 )
 from pyrung.core import fall, fill, forloop, rise, search, system
+from pyrung.core import runner as runner_module
+from pyrung.core.rung_firings import UnrecordedScansError
 from pyrung.core.runner import PLC
 from tests.core.scan_loop_counts import NEVER, ScansOutsideLoop
 
@@ -4564,35 +4566,53 @@ class TestFoldedHistoryQueries:
             _plain_tags_of(s) for s in stepped.history.latest(25)
         ]
 
-    def test_cause_refuses_a_folded_scan(self) -> None:
+    def test_cause_answers_as_stepping_does(self) -> None:
         folded, stepped = self._runs()
         first, last = folded._fold_windows[0]
         for scan in (first, (first + last) // 2, last):
-            with pytest.raises(ValueError, match="folded"):
-                folded.cause("C_Acc", scan)
-            with pytest.raises(ValueError, match="folded"):
-                folded.effect("C_Acc", scan)
+            assert str(folded.cause("C_Acc", scan)) == str(stepped.cause("C_Acc", scan))
+            assert str(folded.effect("C_Acc", scan)) == str(stepped.effect("C_Acc", scan))
         tip = folded.state.scan_id
         assert str(folded.cause("C_Acc", tip)) == str(stepped.cause("C_Acc", tip))
         assert str(folded.cause("Hit")) == str(stepped.cause("Hit"))
 
-    def test_a_fork_refuses_its_parents_folded_scans(self) -> None:
+    def test_a_question_settles_only_what_it_reaches(self) -> None:
+        folded, stepped = self._runs()
+        first, last = folded._fold_windows[0]
+        mid = (first + last) // 2
+        assert folded.rung_firings(mid) == stepped.rung_firings(mid)
+        assert folded._fold_windows == [(first, mid - 1), (mid + 1, last)]
+        assert folded.query.cold_rungs() == stepped.query.cold_rungs()
+        assert folded._fold_windows == []
+        assert folded.rung_firings(mid) == stepped.rung_firings(mid)
+
+    def test_a_question_past_the_limit_says_so(self, monkeypatch: pytest.MonkeyPatch) -> None:
         folded, _stepped = self._runs()
+        first, last = folded._fold_windows[0]
+        monkeypatch.setattr(runner_module, "SETTLE_SCAN_LIMIT", 10)
+        with pytest.raises(UnrecordedScansError, match=rf"scans {first}\.\.{last} include"):
+            folded.cause("Hit")
+        # Over few enough scans it still answers.
+        assert folded.rung_firings(first + 1) is not None
+
+    def test_a_fork_answers_for_its_parents_scans(self) -> None:
+        folded, stepped = self._runs()
         first, last = folded._fold_windows[0]
         mid = (first + last) // 2
         for at in (None, mid):
             child = folded.fork(at)
             grandchild = child.fork()
+            twin = stepped.fork(at)
             for plc in (child, grandchild):
-                with pytest.raises(ValueError, match="folded"):
-                    plc.cause("C_Acc", first)
-                with pytest.raises(ValueError, match="folded"):
-                    plc.effect("C_Acc", first)
-        # Forked from inside a window, the child still owns that window's
-        # earlier scans (clipped at the fork point) and none after it.
+                assert str(plc.cause("C_Acc", first)) == str(twin.cause("C_Acc", first))
+                assert str(plc.effect("C_Acc", first)) == str(twin.effect("C_Acc", first))
+        # Forked from inside a window, the child holds that window's earlier
+        # scans and none after it, and settling the epoch settles it for its forks too.
         child = folded.fork(mid)
-        with pytest.raises(ValueError, match=rf"scans {first}\.\.{mid} "):
-            child.cause("C_Acc", mid)
+        later = child.fork()
+        assert [e.fold_windows for e in child._causal_lineage.sealed_epochs] == [[(first, mid)]]
+        assert str(child.cause("C_Acc", mid)) == str(stepped.fork(mid).cause("C_Acc", mid))
+        assert not any(e.fold_windows for e in later._causal_lineage.sealed_epochs)
 
 
 class TestLandingDtReadouts:

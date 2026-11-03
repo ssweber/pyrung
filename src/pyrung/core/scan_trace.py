@@ -313,6 +313,19 @@ class KernelSource:
             if name in self.functions
         )
         self.scalar_writes, self.opaque_tag_writes = _scalar_writes(tree)
+        # A kernel global loaded from a tag at the top of a scan is its working copy.
+        self.working_copies: dict[str, str] = {
+            statement.targets[0].id: statement.value.slice.value
+            for function in self.step_functions
+            for statement in function.node.body
+            if isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and isinstance(statement.value, ast.Subscript)
+            and isinstance(statement.value.value, ast.Name)
+            and statement.value.value.id == "tags"
+            and isinstance(statement.value.slice, ast.Constant)
+        }
 
 
 _NOT_LITERAL = object()
@@ -633,6 +646,15 @@ class _Frame:
     locals: dict[str, _Value] = field(default_factory=dict)
 
 
+def _count_store(
+    stores: dict[tuple[Any, ...], list[int]], key: tuple[Any, ...], value: _Value
+) -> None:
+    counts = stores.setdefault(key, [0, 0])
+    counts[0] += 1
+    if value.local is not None:
+        counts[1] += 1
+
+
 class _Tracer:
     """One concolic pass over a scan: the real path, with the moving values marked.
 
@@ -658,6 +680,10 @@ class _Tracer:
         self.loop_constants: list[Any] = []
         self.not_live: list[tuple[str, str, int]] = []
         self.edge_bits: dict[str, bool] = {}
+        # Attempted stores this scan, by cell: how many, and how many of a moving value.
+        # What a rung's column says over a stretch depends on it, and nothing else knows.
+        self.stores: dict[tuple[Any, ...], list[int]] = {}
+        self.working_copy_stores: dict[tuple[Any, ...], list[int]] = {}
         self._globals: dict[str, _Value] = {}
         self._known_truth: dict[str, bool] = {}
         self._own_lists: dict[int, list[Any]] = {}
@@ -799,6 +825,7 @@ class _Tracer:
             self.constants.setdefault(key, self._current(key))
         self.cells[key] = value
         self.written.add(key)
+        _count_store(self.stores, key, value)
 
     # -- Loop operations --------------------------------------------------------
 
@@ -911,6 +938,10 @@ class _Tracer:
         if isinstance(target, ast.Name):
             if target.id in frame.function.global_names:
                 self._globals[target.id] = value
+                tag = self._source.working_copies.get(target.id)
+                # The load at the top of the scan is the cell itself, not an attempt.
+                if tag is not None and value is not self.cells.get(("tags", tag)):
+                    _count_store(self.working_copy_stores, ("tags", tag), value)
             else:
                 frame.locals[target.id] = value
         elif isinstance(target, ast.Subscript):
@@ -1676,6 +1707,23 @@ def moving_tags(
     return named
 
 
+def attempted_stores(
+    plan: _Tracer, block_names: Mapping[str, Mapping[int, str]]
+) -> dict[str, tuple[int, int]]:
+    """Per tag: the stores a trace's scan attempts, and how many are of a moving value.
+
+    A tag with a working copy counts attempts on the copy, not the flush at scan end.
+    """
+    stores: dict[str, tuple[int, int]] = {}
+    for key, counts in plan.stores.items():
+        name = _tag_of_cell(key, block_names)
+        if name is not None:
+            stores[name] = (counts[0], counts[1])
+    for key, counts in plan.working_copy_stores.items():
+        stores[key[1]] = (counts[0], counts[1])
+    return stores
+
+
 def coast_moves(plan: _Tracer, block_names: Mapping[str, Mapping[int, str]]) -> CoastMoves:
     """What each scan of this trace does to the tags.
 
@@ -1738,6 +1786,8 @@ def _coast_guards(
         elif name in watched or same(after, before) or after == before:
             # Equal across types too: 0 to False on an Int driven by out() is no transition.
             guards.append(_Guard(f"{old} != {new}", uses))
+            if cell.local is not None and same(after, before):
+                held.append(name)
         else:
             guards.append(_Guard(f"{old} != {plan._atom(_Value(before))}", (old,)))
             if cell.local is not None:

@@ -33,6 +33,7 @@ from pyrung.core import (
 )
 from pyrung.core.coast_run import coast_until, memo_of
 from pyrung.core.tag import Dint
+from tests.fold_check import compare_records
 
 CASES = {}
 
@@ -261,7 +262,29 @@ class TestAgainstStepping:
         assert plc.current_state.scan_id - 1 == SCANS
         observe(plc, plc.current_state)
         assert stats["logical_scans"] == SCANS
-        assert stats["kernel_scans"] + stats["ordinary_folded_scans"] == SCANS
+        # A stretch's landing is the one scan both count.
+        assert SCANS <= stats["kernel_scans"] + stats["ordinary_folded_scans"] <= SCANS + 1
+
+    def test_leaves_the_records_stepping_leaves(self, strict, name: str) -> None:
+        plc = _runner(CASES[name], 0.3)
+        twin = plc.fork()
+        whole = _runner(CASES[name], 0.3)  # the surveys read a runner's own epoch, not a fork's
+        for _ in range(SCANS):
+            twin.step()
+            whole.step()
+        start = plc.current_state.scan_id
+        coast_until(plc, lambda _s: False, budget=SCANS, predicate_reads=frozenset())
+        compare_records("coast", plc, twin, start)
+        assert plc.query.cold_rungs() == whole.query.cold_rungs()
+        assert plc.query.hot_rungs() == whole.query.hot_rungs()
+        tip = plc.current_state.scan_id
+        tags = sorted(n for n in plc.current_state.tags if not n.startswith("sys."))
+        for tag in tags:
+            for scan in (start + 1, start + SCANS // 2, tip):
+                assert str(plc.cause(tag, scan)) == str(twin.cause(tag, scan)), (tag, scan)
+            assert str(plc.effect(tag, start + 1, max_scans=50)) == str(
+                twin.effect(tag, start + 1, max_scans=50)
+            ), tag
 
     def test_watched_tag_stops_on_its_own_scan(self, strict, name: str) -> None:
         # Stop on the first change of everything the program writes, in turn.
@@ -300,6 +323,55 @@ def _ramp() -> None:
         copy(T.Acc // 500, X)
     with Rung(X == 3):
         out(BX)
+
+
+InsideT = Timer.clone("InsideT")
+
+
+def _set_and_reset_inside_a_wait() -> None:
+    with Rung():
+        on_delay(InsideT, 32_000)
+    with Rung(InsideT.Acc == 10_000):
+        latch(Hit)
+    with Rung(InsideT.Acc == 20_000):
+        reset(Hit)
+
+
+class TestARungThatFiresInsideARange:
+    """Set and reset where no scan outside the range would see it."""
+
+    def _stepped(self, scans: int) -> PLC:
+        plc = _runner(_set_and_reset_inside_a_wait, 0.1)
+        for _ in range(scans):
+            plc.step()
+        return plc
+
+    def _check(self, plc: PLC, stepped: PLC) -> None:
+        assert plc.current_state.scan_id == stepped.current_state.scan_id
+        assert plc.query.cold_rungs() == stepped.query.cold_rungs()
+        assert plc.query.hot_rungs() == stepped.query.hot_rungs()
+        tip = plc.current_state.scan_id
+        for scan in range(95, 105):
+            assert plc.rung_firings(scan) == stepped.rung_firings(scan), scan
+        for scan in (101, 150, 201, tip):
+            assert str(plc.cause(Hit, scan)) == str(stepped.cause(Hit, scan)), scan
+        assert str(plc.cause(Hit)) == str(stepped.cause(Hit))
+        assert str(plc.effect(Hit, 101, max_scans=200)) == str(
+            stepped.effect(Hit, 101, max_scans=200)
+        )
+
+    def test_in_a_coast(self, strict) -> None:
+        plc = _runner(_set_and_reset_inside_a_wait, 0.1)
+        stats: dict[str, int] = {}
+        coast_until(plc, lambda _s: False, budget=600, predicate_reads=frozenset(), stats=stats)
+        assert stats["ordinary_folded_scans"] > 500
+        self._check(plc, self._stepped(600))
+
+    def test_in_a_compiled_run(self, loop_from_first_scan) -> None:
+        plc = _runner(_set_and_reset_inside_a_wait, 0.1)
+        plc.run_for(0.1 * 600)
+        assert plc._fold_windows
+        self._check(plc, self._stepped(600))
 
 
 def test_a_long_wait_runs_in_the_loop() -> None:
