@@ -297,7 +297,7 @@ def _mutable_kwdefault(v, *, memo={}):  # noqa: B006
     return {"out": len(memo)}
 
 
-def _object_default(v, thing=_Holder()):
+def _object_default(v, thing=_Holder()):  # noqa: B008
     return {"out": v}
 
 
