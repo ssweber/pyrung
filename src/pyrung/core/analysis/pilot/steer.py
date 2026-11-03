@@ -1188,11 +1188,7 @@ def _try_bearing_coast(
     # Confirmed conditional holds (oscillation correctives) animate during the
     # channel coast, same as program continuation — fork_with_pilot_rungs installs
     # only the steady half.
-    session = CoastSession(
-        fork,
-        kind="bearing_coast",
-        waits_on_work=getattr(ctx, "collect_action_attribution", True),
-    )
+    session = CoastSession(fork, kind="bearing_coast", waits_on_work=True)
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
     global_target_trigger = _terminal_target_trigger(fork, ctx.target)
@@ -1358,11 +1354,7 @@ def _try_program_continuation_seek(
             ),
         )
     )
-    session = CoastSession(
-        fork,
-        kind="letrun",
-        waits_on_work=getattr(ctx, "collect_action_attribution", True),
-    )
+    session = CoastSession(fork, kind="letrun", waits_on_work=True)
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
     letrun_receipt = _coast_holding_state(
