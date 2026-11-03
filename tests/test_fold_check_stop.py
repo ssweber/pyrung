@@ -1067,6 +1067,8 @@ def _rtc_apply_early() -> PLC:
         with Rung():
             copy(system.rtc.hour, Hr)
     plc = PLC(program, dt=0.01)
+    # Not the hour it applies, whatever the time is; a set_rtc() would be in the log itself.
+    plc._set_rtc_internal(datetime(2030, 1, 2, 9, 0, 0), plc.state.timestamp)
     plc.patch({"Go": True})
     return plc
 
