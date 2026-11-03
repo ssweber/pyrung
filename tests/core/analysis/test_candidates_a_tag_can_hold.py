@@ -207,7 +207,7 @@ def test_a_witness_on_a_real_keeps_the_form_of_its_literal() -> None:
 
 def test_a_declared_domain_on_a_real_keeps_the_form_of_its_choices() -> None:
     temp = Real("FormTemp", choices={-1: "open", 5: "fine"})
-    assert [repr(v) for v in _declared_domain(temp)] == ["-1", "5"]
+    assert repr(_declared_domain(temp)) == "(-1, 5)"
 
 
 def test_held_candidates_is_what_the_store_makes_of_each_value() -> None:
