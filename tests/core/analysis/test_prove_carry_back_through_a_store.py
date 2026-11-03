@@ -5,13 +5,17 @@ a calc to an INT holds -32768 for the 32767 of ``I + 1``.  The source has to try
 gets there, so each row here is stepped on both engines as well as asked of the verifier: a
 Proven is checked against a sweep and a witness is replayed.  A decline is an honest answer,
 and no row may be Proven where a scan fires.
+
+The brute force at the end runs every value of an INT or WORD source through the store path,
+over programs generated from the literals that have got this wrong before.
 """
 
 from __future__ import annotations
 
+import math
 import operator
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Callable, Iterable
+from typing import Any, NamedTuple
 
 import pytest
 
@@ -33,7 +37,15 @@ from pyrung.core import (
 )
 from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, never
 from pyrung.core.compiled_plc import CompiledPLC
+from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr, UnaryExpr
+from pyrung.core.instruction.calc import CalcInstruction
+from pyrung.core.instruction.conversions import (
+    _store_copy_value_to_tag_type,
+    _truncate_to_tag_type,
+)
+from pyrung.core.instruction.data_transfer import CopyInstruction
 from pyrung.core.runner import PLC
+from pyrung.core.validation._common import walk_instructions
 
 ENGINES = (PLC, CompiledPLC)
 TYPES = {"Int": Int, "Word": Word, "Dint": Dint, "Real": Real}
@@ -205,22 +217,61 @@ def _through_a_mid_tag(mid: str, target: str, op: str, bound: Any) -> tuple[Prog
         pytest.param("Word", "Word", "==", 65535, -1, id="through a word"),
     ],
 )
-def test_a_wide_tag_on_the_way_passes_on_what_the_source_must_reach(
+def test_a_chain_with_a_wrap_on_it_says_no_scan_only_with_what_it_tried(
     mid, target, op, bound, value
 ) -> None:
     program, hit = _through_a_mid_tag(mid, target, op, bound)
     assert _fires_at(program, "S", value, hit)
 
     verdict = never(program, hit)
-    assert isinstance(verdict, Counterexample)
-    assert _witness_fires(program, verdict, hit)
+    assert not isinstance(verdict, Proven)
+    if isinstance(verdict, Counterexample):
+        assert _witness_fires(program, verdict, hit)
+    else:
+        assert verdict.tags == ["S"]
 
 
-def test_a_chain_of_stores_can_leave_nothing_to_find() -> None:
-    """INT to WORD to INT: the WORD holds nothing under 0, and a copy to the INT clamps."""
+def test_a_chain_of_stores_that_leaves_nothing_to_find_is_not_claimed() -> None:
+    """INT to WORD to INT: nothing fires, but a chain's values aren't known to be all of them."""
     program, hit = _through_a_mid_tag("Word", "Int", "==", -1)
     assert not [value for value in SWEEP if _fires_at(program, "S", value, hit)]
-    assert isinstance(never(program, hit), Proven)
+    verdict = never(program, hit)
+    assert isinstance(verdict, Intractable)
+    assert verdict.tags == ["S"]
+    assert "S" in verdict.reason and "M" in verdict.reason
+
+
+@pytest.mark.parametrize(
+    ("source", "bound"), [pytest.param(Int, 7, id="int"), pytest.param(Dint, 7, id="dint")]
+)
+def test_a_feeder_of_a_declined_hop_has_no_answer_either(source, bound) -> None:
+    """Its comparison gives a tag a domain, and that is no reason to believe the search."""
+    feeder = source("F", external=True)
+    middle = Real("M")
+    last = Int("D")
+    hit = Bool("Hit")
+    with Program(strict=False) as program:
+        with Rung():
+            copy(feeder, middle)
+        with Rung():
+            calc(middle * 3, last)
+        with Rung(last == bound, feeder != 0):
+            out(hit)
+    assert isinstance(never(program, hit), Intractable)
+
+
+def test_a_declared_real_is_not_all_its_whole_numbers() -> None:
+    """``R * 2`` reaches 5 at 2.5, between the values a declared range gives it."""
+    source = Real("R", external=True, min=0.0, max=10.0)
+    last = Word("D")
+    hit = Bool("Hit")
+    with Program(strict=False) as program:
+        with Rung():
+            calc(source * 2, last)
+        with Rung(last == 5):
+            out(hit)
+    assert _fires_at(program, "R", 2.5, hit)
+    assert not isinstance(never(program, hit), Proven)
 
 
 def test_a_multiply_the_inverse_has_no_answer_for_is_not_proven_where_a_scan_fires() -> None:
@@ -274,3 +325,240 @@ def test_every_verdict_agrees_with_a_scan(source: str, target: str, edge: str) -
                 assert _witness_fires(built, verdict, hit), f"{label}: {verdict.trace[-1].inputs}"
             else:
                 assert isinstance(verdict, Intractable), label
+
+
+class Edge(NamedTuple):
+    label: str
+    write: Callable[[Any, Any], Any]
+    literal: Any = None
+
+
+def _copy_edge() -> Edge:
+    return Edge("copy", copy)
+
+
+def _edges(literals: Iterable[Any], factors: Iterable[Any]) -> list[Edge]:
+    edges = [_copy_edge(), Edge("-s", lambda s, d: calc(-s, d))]
+    for k in literals:
+        edges.append(Edge(f"s+{k}", lambda s, d, k=k: calc(s + k, d), k))
+        edges.append(Edge(f"s-{k}", lambda s, d, k=k: calc(s - k, d), k))
+        edges.append(Edge(f"{k}-s", lambda s, d, k=k: calc(k - s, d), k))
+    for k in factors:
+        edges.append(Edge(f"s*{k}", lambda s, d, k=k: calc(s * k, d), k))
+    return edges
+
+
+def _evaluate(node: Any, value: Any) -> Any:
+    if isinstance(node, TagExpr):
+        return value
+    if isinstance(node, LiteralExpr):
+        return node.value
+    if isinstance(node, BinaryExpr):
+        return node.op(_evaluate(node.left, value), _evaluate(node.right, value))
+    if isinstance(node, UnaryExpr):
+        return node.op(_evaluate(node.operand, value))
+    return value if hasattr(node, "name") else node
+
+
+def _stored(instruction: Any, value: Any) -> Any:
+    """What *instruction* leaves on its target for *value*, by the store functions it calls."""
+    if isinstance(instruction, CalcInstruction):
+        given = _evaluate(instruction.expression, value)
+        return _truncate_to_tag_type(given, instruction.dest, instruction.mode)
+    assert isinstance(instruction, CopyInstruction)
+    return _store_copy_value_to_tag_type(value, instruction.dest)
+
+
+class Built(NamedTuple):
+    program: Program
+    source: str
+    last: str
+    hit: Bool
+    writes: tuple[Any, ...]
+
+
+def _build_hops(
+    source: str, hops: tuple[tuple[Edge, str], ...], compare: tuple[str, Any] | None = None
+) -> Built:
+    tag = TYPES[source]("S", external=True)
+    hit = Bool("Hit")
+    with Program(strict=False) as program:
+        current: Any = tag
+        for index, (edge, target) in enumerate(hops):
+            into = TYPES[target](f"T{index}")
+            with Rung():
+                edge.write(current, into)
+            current = into
+        if compare is not None:
+            with Rung(OPS[compare[0]](current, compare[1])):
+                out(hit)
+    writes = tuple(
+        instruction
+        for instruction in walk_instructions(program)
+        if isinstance(instruction, CalcInstruction | CopyInstruction)
+    )
+    return Built(program, tag.name, current.name, hit, writes)
+
+
+def _source_values(source: str, hops: tuple[tuple[Edge, str], ...]) -> Iterable[Any]:
+    """Every value of an INT or WORD; for a DINT or REAL the edges, the turns and the literals."""
+    if source == "Int":
+        return range(-32768, 32768)
+    if source == "Word":
+        return range(65536)
+    picks: set[Any] = {0, 1, -1, 5, -5, 32767, 32768, -32768, 65535, 65536, 2**31 - 1, -(2**31)}
+    for turn in (-3, -2, -1, 1, 2, 3):
+        for side in (-2, -1, 0, 1, 2):
+            picks.update((turn * 65536 + side, turn * 32768 + side, turn * 2**31 + side))
+    for edge, _ in hops:
+        if isinstance(edge.literal, int | float) and not isinstance(edge.literal, bool):
+            for turn in (-2, -1, 0, 1, 2):
+                for near in (0, 5, -1, 65535):
+                    picks.add(near + turn * 65536 - edge.literal)
+                    picks.add(near + turn * 65536 + edge.literal)
+    if source == "Dint":
+        return sorted(int(pick) for pick in picks if -(2**31) <= pick < 2**31)
+    return sorted({*(float(pick) for pick in picks), 0.5, -0.5, 2.5, 3.5, 1e10, -1e10})
+
+
+def _left_on_the_target(built: Built, values: Iterable[Any]) -> dict[Any, Any]:
+    left = {}
+    for value in values:
+        held = value
+        for write in built.writes:
+            held = _stored(write, held)
+        left[value] = held
+    return left
+
+
+def _bounds_of(left: dict[Any, Any]) -> list[Any]:
+    """Comparison values a target can hold at its ends, and the ones a store has got wrong."""
+    held = [value for value in left.values() if isinstance(value, int | float)]
+    finite = [value for value in held if math.isfinite(value)]
+    if not finite:
+        return [5]
+    low, high = min(finite), max(finite)
+    return sorted({low, low + 1, high, high - 1, 5, -1, 3.5, 32768, 65535, 70000})
+
+
+def _verdict_row(
+    source: str,
+    hops: tuple[tuple[Edge, str], ...],
+    compare: tuple[str, Any],
+    left: dict[Any, Any],
+) -> str:
+    """One row's verdict, against what the store leaves for each value of the source."""
+    program, _, _, hit, _ = _build_hops(source, hops, compare)
+    fires = [value for value, held in left.items() if OPS[compare[0]](held, compare[1])]
+    verdict = never(program, hit, max_states=3000, depth_budget=6)
+    if isinstance(verdict, Proven):
+        assert not fires, f"{compare}: Proven, and a scan fires at {source}={fires[:3]}"
+        return "proven"
+    if isinstance(verdict, Counterexample):
+        assert _witness_fires(program, verdict, hit), f"{compare}: {verdict.trace}"
+        return "counterexample"
+    assert isinstance(verdict, Intractable)
+    return "declined firing" if fires else "declined nothing fires"
+
+
+def _check_store_against_stepping(
+    built: Built, left: dict[Any, Any], values: Iterable[Any]
+) -> None:
+    """The store functions the sweep calls are the ones a scan ends up with, on both engines."""
+    for engine in ENGINES:
+        plc = engine(built.program, dt=0.01)
+        for value in values:
+            plc.patch({built.source: value})
+            plc.step()
+            held = plc.current_state.tags[built.last]
+            assert held == left[value], f"{engine.__name__} {built.source}={value}: {held}"
+
+
+def _sample_of(left: dict[Any, Any]) -> list[Any]:
+    values = list(left)
+    step = max(len(values) // 8, 1)
+    return [values[0], values[-1], *values[step // 2 :: step]]
+
+
+def run_hops(source: str, hops: tuple[tuple[Edge, str], ...], rows: int | None = None) -> list[str]:
+    """Every (or the first *rows*) comparison on one program: a verdict for each."""
+    built = _build_hops(source, hops)
+    left = _left_on_the_target(built, _source_values(source, hops))
+    _check_store_against_stepping(built, left, _sample_of(left))
+    compares = [(op, bound) for bound in _bounds_of(left) for op in ("==", "<", ">")]
+    return [_verdict_row(source, hops, compare, left) for compare in compares[:rows]]
+
+
+LITERALS = (1, -3, 32767, 65536, 70000, 2147483547, 1.5, -0.5, 100000.5)
+FACTORS = (3, -1, 1000, 0.5)
+
+
+@pytest.mark.parametrize("source", ["Int", "Word", "Dint", "Real"])
+def test_one_hop_has_no_false_proven(source: str) -> None:
+    verdicts: list[str] = []
+    for edge in _edges(LITERALS, FACTORS)[:: 2 if source in ("Dint", "Real") else 3]:
+        for target in ("Int", "Word", "Dint", "Real"):
+            verdicts += run_hops(source, ((edge, target),), rows=9)
+    assert {"proven", "counterexample"} <= set(verdicts)
+
+
+TWO_HOPS = [
+    pytest.param("Int", (("s+100000", "Dint"), ("copy", "Word")), id="i + 100000, dint, word"),
+    pytest.param("Int", (("copy", "Real"), ("s+100000", "Word")), id="i, real, + 100000, word"),
+    pytest.param("Int", (("s+200000", "Dint"), ("s+1", "Int")), id="i + 200000, dint, + 1, int"),
+    pytest.param("Int", (("s*3", "Dint"), ("copy", "Word")), id="i * 3, dint, word"),
+    pytest.param("Word", (("s+0.5", "Real"), ("copy", "Dint")), id="w + 0.5, real, dint"),
+    pytest.param("Word", (("s*0.5", "Real"), ("copy", "Int")), id="w * 0.5, real, int"),
+    pytest.param("Int", (("copy", "Word"), ("copy", "Int")), id="i, word, int"),
+    pytest.param("Int", (("copy", "Dint"), ("s+1", "Int")), id="i, dint, + 1, int"),
+    pytest.param("Int", (("s+1", "Int"), ("s+1", "Int")), id="i + 1, + 1"),
+    pytest.param("Int", (("copy", "Dint"), ("copy", "Int")), id="i, dint, int: no wrap"),
+    pytest.param("Word", (("s+1", "Int"), ("copy", "Word")), id="w + 1, int, word"),
+    pytest.param("Word", (("copy", "Dint"), ("s+70000", "Int")), id="w, dint, + 70000, int"),
+    pytest.param("Dint", (("s+1", "Dint"), ("copy", "Int")), id="d + 1, dint, int"),
+    pytest.param("Real", (("copy", "Dint"), ("copy", "Word")), id="r, dint, word"),
+]
+
+
+@pytest.mark.parametrize(("source", "hops"), TWO_HOPS)
+def test_two_hops_have_no_false_proven(source: str, hops) -> None:
+    named = {edge.label: edge for edge in _edges((1, 100000, 200000, 70000, 0.5), (3, 0.5))}
+    run_hops(source, tuple((named[label], target) for label, target in hops))
+
+
+def test_a_plain_chain_still_proves() -> None:
+    """Nothing on it wraps, so what it carries back is all there is."""
+    source = Int("S", external=True)
+    middle = Dint("M")
+    last = Int("D")
+    hit = Bool("Hit")
+    with Program(strict=False) as program:
+        with Rung():
+            copy(source, middle)
+        with Rung():
+            copy(middle, last)
+        with Rung(last == 70000):
+            out(hit)
+    assert isinstance(never(program, hit), Proven)
+
+
+@pytest.mark.parametrize(
+    ("write", "bound", "value"),
+    [
+        pytest.param(lambda s, d: calc(s + 1.5, d), -32768, 32767, id="i + 1.5, rolls over"),
+        pytest.param(lambda s, d: calc(s - 0.5, d), -1, -1, id="i - 0.5 truncates to nothing"),
+        pytest.param(lambda s, d: calc(s + 65536.5, d), 5, 5, id="i + 65536.5"),
+        pytest.param(lambda s, d: calc(s + 100000.5, d), 5, 31077, id="i + 100000.5"),
+    ],
+)
+def test_a_fractional_literal_truncates_before_it_wraps(write, bound, value) -> None:
+    source = Int("S", external=True)
+    last = Int("D")
+    hit = Bool("Hit")
+    with Program(strict=False) as program:
+        with Rung():
+            write(source, last)
+        with Rung(last == bound):
+            out(hit)
+    assert _fires_at(program, "S", value, hit)
+    assert not isinstance(never(program, hit), Proven)

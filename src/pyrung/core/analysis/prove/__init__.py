@@ -61,6 +61,9 @@ class _ExploreContext:
     threshold_vector_specs: tuple[_ThresholdVectorSpec, ...]
     dt: float
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
+    # Inputs whose domain may miss a value that reaches a target, with that target: a search
+    # that finds nothing has shown nothing (_backward_propagate_comparison_boundaries).
+    unanswered_inputs: dict[str, str] = field(default_factory=dict)
     # Parallel to ``memory_key_names``: the value an unwritten key reads as.
     memory_key_defaults: tuple[Any, ...] = ()
     demoted_edge_names: tuple[str, ...] = ()

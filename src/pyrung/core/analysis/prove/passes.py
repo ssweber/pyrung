@@ -274,7 +274,9 @@ class _PassContext:
     # (domains, blockers) fixpoint shared by find_threshold_absorptions and
     # classify_dimensions — computed once per pipeline run (see
     # _get_structural_domain_info).
-    _structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None = None
+    _structural_domain_info: (
+        tuple[dict[str, tuple[Any, ...]], frozenset[str], dict[str, str]] | None
+    ) = None
     _pending_infeasible_tags: list[str] = field(default_factory=list)
     _pending_infeasible_hints: list[str] = field(default_factory=list)
     system_points: SystemPointModel | None = None
@@ -480,6 +482,11 @@ class _PassContext:
             all_exprs=self.all_exprs,
             stateful_dims=self.stateful_dims,
             nondeterministic_dims=self.nondeterministic_dims,
+            unanswered_inputs={
+                name: target
+                for name, target in _get_structural_domain_info(self)[2].items()
+                if name in self.nondeterministic_dims
+            },
             stateful_names=self.stateful_names,
             edge_tag_names=self.edge_tag_names,
             memory_key_names=self.memory_key_names or (),
@@ -1868,7 +1875,7 @@ def _pass_build_prior_key_specs(ctx: _PassContext) -> None:
 
 def _get_structural_domain_info(
     ctx: _PassContext,
-) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
+) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], dict[str, str]]:
     """Structural domains + reverse blockers, computed once per pipeline run.
 
     The fixpoint over ``(program, graph, all_exprs)`` dominates context-build

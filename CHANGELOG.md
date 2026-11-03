@@ -76,7 +76,7 @@
 
 ### Fixes
 
-- `how()` and `never()` try only what a tag can hold: `==` and `!=` with a literal it cannot (`"AB"` on a Char, `"x"` on an Int) no longer raise or report a state no scan reaches, and a fraction on an Int no longer misses the values either side of it (`In > 2.5, In < 3.5` is met at 3). An order compare no scan can make (`I > "x"`, `C > 65`) still raises `TypeError`, as stepping does.
+- `how()` and `never()` try only what a tag can hold: `==` and `!=` with a literal it cannot (`"AB"` on a Char, `"x"` on an Int) no longer raise or report a state no scan reaches, and a fraction on an Int no longer misses the values either side of it (`In > 2.5, In < 3.5` is met at 3). An order compare no scan can make (`I > "x"`, `C > 65`) still raises `TypeError`, as stepping does. A search that finds no scan concludes nothing from the values it tried unless they are all that reach the comparison: an input stored through a multiply, a fractional literal, a wider tag or a wrap further down a chain gets a named `Intractable`, where `calc(I + 100000, MD); copy(MD, DW); DW == 5` was `Proven` with `I = 31077` firing it. A counterexample such a search finds is still reported.
 - `never()` no longer proves a `Char` compared by order out of reach, and `how()` no longer gives up on one: `C > "A"` is met at `"B"`.
 - A STOP->RUN restart starts a new recording, so `history.at()` and `fork_from()` no longer replay the previous run's patches over the new one or return a state the previous run cached under the same scan id, and a replay walks past a rung-driven stop without restarting.
 - `history.at()`, `fork_from()` and `rtc_at()` of a scan before a later RTC change, by `set_rtc()` or a rung's apply, keep the clock that scan ran under.

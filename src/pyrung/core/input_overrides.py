@@ -53,11 +53,6 @@ def refuses_value(tag: Tag, value: Any) -> bool:
     return False
 
 
-def holds_as_given(tag: Tag, value: Any) -> bool:
-    """Whether a patch of *tag* with *value* leaves it holding an equal value."""
-    return not refuses_value(tag, value) and _value_a_tag_holds(tag, value, "candidate") == value
-
-
 def held_candidates(tag: Tag, values: Iterable[Any]) -> set[Any]:
     """What *tag* holds of the *values* an analysis would try on it.
 

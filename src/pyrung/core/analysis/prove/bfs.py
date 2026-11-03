@@ -151,6 +151,29 @@ def _free_combo_intractable(
     )
 
 
+def _no_scan_found_intractable(context: _ExploreContext, visited: int) -> Intractable | None:
+    """The answer to a search that found nothing, when finding nothing shows nothing."""
+    unanswered = context.unanswered_inputs
+    if not unanswered:
+        return None
+    names = sorted(unanswered)
+    return Intractable(
+        reason=(
+            f"no scan found, but the values tried on {', '.join(names)} may not be all that"
+            f" reach {', '.join(sorted(set(unanswered.values())))}"
+        ),
+        dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+        estimated_space=visited,
+        tags=names,
+        hints=[
+            f"  {name}: {target} is stored from it through more than a plain sum or copy;"
+            " narrow an integer with choices= or min=/max=, or test it with run_for()"
+            for name, target in sorted(unanswered.items())
+        ],
+        journal=context.journal,
+    )
+
+
 def _bfs_explore(
     context: _ExploreContext,
     *,
@@ -919,8 +942,9 @@ def _bfs_explore_gen(
             if ready is not None:
                 yield ready
 
+    undecided = _no_scan_found_intractable(context, len(visited))
     if project is not None:
-        yield _projected_states(project, projected_rows)
+        yield undecided or _projected_states(project, projected_rows)
         return
 
     caveats = context.caveats
@@ -953,9 +977,9 @@ def _bfs_explore_gen(
         yield [
             r
             if r is not None
-            else Proven(states_explored=len(visited), caveats=caveats, journal=journal)
+            else undecided or Proven(states_explored=len(visited), caveats=caveats, journal=journal)
             for r in results
         ]
         return
 
-    yield [Proven(states_explored=len(visited), caveats=caveats, journal=journal)]
+    yield [undecided or Proven(states_explored=len(visited), caveats=caveats, journal=journal)]
