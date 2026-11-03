@@ -134,7 +134,7 @@ def compile_kernel(
     )
     source, lock_source = _render_kernel_source(ctx, split_after=split_after)
 
-    namespace: dict[str, Any] = dict(ctx.function_objects)
+    namespace: dict[str, Any] = {**ctx.function_objects, **ctx.function_constants}
     code = compile(source, "<kernel>", "exec", dont_inherit=True)
     exec(code, namespace)  # noqa: S102
     step_fn = namespace["_kernel_step"]
@@ -333,7 +333,7 @@ def _render_indirect_helpers(ctx: CodegenContext) -> list[str]:
 
 
 def _render_function_texts(ctx: CodegenContext) -> list[str]:
-    lines: list[str] = []
+    lines: list[str] = ctx.function_constant_lines()
     for symbol in sorted(ctx.function_sources):
         src = ctx.function_sources[symbol].rstrip()
         lines.append(src)

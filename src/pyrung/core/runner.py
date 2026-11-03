@@ -603,6 +603,20 @@ def _may_be_called_again(fn: Any) -> bool:
     return True
 
 
+def _hands_over_nothing_it_could_keep(value: Any) -> bool:
+    """Whether an ``ins`` value reaches the function as a fresh value, or one nothing can change.
+
+    A list a function appends to, or any object it can call, is state like a mutable default.
+    """
+    from pyrung.core.expression import Expression
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    from pyrung.core.tag import ImmediateRef, Tag
+
+    return isinstance(
+        value, Tag | IndirectRef | IndirectExprRef | Expression | ImmediateRef
+    ) or _is_immutable_constant(value)
+
+
 def _program_calls_what_a_kernel_may_not(program: Any) -> bool:
     from pyrung.core.instruction.control import (
         EnabledFunctionCallInstruction,
@@ -614,7 +628,10 @@ def _program_calls_what_a_kernel_may_not(program: Any) -> bool:
         return False
     return any(
         isinstance(instruction, FunctionCallInstruction | EnabledFunctionCallInstruction)
-        and not _may_be_called_again(instruction._fn)
+        and not (
+            _may_be_called_again(instruction._fn)
+            and all(_hands_over_nothing_it_could_keep(v) for v in instruction._ins.values())
+        )
         for instruction in walk_instructions(program)
     )
 

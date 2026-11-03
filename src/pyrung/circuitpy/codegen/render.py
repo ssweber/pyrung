@@ -1016,6 +1016,7 @@ def _render_embedded_functions(ctx: CodegenContext) -> list[str]:
         lines.append("# None emitted in foundation step.")
         lines.append("")
         return lines
+    lines.extend(ctx.function_constant_lines())
     for symbol in sorted(ctx.function_sources):
         src = ctx.function_sources[symbol].rstrip()
         lines.append(src)
