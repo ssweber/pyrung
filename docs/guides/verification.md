@@ -395,7 +395,7 @@ from pyrung.core.analysis.prove import check_lock, write_lock, program_hash
 states = reachable_states(logic, project=["Running"])
 write_lock(Path("pyrung.lock"), states, ["Running"], program_hash(logic))
 
-# Check
+# Check.  A program it can't answer for raises LockIntractable, a RuntimeError naming why.
 diff = check_lock(logic, Path("pyrung.lock"))
 assert diff is None  # None means no change
 ```
