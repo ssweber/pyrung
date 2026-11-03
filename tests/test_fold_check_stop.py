@@ -801,6 +801,7 @@ def test_the_tests_using_own_twin_are_these() -> None:
     }
     assert users == {
         "core/test_history_against_stepping.py::test_a_mutable_default_is_the_function_s_own_list",
+        "core/test_run_function_arguments.py::_a_run_lands_where_its_own_twin_does",
         *(
             f"test_fold_check_stop.py::{name}"
             for name in (

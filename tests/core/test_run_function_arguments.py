@@ -24,6 +24,7 @@ from pyrung.circuitpy.codegen import compile_kernel
 from pyrung.core.analysis.prove.lockfile import program_hash
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.runner import PLC
+from tests import fold_check
 from tests.core.test_fault_flags import _run as _run_on
 
 IN_PROCESS = ["interpreted", "compiled", "kernel_legacy", "kernel_blockless"]
@@ -87,6 +88,18 @@ def _a_run_lands_where_stepping_does(make, *tags) -> tuple:
     ran = _lands(make(), _run, *tags)
     assert ran == _lands(make(), _step, *tags)
     return ran
+
+
+def _a_run_lands_where_its_own_twin_does(make) -> int:
+    """*make*'s constant keeps what the function puts in it, so a twin here would share it."""
+    plc = _plc(make())
+    with fold_check.own_twin(plc) as compare:
+        _run(plc)
+        twin = _plc(make())
+        for _ in range(SCANS):
+            twin.step()
+        compare(twin)
+    return plc.state.tags["B"]
 
 
 def _generate(program):
@@ -253,14 +266,14 @@ class TestConstants:
             return _called(grows, ins={"v": A, "memo": []})
 
         assert not _has_a_kernel(make())
-        assert _a_run_lands_where_stepping_does(make, B) == (SCANS,)
+        assert _a_run_lands_where_its_own_twin_does(make) == SCANS
 
     def test_a_dict_steps_in_a_run_and_grows_on_every_scan(self):
         def make():
             return _called(counts, ins={"v": A, "seen": {}})
 
         assert not _has_a_kernel(make())
-        assert _a_run_lands_where_stepping_does(make, B) == (SCANS,)
+        assert _a_run_lands_where_its_own_twin_does(make) == SCANS
 
     @pytest.mark.parametrize("go", [_run, _step], ids=["run", "step"])
     def test_a_table_changed_between_runs_is_seen(self, go):
@@ -282,7 +295,7 @@ class TestConstants:
             return _called(bumps, ins={"v": _Thing()})
 
         assert not _has_a_kernel(make())
-        assert _a_run_lands_where_stepping_does(make, B) == (SCANS,)
+        assert _a_run_lands_where_its_own_twin_does(make) == SCANS
 
     @pytest.mark.parametrize("engine", IN_PROCESS)
     def test_an_object_whose_repr_is_a_number_is_no_number(self, engine, monkeypatch):
