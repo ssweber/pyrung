@@ -100,6 +100,7 @@ def fine_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(scan_trace, "MIN_RUN_SCANS", 1)
     monkeypatch.setattr(scan_trace, "BURST_SIZES", BURSTS)
     monkeypatch.setattr(scan_trace, "STRICT_SELF_CHECK", True)
+    monkeypatch.setattr(scan_trace, "SELF_CHECK_OBSERVERS", [fold_check._note_self_check_mismatch])
 
 
 def _plc(program: Program, dt: float) -> PLC:

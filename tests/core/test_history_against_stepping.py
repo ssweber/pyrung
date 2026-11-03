@@ -547,19 +547,19 @@ def test_a_mutable_default_is_the_function_s_own_list(
 
     memo().clear()
     plc = build()
-    with fold_check.own_twin():
+    with fold_check.own_twin(plc) as compare:
         plc.run_until(Never, max_cycles=3000)
-    counted = plc.state.tags[Counted.name]
-    assert plc.state.scan_id == 3000
-    assert counted == 3000
-    assert len(memo()) == 3000
+        counted = plc.state.tags[Counted.name]
+        assert plc.state.scan_id == 3000
+        assert counted == 3000
+        assert len(memo()) == 3000
 
-    memo().clear()
-    twin = build()
-    for _ in range(3000):
-        twin.step()
-    assert twin.state.tags[Counted.name] == counted
-    fold_check._compare("compiled", plc.state.scan_id, plc.state, twin.state)
+        memo().clear()
+        twin = build()
+        for _ in range(3000):
+            twin.step()
+        assert twin.state.tags[Counted.name] == counted
+        compare(twin)
     assert plc._compiled_replay_supported_kernel() is None
 
 

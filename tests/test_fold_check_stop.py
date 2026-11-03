@@ -4,12 +4,27 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from pyrung import PLC, Bool, Int, Program, Real, Rung, calc, copy, latch, on_delay, out, rise
+from pyrung import (
+    PLC,
+    Bool,
+    Int,
+    Program,
+    Real,
+    Rung,
+    calc,
+    copy,
+    latch,
+    on_delay,
+    out,
+    rise,
+    run_function,
+)
 from pyrung.core import Timer, compiled_run, scan_trace
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Approach, Physical
@@ -355,6 +370,306 @@ def test_a_short_landing_a_predicate_cannot_judge_is_counted() -> None:
         "compiled", plc, _stepper(plc, 9), lambda _s: plc.state.tags["N"] >= 9, budget=20
     )
     assert fold_check.STATS["short landing not judged: no answer from the predicate"] == before + 1
+
+
+def test_a_long_short_landing_with_the_predicate_false_is_caught(monkeypatch) -> None:
+    monkeypatch.setattr(fold_check, "MAX_SCANS", 100)
+    plc = _plc()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="50 of 200 scans left and the stop predicate false"),
+    ):
+        fold_check._checked("compiled", plc, _stepper(plc, 150), lambda _s: False, budget=200)
+
+
+def test_a_long_short_landing_where_the_predicate_holds_passes(monkeypatch) -> None:
+    monkeypatch.setattr(fold_check, "MAX_SCANS", 100)
+    plc = _plc()
+    fold_check._checked(
+        "compiled", plc, _stepper(plc, 150), lambda s: s.tags["N"] >= 150, budget=200
+    )
+    assert plc.state.scan_id == 150
+
+
+def test_a_long_short_landing_with_no_answer_is_listed(monkeypatch) -> None:
+    monkeypatch.setattr(fold_check, "MAX_SCANS", 100)
+    plc = _plc()
+    reason = "short landing not judged: too long to step, no answer from the predicate"
+    before = fold_check.STATS[reason]
+    fold_check._checked(
+        "compiled", plc, _stepper(plc, 150), lambda _s: plc.state.tags["N"] >= 150, budget=200
+    )
+    assert fold_check.STATS[reason] == before + 1
+    assert reason + ", tests:" in "\n".join(fold_check.summary())
+
+
+# --- A run that raises is held to stepping's raise ----------------------------------------
+
+
+def _raises_at_1500(v):
+    if v >= 1500:
+        raise ValueError("boom")
+    return {"out": v}
+
+
+def _raising(function: Any = _raises_at_1500) -> PLC:
+    """On a timer and a count: lands in the loop, and raises once the count gets there."""
+    with Program(strict=False) as program:
+        with Rung(Go):
+            on_delay(Tm, 2000)
+        with Rung():
+            calc(Cnt + 1, Cnt)
+        with Rung():
+            run_function(function, ins={"v": Cnt}, outs={"out": Hr})
+    plc = PLC(program, dt=0.01)
+    plc.patch({"Go": True})
+    return plc
+
+
+def test_a_raised_run_is_compared_and_raises_on(installed) -> None:
+    fold_check.install()
+    before = fold_check.STATS["raised runs compared"]
+    plc = _raising()
+    with pytest.raises(ValueError, match="boom"):
+        plc.run_for(30.0)
+    assert plc.state.scan_id == 1499
+    assert fold_check.STATS["raised runs compared"] == before + 1
+
+
+def test_a_raised_run_landing_on_the_wrong_state_is_caught(installed, monkeypatch) -> None:
+    real = compiled_run._install
+
+    def scanned_past(plc, replay, state, tip):
+        return real(plc, replay, state.with_tags({"Cnt": state.tags["Cnt"] + 300}), tip)
+
+    monkeypatch.setattr(compiled_run, "_install", scanned_past)
+    fold_check.install()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="differs from stepping.*Cnt: folded"),
+    ):
+        _raising().run_for(30.0)
+
+
+def test_a_raise_stepping_does_not_make_is_caught(installed, monkeypatch) -> None:
+    real = compiled_run._run_compiled
+
+    def spurious(plc, kernel, budget, predicate):
+        real(plc, kernel, budget // 2, predicate)
+        raise RuntimeError("spurious kernel raise")
+
+    monkeypatch.setattr(compiled_run, "_run_compiled", spurious)
+    fold_check.install()
+    with fold_check.deliberate(), pytest.raises(FoldMismatch, match="stepping ran on"):
+        _timed().run_for(20.0)
+
+
+def test_another_exception_type_is_caught() -> None:
+    def raises_at_5(v):
+        if v >= 5:
+            raise ValueError("boom")
+        return {"out": v}
+
+    plc = _raising(raises_at_5)
+
+    def call() -> None:
+        for _ in range(4):
+            plc.step()
+        raise KeyError("not what stepping raises")
+
+    with fold_check.deliberate(), pytest.raises(FoldMismatch, match="stepping raised ValueError"):
+        fold_check._checked("compiled", plc, call, budget=10)
+
+
+def test_a_raise_from_the_predicate_on_the_landing_is_judged_there() -> None:
+    plc = _plc()
+
+    def predicate(state) -> bool:
+        if state.tags["N"] >= 5:
+            raise LookupError("no answer")
+        return False
+
+    def call() -> None:
+        for _ in range(5):
+            plc.step()
+        predicate(plc.state)
+
+    before = fold_check.STATS["raised runs compared"]
+    with pytest.raises(LookupError):
+        fold_check._checked("compiled", plc, call, predicate, budget=10)
+    assert fold_check.STATS["raised runs compared"] == before + 1
+
+
+def test_a_raise_before_any_scan_is_listed() -> None:
+    plc = _plc()
+
+    def call() -> None:
+        raise TypeError("bad argument")
+
+    reason = "raised run not judged: raised before any scan"
+    before = fold_check.STATS[reason]
+    with pytest.raises(TypeError):
+        fold_check._checked("compiled", plc, call, budget=10)
+    assert fold_check.STATS[reason] == before + 1
+    assert reason + ", tests:" in "\n".join(fold_check.summary())
+
+
+def test_stepping_raising_where_the_run_went_on_is_caught() -> None:
+    raising = [False]
+
+    def raises_when_told(v):
+        if raising[0]:
+            raise ValueError("boom")
+        return {"out": v}
+
+    plc = _raising(raises_when_told)
+
+    def call() -> None:
+        for _ in range(9):
+            plc.step()
+        raising[0] = True
+
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="stepping raised ValueError after scan 0"),
+    ):
+        fold_check._checked("run_until", plc, call)
+
+
+# --- own_twin() lets off one runner's twin, and nothing else ------------------------------
+
+
+def test_own_twin_still_holds_a_run_to_the_scans_asked(installed, monkeypatch) -> None:
+    monkeypatch.setattr(compiled_run, "_run_compiled", _short_of(100))
+    fold_check.install()
+    plc = _timed()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="asked for 2000 scans from scan 0, landed at 1900"),
+        fold_check.own_twin(plc),
+    ):
+        plc.run_for(20.0)
+
+
+def test_own_twin_leaves_other_runners_checked(installed, monkeypatch) -> None:
+    def stale(plc: PLC) -> None:
+        plc._state_tags_read_cache = {**plc._state.tags, "Cnt": -1}
+        plc._state_tags_read_cache_state = plc._state
+
+    fold_check.install()
+    plc = _timed()
+    other = _timed()
+    with fold_check.own_twin(plc) as compare:
+        plc.run_for(20.0)
+        twin = _timed()
+        for _ in range(2000):
+            twin.step()
+        compare(twin)
+        _after_install(monkeypatch, stale)
+        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="read mirror at scan"):
+            other.run_for(20.0)
+
+
+def test_own_twin_must_compare() -> None:
+    plc = _plc()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="never compared its run"),
+        fold_check.own_twin(plc),
+    ):
+        pass
+
+
+def test_own_twin_compare_sees_a_difference() -> None:
+    plc = _plc()
+    plc.run(3)
+    twin = _plc()
+    twin.run(3)
+    twin.patch({"N": 40})
+    twin.step()
+    plc.step()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="differs from stepping: N"),
+        fold_check.own_twin(plc) as compare,
+    ):
+        compare(twin)
+
+
+def test_own_twin_compare_sees_another_scan() -> None:
+    plc = _plc()
+    twin = _plc()
+    twin.step()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="run at scan 0, stepped at 1"),
+        fold_check.own_twin(plc) as compare,
+    ):
+        compare(twin)
+
+
+def test_own_twin_is_listed_in_the_summary() -> None:
+    plc = _plc()
+    with fold_check.own_twin(plc) as compare:
+        compare(plc)
+    assert "skipped: the test steps its own twin, tests:" in "\n".join(fold_check.summary())
+
+
+def test_the_tests_using_own_twin_are_these() -> None:
+    root = Path(__file__).parent
+    users = {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*.py")
+        if "own_twin(" in path.read_text(encoding="utf-8", errors="replace")
+    }
+    assert users == {
+        "core/test_history_against_stepping.py",
+        "fold_check.py",
+        "test_fold_check_stop.py",
+    }
+
+
+# --- deliberate() means one mismatch ------------------------------------------------------
+
+
+def test_deliberate_with_no_mismatch_fails() -> None:
+    before = len(fold_check.MISMATCHES)
+    with pytest.raises(FoldMismatch, match="expects one mismatch, this block had 0"):
+        with fold_check.deliberate():
+            pass
+    del fold_check.MISMATCHES[before:]
+
+
+def test_deliberate_declares_only_the_first_mismatch() -> None:
+    before, declared = len(fold_check.MISMATCHES), len(fold_check.DECLARED)
+    with pytest.raises(FoldMismatch, match="expects one mismatch, this block had 2"):
+        with fold_check.deliberate():
+            fold_check._mismatch("the one the test provoked")
+            fold_check._mismatch("a real one")
+    assert [m for _, m in fold_check.DECLARED[declared:]] == ["the one the test provoked"]
+    assert "a real one" in [m for _, m in fold_check.MISMATCHES[before:]]
+    del fold_check.MISMATCHES[before:]
+
+
+def test_deliberate_does_not_cover_another_thread() -> None:
+    before = len(fold_check.MISMATCHES)
+
+    def elsewhere() -> None:
+        fold_check._mismatch("from another thread")
+
+    with fold_check.deliberate():
+        thread = threading.Thread(target=elsewhere)
+        thread.start()
+        thread.join()
+        fold_check._mismatch("the one the test provoked")
+    assert [m for _, m in fold_check.MISMATCHES[before:]] == ["from another thread"]
+    del fold_check.MISMATCHES[before:]
+
+
+def test_deliberate_does_not_mask_what_escapes_it() -> None:
+    with pytest.raises(KeyError):
+        with fold_check.deliberate():
+            raise KeyError("the test's own failure")
 
 
 # --- The runner around the state ---------------------------------------------------------
