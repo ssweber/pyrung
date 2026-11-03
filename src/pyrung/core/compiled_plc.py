@@ -543,7 +543,8 @@ class CompiledPLC:
             blocks=self._kernel.blocks,
         )
         scan_ctx = cast(ScanContext, ctx)
-        self._system_runtime.on_scan_start(scan_ctx)
+        if not self._system_runtime.scan_start_is_quiet(self._kernel.tags, self._kernel.memory):
+            self._system_runtime.on_scan_start(scan_ctx)
 
         if self._kernel.memory.get("_dt") != self._dt:
             ctx.set_memory("_dt", self._dt)
@@ -568,7 +569,8 @@ class CompiledPLC:
         ctx.blocks_live = False
         self._flush_blocks_tracked(tracked)
 
-        self._system_runtime.on_scan_end(scan_ctx)
+        if not self._system_runtime.scan_end_is_quiet(self._kernel.tags, self._dt):
+            self._system_runtime.on_scan_end(scan_ctx)
         self._discover_new_commit_tags()
 
         next_state = SystemState(

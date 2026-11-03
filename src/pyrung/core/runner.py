@@ -4716,7 +4716,11 @@ class PLC:
             # into this same root execution body.
             synthesis_observer.attach(ctx)
 
-        self._system_runtime.on_scan_start(ctx)
+        # An attached observer records what the hook reads, so it runs the hook.
+        if synthesis_observer is not None or not self._system_runtime.scan_start_is_quiet(
+            ctx._state_tags_read, ctx._state_memory
+        ):
+            self._system_runtime.on_scan_start(ctx)
 
         dt = self._calculate_dt()
         if self._state.memory.get("_dt", _SENTINEL) != dt:
