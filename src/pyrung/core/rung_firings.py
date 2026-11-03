@@ -14,7 +14,7 @@ replay only the selected kernel scans when they need that evidence.
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
@@ -139,18 +139,8 @@ class RungFiringTimelines(Generic[K]):
                 self._partly_unknown.add(key)
             if key in self._unknown_keys or value is _UNKNOWN_VALUE:
                 _append_unknown(timeline, scan_id)
-            else:
-                increased = _append_value(timeline, scan_id, value)
-                if increased and len(timeline) >= _TRACK_DISTINCT_AFTER:
-                    distinct = self._distinct_values.get(key)
-                    if distinct is None:
-                        distinct = _known_distinct_values(timeline)
-                        self._distinct_values[key] = distinct
-                    elif not any(_equal(value, prior) for prior in distinct):
-                        distinct.append(value)
-                    if len(distinct) >= _VALUE_VARIETY_THRESHOLD:
-                        self._unknown_keys.add(key)
-                        self._distinct_values.pop(key, None)
+            elif _append_value(timeline, scan_id, value):
+                self._note_new_value(key, timeline, value)
             if tag_name in varied:
                 _append_scan_range(self._varied_ranges.setdefault(key, []), scan_id)
 
@@ -190,15 +180,118 @@ class RungFiringTimelines(Generic[K]):
             key = (rung_index, tag)
             timeline = self._value_timelines[key]
             tail = timeline[-1]
-            if tag in writes and key not in self._unknown_keys:
-                if not _equal(_value_at(tail, last), value_of(tag, count - 1)):
-                    # This tail cannot carry it.  Only a value the arithmetic would not reach.
+            if tag in writes:
+                final = _UNKNOWN_VALUE if key in self._unknown_keys else value_of(tag, count - 1)
+                if not _equal(_value_at(tail, last), final):
+                    # This tail cannot carry it: a value the arithmetic would not reach, a NaN,
+                    # or a column that went unknown on the last scan of the head.
                     for offset in range(head, count):
-                        _append_value(timeline, first_scan_id + offset, value_of(tag, offset))
+                        self._append_written(
+                            key, timeline, first_scan_id + offset, value_of(tag, offset)
+                        )
                     continue
             timeline[-1] = ValueRange(tail.start_scan_id, last, tail.payload)
         for tag in varied:
             _extend_scan_range(self._varied_ranges[(rung_index, tag)], last)
+
+    def tags_of(self, rung_index: K) -> Iterable[str]:
+        """Every tag this rung has written."""
+        return self._tags_by_rung.get(rung_index, ())
+
+    def append_fired_run(self, rung_index: K, first_scan_id: int, last_scan_id: int) -> None:
+        """The firing half of :meth:`append`, for each scan of the range."""
+        self._tags_by_rung.setdefault(rung_index, set())
+        ranges = self._fired_ranges.setdefault(rung_index, [])
+        if ranges and ranges[-1].end_scan_id == first_scan_id - 1:
+            _extend_scan_range(ranges, last_scan_id)
+        else:
+            ranges.append(ScanRange(first_scan_id, last_scan_id))
+
+    def append_tag_run(
+        self,
+        rung_index: K,
+        tag: str,
+        first_scan_id: int,
+        last_scan_id: int,
+        value: Any,
+        delta: int | None = None,
+        varied: bool = False,
+    ) -> None:
+        """One tag's half of :meth:`append`, for each scan of the range.
+
+        *value* is what it reads on the first scan, ``_MISSING_WRITE`` if the rung does not write
+        it there, and it moves by *delta* each scan.  A rung's tags ask nothing of each other, so
+        they may go in in any order, and its firings with :meth:`append_fired_run`.
+        """
+        key = (rung_index, tag)
+        if value is _MISSING_WRITE and tag not in self._tags_by_rung.get(rung_index, ()):
+            return  # A tag has no column until the rung first writes it.
+        count = last_scan_id - first_scan_id + 1
+        head = min(count, 3)
+        if value is _MISSING_WRITE:
+            timeline = self._value_timelines[key]
+            for offset in range(head):
+                _append_value(timeline, first_scan_id + offset, _MISSING_WRITE)
+        else:
+            self._tags_by_rung.setdefault(rung_index, set()).add(tag)
+            self._writers_by_tag.setdefault(tag, set()).add(rung_index)
+            timeline = self._value_timelines.setdefault(key, [])
+            if value is _UNKNOWN_VALUE:
+                self._partly_unknown.add(key)
+            for offset in range(head):
+                self._append_written(
+                    key,
+                    timeline,
+                    first_scan_id + offset,
+                    value if delta is None else value + delta * offset,
+                )
+            if varied:
+                ranges = self._varied_ranges.setdefault(key, [])
+                for offset in range(head):
+                    _append_scan_range(ranges, first_scan_id + offset)
+        if count <= head:
+            return
+        if varied and value is not _MISSING_WRITE:
+            _extend_scan_range(self._varied_ranges[key], last_scan_id)
+        tail = timeline[-1]
+        if value is not _MISSING_WRITE:
+            if key in self._unknown_keys:
+                final = _UNKNOWN_VALUE
+            else:
+                final = value if delta is None else value + delta * (count - 1)
+            if not _equal(_value_at(tail, last_scan_id), final):
+                # This tail cannot carry it: a value the arithmetic would not reach, a NaN, or a
+                # column that went unknown on the last scan of the head.
+                for offset in range(head, count):
+                    self._append_written(
+                        key,
+                        timeline,
+                        first_scan_id + offset,
+                        value if delta is None else value + delta * offset,
+                    )
+                return
+        timeline[-1] = ValueRange(tail.start_scan_id, last_scan_id, tail.payload)
+
+    def _append_written(
+        self, key: tuple[K, str], timeline: list[ValueRange], scan_id: int, value: Any
+    ) -> None:
+        if key in self._unknown_keys or value is _UNKNOWN_VALUE:
+            _append_unknown(timeline, scan_id)
+        elif _append_value(timeline, scan_id, value):
+            self._note_new_value(key, timeline, value)
+
+    def _note_new_value(self, key: tuple[K, str], timeline: list[ValueRange], value: Any) -> None:
+        if len(timeline) < _TRACK_DISTINCT_AFTER:
+            return
+        distinct = self._distinct_values.get(key)
+        if distinct is None:
+            distinct = _known_distinct_values(timeline)
+            self._distinct_values[key] = distinct
+        elif not any(_equal(value, prior) for prior in distinct):
+            distinct.append(value)
+        if len(distinct) >= _VALUE_VARIETY_THRESHOLD:
+            self._unknown_keys.add(key)
+            self._distinct_values.pop(key, None)
 
     def replace_range(self, settled: RungFiringTimelines[K], first: int, last: int) -> None:
         """Take scans *first*..*last* from *settled*, an index of them made later."""

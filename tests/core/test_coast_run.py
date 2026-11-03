@@ -6,6 +6,9 @@ coast runs next to a stepped twin that must match it after every loop firing.
 
 from __future__ import annotations
 
+import math
+import random
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -31,7 +34,8 @@ from pyrung.core import (
     scan_trace,
     system,
 )
-from pyrung.core.coast_run import coast_until, memo_of
+from pyrung.core.coast_run import _record_columns, _Recording, coast_until, memo_of
+from pyrung.core.rung_firings import _UNKNOWN_VALUE, RungFiringTimelines
 from pyrung.core.tag import Dint
 from tests.fold_check import compare_records
 
@@ -335,6 +339,146 @@ def _set_and_reset_inside_a_wait() -> None:
         latch(Hit)
     with Rung(InsideT.Acc == 20_000):
         reset(Hit)
+
+
+def _columns(timelines: RungFiringTimelines[str]) -> str:
+    # By repr: a NaN in a column is equal to nothing, itself included.
+    return repr(sorted(timelines._value_timelines.items()))
+
+
+class _FakePath:
+    def __init__(self, recordings: dict[str, _Recording]) -> None:
+        self.capture = SimpleNamespace(recordings=(recordings,))
+
+
+def _random_recording(rng: random.Random) -> _Recording:
+    tags = rng.sample(["A", "B", "C", "D", "E"], rng.randint(0, 5))
+    settled: dict[str, Any] = {}
+    from_ends: list[tuple[str, int | None, bool]] = []
+    varied = frozenset(tag for tag in tags if rng.random() < 0.2)
+    for tag in tags:
+        kind = rng.random()
+        if kind < 0.3:
+            from_ends.append((tag, rng.choice([1, -1, 2, 0, None]), tag in varied))
+        elif kind < 0.4:
+            settled[tag] = _UNKNOWN_VALUE
+        else:
+            settled[tag] = rng.choice([0, 1, 1.0, True, False, "x", math.nan])
+    return _Recording(settled, tuple(from_ends), varied)
+
+
+class TestRecordedRuns:
+    """A stretch's records land as appending every scan one by one would."""
+
+    @pytest.mark.parametrize("seed", range(60))
+    def test_runs_equal_appending_each_scan(self, seed: int) -> None:
+        rng = random.Random(seed)
+        paths = [
+            _FakePath(
+                {
+                    key: _random_recording(rng)
+                    for key in ("rung0", "rung1", "rung2")
+                    if rng.random() < 0.7
+                }
+            )
+            for _ in range(rng.randint(1, 4))
+        ]
+        runs: RungFiringTimelines[str] = RungFiringTimelines()
+        scans: RungFiringTimelines[str] = RungFiringTimelines()
+        current = {"A": 5, "B": 7, "C": 100, "D": 0, "E": 2}
+        scan = 1
+        batch: list[SimpleNamespace] = []
+        for _ in range(rng.randint(1, 80)):
+            path = rng.choice(paths)
+            count = rng.choice([1, 1, 1, 2, 3, 4, 7, 30])
+            if rng.random() < 0.05:
+                current[rng.choice("ABCDE")] += rng.randint(-3, 3)
+            ends = {}
+            for recording in path.capture.recordings[0].values():
+                for tag, delta, _varied in recording.from_ends:
+                    ends[tag] = current[tag] + (delta or 0) * (count - 1)
+            # Deltas from two rungs on one tag disagree, as no path's would: each rung has its own.
+            for key, recording in path.capture.recordings[0].items():
+                for offset in range(count):
+                    writes = dict(recording.settled)
+                    for tag, delta, _varied in recording.from_ends:
+                        writes[tag] = (
+                            ends[tag] if delta is None else ends[tag] - delta * (count - 1 - offset)
+                        )
+                    scans.append(key, scan + offset, writes, recording.varied)
+            batch.append(SimpleNamespace(path=path, first=scan, count=count, ends=ends))
+            current.update(ends)
+            scan += count
+            if rng.random() < 0.1:
+                scan += rng.randint(1, 3)
+            if rng.random() < 0.1:
+                _record_columns(runs, batch, 0, frozenset())
+                batch = []
+        _record_columns(runs, batch, 0, frozenset())
+
+        assert runs._fired_ranges == scans._fired_ranges
+        assert _columns(runs) == _columns(scans)
+        assert runs._varied_ranges == scans._varied_ranges
+        assert runs._tags_by_rung == scans._tags_by_rung
+        assert runs._writers_by_tag == scans._writers_by_tag
+        assert runs._unknown_keys == scans._unknown_keys
+        assert runs._partly_unknown == scans._partly_unknown
+
+    def test_a_tag_of_many_values_goes_unknown_as_it_would(self) -> None:
+        path = _FakePath({"rung": _Recording({}, (("A", None, False),), frozenset())})
+        runs: RungFiringTimelines[str] = RungFiringTimelines()
+        scans: RungFiringTimelines[str] = RungFiringTimelines()
+        segments = []
+        for scan in range(1, 400):
+            value = scan * scan % 97
+            scans.append("rung", scan, {"A": value})
+            segments.append(SimpleNamespace(path=path, first=scan, count=1, ends={"A": value}))
+        _record_columns(runs, segments, 0, frozenset())
+        assert runs._unknown_keys == scans._unknown_keys
+        assert runs._value_timelines == scans._value_timelines
+
+    def test_a_column_that_goes_unknown_in_a_head_stays_unknown(self) -> None:
+        repeated: RungFiringTimelines[str] = RungFiringTimelines()
+        tag_run: RungFiringTimelines[str] = RungFiringTimelines()
+        scans: RungFiringTimelines[str] = RungFiringTimelines()
+        scan = 1
+        for value in range(0, 1200, 2):
+            for timelines in (repeated, tag_run, scans):
+                timelines.append("rung", scan, {"A": value * value})
+            scan += 1
+            if scans._unknown_keys:
+                break
+        else:
+            pytest.fail("no column went unknown")
+        repeated.append_repeated("rung", scan, 9, {"A": 1})
+        tag_run.append_fired_run("rung", scan, scan + 8)
+        tag_run.append_tag_run("rung", "A", scan, scan + 8, 1)
+        for offset in range(9):
+            scans.append("rung", scan + offset, {"A": 1})
+        assert repeated._value_timelines == scans._value_timelines
+        assert tag_run._value_timelines == scans._value_timelines
+
+    def test_a_cold_tag_costs_a_run_not_a_scan(self) -> None:
+        # One rung, its one tag moving and its others still: a million scans in a few calls.
+        recording = _Recording({"Still": 3}, (("Acc", 1, False),), frozenset())
+        path = _FakePath({"rung": recording})
+        calls = {"tag": 0}
+
+        class Counting(RungFiringTimelines[str]):
+            __slots__ = ()
+
+            def append_tag_run(self, *args: Any, **kwargs: Any) -> None:
+                calls["tag"] += 1
+                super().append_tag_run(*args, **kwargs)
+
+        runs = Counting()
+        segments = [
+            SimpleNamespace(path=path, first=scan, count=1, ends={"Acc": scan})
+            for scan in range(1, 5001)
+        ]
+        _record_columns(runs, segments, 0, frozenset())
+        assert calls["tag"] == 2
+        assert dict(runs.rung_writes_at("rung", 5000)) == {"Still": 3, "Acc": 5000}
 
 
 class TestARungThatFiresInsideARange:

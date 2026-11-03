@@ -55,6 +55,8 @@ from pyrung.core import compiled_run, scan_trace
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.compiled_run import _BoundsWatch, _install, _kernel_cannot_say_what_it_adds
 from pyrung.core.read_trace import _FIELD_READ, _READ_ALL, _traced_call
+from pyrung.core.rung_firings import _MISSING_WRITE, _UNKNOWN_VALUE
+from pyrung.core.rung_firings import _equal as _same_value
 from pyrung.core.scan_trace import (
     _CLASSIFIED_SYSTEM_TAGS,
     DECLINING_SYSTEM_TAGS,
@@ -82,6 +84,8 @@ MAX_KERNELS = 12
 # Paths a kernel keeps, least recently fired out first.  A path holds its trace's
 # operations and each loop written from them.
 MAX_PATHS = 256
+# Columns kept by content in one kernel, so two paths that record the same are seen to agree.
+MAX_INTERNED = 4096
 MAX_LOOPS_PER_PATH = 8
 MAX_SUCCESSORS = 4
 # Interpreted scans between attempts at a stretch: at entry and after a good stretch,
@@ -101,12 +105,26 @@ class _Loop:
 
 
 @dataclass(eq=False)
+class _Recording:
+    """What a path's scans record in one rung's column."""
+
+    # What every scan of the path says, a tag no one capture can speak for reading Unknown.
+    settled: dict[str, Any]
+    # A segment's end says the rest: (tag, how far it moves a scan or None if held, varied).
+    from_ends: tuple[tuple[str, int | None, bool], ...]
+    varied: frozenset[str]
+    # What a rung's column has to change, coming here from another recording of it.
+    changes: dict[_Recording, list[tuple[str, Any, bool]]] = field(default_factory=dict)
+
+
+@dataclass(eq=False)
 class _Capture:
     """What one interpreted scan of a path recorded, by rung and by subroutine rung."""
 
     columns: tuple[dict[Any, tuple[dict[str, Any], frozenset[str]]], ...]
     # Those with nothing moving in them, which every scan of the path repeats.
     settled: tuple[dict[Any, tuple[dict[str, Any], frozenset[str]]], ...]
+    recordings: tuple[dict[Any, _Recording], ...]
 
 
 @dataclass(eq=False)
@@ -138,6 +156,8 @@ class _KernelPaths:
     off: str | None = None
     # One object per distinct column, so paths that agree share it and compare by identity.
     interned: dict[Any, tuple[dict[str, Any], frozenset[str]]] = field(default_factory=dict)
+    # Likewise a column as a path records it, so scans in a row that say the same are seen to.
+    recordings: dict[Any, _Recording] = field(default_factory=dict)
     # The columns a set of paths have in common, as a stretch moves between them.
     common: dict[frozenset[_Path], tuple[frozenset[Any], ...]] = field(default_factory=dict)
 
@@ -295,48 +315,58 @@ def _capture_of(plc: PLC, path: _Path, kernel_paths: _KernelPaths, scan_id: int)
     interned = kernel_paths.interned
     columns = []
     settled = []
+    recordings = []
     for timelines in (plc._rung_firing_timelines, plc._node_firing_timelines):
         these: dict[Any, tuple[dict[str, Any], frozenset[str]]] = {}
         still: dict[Any, tuple[dict[str, Any], frozenset[str]]] = {}
-        for key, recorded in timelines.at(scan_id).items():
-            writes = dict(recorded)
+        recorded: dict[Any, _Recording] = {}
+        for key, fired in timelines.at(scan_id).items():
+            writes = dict(fired)
             varied = frozenset(tag for tag in writes if timelines.varied_on(key, tag, scan_id))
             # By repr, or 1 and True would be one column.
             identity = (key, repr(sorted(writes.items())), varied)
             column = interned.setdefault(identity, (writes, varied))
             these[key] = column
+            recorded[key] = _recording_of(path, column, kernel_paths)
             if not (moving & writes.keys()):
                 still[key] = column
         columns.append(these)
         settled.append(still)
-    return _Capture(tuple(columns), tuple(settled))
+        recordings.append(recorded)
+    return _Capture(tuple(columns), tuple(settled), tuple(recordings))
 
 
-def _column(
-    path: _Path, column: tuple[dict[str, Any], frozenset[str]], ends: dict[str, Any], count: int
-) -> tuple[dict[str, Any], frozenset[str], dict[str, int], set[str]]:
-    """What one rung's capture says over *count* scans: values, varied, deltas, unknowns."""
+def _recording_of(
+    path: _Path, column: tuple[dict[str, Any], frozenset[str]], kernel_paths: _KernelPaths
+) -> _Recording:
+    """How one rung's capture speaks for every scan of its path."""
     writes, varied = column
     deltas = dict(path.moves.moved)
     held = set(path.moves.held)
-    values = dict(writes)
-    moving: dict[str, int] = {}
-    unknown: set[str] = set()
-    for tag in writes:
+    ending = {name for name, _key in path.ending}
+    settled: dict[str, Any] = {}
+    from_ends: list[tuple[str, int | None, bool]] = []
+    for tag, value in writes.items():
         total, symbolic = path.stores.get(tag, (0, 0))
         if not symbolic:
-            continue  # every attempt on this path is a constant
-        if total == 1 and tag in deltas and tag in ends:
-            values[tag] = ends[tag] - deltas[tag] * (count - 1)
-            moving[tag] = deltas[tag]
-        elif total == 1 and tag in held and tag in ends:
-            values[tag] = ends[tag]
+            settled[tag] = value  # every attempt on this path is a constant
+        elif total == 1 and tag in deltas and tag in ending:
+            from_ends.append((tag, deltas[tag], tag in varied))
+        elif total == 1 and tag in held and tag in ending:
+            from_ends.append((tag, None, tag in varied))
         else:
             # Which attempt a rung made, or its value on a later scan, no one capture says.
-            unknown.add(tag)
+            settled[tag] = _UNKNOWN_VALUE
             if total > 1:
                 varied |= {tag}
-    return values, varied, moving, unknown
+    identity = (id(writes), varied, tuple(settled.items()), tuple(from_ends))
+    found = kernel_paths.recordings.get(identity)
+    if found is None:
+        if len(kernel_paths.recordings) >= MAX_INTERNED:
+            kernel_paths.recordings.clear()  # A run breaks where it need not, and nothing else.
+        found = _Recording(settled, tuple(from_ends), varied)
+        kernel_paths.recordings[identity] = found
+    return found
 
 
 def _common_columns(
@@ -384,29 +414,185 @@ def _record_segments(plc: PLC, segments: list[_Segment], kernel_paths: _KernelPa
         for key in here:
             writes, varied = first_capture.columns[level][key]
             timelines.append_repeated(key, start, total, writes, varied)
-        for segment in segments:
-            capture = segment.path.capture
+        _record_columns(timelines, segments, level, here)
+    _record_committed(plc._committed_tag_timelines, segments)
+
+
+class _ColumnRuns:
+    """One rung's column while a stretch goes in: when it has fired, and each tag's run."""
+
+    __slots__ = ("first", "last", "recording", "runs")
+
+    def __init__(self) -> None:
+        self.first = 0
+        self.last = 0
+        self.recording: _Recording | None = None
+        # tag -> [value on its first scan, delta, its first scan, varied].  A run goes on until
+        # something says otherwise, so a tag no path moves is looked at only when it changes.
+        self.runs: dict[str, list[Any]] = {}
+
+
+def _record_columns(
+    timelines: Any, segments: list[_Segment], level: int, common: frozenset[Any]
+) -> None:
+    """The rungs some paths of a stretch fire and others do not, or fire differently.
+
+    Under a bang-bang hold a path changes nearly every scan while nearly every tag does not.
+    Each tag of each column keeps a run, and a segment touches only the tags it moves or its
+    recording changes.  A run is one :meth:`~RungFiringTimelines.append_tag_run`, which lands
+    as appending its scans one by one would, and columns are independent of each other.
+    """
+    columns_of: dict[_Path, list[tuple[Any, _Recording]]] = {}
+    columns: dict[Any, _ColumnRuns] = {}
+
+    def finish(key: Any, column: _ColumnRuns) -> None:
+        timelines.append_fired_run(key, column.first, column.last)
+        for tag, (value, delta, first, varied) in column.runs.items():
+            timelines.append_tag_run(key, tag, first, column.last, value, delta, varied)
+        column.runs.clear()
+
+    for segment in segments:
+        path = segment.path
+        fires = columns_of.get(path)
+        if fires is None:
+            capture = path.capture
             assert capture is not None
-            for key, column in capture.columns[level].items():
-                if key in here:
-                    continue
-                values, varied, deltas, unknown = _column(
-                    segment.path, column, segment.ends, segment.count
-                )
-                timelines.append_repeated(
-                    key, segment.first, segment.count, values, varied, deltas, unknown
-                )
-    committed = plc._committed_tag_timelines
+            fires = columns_of[path] = [
+                (key, recording)
+                for key, recording in capture.recordings[level].items()
+                if key not in common
+            ]
+        first = segment.first
+        count = segment.count
+        last = first + count - 1
+        ends = segment.ends
+        for key, recording in fires:
+            column = columns.get(key)
+            if column is None:
+                column = columns[key] = _ColumnRuns()
+                column.first = first
+            elif column.last != first - 1:
+                finish(key, column)
+                column.first = first
+                column.recording = None
+            before = column.recording
+            runs = column.runs
+            if before is not recording:
+                if before is None:
+                    changes = [
+                        (tag, value, tag in recording.varied)
+                        for tag, value in recording.settled.items()
+                    ]
+                    # Its next firing says a tag this rung once wrote and now does not.
+                    written = {tag for tag, _delta, _varied in recording.from_ends}
+                    changes += [
+                        (tag, _MISSING_WRITE, False)
+                        for tag in timelines.tags_of(key)
+                        if tag not in recording.settled and tag not in written
+                    ]
+                else:
+                    changes = recording.changes.get(before)
+                    if changes is None:
+                        changes = _changes_between(before, recording)
+                        if len(recording.changes) >= MAX_PATHS:
+                            recording.changes.clear()
+                        recording.changes[before] = changes
+                for tag, value, varied in changes:
+                    run = runs.get(tag)
+                    if run is not None:
+                        timelines.append_tag_run(
+                            key, tag, run[2], column.last, run[0], run[1], run[3]
+                        )
+                    runs[tag] = [value, None, first, varied]
+                column.recording = recording
+            for tag, delta, varied in recording.from_ends:
+                value = ends[tag]
+                if delta is not None:
+                    value -= delta * (count - 1)
+                run = runs.get(tag)
+                if run is not None:
+                    if run[1] == delta and run[3] == varied:
+                        if delta is None:
+                            if _same_value(run[0], value):
+                                continue
+                        elif type(value) is int and run[0] + delta * (first - run[2]) == value:
+                            continue
+                    timelines.append_tag_run(key, tag, run[2], column.last, run[0], run[1], run[3])
+                runs[tag] = [value, delta, first, varied]
+            column.last = last
+    for key, column in columns.items():
+        finish(key, column)
+
+
+def _changes_between(before: _Recording, after: _Recording) -> list[tuple[str, Any, bool]]:
+    """What a column's tags go to when it goes from *before* to *after*."""
+    changes: list[tuple[str, Any, bool]] = []
+    for tag, value in after.settled.items():
+        varied = tag in after.varied
+        if (
+            tag not in before.settled
+            or varied != (tag in before.varied)
+            or not _same_value(before.settled[tag], value)
+        ):
+            changes.append((tag, value, varied))
+    written = set(after.settled)
+    written.update(tag for tag, _delta, _varied in after.from_ends)
+    for tag in before.settled:
+        if tag not in written:
+            changes.append((tag, _MISSING_WRITE, False))
+    for tag, _delta, _varied in before.from_ends:
+        if tag not in written:
+            changes.append((tag, _MISSING_WRITE, False))
+    return changes
+
+
+def _record_committed(committed: Any, segments: list[_Segment]) -> None:
+    """What each tag committed.  A tag moving on one line goes in as one run."""
+    # A run is [delta, base, first, last]; a delta of None is a run nothing can say.
+    runs: dict[str, list[Any]] = {}
+
+    def flush(name: str, run: list[Any]) -> None:
+        delta, base, first, last = run
+        if delta is None:
+            committed.append_repeated(name, first, last - first + 1, {name: 0.0}, unknown={name})
+        else:
+            committed.append_repeated(
+                name, first, last - first + 1, {name: base}, deltas={name: delta}
+            )
+
     for segment in segments:
         moves = segment.path.moves
         first, count, ends = segment.first, segment.count, segment.ends
+        last = first + count - 1
         for name, delta in moves.moved:
             base = ends[name] - delta * (count - 1)
-            committed.append_repeated(name, first, count, {name: base}, deltas={name: delta})
+            run = runs.get(name)
+            if run is not None:
+                if (
+                    run[0] == delta
+                    and run[3] == first - 1
+                    and type(base) is int
+                    and run[1] + delta * (first - run[2]) == base
+                ):
+                    run[3] = last
+                    continue
+                flush(name, run)
+            runs[name] = [delta, base, first, last]
         for name in moves.free:
-            committed.append_repeated(name, first, count, {name: 0.0}, unknown={name})
+            run = runs.get(name)
+            if run is not None:
+                if run[0] is None and run[3] == first - 1:
+                    run[3] = last
+                    continue
+                flush(name, run)
+            runs[name] = [None, 0.0, first, last]
         for name, _before, after in moves.flips:
+            run = runs.pop(name, None)
+            if run is not None:
+                flush(name, run)
             committed.append(name, first, {name: after})
+    for name, run in runs.items():
+        flush(name, run)
 
 
 def _note_successor(first: _Path, then: _Path) -> None:
