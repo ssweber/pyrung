@@ -104,6 +104,9 @@ def fine_loop(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _plc(program: Program, dt: float) -> PLC:
     plc = PLC(program, dt=dt)
+    # From construction too: the log keeps the base a set_rtc() replaced, and two
+    # runners built apart would differ there by the microseconds between them.
+    plc._set_rtc_internal(RTC_START, 0.0)
     plc.set_rtc(RTC_START)
     return plc
 
@@ -1014,7 +1017,7 @@ def test_self_check_mismatch_fails_loudly_under_strict(
     wrong = dict(scan_trace._BINARY_OPERATORS)
     wrong[ast.Add] = ("-", wrong[ast.Add][1])
     monkeypatch.setattr(scan_trace, "_BINARY_OPERATORS", wrong)
-    with pytest.raises(SelfCheckMismatch):
+    with fold_check.deliberate(), pytest.raises(SelfCheckMismatch):
         _plc(_timer_program(), 0.01).run_for(1.0)
 
 
@@ -1030,8 +1033,9 @@ def test_self_check_mismatch_declines_the_rest_of_the_run(
     plc = _plc(program, 0.01)
     twin = _plc(program, 0.01)
     before = Counter(scan_trace.TOTALS)
-    plc.run_for(1.0)
-    twin.run(plc.state.scan_id)
+    with fold_check.deliberate():
+        plc.run_for(1.0)
+        twin.run(plc.state.scan_id)
     _assert_equal(plc.state, twin.state)
     assert scan_trace.TOTALS["self check mismatches"] == before["self check mismatches"] + 1
     assert scan_trace.TOTALS["loop scans"] == before["loop scans"]
@@ -1044,7 +1048,7 @@ def test_lockstep_bites_when_guards_are_removed(
     the comparison between firings has to catch it.  If this stops failing, the
     corpus above proves nothing."""
     monkeypatch.setattr(scan_trace._Tracer, "_guard", lambda *_args, **_kwargs: None)
-    with pytest.raises(AssertionError, match="differs from stepping"):
+    with fold_check.deliberate(), pytest.raises(AssertionError, match="differs from stepping"):
         _lockstep(_build(_corpus_sequencer), [(8.0, {})])
 
 
@@ -1232,6 +1236,32 @@ def test_unknown_forms_decline(body: list[str], reason: str) -> None:
     parsed, replay = _replay_stub(source, A=1)
     with pytest.raises(Decline, match=reason):
         build_trace(parsed, replay, set(), None, {})
+
+
+@pytest.mark.parametrize(
+    "tags", [{"B": 0}, {"A": 1}, {}], ids=["read key gone", "written key gone", "both gone"]
+)
+def test_a_loop_handed_containers_that_lost_a_key_runs_no_scan(tags: dict[str, int]) -> None:
+    """The real scan raises or adds the key: the loop must leave that to it, untouched."""
+    source = _step_source("x = tags['A']", "tags['A'] = x + 1", "tags['B'] = x")
+    parsed, replay = _replay_stub(source, A=1, B=0)
+    trace = build_trace(parsed, replay, {("tags", "A"), ("tags", "B")}, None, {})
+    assert trace is not None
+    before = dict(tags)
+    assert trace.loop(tags, {}, {}, 0.0, 0.01, 5, None) == (0, 0.0)
+    assert tags == before
+
+
+def test_a_loop_with_every_key_runs_its_scans() -> None:
+    """The control of the one above."""
+    source = _step_source("x = tags['A']", "tags['A'] = x + 1", "tags['B'] = x")
+    parsed, replay = _replay_stub(source, A=1, B=0)
+    trace = build_trace(parsed, replay, {("tags", "A"), ("tags", "B")}, None, {})
+    assert trace is not None
+    tags = {"A": 1, "B": 0}
+    used, _ts = trace.loop(tags, {}, {}, 0.0, 0.01, 5, None)
+    assert used == 5
+    assert tags == {"A": 6, "B": 5}
 
 
 def test_a_moving_value_inside_a_container_is_not_lost() -> None:

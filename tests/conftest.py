@@ -606,12 +606,28 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):  # noqa
         item.rep_call = rep  # type: ignore[attr-defined]
 
 
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    if session.config.getoption("fold_check", default=False) and exitstatus == 0:
-        from tests import fold_check
+@pytest.fixture(autouse=True)
+def _a_fold_mismatch_fails_its_test(request: pytest.FixtureRequest) -> Any:
+    """Name the test that met a mismatch, even if something on the way out caught it."""
+    module = sys.modules.get("tests.fold_check")
+    before = 0 if module is None else len(module.undeclared())
+    yield
+    module = sys.modules.get("tests.fold_check")
+    if module is None:
+        return
+    found = module.undeclared()[before:]
+    call = getattr(request.node, "rep_call", None)
+    if found and (call is None or not call.failed):
+        pytest.fail(f"a fold mismatch was caught and hidden: {found[0][1]}", pytrace=False)
 
-        if fold_check.vacuous() is not None:
-            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    fold_check = sys.modules.get("tests.fold_check")
+    if fold_check is None or exitstatus != 0:
+        return
+    vacuous = session.config.getoption("fold_check", default=False) and fold_check.vacuous()
+    if fold_check.undeclared() or vacuous:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: pytest.Config) -> None:

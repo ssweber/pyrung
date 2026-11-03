@@ -428,7 +428,7 @@ def _reads_a_dunder(value: int) -> dict[str, int]:
 
 
 def _names_a_dunder_in_a_format(value: int) -> dict[str, int]:
-    return {"out": value + len("{0.__class__}".format(value))}
+    return {"out": value + len(f"{value.__class__}")}
 
 
 def _walks_a_frame(value: int) -> dict[str, int]:
@@ -547,7 +547,8 @@ def test_a_mutable_default_is_the_function_s_own_list(
 
     memo().clear()
     plc = build()
-    plc.run_until(Never, max_cycles=3000)
+    with fold_check.own_twin():
+        plc.run_until(Never, max_cycles=3000)
     counted = plc.state.tags[Counted.name]
     assert plc.state.scan_id == 3000
     assert counted == 3000

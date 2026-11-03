@@ -29,9 +29,14 @@ than fixed-step.  A compiled run longer than ``FOLD_CHECK_MAX_SCANS`` scans (def
 200000) is compared at its landing with real compiled scans, and its loop scans
 counted apart from those compared scan by scan.
 
-The summary prints every mismatch of the session with its test and the differing
-fields, since tests that provoke one on purpose catch it and a bare count could
-hide a real one among them.
+A compiled run is also held to what was asked of it: it lands on the scans asked for,
+or short of them only where stepping's stop predicate holds.  The runner around the state
+is compared too, its read mirror against its own state and a parked playhead included.
+
+A mismatch fails the test that met it and the session, whether or not the test or the
+code under it caught the exception (an ``except Exception`` on the way out must not hide
+one).  A test that provokes one on purpose says so with :func:`deliberate`.  The summary
+prints every mismatch of the session with its test and the differing fields.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ import os
 import warnings
 from collections import Counter
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import pyrung.core.compiled_run as compiled_run
@@ -54,6 +60,8 @@ MAX_PLAIN_COMPILED_SCANS = 20_000_000
 CONTINUE_SCANS = 5
 FORK_SCANS = 3
 HISTORY_SAMPLES = 4
+# RTC changes in a range that get a stepped state each side of them, for the seek.
+RTC_CHANGES_SAMPLED = 4
 # vacuous(): a run this long pays for a trace; below MIN_RUNS_TO_JUDGE of them the
 # session is too small to say (a single test), and the shares are well under what the
 # fold suites reach.
@@ -64,11 +72,16 @@ MIN_SHARE_OF_SCANS_IN_THE_LOOP = 0.25
 
 STATS: Counter[str] = Counter()
 SKIPS: dict[str, list[str]] = {}
-# Every mismatch of the session, caught by its test or not, as (test id, message).  A
-# test that provokes one on purpose catches it, so the count alone could hide a real one.
+# Every mismatch of the session, caught by its test or not, as (test id, message).  Any
+# of these fails the session (see conftest): nothing should have provoked them.
 MISMATCHES: list[tuple[str, str]] = []
 SELF_CHECK_MISMATCHES: list[tuple[str, str]] = []
+# Those provoked on purpose, inside deliberate().
+DECLARED: list[tuple[str, str]] = []
+# Per test file: compiled runs long enough for the loop, and those that used it.
+LONG_RUNS_BY_FILE: dict[str, list[int]] = {}
 _depth = 0
+_declared = 0
 
 
 class FoldMismatch(AssertionError):
@@ -79,15 +92,54 @@ def _test_id() -> str:
     return os.environ.get("PYTEST_CURRENT_TEST", "?").split(" ")[0]
 
 
+@contextmanager
+def deliberate() -> Iterator[None]:
+    """A mismatch in this block is the test's point, so it fails nothing by itself."""
+    global _declared
+    _declared += 1
+    try:
+        yield
+    finally:
+        _declared -= 1
+
+
+@contextmanager
+def own_twin() -> Iterator[None]:
+    """A run with no twin here: its function keeps state a twin in this process would share.
+
+    The twin would go on from the run's count.  A test using this clears that state and
+    steps its own runner against the run.
+    """
+    global _depth
+    _note_skip("skipped: the test steps its own twin")
+    _depth += 1
+    try:
+        yield
+    finally:
+        _depth -= 1
+
+
+def undeclared() -> list[tuple[str, str]]:
+    """The mismatches of the session nothing declared: any of them is a failure."""
+    return [*MISMATCHES, *SELF_CHECK_MISMATCHES]
+
+
 def _mismatch(message: str) -> FoldMismatch:
     """Count and record a mismatch, and return the exception to raise."""
-    STATS["mismatch"] += 1
-    MISMATCHES.append((_test_id(), message))
+    if _declared:
+        STATS["mismatch, deliberate"] += 1
+        DECLARED.append((_test_id(), message))
+    else:
+        STATS["mismatch"] += 1
+        MISMATCHES.append((_test_id(), message))
     return FoldMismatch(message)
 
 
 def _note_self_check_mismatch(message: str) -> None:
-    SELF_CHECK_MISMATCHES.append((_test_id(), message))
+    if _declared:
+        DECLARED.append((_test_id(), message))
+    else:
+        SELF_CHECK_MISMATCHES.append((_test_id(), message))
 
 
 def _skip_reason(plc: Any) -> str | None:
@@ -209,6 +261,10 @@ def _runner_image(plc: Any, start: int, end: int) -> dict[str, Any]:
         "battery_present": plc._battery_present,
         "rtc base": plc._rtc_base,
         "rtc base sim time": _exact(plc._rtc_base_sim_time),
+        # The origin answers for every scan before the first change, and a log with no
+        # change has none: the runner's own base holds then.
+        "log: rtc base at the start": log.rtc_base_at(start)
+        or (plc._rtc_base, plc._rtc_base_sim_time),
         "forces": dict(plc._forces),
         "pending patches": dict(plc._pending_patches),
         "drained patches": dict(plc._this_scan_drained_patches),
@@ -223,14 +279,33 @@ def _runner_image(plc: Any, start: int, end: int) -> dict[str, Any]:
     }
 
 
-def compare_runners(
-    kind: str, plc: Any, twin: Any, start: int, *, playhead_followed: bool = True
-) -> None:
+def _stale_in_the_read_mirror(plc: Any) -> list[str]:
+    """Tags the runner's read mirror answers differently from its state.
+
+    The next interpreted scan reads the mirror as it stands when it says it is of this
+    state, and no copy of the runner carries it, so it is compared here.
+    """
+    mirror = plc._state_tags_read_cache
+    if mirror is None or plc._state_tags_read_cache_state is not plc._state:
+        return []
+    tags = plc._state.tags
+    return sorted(
+        name
+        for name in mirror.keys() | tags.keys()
+        if name not in mirror or name not in tags or _exact(mirror[name]) != _exact(tags[name])
+    )
+
+
+def compare_runners(kind: str, plc: Any, twin: Any, start: int) -> None:
     """The runner around the state: flags, RTC base, scan log, checkpoints, playhead."""
     end = plc._state.scan_id
     a, b = _runner_image(plc, start, end), _runner_image(twin, start, end)
-    if playhead_followed:
-        a["playhead"], b["playhead"] = plc._playhead, twin._playhead
+    a["playhead"], b["playhead"] = plc._playhead, twin._playhead
+    stale = _stale_in_the_read_mirror(plc)
+    if stale:
+        raise _mismatch(
+            f"fold-check ({kind}): the read mirror at scan {end} is not of its state: {stale[:8]}"
+        )
     # Retention trims the older ones, and each runner counts from its own start.
     ours = _in_range(plc._checkpoints, start, end)
     theirs = _in_range(twin._checkpoints, start, end)
@@ -258,8 +333,9 @@ def _one_scan(plc: Any) -> type[BaseException] | None:
 def compare_continuation(kind: str, plc: Any, twin: Any, scans: int = CONTINUE_SCANS) -> None:
     """Scan on from the landing on copies, so what the state does not show comes out.
 
-    A stale flag, a stale RTC base or a stale read cache lands equal and differs only
-    once the next scan reads it.  Copies, so the caller's runners do not move.
+    A stale flag or a stale RTC base lands equal and differs only once the next scan
+    reads it.  Copies, so the caller's runners do not move; a copy starts with no read
+    mirror, which is why :func:`compare_runners` compares the real runner's own.
     """
     ours, theirs = _twin(plc), _twin(twin)
     base = ours._state.scan_id
@@ -308,14 +384,12 @@ def compare_history(kind: str, plc: Any, twin: Any, start: int, truth: dict[int,
         runner._recent_state_cache.update(recent)
         runner._replay_slabs.clear()
         runner._replay_slabs.update(slabs)
-    # A public fork drops forces and PILOT holds, by contract; the twin has them.
-    if (
-        plc.history.contains(middle)
-        and twin.history.contains(middle)
-        and not plc._forces
-        and plc._synthesis is None
-    ):
+    if plc.history.contains(middle) and twin.history.contains(middle):
         fork, twin_fork = plc.fork_from(middle), twin.fork_from(middle)
+        # A public fork drops forces and PILOT holds, by contract, and both forks do.
+        # It keeps a harness: the twin holds the plant and has no harness to keep.
+        if plc._harness is not None:
+            plc._harness.fork_onto(twin_fork)
         _compare("history", middle, fork._state, twin_fork._state)
         for _ in range(FORK_SCANS):
             raised, twin_raised = _one_scan(fork), _one_scan(twin_fork)
@@ -532,14 +606,15 @@ _RAISED: Any = object()
 
 
 def _compare_with_plain_compiled(
-    plc: Any, twin: Any, n: int, start: int, predicate: Callable[[Any], bool] | None
+    plc: Any, twin: Any, scans: int, start: int, predicate: Callable[[Any], bool] | None
 ) -> None:
     """Too long to step: the landing against real compiled scans, the floor under the loop.
 
     A guard this deep (a wrap, an hour's edge) is not reached by any shorter run.  The
-    twin is asked *predicate* on every scan, so an overshoot lands it elsewhere.  Scans
-    between are not compared; the summary counts these apart.  The twin's scans are the
-    check's own: the run's totals, which a rate test reads, do not gain them.
+    twin is given the scans asked for and asked *predicate* on every scan, so a run that
+    overshoots or stops early lands it elsewhere.  Scans between are not compared; the
+    summary counts these apart.  The twin's scans are the check's own: the run's totals,
+    which a rate test reads, do not gain them.
     """
     global _depth
     traces = scan_trace.MAX_TRACES_PER_RUN
@@ -547,16 +622,16 @@ def _compare_with_plain_compiled(
     scan_trace.MAX_TRACES_PER_RUN = 0
     _depth += 1
     try:
-        compiled_run.run_scans(twin, n, predicate)
+        compiled_run.run_scans(twin, scans, predicate)
         _compare("compiled", plc._state.scan_id, plc._state, twin._state)
-        compare_runners("compiled", plc, twin, start, playhead_followed=False)
+        compare_runners("compiled", plc, twin, start)
     finally:
         _depth -= 1
         scan_trace.MAX_TRACES_PER_RUN = traces
         scan_trace.TOTALS.clear()
         scan_trace.TOTALS.update(totals)
     _note_skip("compared at the landing only: too long to step")
-    STATS["scans compared with plain compiled"] += n
+    STATS["scans compared with plain compiled"] += plc._state.scan_id - start
 
 
 def _checked(
@@ -567,7 +642,9 @@ def _checked(
     *,
     fine: bool = True,
     compiled_predicate: bool = False,
+    budget: int | None = None,
 ) -> Any:
+    """Run *call* and check it against a stepped twin; *budget* is the scans asked of it."""
     global _depth
     if _depth:
         return call()
@@ -576,8 +653,9 @@ def _checked(
         _note_skip(f"skipped: {reason}")
         return call()
     start = plc._state.scan_id
-    followed = plc._playhead == start
     twin = _twin(plc)
+    # Parked or not: stepping moves a playhead only if it stands at the tip.
+    twin._playhead = plc._playhead
     ask = None
     if predicate is not None:
         ask = _isolated(predicate, plc)
@@ -602,12 +680,20 @@ def _checked(
     loop_scans = scan_trace.TOTALS["loop scans"] - loop_scans_before
     end = plc._state.scan_id
     n = end - start
+    if budget is not None and (n > budget or (n < budget and predicate is None)):
+        raise _mismatch(
+            f"fold-check ({kind}): asked for {budget} scans from scan {start}, landed at {end}"
+        )
     if n <= 0:
+        if budget:
+            raise _mismatch(f"fold-check ({kind}): asked for {budget} scans, ran none")
         STATS["no scans"] += 1
         return result
     if n > MAX_SCANS:
         if kind == "compiled" and n <= MAX_PLAIN_COMPILED_SCANS:
-            _compare_with_plain_compiled(plc, twin, n, start, ask if compiled_predicate else None)
+            plain_ask = ask if compiled_predicate else None
+            scans = budget if budget is not None and plain_ask is not None else n
+            _compare_with_plain_compiled(plc, twin, scans, start, plain_ask)
             STATS["loop scans, landing only (a run too long to step)"] += loop_scans
         else:
             _note_skip("skipped: longer than FOLD_CHECK_MAX_SCANS")
@@ -617,6 +703,9 @@ def _checked(
     if n >= LONG_ENOUGH_FOR_THE_LOOP and kind == "compiled":
         STATS["compiled runs long enough for the loop"] += 1
         STATS["compiled runs long enough, in the loop"] += bool(loop_scans)
+        by_file = LONG_RUNS_BY_FILE.setdefault(_test_id().split("::")[0], [0, 0])
+        by_file[0] += 1
+        by_file[1] += bool(loop_scans)
     produced = {
         sid: entry[0] for sid, entry in plc._recent_state_cache.items() if start < sid <= end
     }
@@ -627,12 +716,19 @@ def _checked(
     # Bounded: a handful of the stepped states, for the seek to answer to.
     truth: dict[int, Any] = {}
     truth_every = max(1, n // HISTORY_SAMPLES)
+    # A short landing has to be the scan the predicate stops on, so it is asked there too.
+    short = budget is not None and n < budget
+    sample = {start + 1, end - 1}
+    changes = sorted(_in_range(plc._scan_log._rtc_base_changes, start, end))
+    for scan in changes[:RTC_CHANGES_SAMPLED]:
+        sample.update((scan - 1, scan))
+    stop_held = None
     for _ in range(n):
         twin._run_single_scan(consume_pause_request=False)
         sid = twin._state.scan_id
-        if (sid - start) % truth_every == 0 or sid == end - 1:
+        if (sid - start) % truth_every == 0 or sid in sample:
             truth[sid] = twin._state
-        if ask is not None and sid < end:
+        if ask is not None and (sid < end or short):
             first = not asked
             before = _fingerprint(ask, plc) if first else None
             hit = _predicate_on_twin(ask, plc, twin)
@@ -645,7 +741,9 @@ def _checked(
                 ask = None
             elif hit is not _RAISED:
                 STATS["predicate scans"] += 1
-                if hit:
+                if sid == end:
+                    stop_held = bool(hit)
+                elif hit:
                     raise _mismatch(
                         f"fold-check ({kind}): stop predicate true at scan {sid}, "
                         f"folded run stopped at {end}"
@@ -659,10 +757,18 @@ def _checked(
             f"{twin._state.scan_id}"
         )
     _compare(kind, end, plc._state, twin._state)
+    if short:
+        if stop_held is False:
+            raise _mismatch(
+                f"fold-check ({kind}): returned at scan {end} with {budget - n} of {budget} "
+                "scans left and the stop predicate false"
+            )
+        if stop_held is None:
+            _note_skip("short landing not judged: no answer from the predicate")
     if kind == "compiled":
         _depth += 1
         try:
-            compare_runners(kind, plc, twin, start, playhead_followed=followed)
+            compare_runners(kind, plc, twin, start)
             compare_history(kind, plc, twin, start, truth)
             compare_continuation(kind, plc, twin)
         finally:
@@ -703,6 +809,7 @@ def install() -> None:
                 predicate,
                 fine=scans <= MAX_SCANS,
                 compiled_predicate=predicate is not None and kwargs.get("compiled_predicate", True),
+                budget=scans,
             )
         finally:
             scan_trace.BURST_SIZES = _LOOP_BURSTS
@@ -757,12 +864,30 @@ def vacuous() -> str | None:
     return None
 
 
+def files_without_the_loop() -> list[tuple[str, int]]:
+    """Test files with enough long runs to judge, none of which used the loop.
+
+    Reported, not failed on: vacuous() judges the session, so a file whose loop died goes
+    unseen there, but a file of programs that all decline for honest reasons looks the same.
+    """
+    return [
+        (name, runs)
+        for name, (runs, in_loop) in sorted(LONG_RUNS_BY_FILE.items())
+        if runs >= MIN_RUNS_TO_JUDGE and not in_loop
+    ]
+
+
 def summary() -> list[str]:
     lines = [f"  {key}: {count}" for key, count in sorted(STATS.items())]
     lines.extend(f"  scan loop, {key}: {count}" for key, count in sorted(scan_trace.TOTALS.items()))
     lines.extend(f"  MISMATCH in {test}: {message}" for test, message in MISMATCHES)
     lines.extend(
         f"  SELF CHECK MISMATCH in {test}: {message}" for test, message in SELF_CHECK_MISMATCHES
+    )
+    lines.extend(f"  deliberate mismatch in {test}: {message}" for test, message in DECLARED)
+    lines.extend(
+        f"  no scan loop in {name}: {runs} long compiled runs"
+        for name, runs in files_without_the_loop()
     )
     for reason, tests in sorted(SKIPS.items()):
         if reason.startswith(("predicate skipped", "compared at the landing", "skipped: longer")):
