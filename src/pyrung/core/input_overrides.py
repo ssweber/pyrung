@@ -67,19 +67,18 @@ def held_candidates(tag: Tag, values: Iterable[Any]) -> set[Any]:
     3 and 4.  A finite REAL past float32 range maps to +/-Inf, which a REAL holds and
     which is past that literal too, though a patch refuses the literal itself.  What
     no store of the type can make sense of (``"AB"`` on a CHAR, ``"x"`` on an INT) is
-    dropped: no scan can see the tag hold it.  One the tag holds as an equal value stays
-    as it was given: a ``-1`` on a REAL is not rewritten to ``-1.0`` in what a plan or a
-    witness reports.
+    dropped: no scan can see the tag hold it.  A number a REAL holds as an equal float
+    stays as it was given: a ``-1`` on a REAL is not rewritten to ``-1.0`` in what a plan
+    or a witness reports.  Anywhere else the candidate is the stored value, so ``3.0`` on
+    an INT is 3.
     """
     held: set[Any] = set()
     for value in values:
         if tag.type is TagType.REAL and isinstance(value, bool | int | float):
             stored = store_real(value)
-        elif refuses_value(tag, value):
-            continue
-        else:
-            stored = _value_a_tag_holds(tag, value, "candidate")
-        held.add(value if value == stored else stored)
+            held.add(value if value == stored and not isinstance(value, bool) else stored)
+        elif not refuses_value(tag, value):
+            held.add(_value_a_tag_holds(tag, value, "candidate"))
     return held
 
 

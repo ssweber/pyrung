@@ -169,13 +169,10 @@ def test_a_value_carried_back_through_a_copy_is_what_the_source_holds() -> None:
         (R, -1),
         (R, 2),
         (R, 1.5),
-        (In, 3.0),
-        (In, True),
-        (W, 7.0),
         (C, "A"),
     ],
 )
-def test_a_candidate_the_tag_holds_as_an_equal_value_keeps_its_form(tag, given) -> None:
+def test_a_candidate_a_real_holds_as_an_equal_value_keeps_its_form(tag, given) -> None:
     assert [repr(v) for v in held_candidates(tag, [given])] == [repr(given)]
 
 
@@ -183,6 +180,10 @@ def test_a_candidate_the_tag_holds_as_an_equal_value_keeps_its_form(tag, given) 
     ("tag", "given", "stored"),
     [
         (In, 3.5, "3"),
+        (In, 3.0, "3"),
+        (In, True, "1"),
+        (W, 7.0, "7"),
+        (R, True, "1.0"),
         (In, 99999, "32767"),
         (W, -1, "65535"),
         (R, 1e39, "inf"),
@@ -191,6 +192,26 @@ def test_a_candidate_the_tag_holds_as_an_equal_value_keeps_its_form(tag, given) 
 )
 def test_a_candidate_the_store_would_change_is_mapped(tag, given, stored) -> None:
     assert [repr(v) for v in held_candidates(tag, [given])] == [stored]
+
+
+@pytest.mark.parametrize(
+    ("condition", "true_at"),
+    [
+        pytest.param(lambda: In > 3.0, lambda v: v > 3, id="above"),
+        pytest.param(lambda: In == 3.0, lambda v: v == 3, id="at"),
+        pytest.param(lambda: In >= 3.0, lambda v: v >= 3, id="at or above"),
+        pytest.param(lambda: In < 3.0, lambda v: v < 3, id="below"),
+    ],
+)
+def test_a_whole_float_on_an_int_is_the_int(condition, true_at) -> None:
+    program = _program(condition())
+
+    result = never(program, Y)
+    assert isinstance(result, Counterexample)
+    witness = result.trace[-1].inputs["In"]
+    assert type(witness) is int
+    assert true_at(witness)
+    assert _how(program).reachable is True
 
 
 def test_a_witness_on_a_real_keeps_the_form_of_its_literal() -> None:
