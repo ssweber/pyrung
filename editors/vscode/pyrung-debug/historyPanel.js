@@ -13,6 +13,7 @@ class PyrungHistoryPanelProvider {
     this._chainResult = null;
     this._chainError = null;
     this._fetchGeneration = 0;
+    this._fetching = false;
     this._getExecutionState =
       typeof getExecutionState === "function" ? getExecutionState : () => "unknown";
     this._log = typeof log === "function" ? log : null;
@@ -123,6 +124,7 @@ class PyrungHistoryPanelProvider {
 
   setSession(session) {
     this._fetchGeneration += 1;
+    this._fetching = false;
     this._session = session;
     this._debug(`setSession(${session ? session.id : "null"})`);
     if (!session) {
@@ -242,7 +244,14 @@ class PyrungHistoryPanelProvider {
   }
 
   async _loadOlder() {
-    if (!this._canFetchHistory() || !this._watchedTags.size || !this._entries.length) {
+    // A fetch in flight is about to change what "older" means, so the click has no last entry
+    // to go on: the button is disabled for the same reason, and this catches what got past it.
+    if (
+      this._fetching ||
+      !this._canFetchHistory() ||
+      !this._watchedTags.size ||
+      !this._entries.length
+    ) {
       return;
     }
     // A window's own scans are still to read; after an entry, what is older than it.
@@ -342,7 +351,12 @@ class PyrungHistoryPanelProvider {
       return;
     }
 
+    // The newest fetch is the one that answers: a refresh during a Load older replaces the list
+    // the older page would have been added to.
+    this._fetchGeneration += 1;
     const generation = this._fetchGeneration;
+    this._fetching = true;
+    this._postState();
     try {
       this._debug(
         `_fetchEntries(append=${append ? "true" : "false"}, beforeScan=${beforeScan ?? "none"}) watched=${Array.from(this._watchedTags).join(",")}`
@@ -363,10 +377,15 @@ class PyrungHistoryPanelProvider {
         nextEntries.length === this._pageSize ||
         Boolean(nextEntries[nextEntries.length - 1]?.window);
       this._debug(`_fetchEntries received ${nextEntries.length} entries`);
+      this._fetching = false;
       this._postState();
     } catch (error) {
       this._debug(`_fetchEntries failed: ${String(error?.message || error)}`);
       // Session may have ended between the stopped event and the request.
+      if (this._fetchGeneration === generation) {
+        this._fetching = false;
+        this._postState();
+      }
     }
   }
 
@@ -391,6 +410,7 @@ class PyrungHistoryPanelProvider {
       hasSession: Boolean(this._session),
       executionState: this._executionState(),
       hasMore: this._hasMore,
+      fetching: this._fetching,
       mode: this._mode,
       chainResult: this._chainResult,
       chainError: this._chainError,
@@ -521,7 +541,8 @@ class PyrungHistoryPanelProvider {
   .run-btn:hover:not(:disabled) {
     background: var(--vscode-button-hoverBackground);
   }
-  .run-btn:disabled {
+  .run-btn:disabled,
+  .load-btn:disabled {
     opacity: 0.5;
     cursor: default;
   }
@@ -974,6 +995,7 @@ class PyrungHistoryPanelProvider {
     hasSession: false,
     executionState: "unknown",
     hasMore: false,
+    fetching: false,
     mode: "tags",
     chainResult: null,
     chainError: null,
@@ -1290,7 +1312,9 @@ class PyrungHistoryPanelProvider {
       .join("");
 
     const loadOlderHtml = state.hasMore
-      ? '<button class="load-btn" id="load-older-btn">Load older...</button>'
+      ? '<button class="load-btn" id="load-older-btn"' +
+        (state.fetching ? " disabled" : "") +
+        ">Load older...</button>"
       : "";
 
     content.innerHTML =
@@ -1646,6 +1670,7 @@ class PyrungHistoryPanelProvider {
       state.hasSession = Boolean(msg.hasSession);
       state.executionState = msg.executionState || "unknown";
       state.hasMore = Boolean(msg.hasMore);
+      state.fetching = Boolean(msg.fetching);
       state.mode = msg.mode === "chain" ? "chain" : "tags";
       state.chainResult = msg.chainResult || null;
       state.chainError = typeof msg.chainError === "string" ? msg.chainError : null;
