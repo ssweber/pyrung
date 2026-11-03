@@ -37,7 +37,6 @@ class TestTheLedger:
         ledger = SearchBudget()
         ledger.charge_execution(_receipt(1, 2, 3))
         assert ledger.spent == 3
-        assert ledger.scans_run == 3
 
     def test_a_scan_is_charged_once_across_consumers(self) -> None:
         ledger = SearchBudget()
@@ -48,7 +47,6 @@ class TestTheLedger:
     def test_a_hundred_loop_scans_are_a_unit(self) -> None:
         ledger = SearchBudget()
         ledger.charge_execution(_receipt(1, 1002))
-        assert ledger.scans_run == 1002
         assert ledger.spent == 2 + 10
 
     def test_a_stretch_is_charged_once_and_its_remainder_is_kept(self) -> None:
@@ -109,8 +107,7 @@ class TestTheClock:
     def test_out_of_time_is_its_own_terminal(self) -> None:
         plan = _slow_lamp(30_000).how(Lamp, wall_clock_s=0.0)
         assert plan.status is PlanStatus.STOPPED
-        assert plan.reason.startswith("wall-clock budget exhausted (0 s, ")
-        assert " scans run)" in plan.reason
+        assert plan.reason.startswith("wall-clock budget exhausted (0 s)")
         assert plan.reason.isascii()
 
     def test_none_turns_it_off(self) -> None:
@@ -148,7 +145,7 @@ class TestTheClock:
         monkeypatch.setattr(budget.WallClock, "check", check)
         plan = _slow_lamp(30_000).how(Lamp, wall_clock_s=1.0)
         assert plan.status is PlanStatus.STOPPED
-        assert plan.reason.startswith("wall-clock budget exhausted (1 s, ")
+        assert plan.reason.startswith("wall-clock budget exhausted (1 s)")
 
     def test_a_theory_can_end_by_the_clock(self) -> None:
         assert TheoryTermination.WALL_CLOCK.value == "wall-clock"

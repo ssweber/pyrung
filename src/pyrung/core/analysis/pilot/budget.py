@@ -67,11 +67,6 @@ class SearchBudget:
     def remaining(self, limit: int) -> int:
         return max(0, limit - self.spent)
 
-    @property
-    def scans_run(self) -> int:
-        """Interpreted and loop scans charged so far."""
-        return len(self._charged_scans) + self._stretch_scans
-
     def charge_execution(self, receipt: Any, *, dwell_scans: int = 0) -> None:
         """Charge each epoch-owned scan once across nested consumers.
 

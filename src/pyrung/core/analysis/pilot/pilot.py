@@ -512,8 +512,7 @@ def _pilot_loop_events(
         assert clock is not None
         frame = at_the_stop.get("frame")
         reason = _with_avoid_reason(
-            f"wall-clock budget exhausted ({clock.limit_s:g} s, "
-            f"{at_the_stop['state'].budget.scans_run} scans run)",
+            f"wall-clock budget exhausted ({clock.limit_s:g} s)",
             at_the_stop["state"],
             ctx,
             frame,
