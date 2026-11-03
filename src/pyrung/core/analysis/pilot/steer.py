@@ -598,7 +598,7 @@ def _pen_tags(state: _PilotState, ctx: _PilotContext) -> frozenset[str]:
     transitions, not a net no-op) plus the loop's watch tags and pipeline role
     channels (bearing departures land as recorded events with exact scans).
     Accumulator registers are excluded: a change-pen on a per-scan-churny tag
-    would collapse every fold to step-mode, and acc membership in the
+    would end every stretch of the loop, and acc membership in the
     incident's changed set is served by endpoint diff instead.
     """
     from pyrung.core.analysis.pilot.advance import iter_advance_owners

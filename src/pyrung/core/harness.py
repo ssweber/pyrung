@@ -49,8 +49,7 @@ class _BoolCoupling:
     keeps the feedback asserted for ``off_delay`` after the enable drops.  The
     feedback tag *is* the off-delay's done bit, so the only register the program
     reads is ``Fb``; ``ton_acc`` / ``tof_acc`` are the timers' internal
-    accumulators (excluded from the fold plateau — they churn every scan but are
-    unobservable).
+    accumulators.
 
     The timer *instructions* themselves live in the runner's synthesis overlay
     (``plc._synthesis.plant``); this record keeps only the metadata and the
@@ -282,7 +281,6 @@ class Harness:
         if self._plc._synthesis is not None:
             self._plc._note_plant_change()
             self._plc._synthesis.plant = []
-            self._plc._fold_context_cache = None
             self._plc._compiled_replay_kernel = None
             self._plc._soft_exec_program_cache = None
             self._plc._causal_lineage.invalidate_current_epoch()
@@ -707,10 +705,8 @@ class Harness:
         # Plant rungs keep their memory under their own ``plant:`` site keys.
         bind_sites(plant, namespace=PLANT_NAMESPACE)
         self._plc._synthesis.plant = plant
-        # The overlay changed, so caches that snapshot it are stale: the fold
-        # context (acc sources) and the soft-exec replay kernel + its bracketed
-        # compilation unit — all rebuilt lazily on next use.
-        self._plc._fold_context_cache = None
+        # The overlay changed, so caches that snapshot it are stale: the soft-exec
+        # replay kernel + its bracketed compilation unit, rebuilt lazily on next use.
         self._plc._compiled_replay_kernel = None
         self._plc._soft_exec_program_cache = None
         self._plc._causal_lineage.invalidate_current_epoch()

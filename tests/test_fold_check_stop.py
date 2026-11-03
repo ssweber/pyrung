@@ -1,4 +1,4 @@
-"""The fold check can fail: each comparison in tests/fold_check.py, against a broken run."""
+"""The long-run check can fail: each comparison in tests/fold_check.py, against a broken run."""
 
 from __future__ import annotations
 
@@ -76,14 +76,9 @@ def test_a_predicate_over_the_real_runner_is_not_asked() -> None:
 def installed(monkeypatch: pytest.MonkeyPatch):
     """The real wrappers, installed for this test only (everything is restored)."""
     import pyrung.core.analysis.pilot.coast as pilot_coast
-    import pyrung.core.analysis.pilot.cyclefold as cyclefold
     import pyrung.core.coast_run as coast_run
-    import pyrung.core.fold as fold
 
     for mod, name in (
-        (fold, "fold_run_until"),
-        (fold, "fold_run_for"),
-        (cyclefold, "cycle_fold_until"),
         (coast_run, "coast_until"),
         (pilot_coast, "coast_until"),
         (compiled_run, "run_scans"),
@@ -94,7 +89,7 @@ def installed(monkeypatch: pytest.MonkeyPatch):
     ):
         monkeypatch.setattr(mod, name, getattr(mod, name))
     monkeypatch.setattr(compiled_run, "_fold_check_installed", False, raising=False)
-    return fold, coast_run
+    return coast_run
 
 
 def _overshooting(extra: int):
@@ -137,7 +132,7 @@ def test_run_until_through_install_passes_an_exact_stop(installed, monkeypatch) 
 
 
 def test_a_coast_through_install_catches_a_late_stop(installed, monkeypatch) -> None:
-    _, coast_run = installed
+    coast_run = installed
 
     def overshoot(plc, predicate, **_kwargs):
         return _overshooting(2)(plc, predicate)
@@ -153,7 +148,7 @@ def test_a_coast_through_install_catches_a_late_stop(installed, monkeypatch) -> 
 
 
 def test_a_coast_through_install_catches_a_run_past_its_budget(installed, monkeypatch) -> None:
-    _, coast_run = installed
+    coast_run = installed
 
     def past(plc, _predicate, *, budget, **_kwargs):
         for _ in range(budget + 1):
@@ -1253,7 +1248,7 @@ def test_a_force_record_stepping_does_not_have_is_caught() -> None:
 
 
 def test_install_leaves_what_a_coast_keeps_alone(installed) -> None:
-    _, coast_run = installed
+    coast_run = installed
     names = ("ENTRY_WAIT", "STRETCH_CHECKPOINT_INTERVALS", "MAX_CHECKPOINTS", "MAX_RECORD_RUNS")
     before = [getattr(coast_run, name) for name in names]
     fold_check.install()
@@ -1261,7 +1256,7 @@ def test_install_leaves_what_a_coast_keeps_alone(installed) -> None:
 
 
 def test_a_real_thinned_coast_passes(installed, monkeypatch) -> None:
-    _, coast_run = installed
+    coast_run = installed
     monkeypatch.setattr(coast_run, "MAX_CHECKPOINTS", 3)
     fold_check.install()
     plc = _timed()
@@ -1275,18 +1270,18 @@ class TestScansOutOfTheRecords:
     SETTLED = "scans out of the records, settled to compare"
 
     def test_they_are_compared_and_left_as_they_were(self, installed, monkeypatch) -> None:
-        _, coast_run = installed
+        coast_run = installed
         monkeypatch.setattr(coast_run, "MAX_RECORD_RUNS", 5)
         fold_check.install()
         plc = _timed()
         before = fold_check.STATS[self.SETTLED]
         coast_run.coast_until(plc, lambda _s: False, budget=5000)
-        assert plc._fold_windows, "a later question still has to find them left out"
-        left_out = sum(high - low + 1 for low, high in plc._fold_windows)
+        assert plc._unrecorded_scans, "a later question still has to find them left out"
+        left_out = sum(high - low + 1 for low, high in plc._unrecorded_scans)
         assert fold_check.STATS[self.SETTLED] - before == left_out
 
     def test_a_wrong_answer_for_them_is_caught(self, installed, monkeypatch) -> None:
-        _, coast_run = installed
+        coast_run = installed
         monkeypatch.setattr(coast_run, "MAX_RECORD_RUNS", 5)
         real = PLC._stepped_again
 
@@ -1365,7 +1360,7 @@ class TestACoastStoppedByTheLedger:
             self._stops_early(lambda: True, wrong)
 
     def test_install_reads_it_from_the_coast(self, installed, monkeypatch) -> None:
-        _, coast_run = installed
+        coast_run = installed
         fold_check.install()
         plc = _timed()
         memo = coast_run.memo_of(plc)

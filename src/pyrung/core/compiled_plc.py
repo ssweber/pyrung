@@ -34,7 +34,6 @@ from pyrung.core.system_points import (
     SYSTEM_TAGS_BY_NAME,
     SystemPointRuntime,
     clock_high,
-    system,
 )
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeMode
@@ -584,50 +583,16 @@ class CompiledPLC:
         self._sync_runtime_flags_from_state()
         return self._state
 
-    def step_replay(
-        self,
-        *,
-        logical_scans: int = 1,
-        ordinary_dt: bool = False,
-        defer_flush: bool = False,
-    ) -> None:
-        """Run one lightweight replay step, possibly as a certified macro scan.
+    def step_replay(self, *, defer_flush: bool = False) -> None:
+        """Run one lightweight replay step.
 
         With *defer_flush* the block cells written this scan stay in the arrays
         until :meth:`_materialize_replay_state`, so the tag dict is stale for
         them until then.  Nothing in a scan reads a block cell from the dict.
-
-        ``logical_scans > 1`` is reserved for the shared fold proof.  The
-        program executes once with aggregate ``dt`` while scan id and clock
-        memory land where the equivalent ordinary scans would have left them.
-        The macro scan resolves time-derived reads (system clocks, ``rtc.*``)
-        at the timestamp the last of those ordinary scans would have read.
-        With *ordinary_dt* it executes at the normal ``dt`` instead, standing for
-        only the last of them (see ``fold._AnalogFeedback``).
         """
-        if logical_scans < 1:
-            raise ValueError("logical_scans must be >= 1")
         self._ensure_running()
 
-        normal_dt = self._dt
-        effective_dt = logical_scans * normal_dt
-        scan_dt = normal_dt if ordinary_dt else effective_dt
-        scan_time_extrema = (
-            {
-                name: self._kernel.tags.get(name, _MISSING)
-                for name in (
-                    system.sys.scan_time_min_ms.name,
-                    system.sys.scan_time_max_ms.name,
-                )
-            }
-            if logical_scans > 1
-            else None
-        )
-        self._dt = scan_dt
-        start_timestamp = self._kernel.timestamp
-        # The last of the folded ordinary scans starts ``logical_scans - 1``
-        # normal steps in; this one macro scan stands in for it.
-        self._kernel.timestamp = start_timestamp + (logical_scans - 1) * normal_dt
+        scan_dt = self._dt
         ctx = _KernelRuntimeContext(
             tags=self._kernel.tags,
             memory=self._kernel.memory,
@@ -637,55 +602,35 @@ class CompiledPLC:
             blocks=self._kernel.blocks,
         )
         scan_ctx = cast(ScanContext, ctx)
-        try:
-            if not self._system_runtime.scan_start_is_quiet(self._kernel.tags, self._kernel.memory):
-                self._system_runtime.on_scan_start(scan_ctx)
+        if not self._system_runtime.scan_start_is_quiet(self._kernel.tags, self._kernel.memory):
+            self._system_runtime.on_scan_start(scan_ctx)
 
-            if self._kernel.memory.get("_dt") != scan_dt:
-                ctx.set_memory("_dt", scan_dt)
+        if self._kernel.memory.get("_dt") != scan_dt:
+            ctx.set_memory("_dt", scan_dt)
 
-            self._materialize_system_tags(ctx)
+        self._materialize_system_tags(ctx)
 
-            # Single block bracket (see :meth:`step`): the plant pass lags the
-            # command by one scan on replay exactly as it did live, then the drain,
-            # main pass, and post-logic forces hand off through the shared block
-            # arrays (no per-scan reload; see :meth:`_open_block_bracket`).
-            tracked = self._open_block_bracket()
-            ctx.blocks_live = True
-            if self._compiled.pre_step_fn is not None:
-                self._run_kernel_pass(self._compiled.pre_step_fn)
-            self._apply_pre_scan_overrides(scan_ctx)
-            self._run_kernel_pass(self._compiled.step_fn)
-            self._input_overrides.apply_post_logic(scan_ctx)
-            ctx.blocks_live = False
-            if not defer_flush:
-                self._flush_blocks_tracked(tracked)
+        # Single block bracket (see :meth:`step`): the plant pass lags the
+        # command by one scan on replay exactly as it did live, then the drain,
+        # main pass, and post-logic forces hand off through the shared block
+        # arrays (no per-scan reload; see :meth:`_open_block_bracket`).
+        tracked = self._open_block_bracket()
+        ctx.blocks_live = True
+        if self._compiled.pre_step_fn is not None:
+            self._run_kernel_pass(self._compiled.pre_step_fn)
+        self._apply_pre_scan_overrides(scan_ctx)
+        self._run_kernel_pass(self._compiled.step_fn)
+        self._input_overrides.apply_post_logic(scan_ctx)
+        ctx.blocks_live = False
+        if not defer_flush:
+            self._flush_blocks_tracked(tracked)
 
-            if not self._system_runtime.scan_end_is_quiet(self._kernel.tags, scan_dt):
-                self._system_runtime.on_scan_end(scan_ctx)
-            if scan_time_extrema is not None:
-                # The large dt advances timers, but it is not a historical scan
-                # duration and must not inflate the fixed-step diagnostics.
-                for name, value in scan_time_extrema.items():
-                    if value is _MISSING:
-                        self._kernel.tags.pop(name, None)
-                    else:
-                        self._kernel.tags[name] = value
-            self._discover_new_commit_tags()
+        if not self._system_runtime.scan_end_is_quiet(self._kernel.tags, scan_dt):
+            self._system_runtime.on_scan_end(scan_ctx)
+        self._discover_new_commit_tags()
 
-            self._kernel.scan_id += logical_scans
-            self._kernel.timestamp = start_timestamp + effective_dt
-        except BaseException:
-            # A scan that raised commits nothing: undo the landing's clock move.
-            self._kernel.timestamp = start_timestamp
-            raise
-        finally:
-            self._dt = normal_dt
-            if logical_scans > 1:
-                # Aggregate dt is an execution device, not part of the recorded
-                # endpoint.  Historical fixed-step scans leave normal dt in
-                # memory, so normalize it before materialization.
-                self._kernel.memory["_dt"] = normal_dt
+        self._kernel.scan_id += 1
+        self._kernel.timestamp += scan_dt
 
     def _materialize_replay_state(self) -> SystemState:
         """Build SystemState from current kernel state (replay fast path)."""

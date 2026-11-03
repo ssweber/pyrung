@@ -104,7 +104,6 @@ def _assert_replay_equals_stepping(plc: PLC, recorded: list[dict[str, Any]]) -> 
     assert {name: plc.replay_to(0).state.tags[name] for name in recorded[0]} == recorded[0]
     for scan_id in range(1, len(recorded)):
         assert dict(plc.replay_to(scan_id).state.tags) == recorded[scan_id], scan_id
-        assert dict(plc._replay_seek(scan_id).state.tags) == recorded[scan_id], scan_id
 
 
 @pytest.mark.parametrize("name_slot", NAMES)

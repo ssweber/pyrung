@@ -893,7 +893,7 @@ def _stretch_checkpoint_interval(plc: PLC) -> int:
 def _land(plc: PLC, replay: CompiledPLC) -> None:
     if plc._state.scan_id != replay._kernel.scan_id:
         _install(plc, replay, replay._materialize_replay_state())
-    plc._record_fold_landing()
+    plc._record_landing()
     plc._bounds_violations = {}
     plc._epoch_caches.on_tip_advanced()
 
@@ -913,14 +913,13 @@ def coast_until(
     after a scan that asks to pause, or after the program stops itself.  Returns whether it
     holds there.  *predicate_reads* is the exact set of tags *predicate* reads
     through ``state.tags``; without it the reads are traced.  *stats* gets
-    ``logical_scans``, ``kernel_scans``, ``macro_folds`` (stretches) and
-    ``ordinary_folded_scans`` (scans in them).  *on_kernel_scan* and ``kernel_scans``
+    ``logical_scans``, ``kernel_scans``, ``stretches`` and ``stretched_scans``
+    (the scans in them).  *on_kernel_scan* and ``kernel_scans``
     have each interpreted scan and the landing, which a stretch may have run.
     """
     start_scan = plc.state.scan_id
     kernel_scans = 0
     stretches = 0
-    stretched = 0
     last_noted = start_scan
 
     def note(scan: int) -> None:
@@ -939,9 +938,8 @@ def coast_until(
             stats.update(
                 logical_scans=logical,
                 kernel_scans=kernel_scans,
-                macro_folds=stretches,
-                ordinary_folded_scans=stretched,
-                skipped_scans=logical - kernel_scans,
+                stretches=stretches,
+                stretched_scans=logical - kernel_scans,
             )
         return reached
 
@@ -1024,7 +1022,6 @@ def coast_until(
         used, learned = _try_stretch(plc, kernel, memo, predicate, reads, watched, limit)
         if used:
             stretches += 1
-            stretched += used
             paused = plc._consume_pause_request()
             hit = bool(predicate(plc.state))
             if hit or paused:

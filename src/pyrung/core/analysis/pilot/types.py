@@ -94,13 +94,13 @@ def _avoid_member_true(pred: Callable[[dict[str, Any]], bool], state: dict[str, 
 
 @dataclass(frozen=True)
 class _AvoidMember:
-    """One avoided snapshot condition and its optional coast fold metadata."""
+    """One avoided snapshot condition and, when it has one, its runtime Condition."""
 
     name: str
     pred: Callable[[dict[str, Any]], bool]
     tags: frozenset[str] = frozenset()
     # The normalized runtime Condition equivalent to ``pred``.  CoastSession
-    # uses it only as fold/read metadata; ``pred`` remains authoritative.
+    # uses it only to say what it reads; ``pred`` remains authoritative.
     # Opaque callables have none and therefore retain the narrower
     # real-observed-scan contract.
     condition: Any | None = None
@@ -303,7 +303,7 @@ class _StepContext:
         )
 
     def point_at(self, scan_id: int) -> ExecutionPoint | None:
-        """Resolve one exact kernel scan without confusing logical fold gaps."""
+        """Resolve one exact interpreted scan; a scan inside a stretch has none."""
 
         matches = tuple(
             point
@@ -613,8 +613,8 @@ class _PulseState:
     post_pulse_key: _StateKey
     snap: dict[str, Any]
     key: _StateKey
-    # Ordered actual interpreter scans owned by this execution fork. Logical
-    # scan IDs skipped by a fold are deliberately absent.
+    # Ordered interpreted scans owned by this execution fork. Scan IDs inside a
+    # stretch of the loop are deliberately absent.
     kernel_scan_ids: tuple[int, ...]
     # Selected-scan replay memo. The immutable epoch owner is retained beside
     # each projection so a scan ID cannot reuse evidence from another fork.

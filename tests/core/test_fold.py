@@ -1,4 +1,8 @@
-"""Tests for core/fold.py — fold-aware run_until() and run_for()."""
+"""Long runs land where stepping does: run_until() and run_for() on the guarded loop.
+
+These programs were first written against the fold that the loop replaced, most of them for
+a bug it had; they stay as a corpus, and their comments still say what the bug was.
+"""
 
 from __future__ import annotations
 
@@ -165,21 +169,10 @@ class TestCounterFold:
         prog, ctr = _counter_program(100)
         plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True})
-        advances: list[tuple[str, object]] = []
 
-        from pyrung.core.fold import fold_run_until
+        plc.run_until(ctr.Done, max_cycles=500, fold=True)
 
-        fold_ctx = plc._ensure_fold_context()
-        assert fold_ctx is not None
-        fold_run_until(
-            plc,
-            lambda state: state.tags.get(ctr.Done.name) is True,
-            max_cycles=500,
-            fold_ctx=fold_ctx,
-            advances=advances,
-        )
-
-        assert advances == []
+        assert plc.state.scan_id == 500
         assert plc.state.tags["Ctr_Acc"] == 1
         assert plc.state.tags["Ctr_Done"] is False
 
@@ -449,9 +442,6 @@ class TestSystemClockFold:
         plc_fold.step()
         plc_fold.run_for(0.5, fold=True)
 
-        ctx = plc_fold._ensure_fold_context()
-        assert "sys.scan_counter" in ctx.scan_derived_names
-
         plc_nofold = PLC(self._scan_counter_program(), dt=0.010)
         plc_nofold.patch({"Enable": True})
         plc_nofold.step()
@@ -479,9 +469,6 @@ class TestSystemClockFold:
         plc_fold.patch({"Enable": True})
         plc_fold.step()
         plc_fold.run_for(0.3, fold=True)
-
-        ctx = plc_fold._ensure_fold_context()
-        assert "sys.scan_clock_toggle" in ctx.scan_derived_names
 
         plc_nofold = PLC(self._toggle_program(), dt=0.010)
         plc_nofold.patch({"Enable": True})
@@ -871,29 +858,24 @@ class TestUnreadAccumulatorFold:
 
 
 class TestAffineAccumulatorViews:
-    def test_negated_view_threshold_is_projected_to_source(self) -> None:
-        from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.fold import _build_fold_context
+    def test_negated_view_threshold_matches_stepping(self) -> None:
+        def build() -> Program:
+            Enable = Bool("Enable", external=True)
+            Tmr = Timer.clone("Tmr")
+            Remaining = Int("Remaining")
+            Done = Bool("Done")
 
-        Enable = Bool("Enable", external=True)
-        Tmr = Timer.clone("Tmr")
-        Remaining = Int("Remaining")
-        Done = Bool("Done")
+            with Program() as program:
+                with Rung(Enable):
+                    on_delay(Tmr, 1000, "ms")
+                with Rung():
+                    calc(1000 - Tmr.Acc, Remaining)
+                with Rung(Remaining < 500):
+                    out(Done)
+            return program
 
-        with Program() as program:
-            with Rung(Enable):
-                on_delay(Tmr, 1000, "ms")
-            with Rung():
-                calc(1000 - Tmr.Acc, Remaining)
-            with Rung(Remaining < 500):
-                out(Done)
-
-        plc = PLC(program)
-        context = _build_fold_context(plc, build_program_graph(program), program)
-
-        assert Remaining.name in context.mirror_names
-        assert ("gt", 500) in context.comparisons[Tmr.Acc.name]
-        assert Remaining.name not in context.comparisons
+        folded = _assert_fold_is_exact(build, _scans(150), patch={"Enable": True})
+        assert folded.state.tags["Done"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -1223,25 +1205,23 @@ class TestScanVaryingValuesAreExact:
             assert folded.state.tags[tag] == stepped.state.tags[tag]
 
     @pytest.mark.parametrize("form", ["sum", "math", "shift"])
-    def test_self_reference_seen_through_function_expressions(self, form: str) -> None:
-        from pyrung import Block, TagType
-        from pyrung.core.analysis.pdg import build_program_graph
+    def test_self_reference_through_function_expressions_matches_stepping(self, form: str) -> None:
         from pyrung.core.expression import lsh, sqrt
-        from pyrung.core.fold import _calc_self_referential
 
-        DS = Block("DS", TagType.INT, 1, 2)
-        X = DS[1]
-        expr = {
-            "sum": DS.select(1, 2).sum() + 1,
-            "math": sqrt(X),
-            "shift": lsh(X, 1),
-        }[form]
-        with Program(strict=False) as prog:
-            with Rung():
-                calc(expr, X)
+        def build() -> Program:
+            DS = Block("DS", TagType.INT, 1, 2)
+            X = DS[1]
+            expr = {
+                "sum": DS.select(1, 2).sum() + 1,
+                "math": sqrt(X),
+                "shift": lsh(X, 1),
+            }[form]
+            with Program(strict=False) as prog:
+                with Rung():
+                    calc(expr, X)
+            return prog
 
-        pdg = build_program_graph(prog)
-        assert _calc_self_referential(X.name, pdg, prog)
+        _assert_fold_is_exact(build, _scans(100), patch={"DS1": 9, "DS2": 9})
 
 
 # ---------------------------------------------------------------------------
@@ -1437,14 +1417,6 @@ class TestRtcTickBound:
     """A rung or a run_until condition that reads an ``rtc.*`` field bounds every
     fold window at that field's next tick, so folding never skips one."""
 
-    def test_rtc_fields_are_collected(self) -> None:
-        prog, _x = _rtc_latch_program()
-        plc = _rtc_plc(prog)
-        assert plc._ensure_fold_context().rtc_fields == {system.rtc.second.name}
-        cond = plc._ensure_fold_context(frozenset({system.rtc.minute.name}))
-        assert cond.rtc_condition_fields == {system.rtc.minute.name}
-        assert cond.rtc_fields == {system.rtc.second.name, system.rtc.minute.name}
-
     def test_rtc_condition_rung_does_not_skip_its_second(self) -> None:
         prog, _x = _rtc_latch_program()
         stepped = _rtc_plc(prog)
@@ -1471,26 +1443,13 @@ class TestRtcTickBound:
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
 
-    def test_probe_must_read_the_window_value(self) -> None:
-        """A probe that read the second before a tick, landing after it, says
-        nothing about a window that reads the new second."""
-        from types import SimpleNamespace
-
-        from pyrung.core.fold import _scans_to_rtc_tick
-
-        prog, _x = _rtc_latch_program()
-        plc = _rtc_plc(prog, start=(2026, 3, 1, 12, 59, 57, 0))
-        ctx = plc._ensure_fold_context()
-        fields = ctx.rtc_fields
-        rtc_at = plc._rtc_at_sim_time
-        # The second ticks at sim time 1.0 (scan reads at 0.99 and 1.00).
-        after = SimpleNamespace(tags=plc.state.tags, timestamp=1.005)
-        assert _scans_to_rtc_tick(ctx, after, 0.995, rtc_at, fields) == 0
-        after = SimpleNamespace(tags=plc.state.tags, timestamp=1.015)
-        assert _scans_to_rtc_tick(ctx, after, 1.005, rtc_at, fields) == 99
-        # Reads at 1.015 .. 1.995 see the same second; the landing may follow.
-        before = SimpleNamespace(tags=plc.state.tags, timestamp=0.505)
-        assert _scans_to_rtc_tick(ctx, before, 0.495, rtc_at, fields) == 50
+    def test_across_a_tick_soon_after_the_start_matches_stepped(self) -> None:
+        """The second ticks a scan into the run, and the scans after it read the new one."""
+        folded, stepped = _folded_and_stepped(
+            lambda: _rtc_latch_program()[0], _scans(4_000), start=(2026, 3, 1, 12, 59, 57, 0)
+        )
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _full_state(folded) == _full_state(stepped)
 
     @pytest.mark.parametrize("dt", [0.010, 0.030, 0.070])
     def test_rtc_gated_counter_matches_stepped(self, dt: float) -> None:
@@ -1504,56 +1463,22 @@ class TestRtcTickBound:
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
 
-    def test_apply_flag_declines_the_window(self) -> None:
-        from types import SimpleNamespace
-
-        from pyrung.core.fold import _scans_to_rtc_tick
-
-        prog, _x = _rtc_latch_program()
-        plc = _rtc_plc(prog)
-        ctx = plc._ensure_fold_context()
-        state = plc.state
-        free = _scans_to_rtc_tick(
-            ctx, state, state.timestamp - ctx.normal_dt, plc._rtc_at_sim_time, ctx.rtc_fields
+    def test_apply_flag_matches_stepped(self) -> None:
+        folded, stepped = _folded_and_stepped(
+            lambda: _rtc_latch_program()[0],
+            _scans(300),
+            patch={system.rtc.apply_time.name: True},
         )
-        assert free is not None and free > 0
-        applying = SimpleNamespace(
-            tags={**state.tags, system.rtc.apply_time.name: True}, timestamp=state.timestamp
-        )
-        assert (
-            _scans_to_rtc_tick(
-                ctx,
-                applying,
-                state.timestamp - ctx.normal_dt,
-                plc._rtc_at_sim_time,
-                ctx.rtc_fields,
-            )
-            == 0
-        )
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _full_state(folded) == _full_state(stepped)
 
     @pytest.mark.parametrize("dt", [0.010, 0.5])
-    def test_replay_seek_matches_replay(self, dt: float) -> None:
+    def test_replay_matches_stepping(self, dt: float) -> None:
         prog, _hit = _rtc_mirror_only_program()
         plc = _rtc_plc(prog, dt=dt)
-        for _ in range(int(30 / dt)):
-            plc.step()
         target = int(19.5 / dt)
-        seek = plc._replay_seek(target)
-        ref = plc.replay_to(target)
-        assert seek.state.scan_id == ref.state.scan_id
-        assert _plain_tags(seek) == _plain_tags(ref)
-
-
-def _unbounded_rtc(plc: PLC) -> None:
-    """Drop the RTC tick bound from every cached fold context, so a window can
-    span ticks and the landing scan alone decides what the RTC reads."""
-    from dataclasses import replace
-
-    plc._ensure_fold_context()
-    cache = plc._fold_context_cache
-    assert cache is not None
-    for key, value in list(cache.items()):
-        cache[key] = replace(value, rtc_fields=frozenset())
+        truth = _step_noting(plc, int(30 / dt), (target,))
+        assert _full_state(plc.replay_to(target)) == truth[target]
 
 
 class TestFoldLandingTime:
@@ -1566,26 +1491,18 @@ class TestFoldLandingTime:
         _run_scans(stepped, 4_000, fold=False)
         prog, _hit = _rtc_mirror_only_program()
         folded = _rtc_plc(prog)
-        _unbounded_rtc(folded)
-        counter = _count_kernel_scans(folded)
         _run_scans(folded, 4_000, fold=True)
 
-        assert counter["n"] < 10  # one window spans every tick
-        assert folded.state.timestamp == pytest.approx(stepped.state.timestamp)
+        assert folded.state.timestamp == stepped.state.timestamp
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
 
-    def test_compiled_replay_landing_resolves_rtc(self) -> None:
+    def test_compiled_replay_resolves_rtc(self) -> None:
         prog, _hit = _rtc_mirror_only_program()
         plc = _rtc_plc(prog)
-        for _ in range(3_000):
-            plc.step()
-        _unbounded_rtc(plc)
-        # Between checkpoints, so the seek has to fold across ticks.
-        seek = plc._replay_seek(1_950)
-        ref = plc.replay_to(1_950)
-        assert 0 < plc._last_replay_seek_stats["kernel_scans"] < 100
-        assert _plain_tags(seek) == _plain_tags(ref)
+        # Between checkpoints, so the seek runs scans across ticks.
+        truth = _step_noting(plc, 3_000, (1_950,))
+        assert _full_state(plc.replay_to(1_950)) == truth[1_950]
 
     def test_landing_edge_memory_matches_stepping(self) -> None:
         """rise(clock) after a fold compares against the clock the last folded
@@ -1735,17 +1652,6 @@ class TestSoftRtcTicks:
     """While every rung that reads a clock copy is off, the landing scan
     rebuilds the copies exactly, so folds cross RTC ticks bit-equal."""
 
-    def test_mirrors_and_off_readers_are_found(self) -> None:
-        from pyrung.core.fold import _time_mirrors_off
-
-        prog, hit = _rtc_mirror_program()
-        plc = _rtc_mirror_plc(prog)
-        tm = plc._ensure_fold_context(frozenset({hit.name})).time_mirrors
-        assert tm is not None
-        assert tm.names == {"Sec", "HHMM"}
-        assert len(tm.dead_nodes) == 1
-        assert _time_mirrors_off(tm, (plc.state.tags,))
-
     @pytest.mark.parametrize("mode", ["run_for", "callable"])
     @pytest.mark.parametrize("seconds", [5, 12])
     def test_folded_matches_stepped_across_rollovers(self, seconds: int, mode: str) -> None:
@@ -1785,17 +1691,6 @@ class TestSoftRtcTicks:
         # About one real scan for each RTC second the rungs read.
         assert counter["n"] < 20
 
-    def test_live_reader_is_not_judged_off(self) -> None:
-        from pyrung.core.fold import _time_mirrors_off
-
-        prog, hit = _rtc_mirror_program()
-        plc = _rtc_mirror_plc(prog)
-        tm = plc._ensure_fold_context(frozenset({hit.name})).time_mirrors
-        assert tm is not None
-        plc.patch({"Manual": 1})
-        plc.step()
-        assert not _time_mirrors_off(tm, (plc.state.tags,))
-
     def test_live_reader_folded_matches_stepped(self) -> None:
         folded, stepped = _folded_and_stepped(
             lambda: _rtc_mirror_program()[0], _until_hit(10_000), patch={"Manual": 1}
@@ -1807,14 +1702,6 @@ class TestSoftRtcTicks:
     def test_one_shot_stamp_is_inactive_either_way(self, stopped: bool) -> None:
         """Powered, the one-shot stamp fired on its first powered scan; off, it
         does nothing.  Either way it does not act on a tick."""
-        from pyrung.core.fold import _time_mirrors_off
-
-        prog, hit = _rtc_mirror_program(stop_stamp=True)
-        plc = _rtc_mirror_plc(prog, Stopped=stopped)
-        tm = plc._ensure_fold_context(frozenset({hit.name})).time_mirrors
-        assert tm is not None
-        assert _time_mirrors_off(tm, (plc.state.tags,))
-
         folded, stepped = _folded_and_stepped(
             lambda: _rtc_mirror_program(stop_stamp=True)[0],
             _until_hit(10_000),
@@ -1834,18 +1721,14 @@ class TestSoftRtcTicks:
         assert _plain_tags(folded) == _plain_tags(stepped)
 
     @pytest.mark.parametrize("dt", [0.5, 0.01])
-    def test_replay_seek_across_soft_ticks(self, dt: float) -> None:
+    def test_replay_across_soft_ticks_matches_stepping(self, dt: float) -> None:
         from datetime import datetime
 
         plc = PLC(_rtc_mirror_program()[0], dt=dt)
         plc.set_rtc(datetime(*_RTC_START))
-        for _ in range(int(30 / dt)):
-            plc.step()
         target = int(19.5 / dt)
-        seek = plc._replay_seek(target)
-        ref = plc.replay_to(target)
-        assert plc._last_replay_seek_stats["kernel_scans"] < 20
-        assert _plain_tags(seek) == _plain_tags(ref)
+        truth = _step_noting(plc, int(30 / dt), (target,))
+        assert _full_state(plc.replay_to(target)) == truth[target]
 
 
 def _branch_position_program(shape: str) -> Program:
@@ -1944,112 +1827,110 @@ class TestSoftRtcRefusals:
 
     _START = (2026, 3, 1, 12, 59, 5, 250_000)
 
-    @staticmethod
-    def _tm(prog: Program, targets: frozenset[str] = frozenset()) -> Any:
-        plc = _rtc_plc(prog)
-        return plc._ensure_fold_context(targets).time_mirrors
+    def _assert_matches_stepped(self, build: Callable[[], Program], **patch: Any) -> None:
+        # dt 0.05 over 100 s: the clock copy ticks over a minute rollover.
+        folded, stepped = _folded_and_stepped(
+            build, _scans(2_000), dt=0.05, start=self._START, patch=patch or None
+        )
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _full_state(folded) == _full_state(stepped)
 
     def test_reader_before_writer(self) -> None:
-        from pyrung import copy
+        def build() -> Program:
+            Sec, Echo = Int("Sec"), Int("Echo")
+            with Program(strict=False) as prog:
+                with Rung():
+                    copy(Sec, Echo)
+                with Rung():
+                    copy(system.rtc.second, Sec)
+            return prog
 
-        Sec, Echo = Int("Sec"), Int("Echo")
-        with Program(strict=False) as prog:
-            with Rung():
-                copy(Sec, Echo)
-            with Rung():
-                copy(system.rtc.second, Sec)
-        assert self._tm(prog) is None
+        self._assert_matches_stepped(build)
 
     def test_mirror_in_an_enable_condition(self) -> None:
-        from pyrung import copy, latch
+        def build() -> Program:
+            Sec, X = Int("Sec"), Bool("X")
+            with Program(strict=False) as prog:
+                with Rung():
+                    copy(system.rtc.second, Sec)
+                with Rung(Sec == 30):
+                    latch(X)
+            return prog
 
-        Sec, X = Int("Sec"), Bool("X")
-        with Program(strict=False) as prog:
-            with Rung():
-                copy(system.rtc.second, Sec)
-            with Rung(Sec == 30):
-                latch(X)
-        assert self._tm(prog) is None
+        self._assert_matches_stepped(build)
 
     def test_mirror_as_target(self) -> None:
-        from pyrung import copy
+        def build() -> Program:
+            Sec, Req, Log = Int("Sec"), Bool("Req"), Int("Log")
+            with Program(strict=False) as prog:
+                with Rung():
+                    copy(system.rtc.second, Sec)
+                with Rung(Req):
+                    copy(Sec, Log)
+            return prog
 
-        Sec, Req, Log = Int("Sec"), Bool("Req"), Int("Log")
-        with Program(strict=False) as prog:
-            with Rung():
-                copy(system.rtc.second, Sec)
-            with Rung(Req):
-                copy(Sec, Log)
-        assert self._tm(prog) is not None
-        assert self._tm(prog, frozenset({"Sec"})) is None
+        folded, stepped = _folded_and_stepped(
+            build,
+            lambda plc, fold: plc.run_until(Int("Sec") == 30, max_cycles=2_000, fold=fold),
+            dt=0.05,
+            start=self._START,
+        )
+        assert stepped.state.tags["Sec"] == 30
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _full_state(folded) == _full_state(stepped)
 
-    def test_calc_that_could_fault_is_not_a_mirror(self) -> None:
-        """``second * 1000`` overflows an Int: the out-of-range flag would follow
-        the clock, so the calc is a live reader, not a rebuilt copy."""
-        from pyrung import copy
+    def test_calc_that_could_fault(self) -> None:
+        """``second * 1000`` overflows an Int: the out-of-range flag follows the clock."""
 
-        Big, Req, Log = Int("Big"), Bool("Req"), Int("Log")
-        with Program(strict=False) as prog:
-            with Rung():
-                calc(system.rtc.second * 1000, Big)
-            with Rung(Req):
-                copy(Big, Log)
-        assert self._tm(prog) is None
+        def build() -> Program:
+            Big, Req, Log = Int("Big"), Bool("Req"), Int("Log")
+            with Program(strict=False) as prog:
+                with Rung():
+                    calc(system.rtc.second * 1000, Big)
+                with Rung(Req):
+                    copy(Big, Log)
+            return prog
 
-    def test_fault_flag_reader_does_not_disable_mirrors(self) -> None:
-        from pyrung import copy, latch
+        self._assert_matches_stepped(build)
+        self._assert_matches_stepped(build, Req=True)
 
-        Sec, Req, Log = Int("Sec"), Bool("Req"), Int("Log")
-        with Program(strict=False) as prog:
-            with Rung():
-                copy(system.rtc.second, Sec)
-            with Rung(Req):
-                copy(Sec, Log)
-            with Rung(system.fault.out_of_range):
-                latch(Bool("Err"))
-        tm = self._tm(prog)
-        assert tm is not None and tm.names == {"Sec"}
+    def test_fault_flag_reader(self) -> None:
+        def build() -> Program:
+            Sec, Req, Log = Int("Sec"), Bool("Req"), Int("Log")
+            with Program(strict=False) as prog:
+                with Rung():
+                    copy(system.rtc.second, Sec)
+                with Rung(Req):
+                    copy(Sec, Log)
+                with Rung(system.fault.out_of_range):
+                    latch(Bool("Err"))
+            return prog
 
-    def test_clock_gated_copy_is_a_reader_never_off(self) -> None:
-        from pyrung import copy
-        from pyrung.core.fold import _time_mirrors_off
+        self._assert_matches_stepped(build)
 
-        Sec, Gated = Int("Sec"), Int("Gated")
-        with Program(strict=False) as prog:
-            with Rung():
-                copy(system.rtc.second, Sec)
-            with Rung(system.sys.clock_1s):
-                copy(system.rtc.second, Gated)
-        plc = _rtc_plc(prog)
-        tm = plc._ensure_fold_context().time_mirrors
-        assert tm is not None and "Gated" not in tm.names
-        assert not _time_mirrors_off(tm, (plc.state.tags,))
+    def test_clock_gated_copy(self) -> None:
+        def build() -> Program:
+            Sec, Gated = Int("Sec"), Int("Gated")
+            with Program(strict=False) as prog:
+                with Rung():
+                    copy(system.rtc.second, Sec)
+                with Rung(system.sys.clock_1s):
+                    copy(system.rtc.second, Gated)
+            return prog
 
-    def test_self_feeding_clock_calc_is_never_off(self) -> None:
-        from pyrung import copy
-        from pyrung.core.fold import _time_mirrors_off
+        self._assert_matches_stepped(build)
 
-        Sec, Tot = Int("Sec"), Int("Tot")
-        with Program(strict=False) as prog:
-            with Rung():
-                copy(system.rtc.second, Sec)
-            with Rung():
-                calc(Tot + system.rtc.second, Tot)
-        plc = _rtc_plc(prog)
-        tm = plc._ensure_fold_context().time_mirrors
-        assert tm is not None and "Tot" not in tm.names
-        assert not _time_mirrors_off(tm, (plc.state.tags,))
+    def test_self_feeding_clock_calc(self) -> None:
+        def build() -> Program:
+            Sec, Tot = Int("Sec"), Int("Tot")
+            with Program(strict=False) as prog:
+                with Rung():
+                    copy(system.rtc.second, Sec)
+                with Rung():
+                    calc(Tot + system.rtc.second, Tot)
+            return prog
 
-    def test_branch_is_judged_at_its_own_position(self) -> None:
-        from pyrung.core.fold import _time_mirrors_off
-
-        plc = _rtc_plc(_branch_position_program("above"), dt=1.0, start=self._START)
-        for _ in range(30):
-            plc.step()
-        tm = plc._ensure_fold_context(frozenset({"Hit"})).time_mirrors
-        assert tm is not None
-        assert plc.state.tags["Half"] == 1  # the branch is live
-        assert not _time_mirrors_off(tm, (plc.state.tags,))
+        self._assert_matches_stepped(build)
 
     @pytest.mark.parametrize("shape", ["above", "below", "continued"])
     @pytest.mark.parametrize("dt", [1.0, 0.05])
@@ -2080,13 +1961,9 @@ class TestSoftRtcRefusals:
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
 
-    def test_return_early_before_the_copy_is_not_a_recompute(self) -> None:
-        assert self._tm(_rtc_reader_shape("return_early")) is None
-
 
 class TestRunForScanCount:
-    """A folded run_for runs exactly the scans stepping would, although the
-    folded and stepped timestamps differ in their last bits."""
+    """A run_for on the loop runs exactly the scans stepping would."""
 
     @pytest.mark.parametrize(("dt", "seconds"), [(0.010, 40.0), (0.3, 12.0), (0.7, 33.0)])
     def test_folded_run_for_matches_stepped(self, dt: float, seconds: float) -> None:
@@ -2099,13 +1976,10 @@ class TestRunForScanCount:
         folded, stepped = run(True), run(False)
         assert folded.state.scan_id == stepped.state.scan_id
         assert folded.state.tags["X"] == stepped.state.tags["X"]
-        if dt == 0.010:
-            # At dt 0.3 / 0.7 a millisecond timer folded in one aggregate dt
-            # can floor one unit below its stepped sum (a separate issue).
-            assert _plain_tags(folded) == _plain_tags(stepped)
+        assert _full_state(folded) == _full_state(stepped)
 
     def test_stepped_scan_count_replays_the_additions(self) -> None:
-        from pyrung.core.fold import _stepped_scans_until
+        from pyrung.core.compiled_run import _stepped_scans_until
 
         t, n = 0.01, 0
         while t < 40.01:
@@ -2179,19 +2053,16 @@ class TestSoftRtcForcedTags:
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
 
-    def test_replay_seek_over_forced_history(self) -> None:
+    def test_replay_over_forced_history_matches_stepping(self) -> None:
         from datetime import datetime
 
         plc = PLC(_forced_gate_program(False), dt=0.01)
         plc.set_rtc(datetime(*self._START))
         plc.force("G", False)
-        for _ in range(4_001):
-            plc.step()
+        truth = _step_noting(plc, 4_001, (2_490, 2_599))
         for target in (2_490, 2_599):
-            seek = plc._replay_seek(target)
-            ref = plc.replay_to(target)
-            assert _plain_tags(seek) == _plain_tags(ref)
-        assert ref.state.tags["Seen"] is True
+            assert _full_state(plc.replay_to(target)) == truth[target]
+        assert plc.replay_to(2_599).state.tags["Seen"] is True
 
 
 class TestSoftRtcCallablePredicate:
@@ -2289,10 +2160,20 @@ class TestLandingScanRaises:
 
 
 def _full_state(plc: PLC) -> dict[str, Any]:
-    """Every tag and memory slot except the per-scan diagnostics a landing inflates."""
+    """Every tag and memory slot."""
     state = _plain_tags(plc)
     state.update({f"mem:{k}": v for k, v in plc.state.memory.items()})
     return state
+
+
+def _step_noting(plc: PLC, n: int, scans: tuple[int, ...]) -> dict[int, dict[str, Any]]:
+    """Step *plc* *n* times, and return its full state as stepped at each of *scans*."""
+    noted = {}
+    for _ in range(n):
+        plc.step()
+        if plc.state.scan_id in scans:
+            noted[plc.state.scan_id] = _full_state(plc)
+    return noted
 
 
 def _assert_fold_is_exact(
@@ -2427,14 +2308,11 @@ class TestTimerCarryExact:
         _assert_fold_is_exact(self._timer_with_reader(unit, 30_000), _scans(n), dt=dt)
 
     @pytest.mark.parametrize(("dt", "n"), [(0.1, 300), (0.7, 100), (0.013, 3000)])
-    def test_replay_seek_matches_replay_to(self, dt: float, n: int) -> None:
+    def test_replay_matches_stepping(self, dt: float, n: int) -> None:
         plc = PLC(self._timer_with_reader("s", 1_000)(), dt=dt)
-        for _ in range(n):
-            plc.step()
         target = n - 5
-        sought = plc._replay_seek(target)
-        assert plc._last_replay_seek_stats["kernel_scans"] < n // 2
-        assert _full_state(sought) == _full_state(plc.replay_to(target))
+        truth = _step_noting(plc, n, (target,))
+        assert _full_state(plc.replay_to(target)) == truth[target]
 
     def test_timer_held_at_its_clamp_keeps_its_carry(self) -> None:
         # At 32767 with a whole-unit quantum and no carry, the probe sees the
@@ -2459,43 +2337,6 @@ class TestTimerCarryExact:
         assert folded.state.tags["Long_Acc"] == 32_767
 
     @pytest.mark.parametrize(
-        "quantum",
-        [
-            0.01,
-            0.05,
-            0.3,
-            0.7,
-            0.007,
-            0.013,
-            0.0013,
-            0.01 / 60,
-            0.03 / 60,
-            0.01 / 3600,
-            1.1,
-            1.5,
-            1.9,
-        ],
-    )
-    def test_accelerated_carry_equals_the_recurrence(self, quantum: float) -> None:
-        from pyrung.core.fold import _carry_run, _timer_step
-
-        for acc0, frac0, n, target in (
-            (0, 0.0, 30_000, None),
-            (32_700, 0.0, 30_000, None),
-            (5, 0.37, 20_000, 120),
-            (0, 0.0, 40_000, 400),
-        ):
-            acc, frac, reached = acc0, frac0, None
-            for k in range(1, n + 1):
-                acc, frac = _timer_step(acc, frac, quantum, 32_767)
-                if target is not None and acc >= target:
-                    reached = k
-                    break
-            steps, f_acc, f_frac, status = _carry_run(acc0, frac0, quantum, 32_767, n, target)
-            assert status == ("target" if reached else "limit")
-            assert (steps, f_acc, f_frac) == (reached or n, acc, frac)
-
-    @pytest.mark.parametrize(
         ("unit", "seconds", "max_kernel"), [("min", 86_400.0, 4), ("h", 8_640.0, 4)]
     )
     def test_sub_unit_timer_folds_long_runs_cheaply(
@@ -2517,20 +2358,6 @@ class TestTimerCarryExact:
         counter = _count_kernel_scans(plc)
         plc.run_for(seconds)
         assert counter["n"] <= max_kernel
-
-    @pytest.mark.parametrize(
-        ("quantum", "frac"),
-        [(10.0, 0.0), (700.0000000000001, 0.0), (300.0, 0.25), (0.1, 0.0), (1023.5, 0.5)],
-    )
-    def test_closed_form_carry_equals_the_recurrence(self, quantum: float, frac: float) -> None:
-        from pyrung.core.fold import _AccSource, _timer_after, _timer_step, _TimerMove
-
-        src = _AccSource("T_Acc", "T_Done", 32_767, "up", True)
-        move = _TimerMove(src, 0, frac, quantum, quantum)
-        acc, carry = 0, frac
-        for n in range(1, 400):
-            acc, carry = _timer_step(acc, carry, quantum, 32_767)
-            assert _timer_after(move, n) == (acc, carry)
 
 
 class TestSelfFeedingChurnExact:
@@ -2783,8 +2610,6 @@ class TestSelfFeedingChurnExact:
             lambda plc, fold: plc.run_until(Bool("End"), max_cycles=10_000, fold=fold),
             patch={"Wide": 32_000},
         )
-        plc = PLC(build(), dt=0.010)
-        assert bool(plc._ensure_fold_context().mirror_limits) is limit
 
     @staticmethod
     def _copy_into_a_word(step: int, reader: Callable[[Any], None]) -> Callable[[], Program]:
@@ -2942,9 +2767,7 @@ class TestSelfFeedingChurnExact:
         folded = _assert_fold_is_exact(build, _until_hit(1_000))
         assert folded.state.tags["FaultNow"] is False
 
-    def test_cycle_jump_stops_short_of_a_wrap(self) -> None:
-        from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
-
+    def test_a_period_2_cycle_stops_short_of_a_wrap(self) -> None:
         def build() -> Program:
             Tot = Int("Tot")
             Osc = Bool("Osc")
@@ -2970,12 +2793,7 @@ class TestSelfFeedingChurnExact:
             plc = PLC(build(), dt=0.010)
             plc.patch({"Tot": 32_000})
             plc.step()
-            if fold:
-                stats: dict[str, int] = {}
-                cycle_fold_until(plc, faulted, budget=3_000, kernel_budget=False, stats=stats)
-                assert stats["cycle_folds"] >= 1
-            else:
-                plc.run_until(faulted, max_cycles=3_000, fold=False)
+            plc.run_until(faulted, max_cycles=3_000, fold=fold)
             runs.append(plc)
         folded, stepped = runs
         assert folded.state.scan_id == stepped.state.scan_id
@@ -3067,7 +2885,7 @@ class TestClockEdgesAsRead:
     def test_rise_rungs_match_stepping(self, clock: str, dt: float, pulse: bool) -> None:
         _assert_fold_is_exact(self._rise_program(clock, pulse), _scans(2_000), dt=dt)
 
-    def test_replay_seek_keeps_every_rise(self) -> None:
+    def test_replay_keeps_every_rise(self) -> None:
         def build() -> Program:
             S = Int("S")
             with Program(strict=False) as prog:
@@ -3076,10 +2894,10 @@ class TestClockEdgesAsRead:
             return prog
 
         plc = PLC(build(), dt=0.25)
-        for _ in range(300):
-            plc.step()
-        for target in (10, 51, 157, 299):
-            assert plc._replay_seek(target).state.tags["S"] == plc.replay_to(target).state.tags["S"]
+        targets = (10, 51, 157, 299)
+        truth = _step_noting(plc, 300, targets)
+        for target in targets:
+            assert _full_state(plc.replay_to(target)) == truth[target]
 
 
 class TestFlagsFollowInsideAWindow:
@@ -3609,9 +3427,7 @@ class TestUnseenStopsStayExact:
         # A monitor watches every scan: the run steps, whichever tag it watches.
         assert kernel[True] == kernel[False]
 
-    def test_pause_breakpoint_blocks_cycle_jumps(self) -> None:
-        from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
-
+    def test_pause_breakpoint_in_a_period_2_cycle(self) -> None:
         def build() -> Program:
             Osc = Bool("Osc")
             with Program(strict=False) as prog:
@@ -3626,10 +3442,7 @@ class TestUnseenStopsStayExact:
             plc = PLC(build(), dt=0.010)
             plc.step()
             plc.when(Int("Tmr_Acc") >= 5_000).pause()
-            if fold:
-                cycle_fold_until(plc, lambda _s: False, budget=3_000, kernel_budget=False)
-            else:
-                plc.run_until(Bool("Never"), max_cycles=3_000, fold=False)
+            plc.run_until(Bool("Never"), max_cycles=3_000, fold=fold)
             runs.append(plc)
         assert runs[0].state.scan_id == runs[1].state.scan_id
         assert _full_state(runs[0]) == _full_state(runs[1])
@@ -3713,14 +3526,13 @@ class TestFoldedHistoryReplays:
                 out(Bool("Hit"))
         return prog
 
-    def test_history_replay_seek_and_forks_match_stepping(self) -> None:
+    def test_history_replay_and_forks_match_stepping(self) -> None:
         folded, stepped = _folded_and_stepped(self._program, _until_hit(3_000), patch={"En": True})
         tip = folded.state.scan_id
         assert tip == stepped.state.scan_id
         for target in (2, 3, 4, tip // 2, tip - 1, tip):
             want = _full_state(stepped.replay_to(target))
             assert _full_state(folded.replay_to(target)) == want
-            assert _full_state(folded._replay_seek(target)) == want
             assert _plain_tags_of(folded.history.at(target)) == _plain_tags_of(
                 stepped.history.at(target)
             )
@@ -3919,7 +3731,6 @@ class TestTimedDrumCorrectedEveryScan:
     def _assert_replay_matches(folded: PLC, stepped: PLC) -> None:
         for target in (2, 3, 60, 150, folded.state.scan_id - 1, folded.state.scan_id):
             want = _full_state(stepped.replay_to(target))
-            assert _full_state(folded._replay_seek(target)) == want
             assert _full_state(folded.replay_to(target)) == want
 
     @pytest.mark.parametrize("kind", ["time", "time_event"])
@@ -3971,19 +3782,13 @@ class TestTimedDrumCorrectedEveryScan:
         assert folded.state.tags["DAcc"] == stepped.state.tags["DAcc"] > 0
         assert kernel_scans[True] < kernel_scans[False]
 
-    def test_program_writing_only_its_own_step_replays_folded(self) -> None:
-        """With no other writer of the step, replay keeps folding the drum."""
-        from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.fold import _build_fold_context
-
-        def contested(writer: str) -> frozenset[str]:
-            program = self._build("time", writer)()
-            plc = PLC(program, dt=0.010)
-            return _build_fold_context(plc, build_program_graph(program), program).contested_timers
-
-        assert contested("none") == frozenset()
-        for writer in ("above", "below", "same rung"):
-            assert contested(writer) == {"DAcc"}
+    @pytest.mark.parametrize("writer", ["none", "above", "below", "same rung"])
+    def test_replay_of_every_writer_matches_stepping(self, writer: str) -> None:
+        folded, stepped = _folded_and_stepped(
+            self._build("time", writer), _scans(300), patch={"En": True, "Stage": True}
+        )
+        assert _full_state(folded) == _full_state(stepped)
+        self._assert_replay_matches(folded, stepped)
 
 
 class TestTimedDrumReadsAnotherStep:
@@ -4035,7 +3840,6 @@ class TestTimedDrumReadsAnotherStep:
     def _assert_replay_matches(folded: PLC, stepped: PLC) -> None:
         for target in (2, 3, 19, 20, 21, 22, 150, folded.state.scan_id):
             want = _full_state(stepped.replay_to(target))
-            assert _full_state(folded._replay_seek(target)) == want
             assert _full_state(folded.replay_to(target)) == want
 
     @pytest.mark.parametrize("kind", ["time", "time_event"])
@@ -4085,9 +3889,6 @@ class TestTimedDrumReadsAnotherStep:
         assert folded.state.tags["DAcc"] == stepped.state.tags["DAcc"] > 0
         assert kernel_scans[True] < kernel_scans[False]
         self._assert_replay_matches(folded, stepped)
-        # Short of the tip: the tip and the checkpoints are cached, nothing to replay.
-        folded._replay_seek(folded.state.scan_id - 50)
-        assert folded._last_replay_seek_stats["ordinary_folded_scans"] > 0
 
     @pytest.mark.parametrize("kind", ["time", "time_event"])
     @pytest.mark.parametrize("presets", [(5, 5000, 5000), (200, 5000, 5000), (5000, 5, 200)])
@@ -4111,47 +3912,44 @@ class TestTimedDrumReadsAnotherStep:
         )
         assert _full_state(folded) == _full_state(stepped)
         for target in (40, 81, 82, 100, 161, 162, 163, 300, folded.state.scan_id):
-            assert _full_state(folded._replay_seek(target)) == _full_state(
-                stepped.replay_to(target)
-            )
+            assert _full_state(folded.replay_to(target)) == _full_state(stepped.replay_to(target))
 
     @pytest.mark.parametrize(
-        "above, below, contested",
+        "above, below",
         [
-            (None, None, False),
-            (1, None, False),
-            (None, 3, False),
-            (2, 2, False),
-            (1, 3, True),  # Two good steps.
-            (0, None, True),  # A bad step.
-            (4, None, True),  # Past the last step.
-            (True, None, True),  # Not a step number.
-            (Int("Staged"), None, True),  # Unknown.
+            (None, None),
+            (1, None),
+            (None, 3),
+            (2, 2),
+            (1, 3),  # Two good steps.
+            (0, None),  # A bad step.
+            (4, None),  # Past the last step.
+            (True, None),  # Not a step number.
+            (Int("Staged"), None),  # Unknown.
         ],
     )
-    def test_replay_needs_one_good_literal_step(
-        self, above: Any, below: Any, contested: bool
-    ) -> None:
-        from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.fold import _build_fold_context
+    def test_any_literal_step_matches_stepping(self, above: Any, below: Any) -> None:
+        build = self._build("time", above, below, (500, 500, 500))
+        folded, stepped = _folded_and_stepped(build, _scans(300), patch={"En": True, "Stage": True})
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _full_state(folded) == _full_state(stepped)
+        self._assert_replay_matches(folded, stepped)
 
-        program = self._build("time", above, below, (500, 500, 500))()
-        plc = PLC(program, dt=0.010)
-        found = _build_fold_context(plc, build_program_graph(program), program).contested_timers
-        assert found == ({"DAcc"} if contested else frozenset())
+    @pytest.mark.parametrize("how", ["calc", "pointer", "slot"])
+    def test_any_other_way_to_write_the_step_matches_stepping(self, how: str) -> None:
+        from pyrung import time_drum
 
-    def test_replay_counts_any_other_way_to_write_the_step(self) -> None:
-        from pyrung import Block, TagType, time_drum
-        from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.fold import _build_fold_context
-
-        bank = Block("Bank", TagType.INT, 1, 4)
-
-        def contested(write: Callable[[], Any], step: Any = None) -> frozenset[str]:
-            step = Int("Step") if step is None else step
+        def build() -> Program:
+            bank = Block("Bank", TagType.INT, 1, 4)
+            step = Int("Step") if how == "calc" else bank[2]
             with Program(strict=False) as program:
                 with Rung(Bool("Stage")):
-                    write()
+                    if how == "calc":
+                        calc(Int("Step") * 0 + 1, Int("Step"))
+                    elif how == "pointer":
+                        copy(1, bank[Int("I", default=2)])
+                    else:
+                        copy(1, bank[2])
                 with Rung(Bool("En")):
                     time_drum(
                         outputs=[Bool("O1")],
@@ -4162,12 +3960,12 @@ class TestTimedDrumReadsAnotherStep:
                         accumulator=Dint("DAcc"),
                         completion_flag=Bool("DDone"),
                     ).reset(Bool("R"))
-            plc = PLC(program, dt=0.010)
-            return _build_fold_context(plc, build_program_graph(program), program).contested_timers
+            return program
 
-        assert contested(lambda: calc(Int("Step") * 0 + 1, Int("Step"))) == {"DAcc"}
-        assert contested(lambda: copy(1, bank[Int("I")]), bank[2]) == {"DAcc"}
-        assert contested(lambda: copy(1, bank[2]), bank[2]) == frozenset()
+        folded, stepped = _folded_and_stepped(build, _scans(300), patch={"En": True, "Stage": True})
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _full_state(folded) == _full_state(stepped)
+        self._assert_replay_matches(folded, stepped)
 
     @pytest.mark.parametrize("reader", ["preset", "comparison"])
     def test_tag_written_around_a_timer_reader(self, reader: str) -> None:
@@ -4410,15 +4208,15 @@ class TestReadsOutsideTheCrossings:
         folded = _assert_fold_is_exact(self._timer_only, run)
         assert folded.state.scan_id < 5_000
 
-    def test_cycle_coast_traces_an_undeclared_predicate(self) -> None:
-        from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
+    def test_a_coast_traces_an_undeclared_predicate(self) -> None:
+        from pyrung.core.coast_run import coast_until
 
         def run(plc: PLC, fold: bool) -> None:
             def pred(s: Any) -> bool:
                 return s.tags.get("Tmr_Acc", 0) >= 5_000
 
             if fold:
-                cycle_fold_until(plc, pred, budget=5_000)
+                coast_until(plc, pred, budget=5_000)
             else:
                 plc.run_until(pred, max_cycles=5_000, fold=False)
 
@@ -4530,8 +4328,8 @@ class TestCallableReadsThePlc:
 
 
 class TestFoldedHistoryQueries:
-    """History materializes the scans a fold skipped; recorded cause() refuses
-    them clearly instead of answering from the one-step landing."""
+    """A run on the loop leaves scans out of the causal records.  A question that
+    reaches them steps them again, and answers as stepping does."""
 
     @staticmethod
     def _program() -> Program:
@@ -4552,7 +4350,7 @@ class TestFoldedHistoryQueries:
     def _runs(self) -> tuple[PLC, PLC]:
         folded, stepped = _folded_and_stepped(self._program, _until_hit(3_000), patch={"En": True})
         assert folded.state.scan_id == stepped.state.scan_id
-        assert folded._fold_windows
+        assert folded._unrecorded_scans
         return folded, stepped
 
     def test_range_and_latest_cover_every_scan(self) -> None:
@@ -4568,7 +4366,7 @@ class TestFoldedHistoryQueries:
 
     def test_cause_answers_as_stepping_does(self) -> None:
         folded, stepped = self._runs()
-        first, last = folded._fold_windows[0]
+        first, last = folded._unrecorded_scans[0]
         for scan in (first, (first + last) // 2, last):
             assert str(folded.cause("C_Acc", scan)) == str(stepped.cause("C_Acc", scan))
             assert str(folded.effect("C_Acc", scan)) == str(stepped.effect("C_Acc", scan))
@@ -4578,17 +4376,17 @@ class TestFoldedHistoryQueries:
 
     def test_a_question_settles_only_what_it_reaches(self) -> None:
         folded, stepped = self._runs()
-        first, last = folded._fold_windows[0]
+        first, last = folded._unrecorded_scans[0]
         mid = (first + last) // 2
         assert folded.rung_firings(mid) == stepped.rung_firings(mid)
-        assert folded._fold_windows == [(first, mid - 1), (mid + 1, last)]
+        assert folded._unrecorded_scans == [(first, mid - 1), (mid + 1, last)]
         assert folded.query.cold_rungs() == stepped.query.cold_rungs()
-        assert folded._fold_windows == []
+        assert folded._unrecorded_scans == []
         assert folded.rung_firings(mid) == stepped.rung_firings(mid)
 
     def test_a_question_past_the_limit_says_so(self, monkeypatch: pytest.MonkeyPatch) -> None:
         folded, _stepped = self._runs()
-        first, last = folded._fold_windows[0]
+        first, last = folded._unrecorded_scans[0]
         monkeypatch.setattr(runner_module, "SETTLE_SCAN_LIMIT", 10)
         with pytest.raises(UnrecordedScansError, match=rf"scans {first}\.\.{last} include"):
             folded.cause("Hit")
@@ -4597,7 +4395,7 @@ class TestFoldedHistoryQueries:
 
     def test_a_fork_answers_for_its_parents_scans(self) -> None:
         folded, stepped = self._runs()
-        first, last = folded._fold_windows[0]
+        first, last = folded._unrecorded_scans[0]
         mid = (first + last) // 2
         for at in (None, mid):
             child = folded.fork(at)
@@ -4610,9 +4408,9 @@ class TestFoldedHistoryQueries:
         # scans and none after it, and settling the epoch settles it for its forks too.
         child = folded.fork(mid)
         later = child.fork()
-        assert [e.fold_windows for e in child._causal_lineage.sealed_epochs] == [[(first, mid)]]
+        assert [e.unrecorded_scans for e in child._causal_lineage.sealed_epochs] == [[(first, mid)]]
         assert str(child.cause("C_Acc", mid)) == str(stepped.fork(mid).cause("C_Acc", mid))
-        assert not any(e.fold_windows for e in later._causal_lineage.sealed_epochs)
+        assert not any(e.unrecorded_scans for e in later._causal_lineage.sealed_epochs)
 
 
 class TestLandingDtReadouts:
@@ -4903,7 +4701,6 @@ class TestContestedTimer:
         for target in (5, 100, 160, 300, tip - 1, tip):
             want = _full_state(stepped.replay_to(target))
             assert _full_state(folded.replay_to(target)) == want
-            assert _full_state(folded._replay_seek(target)) == want
 
     def test_reset_writer_held_on_steps(self) -> None:
         def run(plc: PLC, fold: bool) -> None:

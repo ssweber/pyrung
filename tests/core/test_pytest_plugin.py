@@ -105,7 +105,7 @@ class TestCoverageCollector:
 
         monkeypatch.setattr(runner, "SETTLE_SCAN_LIMIT", 10)
         plc = long_run(stepped=False)
-        assert plc._fold_windows
+        assert plc._unrecorded_scans
         with pytest.raises(UnrecordedScansError):
             plc.query.cold_rungs()  # a question has its limit
 

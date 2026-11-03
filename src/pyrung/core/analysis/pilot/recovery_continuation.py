@@ -328,4 +328,4 @@ def exact_local_repair_window(
     ):
         return False
     receipt = pulse.coast_receipt
-    return receipt is None or not (receipt.macro_folds or receipt.skipped_scans)
+    return receipt is None or not (receipt.stretches or receipt.stretched_scans)

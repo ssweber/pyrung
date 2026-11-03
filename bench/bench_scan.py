@@ -3,7 +3,7 @@
 The default case reuses one PackML runner.  ``--pilot`` repeatedly forks a
 warm runner and drives each child through ``run_until(..., fold=False)``, which
 models pilot's short-lived trial forks while keeping the measurement focused on
-real interpreted scans rather than fold detection.
+real interpreted scans rather than the guarded loop.
 
 Usage:
     uv run python bench/bench_scan.py

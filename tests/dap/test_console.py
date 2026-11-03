@@ -903,7 +903,7 @@ class TestCausalVerbs:
 
         assert _format_pilot_progress(event) == "  State 6 -> 7 after 20 scans.\n"
 
-    def test_how_progress_reports_folded_and_kernel_work(self):
+    def test_how_progress_reports_loop_and_interpreted_work(self):
         from pyrung.core.analysis.pilot.types import PilotEvent
         from pyrung.dap.console import _format_pilot_progress
 
@@ -916,14 +916,14 @@ class TestCausalVerbs:
                 "bearing_coast_channel_tag": "State",
                 "bearing_coast_before_value": 6,
                 "bearing_coast_actual_value": 7,
-                "coast_skipped_scans": 3300,
+                "coast_stretched_scans": 3300,
                 "coast_kernel_scans": 497,
             },
         )
 
         assert (
             _format_pilot_progress(event)
-            == "  State 6 -> 7 after 3797 scans (3,300 folded; 497 kernel).\n"
+            == "  State 6 -> 7 after 3797 scans (3,300 in the loop; 497 interpreted).\n"
         )
 
 

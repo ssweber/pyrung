@@ -515,7 +515,7 @@ def observe_departure(
     )
     # Execution's pen timeline already names the exact occurrence scan.  Use
     # its predecessor for the earned-work receipt before asking for a deep
-    # causal explanation.  On a long folded run, rebuilding that explanation
+    # causal explanation.  On a long coast, rebuilding that explanation
     # merely to discover an already-proven clean forward continuation turns
     # this classification into a history replay.
     if work is not None and cause_scan is not None and cause_scan > work.history.oldest_scan_id:

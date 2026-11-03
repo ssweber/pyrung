@@ -1359,8 +1359,6 @@ def _build_access_sequence(
     node_index_by_rung: dict[int, int],
     tag_refs: dict[str, Tag],
     fault_writes: frozenset[str] = frozenset(),
-    *,
-    loop_iterations: int = 1,
 ) -> tuple[_AccessEvent, ...]:
     """Build execution-ordered access events following runner semantics.
 
@@ -1368,7 +1366,6 @@ def _build_access_sequence(
     correctly reflect cross-subroutine ordering (e.g. a main-program rung
     after a ``call()`` reads the version written by the subroutine, not the
     scan-entry version).  Implicit fault writes count for *fault_writes* only.
-    A For body is emitted *loop_iterations* times.
     """
     from pyrung.core.rung import Rung as RungClass
 
@@ -1407,19 +1404,18 @@ def _build_access_sequence(
             events.append(instruction_event)
 
         if isinstance(item, ForLoopInstruction):
-            for _iteration in range(loop_iterations):
-                for child in item.body:
-                    if isinstance(child, RungClass):
-                        # A body rung reads its contacts when it runs, in body order.
-                        local_reads = _rung_condition_reads(child, tag_refs, local_only=True)
-                        if local_reads:
-                            events.append(
-                                _AccessEvent(node_index=node_index, condition_reads=local_reads)
-                            )
-                        for body_instr in child._instructions:
-                            walk_instruction(body_instr, node_index)
-                    else:
-                        walk_instruction(child, node_index)
+            for child in item.body:
+                if isinstance(child, RungClass):
+                    # A body rung reads its contacts when it runs, in body order.
+                    local_reads = _rung_condition_reads(child, tag_refs, local_only=True)
+                    if local_reads:
+                        events.append(
+                            _AccessEvent(node_index=node_index, condition_reads=local_reads)
+                        )
+                    for body_instr in child._instructions:
+                        walk_instruction(body_instr, node_index)
+                else:
+                    walk_instruction(child, node_index)
 
         if isinstance(item, CallInstruction):
             inline_subroutine(item.subroutine_name)
@@ -1495,34 +1491,6 @@ def _build_def_use_chains(
         )
         for tag_name in all_tags
     }
-
-
-def tags_read_between_writes(
-    program: Program,
-    graph: ProgramGraph,
-    written_before: Collection[str] = (),
-) -> frozenset[str]:
-    """Tags a scan can read between two of their writes, as far as the rungs show.
-
-    Such a read sees a value that is neither the one the scan entered with nor
-    the one it ends with: a scan boundary does not show it.  For bodies count
-    twice, so a read also sees the iteration before.  *written_before* names the
-    tags something outside *program* writes before its first rung.  Over-cap
-    indirect writes have no events (see ``ProgramGraph.indirect_writes``).
-    """
-    # Only the order of the versions matters here, not which node made them.
-    events = _build_access_sequence(
-        program,
-        defaultdict(int),
-        dict(graph.tags),
-        graph.fault_writes,
-        loop_iterations=2,
-    )
-    return frozenset(
-        name
-        for name, versions in _build_def_use_chains(events).items()
-        if any(version.read_by for version in versions[0 if name in written_before else 1 : -1])
-    )
 
 
 def resolve_rung(program: Program, node: RungNode) -> Rung | None:

@@ -294,7 +294,6 @@ class ScanContext:
         "_current_node_id",
         "_read_sink",
         "_write_sink",
-        "_acc_writes",
         "_tag_write_sources",
         "_memory_write_sources",
         "_resolver",
@@ -371,10 +370,6 @@ class ScanContext:
         # callback check; no ordered journal is allocated unless an observer
         # installs the sink.
         self._write_sink: WriteOccurrenceSink | None = None
-        # Optional write count per watched tag (the timed accumulators a fold
-        # probe checks for a second write in one scan).  ``None`` on scans
-        # nothing watches.
-        self._acc_writes: dict[str, int] | None = None
         # Definition tokens for pending values during an observed replay.
         # The write sink creates each token; ConditionView freezes these maps
         # beside its pending values so a later read names the definition it
@@ -507,20 +502,7 @@ class ScanContext:
             if self._tag_write_sources is not None:
                 self._tag_write_sources[name] = source
         self._journal_capture(name, value)
-        counts = self._acc_writes
-        if counts is not None and name in counts:
-            counts[name] += 1
         self._tags_pending[name] = value
-
-    def entry_tag(self, name: str, default: Any = None) -> Any:
-        """A tag's value as the scan entered, whatever this scan has written since."""
-        return self._state_tags_read.get(name, default)
-
-    def count_acc_write(self, name: str) -> None:
-        """Count a write the watched accumulator's own writes do not show (see ``_acc_writes``)."""
-        counts = self._acc_writes
-        if counts is not None and name in counts:
-            counts[name] += 1
 
     def set_tags(self, updates: dict[str, Any]) -> None:
         """Set multiple tag values (batched, committed at end of scan).
@@ -540,11 +522,6 @@ class ScanContext:
         if self._capture_stack:
             for name in updates:
                 self._journal_capture(name, updates[name])
-        counts = self._acc_writes
-        if counts is not None:
-            for name in updates:
-                if name in counts:
-                    counts[name] += 1
         self._tags_pending.update(updates)
 
     def _set_tag_internal(self, name: str, value: Any) -> None:
@@ -555,9 +532,6 @@ class ScanContext:
             if self._tag_write_sources is not None:
                 self._tag_write_sources[name] = source
         self._journal_capture(name, value)
-        counts = self._acc_writes
-        if counts is not None and name in counts:
-            counts[name] += 1
         self._tags_pending[name] = value
 
     def _set_tags_internal(self, updates: dict[str, Any]) -> None:
@@ -571,11 +545,6 @@ class ScanContext:
         if self._capture_stack:
             for name in updates:
                 self._journal_capture(name, updates[name])
-        counts = self._acc_writes
-        if counts is not None:
-            for name in updates:
-                if name in counts:
-                    counts[name] += 1
         self._tags_pending.update(updates)
 
     def set_memory(self, key: str, value: Any) -> None:

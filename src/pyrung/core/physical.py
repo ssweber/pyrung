@@ -104,7 +104,7 @@ class Ramp:
 
     Lowered by :func:`pyrung.core.synthesis.analog_feedback_rungs` to an arm
     latch plus two guarded ``calc`` plant rungs reading ``sys.dt`` — real,
-    inspectable rungs that fold and trace natively (no Python tick, no io-gap).
+    inspectable rungs that compile and trace natively (no Python tick, no io-gap).
 
     The declaration is pure data, so it round-trips through a Click nickname
     comment as ``profile=ramp:up=<up>|down=<down>`` (see :meth:`to_token`).

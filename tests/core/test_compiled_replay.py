@@ -950,7 +950,7 @@ def test_replay_to_falls_back_for_unsupported_program() -> None:
     _assert_states_equivalent(replay, interpreted)
 
 
-def test_sparse_replay_seek_reports_unsupported_world_as_residual() -> None:
+def test_a_replay_of_a_world_the_kernel_cannot_run_lands_interpreted() -> None:
     enable = Bool("UnsupportedSeekEnable")
 
     with Program(strict=False) as program:
@@ -961,18 +961,10 @@ def test_sparse_replay_seek_reports_unsupported_world_as_residual() -> None:
     source.patch({"UnsupportedSeekEnable": True})
     source.run(5)
 
-    replay = source._replay_seek(4)
+    replay = source.replay_to(4)
 
     assert replay.state.scan_id == 4
     assert source._compiled_replay_supported_kernel() is None
-    assert source._last_replay_seek_stats == {
-        "logical_scans": 4,
-        "kernel_scans": 4,
-        "folded_scans": 0,
-        "ordinary_folded_scans": 0,
-        "cycle_folded_scans": 0,
-        "residual_scans": 4,
-    }
 
 
 def test_compiled_plc_with_prebuilt_kernel_does_not_walk_program(monkeypatch) -> None:

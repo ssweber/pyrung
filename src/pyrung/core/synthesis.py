@@ -10,7 +10,7 @@ harness couplings — a sensor reflecting the outputs the program already wrote)
 the feedback is an input image that lags the command by one scan.  ``holds`` then
 steer inputs before the program reads them (PILOT's input vector for this scan).
 Both are ordinary :class:`~pyrung.core.rung.Rung` objects built programmatically
-here, so the reader, fold, compile, and causal subsystems consume them with no
+here, so the reader, compile, and causal subsystems consume them with no
 special case — synthesis *is* rungs.
 
 Synthesis lives on the soft-exec :class:`~pyrung.core.runner.PLC` only (see
@@ -53,7 +53,7 @@ class Synthesis:
         return not self.holds and not self.plant
 
     def all_rungs(self) -> Iterator[Rung]:
-        """Yield every synthesis rung in scan order — for fold/compile walks."""
+        """Yield every synthesis rung in scan order — for compile walks."""
         yield from self.plant
         yield from self.holds
 
@@ -116,10 +116,8 @@ def analog_feedback_rungs(
     """Lower a linear analog coupling (a :class:`~pyrung.core.physical.Ramp`) to plant rungs.
 
     Rates are per **second**, applied against ``dt_tag`` (``sys.dt``), so the ramp
-    is stable across scan periods *and folds for free*: ``dt`` already carries the
-    macro-skip count, so ``fb += up*dt`` advances by the full N-scan amount in a
-    single folded scan — no accumulator special-casing.  The rungs are exactly
-    what a hand-written plant-sim ladder would use::
+    is stable across scan periods.  The rungs are exactly what a hand-written
+    plant-sim ladder would use::
 
         Rung(enable):            calc(fb + up*dt,   fb)   # advance while energized
         Rung(enable):            latch(armed)             # wake on first energize
@@ -558,7 +556,7 @@ def function_rung(
     """Build a guarded rung that runs an opaque ``fn`` with declared ins/outs.
 
     The ``ins``/``outs`` are declared, so the dataflow stays visible to PDG /
-    fold / trace / causal even though the body is opaque (the analog profile, a
+    trace / causal even though the body is opaque (the analog profile, a
     sandbox probe).  ``guard=None`` runs every scan; a guard arms it (e.g. an
     analog coupling that ticks only while its enable has activated it).
     """

@@ -938,8 +938,8 @@ def observe_execution_window(
     matching release-scan write therefore cannot satisfy or erase the promise
     made by the assertion. Pulse/Batch observations begin at the assertion scan
     and include only later kernel scans explicitly retained by the execution
-    session. Folded logical gaps remain unobserved rather than being replayed
-    as a complete logical corridor.
+    session. Scans inside a stretch of the loop remain unobserved rather than
+    being replayed as a complete logical corridor.
     """
 
     if expectation is None:
@@ -1018,7 +1018,7 @@ def observe_execution_window(
     complete_single_scan = (
         coast_receipt is not None
         and coast_receipt.logical_scans == 1
-        and coast_receipt.skipped_scans == 0
+        and coast_receipt.stretched_scans == 0
         and len(projections) == 1
         and projections[0].scan_id == landing_scan
     )
@@ -1064,7 +1064,7 @@ def observe_execution_window(
                         displaced_read=observation.displaced_read,
                         observed_reads=observation.observed_reads,
                         displacement_enabling_reads=(observation.displacement_enabling_reads),
-                        detail="coast corridor contains unobserved or folded scans",
+                        detail="coast corridor contains unobserved scans",
                     )
                 )
     return _bind_execution_owner(tuple(results), fork, fallback_scan=landing_scan)

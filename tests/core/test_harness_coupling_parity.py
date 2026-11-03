@@ -151,15 +151,14 @@ def test_bool_glitch_is_suppressed_under_dwell() -> None:
     )
 
 
-# ── bool dwell folds like a program timer ─────────────────────────────────────
-#    The on/off-delay timers are registered as ordinary fold sources, so a long
-#    dwell collapses to a handful of kernel scans (dt-knob) and lands *bit-equal*
-#    to stepping scan-by-scan — not stepped one scan at a time.
+# ── bool dwell runs like a program timer ─────────────────────────────────────
+#    The on/off-delay timers run as a program timer does, so a long dwell lands
+#    *bit-equal* to stepping scan-by-scan.
 
 
-def _bool_fold_plc(dt: float = 0.010):
+def _bool_dwell_plc(dt: float = 0.010):
     Enable = Bool("Enable", external=True)
-    # 2s on-delay at dt=10ms = 200 scans of dwell to fold through.
+    # 2s on-delay at dt=10ms = 200 scans of dwell.
     Fb = Bool("Fb", physical=Physical("M", on_delay="2s", off_delay="500ms"), link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
@@ -171,7 +170,7 @@ def _bool_fold_plc(dt: float = 0.010):
 
 
 def test_bool_dwell_lands_on_the_feedback() -> None:
-    plc = _bool_fold_plc()
+    plc = _bool_dwell_plc()
     plc.force("Enable", True)
     plc.run_until(lambda s: s.tags.get("Fb") is True, max_cycles=5000, fold=True)
 
@@ -179,17 +178,17 @@ def test_bool_dwell_lands_on_the_feedback() -> None:
     assert plc.state.scan_id >= 200  # the dwell really was ~200 scans long
 
 
-def test_bool_dwell_fold_matches_stepping() -> None:
+def test_bool_dwell_matches_stepping() -> None:
     # Run until the *program* reacts to the synthesized feedback (Stage := 1),
     # i.e. one scan after Fb commits — the program-visible event.
-    folded = _bool_fold_plc()
+    folded = _bool_dwell_plc()
     folded.force("Enable", True)
     folded.run_until(lambda s: s.tags.get("Stage") == 1, max_cycles=5000, fold=True)
 
-    stepped = _bool_fold_plc()
+    stepped = _bool_dwell_plc()
     stepped.force("Enable", True)
     stepped.run_until(lambda s: s.tags.get("Stage") == 1, max_cycles=5000, fold=False)
 
-    # Same scan the program latched the feedback — fold is sound, not approximate.
+    # Same scan the program latched the feedback.
     assert folded.state.scan_id == stepped.state.scan_id
     assert folded.state.tags["Stage"] == stepped.state.tags["Stage"] == 1

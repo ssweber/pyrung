@@ -566,7 +566,7 @@ def _verify_gates(
     """Apply the shared trial gates to an executed pulse or coast.
 
     Runs avoid and target checks, then spin and dead-end gates, outcome
-    classification, and finally revisit admission. Condition-like avoids fired by a folded coast
+    classification, and finally revisit admission. Condition-like avoids fired by a coast
     arrive on its receipt; opaque callables are checked only at endpoints and
     real snapshots retained by execution. All steering execution modes
     converge here.

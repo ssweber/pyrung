@@ -790,7 +790,7 @@ def promote_terminal_target_observation(
     The current frontier selected the static producer before execution. This
     adapter grants it terminal authority only after exactly one dynamic target
     occurrence appears and an exact same-scan projection proves the final
-    landing writer. Multiple appearances or a folded/missing projection are
+    landing writer. Multiple appearances or a missing projection are
     ambiguous and therefore produce no obligation failure.
     """
 

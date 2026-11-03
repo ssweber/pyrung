@@ -170,7 +170,7 @@ class TraceNode:
     # Public result requested from the advance owner, distinct from the
     # internal crossing in ``advance.until`` (a timer's Done=True versus
     # Acc>=preset). Coast heads to and verifies this result; the profile keeps
-    # the internal crossing as folding metadata.
+    # the internal crossing.
     owner_boundary: tuple[str, Any] | None = None
     owner_condition: Any = None
     # A non-linear profile's boundary is itself the next stage heading. Linear

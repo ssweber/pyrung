@@ -443,7 +443,6 @@ def test_replay_runs_each_scan_under_the_plant_that_ran_it(scan_id: int) -> None
 
     assert _exact(plc.history.at(scan_id).tags) == _exact(ran[scan_id].tags)
     assert _exact(plc.replay_to(scan_id).state.tags) == _exact(ran[scan_id].tags)
-    assert _exact(plc._replay_seek(scan_id).state.tags) == _exact(ran[scan_id].tags)
 
 
 def test_a_replayed_range_across_a_late_install_keeps_each_side() -> None:
@@ -459,8 +458,8 @@ def test_a_replayed_range_across_a_late_install_keeps_each_side() -> None:
     assert _exact(plc.history.at(700).tags) == _exact(across[10].tags)
 
 
-def test_a_replay_before_a_coupling_change_has_no_harness_to_fold_by() -> None:
-    """The plant it runs is not the one today's harness describes: its seek runs each scan."""
+def test_a_replay_before_a_coupling_change_has_no_harness() -> None:
+    """The plant it runs is not the one today's harness describes: it runs each scan."""
     enable, over, shown = Bool("Enable"), Bool("Over"), Real("Shown")
     timer = Timer.clone("Tm")
     temp = Real(
@@ -488,7 +487,7 @@ def test_a_replay_before_a_coupling_change_has_no_harness_to_fold_by() -> None:
     assert replay._harness is None
     counter = ScansOutsideLoop(replay)
     replay.run_for(30.0)
-    assert counter["n"] == 3_000, "every scan of the seek ran"
+    assert counter["n"] == 3_000, "every scan of the run ran"
     replay._recent_state_cache.clear()
     replay._replay_slabs.clear()
     for scan in (2_000, 3_000, 3_999, 4_000):

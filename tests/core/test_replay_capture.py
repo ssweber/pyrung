@@ -150,7 +150,7 @@ def test_replay_capture_uses_shared_state_slab_and_restores_force_map(
     assert views[RungId(None, 0)].get_tag("Enable") is True
 
 
-def test_sparse_replay_seek_folds_to_exact_endpoint_across_recorded_events() -> None:
+def test_sparse_replay_lands_as_stepped_across_recorded_events() -> None:
     enable = Bool("Enable", external=True)
     marker = Bool("Marker", external=True)
     timer = Timer.clone("ReplayFoldTmr")
@@ -164,34 +164,25 @@ def test_sparse_replay_seek_folds_to_exact_endpoint_across_recorded_events() -> 
 
     source = PLC(program, dt=0.01, checkpoint_interval=10_000)
     source.force(enable, True)
+    expected = source.current_state
     for scan_id in range(1, 3001):
         if scan_id == 421:
             source.patch({marker.name: True})
         source.step()
+        if source.current_state.scan_id == 2999:
+            expected = source.current_state
 
-    # Force both reconstructions to start at the initial state.  Checkpoint
-    # force snapshots remain in the scan log and must not become false
-    # boundaries when the effective force map is unchanged.
+    # Start the replay at the initial state.  Checkpoint force snapshots remain in the scan
+    # log and must not become false boundaries when the effective force map is unchanged.
     source._checkpoints.clear()
-    kernel = source._compiled_replay_supported_kernel()
-    assert kernel is not None
+    assert source._compiled_replay_supported_kernel() is not None
 
-    expected = source._replay_to_compiled(2999, kernel).state
-    actual = source._replay_seek(2999).state
+    actual = source.replay_to(2999).state
 
     assert actual.scan_id == expected.scan_id
-    assert actual.timestamp == pytest.approx(expected.timestamp)
+    assert actual.timestamp == expected.timestamp
     assert dict(actual.tags) == dict(expected.tags)
     assert dict(actual.memory) == dict(expected.memory)
-    assert source._last_replay_seek_stats["logical_scans"] == 2999
-    assert source._last_replay_seek_stats["folded_scans"] > 2950
-    assert source._last_replay_seek_stats["kernel_scans"] < 30
-    assert (
-        source._last_replay_seek_stats["ordinary_folded_scans"]
-        + source._last_replay_seek_stats["cycle_folded_scans"]
-        + source._last_replay_seek_stats["residual_scans"]
-        == source._last_replay_seek_stats["logical_scans"]
-    )
     assert not source._replay_slabs
 
     source._recent_state_cache.clear()
@@ -235,7 +226,7 @@ def test_causal_slab_spans_intermediate_checkpoints_as_one_contiguous_window() -
     assert source._state_at(601) is slab[601]
 
 
-def test_sparse_replay_seek_preserves_clock_edge_memory() -> None:
+def test_sparse_replay_preserves_clock_edge_memory() -> None:
     pulses = Int("ClockPulses")
 
     with Program(strict=False) as program:
@@ -245,16 +236,17 @@ def test_sparse_replay_seek_preserves_clock_edge_memory() -> None:
     source = PLC(program, dt=0.01)
     source.run(333)
     source._checkpoints.clear()
-    kernel = source._compiled_replay_supported_kernel()
-    assert kernel is not None
+    assert source._compiled_replay_supported_kernel() is not None
 
-    expected = source._replay_to_compiled(332, kernel).state
-    actual = source._replay_seek(332).state
+    twin = PLC(program, dt=0.01)
+    twin.run(332)
+    expected = twin.current_state
+    actual = source.replay_to(332).state
 
-    assert actual.timestamp == pytest.approx(expected.timestamp)
+    assert actual.scan_id == expected.scan_id
+    assert actual.timestamp == expected.timestamp
     assert dict(actual.tags) == dict(expected.tags)
     assert dict(actual.memory) == dict(expected.memory)
-    assert source._last_replay_seek_stats["folded_scans"] > 250
 
 
 def test_replay_capture_reuses_source_pdg(monkeypatch: pytest.MonkeyPatch) -> None:

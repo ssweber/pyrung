@@ -164,8 +164,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         default=False,
         help=(
-            "Check every folded run_until()/run_for()/cycle coast against a "
-            "stepped twin, scan by scan (tests/fold_check.py)."
+            "Check every run_until()/run_for() on the guarded loop and every coast "
+            "against a stepped twin, scan by scan (tests/fold_check.py)."
         ),
     )
     group = parser.getgroup("pyrung-conformance", "pyrung conformance suite")

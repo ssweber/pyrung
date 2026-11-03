@@ -1,18 +1,16 @@
-"""Fold differential check: every folded run against a stepped twin.
+"""Differential check of the long runs: every run in the guarded loop against a stepped twin.
 
-Enabled by ``--fold-check`` (``make test-fold``).  The entry points (``fold_run_until``,
-``fold_run_for``, ``compiled_run.run_scans``, PILOT's ``coast_until``) are wrapped.
-Before a folded run starts, a twin is built from the same tip state, forces,
-pending patches and synthesis overlay; after the run, the twin steps the same
-number of scans one by one, and every state the folded run itself produced
-(executed scans and landings, as cached) must equal the twin's state at that
-scan: tags and memory exactly, the timestamp to within a microsecond.  A
-run_until-style driver (``fold_run_until``, ``coast_until``) also hands the twin its stop predicate: if
-it is true on the twin at a scan before the one where the folded run stopped, the fold
-overshot and :class:`FoldMismatch` says so.  A predicate that reads the real runner
-instead of its argument (it would answer about the wrong runner on a twin) or that
-raises on the twin is not asked, and is counted.  A mismatch raises
-:class:`FoldMismatch` inside the test that ran the fold, naming the scan and the differing keys.
+Enabled by ``--fold-check`` (``make test-fold``).  The entry points
+(``compiled_run.run_scans``, ``coast_run.coast_until``) are wrapped.  Before a run starts, a
+twin is built from the same tip state, forces, pending patches and synthesis overlay; after
+the run, the twin steps the same number of scans one by one, and every state the run itself
+produced (executed scans and landings, as cached) must equal the twin's state at that scan,
+tags, memory and timestamp exactly.  A driver with a stop predicate also hands it to the twin:
+if it is true on the twin at a scan before the one where the run stopped, the run overshot
+and :class:`FoldMismatch` says so.  A predicate that reads the real runner instead of its
+argument (it would answer about the wrong runner on a twin) or that raises on the twin is not
+asked, and is counted.  A mismatch raises :class:`FoldMismatch` inside the test that ran it,
+naming the scan and the differing keys.
 
 The guarded scan loop runs in a finer mode here: it fires a few scans at a time
 (``scan_trace.BURST_SIZES``), and each state it leaves between firings is compared
@@ -82,7 +80,7 @@ HISTORY_SAMPLES = 4
 RTC_CHANGES_SAMPLED = 4
 # vacuous(): a run this long pays for a trace; below MIN_RUNS_TO_JUDGE of them the
 # session is too small to say (a single test), and the shares are well under what the
-# fold suites reach.
+# long-run suites reach.
 LONG_ENOUGH_FOR_THE_LOOP = 50
 MIN_RUNS_TO_JUDGE = 20
 MIN_SHARE_OF_RUNS_IN_THE_LOOP = 0.25
@@ -303,44 +301,29 @@ def _exact(value: Any) -> Any:
     return (type(value).__name__, value)
 
 
-def _image(state: Any, ignored: frozenset[str] = frozenset()) -> dict[str, Any]:
-    out = {k: _exact(v) for k, v in state.tags.items() if k not in ignored}
+def _image(state: Any) -> dict[str, Any]:
+    out = {k: _exact(v) for k, v in state.tags.items()}
     out.update({f"mem:{k}": _exact(v) for k, v in state.memory.items()})
     return out
-
-
-# The scan loop and real compiled scans add dt as stepping does, so they must land on
-# the same bits.  Only these older paths multiply (a fold's macro step, the history
-# seek, which uses it): drift this small reads alike there, and a landing inflates the
-# per-scan diagnostic (see fold._do_fold).
-_MACRO_STEP_KINDS = frozenset(
-    {"run_until", "run_for", "cycle", "history", "history, stepped runner"}
-)
-_TIMESTAMP_TOLERANCE = 1e-6
-_MACRO_STEP_IGNORED_TAGS = frozenset({"sys.scan_time_current_ms"})
 
 
 def _compare(
     kind: str, scan: int, folded: Any, stepped: Any, last_equal: int | None = None
 ) -> None:
-    macro = kind in _MACRO_STEP_KINDS
-    ignored = _MACRO_STEP_IGNORED_TAGS if macro else frozenset()
-    a, b = _image(folded, ignored), _image(stepped, ignored)
-    if macro:
-        if abs(folded.timestamp - stepped.timestamp) > _TIMESTAMP_TOLERANCE:
-            a[":timestamp"], b[":timestamp"] = folded.timestamp, stepped.timestamp
-    else:
-        a[":timestamp"], b[":timestamp"] = _exact(folded.timestamp), _exact(stepped.timestamp)
+    # The loop, real compiled scans and the history seek all add dt as stepping does, so
+    # they land on the same bits.
+    a, b = _image(folded), _image(stepped)
+    a[":timestamp"], b[":timestamp"] = _exact(folded.timestamp), _exact(stepped.timestamp)
     a[":scan_id"], b[":scan_id"] = folded.scan_id, stepped.scan_id
     if a == b:
         return
-    # A gap since the last equal state means the fold computed this one in a
-    # jump or a landing; no gap means one executed scan diverged.
+    # A gap since the last equal state means the loop computed this one inside a firing;
+    # no gap means one executed scan diverged.
     where = (
         ""
         if last_equal is None
         else f" (last equal state: scan {last_equal}, "
-        + ("an executed scan diverged)" if last_equal == scan - 1 else "computed across a fold)")
+        + ("an executed scan diverged)" if last_equal == scan - 1 else "computed in the loop)")
     )
     keys = sorted(k for k in a.keys() | b.keys() if a.get(k) != b.get(k))
     diff = ", ".join(f"{k}: folded={a.get(k)!r} stepped={b.get(k)!r}" for k in keys[:8])
@@ -607,7 +590,7 @@ def _record_pieces(plc: Any, first: int, end: int) -> list[tuple[Any, int, int]]
     """
     pieces = []
     cursor = first
-    for low, high in sorted(plc._fold_windows):
+    for low, high in sorted(plc._unrecorded_scans):
         low, high = max(low, first), min(high, end)
         if low > high:
             continue
@@ -709,13 +692,11 @@ def compare_history(kind: str, plc: Any, twin: Any, start: int, truth: dict[int,
     shows up here even if the landing is right.  *truth* holds the twin's states as it
     stepped them, and the seek is asked of both runners with their caches emptied: the
     stepped runner too, since a seek that is wrong by itself must not pass by agreeing
-    with itself.  The seek macro-steps (runner._replay_to_compiled), so its time gets
-    the macro tolerance; a tag or a memory value does not.
+    with itself.
     """
     end = plc._state.scan_id
     n = end - start
     middle = start + max(1, n // 2)
-    seek_stats = getattr(plc, "_last_replay_seek_stats", None)
     kept = {
         runner: (dict(runner._recent_state_cache), dict(runner._replay_slabs))
         for runner in (plc, twin)
@@ -751,8 +732,6 @@ def compare_history(kind: str, plc: Any, twin: Any, start: int, truth: dict[int,
                 break
             _compare("history", fork._state.scan_id, fork._state, twin_fork._state)
             STATS["scans compared on a fork from inside a range"] += 1
-    if seek_stats is not None:
-        plc._last_replay_seek_stats = seek_stats
 
 
 # how() ends on these, and they are BaseExceptions so its own catches leave them alone.
@@ -1368,15 +1347,12 @@ def _checked(
 def install() -> None:
     """Wrap the entry points (idempotent)."""
     import pyrung.core.analysis.pilot.coast as pilot_coast
-    import pyrung.core.analysis.pilot.cyclefold as cyclefold
     import pyrung.core.coast_run as coast_run
-    import pyrung.core.fold as fold
 
     if getattr(compiled_run, "_fold_check_installed", False):
         return
     setattr(compiled_run, "_fold_check_installed", True)  # noqa: B010
 
-    run_until, run_for, cycle = fold.fold_run_until, fold.fold_run_for, cyclefold.cycle_fold_until
     compiled_scans = compiled_run.run_scans
     coast = coast_run.coast_until
     # Send every run through the kernel: a short run is the common test.
@@ -1406,21 +1382,6 @@ def install() -> None:
 
     setattr(compiled_run, "run_scans", run_scans)  # noqa: B010
 
-    def fold_run_until(runner: Any, predicate: Any, *args: Any, **kwargs: Any) -> Any:
-        return _checked(
-            "run_until", runner, lambda: run_until(runner, predicate, *args, **kwargs), predicate
-        )
-
-    def fold_run_for(runner: Any, seconds: float, *args: Any, **kwargs: Any) -> Any:
-        return _checked("run_for", runner, lambda: run_for(runner, seconds, *args, **kwargs))
-
-    def cycle_fold_until(plc: Any, predicate: Any, *args: Any, **kwargs: Any) -> Any:
-        return _checked("cycle", plc, lambda: cycle(plc, predicate, *args, **kwargs), predicate)
-
-    setattr(fold, "fold_run_until", fold_run_until)  # noqa: B010
-    setattr(fold, "fold_run_for", fold_run_for)  # noqa: B010
-    setattr(cyclefold, "cycle_fold_until", cycle_fold_until)  # noqa: B010
-
     def coast_until(
         plc: Any, predicate: Any, *, budget: int, stats: Any = None, **kwargs: Any
     ) -> Any:
@@ -1445,7 +1406,7 @@ def install() -> None:
 
 
 def wall_budget(seconds: float) -> float:
-    """A wall-clock test budget, widened while the check steps a twin of every fold."""
+    """A wall-clock test budget, widened while the check steps a twin of every run."""
     return seconds * 10 if getattr(compiled_run, "_fold_check_installed", False) else seconds
 
 

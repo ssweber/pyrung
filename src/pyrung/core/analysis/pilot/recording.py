@@ -706,8 +706,8 @@ def _bearing_coast_accepted_payload(trial: _AcceptedTrial) -> dict[str, Any]:
         "scan_after": pulse.fork.state.scan_id,
         "coast_logical_scans": receipt.logical_scans if receipt is not None else None,
         "coast_kernel_scans": receipt.kernel_scans if receipt is not None else None,
-        "coast_skipped_scans": receipt.skipped_scans if receipt is not None else None,
-        "coast_macro_folds": receipt.macro_folds if receipt is not None else None,
+        "coast_stretched_scans": receipt.stretched_scans if receipt is not None else None,
+        "coast_stretches": receipt.stretches if receipt is not None else None,
         "snapshot": dict(execution.after_snap),
         "effect_observations": execution.effect_observations,
     }

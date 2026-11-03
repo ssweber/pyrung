@@ -5,7 +5,7 @@ drives an *indicator*: an ``out()`` bit on rungs of plain contacts, whose reader
 all sit below its writers and write nothing but indicators.  The guard does not
 watch an indicator and each landing rebuilds it.  Anything else a clock-driven tag
 reaches keeps the clock a bound: a second clock on a rung, a comparison, a latch, a
-copy, a subroutine gated by it.  Blink indicators are common and cheap, so they fold.
+copy, a subroutine gated by it.  Blink indicators are common and cheap, so they stay in the loop.
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ def _plc(body: Body, patch: dict[str, Any] | None) -> PLC:
 
 
 def _assert_exact(body: Body, scans: int = 1200, patch: dict[str, Any] | None = None) -> None:
-    """Fold and replay seek equal stepping, at the end and at every scan the fold kept."""
+    """The loop and a replay equal stepping, at the end and at scans a replay reaches."""
     stepped = _plc(body, patch)
     expected: dict[int, dict[str, Any]] = {}
     for _ in range(scans):
@@ -115,7 +115,7 @@ def _assert_exact(body: Body, scans: int = 1200, patch: dict[str, Any] | None = 
     assert _state(folded) == expected[folded.state.scan_id]
 
     for target in (stepped.state.scan_id // 2, (stepped.state.scan_id * 3) // 4):
-        seek = stepped._replay_seek(target)
+        seek = stepped.replay_to(target)
         assert _state(seek) == expected[target]
 
 
@@ -638,7 +638,7 @@ def _indicator_of_a_rebuilt_value() -> None:
     _timer()
 
 
-class TestAnIndicatorStillFolds:
+class TestAnIndicatorStaysInTheLoop:
     """A clock-driven bit that gates nothing else moving: the common case, and exact."""
 
     @pytest.mark.parametrize(
@@ -652,7 +652,7 @@ class TestAnIndicatorStillFolds:
             pytest.param(_indicator_in_a_subroutine, id="in-a-subroutine"),
         ],
     )
-    def test_folds_exactly(self, body: Body) -> None:
+    def test_runs_exactly(self, body: Body) -> None:
         # A real scan at each edge of the 100 ms clock: 1 scan in 5.
         assert _kernel_scans(body) <= 1200 // 4
         _assert_exact(body)
@@ -885,7 +885,7 @@ def _contact_on_a_comparison_result() -> None:
 
 
 class TestWhatIsNotAnIndicator:
-    """Each folds less than an indicator does, or not at all, and stays exact."""
+    """Each stays in the loop less than an indicator does, or not at all, and stays exact."""
 
     @pytest.mark.parametrize(
         "body",

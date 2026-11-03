@@ -453,7 +453,7 @@ def _cmd_cause(adapter: Any, expression: str) -> ConsoleResult:
             chain = runner.cause(tag, to=value)
         else:
             chain = runner.cause(tag, scan=scan)
-    except ValueError as exc:  # e.g. a scan a fold computed in one step
+    except ValueError as exc:  # e.g. too many unrecorded scans to settle
         raise adapter.DAPAdapterError(str(exc)) from exc
     if chain is None:
         return ConsoleResult(f"No causal chain found for {tag}")
@@ -472,7 +472,7 @@ def _cmd_effect(adapter: Any, expression: str) -> ConsoleResult:
             chain = runner.effect(tag, from_=value)
         else:
             chain = runner.effect(tag, scan=scan)
-    except ValueError as exc:  # e.g. a scan a fold computed in one step
+    except ValueError as exc:  # e.g. too many unrecorded scans to settle
         raise adapter.DAPAdapterError(str(exc)) from exc
     if chain is None:
         return ConsoleResult(f"No effect chain found for {tag}")
@@ -767,14 +767,14 @@ class _PilotProgressFormatter:
             scan_before = data.get("scan_before")
             scan_after = data.get("scan_after", event.scan)
             span = scan_after - scan_before if scan_before is not None else None
-            skipped = data.get("coast_skipped_scans")
+            stretched = data.get("coast_stretched_scans")
             kernel = data.get("coast_kernel_scans")
             channel = data.get("bearing_coast_channel_tag")
             before = data.get("bearing_coast_before_value")
             after = data.get("bearing_coast_actual_value")
             elapsed = f" after {span} scan{'s' if span != 1 else ''}" if span is not None else ""
-            if isinstance(skipped, int) and skipped > 0 and isinstance(kernel, int):
-                elapsed += f" ({skipped:,} folded; {kernel:,} kernel)"
+            if isinstance(stretched, int) and stretched > 0 and isinstance(kernel, int):
+                elapsed += f" ({stretched:,} in the loop; {kernel:,} interpreted)"
             prefix = " " if self._wait_open or self._retry_open else "  "
             wait_channel = self._wait_channel
             resuming = self._resuming_open

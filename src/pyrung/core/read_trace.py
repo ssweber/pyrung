@@ -56,10 +56,10 @@ def _extract_condition_reads(condition: Any) -> frozenset[str]:
     return frozenset(out)
 
 
-# Reads of an opaque stop predicate.  A callable ``run_until`` predicate is
-# judged on a state whose field and tag reads are recorded: a window may fold
-# only if, at the probe, the predicate read no value the window moves (it then
-# takes the same path and returns the same answer on every skipped scan).
+# Reads of an opaque stop predicate.  A coast's undeclared predicate is judged on
+# a state whose field and tag reads are recorded: a loop may run on only while the
+# predicate read no value it moves (it then takes the same path and returns the
+# same answer on every scan in between).
 _READ_TRACES: list[set[str]] = []
 _READ_ALL = "*"  # iterated or compared the whole tag map
 _FIELD_READ = ":"  # prefix of a state field read (scan_id, timestamp, memory)

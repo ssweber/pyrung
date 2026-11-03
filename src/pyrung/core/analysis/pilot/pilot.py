@@ -681,7 +681,7 @@ def _search_events(
     # investigate and revert it. Rejected modes fall through to the next mode in
     # the same turn.
     # The invocation ledger charges executed kernel scans and bounded research
-    # dispatches, including discarded work. Folded logical dwell is reported
+    # dispatches, including discarded work. Logical dwell in the loop is reported
     # separately; restoring a checkpoint never replenishes the allowance.
     last_frame: _IterationFrame | None = None
     last_frontier: tuple[_ActionPair, ...] = ()

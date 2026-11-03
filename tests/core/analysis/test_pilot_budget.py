@@ -273,7 +273,7 @@ class TestARefusedQuestion:
         monkeypatch.setattr(runner, "SETTLE_SCAN_LIMIT", 0)
         plc = _slow_lamp(100_000).fork()
         coast_run.coast_until(plc, lambda _state: False, budget=5000)
-        assert plc._fold_windows
+        assert plc._unrecorded_scans
         plc._search_refuses_restart = True
         return plc
 

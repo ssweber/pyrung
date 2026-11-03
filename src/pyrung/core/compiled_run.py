@@ -9,7 +9,7 @@ and while a kernel could not say what the scan adds to the state: a rung may sto
 a default into a tag the state does not have yet.
 
 Compiled scans record no causal timelines.  Their range goes in the runner's
-fold windows, as the fold's macro steps do.
+unrecorded scans, and the first question that reaches one steps it again.
 
 Between real scans, the guarded loop of :mod:`pyrung.core.scan_trace` runs the
 scans that repeat the one before.  Its scans end in the same kernel state a real
@@ -20,6 +20,7 @@ matter commits.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any
@@ -44,22 +45,32 @@ INTERPRETED_PREFIX = 1000
 LOOP_OBSERVERS: list[Callable[[PLC, SystemState], None]] = []
 
 
-def _replace_tip_state(
-    runner: PLC, state: SystemState, tag_edits: dict[str, Any] | None = None
-) -> None:
+def _stepped_scans_until(
+    start: float, target: float, dt: float, *, max_scans: int = 5_000_000
+) -> int | None:
+    """How many fixed-step scans carry a clock from *start* past *target*.
+
+    Counted by adding *dt* the way stepping does, so float drift lands the same.
+    None when *dt* cannot get there or the count would take over *max_scans*.
+    """
+    if dt <= 0 or not math.isfinite(dt) or (target - start) / dt > max_scans:
+        return None
+    t = start
+    n = 0
+    while t < target:
+        t += dt
+        n += 1
+    return n
+
+
+def _replace_tip_state(runner: PLC, state: SystemState) -> None:
     """Install *state* as the tip without a scan.
 
-    Keeps the runner's plain-dict read mirror of the tip tags valid.  *state*
-    has the tip's tags, plus *tag_edits* when given; any other tag change
-    drops the mirror (the next scan rebuilds it).
+    Keeps the runner's plain-dict read mirror of the tip tags while *state* has the
+    tip's tags; any other change drops the mirror (the next scan rebuilds it).
     """
     if runner._state_tags_read_cache_state is runner._state:
-        if tag_edits:
-            cache = runner._state_tags_read_cache
-            if cache is not None:
-                cache.update(tag_edits)
-            runner._state_tags_read_cache_state = state
-        elif state.tags is runner._state.tags:
+        if state.tags is runner._state.tags:
             runner._state_tags_read_cache_state = state
         else:
             runner._state_tags_read_cache_state = None
@@ -221,7 +232,7 @@ def _run_compiled(
     if settled.scan_id != plc._state.scan_id:
         _install(plc, replay, settled)
     if settled.scan_id >= first_scan_id:
-        plc._record_fold_landing(first_scan_id)
+        plc._record_landing(first_scan_id)
         plc._bounds_violations = {}
     return budget - used if undone else 0
 
@@ -286,7 +297,7 @@ def _install(plc: PLC, replay: CompiledPLC, state: SystemState) -> None:
         scan_id, base, base_sim_time = applied.pop(0)
         plc._set_rtc_and_record(base, base_sim_time, scan_id=scan_id)
     _replace_tip_state(plc, state)
-    plc._record_fold_landing()
+    plc._record_landing()
     plc._apply_history_retention(state.scan_id)
     plc._sync_runtime_flags_from_state()
     if plc._playhead == previous_tip:
