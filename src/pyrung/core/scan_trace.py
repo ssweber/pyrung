@@ -263,8 +263,8 @@ class _Function:
     local_names: frozenset[str]
 
 
-# Generated helpers the kernel may call.  ``run_function`` bodies are the user's
-# code, compiled in as ``_fn_*``: they are not on this list and so decline.
+# Generated helpers the kernel may call.  ``run_function`` bodies are the user's code,
+# called by reference as ``_fn_*``: they are not on this list and so decline.
 _HELPER_PREFIXES = (
     "_sub_",
     "_resolve_index_",

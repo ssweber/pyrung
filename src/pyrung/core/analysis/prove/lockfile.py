@@ -16,6 +16,14 @@ if TYPE_CHECKING:
     from pyrung.core.program import Program
 
 
+class LockIntractable(RuntimeError):
+    """check_lock could not compute the reachable states; *intractable* says why."""
+
+    def __init__(self, intractable: Intractable) -> None:
+        super().__init__(f"Verification intractable: {intractable.reason}")
+        self.intractable = intractable
+
+
 def diff_states(
     before: frozenset[frozenset[tuple[str, Any]]],
     after: frozenset[frozenset[tuple[str, Any]]],
@@ -234,7 +242,8 @@ def check_lock(
 ) -> StateDiff | None:
     """Recompute reachable states and diff against a lock file.
 
-    Returns None if the lock matches, or a ``StateDiff`` if changed.
+    Returns None if the lock matches, or a ``StateDiff`` if changed.  Raises
+    ``LockIntractable`` if the program's states can't be computed.
     """
     from . import reachable_states
 
@@ -253,8 +262,7 @@ def check_lock(
         split_at=split_at,
     )
     if isinstance(new_states, Intractable):
-        msg = f"Verification intractable: {new_states.reason}"
-        raise RuntimeError(msg)
+        raise LockIntractable(new_states)
 
     d = diff_states(old_states, new_states)
     if not d.added and not d.removed:

@@ -9,12 +9,23 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung import Bool, Char, Int, Or, Program, Real, Rung, Word, copy, latch, out
-from pyrung.core import PLC
+from pyrung import Bool, Char, Int, Or, Program, Real, Rung, Word, calc, copy, fill, latch, out
+from pyrung.core import PLC, Block, TagType
+from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot.skiff import _declared_domain
-from pyrung.core.analysis.prove import Counterexample, Proven, never
+from pyrung.core.analysis.prove import (
+    Counterexample,
+    Intractable,
+    Proven,
+    always,
+    never,
+    reachable_states,
+)
 from pyrung.core.analysis.prove.classify import _condition_to_expr, _extract_value_domain
+from pyrung.core.compiled_plc import CompiledPLC
+from pyrung.core.crossing import Affine, invert_affine_candidate
 from pyrung.core.input_overrides import held_candidates, refuses_value
+from pyrung.core.storage import StoreTransform
 
 Y = Bool("Y")
 Go = Bool("Go", external=True)
@@ -149,6 +160,106 @@ def test_a_literal_no_tag_holds_blocks_its_rung_not_the_run() -> None:
     assert _how(program).reachable is False
 
 
+def _splits_a_tag_holding_none_of_its_choices() -> tuple[Program, Bool]:
+    switch = Char("Sw", choices={"AB": "two"}, default="AB")
+    hit = Bool("SwHit")
+    with Program(strict=False) as program:
+        with Rung(Go):
+            copy("AB", switch)
+        with Rung(switch == "AB"):
+            out(hit)
+    return program, hit
+
+
+def test_a_split_with_no_case_to_try_declines_and_names_the_tag() -> None:
+    program, hit = _splits_a_tag_holding_none_of_its_choices()
+    for engine in (PLC, CompiledPLC):
+        plc = engine(program, dt=0.01)
+        plc.step()
+        assert plc.current_state.tags["SwHit"] is True
+
+    for result in (
+        never(program, hit, split_at=["Sw"]),
+        always(program, ~hit, split_at=["Sw"]),
+        reachable_states(program, project=["SwHit"], split_at=["Sw"]),
+    ):
+        assert isinstance(result, Intractable)
+        assert "Sw" in result.reason
+        assert result.tags == ["Sw"]
+    assert isinstance(never(program, hit), Counterexample)
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"split_at": ["Held"]}], ids=["plain", "split_at"])
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC])
+def test_a_witness_leaves_out_a_default_the_tag_could_not_be_patched_to(engine, kwargs) -> None:
+    """Held starts at "AB", which a patch refuses; a rung is what moves it to "B"."""
+    Held = Char("Held", choices={"AB": "two", "B": "one"}, default="AB")
+    with Program(strict=False) as program:
+        with Rung(Go):
+            copy("B", Held)
+        with Rung(Held == "AB"):
+            out(Y)
+
+    result = never(program, Y, **kwargs)
+
+    assert isinstance(result, Counterexample)
+    assert all("Held" not in step.inputs for step in result.trace)
+    plc = engine(program, dt=0.01)
+    for step in result.trace:
+        if step.inputs:
+            plc.patch(step.inputs)
+        for _ in range(step.scans):
+            plc.step()
+    assert plc.current_state.tags["Y"] is True
+
+
+def _copy_into(words) -> None:
+    copy(In, words[1])
+
+
+def _add_five_into(words) -> None:
+    calc(In + 5, words[1])
+
+
+def _fill_into(words) -> None:
+    fill(In, words.select(1, 2))
+
+
+@pytest.mark.parametrize(
+    "writes, needs",
+    [(_copy_into, -1), (_add_five_into, -6), (_fill_into, -1)],
+    ids=["copy", "calc", "fill"],
+)
+def test_how_sets_a_source_what_it_can_hold_to_reach_a_wrapped_value(writes, needs) -> None:
+    """65535 on an INT source would clamp: the way to a WORD's 65535 is -1."""
+    words = Block("WW", TagType.WORD, 1, 2)
+    with Program(strict=False) as program:
+        with Rung():
+            writes(words)
+        with Rung(words[1] == 65535):
+            out(Y)
+
+    plan = _how(program)
+
+    assert plan.status is PlanStatus.REACHED
+    assert f"Set In={needs}." in str(plan)
+
+
+@pytest.mark.parametrize(
+    "storage, source, needs",
+    [
+        (StoreTransform("wrap", 0, 65535), StoreTransform("clamp", -32768, 32767), -1),
+        (StoreTransform("wrap", 0, 65535), StoreTransform("clamp", 0, 65535), 65535),
+        (StoreTransform("wrap", 0, 65535), None, 65535),
+        (StoreTransform("wrap", 0, 65535), StoreTransform("clamp", 1, 9), 65535),
+    ],
+    ids=["a way it can hold", "already holds it", "not known", "no way it can hold"],
+)
+def test_a_wrap_candidate_prefers_one_the_source_can_hold(storage, source, needs) -> None:
+    claim = Affine("S", storage=storage)
+    assert invert_affine_candidate(claim, 65535, source) == needs
+
+
 def test_a_value_carried_back_through_a_copy_is_what_the_source_holds() -> None:
     """The back-propagated 3.5 lands on an INT source as 3: a replay holds that too."""
     D = Real("D")
@@ -169,13 +280,10 @@ def test_a_value_carried_back_through_a_copy_is_what_the_source_holds() -> None:
         (R, -1),
         (R, 2),
         (R, 1.5),
-        (In, 3.0),
-        (In, True),
-        (W, 7.0),
         (C, "A"),
     ],
 )
-def test_a_candidate_the_tag_holds_as_an_equal_value_keeps_its_form(tag, given) -> None:
+def test_a_candidate_a_real_holds_as_an_equal_value_keeps_its_form(tag, given) -> None:
     assert [repr(v) for v in held_candidates(tag, [given])] == [repr(given)]
 
 
@@ -183,6 +291,10 @@ def test_a_candidate_the_tag_holds_as_an_equal_value_keeps_its_form(tag, given) 
     ("tag", "given", "stored"),
     [
         (In, 3.5, "3"),
+        (In, 3.0, "3"),
+        (In, True, "1"),
+        (W, 7.0, "7"),
+        (R, True, "1.0"),
         (In, 99999, "32767"),
         (W, -1, "65535"),
         (R, 1e39, "inf"),
@@ -191,6 +303,26 @@ def test_a_candidate_the_tag_holds_as_an_equal_value_keeps_its_form(tag, given) 
 )
 def test_a_candidate_the_store_would_change_is_mapped(tag, given, stored) -> None:
     assert [repr(v) for v in held_candidates(tag, [given])] == [stored]
+
+
+@pytest.mark.parametrize(
+    ("condition", "true_at"),
+    [
+        pytest.param(lambda: In > 3.0, lambda v: v > 3, id="above"),
+        pytest.param(lambda: In == 3.0, lambda v: v == 3, id="at"),
+        pytest.param(lambda: In >= 3.0, lambda v: v >= 3, id="at or above"),
+        pytest.param(lambda: In < 3.0, lambda v: v < 3, id="below"),
+    ],
+)
+def test_a_whole_float_on_an_int_is_the_int(condition, true_at) -> None:
+    program = _program(condition())
+
+    result = never(program, Y)
+    assert isinstance(result, Counterexample)
+    witness = result.trace[-1].inputs["In"]
+    assert type(witness) is int
+    assert true_at(witness)
+    assert _how(program).reachable is True
 
 
 def test_a_witness_on_a_real_keeps_the_form_of_its_literal() -> None:

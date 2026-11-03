@@ -60,6 +60,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 import pyrung.core.compiled_run as compiled_run
@@ -157,6 +158,8 @@ class _OwnTwin:
 
     plc: Any
     start: int
+    rtc_at_the_start: Any
+    log_at_the_start: Any
     landed: int | None = None
     compared: int | None = None
 
@@ -186,7 +189,8 @@ def own_twin(plc: Any) -> Iterator[Callable[[Any], None]]:
     checked.  tests/test_fold_check_stop.py pins the tests using this, and the summary
     lists them.
     """
-    block = _OwnTwin(plc, plc._state.scan_id)
+    start = plc._state.scan_id
+    block = _OwnTwin(plc, start, _rtc_at_the_start(plc, start), plc._scan_log)
 
     def compare(stepped: Any) -> None:
         if stepped is plc:
@@ -197,7 +201,7 @@ def own_twin(plc: Any) -> Iterator[Callable[[Any], None]]:
                 f"fold-check (own twin): run at scan {scan}, stepped at {stepped._state.scan_id}"
             )
         _compare("compiled", scan, plc._state, stepped._state)
-        compare_runners("compiled", plc, stepped, block.start, built_apart=True)
+        compare_runners("compiled", plc, stepped, block.start, own_twin_of=block)
         block.compared = scan
 
     _note_skip("skipped: the test steps its own twin")
@@ -348,6 +352,80 @@ def _in_range(by_scan: dict[int, Any], start: int, end: int) -> dict[int, Any]:
     return {scan: by_scan[scan] for scan in sorted(by_scan) if start < scan <= end}
 
 
+def _rtc_at_the_start(plc: Any, start: int) -> Any:
+    """The base *start* ran on.  The log's origin answers for every scan before the first
+    change, and a log with no change has none: the runner's own base holds then."""
+    return plc._scan_log.rtc_base_at(start) or (plc._rtc_base, plc._rtc_base_sim_time)
+
+
+def _rtc_parts(moment: datetime) -> tuple[Any, Any, int]:
+    return moment.date(), moment.time().replace(microsecond=0), moment.microsecond
+
+
+def _set_the_same_rtc(plc: Any, twin: Any, scan: int) -> bool:
+    """The base each runner took at *scan* is one set: each part alike, or kept by both.
+
+    A rung's apply_time keeps the date and microsecond its runner had, an apply_date the
+    time of day, and two runners built apart had different ones.
+    """
+
+    def had_then(runner: Any, sim_time: float) -> datetime:
+        base, base_sim_time = runner._scan_log.rtc_base_at(scan - 1)
+        return base + timedelta(seconds=sim_time - base_sim_time)
+
+    (ours, our_time) = plc._scan_log._rtc_base_changes[scan]
+    (theirs, their_time) = twin._scan_log._rtc_base_changes[scan]
+    if our_time != their_time:
+        return False
+    return all(
+        our == their or (our == we_had and their == they_had)
+        for our, their, we_had, they_had in zip(
+            _rtc_parts(ours),
+            _rtc_parts(theirs),
+            _rtc_parts(had_then(plc, our_time)),
+            _rtc_parts(had_then(twin, their_time)),
+            strict=True,
+        )
+    )
+
+
+def _compare_rtc_as_own_twins(
+    plc: Any, twin: Any, a: dict[str, Any], b: dict[str, Any], block: _OwnTwin
+) -> None:
+    """Rewrite the two images so an RTC base each came by on its own compares equal.
+
+    A reset in the block starts a fresh log on a base of its own, on each runner, so what
+    the run started on is what that log answers, as the twin's is.
+    """
+    at_the_start = "as it started"
+    started_on = block.rtc_at_the_start
+    if plc._scan_log is not block.log_at_the_start:
+        started_on = a["log: rtc base at the start"]
+    twin_start = b["log: rtc base at the start"]
+    if a["log: rtc base at the start"] == started_on:
+        a["log: rtc base at the start"] = at_the_start
+    b["log: rtc base at the start"] = at_the_start
+
+    ours, theirs = a["log: rtc"], b["log: rtc"]
+    last_set = max(ours, default=None)
+    moved_as_set = (
+        last_set == max(theirs, default=None)
+        and last_set is not None
+        and a["rtc base"] == ours[last_set][0]
+        and b["rtc base"] == theirs[last_set][0]
+    )
+    for scan in ours.keys() & theirs.keys():
+        if _set_the_same_rtc(plc, twin, scan):
+            theirs[scan] = ours[scan]
+    if moved_as_set and theirs[last_set] == ours[last_set]:
+        b["rtc base"] = a["rtc base"]
+        return
+    if a["rtc base"] == started_on[0]:
+        a["rtc base"] = at_the_start
+    if b["rtc base"] == twin_start[0]:
+        b["rtc base"] = at_the_start
+
+
 def _runner_image(plc: Any, start: int, end: int) -> dict[str, Any]:
     """What a commit leaves on the runner besides the state, for scans after *start*."""
     log = plc._scan_log
@@ -362,10 +440,7 @@ def _runner_image(plc: Any, start: int, end: int) -> dict[str, Any]:
         "battery_present": plc._battery_present,
         "rtc base": plc._rtc_base,
         "rtc base sim time": _exact(plc._rtc_base_sim_time),
-        # The origin answers for every scan before the first change, and a log with no
-        # change has none: the runner's own base holds then.
-        "log: rtc base at the start": log.rtc_base_at(start)
-        or (plc._rtc_base, plc._rtc_base_sim_time),
+        "log: rtc base at the start": _rtc_at_the_start(plc, start),
         "forces": dict(plc._forces),
         "pending patches": dict(plc._pending_patches),
         "drained patches": dict(plc._this_scan_drained_patches),
@@ -434,18 +509,19 @@ def _hold_to_a_subset(
 
 
 def compare_runners(
-    kind: str, plc: Any, twin: Any, start: int, *, built_apart: bool = False
+    kind: str, plc: Any, twin: Any, start: int, *, own_twin_of: _OwnTwin | None = None
 ) -> None:
     """The runner around the state: flags, RTC base, scan log, checkpoints, playhead.
 
-    *built_apart* is a twin that isn't a fork of *plc*: each read the wall clock when it
-    was built, so their RTC bases differ by that and the state answers for what read them.
+    *own_twin_of* is a twin that isn't a fork of *plc*: each read the wall clock when it was
+    built, so their RTC bases differ by that and each answers to its own start.  A base that
+    moved from it has to match the other's as far as what moved it says: all of a set_rtc(),
+    the fields a rung's apply sets.
     """
     end = plc._state.scan_id
     a, b = _runner_image(plc, start, end), _runner_image(twin, start, end)
-    if built_apart:
-        for image in (a, b):
-            del image["rtc base"], image["log: rtc base at the start"]
+    if own_twin_of is not None:
+        _compare_rtc_as_own_twins(plc, twin, a, b, own_twin_of)
     a["playhead"], b["playhead"] = plc._playhead, twin._playhead
     stale = _stale_in_the_read_mirror(plc)
     if stale:

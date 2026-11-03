@@ -5,7 +5,11 @@ from __future__ import annotations
 import builtins
 import hashlib
 import math
+from collections.abc import Iterator
 from dataclasses import dataclass, field
+from decimal import Decimal
+from enum import Enum
+from fractions import Fraction
 from typing import Any
 
 from pyrung.circuitpy.codegen._constants import (
@@ -93,6 +97,43 @@ def _name_for_the_lock(fn: Any) -> str:
     return f"{kind.__module__}.{kind.__qualname__} {getattr(fn, '__qualname__', '')}".rstrip()
 
 
+def _text_for_the_lock(value: Any, seen: dict[int, int] | None = None) -> str:
+    """What a lock sees of a constant: its value wherever text says it, the same in any process.
+
+    A kernel holds the constant itself, so this is read and never run, and it can say what
+    ``repr`` alone wouldn't: a set's items in order, a list held twice.  What has no text
+    gets its names.
+    """
+    kind = type(value)
+    if value is None or kind in (bool, int, float, complex, str, bytes, bytearray, range):
+        return repr(value)
+    if kind in (Decimal, Fraction):
+        return repr(value)
+    if isinstance(value, Enum):
+        return f"{kind.__qualname__}.{value.name}"
+    if isinstance(value, Tag):
+        return f"{kind.__qualname__}({value.name!r})"
+    if kind in (set, frozenset):
+        # Their items are hashable, so nothing in one can be seen elsewhere as a list.
+        items = ", ".join(sorted(_text_for_the_lock(item) for item in value))
+        return f"{kind.__name__}({{{items}}})"
+    if kind not in (list, tuple, dict):
+        return _name_for_the_lock(value)
+    seen = {} if seen is None else seen
+    if kind is tuple:
+        return "(" + "".join(f"{_text_for_the_lock(item, seen)}, " for item in value) + ")"
+    if id(value) in seen:
+        return f"<as {seen[id(value)]}>"
+    seen[id(value)] = len(seen)
+    if kind is list:
+        return "[" + ", ".join(_text_for_the_lock(item, seen) for item in value) + "]"
+    pairs = (
+        f"{_text_for_the_lock(key, seen)}: {_text_for_the_lock(item, seen)}"
+        for key, item in value.items()
+    )
+    return "{" + ", ".join(pairs) + "}"
+
+
 def _is_plain_literal(value: Any) -> bool:
     """Whether ``repr(value)`` is *value*, and no call can tell one copy from another."""
     kind = type(value)
@@ -116,6 +157,17 @@ def _renders_faithfully(value: Any, seen: set[int] | None = None) -> bool:
     seen.add(id(value))
     items = [*value.keys(), *value.values()] if kind is dict else value
     return all(_renders_faithfully(item, seen) for item in items)
+
+
+def _mutables_inside(value: Any) -> Iterator[Any]:
+    """Each list and dict a constant holds, itself included: what a call can change."""
+    kind = type(value)
+    if kind not in (list, tuple, dict):
+        return
+    if kind is not tuple:
+        yield value
+    for item in [*value.keys(), *value.values()] if kind is dict else value:
+        yield from _mutables_inside(item)
 
 
 def describe_static_range(range_value: BlockRange) -> StaticRangeLayout:
@@ -239,6 +291,8 @@ class CodegenContext:
     function_objects: dict[str, Any] = field(default_factory=dict)
     function_constants: dict[str, Any] = field(default_factory=dict)
     function_constant_symbols: dict[int, str] = field(default_factory=dict)
+    #: A code.py's constants: each list and dict one holds -> the symbol that holds it.
+    function_constant_owners: dict[int, str] = field(default_factory=dict)
     runstop: RunStopConfig | None = None
     board_tag_names: set[str] = field(default_factory=set)
     uses_board_switch: bool = False
@@ -795,7 +849,8 @@ class CodegenContext:
 
         Stepping hands the function one object, scan after scan, so what the function does
         to it lasts.  A plain literal's text will do.  Anything else a kernel holds by
-        reference, and a code.py binds once at module level if its text rebuilds it.
+        reference, and a code.py binds once at module level if its text rebuilds it.  Text
+        can't say that two constants hold one list, so a code.py refuses that as well.
         """
         if _is_plain_literal(value):
             return repr(value)
@@ -808,6 +863,15 @@ class CodegenContext:
                 "Pass a number, a string, or a list or dict of them."
             )
         symbol = f"_fc_{len(self.function_constants)}"
+        if not self.kernel_runtime:
+            inside = {id(item) for item in _mutables_inside(value)}
+            if any(item in self.function_constant_owners for item in inside):
+                raise ValueError(
+                    f"A run_function constant shares a list or dict with another: {value!r}. "
+                    "A code.py rebuilds each from its text, so a change made through one "
+                    "would not show in the other. Pass one object, or a copy to each."
+                )
+            self.function_constant_owners.update(dict.fromkeys(inside, symbol))
         self.function_constants[symbol] = value
         self.function_constant_symbols[id(value)] = symbol
         return symbol
@@ -815,15 +879,17 @@ class CodegenContext:
     def function_constant_lines(self) -> list[str]:
         """Each constant's binding: a code.py runs these, a kernel's lock reads them."""
         return [
-            f"{symbol} = {repr(value) if _renders_faithfully(value) else _name_for_the_lock(value)}"
+            f"{symbol} = {repr(value) if _renders_faithfully(value) else _text_for_the_lock(value)}"
             for symbol, value in self.function_constants.items()
         ]
 
     def _call_by_reference(self, fn: Any) -> str:
         """Bind *fn* itself to a symbol: a kernel lives in this process and calls the function.
 
-        Its text is kept for the lock only, so a lock sees an edit to the function.  Whether
-        that text is what *fn* runs doesn't matter here, and nothing about *fn* is refused.
+        Its text is kept for the lock only, so a lock sees an edit to the function, and one
+        with no text is known by name.  Whether that text is what *fn* runs doesn't matter
+        here: a kernel takes any callable.  Whether it may be called is for the kernel's
+        gate and the verifier's, ``calls_that_depend_on_more_than_their_inputs``.
         """
         fn_name = getattr(fn, "__name__", type(fn).__name__)
         symbol = _mangle_symbol(fn_name, "_fn_", set(self.function_sources))

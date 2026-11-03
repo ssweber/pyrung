@@ -61,6 +61,12 @@ class _ExploreContext:
     threshold_vector_specs: tuple[_ThresholdVectorSpec, ...]
     dt: float
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
+    # Inputs whose domain may miss a value that reaches a target, with that target: a search
+    # that finds nothing has shown nothing (_backward_propagate_comparison_boundaries).
+    unanswered_inputs: dict[str, str] = field(default_factory=dict)
+    # Unbounded inputs a callable property may read.  It names no comparison to carry back,
+    # so the values the search tries on them say nothing about the ones it does not.
+    inputs_a_callable_may_read: tuple[str, ...] = ()
     # Parallel to ``memory_key_names``: the value an unwritten key reads as.
     memory_key_defaults: tuple[Any, ...] = ()
     demoted_edge_names: tuple[str, ...] = ()
@@ -126,6 +132,7 @@ from .classify import (
 )
 from .elision import _elide_scan_local_stateful_dims as _elide_scan_local_stateful_dims
 from .independence import FreeInputFactoring, IndependenceRelation
+from .lockfile import LockIntractable as LockIntractable
 from .lockfile import _apply_band as _apply_band
 from .lockfile import (
     _build_band_maps,
@@ -223,6 +230,39 @@ def _validate_split_at(
     return result
 
 
+def _functions_the_search_cannot_call(program: Program) -> Intractable | None:
+    """An answer for a program whose function calls say nothing the search can use.
+
+    The search calls a function to learn what it writes, for the inputs it is exploring and
+    as many times as it likes.  A function that keeps something from call to call, or reads
+    something past its arguments, answers those calls with what stepping might never see, so
+    a verdict built on them would be a guess.  It is left uncalled, not explored.
+    """
+    from pyrung.core.runner import calls_that_depend_on_more_than_their_inputs
+    from pyrung.core.tag import Tag
+
+    calls = calls_that_depend_on_more_than_their_inputs(program)
+    if not calls:
+        return None
+    names = sorted(
+        {getattr(call._fn, "__qualname__", type(call._fn).__name__) for call, _ in calls}
+    )
+    return Intractable(
+        reason=(f"a function whose answer may not follow from its inputs: {', '.join(names)}"),
+        dimensions=len(calls),
+        estimated_space=0,
+        tags=sorted(
+            {out.name for call, _ in calls for out in call._outs.values() if isinstance(out, Tag)}
+        ),
+        hints=[
+            f"  {getattr(call._fn, '__qualname__', type(call._fn).__name__)}: {why}; "
+            "make it a plain def of what ins= hands it, or test it with run_for()"
+            for call, why in calls
+        ],
+        kind="function",
+    )
+
+
 def _build_explore_context(
     program: Program,
     *,
@@ -248,6 +288,23 @@ def _build_explore_context(
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for always()/reachable_states()."""
     split_at_tags = _validate_split_at(program, split_at) if split_at else None
+    no_case_to_split = sorted(name for name, cases in (split_at_tags or {}).items() if not cases)
+    if no_case_to_split:
+        # A scan can still see such a tag hold its default, so no case at all is not "no state".
+        return Intractable(
+            reason=f"split_at over a tag that holds none of its choices: {', '.join(no_case_to_split)}",
+            dimensions=len(no_case_to_split),
+            estimated_space=0,
+            tags=no_case_to_split,
+            hints=[
+                f"  {name}: leave it out of split_at, or give it choices= its type can hold"
+                for name in no_case_to_split
+            ],
+        )
+    if not _opt_config.domains_only:
+        refused = _functions_the_search_cannot_call(program)
+        if refused is not None:
+            return refused
     ctx = _PassContext(
         program=program,
         scope=scope,
@@ -545,7 +602,9 @@ def always(
     scope : list of tag names, optional
         Override automatic scope derivation.  For a callable property this
         is its read set: every input upstream of these tags is explored.
-        A callable without ``scope=`` keeps every input in play.
+        A callable without ``scope=`` keeps every input in play.  It names no
+        comparison to carry back, so finding no scan on an input whose domain is not every
+        value it can hold answers Intractable.
     depth_budget : int
         BFS depth budget: the longest scan sequence explored.
     max_states : int

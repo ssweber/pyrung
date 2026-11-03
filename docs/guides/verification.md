@@ -34,6 +34,8 @@ always(logic, ~Running, EstopOK)          # implicit AND (same property, always 
 always(logic, lambda s: s["X"] + s["Y"] < 100)  # callable fallback
 ```
 
+A callable names no comparison for the verifier to work back from, so it is only `Proven` over inputs whose every value was tried: Bools, `choices=`, and `min=`/`max=` integers of at most 1000 values no comparison narrows. The inputs it may read are every input, or with `scope=` the inputs in scope and those a tag in scope takes its value from. Over any other input, finding no violation answers `Intractable`.
+
 Condition expressions are preferred — the verifier extracts referenced tags and automatically restricts input enumeration to the upstream cone. A callable names no tags, so the verifier can't tell what it reads: without `scope=` it explores every input on every scan, which is slower. Pass `scope=` with the tags the callable reads and the verifier treats that list as its read set, exploring every input upstream of those tags. A callable that reads a tag outside its `scope=` can miss a violation.
 
 ### Result types
@@ -64,10 +66,11 @@ elif isinstance(result, Intractable):
 
 `Intractable` means the verifier could not decide. `result.kind` says why:
 
-- `"search"` — the state space is too large. The `hints` list describes the largest dimensions — which tags are blowing up the state space and why. The fix is usually adding `choices` or `min`/`max` metadata to the unbounded tags — the same metadata you'd declare anyway for Data View dropdowns and static validation.
+- `"search"` — the state space is too large. The `hints` list describes the largest dimensions — which tags are blowing up the state space and why. The fix is usually adding `choices` or `min`/`max` metadata to the unbounded tags — the same metadata you'd declare anyway for Data View dropdowns and static validation. A search that found no scan also answers this when the values it tried on an input may not be all that reach a comparison, as through a multiply, a fractional literal or a wrap further down a chain of stores: `result.tags` names the input, and a `min`/`max` or `choices` on an integer input, or a `run_for()`, settles it.
 - `"timing"` — unconfirmed. The search found a violation, but replaying its trace on the concrete PLC (at the verifier's fixed `dt`, 10 ms) did not reach it: the violation needs a timer to finish on a scan the PLC's timing does not give, like a 30 ms timer done before a 1000 ms one started with it. `result.tags` names the timers, `result.trace` keeps the search's trace (each step's `timers` lists the ticks it moved) and `result.diverged_at` is the step where the replay left it. Whether it can happen depends on timer timing, which the verifier does not model (see [How it works](#how-it-works)): check it with a `run_for()` test.
 - `"timers"` — so many timers run at once that the ways they can finish on one scan pass the verifier's cap. Narrowing `choices`/`min`/`max` does not help; prove a property whose scope reaches fewer of them, or test the timing with `run_for()`.
 - `"property"` — the property's own `rise()`/`fall()`, which the search counts as possibly true on every scan, gave a counterexample the concrete PLC did not reproduce. Latch or one-shot the edge in the program and name that coil in the property instead.
+- `"function"` — a `run_function` whose answer may not follow from its inputs, because it keeps something between calls or reads something past its arguments. The search explores a function by calling it, so it leaves this one uncalled. `result.hints` names each function and why; a plain `def` of what `ins=` hands it gets past this, or test it with `run_for()`.
 
 Every `Counterexample` is confirmed the same way before it is reported: its trace is the one the concrete PLC followed to the violation, waits folded into multi-scan steps. The one exception is a trace that only drives free system tags (see [System tags](#system-tags)), which keeps its caveat instead.
 
@@ -104,6 +107,10 @@ run_function(my_func, outs={"r": result})
 result = Int("Result", min=0, max=100)
 run_function(my_func, outs={"r": result})
 ```
+
+The search calls the function itself to learn what it writes, so that holds only for a function whose answer follows from its inputs. A closure, a global, a helper, a mutable default, an import, a callable object, or a list, dict or object in `ins=` gets an `Intractable` of kind `"function"`, from `reachable_states()` and `pyrung lock` too.
+
+A function past that isn't always explored. The output of a `run_enabled_function` that no rung reads, and an output through a pointer (`blk[Idx]`), can stay out of the search, so a `Proven` on one of those says nothing about what the function writes. Test it with `run_for()`.
 
 Timers are black boxes. A timer's Done may change on any scan its instruction allows: an enabled `on_delay` may finish on any scan and then stays done, a disabled `off_delay` may drop on any scan, a running `time_drum` or `time_event_drum` step may end on any scan, and the Out family's `debounce`, `flasher` and `timed` coils time the same way. Enable, reset and preset logic stay exact, and a tag preset is simply read. That covers everything a real timer can do under any scan time and any preset value, so a `Proven` holds whatever the timing. An accumulator the program compares takes the values its comparisons split at; one read as a value (copied, computed with, read by a callable property) may take any value. Counters count rising edges and are tracked exactly: counting is not time.
 
@@ -388,7 +395,7 @@ from pyrung.core.analysis.prove import check_lock, write_lock, program_hash
 states = reachable_states(logic, project=["Running"])
 write_lock(Path("pyrung.lock"), states, ["Running"], program_hash(logic))
 
-# Check
+# Check.  A program it can't answer for raises LockIntractable, a RuntimeError naming why.
 diff = check_lock(logic, Path("pyrung.lock"))
 assert diff is None  # None means no change
 ```

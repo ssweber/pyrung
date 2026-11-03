@@ -584,8 +584,8 @@ class TestHowPriorUnchanged:
                 copy(R.month, stamp)
         graph = build_program_graph(logic)
         exprs = _collect_all_exprs(logic, graph)
-        off, _ = _collect_structural_domain_info(logic, graph, exprs)
-        on, _ = _collect_structural_domain_info(logic, graph, exprs, model_system_points=True)
+        off, *_ = _collect_structural_domain_info(logic, graph, exprs)
+        on, *_ = _collect_structural_domain_info(logic, graph, exprs, model_system_points=True)
         assert off["rtc.month"] == (0,)
         assert on["rtc.month"] == tuple(range(1, 13))
 

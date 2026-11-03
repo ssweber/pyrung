@@ -46,7 +46,11 @@ from pyrung.core.executor import (
 )
 from pyrung.core.expression import RandIntExpr, randint_sites
 from pyrung.core.history import History
-from pyrung.core.input_overrides import InputOverrideManager
+from pyrung.core.input_overrides import (
+    InputOverrideManager,
+    TagsKnownOrReached,
+    TagsRungsReach,
+)
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
 from pyrung.core.rung_firings import (
@@ -79,7 +83,7 @@ if TYPE_CHECKING:
     from pyrung.core.coast_run import CoastMemo
     from pyrung.core.condition import Condition
     from pyrung.core.rung import Rung
-    from pyrung.core.tag import Tag
+    from pyrung.core.tag import Tag, TagType
 
 _SENTINEL = object()  # distinguishes "not passed" from None/False
 
@@ -361,74 +365,111 @@ def _iter_tags_and_edge_names(
     roots: Iterable[Any],
     *,
     block_uses: list[Any] | None = None,
+    beyond_rungs: list[Tag] | None = None,
 ) -> tuple[tuple[Tag, ...], frozenset[str]]:
     """Single-pass graph walk collecting both Tag objects and edge tag names.
 
+    The tags returned are what the rungs say.  A range holds its block, whose cache is every
+    slot anything has asked for, and a call holds its program, which holds what has run and
+    been asked of it, so the walk takes neither on its way.  Of a block's slots it takes the
+    ones a map_to put there; of a program, its rungs and subroutines.
+
     *block_uses*, when given, also collects each range and pointer into a block.
+    *beyond_rungs*, when given, also collects the tags found by going on into those blocks
+    and programs, once the rungs are done: some other tag of the same name yields to a rung's.
     """
     from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
     from pyrung.core.memory_block import (
+        Block,
         BlockRange,
         IndirectBlockRange,
         IndirectExprRef,
         IndirectRef,
     )
+    from pyrung.core.program import Program
     from pyrung.core.tag import Tag as TagClass
 
     found_by_name: dict[str, TagClass] = {}
     edge_names: set[str] = set()
     visited: set[int] = set()
     queue: list[Any] = list(roots)
+    held_back: dict[int, Any] = {}
+    on_the_rungs = True
+    on_rungs_by_name: dict[str, TagClass] = {}
 
-    while queue:
-        current = queue.pop()
-        if current is None:
-            continue
-        if isinstance(current, TagClass):
-            found_by_name[current.name] = current
-            continue
-        if isinstance(current, (RisingEdgeCondition, FallingEdgeCondition)):
-            edge_names.add(current._resolved_tag.name)
-            # Still need to walk children for Tag references
+    while True:
+        while queue:
+            current = queue.pop()
+            if current is None:
+                continue
+            if isinstance(current, TagClass):
+                found_by_name[current.name] = current
+                continue
+            if isinstance(current, (RisingEdgeCondition, FallingEdgeCondition)):
+                edge_names.add(current._resolved_tag.name)
+                # Still need to walk children for Tag references
+                current_id = id(current)
+                if current_id in visited:
+                    continue
+                visited.add(current_id)
+                if hasattr(current, "__dict__"):
+                    queue.extend(vars(current).values())
+                continue
+            if isinstance(current, (str, bytes, bytearray, int, float, bool)):
+                continue
+
             current_id = id(current)
+            if on_the_rungs and isinstance(current, Block | Program):
+                if current_id not in held_back:
+                    held_back[current_id] = current
+                    if isinstance(current, Block):
+                        queue.extend(current._mapped_tags.values())
+                    else:
+                        queue.extend(current.rungs)
+                        queue.extend(current.subroutines.values())
+                continue
             if current_id in visited:
                 continue
             visited.add(current_id)
+
+            if (
+                on_the_rungs
+                and block_uses is not None
+                and isinstance(
+                    current, BlockRange | IndirectRef | IndirectExprRef | IndirectBlockRange
+                )
+            ):
+                block_uses.append(current)
+
+            if isinstance(current, Mapping):
+                queue.extend(current.keys())
+                queue.extend(current.values())
+                continue
+            if isinstance(current, tuple | list | set | frozenset):
+                queue.extend(current)
+                continue
+
             if hasattr(current, "__dict__"):
                 queue.extend(vars(current).values())
-            continue
-        if isinstance(current, (str, bytes, bytearray, int, float, bool)):
-            continue
+                continue
+            if hasattr(current, "__slots__"):
+                for slot in current.__slots__:
+                    if slot in {"__weakref__", "__dict__"}:
+                        continue
+                    if hasattr(current, slot):
+                        queue.append(getattr(current, slot))
 
-        current_id = id(current)
-        if current_id in visited:
-            continue
-        visited.add(current_id)
+        if beyond_rungs is None or not on_the_rungs:
+            break
+        on_the_rungs = False
+        on_rungs_by_name = found_by_name
+        found_by_name = {}
+        queue = list(held_back.values())
 
-        if block_uses is not None and isinstance(
-            current, BlockRange | IndirectRef | IndirectExprRef | IndirectBlockRange
-        ):
-            block_uses.append(current)
-
-        if isinstance(current, Mapping):
-            queue.extend(current.keys())
-            queue.extend(current.values())
-            continue
-        if isinstance(current, tuple | list | set | frozenset):
-            queue.extend(current)
-            continue
-
-        if hasattr(current, "__dict__"):
-            queue.extend(vars(current).values())
-            continue
-        if hasattr(current, "__slots__"):
-            for slot in current.__slots__:
-                if slot in {"__weakref__", "__dict__"}:
-                    continue
-                if hasattr(current, slot):
-                    queue.append(getattr(current, slot))
-
-    return tuple(found_by_name.values()), frozenset(edge_names)
+    if beyond_rungs is None:
+        return tuple(found_by_name.values()), frozenset(edge_names)
+    beyond_rungs.extend(tag for name, tag in found_by_name.items() if name not in on_rungs_by_name)
+    return tuple(on_rungs_by_name.values()), frozenset(edge_names)
 
 
 def _apply_lifecycle_to_replay(replay: Any, event: LifecycleEvent) -> None:
@@ -624,7 +665,12 @@ def _hands_over_nothing_it_could_keep(value: Any) -> bool:
     ) or _is_immutable_constant(value)
 
 
-def _program_calls_what_a_kernel_may_not(program: Any) -> bool:
+def calls_that_depend_on_more_than_their_inputs(program: Any) -> list[tuple[Any, str]]:
+    """Each ``run_function`` whose answer may not follow from its inputs, and why.
+
+    The one gate on calling a function anywhere but its own scan: a kernel's undo calls it
+    again, and the verifier calls it to explore, for inputs no scan may ever give it.
+    """
     from pyrung.core.instruction.control import (
         EnabledFunctionCallInstruction,
         FunctionCallInstruction,
@@ -632,58 +678,29 @@ def _program_calls_what_a_kernel_may_not(program: Any) -> bool:
     from pyrung.core.program import Program
 
     if not isinstance(program, Program):
-        return False
-    return any(
-        isinstance(instruction, FunctionCallInstruction | EnabledFunctionCallInstruction)
-        and not (
-            _may_be_called_again(instruction._fn)
-            and all(_hands_over_nothing_it_could_keep(v) for v in instruction._ins.values())
-        )
-        for instruction in walk_instructions(program)
-    )
-
-
-class _SlotsRungsReach:
-    """The block slots a range or a pointer in a rung reaches, by name.
-
-    A runner knows the tags a rung names, and a ``select()`` or a ``Block[Pointer]`` names
-    only its block: its slots stay lazy until something asks for one.  A kernel lists them
-    as it binds the block, so these are the same slots, and a slot patched by name holds
-    its type on both engines and whatever else was patched first.  Built the first time a
-    name is not a known tag, and shared with forks, which skip the walk.
-    """
-
-    __slots__ = ("_logic", "_program", "_by_name")
-
-    def __init__(self, logic: Iterable[Any], program: Any) -> None:
-        self._logic = logic
-        self._program = program
-        self._by_name: dict[str, Tag] | None = None
-
-    def get(self, name: str) -> Tag | None:
-        if self._by_name is None:
-            self._by_name = self._build()
-        return self._by_name.get(name)
-
-    def _build(self) -> dict[str, Tag]:
-        from pyrung.core.memory_block import BlockRange
-
-        roots: list[Any] = list(self._logic)
-        if self._program is not None:
-            for subroutine_rungs in self._program.subroutines.values():
-                roots.extend(subroutine_rungs)
-        uses: list[Any] = []
-        _iter_tags_and_edge_names(roots, block_uses=uses)
-        slots: list[Tag] = []
-        for use in uses:
-            if isinstance(use, BlockRange):
-                slots.extend(use.tags())
-            else:
-                block = use.block
-                slots.extend(
-                    block._get_tag(addr) for addr in block._window_addresses(block.start, block.end)
+        return []
+    found: list[tuple[Any, str]] = []
+    for instruction in walk_instructions(program):
+        if not isinstance(instruction, FunctionCallInstruction | EnabledFunctionCallInstruction):
+            continue
+        if not _may_be_called_again(instruction._fn):
+            found.append(
+                (
+                    instruction,
+                    "it is not a plain def of its arguments: it is a callable object, or uses "
+                    "a closure, a global, a helper, a mutable default or an import",
                 )
-        return {tag.name: tag for tag in slots}
+            )
+            continue
+        for key, value in instruction._ins.items():
+            if not _hands_over_nothing_it_could_keep(value):
+                found.append((instruction, f"ins[{key!r}] is an object it could change or keep"))
+                break
+    return found
+
+
+def _program_calls_what_a_kernel_may_not(program: Any) -> bool:
+    return bool(calls_that_depend_on_more_than_their_inputs(program))
 
 
 def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
@@ -1727,9 +1744,12 @@ class PLC:
         )
         self._input_overrides = InputOverrideManager(
             is_read_only=self._system_runtime.is_read_only,
-            known_tag=self._tag_a_name_means,
+            known_type=self._type_a_name_holds,
         )
-        self._slots_rungs_reach = _SlotsRungsReach(self._logic, self._program)
+        self._tags_rungs_reach = TagsRungsReach(self._logic, self._program)
+        # Known only because a patch or a force named them by Tag: a name means no more than
+        # it did, so a string's answer doesn't depend on which came first.
+        self._names_no_rung_gave: set[str] = set()
         # Preserve direct access used in tests/live-tag helpers.
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
@@ -1765,7 +1785,9 @@ class PLC:
             return
         self._known_tags_by_name = {}
         self._edge_tag_names = self._refresh_known_tags_and_edges()
-        self._constrained_tags = build_constraint_index(self._known_tags_by_name)
+        self._constrained_tags = build_constraint_index(
+            self._tags_rungs_reach.declared_with(self._known_tags_by_name)
+        )
         # Seed initial state with tag defaults (skip tags already in state).
         # One pmap iteration + C-level set difference; per-key pmap
         # ``in`` probes cost ~2 bucket walks per known tag.
@@ -1796,8 +1818,13 @@ class PLC:
 
     @property
     def tags(self) -> MappingProxyType[str, Tag]:
-        """Read-only mapping of tag name → Tag object."""
-        return MappingProxyType(self._known_tags_by_name)
+        """Read-only mapping of tag name → Tag object, for what the program has and reaches.
+
+        A slot a range reaches becomes a tag when it is read from here.
+        """
+        return MappingProxyType(
+            TagsKnownOrReached(self._known_tags_by_name, self._tags_rungs_reach)
+        )
 
     @property
     def bounds_violations(self) -> dict[str, BoundsViolation]:
@@ -2753,7 +2780,8 @@ class PLC:
                 self._constrained_tags,
             ),
         )
-        fork._slots_rungs_reach = self._slots_rungs_reach
+        fork._tags_rungs_reach = self._tags_rungs_reach
+        fork._names_no_rung_gave = set(self._names_no_rung_gave)
         fork._set_time_mode(self._time_mode, dt=self._dt)
         fork._coast_memo = self._coast_memo
         fork._search_refuses_restart = self._search_refuses_restart
@@ -3248,7 +3276,8 @@ class PLC:
                 self._constrained_tags,
             ),
         )
-        fork._slots_rungs_reach = self._slots_rungs_reach
+        fork._tags_rungs_reach = self._tags_rungs_reach
+        fork._names_no_rung_gave = set(self._names_no_rung_gave)
         fork._state = state
         fork._reset_cache(state)
         fork._initial_scan_id = state.scan_id
@@ -4166,8 +4195,8 @@ class PLC:
     def reboot(self) -> SystemState:
         """Power-cycle the runner and return the reset state.
 
-        Reboot is destructive: tags reset to defaults (except
-        battery-preserved retentive values), ``state.scan_id`` and
+        Reboot is destructive: with a battery every tag keeps its value, and
+        without one every tag returns to its default.  ``state.scan_id`` and
         ``state.timestamp`` return to 0.  Because post-reboot scan_ids
         would alias pre-reboot entries in every sparse channel
         (patches, forces, rtc_base_changes, dts), the scan log and
@@ -4236,22 +4265,38 @@ class PLC:
     def _refresh_known_tags_and_edges(self) -> frozenset[str]:
         from pyrung.core.system_points import _DERIVED_EDGE_TAGS
 
-        roots: list[Any] = list(self._logic)
-        if self._program is not None:
-            for subroutine_rungs in self._program.subroutines.values():
-                roots.extend(subroutine_rungs)
-        tags, edge_names = _iter_tags_and_edge_names(roots)
-        for tag in tags:
+        walked = self._tags_rungs_reach.walk()
+        for tag in walked.named:
             self._register_known_tag(tag)
-        return edge_names - _DERIVED_EDGE_TAGS.keys()
+        for tag in walked.beyond_rungs:
+            self._register_tag_no_rung_gave(tag)
+        return walked.edge_names - _DERIVED_EDGE_TAGS.keys()
 
-    def _tag_a_name_means(self, name: str) -> Tag | None:
+    def _type_a_name_holds(self, name: str) -> TagType | None:
+        """The type a patch or force by *name* stores, or None if it stores as given.
+
+        A tag known only because something else named it, an override or a cached slot
+        no rung reaches, doesn't change what the name means: the rungs say that.
+        """
         known = self._known_tags_by_name.get(name)
-        return known if known is not None else self._slots_rungs_reach.get(name)
+        if known is None or name in self._names_no_rung_gave:
+            return self._tags_rungs_reach.type_of(name)
+        return known.type
+
+    def _tag_known_or_reached(self, name: str) -> Tag | None:
+        known = self._known_tags_by_name.get(name)
+        return known if known is not None else self._tags_rungs_reach.get(name)
+
+    def _register_tag_no_rung_gave(self, tag: Tag) -> None:
+        no_rung = tag.name not in self._known_tags_by_name or tag.name in self._names_no_rung_gave
+        self._register_known_tag(tag)
+        if no_rung and tag.name not in SYSTEM_TAGS_BY_NAME:
+            self._names_no_rung_gave.add(tag.name)
 
     def _register_known_tag(self, tag: Tag) -> None:
         if tag.name in SYSTEM_TAGS_BY_NAME:
             return
+        self._names_no_rung_gave.discard(tag.name)
         existing = self._known_tags_by_name.get(tag.name)
         if existing is None:
             self._known_tags_by_name[tag.name] = tag
@@ -4278,7 +4323,7 @@ class PLC:
 
         for key in tags:
             if isinstance(key, TagClass):
-                self._register_known_tag(key)
+                self._register_tag_no_rung_gave(key)
 
     def _rebuild_tags_for_reset(
         self,
@@ -4296,6 +4341,12 @@ class PLC:
                 rebuilt[tag.name] = current_tags[tag.name]
                 continue
             rebuilt[tag.name] = tag.default
+        self._tags_rungs_reach.kept_through_a_reset(
+            current_tags,
+            rebuilt,
+            preserve_all=preserve_all,
+            preserve_retentive=preserve_retentive,
+        )
         # A plant is the machine's physics, not the controller's memory: nothing of it
         # survives a reset but the tags themselves, which start over at their defaults.
         return {**self._plant_tag_defaults(), **rebuilt}
@@ -4503,7 +4554,7 @@ class PLC:
         from pyrung.core.tag import Tag as TagClass
 
         if isinstance(tag, TagClass):
-            self._register_known_tag(tag)
+            self._register_tag_no_rung_gave(tag)
         self._input_overrides.add_force(tag, value)
 
     def unforce(self, tag: str | Tag) -> None:

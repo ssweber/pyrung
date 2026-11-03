@@ -68,9 +68,6 @@ from pyrung.core.analysis.reverse_edges import (
     calc_reverse_edge as _calc_reverse_edge,
 )
 from pyrung.core.analysis.reverse_edges import (
-    compose_invert as _compose_invert,
-)
-from pyrung.core.analysis.reverse_edges import (
     literal_value_from_value as _literal_value_from_value,
 )
 from pyrung.core.analysis.reverse_edges import (
@@ -79,6 +76,11 @@ from pyrung.core.analysis.reverse_edges import (
 from pyrung.core.analysis.simplified import Expr, _condition_to_expr, simplified_forms
 from pyrung.core.expression import is_randint_tag, randint_sites
 from pyrung.core.input_overrides import held_candidates
+from pyrung.core.instruction.conversions import (
+    StoreTransform,
+    calc_store_transform,
+    copy_store_transform,
+)
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
@@ -1953,12 +1955,13 @@ def _collect_structural_domain_info(
     *,
     model_system_points: bool = False,
     real_gap_points: bool = True,
-) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
+) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], dict[str, str]]:
     """Discover finite domains and reverse soundness blockers.
 
-    Returns ``(domains, blockers)`` where *domains* maps tag names to their
-    inferred finite value tuples and *blockers* lists source tags with
-    unsupported reverse dependencies that could not be safely bounded.
+    Returns ``(domains, blockers, unanswered)`` where *domains* maps tag names
+    to their inferred finite value tuples, *blockers* lists source tags with
+    unsupported reverse dependencies that could not be safely bounded, and
+    *unanswered* is :func:`_backward_propagate_comparison_boundaries`'s.
 
     *model_system_points* (BFS only) treats scan-, clock- and time-derived
     system tags as free inputs: never constant storage, and seeded with their
@@ -2134,7 +2137,7 @@ def _collect_structural_domain_info(
     if profile:
         profile_last = _classify_profile_mark(timings, "discovered_domain_merge", profile_last)
 
-    blockers = _backward_propagate_comparison_boundaries(
+    blockers, unanswered = _backward_propagate_comparison_boundaries(
         program,
         graph,
         all_exprs,
@@ -2159,9 +2162,10 @@ def _collect_structural_domain_info(
             writer_probes=fixpoint_writer_probes,
             changes=fixpoint_domain_changes,
             blockers=len(blockers),
+            unanswered=len(unanswered),
         )
 
-    return known_domains, blockers
+    return known_domains, blockers, unanswered
 
 
 def _collect_structural_domains(
@@ -2171,7 +2175,7 @@ def _collect_structural_domains(
     literal_write_domains: dict[str, tuple[Any, ...]] | None = None,
 ) -> dict[str, tuple[Any, ...]]:
     """Discover finite domains from structural writes via fixed-point propagation."""
-    domains, _blockers = _collect_structural_domain_info(
+    domains, _blockers, _unanswered = _collect_structural_domain_info(
         program, graph, all_exprs, literal_write_domains
     )
     return domains
@@ -2460,6 +2464,84 @@ def _unsupported_reverse_sources(
     return []
 
 
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and math.isfinite(value)
+
+
+class _Hop(NamedTuple):
+    values: tuple[Any, ...]  # What the source has to try, before the ones next door.
+    complete: bool  # Those are all the places a comparison on the target can change.
+    alone: bool = False  # Complete only with no other hop on the way to the comparison.
+
+
+def _is_whole(value: Any) -> bool:
+    return _is_number(value) and value == int(value)
+
+
+def _through_the_store(
+    target_values: tuple[Any, ...],
+    invert: _InvertFn,
+    store: StoreTransform | None,
+    source_tag: Tag,
+) -> _Hop:
+    """Where a comparison of a target with *target_values* can change, on a source.
+
+    An expression's inverse knows nothing of the store.  A clamp or a REAL has one way to
+    any value, so the inverse is the answer.  A wrap has one way for each turn, and it
+    truncates first, so only the plain case is worked out: a source of known integer range,
+    plus or minus it and a whole number, passing each value of the target at most once.
+    Then a comparison can only change at a boundary's one way back, or where the store turns
+    over.  Anything else (a REAL source, a multiply, a fractional literal, a DINT into 16
+    bits) gets the inverse to try and is not *complete*: a scan it finds is real, but finding
+    none says nothing.
+
+    Those turns are *alone*, as is a REAL into an integer, which is a step: 32768.5 copied to
+    a DINT is on the same side of ``> 32768`` as 32768, so a hop feeding that REAL needs the
+    place the step falls, and it is handed the boundary.
+    """
+    numbers = [value for value in target_values if _is_number(value)]
+    raws = [invert(value) for value in numbers]
+    inverse = tuple(raw for raw in raws if _is_number(raw))
+    answered = len(inverse) == len(raws)
+
+    if store is None or store.kind != "wrap":
+        if source_tag.type != TagType.REAL:
+            return _Hop(inverse, answered)
+        # A sum rounds on a REAL source, so its inverse need not be the way back.
+        return _Hop(
+            inverse,
+            answered and _is_whole(invert(0)),
+            alone=store is not None and store.kind != "real",
+        )
+    assert store.lower is not None and store.upper is not None
+
+    source_store = copy_store_transform(source_tag.type)
+    if source_store is None or source_store.lower is None or source_store.upper is None:
+        return _Hop(inverse, False)
+    at_zero, at_one = invert(0), invert(1)
+    if not (_is_whole(at_zero) and _is_whole(at_one)) or abs(at_one - at_zero) != 1:
+        return _Hop(inverse, False)
+    at_zero, slope = int(at_zero), int(at_one - at_zero)
+
+    # What the expression gives over the source's range, before the store.
+    ends = (source_store.lower, source_store.upper)
+    first, last = sorted(slope * (end - at_zero) for end in ends)
+    modulus = store.upper - store.lower + 1
+    if last - first >= modulus:
+        return _Hop(inverse, False)
+    if store.lower <= first and last <= store.upper:
+        return _Hop(inverse, answered)
+
+    values = set(ends)
+    for whole in {store.lower, store.upper}.union(
+        *({math.floor(value), math.ceil(value)} for value in numbers)
+    ):
+        given = first + (whole - first) % modulus
+        if given <= last:
+            values.add(at_zero + slope * given)
+    return _Hop(tuple(sorted(values)), True, alone=True)
+
+
 def _backward_propagate_comparison_boundaries(
     program: Program,
     graph: ProgramGraph,
@@ -2468,7 +2550,7 @@ def _backward_propagate_comparison_boundaries(
     atom_idx: dict[str, list[Atom]],
     *,
     real_gap_points: bool = True,
-) -> frozenset[str]:
+) -> tuple[frozenset[str], dict[str, str]]:
     """Propagate comparison boundary values from write targets back to sources.
 
     Covers ``copy``, ``fill``, ``blockcopy`` (identity), and invertible
@@ -2479,8 +2561,11 @@ def _backward_propagate_comparison_boundaries(
 
     Returns the set of *reverse soundness blockers* — source tags with
     unsupported reverse dependencies whose domains could not be safely
-    bounded by structural or declared fallbacks.
+    bounded by structural or declared fallbacks — and *unanswered*: source
+    tags whose domain holds what the inverse gave but maybe not every value
+    that reaches the target, with the target each was carried back from.
     """
+    from pyrung.core.analysis.pdg import _extract_tag_names
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import (
         BlockCopyInstruction,
@@ -2489,7 +2574,9 @@ def _backward_propagate_comparison_boundaries(
     )
     from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
 
-    reverse_edges: dict[str, list[tuple[str, _InvertFn]]] = {}
+    # Source -> (target, inverse of the expression, what the target's store is): copy's
+    # store unless a calc wrote it, when the mode names calc's.
+    reverse_edges: dict[str, list[tuple[str, _InvertFn, str | None]]] = {}
     covered_pairs: set[tuple[str, str]] = set()
 
     for instr in walk_instructions(program):
@@ -2503,7 +2590,7 @@ def _backward_propagate_comparison_boundaries(
             if not target_names:
                 target_names = _expand_indirect_tag_names(instr.dest, graph.indirect_reach)
             for target_name in target_names:
-                reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY))
+                reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY, None))
                 covered_pairs.add((source_name, target_name))
 
         elif isinstance(instr, FillInstruction):
@@ -2514,7 +2601,7 @@ def _backward_propagate_comparison_boundaries(
             if not target_names:
                 target_names = _expand_indirect_tag_names(instr.dest, graph.indirect_reach)
             for target_name in target_names:
-                reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY))
+                reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY, None))
                 covered_pairs.add((source_name, target_name))
 
         elif isinstance(instr, BlockCopyInstruction):
@@ -2527,12 +2614,12 @@ def _backward_propagate_comparison_boundaries(
             if source_names and dest_names:
                 if len(source_names) == len(dest_names):
                     for src, dst in zip(source_names, dest_names, strict=True):
-                        reverse_edges.setdefault(src, []).append((dst, _IDENTITY))
+                        reverse_edges.setdefault(src, []).append((dst, _IDENTITY, None))
                         covered_pairs.add((src, dst))
                 else:
                     for src in source_names:
                         for dst in dest_names:
-                            reverse_edges.setdefault(src, []).append((dst, _IDENTITY))
+                            reverse_edges.setdefault(src, []).append((dst, _IDENTITY, None))
                             covered_pairs.add((src, dst))
 
         elif isinstance(instr, CalcInstruction):
@@ -2542,16 +2629,35 @@ def _backward_propagate_comparison_boundaries(
             edge = _calc_reverse_edge(instr.expression)
             if edge is not None:
                 source_name, invert = edge
-                reverse_edges.setdefault(source_name, []).append((target_name, invert))
+                reverse_edges.setdefault(source_name, []).append((target_name, invert, instr.mode))
                 covered_pairs.add((source_name, target_name))
 
     comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
+    store_cannot_invert: dict[str, str] = {}
+    target_to_sources: dict[str, list[tuple[str, _InvertFn, str | None]]] = {}
+    for _src, _edges in reverse_edges.items():
+        for _tgt, _inv, _mode in _edges:
+            target_to_sources.setdefault(_tgt, []).append((_src, _inv, _mode))
+
+    def no_complete_answer(name: str, target: str) -> None:
+        # What feeds a tag with no complete answer has none either.
+        feeders = [name]
+        while feeders:
+            feeder = feeders.pop()
+            if feeder not in store_cannot_invert:
+                store_cannot_invert[feeder] = target
+                feeders.extend(src for src, _inv, _mode in target_to_sources.get(feeder, ()))
+
+    # The sources a hop gave a domain: it answers for that hop, and no other way there.
+    carried_back: set[str] = set()
 
     if reverse_edges:
-        target_to_sources: dict[str, list[tuple[str, _InvertFn]]] = {}
-        for _src, _edges in reverse_edges.items():
-            for _tgt, _inv in _edges:
-                target_to_sources.setdefault(_tgt, []).append((_src, _inv))
+        # A REAL's split points over every hop: the cells between two of them need a value,
+        # whichever comparison each came from.
+        real_splits: dict[str, set[Any]] = {}
+        # What reaches each source, and the REAL sources that reach a target through a step.
+        hops_to: dict[str, set[tuple[str, _InvertFn, frozenset[Any]]]] = {}
+        stepped_reals: dict[str, str] = {}
 
         comp_boundaries: dict[str, list[Any]] = {}
         for _tag_name in atom_idx:
@@ -2563,30 +2669,48 @@ def _backward_propagate_comparison_boundaries(
                 comp_boundaries.setdefault(_tag_name, []).append(atom.operand)
 
         for comp_tag, boundaries in comp_boundaries.items():
-            queue: list[tuple[str, _InvertFn]] = list(target_to_sources.get(comp_tag, []))
+            queue = [
+                (source, invert, mode, comp_tag, tuple(boundaries))
+                for source, invert, mode in target_to_sources.get(comp_tag, [])
+            ]
             visited: set[str] = {comp_tag}
-
+            tried: dict[str, set[Any]] = {comp_tag: {b for b in boundaries if _is_number(b)}}
             while queue:
-                source_name, composed_invert = queue.pop(0)
-                if source_name in visited:
-                    continue
-                visited.add(source_name)
-
+                source_name, invert, calc_mode, target_name, target_values = queue.pop(0)
                 source_tag = graph.tags.get(source_name)
                 if source_tag is None:
                     continue
+                target_tag = graph.tags.get(target_name)
+                store = (
+                    None
+                    if target_tag is None
+                    else copy_store_transform(target_tag.type)
+                    if calc_mode is None
+                    else calc_store_transform(target_tag.type, calc_mode)
+                )
 
+                hop = _through_the_store(target_values, invert, store, source_tag)
+                # A wrap's hop answers for this target's boundaries alone, not a chain's.
+                chained = target_name != comp_tag or source_name in target_to_sources
+                if not hop.complete or (hop.alone and chained):
+                    no_complete_answer(source_name, target_name)
+                hops_to.setdefault(source_name, set()).add(
+                    (target_name, invert, frozenset(hop.values))
+                )
+                if hop.alone and source_tag.type == TagType.REAL:
+                    stepped_reals[source_name] = target_name
+                if source_name in visited:
+                    # Only the first edge from a source is carried on.  A second that asks
+                    # for values it did not try has not been answered for.
+                    if not tried[source_name].issuperset(hop.values):
+                        no_complete_answer(source_name, target_name)
+                    continue
+                visited.add(source_name)
+                tried[source_name] = set(hop.values)
+                split_points: set[Any] = set(hop.values)
                 back_values: set[Any] = set()
-                split_points: set[Any] = set()
-                for boundary in boundaries:
-                    raw = composed_invert(boundary)
-                    if not isinstance(raw, (int, float)):
-                        continue
-                    split_points.add(raw)
-                    back_values.add(raw)
-                    back_values.add(raw - 1)
-                    back_values.add(raw + 1)
-
+                for raw in hop.values:
+                    back_values.update((raw, raw - 1, raw + 1))
                 if not back_values:
                     continue
 
@@ -2603,7 +2727,9 @@ def _backward_propagate_comparison_boundaries(
                         back_values.add(own_boundary - 1)
                         back_values.add(own_boundary + 1)
                 if real_gap_points and source_tag.type == TagType.REAL:
-                    back_values |= _real_gap_points(split_points)
+                    splits = real_splits.setdefault(source_name, set())
+                    splits |= split_points
+                    back_values |= _real_gap_points(splits)
 
                 existing = set(known_domains.get(source_name, ()))
                 merged = existing | back_values
@@ -2617,27 +2743,48 @@ def _backward_propagate_comparison_boundaries(
                     if source_tag.max is not None:
                         merged = {v for v in merged if v <= source_tag.max}
                 if len(merged) > 1000:
+                    no_complete_answer(source_name, target_name)
                     continue
 
                 new_domain = tuple(sorted(merged))
                 if known_domains.get(source_name) != new_domain:
                     known_domains[source_name] = new_domain
+                carried_back.add(source_name)
 
-                for next_src, next_inv in target_to_sources.get(source_name, []):
-                    if next_src not in visited:
-                        queue.append(
-                            (
-                                next_src,
-                                _compose_invert(next_inv, composed_invert),
-                            )
-                        )
+                for next_src, next_inv, next_mode in target_to_sources.get(source_name, []):
+                    queue.append((next_src, next_inv, next_mode, source_name, hop.values))
+
+        # A step holds a whole cell on one side of a comparison: 5.7 copied to an INT is 5.
+        # Only that cell tells apart ``R > 5.5, D == 5``, and it has no value of its own.
+        for source_name, target_name in stepped_reals.items():
+            if comp_boundaries.get(source_name) or len(hops_to[source_name]) > 1:
+                no_complete_answer(source_name, target_name)
+
+    def needs_an_answer(target: str) -> bool:
+        return bool(atom_idx.get(target)) or target in carried_back
 
     reverse_soundness_blockers: set[str] = set()
     for instr in walk_instructions(program):
+        if carried_back and isinstance(instr, CalcInstruction):
+            # Whatever shape it is in, a calc no edge covers has no way back from its target.
+            dest_names = _resolve_tag_names(instr.dest) or _expand_indirect_tag_names(
+                instr.dest, graph.indirect_reach
+            )
+            for source_name in sorted(carried_back & _extract_tag_names(instr.expression, {})):
+                for target_name in dest_names:
+                    if (
+                        target_name != source_name
+                        and needs_an_answer(target_name)
+                        and (source_name, target_name) not in covered_pairs
+                    ):
+                        no_complete_answer(source_name, target_name)
         source_targets = _unsupported_reverse_sources(instr, covered_pairs, graph.indirect_reach)
         for source_name, target_names in source_targets:
-            has_downstream_comparison = any(atom_idx.get(tn) for tn in target_names)
-            if not has_downstream_comparison:
+            if source_name in carried_back:
+                for target_name in filter(needs_an_answer, target_names):
+                    no_complete_answer(source_name, target_name)
+                continue
+            if not any(atom_idx.get(tn) for tn in target_names):
                 continue
             if source_name in known_domains:
                 continue
@@ -2650,7 +2797,19 @@ def _backward_propagate_comparison_boundaries(
                 continue
             reverse_soundness_blockers.add(source_name)
 
-    return frozenset(reverse_soundness_blockers)
+    unanswered: dict[str, str] = {}
+    for source_name, target_name in store_cannot_invert.items():
+        source_tag = graph.tags.get(source_name)
+        if source_tag is None:
+            continue
+        declared = _declared_domain(source_tag)
+        # A declared REAL's domain is the whole numbers of its range: not every value.
+        if declared is not None and source_tag.type != TagType.REAL:
+            known_domains[source_name] = declared
+        else:
+            unanswered[source_name] = target_name
+
+    return frozenset(reverse_soundness_blockers), unanswered
 
 
 def _extract_value_domain(
@@ -3314,7 +3473,8 @@ def _classify_dimensions_from_graph(
     scope: list[str] | None = None,
     project: tuple[str, ...] | None = None,
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
-    structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None = None,
+    structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str], dict[str, str]]
+    | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
     exclusions: dict[str, str] | None = None,
     unclassified: set[str] | None = None,
@@ -3344,7 +3504,7 @@ def _classify_dimensions_from_graph(
     inputs.  Without it, unwritten system tags are left out (the ``how()``
     domain prior).
 
-    *structural_domain_info* is the ``(domains, blockers)`` pair from
+    *structural_domain_info* is the ``(domains, blockers, unanswered)`` from
     :func:`_collect_structural_domain_info`; pass it to reuse a fixpoint already
     computed by another pass (only valid when *discovered_domains* is None, since
     that input feeds the fixpoint).
@@ -3397,13 +3557,13 @@ def _classify_dimensions_from_graph(
         profile_last = _classify_profile_mark(timings, "literal_write_domains", profile_last)
     if structural_domain_info is not None and discovered_domains is None:
         # Reuse the fixpoint another pass already ran — it's the dominant cost.
-        structural_domains, reverse_blockers = structural_domain_info
+        structural_domains, reverse_blockers, _unanswered = structural_domain_info
         if profile:
             profile_last = _classify_profile_mark(
                 timings, "structural_domain_info_reuse", profile_last
             )
     else:
-        structural_domains, reverse_blockers = _collect_structural_domain_info(
+        structural_domains, reverse_blockers, _unanswered = _collect_structural_domain_info(
             program,
             graph,
             all_exprs,

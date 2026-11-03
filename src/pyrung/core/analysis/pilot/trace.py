@@ -89,6 +89,7 @@ from pyrung.core.crossing import (
     eq_target,
 )
 from pyrung.core.instruction.advance import ConditionDemand, constraint_holds
+from pyrung.core.instruction.conversions import copy_store_transform
 from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
 
 if TYPE_CHECKING:
@@ -2124,7 +2125,10 @@ def _trace_back(
             and not producer_constraints
             and isinstance(wv, Affine)
         ):
-            candidate = _invert_affine(wv, value)
+            source = env.pdg.tags.get(wv.source)
+            candidate = _invert_affine(
+                wv, value, copy_store_transform(source.type) if source is not None else None
+            )
             if candidate is not None and not (wv.source == tag and _values_match(candidate, value)):
                 affine_candidate = (wv.source, candidate)
 

@@ -177,7 +177,10 @@ def _cmd_force(adapter: Any, expression: str) -> ConsoleResult:
     value = adapter._parse_literal(raw_value)
     runner = adapter._require_runner_locked()
     name = adapter._resolve_target_locked(tag)
-    runner.force(name, value)
+    try:
+        runner.force(name, value)
+    except ValueError as exc:
+        raise adapter.DAPAdapterError(f"cannot force: {exc}") from exc
     execution_flow.invalidate_mid_scan(adapter)
     return ConsoleResult(f"Forced {tag}={runner.forces[name]!r}")
 
@@ -217,7 +220,10 @@ def _cmd_patch(adapter: Any, expression: str) -> ConsoleResult:
     value = adapter._parse_literal(raw_value)
     runner = adapter._require_runner_locked()
     name = adapter._resolve_target_locked(tag)
-    runner.patch({name: value})
+    try:
+        runner.patch({name: value})
+    except ValueError as exc:
+        raise adapter.DAPAdapterError(f"cannot patch: {exc}") from exc
     execution_flow.invalidate_mid_scan(adapter)
     return ConsoleResult(f"Patched {tag}={runner.pending_patches[name]!r}")
 
@@ -1113,7 +1119,7 @@ def _format_prove_result(result: Any) -> str:
 def _resolve_tags(runner: Any, names: list[str], *, verb: str) -> list[Any]:
     tags = []
     for name in names:
-        tag = runner._known_tags_by_name.get(name)
+        tag = runner._tag_known_or_reached(name)
         if tag is None:
             raise ValueError(f"{verb}: unknown tag '{name}'")
         tags.append(tag)

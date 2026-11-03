@@ -401,6 +401,7 @@ class Tag:
                     f"cannot remap to {self.name!r}."
                 )
             block._mapped_tags[addr] = self
+            block._slot_names_changed += 1
             block._tag_cache.pop(addr, None)
         return MappingEntry(source=self, target=target)
 
