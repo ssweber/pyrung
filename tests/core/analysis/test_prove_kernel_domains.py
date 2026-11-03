@@ -32,6 +32,7 @@ from pyrung.core.analysis.prove import (
     _has_data_feedback,
     _pilot_sweep_domains,
     always,
+    never,
     reachable_states,
 )
 
@@ -529,7 +530,7 @@ class TestKernelDomainDiscovery:
             with Rung(Stored > Other):
                 out(Flag)
 
-        result = always(logic, lambda s: True)
+        result = never(logic, Flag, ~Flag)
         assert isinstance(result, Proven)
 
     def test_copy_with_reset_from_bounded_source(self):
@@ -637,5 +638,5 @@ class TestValidateDeclaredBounds:
             with Rung(Dest > 3):
                 out(Flag)
 
-        result = always(logic, lambda s: True)
+        result = never(logic, Flag, ~Flag)
         assert isinstance(result, Proven)

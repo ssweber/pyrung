@@ -64,6 +64,9 @@ class _ExploreContext:
     # Inputs whose domain may miss a value that reaches a target, with that target: a search
     # that finds nothing has shown nothing (_backward_propagate_comparison_boundaries).
     unanswered_inputs: dict[str, str] = field(default_factory=dict)
+    # Unbounded inputs a callable property may read.  It names no comparison to carry back,
+    # so the values the search tries on them say nothing about the ones it does not.
+    inputs_a_callable_may_read: tuple[str, ...] = ()
     # Parallel to ``memory_key_names``: the value an unwritten key reads as.
     memory_key_defaults: tuple[Any, ...] = ()
     demoted_edge_names: tuple[str, ...] = ()
@@ -599,7 +602,9 @@ def always(
     scope : list of tag names, optional
         Override automatic scope derivation.  For a callable property this
         is its read set: every input upstream of these tags is explored.
-        A callable without ``scope=`` keeps every input in play.
+        A callable without ``scope=`` keeps every input in play.  It names no
+        comparison to carry back, so finding no scan on an input whose domain is not every
+        value it can hold answers Intractable.
     depth_budget : int
         BFS depth budget: the longest scan sequence explored.
     max_states : int

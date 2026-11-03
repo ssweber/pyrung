@@ -33,6 +33,7 @@ from .classify import (
     _collect_all_exprs,
     _collect_literal_write_domains,
     _collect_structural_domain_info,
+    _declared_domain,
     _pilot_sweep_domains,
 )
 from .elision import _elide_scan_local_stateful_dims
@@ -300,6 +301,33 @@ class _PassContext:
             stepping_tags=self._stepping_tags or frozenset(),
         )
 
+    def _inputs_a_callable_may_read(self) -> tuple[str, ...]:
+        """The inputs a callable may read whose domain is not every value they can hold.
+
+        A condition names its comparisons and they are carried back to the inputs, so what
+        the search tries answers for it.  A callable names none: ``s["I"] != 7`` is decided at
+        7 whether or not anything else in the program compares I there.  Only a domain
+        holding every value can answer for that, and a REAL's whole numbers are not every
+        value.
+        """
+        assert self.nondeterministic_dims is not None and self.graph is not None
+        if self.opaque_reads_all:
+            read: Iterable[str] = self.nondeterministic_dims
+        else:
+            read = (name for name in self.opaque_reads if name in self.nondeterministic_dims)
+        unbounded = []
+        for name in read:
+            tag = self.graph.tags.get(name)
+            declared = None if tag is None else _declared_domain(tag)
+            if (
+                tag is None
+                or declared is None
+                or (tag.type == TagType.REAL and tag.choices is None)
+                or not set(declared) <= set(self.nondeterministic_dims[name])
+            ):
+                unbounded.append(name)
+        return tuple(sorted(unbounded))
+
     def freeze(self) -> _ExploreContext:
         assert self.compiled is not None
         assert self.graph is not None
@@ -487,6 +515,7 @@ class _PassContext:
                 for name, target in _get_structural_domain_info(self)[2].items()
                 if name in self.nondeterministic_dims
             },
+            inputs_a_callable_may_read=self._inputs_a_callable_may_read(),
             stateful_names=self.stateful_names,
             edge_tag_names=self.edge_tag_names,
             memory_key_names=self.memory_key_names or (),

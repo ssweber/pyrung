@@ -35,7 +35,7 @@ from pyrung.core import (
     fill,
     out,
 )
-from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, never
+from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always, never
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr, UnaryExpr
 from pyrung.core.instruction.calc import CalcInstruction
@@ -290,6 +290,213 @@ def test_a_multiply_the_inverse_has_no_answer_for_is_not_proven_where_a_scan_fir
     assert not isinstance(verdict, Proven)
     if isinstance(verdict, Counterexample):
         assert _witness_fires(program, verdict, hit)
+
+
+# Each of these was Proven with the witness firing.  Asked of the verifier and stepped on both
+# engines: the witness has to fire, and the verdict has to be anything but Proven.
+_I = Int("I", external=True)
+_DI = Int("DI")
+_DD = Dint("DD")
+_DA = Real("DA")
+_DB = Real("DB")
+_A = Int("A")
+_B = Int("B")
+_T = Int("T")
+_J = Int("J", external=True)
+_R = Real("R", external=True)
+_RB = Real("Rb", external=True, min=0.0, max=100.0)
+_MODE = Bool("Mode", external=True)
+_HIT = Bool("Hit")
+
+
+def _rungs(*pairs: tuple[Any, ...]) -> Program:
+    """A program of ``(body, *conditions)`` rungs."""
+    with Program(strict=False) as program:
+        for body, *conditions in pairs:
+            with Rung(*conditions):
+                body()
+    return program
+
+
+def _hit() -> None:
+    out(_HIT)
+
+
+def _scale_select() -> Program:
+    return _rungs(
+        (lambda: copy(_I, _DI), _MODE),
+        (lambda: calc(_I * 10, _DI), ~_MODE),
+        (_hit, ~_MODE, _DI == 500),
+    )
+
+
+def _copy_then_calc() -> Program:
+    return _rungs((lambda: copy(_I, _DI),), (lambda: calc(_I + 100, _DI),), (_hit, _DI == 5000))
+
+
+def _calc_then_copy() -> Program:
+    return _rungs((lambda: calc(_I + 100, _DI),), (lambda: copy(_I, _DI),), (_hit, _DI == 5000))
+
+
+def _copy_then_double() -> Program:
+    return _rungs((lambda: copy(_I, _DI),), (lambda: calc(_I * 2, _DI),), (_hit, _DI == 6))
+
+
+def _diamond() -> Program:
+    return _rungs(
+        (lambda: copy(_J, _A),),
+        (lambda: calc(_J + 100, _B),),
+        (lambda: copy(_A, _T), _MODE),
+        (lambda: copy(_B, _T), ~_MODE),
+        (_hit, ~_MODE, _T == 5000),
+    )
+
+
+def _through_a_step(source: Any, dest: Any, *conditions: Any) -> Program:
+    return _rungs((lambda: copy(source, dest),), (_hit, *conditions))
+
+
+def _two_hops(source: Any, first: float, second: float) -> Program:
+    return _rungs(
+        (lambda: copy(source, _DA),),
+        (lambda: copy(source, _DB),),
+        (_hit, _DA > first, _DB < second),
+    )
+
+
+def _a_sum_and_a_copy() -> Program:
+    return _rungs(
+        (lambda: calc(_R + 1, _DA),),
+        (lambda: copy(_R, _DB),),
+        (_hit, _DA > 2.5, _DB < 1.6),
+    )
+
+
+UNEVALUATED = [
+    pytest.param(_scale_select, "I", 50, id="scale-select"),
+    pytest.param(_copy_then_calc, "I", 4900, id="copy-then-calc"),
+    pytest.param(_calc_then_copy, "I", 5000, id="calc-then-copy"),
+    pytest.param(_copy_then_double, "I", 3, id="copy-then-double"),
+    pytest.param(_diamond, "J", 4900, id="diamond"),
+    pytest.param(lambda: _through_a_step(_R, _DI, _R > 5.5, _DI == 5), "R", 5.7, id="step-above"),
+    pytest.param(
+        lambda: _through_a_step(_R, _DI, _R < -5.5, _DI == -5), "R", -5.7, id="step-below"
+    ),
+    pytest.param(lambda: _through_a_step(_R, _DD, _R > 5.5, _DD == 5), "R", 5.7, id="step-dint"),
+    pytest.param(
+        lambda: _through_a_step(_RB, _DI, _RB > 5.5, _DI == 5), "Rb", 5.7, id="step-declared"
+    ),
+    pytest.param(lambda: _through_a_step(_R, _DI, _R > 5, _DI == 5), "R", 5.5, id="step-whole"),
+    pytest.param(lambda: _two_hops(_R, 1.5, 1.6), "R", 1.55, id="two-hops"),
+    pytest.param(_a_sum_and_a_copy, "R", 1.55, id="sum-and-copy"),
+    pytest.param(lambda: _two_hops(_RB, 1.5, 1.6), "Rb", 1.55, id="two-hops-declared"),
+]
+
+
+@pytest.mark.parametrize(("build", "source", "value"), UNEVALUATED)
+def test_a_carried_set_no_edge_answered_for_is_not_proven(build, source, value) -> None:
+    program = build()
+    assert _fires_at(program, source, value, _HIT)
+    verdict = never(program, _HIT, max_states=3000, depth_budget=6)
+    assert not isinstance(verdict, Proven)
+    if isinstance(verdict, Counterexample):
+        assert _witness_fires(program, verdict, _HIT)
+
+
+def _unread_by_the_rungs() -> Program:
+    return _rungs((lambda: out(Bool("Y")), _I > 100))
+
+
+def _read_after_the_store() -> Program:
+    return _rungs(
+        (lambda: out(Bool("Z")), _I > 100),
+        (lambda: copy(_I, Word("DW")),),
+    )
+
+
+def _a_real_it_has_only_tried_whole_numbers_of() -> Program:
+    return _rungs((lambda: out(Bool("Y")), _RB > 100))
+
+
+OPAQUE = [
+    pytest.param(_unread_by_the_rungs, "I", 7, lambda s: s["I"] != 7, id="direct"),
+    pytest.param(_read_after_the_store, "I", -1, lambda s: s.get("DW") != 65535, id="stored"),
+    pytest.param(
+        _a_real_it_has_only_tried_whole_numbers_of,
+        "Rb",
+        7.5,
+        lambda s: s["Rb"] != 7.5,
+        id="declared-real",
+    ),
+]
+
+
+@pytest.mark.parametrize(("build", "source", "value", "holds"), OPAQUE)
+def test_a_callable_is_not_answered_for_by_a_partition(build, source, value, holds) -> None:
+    """It names no comparison to carry back, so the search has no reason to try its value."""
+    program = build()
+    for engine in ENGINES:
+        plc = engine(program, dt=0.01)
+        plc.patch({source: value})
+        plc.step()
+        assert not holds(dict(plc.current_state.tags))
+    verdict = always(program, holds, max_states=3000, depth_budget=6)
+    assert not isinstance(verdict, Proven)
+
+
+def test_the_reason_a_callable_is_declined_names_the_input_and_what_to_do() -> None:
+    verdict = always(_unread_by_the_rungs(), lambda s: s["I"] != 7, max_states=3000)
+    assert isinstance(verdict, Intractable)
+    assert "callable property" in verdict.reason
+    assert verdict.tags == ["I"]
+    assert "choices=" in verdict.hints[0]
+
+
+def test_a_callable_is_still_answered_for_where_every_value_was_tried() -> None:
+    """Nothing narrows a small declared INT that is only copied, nor a tag's choices."""
+    small = Int("Small", external=True, min=0, max=20)
+    copied = _rungs((lambda: copy(small, Int("Z")),))
+    assert isinstance(always(copied, lambda s: s["Small"] <= 20, max_states=3000), Proven)
+    assert isinstance(always(copied, lambda s: s["Small"] != 7, max_states=3000), Counterexample)
+
+    chosen = Int("Chosen", external=True, choices={0: "a", 1: "b", 2: "c"})
+    compared = _rungs((_hit, chosen == 1))
+    assert isinstance(always(compared, lambda s: s["Chosen"] in (0, 1, 2)), Proven)
+    assert isinstance(always(compared, lambda s: s["Chosen"] != 2), Counterexample)
+
+
+def test_a_comparison_narrows_what_a_callable_can_be_answered_for() -> None:
+    """``Small > 5`` leaves the search 4, 5, 6 and the ends, and 7 is not among them."""
+    small = Int("Small", external=True, min=0, max=20)
+    program = _rungs((_hit, small > 5))
+    assert isinstance(always(program, lambda s: s["Small"] != 7, max_states=3000), Intractable)
+
+
+def test_the_same_edge_twice_still_proves() -> None:
+    """A second rung copying the same way asks for the values the first one tried."""
+    program = _rungs(
+        (lambda: copy(_I, _DI), _MODE),
+        (lambda: copy(_I, _DI), ~_MODE),
+        (_hit, _I > 5, _DI < 3),
+    )
+    assert isinstance(never(program, _HIT, max_states=3000, depth_budget=6), Proven)
+
+
+def test_a_declared_real_compared_once_still_proves() -> None:
+    """One hop and no comparison of its own: nothing here needs a cell the search skips."""
+    scaled = Real("ScaledR")
+    program = _rungs((lambda: calc(_RB * 2, scaled),), (_hit, scaled > 250))
+    assert isinstance(never(program, _HIT, max_states=3000, depth_budget=6), Proven)
+
+
+def test_two_hops_on_a_real_with_room_between_them_still_prove() -> None:
+    """Over the two hops every cell has a value, and none of them fires."""
+    program = _rungs(
+        (lambda: copy(_RB, _DA),),
+        (lambda: copy(_RB, _DB),),
+        (_hit, _DA > 60, _DB < 50),
+    )
+    assert isinstance(never(program, _HIT, max_states=3000, depth_budget=6), Proven)
 
 
 MATRIX_BOUNDS = [-32768, -1, 0, 3.5, 32767, 32768, 40000, 65535, 70000]

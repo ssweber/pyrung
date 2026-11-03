@@ -749,7 +749,8 @@ def test_scaled_real_compared_with_literal() -> None:
     reason=(
         "pre-existing (base too): an unscoped callable property "
         "(never(p, lambda s: s['In'] == 301)) reads In where classify cannot "
-        "see it, so In keeps its program partition: false Proven"
+        "see it, so In keeps its program partition: declined as Intractable, "
+        "where a search of every value would find 301"
     ),
 )
 def test_unscoped_callable_property_reads_input() -> None:

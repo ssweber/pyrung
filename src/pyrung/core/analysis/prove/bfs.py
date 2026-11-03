@@ -165,6 +165,23 @@ def _free_combo_intractable(
 
 def _no_scan_found_intractable(context: _ExploreContext, visited: int) -> Intractable | None:
     """The answer to a search that found nothing, when finding nothing shows nothing."""
+    unbounded = context.inputs_a_callable_may_read
+    if unbounded:
+        return Intractable(
+            reason=(
+                f"no scan found, but a callable property may tell apart values of"
+                f" {', '.join(unbounded)} the search did not try"
+            ),
+            dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+            estimated_space=visited,
+            tags=list(unbounded),
+            hints=[
+                f"  {name}: write the property as a condition, which names its comparisons,"
+                " or narrow an integer with choices= or min=/max="
+                for name in unbounded
+            ],
+            journal=context.journal,
+        )
     unanswered = context.unanswered_inputs
     if not unanswered:
         return None

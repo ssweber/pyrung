@@ -2649,6 +2649,13 @@ def _backward_propagate_comparison_boundaries(
                     store_cannot_invert[feeder] = target
                     feeders.extend(src for src, _inv, _mode in target_to_sources.get(feeder, ()))
 
+        # A REAL's split points over every hop: the cells between two of them need a value,
+        # whichever comparison each came from.
+        real_splits: dict[str, set[Any]] = {}
+        # What reaches each source, and the REAL sources that reach a target through a step.
+        hops_to: dict[str, set[tuple[_InvertFn, frozenset[Any]]]] = {}
+        stepped_reals: dict[str, str] = {}
+
         comp_boundaries: dict[str, list[Any]] = {}
         for _tag_name in atom_idx:
             for atom in atom_idx[_tag_name]:
@@ -2664,11 +2671,9 @@ def _backward_propagate_comparison_boundaries(
                 for source, invert, mode in target_to_sources.get(comp_tag, [])
             ]
             visited: set[str] = {comp_tag}
+            tried: dict[str, set[Any]] = {comp_tag: {b for b in boundaries if _is_number(b)}}
             while queue:
                 source_name, invert, calc_mode, target_name, target_values = queue.pop(0)
-                if source_name in visited:
-                    continue
-                visited.add(source_name)
                 source_tag = graph.tags.get(source_name)
                 if source_tag is None:
                     continue
@@ -2686,6 +2691,17 @@ def _backward_propagate_comparison_boundaries(
                 chained = target_name != comp_tag or source_name in target_to_sources
                 if not hop.complete or (hop.alone and chained):
                     no_complete_answer(source_name, target_name)
+                hops_to.setdefault(source_name, set()).add((invert, frozenset(hop.values)))
+                if hop.alone and source_tag.type == TagType.REAL:
+                    stepped_reals[source_name] = target_name
+                if source_name in visited:
+                    # Only the first edge from a source is carried on.  A second that asks
+                    # for values it did not try has not been answered for.
+                    if not tried[source_name].issuperset(hop.values):
+                        no_complete_answer(source_name, target_name)
+                    continue
+                visited.add(source_name)
+                tried[source_name] = set(hop.values)
                 split_points: set[Any] = set(hop.values)
                 back_values: set[Any] = set()
                 for raw in hop.values:
@@ -2706,7 +2722,9 @@ def _backward_propagate_comparison_boundaries(
                         back_values.add(own_boundary - 1)
                         back_values.add(own_boundary + 1)
                 if real_gap_points and source_tag.type == TagType.REAL:
-                    back_values |= _real_gap_points(split_points)
+                    splits = real_splits.setdefault(source_name, set())
+                    splits |= split_points
+                    back_values |= _real_gap_points(splits)
 
                 existing = set(known_domains.get(source_name, ()))
                 merged = existing | back_values
@@ -2728,8 +2746,13 @@ def _backward_propagate_comparison_boundaries(
                     known_domains[source_name] = new_domain
 
                 for next_src, next_inv, next_mode in target_to_sources.get(source_name, []):
-                    if next_src not in visited:
-                        queue.append((next_src, next_inv, next_mode, source_name, hop.values))
+                    queue.append((next_src, next_inv, next_mode, source_name, hop.values))
+
+        # A step holds a whole cell on one side of a comparison: 5.7 copied to an INT is 5.
+        # Only that cell tells apart ``R > 5.5, D == 5``, and it has no value of its own.
+        for source_name, target_name in stepped_reals.items():
+            if comp_boundaries.get(source_name) or len(hops_to[source_name]) > 1:
+                no_complete_answer(source_name, target_name)
 
     reverse_soundness_blockers: set[str] = set()
     unanswered: dict[str, str] = {}
