@@ -186,6 +186,30 @@ def test_a_split_with_no_case_to_try_declines_and_names_the_tag() -> None:
     assert isinstance(never(program, hit), Counterexample)
 
 
+@pytest.mark.parametrize("kwargs", [{}, {"split_at": ["Held"]}], ids=["plain", "split_at"])
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC])
+def test_a_witness_leaves_out_a_default_the_tag_could_not_be_patched_to(engine, kwargs) -> None:
+    """Held starts at "AB", which a patch refuses; a rung is what moves it to "B"."""
+    Held = Char("Held", choices={"AB": "two", "B": "one"}, default="AB")
+    with Program(strict=False) as program:
+        with Rung(Go):
+            copy("B", Held)
+        with Rung(Held == "AB"):
+            out(Y)
+
+    result = never(program, Y, **kwargs)
+
+    assert isinstance(result, Counterexample)
+    assert all("Held" not in step.inputs for step in result.trace)
+    plc = engine(program, dt=0.01)
+    for step in result.trace:
+        if step.inputs:
+            plc.patch(step.inputs)
+        for _ in range(step.scans):
+            plc.step()
+    assert plc.current_state.tags["Y"] is True
+
+
 def test_a_value_carried_back_through_a_copy_is_what_the_source_holds() -> None:
     """The back-propagated 3.5 lands on an INT source as 3: a replay holds that too."""
     D = Real("D")

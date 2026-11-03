@@ -87,9 +87,21 @@ def _merge_caveats(*groups: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(merged)
 
 
+def _what_the_search_chose(
+    inputs: dict[str, Any], domains: dict[str, tuple[Any, ...]]
+) -> dict[str, Any]:
+    """A trace step's inputs, without a value the tag was already holding and no domain offers.
+
+    A replay holds that value too, and could not always patch it back in (a default outside
+    its ``choices=``).
+    """
+    return {name: value for name, value in inputs.items() if value in domains.get(name, (value,))}
+
+
 def _build_trace(
     parent_map: dict[tuple[Any, ...], _ParentLink],
     key: tuple[Any, ...],
+    domains: dict[str, tuple[Any, ...]],
 ) -> tuple[list[TraceStep], tuple[str, ...]]:
     """Reconstruct the input trace and per-edge caveats to failure."""
     links: list[_ParentLink] = []
@@ -105,7 +117,7 @@ def _build_trace(
     for link in links:
         trace.append(
             TraceStep(
-                inputs=link.inputs,
+                inputs=_what_the_search_chose(link.inputs, domains),
                 scans=link.scans,
                 prev=link.prev,
                 timers=link.timers,
@@ -411,11 +423,13 @@ def _bfs_explore_gen(
                     journal=context.journal,
                 )
                 continue
-            trace, trace_caveats = _build_trace(parent_map, p_key)
+            trace, trace_caveats = _build_trace(
+                parent_map, p_key, context.nondeterministic_dims
+            )
             choices, moved, _open = _choice[0]
             trace.append(
                 TraceStep(
-                    inputs=input_dict,
+                    inputs=_what_the_search_chose(input_dict, context.nondeterministic_dims),
                     scans=edge_scans,
                     prev=bprev_dict or {},
                     timers=moved,
