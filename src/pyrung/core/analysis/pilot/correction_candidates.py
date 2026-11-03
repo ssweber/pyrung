@@ -28,7 +28,6 @@ from pyrung.core.analysis.pilot.overlay import (
     _pilot_rung_execution_receipt,
     _pilot_rungs_from_proposals,
     _target_unresolved_condition,
-    _union_conditions,
 )
 from pyrung.core.analysis.pilot.route_judgment import route_has_no_dead_end
 from pyrung.core.analysis.pilot.trace import trace_back
@@ -71,16 +70,6 @@ class CandidateIncident(Protocol):
     def occurrence_conditions(self) -> Sequence[Any]: ...
 
 
-class CandidateOutcome(Protocol):
-    """Replay landing evidence consumed only for correction scoping."""
-
-    @property
-    def snapshot(self) -> Mapping[str, Any]: ...
-
-    @property
-    def landed(self) -> bool: ...
-
-
 class UnsupportedOccurrenceScope(RuntimeError):
     """A retained writer condition cannot be projected without widening it."""
 
@@ -103,13 +92,6 @@ def _proposal_identity(proposal: Any) -> tuple[str, Any]:
     return tag, (_semantic_key(value), None)
 
 
-def _hypothesis_identity(proposals: Iterable[Any]) -> tuple[tuple[str, Any], ...]:
-    """Stable comparison key for proposals that may not own a scope yet."""
-
-    pairs = map(_proposal_identity, proposals)
-    return tuple(sorted(pairs, key=lambda pair: (pair[0], repr(pair[1]))))
-
-
 def correction_identity(pilot_rungs: Iterable[PilotRung]) -> CorrectionIdentity:
     """Exact identity of an executable, replay-confirmed correction."""
 
@@ -119,41 +101,6 @@ def correction_identity(pilot_rungs: Iterable[PilotRung]) -> CorrectionIdentity:
             raise TypeError("correction identity requires executable PilotRungs")
         identities.append(_rung_identity(rung))
     return tuple(sorted(identities, key=repr))
-
-
-def _hold_is_noop(
-    tag: str,
-    value: Any,
-    snap: Mapping[str, Any],
-    pdg: Any,
-    program: Any,
-    incident_movers: frozenset[str] = frozenset(),
-    after_snap: Mapping[str, Any] | None = None,
-    synthesis_rungs: Sequence[PilotRung] = (),
-) -> bool:
-    """Whether a proposed hold changes no executable writer behavior."""
-
-    from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.analysis.steerable import _literal_write
-
-    if tag in incident_movers:
-        return False
-    if after_snap is not None and not _values_match(after_snap.get(tag), value):
-        return False
-    if getattr(value, "rules", None) is not None:
-        return False
-    if any(rung.dest == tag for rung in synthesis_rungs):
-        return False
-    if not _values_match(snap.get(tag), value):
-        return False
-    for rung_index in pdg.writers_of.get(tag, frozenset()):
-        rung = resolve_rung(program, pdg.rung_nodes[rung_index])
-        if rung is None:
-            return False
-        literal = _literal_write(rung, tag)
-        if literal is None or not _values_match(literal, value):
-            return False
-    return True
 
 
 def _last_transition_scan(plc: Any, tag: str, start_scan: int, end_scan: int) -> int | None:
@@ -402,24 +349,6 @@ def _retained_scoped_rungs(
     return tuple(result)
 
 
-def _discharges_occurrence_requirements(
-    proposals: tuple[Any, ...],
-    requirements: tuple[tuple[str, Any], ...],
-) -> bool:
-    """Whether proposals directly falsify every recorded support demand."""
-
-    if not proposals or not requirements:
-        return False
-    demanded = {tag: value for tag, value in requirements}
-    corrected: set[str] = set()
-    for proposal in proposals:
-        tag, value = _proposal_pair(proposal)
-        if tag not in demanded or _values_match(value, demanded[tag]):
-            return False
-        corrected.add(tag)
-    return corrected == set(demanded)
-
-
 def _exploratory_correction_rungs(
     plc: Any,
     proposals: tuple[Any, ...],
@@ -473,117 +402,6 @@ def _exploratory_correction_rungs(
         )
         result.extend(_pilot_rungs_from_proposals([proposal], AllCondition(*guard_terms)))
     return tuple(result)
-
-
-def _scoped_correction_rungs(
-    plc: Any,
-    proposals: tuple[Any, ...],
-    incident: CandidateIncident,
-    outcome: CandidateOutcome,
-    ctx: Any,
-    progress_mark: tuple[tuple[str, Any], ...] = (),
-    producer_envelope: bool = False,
-    *,
-    neutralized: bool = False,
-) -> tuple[PilotRung, ...]:
-    """Give a replay-successful correction its evidence-derived lifetime."""
-
-    if incident.occurrence_conditions:
-        occurrence_scope = _retained_occurrence_scope(proposals, incident)
-        return _retained_scoped_rungs(plc, proposals, occurrence_scope, ctx)
-
-    if all(
-        isinstance(proposal, PilotRung) and proposal.operation is not None for proposal in proposals
-    ):
-        return tuple(proposals)
-
-    if producer_envelope and all(isinstance(proposal, PilotRung) for proposal in proposals):
-        return _target_scoped_producer_envelope_rungs(plc, tuple(proposals), ctx)
-
-    scoped_proposals = tuple(
-        (proposal.dest, proposal.value)
-        if isinstance(proposal, PilotRung)
-        and proposal.operation is None
-        and (incident.channel_tag is not None or progress_mark)
-        else proposal
-        for proposal in proposals
-    )
-    channel_tag = incident.channel_tag
-    exposure_guards = tuple(
-        proposal.guard
-        for proposal in proposals
-        if isinstance(proposal, PilotRung) and proposal.operation is None
-    )
-    if (
-        channel_tag is not None
-        and (channel := plc._known_tags_by_name.get(channel_tag)) is not None
-        and (neutralized or outcome.landed)
-    ):
-        from pyrung.core.condition import CompareEq, CompareNe
-
-        before = incident.before_snap.get(channel_tag)
-        if neutralized and not outcome.landed and exposure_guards:
-            scope = _union_conditions((CompareEq(channel, before), *exposure_guards))
-        else:
-            landing = outcome.snapshot.get(channel_tag) if outcome.landed else before
-            if outcome.landed and progress_mark and exposure_guards:
-                scope = _union_conditions(
-                    (
-                        CompareEq(channel, before),
-                        *exposure_guards,
-                        CompareEq(channel, landing),
-                    )
-                )
-            else:
-                scope = (
-                    CompareEq(channel, before)
-                    if _values_match(landing, before)
-                    else CompareNe(channel, landing)
-                )
-    else:
-        scope = _target_unresolved_condition(
-            plc,
-            ctx.target.tag,
-            ctx.target.value,
-            ctx.target.predicate,
-        )
-    if progress_mark:
-        from pyrung.core.condition import AllCondition, CompareEq
-
-        coordinates = []
-        for tag_name, value in progress_mark:
-            tag = plc._known_tags_by_name.get(tag_name)
-            if tag is None:
-                raise KeyError(f"progress receipt tag {tag_name!r} is not a program tag")
-            coordinates.append(CompareEq(tag, value))
-        scope = AllCondition(scope, *coordinates)
-    return tuple(_pilot_rungs_from_proposals(list(scoped_proposals), scope))
-
-
-def _target_scoped_producer_envelope_rungs(
-    plc: Any,
-    proposals: tuple[PilotRung, ...],
-    ctx: Any,
-) -> tuple[PilotRung, ...]:
-    """Bound a statically complete producer envelope by the requested target."""
-
-    from pyrung.core.condition import AllCondition
-
-    unresolved = _target_unresolved_condition(
-        plc,
-        ctx.target.tag,
-        ctx.target.value,
-        ctx.target.predicate,
-    )
-    return tuple(
-        PilotRung(
-            proposal.dest,
-            proposal.value,
-            AllCondition(unresolved, proposal.guard),
-            operation=proposal.operation,
-        )
-        for proposal in proposals
-    )
 
 
 def _active_pilot_rungs_defeat_needed(
