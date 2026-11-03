@@ -51,7 +51,6 @@ prints every mismatch of the session with its test and the differing fields.
 from __future__ import annotations
 
 import os
-import sys
 import threading
 import warnings
 from collections import Counter
@@ -394,6 +393,42 @@ def _stale_in_the_read_mirror(plc: Any) -> list[str]:
     )
 
 
+# A coast keeps wider checkpoints in a stretch and thins them past a cap, which costs a replay
+# run-up and no value.  So what it does keep has to be stepping's.
+_KEEPS_FEWER_CHECKPOINTS = frozenset({"coast"})
+
+
+def _hold_to_a_subset(
+    kind: str,
+    end: int,
+    ours: dict[int, Any],
+    theirs: dict[int, Any],
+    a: dict[str, Any],
+    b: dict[str, Any],
+) -> None:
+    """Our checkpoints and their force records are some of stepping's, equal at each."""
+    forces = a.pop("log: forces at checkpoints")
+    stepped_forces = b.pop("log: forces at checkpoints")
+    not_stepped = sorted(set(ours) - set(theirs))
+    if not_stepped:
+        raise _mismatch(
+            f"fold-check ({kind}): the runner at scan {end} has checkpoints stepping does not: "
+            f"{not_stepped[:6]}"
+        )
+    # A replay anchored on a checkpoint reads its forces there.
+    no_record = sorted(set(ours) - set(forces))
+    if no_record:
+        raise _mismatch(
+            f"fold-check ({kind}): checkpoints with no force record at scan {end}: {no_record[:6]}"
+        )
+    for scan, held in forces.items():
+        if scan not in stepped_forces or stepped_forces[scan] != held:
+            raise _mismatch(
+                f"fold-check ({kind}): forces recorded at scan {scan}: {held!r}, "
+                f"stepped {stepped_forces.get(scan, 'none')!r}"
+            )
+
+
 def compare_runners(
     kind: str, plc: Any, twin: Any, start: int, *, built_apart: bool = False
 ) -> None:
@@ -416,9 +451,12 @@ def compare_runners(
     # Retention trims the older ones, and each runner counts from its own start.
     ours = _in_range(plc._checkpoints, start, end)
     theirs = _in_range(twin._checkpoints, start, end)
-    if ours and plc._history_retention_scans is not None:
-        theirs = {scan: state for scan, state in theirs.items() if scan >= min(ours)}
-    a["checkpoints"], b["checkpoints"] = sorted(ours), sorted(theirs)
+    if kind in _KEEPS_FEWER_CHECKPOINTS:
+        _hold_to_a_subset(kind, end, ours, theirs, a, b)
+    else:
+        if ours and plc._history_retention_scans is not None:
+            theirs = {scan: state for scan, state in theirs.items() if scan >= min(ours)}
+        a["checkpoints"], b["checkpoints"] = sorted(ours), sorted(theirs)
     if a != b:
         keys = sorted(k for k in a.keys() | b.keys() if a.get(k) != b.get(k))
         diff = ", ".join(f"{k}: folded={a.get(k)!r} stepped={b.get(k)!r}" for k in keys)
@@ -481,12 +519,36 @@ def _unknown_scans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
     return _spans([r for r in ranges if isinstance(r.payload, rung_firings.Unknown)], first, last)
 
 
+def _record_pieces(plc: Any, first: int, end: int) -> list[tuple[Any, int, int]]:
+    """Who holds the records of *first*..*end*: *plc*, or for scans it left out a replay of them.
+
+    It is what a settle would install, stepped here on the side, since a settle changes the
+    runner under test: a question that comes later still has to find those scans as it left them.
+    """
+    pieces = []
+    cursor = first
+    for low, high in sorted(plc._fold_windows):
+        low, high = max(low, first), min(high, end)
+        if low > high:
+            continue
+        if cursor < low:
+            pieces.append((plc, cursor, low - 1))
+        pieces.append((plc._stepped_again(low, high, None), low, high))
+        STATS["scans out of the records, settled to compare"] += high - low + 1
+        cursor = high + 1
+    if cursor <= end:
+        pieces.append((plc, cursor, end))
+    return pieces
+
+
 def compare_records(kind: str, plc: Any, twin: Any, start: int) -> None:
     """What scans after *start* left in the firing indexes, against what stepping left."""
-    end = plc._state.scan_id
-    first = start + 1
-    if end < first:
-        return
+    for holder, first, last in _record_pieces(plc, start + 1, plc._state.scan_id):
+        _compare_records_over(kind, holder, twin, first, last)
+    STATS[f"records compared: {kind}"] += 1
+
+
+def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) -> None:
     for name, ours, theirs in (
         ("rung", plc._rung_firing_timelines, twin._rung_firing_timelines),
         ("node", plc._node_firing_timelines, twin._node_firing_timelines),
@@ -525,7 +587,6 @@ def compare_records(kind: str, plc: Any, twin: Any, start: int) -> None:
                 raise _mismatch(
                     f"fold-check ({kind}): {name} {key!r} varied on {a[:6]}, stepped on {b[:6]}"
                 )
-    STATS[f"records compared: {kind}"] += 1
 
 
 def _one_scan(plc: Any) -> type[BaseException] | None:
@@ -905,7 +966,12 @@ def _judge_the_raise_alone(
 
 
 def _compare_with_plain_compiled(
-    plc: Any, twin: Any, scans: int, start: int, predicate: Callable[[Any], bool] | None
+    kind: str,
+    plc: Any,
+    twin: Any,
+    scans: int,
+    start: int,
+    predicate: Callable[[Any], bool] | None,
 ) -> None:
     """Too long to step: the landing against real compiled scans, the floor under the loop.
 
@@ -925,11 +991,11 @@ def _compare_with_plain_compiled(
             compiled_run.run_scans(twin, scans, predicate)
         except Exception as exc:
             raise _mismatch(
-                f"fold-check (compiled): plain compiled raised {type(exc).__name__} short of "
+                f"fold-check ({kind}): plain compiled raised {type(exc).__name__} short of "
                 f"scan {plc._state.scan_id}"
             ) from exc
-        _compare("compiled", plc._state.scan_id, plc._state, twin._state)
-        compare_runners("compiled", plc, twin, start)
+        _compare(kind, plc._state.scan_id, plc._state, twin._state)
+        compare_runners(kind, plc, twin, start)
     finally:
         _depth -= 1
         scan_trace.MAX_TRACES_PER_RUN = traces
@@ -976,8 +1042,14 @@ def _checked(
     fine: bool = True,
     compiled_predicate: bool = False,
     budget: int | None = None,
+    out_of_work: Callable[[], bool] | None = None,
 ) -> Any:
-    """Run *call* and check it against a stepped twin; *budget* is the scans asked of it."""
+    """Run *call* and check it against a stepped twin; *budget* is the scans asked of it.
+
+    *out_of_work* says how() stopped the run for its ledger: as with its clock that is no
+    scan's doing, so it isn't held to its budget or asked for a true predicate where it landed.
+    All else is compared at that landing.
+    """
     global _depth
     if _depth:
         return call()
@@ -1028,6 +1100,8 @@ def _checked(
     loop_scans = scan_trace.TOTALS["loop scans"] - loop_scans_before
     end = plc._state.scan_id
     n = end - start
+    if out_of_work is not None and out_of_work():
+        budget = n
     # A raise is a run stopped early, by whatever raised: that is judged below.
     _hold_to_the_scans_asked(
         kind, start, end, budget, predicate if raised is None else _STOPPED_BY_THE_RAISE
@@ -1040,10 +1114,10 @@ def _checked(
     # A short landing has to be the scan the predicate stops on, so it is asked there too.
     short = raised is None and budget is not None and n < budget
     if n > MAX_SCANS:
-        if kind == "compiled" and n <= MAX_PLAIN_COMPILED_SCANS:
+        if kind in ("compiled", "coast") and n <= MAX_PLAIN_COMPILED_SCANS:
             plain_ask = ask if compiled_predicate and raised is None else None
             scans = budget if budget is not None and plain_ask is not None else n
-            _compare_with_plain_compiled(plc, twin, scans, start, plain_ask)
+            _compare_with_plain_compiled(kind, plc, twin, scans, start, plain_ask)
             STATS["loop scans, landing only (a run too long to step)"] += loop_scans
             if short and plain_ask is None:
                 _judge_a_short_landing_on_its_last_scan(kind, plc, twin, ask, budget, n)
@@ -1181,14 +1255,6 @@ def install() -> None:
     setattr(scan_trace, "MIN_RUN_SCANS", 1)  # noqa: B010
     setattr(scan_trace, "BURST_SIZES", _LOOP_BURSTS)  # noqa: B010
     setattr(scan_trace, "STRICT_SELF_CHECK", True)  # noqa: B010
-    # A coast asks for the loop at its second scan, so a short one reaches it.
-    setattr(coast_run, "ENTRY_WAIT", 1)  # noqa: B010
-    # And keeps the checkpoints and records stepping keeps, for the compares to hold them all
-    # to the twin's.  What it leaves out for real is read against stepping in test_coast_run.py
-    # (TestCheckpointsInAStretch, TestRecordsPastTheirCap).
-    setattr(coast_run, "STRETCH_CHECKPOINT_INTERVALS", 1)  # noqa: B010
-    setattr(coast_run, "MAX_CHECKPOINTS", sys.maxsize)  # noqa: B010
-    setattr(coast_run, "MAX_RECORD_RUNS", sys.maxsize)  # noqa: B010
     if _note_self_check_mismatch not in scan_trace.SELF_CHECK_OBSERVERS:
         scan_trace.SELF_CHECK_OBSERVERS.append(_note_self_check_mismatch)
 
@@ -1225,13 +1291,18 @@ def install() -> None:
     setattr(fold, "fold_run_for", fold_run_for)  # noqa: B010
     setattr(cyclefold, "cycle_fold_until", cycle_fold_until)  # noqa: B010
 
-    def coast_until(plc: Any, predicate: Any, *, budget: int, **kwargs: Any) -> Any:
+    def coast_until(
+        plc: Any, predicate: Any, *, budget: int, stats: Any = None, **kwargs: Any
+    ) -> Any:
+        said = {} if stats is None else stats
+        said.pop("out_of_work", None)
         return _checked(
             "coast",
             plc,
-            lambda: coast(plc, predicate, budget=budget, **kwargs),
+            lambda: coast(plc, predicate, budget=budget, stats=said, **kwargs),
             predicate,
             budget=budget,
+            out_of_work=lambda: "out_of_work" in said,
         )
 
     setattr(coast_run, "coast_until", coast_until)  # noqa: B010

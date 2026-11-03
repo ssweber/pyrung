@@ -73,7 +73,7 @@ def test_the_returned_fork_is_not_a_search() -> None:
     assert fork.fork()._search_refuses_restart is False
 
     stepped = plc.fork()
-    for scan in range(fork.state.scan_id):
+    for _ in range(fork.state.scan_id):
         stepped.step()
     assert stepped.state.tags == fork.state.tags
     for _ in range(40):

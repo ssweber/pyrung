@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from pyrung.circuitpy import codegen
 from pyrung.core import (
     PLC,
     Block,
@@ -36,7 +37,6 @@ from pyrung.core import (
     scan_trace,
     system,
 )
-from pyrung.circuitpy import codegen
 from pyrung.core.coast_run import _record_columns, _Recording, coast_until, memo_of
 from pyrung.core.rung_firings import _UNKNOWN_VALUE, RungFiringTimelines, UnrecordedScansError
 from pyrung.core.tag import Dint
@@ -724,18 +724,8 @@ def test_the_kernel_held_longest_unused_goes_first() -> None:
     assert len(memo.kernels) == coast_run.MAX_KERNELS == 2
 
 
-@pytest.fixture
-def _not_under_fold_check() -> None:
-    # Lockstep compares every checkpoint and record with a stepped twin's, so a coast keeps
-    # all of them there.  These read what a coast leaves out against stepping themselves.
-    if getattr(compiled_run, "_fold_check_installed", False):
-        pytest.skip("--fold-check coasts keep what stepping keeps")
-
-
 class TestCheckpointsInAStretch:
     SCANS = 12_000
-
-    pytestmark = pytest.mark.usefixtures("_not_under_fold_check")
 
     def _coasted(self, **kwargs: Any) -> PLC:
         plc = PLC(_program(_ramp), dt=0.01, **kwargs)
@@ -839,8 +829,6 @@ def _fires_every_other_scan() -> None:
 
 
 class TestRecordsPastTheirCap:
-    pytestmark = pytest.mark.usefixtures("_not_under_fold_check")
-
     SCANS = 12_000
 
     def _coasted(self, monkeypatch: pytest.MonkeyPatch, runs: int) -> PLC:

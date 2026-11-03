@@ -2446,9 +2446,8 @@ class PLC:
         """What a how() asking this question polls while it waits for the answer."""
         return None if self._coast_memo is None else self._coast_memo.check_limits
 
-    def _settle_window(
-        self, first: int, last: int, check_limits: Callable[[], None] | None
-    ) -> None:
+    def _stepped_again(self, first: int, last: int, check_limits: Callable[[], None] | None) -> PLC:
+        """A replay of scans up to *last* from the checkpoint before *first*, with its records."""
         anchor = self._nearest_checkpoint_at_or_before(first - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
         for scan_id in range(anchor_scan_id + 1, last + 1):
@@ -2456,6 +2455,12 @@ class PLC:
                 check_limits()
             self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
             replay.step()
+        return replay
+
+    def _settle_window(
+        self, first: int, last: int, check_limits: Callable[[], None] | None
+    ) -> None:
+        replay = self._stepped_again(first, last, check_limits)
         self._rung_firing_timelines.replace_range(replay._rung_firing_timelines, first, last)
         self._committed_tag_timelines.replace_range(replay._committed_tag_timelines, first, last)
         self._node_firing_timelines.replace_range(replay._node_firing_timelines, first, last)
