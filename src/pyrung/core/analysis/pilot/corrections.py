@@ -58,7 +58,6 @@ from pyrung.core.analysis.pilot.trace_read import UnsupportedConstruct
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.analysis.sp_values import _values_match, _writer_for_tag
 from pyrung.core.crossing import Eq, complement_scalar_constraint
-from pyrung.core.rung_firings import UnrecordedScansError
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.incidents import DeviationIncident
@@ -357,8 +356,6 @@ def causal_channel_guard(
             continue
         try:
             chain = plc.cause(source, scan=source_scan, deep=True)
-        except UnrecordedScansError:
-            raise  # the search cannot answer as if nothing happened in them
         except Exception:  # noqa: BLE001
             logger.debug(
                 "causal exposure: cause(%s@%s) raised",

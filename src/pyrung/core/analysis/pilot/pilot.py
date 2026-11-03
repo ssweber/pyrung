@@ -129,6 +129,7 @@ from pyrung.core.analysis.pilot.world_key import (
 )
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.coast_run import CoastMemo, memo_of
+from pyrung.core.rung_firings import SearchQuestionRefused
 from pyrung.core.runner import SearchStopped
 
 if TYPE_CHECKING:
@@ -426,6 +427,8 @@ def _finished_event(
     )
     # The caller gets this fork to run.  The search's clock, memo and refusal to restart
     # end with the search.
+    if state.work._coast_memo is not None:
+        state.work._coast_memo.check_limits = None
     state.work._coast_memo = None
     state.work._search_refuses_restart = False
     return event
@@ -505,24 +508,31 @@ def _pilot_loop_events(
     at_the_stop: dict[str, Any] = {}
     try:
         yield from _search_events(plc, ctx, at_the_stop)
-    except SearchStopped as stopped:
+        return
+    except (SearchStopped, SearchOutOfTime, SearchOutOfMemory, SearchQuestionRefused) as ended:
+        stop = ended
+    # What the terminal itself reads is no search's, and has nothing left to run out of.
+    state = at_the_stop["state"]
+    memo.check_limits = None
+    state.work._search_refuses_restart = False
+    if isinstance(stop, SearchStopped):
         termination = TheoryTermination.STUCK
         reason = (
-            f"the program stopped itself at scan {stopped.scan_id} and its next scan would "
+            f"the program stopped itself at scan {stop.scan_id} and its next scan would "
             "restart it; how() does not plan across a restart"
         )
-    except SearchOutOfTime:
+    elif isinstance(stop, SearchOutOfTime):
         termination = TheoryTermination.WALL_CLOCK
         assert clock is not None
         reason = _out_of_a_limit(
             f"wall-clock budget exhausted ({clock.limit_s:g} s)", at_the_stop, ctx
         )
-    except SearchOutOfMemory:
+    elif isinstance(stop, SearchOutOfMemory):
         termination = TheoryTermination.BUDGET
         reason = _out_of_a_limit("memory budget exhausted (about 1 GB held)", at_the_stop, ctx)
     else:
-        return
-    state = at_the_stop["state"]
+        termination = TheoryTermination.STUCK
+        reason = _out_of_a_limit(f"a question was refused: {stop}", at_the_stop, ctx)
     _theory_recording._run_optional_theory_hook(
         _theory_recording._record_optional_theory_abandoned, state, termination
     )

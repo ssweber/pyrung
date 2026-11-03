@@ -42,6 +42,20 @@ class UnrecordedScansError(ValueError):
         self.scans = scans
 
 
+class SearchQuestionRefused(BaseException):
+    """A how() asked a question that met :class:`UnrecordedScansError`.
+
+    The search reads causes under many ``except Exception`` that mean "no evidence", and scans
+    it cannot afford to read are not evidence that nothing happened in them.  So in a search
+    the refusal is a BaseException, whichever catch it passes, and ends the search with a
+    terminal saying so.
+    """
+
+    def __init__(self, refusal: UnrecordedScansError) -> None:
+        super().__init__(str(refusal))
+        self.refusal = refusal
+
+
 _VALUE_VARIETY_THRESHOLD = 100
 _TRACK_DISTINCT_AFTER = 8
 _UNKNOWN_VALUE = object()

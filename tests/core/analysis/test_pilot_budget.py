@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from pyrung import PLC, Bool, Int, Physical, Program, Rung, Timer, on_delay, out, run_function
+from pyrung.core import coast_run, runner
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import budget
+from pyrung.core.analysis.pilot import coast as pilot_coast
+from pyrung.core.analysis.pilot import pilot as pilot_module
 from pyrung.core.analysis.pilot.budget import SearchBudget
+from pyrung.core.analysis.pilot.causal import _shared_cause, action_caused_change
 from pyrung.core.analysis.pilot.working_theory import TheoryTermination
+from pyrung.core.rung_firings import SearchQuestionRefused, UnrecordedScansError
 
 Slow = Timer.clone("Slow")
 Lamp = Bool("Lamp")
@@ -150,6 +156,65 @@ class TestAStopIsNotAVerdict:
         assert plan.status is PlanStatus.STOPPED
         assert plan.reason.startswith("budget exhausted")
         assert "physical link" not in plan.reason
+
+
+class TestARefusedQuestion:
+    # Scans the search cannot afford to read are not evidence that nothing happened in them.
+
+    @pytest.fixture
+    def unrecorded(self, monkeypatch: pytest.MonkeyPatch) -> PLC:
+        """A fork in a search, whose scans have no records and may not get them."""
+        monkeypatch.setattr(coast_run, "MAX_RECORD_RUNS", 0)
+        monkeypatch.setattr(runner, "SETTLE_SCAN_LIMIT", 0)
+        plc = _slow_lamp(100_000).fork()
+        coast_run.coast_until(plc, lambda _state: False, budget=5000)
+        assert plc._fold_windows
+        plc._search_refuses_restart = True
+        return plc
+
+    def test_action_caused_change_does_not_call_it_no_cause(self, unrecorded: PLC) -> None:
+        tip = unrecorded.state.scan_id
+        with pytest.raises(SearchQuestionRefused):
+            action_caused_change(
+                unrecorded, "Go", Slow.Acc.name, frozenset({"Go"}), scan=tip, start_scan=tip - 3
+            )
+
+    def test_shared_cause_does_not_call_it_no_cause(self, unrecorded: PLC) -> None:
+        with pytest.raises(SearchQuestionRefused):
+            _shared_cause(unrecorded, Slow.Acc.name)
+
+    def test_outside_a_search_it_is_the_public_error(self, unrecorded: PLC) -> None:
+        unrecorded._search_refuses_restart = False
+        with pytest.raises(UnrecordedScansError):
+            unrecorded.cause(Slow.Acc.name)
+
+    def test_it_ends_the_search_and_says_so(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        real = coast_run.coast_until
+
+        def then_ask(plc: PLC, *args: Any, **kwargs: Any) -> Any:
+            real(plc, *args, **kwargs)
+            raise SearchQuestionRefused(UnrecordedScansError(1, 2, 3))
+
+        monkeypatch.setattr(pilot_coast, "coast_until", then_ask)
+        plan = _slow_lamp(30_000).how(Lamp, wall_clock_s=None)
+        assert plan.status is PlanStatus.STOPPED
+        assert plan.reason.startswith("a question was refused: scans 1..2 include")
+        assert "physical link" not in plan.reason
+
+    def test_what_the_terminal_reads_cannot_end_a_search_again(self, monkeypatch) -> None:
+        # The clock is out, and a BaseException out of how() would reach the caller raw.
+        monkeypatch.setattr(budget, "WALL_CLOCK_ENABLED", True)
+        terminal_polled = []
+        real = pilot_module._stopped_events
+
+        def stopped_events(state: Any, *args: Any, **kwargs: Any) -> Any:
+            terminal_polled.append(state.work._coast_memo.check_limits)
+            return real(state, *args, **kwargs)
+
+        monkeypatch.setattr(pilot_module, "_stopped_events", stopped_events)
+        plan = _slow_lamp(30_000).how(Lamp, wall_clock_s=0.0)
+        assert plan.status is PlanStatus.STOPPED
+        assert terminal_polled == [None]
 
 
 class TestTheClock:

@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot.effect_observation import changed_replay_scan_ids
 from pyrung.core.analysis.sp_values import _values_match
-from pyrung.core.rung_firings import UnrecordedScansError
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal.models import CausalChain
@@ -427,8 +426,6 @@ def _shared_cause(
             )
         else:
             result = plc.cause(tag)
-    except UnrecordedScansError:
-        raise  # the search cannot answer as if nothing happened in them
     except Exception:  # noqa: BLE001
         logger.debug("pilot causal: cause(%s) raised", tag, exc_info=True)
         result = None

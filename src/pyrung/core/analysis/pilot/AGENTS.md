@@ -224,7 +224,9 @@ assignment survey and frontier probes check the remaining allowance before scans
 What a coast leaves behind has its cap in `coast_run.py`: kernels and paths in the memo,
 checkpoints on the runner (spaced wider inside a stretch, thinned past `MAX_CHECKPOINTS`),
 record runs (past `MAX_RECORD_RUNS` a stretch's scans settle when asked, or a named error
-past `SETTLE_SCAN_LIMIT`).
+past `SETTLE_SCAN_LIMIT`). What ends a search from under a question is a BaseException
+(`SearchOutOfTime`, `SearchOutOfMemory`, `SearchQuestionRefused`), so the `except Exception`
+around causal reads means only "no evidence" and cannot turn one of those into a verdict.
 
 ## Attempt transaction
 

@@ -53,6 +53,7 @@ from pyrung.core.rung_firings import (
     _UNKNOWN_VALUE,
     SETTLE_SCAN_LIMIT,
     RungFiringTimelines,
+    SearchQuestionRefused,
     UnrecordedScansError,
 )
 from pyrung.core.scan_log import LifecycleEvent, LifecycleKind, ScanLog, ScanLogSnapshot
@@ -1955,12 +1956,17 @@ class PLC:
         owner = self._causal_lineage.owner_at(target)
         return owner.rung_firing_timelines.at(target) if owner is not None else pmap()
 
+    def _refusal(self, first: int, last: int, scans: int) -> BaseException:
+        """What a question gets when reading *first*..*last* would step too far."""
+        refusal = UnrecordedScansError(first, last, scans)
+        return SearchQuestionRefused(refusal) if self._search_refuses_restart else refusal
+
     def _rung_firings_stepped_again(
         self, target: int, check_limits: Callable[[], None] | None
     ) -> PMap:
         steps = target - self._replay_anchor_scan(target - 1)
         if steps > SETTLE_SCAN_LIMIT:
-            raise UnrecordedScansError(target, target, steps)
+            raise self._refusal(target, target, steps)
         anchor = self._nearest_checkpoint_at_or_before(target - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
         for scan_id in range(anchor_scan_id + 1, target + 1):
@@ -2426,7 +2432,7 @@ class PLC:
         # What it costs is the steps from the checkpoint, and a long stretch keeps few of them.
         scans = sum(end - owner._replay_anchor_scan(start - 1) for owner, (start, end) in asked)
         if scans > SETTLE_SCAN_LIMIT:
-            raise UnrecordedScansError(asked[0][1][0], asked[-1][1][1], scans)
+            raise self._refusal(asked[0][1][0], asked[-1][1][1], scans)
         for owner, (start, end) in asked:
             owner._settle_window(start, end, self._search_limits())
 
