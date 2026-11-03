@@ -67,11 +67,6 @@ def _clamp_dint(value: int) -> int:
     return max(_DINT_MIN, min(_DINT_MAX, value))
 
 
-def _clamp_int(value: int) -> int:
-    """Clamp integer to INT (16-bit signed) range."""
-    return max(_INT_MIN, min(_INT_MAX, value))
-
-
 def _int_to_float_bits(n: int) -> float:
     """Reinterpret a 32-bit unsigned integer bit pattern as IEEE 754 float."""
     return struct.unpack("<f", struct.pack("<I", int(n) & 0xFFFFFFFF))[0]

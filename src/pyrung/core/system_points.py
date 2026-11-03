@@ -452,9 +452,6 @@ class SystemPointRuntime:
     def read_only_tags(self) -> frozenset[str]:
         return READ_ONLY_SYSTEM_TAG_NAMES
 
-    def is_system_tag(self, name: str) -> bool:
-        return name in SYSTEM_TAGS_BY_NAME
-
     def is_read_only(self, name: str) -> bool:
         return name in READ_ONLY_SYSTEM_TAG_NAMES
 

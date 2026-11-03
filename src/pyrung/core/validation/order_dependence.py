@@ -170,12 +170,6 @@ class _Sequence:
     rows: list[_Placed] = field(default_factory=list)
 
 
-def _iter_conditions(value: Any) -> Iterable[Any]:
-    for item in value if isinstance(value, tuple) else (value,):
-        if item is not None:
-            yield item
-
-
 _Writes = tuple[frozenset[str], frozenset[str]]
 _NO_WRITES: _Writes = (frozenset(), frozenset())
 
