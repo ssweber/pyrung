@@ -68,9 +68,6 @@ from pyrung.core.analysis.reverse_edges import (
     calc_reverse_edge as _calc_reverse_edge,
 )
 from pyrung.core.analysis.reverse_edges import (
-    compose_invert as _compose_invert,
-)
-from pyrung.core.analysis.reverse_edges import (
     literal_value_from_value as _literal_value_from_value,
 )
 from pyrung.core.analysis.reverse_edges import (
@@ -78,7 +75,12 @@ from pyrung.core.analysis.reverse_edges import (
 )
 from pyrung.core.analysis.simplified import Expr, _condition_to_expr, simplified_forms
 from pyrung.core.expression import is_randint_tag, randint_sites
-from pyrung.core.input_overrides import held_candidates
+from pyrung.core.input_overrides import held_candidates, holds_as_given
+from pyrung.core.instruction.conversions import (
+    StoreTransform,
+    calc_store_transform,
+    copy_store_transform,
+)
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
@@ -2460,6 +2462,74 @@ def _unsupported_reverse_sources(
     return []
 
 
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and math.isfinite(value)
+
+
+class _ThroughTheStore(NamedTuple):
+    values: tuple[Any, ...]  # What this source tries.
+    carried_on: tuple[Any, ...]  # What a source feeding this one has to reach.
+
+
+# How far either way a wrap's aliases are looked for.  With no alias in reach a source whose
+# range the window passes on both sides has none at all; otherwise the search declines.
+_WRAP_WINDOW = 8
+
+
+def _through_the_store(
+    value: Any,
+    invert: _InvertFn,
+    store: StoreTransform | None,
+    source_tag: Tag,
+) -> _ThroughTheStore | None:
+    """What a source could hold to leave *value* on a target, through the target's store.
+
+    An expression's inverse knows nothing of the store, and a wrap has more than one way to
+    any value: a WORD holds 65535 for the -1 of an INT, and a ``calc`` to an INT holds -32768
+    for the 32767 of ``I + 1``.  A clamp or a REAL has one way, so a value past what the source
+    holds is one no scan of it can leave.  Returns None where the search can't say which:
+    the aliases are out of reach, or the inverse has no answer (``I * 2`` for an odd value).
+    """
+    raw = invert(value)
+    direct = raw if _is_number(raw) else None
+    if store is None or store.kind != "wrap":
+        return None if direct is None else _ThroughTheStore((direct,), (direct,))
+    low, high = store.lower, store.upper
+    assert low is not None and high is not None
+    modulus = high - low + 1
+
+    source_store = copy_store_transform(source_tag.type)
+    source_low = source_store.lower if source_store is not None else None
+    source_high = source_store.upper if source_store is not None else None
+    bounded = source_low is not None and source_high is not None
+    wide = not bounded or source_high - source_low + 1 > 2 * modulus
+
+    # A float boundary is compared to the whole numbers either side of it.
+    wholes = {math.floor(value), math.ceil(value)}
+    window = 1 if wide else _WRAP_WINDOW
+    aliases: list[Any] = []
+    for whole in sorted(wholes):
+        for turn in range(-window, window + 1):
+            alias = invert(whole + turn * modulus)
+            if _is_number(alias) and (not bounded or holds_as_given(source_tag, alias)):
+                aliases.append(alias)
+
+    if direct is not None and (not bounded or holds_as_given(source_tag, direct)):
+        # One way is enough to try here: a wide source holds every value of a narrow target.
+        # A narrower source feeding this one may only reach one of the others.
+        return _ThroughTheStore((direct,), (direct, *aliases))
+    if aliases:
+        tried = tuple(aliases) if direct is None else (direct, *aliases)
+        return _ThroughTheStore(tried, tried)
+    if not bounded:
+        return None
+    ends = [invert(whole + side * _WRAP_WINDOW * modulus) for whole in wholes for side in (-1, 1)]
+    if all(_is_number(end) for end in ends) and min(ends) < source_low and max(ends) > source_high:
+        # No alias in the source's range, none past the window: no scan leaves this value.
+        return _ThroughTheStore((direct,) if direct is not None else (), ())
+    return None
+
+
 def _backward_propagate_comparison_boundaries(
     program: Program,
     graph: ProgramGraph,
@@ -2489,7 +2559,9 @@ def _backward_propagate_comparison_boundaries(
     )
     from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
 
-    reverse_edges: dict[str, list[tuple[str, _InvertFn]]] = {}
+    # Source -> (target, inverse of the expression, what the target's store is): copy's
+    # store unless a calc wrote it, when the mode names calc's.
+    reverse_edges: dict[str, list[tuple[str, _InvertFn, str | None]]] = {}
     covered_pairs: set[tuple[str, str]] = set()
 
     for instr in walk_instructions(program):
@@ -2503,7 +2575,7 @@ def _backward_propagate_comparison_boundaries(
             if not target_names:
                 target_names = _expand_indirect_tag_names(instr.dest, graph.indirect_reach)
             for target_name in target_names:
-                reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY))
+                reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY, None))
                 covered_pairs.add((source_name, target_name))
 
         elif isinstance(instr, FillInstruction):
@@ -2514,7 +2586,7 @@ def _backward_propagate_comparison_boundaries(
             if not target_names:
                 target_names = _expand_indirect_tag_names(instr.dest, graph.indirect_reach)
             for target_name in target_names:
-                reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY))
+                reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY, None))
                 covered_pairs.add((source_name, target_name))
 
         elif isinstance(instr, BlockCopyInstruction):
@@ -2527,12 +2599,12 @@ def _backward_propagate_comparison_boundaries(
             if source_names and dest_names:
                 if len(source_names) == len(dest_names):
                     for src, dst in zip(source_names, dest_names, strict=True):
-                        reverse_edges.setdefault(src, []).append((dst, _IDENTITY))
+                        reverse_edges.setdefault(src, []).append((dst, _IDENTITY, None))
                         covered_pairs.add((src, dst))
                 else:
                     for src in source_names:
                         for dst in dest_names:
-                            reverse_edges.setdefault(src, []).append((dst, _IDENTITY))
+                            reverse_edges.setdefault(src, []).append((dst, _IDENTITY, None))
                             covered_pairs.add((src, dst))
 
         elif isinstance(instr, CalcInstruction):
@@ -2542,16 +2614,17 @@ def _backward_propagate_comparison_boundaries(
             edge = _calc_reverse_edge(instr.expression)
             if edge is not None:
                 source_name, invert = edge
-                reverse_edges.setdefault(source_name, []).append((target_name, invert))
+                reverse_edges.setdefault(source_name, []).append((target_name, invert, instr.mode))
                 covered_pairs.add((source_name, target_name))
 
     comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
+    store_cannot_invert: set[str] = set()
 
     if reverse_edges:
-        target_to_sources: dict[str, list[tuple[str, _InvertFn]]] = {}
+        target_to_sources: dict[str, list[tuple[str, _InvertFn, str | None]]] = {}
         for _src, _edges in reverse_edges.items():
-            for _tgt, _inv in _edges:
-                target_to_sources.setdefault(_tgt, []).append((_src, _inv))
+            for _tgt, _inv, _mode in _edges:
+                target_to_sources.setdefault(_tgt, []).append((_src, _inv, _mode))
 
         comp_boundaries: dict[str, list[Any]] = {}
         for _tag_name in atom_idx:
@@ -2563,30 +2636,48 @@ def _backward_propagate_comparison_boundaries(
                 comp_boundaries.setdefault(_tag_name, []).append(atom.operand)
 
         for comp_tag, boundaries in comp_boundaries.items():
-            queue: list[tuple[str, _InvertFn]] = list(target_to_sources.get(comp_tag, []))
+            queue = [
+                (source, invert, mode, comp_tag, tuple(boundaries))
+                for source, invert, mode in target_to_sources.get(comp_tag, [])
+            ]
             visited: set[str] = {comp_tag}
-
             while queue:
-                source_name, composed_invert = queue.pop(0)
+                source_name, invert, calc_mode, target_name, target_values = queue.pop(0)
                 if source_name in visited:
                     continue
                 visited.add(source_name)
-
                 source_tag = graph.tags.get(source_name)
                 if source_tag is None:
                     continue
+                target_tag = graph.tags.get(target_name)
+                store = (
+                    None
+                    if target_tag is None
+                    else copy_store_transform(target_tag.type)
+                    if calc_mode is None
+                    else calc_store_transform(target_tag.type, calc_mode)
+                )
 
                 back_values: set[Any] = set()
                 split_points: set[Any] = set()
-                for boundary in boundaries:
-                    raw = composed_invert(boundary)
-                    if not isinstance(raw, (int, float)):
+                carried_on: set[Any] = set()
+                for boundary in target_values:
+                    if not _is_number(boundary):
                         continue
-                    split_points.add(raw)
-                    back_values.add(raw)
-                    back_values.add(raw - 1)
-                    back_values.add(raw + 1)
-
+                    through = _through_the_store(boundary, invert, store, source_tag)
+                    if through is None:
+                        store_cannot_invert.add(source_name)
+                        continue
+                    split_points.update(through.values)
+                    carried_on.update(through.carried_on)
+                    for raw in through.values:
+                        back_values.update((raw, raw - 1, raw + 1))
+                    # Next door to a boundary on the target can be anywhere on the source:
+                    # 32768 on a WORD is -32768 on the INT copied to it, 32767 is 32767.
+                    for neighbour in (boundary - 1, boundary + 1):
+                        beside = _through_the_store(neighbour, invert, store, source_tag)
+                        if beside is not None:
+                            back_values.update(beside.values)
                 if not back_values:
                     continue
 
@@ -2623,16 +2714,22 @@ def _backward_propagate_comparison_boundaries(
                 if known_domains.get(source_name) != new_domain:
                     known_domains[source_name] = new_domain
 
-                for next_src, next_inv in target_to_sources.get(source_name, []):
+                for next_src, next_inv, next_mode in target_to_sources.get(source_name, []):
                     if next_src not in visited:
                         queue.append(
-                            (
-                                next_src,
-                                _compose_invert(next_inv, composed_invert),
-                            )
+                            (next_src, next_inv, next_mode, source_name, tuple(carried_on))
                         )
 
     reverse_soundness_blockers: set[str] = set()
+    for source_name in store_cannot_invert:
+        source_tag = graph.tags.get(source_name)
+        if source_tag is None:
+            continue
+        declared = _declared_domain(source_tag)
+        if declared is not None:
+            known_domains[source_name] = declared
+        else:
+            reverse_soundness_blockers.add(source_name)
     for instr in walk_instructions(program):
         source_targets = _unsupported_reverse_sources(instr, covered_pairs, graph.indirect_reach)
         for source_name, target_names in source_targets:
