@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung import Bool, Char, Int, Or, Program, Real, Rung, Word, copy, latch, out
-from pyrung.core import PLC
+from pyrung import Bool, Char, Int, Or, Program, Real, Rung, Word, calc, copy, fill, latch, out
+from pyrung.core import PLC, Block, TagType
+from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot.skiff import _declared_domain
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -22,7 +23,9 @@ from pyrung.core.analysis.prove import (
 )
 from pyrung.core.analysis.prove.classify import _condition_to_expr, _extract_value_domain
 from pyrung.core.compiled_plc import CompiledPLC
+from pyrung.core.crossing import Affine, invert_affine_candidate
 from pyrung.core.input_overrides import held_candidates, refuses_value
+from pyrung.core.storage import StoreTransform
 
 Y = Bool("Y")
 Go = Bool("Go", external=True)
@@ -208,6 +211,53 @@ def test_a_witness_leaves_out_a_default_the_tag_could_not_be_patched_to(engine, 
         for _ in range(step.scans):
             plc.step()
     assert plc.current_state.tags["Y"] is True
+
+
+def _copy_into(words) -> None:
+    copy(In, words[1])
+
+
+def _add_five_into(words) -> None:
+    calc(In + 5, words[1])
+
+
+def _fill_into(words) -> None:
+    fill(In, words.select(1, 2))
+
+
+@pytest.mark.parametrize(
+    "writes, needs",
+    [(_copy_into, -1), (_add_five_into, -6), (_fill_into, -1)],
+    ids=["copy", "calc", "fill"],
+)
+def test_how_sets_a_source_what_it_can_hold_to_reach_a_wrapped_value(writes, needs) -> None:
+    """65535 on an INT source would clamp: the way to a WORD's 65535 is -1."""
+    words = Block("WW", TagType.WORD, 1, 2)
+    with Program(strict=False) as program:
+        with Rung():
+            writes(words)
+        with Rung(words[1] == 65535):
+            out(Y)
+
+    plan = _how(program)
+
+    assert plan.status is PlanStatus.REACHED
+    assert f"Set In={needs}." in str(plan)
+
+
+@pytest.mark.parametrize(
+    "storage, source, needs",
+    [
+        (StoreTransform("wrap", 0, 65535), StoreTransform("clamp", -32768, 32767), -1),
+        (StoreTransform("wrap", 0, 65535), StoreTransform("clamp", 0, 65535), 65535),
+        (StoreTransform("wrap", 0, 65535), None, 65535),
+        (StoreTransform("wrap", 0, 65535), StoreTransform("clamp", 1, 9), 65535),
+    ],
+    ids=["a way it can hold", "already holds it", "not known", "no way it can hold"],
+)
+def test_a_wrap_candidate_prefers_one_the_source_can_hold(storage, source, needs) -> None:
+    claim = Affine("S", storage=storage)
+    assert invert_affine_candidate(claim, 65535, source) == needs
 
 
 def test_a_value_carried_back_through_a_copy_is_what_the_source_holds() -> None:
