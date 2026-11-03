@@ -49,6 +49,7 @@ import warnings
 from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
 import pyrung.core.compiled_run as compiled_run
@@ -87,7 +88,7 @@ _depth = 0
 # Mismatch counts of the deliberate() blocks open on this thread, innermost last.
 _deliberate_blocks = threading.local()
 # The runners inside an own_twin() block.
-_own_twin_runners: list[Any] = []
+_own_twin_blocks: list[_OwnTwin] = []
 
 
 class FoldMismatch(AssertionError):
@@ -115,12 +116,18 @@ def deliberate() -> Iterator[None]:
     blocks = _open_deliberate_blocks()
     block = [0]
     blocks.append(block)
+    message = "fold-check: deliberate() expects one mismatch, this block had {}"
     try:
         yield
-    finally:
+    except Exception:
+        # The test's own failure goes on, and the count is held to as well.
         blocks.pop()
+        if block[0] != 1:
+            _mismatch(message.format(block[0]))
+        raise
+    blocks.pop()
     if block[0] != 1:
-        raise _mismatch(f"fold-check: deliberate() expects one mismatch, this block had {block[0]}")
+        raise _mismatch(message.format(block[0]))
 
 
 def _declares_this_mismatch() -> bool:
@@ -131,35 +138,73 @@ def _declares_this_mismatch() -> bool:
     return blocks[-1][0] == 1
 
 
+@dataclass
+class _OwnTwin:
+    """One own_twin() block: where its run landed, and the scan its last compare was of."""
+
+    plc: Any
+    start: int
+    landed: int | None = None
+    compared: int | None = None
+
+    def unchecked(self) -> str | None:
+        if self.compared is None:
+            return "fold-check (own twin): the block never compared its run"
+        end = self.plc._state.scan_id
+        if self.landed is not None:
+            end = max(end, self.landed)
+        if self.compared != end:
+            return (
+                f"fold-check (own twin): the block's last compare is of scan {self.compared}, "
+                f"its run got to scan {end}"
+            )
+        return None
+
+
 @contextmanager
 def own_twin(plc: Any) -> Iterator[Callable[[Any], None]]:
     """A run with no twin here: its function keeps state a twin in this process would share.
 
     The twin would go on from the run's count, so the test clears that state, steps its
-    own runner and hands it to the compare this yields, which the block must call.  Only
-    *plc* is let off, and only the twin: it still lands on the scans asked of it, and other
-    runners in the block stay checked.  tests/test_fold_check_stop.py pins the tests using
-    this, and the summary lists them.
+    own runner and hands it to the compare this yields.  The block's last compare must be
+    of where its run got to, even if the block raises, and of another runner: state,
+    scan and runner are compared as a twin's would be.  Only *plc* is let off, and only
+    the twin: it still lands on the scans asked of it, and other runners in the block stay
+    checked.  tests/test_fold_check_stop.py pins the tests using this, and the summary
+    lists them.
     """
-    compared = [False]
+    block = _OwnTwin(plc, plc._state.scan_id)
 
     def compare(stepped: Any) -> None:
-        compared[0] = True
-        if plc._state.scan_id != stepped._state.scan_id:
+        if stepped is plc:
+            raise _mismatch("fold-check (own twin): a run compared with itself proves nothing")
+        scan = plc._state.scan_id
+        if scan != stepped._state.scan_id:
             raise _mismatch(
-                f"fold-check (own twin): run at scan {plc._state.scan_id}, "
-                f"stepped at {stepped._state.scan_id}"
+                f"fold-check (own twin): run at scan {scan}, stepped at {stepped._state.scan_id}"
             )
-        _compare("compiled", plc._state.scan_id, plc._state, stepped._state)
+        _compare("compiled", scan, plc._state, stepped._state)
+        compare_runners("compiled", plc, stepped, block.start, built_apart=True)
+        block.compared = scan
 
     _note_skip("skipped: the test steps its own twin")
-    _own_twin_runners.append(plc)
+    _own_twin_blocks.append(block)
     try:
         yield compare
+    except FoldMismatch:
+        raise
+    except Exception:
+        # The test's own failure goes on, and what went uncompared is on the record too.
+        unchecked = block.unchecked()
+        if unchecked is not None:
+            _mismatch(unchecked)
+        raise
+    else:
+        unchecked = block.unchecked()
+        if unchecked is not None:
+            raise _mismatch(unchecked)
     finally:
-        _own_twin_runners.pop()
-    if not compared[0]:
-        raise _mismatch("fold-check (own twin): the block never compared its run")
+        _own_twin_blocks.pop()
 
 
 def undeclared() -> list[tuple[str, str]]:
@@ -339,10 +384,19 @@ def _stale_in_the_read_mirror(plc: Any) -> list[str]:
     )
 
 
-def compare_runners(kind: str, plc: Any, twin: Any, start: int) -> None:
-    """The runner around the state: flags, RTC base, scan log, checkpoints, playhead."""
+def compare_runners(
+    kind: str, plc: Any, twin: Any, start: int, *, built_apart: bool = False
+) -> None:
+    """The runner around the state: flags, RTC base, scan log, checkpoints, playhead.
+
+    *built_apart* is a twin that isn't a fork of *plc*: each read the wall clock when it
+    was built, so their RTC bases differ by that and the state answers for what read them.
+    """
     end = plc._state.scan_id
     a, b = _runner_image(plc, start, end), _runner_image(twin, start, end)
+    if built_apart:
+        for image in (a, b):
+            del image["rtc base"], image["log: rtc base at the start"]
     a["playhead"], b["playhead"] = plc._playhead, twin._playhead
     stale = _stale_in_the_read_mirror(plc)
     if stale:
@@ -699,6 +753,40 @@ def _judge_a_raised_run(
     STATS["raised runs compared"] += 1
 
 
+def _judge_the_raise_alone(
+    kind: str,
+    plc: Any,
+    raised: Exception,
+    ask: Callable[[Any], bool] | None,
+    predicate: Callable[[Any], bool] | None,
+) -> None:
+    """A raised run no twin can follow: a scan stepped from its landing must raise the same.
+
+    That says the run stopped on a scan that raises.  The scans before it are not stepped,
+    so one stepping would have raised on goes unseen.
+    """
+    global _depth
+    landing = _twin(plc)
+    hit = None if ask is None else _predicate_on_twin(ask, plc, landing)
+    if isinstance(hit, _Raised) and hit.raised is type(raised):
+        return
+    _depth += 1
+    try:
+        on_landing = _one_scan(landing)
+    finally:
+        _depth -= 1
+    if on_landing is None and predicate is not None and ask is None:
+        _note_skip("raised run not judged: the predicate has no copy to ask")
+        return
+    if on_landing is not type(raised):
+        stepped = "ran on" if on_landing is None else f"raised {on_landing.__name__}"
+        raise _mismatch(
+            f"fold-check ({kind}): run raised {type(raised).__name__} after scan "
+            f"{plc._state.scan_id}, stepping {stepped}"
+        )
+    STATS["raised runs too long to compare, their last scan judged"] += 1
+
+
 def _compare_with_plain_compiled(
     plc: Any, twin: Any, scans: int, start: int, predicate: Callable[[Any], bool] | None
 ) -> None:
@@ -776,9 +864,13 @@ def _checked(
     global _depth
     if _depth:
         return call()
-    if any(plc is runner for runner in _own_twin_runners):
+    block = next((b for b in reversed(_own_twin_blocks) if b.plc is plc), None)
+    if block is not None:
         start = plc._state.scan_id
-        result = call()
+        try:
+            result = call()
+        finally:
+            block.landed = plc._state.scan_id
         _hold_to_the_scans_asked(kind, start, plc._state.scan_id, budget, predicate)
         return result
     reason = _skip_reason(plc)
@@ -856,6 +948,7 @@ def _checked(
             _note_skip("skipped: longer than FOLD_CHECK_MAX_SCANS")
             STATS["loop scans, not compared (a run too long to compare)"] += loop_scans
             if raised is not None:
+                _judge_the_raise_alone(kind, plc, raised, ask, predicate)
                 raise raised
         return result
     STATS["loop scans compared scan by scan"] += loop_scans
