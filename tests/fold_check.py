@@ -538,10 +538,12 @@ def _compare_with_plain_compiled(
 
     A guard this deep (a wrap, an hour's edge) is not reached by any shorter run.  The
     twin is asked *predicate* on every scan, so an overshoot lands it elsewhere.  Scans
-    between are not compared; the summary counts these apart.
+    between are not compared; the summary counts these apart.  The twin's scans are the
+    check's own: the run's totals, which a rate test reads, do not gain them.
     """
     global _depth
     traces = scan_trace.MAX_TRACES_PER_RUN
+    totals = scan_trace.TOTALS.copy()
     scan_trace.MAX_TRACES_PER_RUN = 0
     _depth += 1
     try:
@@ -551,6 +553,8 @@ def _compare_with_plain_compiled(
     finally:
         _depth -= 1
         scan_trace.MAX_TRACES_PER_RUN = traces
+        scan_trace.TOTALS.clear()
+        scan_trace.TOTALS.update(totals)
     _note_skip("compared at the landing only: too long to step")
     STATS["scans compared with plain compiled"] += n
 
