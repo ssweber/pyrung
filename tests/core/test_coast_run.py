@@ -648,6 +648,22 @@ def test_kernel_and_path_caps_hold(monkeypatch: pytest.MonkeyPatch) -> None:
     assert all(len(held.paths) <= 2 for held in memo.paths.values())
 
 
+def test_columns_kept_by_content_have_their_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    uncapped = _runner(CASES["staircase_mirror"], 0.3)
+    coast_until(uncapped, lambda _s: False, budget=SCANS, predicate_reads=frozenset())
+    assert max(len(held.interned) for held in memo_of(uncapped).paths.values()) > 2
+
+    monkeypatch.setattr(coast_run, "MAX_INTERNED", 2)
+    plc = _runner(CASES["staircase_mirror"], 0.3)
+    coast_until(plc, lambda _s: False, budget=SCANS, predicate_reads=frozenset())
+    assert all(len(held.interned) <= 2 for held in memo_of(plc).paths.values())
+    # Past the cap two paths may no longer see they agree, and the answers are the same.
+    twin = _runner(CASES["staircase_mirror"], 0.3)
+    for _ in range(plc.state.scan_id - twin.state.scan_id):
+        twin.step()
+    compare_records("capped columns", plc, twin, 0)
+
+
 def test_the_kernel_held_longest_unused_goes_first() -> None:
     memo = coast_run.CoastMemo()
     program = object()

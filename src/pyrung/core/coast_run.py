@@ -340,6 +340,9 @@ def _capture_of(plc: PLC, path: _Path, kernel_paths: _KernelPaths, scan_id: int)
             varied = frozenset(tag for tag in writes if timelines.varied_on(key, tag, scan_id))
             # By repr, or 1 and True would be one column.
             identity = (key, repr(sorted(writes.items())), varied)
+            if identity not in interned and len(interned) >= MAX_INTERNED:
+                interned.clear()  # Paths held from before no longer agree with new ones: a
+                #                   record run breaks where it need not, and nothing else.
             column = interned.setdefault(identity, (writes, varied))
             these[key] = column
             recorded[key] = _recording_of(path, column, kernel_paths)
