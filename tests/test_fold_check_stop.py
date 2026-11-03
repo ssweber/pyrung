@@ -6,6 +6,7 @@ import ast
 import subprocess
 import sys
 import threading
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -641,6 +642,73 @@ def test_own_twin_compare_sees_a_difference() -> None:
         compare(twin)
 
 
+def test_own_twin_sees_a_base_the_run_left_off() -> None:
+    plc = _plc()
+    twin = _plc()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="the runner differs at scan 3: .*rtc base: folded="),
+        fold_check.own_twin(plc) as compare,
+    ):
+        plc.run(3)
+        plc._rtc_base += timedelta(hours=1)
+        twin.run(3)
+        compare(twin)
+
+
+def test_own_twin_sees_a_base_the_stepped_runner_moved_and_the_run_did_not() -> None:
+    plc = _plc()
+    twin = _plc()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="the runner differs at scan 3: "),
+        fold_check.own_twin(plc) as compare,
+    ):
+        plc.run(3)
+        twin.set_rtc(datetime(2030, 1, 2, 3, 4, 5))
+        twin.run(3)
+        compare(twin)
+
+
+def test_own_twin_lets_two_runners_start_at_their_own_times() -> None:
+    plc = _plc()
+    twin = _plc()
+    twin._rtc_base = plc._rtc_base + timedelta(days=1)
+    with fold_check.own_twin(plc) as compare:
+        plc.run(3)
+        twin.run(3)
+        compare(twin)
+
+
+def test_own_twin_holds_a_base_both_were_set_to() -> None:
+    plc = _plc()
+    twin = _plc()
+    twin._rtc_base = plc._rtc_base + timedelta(days=1)
+    when = datetime(2030, 1, 2, 3, 4, 5)
+    with fold_check.own_twin(plc) as compare:
+        for runner in (plc, twin):
+            runner.run(1)
+            runner.set_rtc(when)
+            runner.run(2)
+        compare(twin)
+    assert plc._rtc_base == twin._rtc_base == when
+
+
+def test_own_twin_sees_two_bases_set_apart() -> None:
+    plc = _plc()
+    twin = _plc()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="the runner differs at scan 3: "),
+        fold_check.own_twin(plc) as compare,
+    ):
+        for runner, hour in ((plc, 3), (twin, 4)):
+            runner.run(1)
+            runner.set_rtc(datetime(2030, 1, 2, hour, 4, 5))
+            runner.run(2)
+        compare(twin)
+
+
 def test_own_twin_compare_sees_another_scan() -> None:
     plc = _plc()
     twin = _plc()
@@ -810,6 +878,11 @@ def test_the_tests_using_own_twin_are_these() -> None:
                 "test_own_twin_must_compare",
                 "test_own_twin_compare_sees_a_difference",
                 "test_own_twin_compare_sees_another_scan",
+                "test_own_twin_sees_a_base_the_run_left_off",
+                "test_own_twin_sees_a_base_the_stepped_runner_moved_and_the_run_did_not",
+                "test_own_twin_lets_two_runners_start_at_their_own_times",
+                "test_own_twin_holds_a_base_both_were_set_to",
+                "test_own_twin_sees_two_bases_set_apart",
                 "test_own_twin_is_listed_in_the_summary",
                 "test_own_twin_refuses_the_run_itself",
                 "test_own_twin_refuses_a_compare_from_before_the_run",

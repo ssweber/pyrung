@@ -144,6 +144,8 @@ class _OwnTwin:
 
     plc: Any
     start: int
+    rtc_base: Any
+    rtc_at_the_start: Any
     landed: int | None = None
     compared: int | None = None
 
@@ -173,7 +175,8 @@ def own_twin(plc: Any) -> Iterator[Callable[[Any], None]]:
     checked.  tests/test_fold_check_stop.py pins the tests using this, and the summary
     lists them.
     """
-    block = _OwnTwin(plc, plc._state.scan_id)
+    start = plc._state.scan_id
+    block = _OwnTwin(plc, start, plc._rtc_base, _rtc_at_the_start(plc, start))
 
     def compare(stepped: Any) -> None:
         if stepped is plc:
@@ -184,7 +187,7 @@ def own_twin(plc: Any) -> Iterator[Callable[[Any], None]]:
                 f"fold-check (own twin): run at scan {scan}, stepped at {stepped._state.scan_id}"
             )
         _compare("compiled", scan, plc._state, stepped._state)
-        compare_runners("compiled", plc, stepped, block.start, built_apart=True)
+        compare_runners("compiled", plc, stepped, block.start, own_twin_of=block)
         block.compared = scan
 
     _note_skip("skipped: the test steps its own twin")
@@ -335,6 +338,12 @@ def _in_range(by_scan: dict[int, Any], start: int, end: int) -> dict[int, Any]:
     return {scan: by_scan[scan] for scan in sorted(by_scan) if start < scan <= end}
 
 
+def _rtc_at_the_start(plc: Any, start: int) -> Any:
+    """The base *start* ran on.  The log's origin answers for every scan before the first
+    change, and a log with no change has none: the runner's own base holds then."""
+    return plc._scan_log.rtc_base_at(start) or (plc._rtc_base, plc._rtc_base_sim_time)
+
+
 def _runner_image(plc: Any, start: int, end: int) -> dict[str, Any]:
     """What a commit leaves on the runner besides the state, for scans after *start*."""
     log = plc._scan_log
@@ -349,10 +358,7 @@ def _runner_image(plc: Any, start: int, end: int) -> dict[str, Any]:
         "battery_present": plc._battery_present,
         "rtc base": plc._rtc_base,
         "rtc base sim time": _exact(plc._rtc_base_sim_time),
-        # The origin answers for every scan before the first change, and a log with no
-        # change has none: the runner's own base holds then.
-        "log: rtc base at the start": log.rtc_base_at(start)
-        or (plc._rtc_base, plc._rtc_base_sim_time),
+        "log: rtc base at the start": _rtc_at_the_start(plc, start),
         "forces": dict(plc._forces),
         "pending patches": dict(plc._pending_patches),
         "drained patches": dict(plc._this_scan_drained_patches),
@@ -385,18 +391,26 @@ def _stale_in_the_read_mirror(plc: Any) -> list[str]:
 
 
 def compare_runners(
-    kind: str, plc: Any, twin: Any, start: int, *, built_apart: bool = False
+    kind: str, plc: Any, twin: Any, start: int, *, own_twin_of: _OwnTwin | None = None
 ) -> None:
     """The runner around the state: flags, RTC base, scan log, checkpoints, playhead.
 
-    *built_apart* is a twin that isn't a fork of *plc*: each read the wall clock when it
-    was built, so their RTC bases differ by that and the state answers for what read them.
+    *own_twin_of* is a twin that isn't a fork of *plc*: each read the wall clock when it was
+    built, so their RTC bases differ by that and each answers to its own start.  A base that
+    moved from it has to match the other's, which set_rtc() and a rung's apply give.
     """
     end = plc._state.scan_id
     a, b = _runner_image(plc, start, end), _runner_image(twin, start, end)
-    if built_apart:
-        for image in (a, b):
-            del image["rtc base"], image["log: rtc base at the start"]
+    if own_twin_of is not None:
+        at_the_start = "as it started"
+        twin_start = b["log: rtc base at the start"]
+        if a["log: rtc base at the start"] == own_twin_of.rtc_at_the_start:
+            a["log: rtc base at the start"] = at_the_start
+        b["log: rtc base at the start"] = at_the_start
+        if a["rtc base"] == own_twin_of.rtc_base:
+            a["rtc base"] = at_the_start
+        if b["rtc base"] == twin_start[0]:
+            b["rtc base"] = at_the_start
     a["playhead"], b["playhead"] = plc._playhead, twin._playhead
     stale = _stale_in_the_read_mirror(plc)
     if stale:
