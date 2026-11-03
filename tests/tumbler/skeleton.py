@@ -156,7 +156,6 @@ _DATACLASS_KEEP: dict[str, tuple[str, ...]] = {
         "inputs",
         "steady_holds",
         "pulsing_holds",
-        "accelerators",
         "notes",
     ),
     "_Step": ("inputs",),
@@ -179,7 +178,7 @@ def _jsonify_dataclass(value: Any) -> Any:
     if name == "_HoldLogEntry" and isinstance(out.get("tags"), list):
         out["tags"] = sorted(out["tags"], key=_sort_key)
     elif name == "PlanStep":
-        for field in ("steady_holds", "pulsing_holds", "accelerators"):
+        for field in ("steady_holds", "pulsing_holds"):
             if isinstance(out.get(field), list):
                 out[field] = sorted(out[field], key=_sort_key)
         if out.get("kind") == "force" and isinstance(out.get("inputs"), list):

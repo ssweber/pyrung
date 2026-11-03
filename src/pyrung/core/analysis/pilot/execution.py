@@ -284,10 +284,6 @@ class ExecutionReceipt:
             raise ValueError("execution receipt scans must follow their source")
 
     @property
-    def accelerators(self) -> tuple[tuple[str, Any], ...]:
-        return self.coast_receipt.advances if self.coast_receipt is not None else ()
-
-    @property
     def kernel_scan_ids(self) -> tuple[int, ...]:
         return tuple(scan for span in self.spans for scan in span.kernel_scan_ids)
 

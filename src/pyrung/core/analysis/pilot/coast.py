@@ -119,11 +119,6 @@ class CoastReceipt:
     kernel_scans: int = 0
     macro_folds: int = 0
     trajectory: tuple[dict[str, Any], ...] = ()
-    # Exact visible tag destinations written by ordinary or cycle folding, in
-    # execution order. These are the manual edits needed to reproduce each jump.
-    advances: tuple[tuple[str, Any], ...] = ()
-    # Cheap scalar timer carry updates replayed in lieu of full kernel scans.
-    timer_quanta_replayed: int = 0
 
     @property
     def logical_scans(self) -> int:
@@ -372,8 +367,6 @@ class CoastSession:
 
         kernel_scans = 0
         macro_folds = 0
-        timer_quanta_replayed = 0
-        advances: list[tuple[str, Any]] = []
         stop_reason = "timeout"
         fired_terminal: tuple[str, ...] = ()
 
@@ -504,14 +497,11 @@ class CoastSession:
             budget=budget,
             kernel_scans=kernel_scans,
             macro_folds=macro_folds,
-            advances=tuple(advances),
-            timer_quanta_replayed=timer_quanta_replayed,
         )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "coast %s: %s at scan %d "
-                "(%d logical scans, %d kernel scans, %d skipped, %d macro folds, "
-                "%d timer quanta replayed) "
+                "(%d logical scans, %d kernel scans, %d skipped, %d macro folds) "
                 "fired=%s%s",
                 self.kind,
                 receipt.stop_reason,
@@ -520,7 +510,6 @@ class CoastSession:
                 receipt.kernel_scans,
                 receipt.skipped_scans,
                 receipt.macro_folds,
-                receipt.timer_quanta_replayed,
                 ",".join(receipt.fired) or "-",
                 f" stats={self._last_coast_stats}" if self._last_coast_stats else "",
             )
@@ -573,8 +562,6 @@ class CoastSession:
         stop_reason = "timeout"
         kernel_scans = 0
         macro_folds = 0
-        timer_quanta_replayed = 0
-        advances: list[tuple[str, Any]] = []
         while True:
             remaining = cap - (plc.state.scan_id - start_scan)
             if remaining <= 0:
@@ -586,8 +573,6 @@ class CoastSession:
             )
             kernel_scans += receipt.kernel_scans
             macro_folds += receipt.macro_folds
-            timer_quanta_replayed += receipt.timer_quanta_replayed
-            advances.extend(receipt.advances)
             if receipt.stop_reason == "timeout":
                 # Silent through the whole confirmation window: landed.
                 stop_reason = "quiescent"
@@ -605,8 +590,6 @@ class CoastSession:
             budget=cap,
             kernel_scans=kernel_scans,
             macro_folds=macro_folds,
-            advances=tuple(advances),
-            timer_quanta_replayed=timer_quanta_replayed,
         )
 
     def settle(

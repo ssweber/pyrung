@@ -44,7 +44,6 @@ from pyrung.core.analysis.pilot.world_key import _rung_identity
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.validation.render import (
     caret_of,
-    operand_name,
     render_condition,
     with_rung_line,
 )
@@ -307,12 +306,6 @@ def _build_plan_journal(
             )
 
         if is_coast:
-            known_tags = getattr(fork, "_known_tags_by_name", {}) if fork is not None else {}
-            display_accel = tuple(
-                (operand_name(known_tags.get(tag, tag)), value)
-                for tag, value in sc.execution.accelerators
-            )
-
             entries.append(
                 (
                     first_step.scan_before,
@@ -326,7 +319,6 @@ def _build_plan_journal(
                         transition=transition,
                         waiting_for=sc.frontier_tags,
                         steady_holds=sc.steady_holds,
-                        accelerators=display_accel,
                         rungs=sc.pilot_rungs,
                     ),
                 )
@@ -716,9 +708,6 @@ def _bearing_coast_accepted_payload(trial: _AcceptedTrial) -> dict[str, Any]:
         "coast_kernel_scans": receipt.kernel_scans if receipt is not None else None,
         "coast_skipped_scans": receipt.skipped_scans if receipt is not None else None,
         "coast_macro_folds": receipt.macro_folds if receipt is not None else None,
-        "coast_timer_quanta_replayed": (
-            receipt.timer_quanta_replayed if receipt is not None else None
-        ),
         "snapshot": dict(execution.after_snap),
         "effect_observations": execution.effect_observations,
     }

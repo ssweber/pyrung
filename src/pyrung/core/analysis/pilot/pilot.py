@@ -491,7 +491,7 @@ def _pilot_loop_events(
     # channel registers (opaque-loop tags + each pipeline role's
     # ``channel_tag``) pick the transition label; the accumulator registers
     # (from every accumulating instruction's profile, incl. harness couplings)
-    # split accelerator patches from command inputs.  Both are static for the
+    # split accumulator patches from command inputs.  Both are static for the
     # life of this loop, so computed once here rather than per journal build.
     journal_channel_tags = frozenset(ctx.opaque_loop) | frozenset(
         role.channel_tag for role in ctx.pipeline_roles

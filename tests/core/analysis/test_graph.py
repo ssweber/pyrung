@@ -333,12 +333,12 @@ class TestPlanDisplay:
                     99,
                     (),
                     "",
-                    accelerators=(("Soak.Acc", 900),),
                 ),
             ),
         )
 
-        assert "Jump ahead: set Soak.Acc=900." in str(plan)
+        # What a coast waits on is the plan; a shortcut past it is not an instruction.
+        assert "Jump ahead" not in str(plan)
 
     def test_pulse_step_renders_as_set_and_keeps_its_observed_transition(self):
         plan = Plan(

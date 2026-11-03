@@ -177,7 +177,6 @@ class PlanStep:
     - ``"patch"`` — user-style configuration applied before one execution.
     - ``"force"`` — a temporary-logic installation (discovered prerequisite).
     - ``"coast"``   — a bearing coast or let-run dwell (waiting for timers/sequences).
-    - ``"accelerator"`` — a timer/counter accumulator patch (proved-safe skip).
     """
 
     kind: str
@@ -189,7 +188,6 @@ class PlanStep:
     waiting_for: tuple[str, ...] = ()
     steady_holds: tuple[str, ...] = ()
     pulsing_holds: tuple[str, ...] = ()
-    accelerators: tuple[tuple[str, Any], ...] = ()
     # Relational lever reports for inputs on this step — "held Band < -100.0 to
     # satisfy PV < Lower (e.g., Band = -100.000001; heuristic value — relation is
     # the requirement, not this number)".  The relation is the requirement; the
@@ -526,16 +524,9 @@ def _format_plan_step(
                 sub.append(f"   Keep: {keep}.")
             if step.pulsing_holds:
                 sub.append(f"   Pulse: {', '.join(step.pulsing_holds)}.")
-        if step.accelerators:
-            skip_items = ", ".join(f"{t}={_format_value(v)}" for t, v in step.accelerators)
-            sub.append(f"   Jump ahead: set {skip_items}.")
         if sub:
             return line + "\n" + "\n".join(sub)
         return line
-
-    if step.kind == "accelerator":
-        tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
-        return f"{prefix} Jump ahead: set {tags}."
 
     inputs = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
     line = f"{prefix} Set {inputs}."
