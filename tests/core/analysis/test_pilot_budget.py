@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyrung import PLC, Bool, Program, Rung, Timer, on_delay, out
+from pyrung import PLC, Bool, Physical, Program, Rung, Timer, on_delay, out
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import budget
 from pyrung.core.analysis.pilot.budget import SearchBudget
@@ -14,6 +14,7 @@ from pyrung.core.analysis.pilot.working_theory import TheoryTermination
 
 Slow = Timer.clone("Slow")
 Lamp = Bool("Lamp")
+y_Done = Bool("y_Done")
 
 
 def _receipt(*scans: int, epoch: str = "e") -> SimpleNamespace:
@@ -65,6 +66,39 @@ class TestTheLedger:
         plan = _slow_lamp(2_000_000).how(Lamp, max_scans=200)
         assert plan.status is PlanStatus.STOPPED
         assert plan.reason.startswith("budget exhausted")
+
+
+def _linked_motor() -> PLC:
+    x_Go = Bool("x_Go")
+    o_Motor = Bool("o_Motor")
+    x_MotorFB = Bool("x_MotorFB", physical=Physical("MotorFb", on_delay="20ms"), link="o_Motor")
+    with Program() as logic:
+        with Rung(x_Go):
+            out(o_Motor)
+        with Rung(o_Motor, x_MotorFB):
+            out(y_Done)
+    return PLC(logic, dt=0.01)
+
+
+class TestAStopIsNotAVerdict:
+    # A physical link that the search has not got past yet is not one it cannot get past.
+
+    def test_the_program_reaches_its_target(self) -> None:
+        plan = _linked_motor().how(y_Done, wall_clock_s=None)
+        assert plan.status is PlanStatus.REACHED
+
+    def test_out_of_time_says_so_and_nothing_about_a_link(self, monkeypatch) -> None:
+        monkeypatch.setattr(budget, "WALL_CLOCK_ENABLED", True)
+        plan = _linked_motor().how(y_Done, wall_clock_s=0.0)
+        assert plan.status is PlanStatus.STOPPED
+        assert plan.reason.startswith("wall-clock budget exhausted")
+        assert "physical link" not in plan.reason
+
+    def test_out_of_work_says_so_and_nothing_about_a_link(self) -> None:
+        plan = _linked_motor().how(y_Done, max_scans=0, wall_clock_s=None)
+        assert plan.status is PlanStatus.STOPPED
+        assert plan.reason.startswith("budget exhausted")
+        assert "physical link" not in plan.reason
 
 
 class TestTheClock:

@@ -148,6 +148,8 @@ class _DriveOutcome:
     reason: str | None
     knowledge: dict[str, Any]
     root_route: TraceChoice | None
+    # The clock, the ledger or the program ended the search, so it says nothing about the target.
+    cut_short: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +400,7 @@ def _finished_event(
     *,
     reached: bool,
     reason: str,
+    cut_short: bool = False,
 ) -> PilotEvent:
     """Build the single terminal recording shape for every loop exit."""
 
@@ -406,6 +409,7 @@ def _finished_event(
         state.work.state.scan_id,
         {
             "reached": reached,
+            "cut_short": cut_short,
             "steps": tuple(state.steps),
             "journey": tuple(state.journey),
             "knowledge": _knowledge_payload(state, ctx.compass),
@@ -457,6 +461,7 @@ def _stopped_events(
     *,
     candidate_count: int,
     diagnosis: Stuck | None = None,
+    cut_short: bool = False,
 ) -> Iterator[PilotEvent]:
     """Emit one failed terminal sequence and restore its checkpoint world."""
 
@@ -477,6 +482,7 @@ def _stopped_events(
         journal_acc_names,
         reached=False,
         reason=reason,
+        cut_short=cut_short,
     )
 
 
@@ -528,6 +534,7 @@ def _pilot_loop_events(
         at_the_stop["channels"],
         at_the_stop["accumulators"],
         candidate_count=0,
+        cut_short=True,
     )
 
 
@@ -1678,6 +1685,7 @@ def _search_events(
             journal_channel_tags,
             journal_acc_names,
             candidate_count=0,
+            cut_short=True,
         )
         return
     _theory_recording._run_optional_theory_hook(
@@ -1731,4 +1739,5 @@ def _pilot_loop(
         reason=None if reached else final.data.get("reason"),
         knowledge=dict(final.data.get("knowledge", {})),
         root_route=final.data.get("root_route"),
+        cut_short=bool(final.data.get("cut_short")),
     )
