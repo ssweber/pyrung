@@ -469,11 +469,6 @@ class DAPAdapter:
     def _on_evaluate(self, args: dict[str, Any]) -> HandlerResult:
         return stack_variables_evaluate.on_evaluate(self, args)
 
-    def _evaluate_repl_command_locked(self, expression: str) -> str:
-        from pyrung.dap.console import dispatch
-
-        return dispatch(self, expression).text
-
     def _evaluate_watch_expression_locked(self, expression: str) -> Any:
         return stack_variables_evaluate.evaluate_watch_expression_locked(self, expression)
 

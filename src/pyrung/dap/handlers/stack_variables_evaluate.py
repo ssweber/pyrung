@@ -190,33 +190,6 @@ def on_evaluate(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             return {"result": console_result.text, "variablesReference": 0}, console_result.events
 
 
-def evaluate_repl_command_locked(adapter: Any, expression: str) -> str:
-    parts = expression.strip().split()
-    command = parts[0]
-    runner = adapter._require_runner_locked()
-    if command == "force":
-        if len(parts) < 3:
-            raise adapter.DAPAdapterError("Usage: force <tag> <value>")
-        tag = parts[1]
-        raw_value = expression.strip().split(None, 2)[2]
-        value = adapter._parse_literal(raw_value)
-        runner.force(tag, value)
-        return f"Forced {tag}={value!r}"
-    if command == "unforce":
-        if len(parts) != 2:
-            raise adapter.DAPAdapterError("Usage: unforce <tag>")
-        tag = parts[1]
-        runner.unforce(tag)
-        return f"Removed force {tag}"
-    if command == "clear_forces":
-        runner.clear_forces()
-        return "Cleared all forces"
-    raise adapter.DAPAdapterError(
-        "Unsupported Debug Console command. Use force/unforce/clear_forces. "
-        "Use Watch for predicate expressions."
-    )
-
-
 def evaluate_watch_expression_locked(adapter: Any, expression: str) -> Any:
     state = adapter._effective_evaluate_state_locked()
     try:
