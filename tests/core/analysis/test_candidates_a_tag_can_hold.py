@@ -110,6 +110,29 @@ def test_a_real_range_literal_keeps_both_sides(condition) -> None:
     assert isinstance(never(_program(condition()), Y), Counterexample)
 
 
+@pytest.mark.parametrize(
+    ("condition", "true_values"),
+    [
+        pytest.param(lambda: C > "A", {"B"}, id="above a char"),
+        pytest.param(lambda: C >= "B", {"B", "C"}, id="at or above a char"),
+        pytest.param(lambda: C < "A", {"@", "\x00"}, id="below a char"),
+        pytest.param(lambda: C > "AB", {"B"}, id="above two chars"),
+        pytest.param(lambda: C < "AB", {"@", "A", "\x00"}, id="below two chars"),
+        pytest.param(lambda: Or(C == "AB", C > "A"), {"B"}, id="two chars or above a char"),
+    ],
+)
+def test_a_char_compared_by_order_has_neighbours(condition, true_values) -> None:
+    program = _program(condition())
+
+    result = never(program, Y)
+    assert isinstance(result, Counterexample)
+    assert result.trace[-1].inputs.get("C", "\x00") in true_values
+
+
+def test_a_char_past_every_char_is_proven() -> None:
+    assert isinstance(never(_program(C < "\x00"), Y), Proven)
+
+
 def test_how_takes_the_other_branch_of_an_or() -> None:
     assert _how(_program(Or(C == "AB", Go))).reachable is True
 

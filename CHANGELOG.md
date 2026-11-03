@@ -77,6 +77,7 @@
 ### Fixes
 
 - `how()` and `never()` try only what a tag can hold: a literal it cannot (`"AB"` on a Char, `"x"` or `3.5` on an Int) no longer raises, reports a state no scan reaches, or misses the values either side of a fraction (`In > 2.5, In < 3.5` is met at 3).
+- `never()` no longer proves a `Char` compared by order out of reach, and `how()` no longer gives up on one: `C > "A"` is met at `"B"`.
 - A STOP->RUN restart starts a new recording, so `history.at()` and `fork_from()` no longer replay the previous run's patches over the new one or return a state the previous run cached under the same scan id, and a replay walks past a rung-driven stop without restarting.
 - `history.at()`, `fork_from()` and `rtc_at()` of a scan before a later RTC change, by `set_rtc()` or a rung's apply, keep the clock that scan ran under.
 - A `run_function()` runs itself, in a run and in a seek, unless a generated kernel's copy means the same: a closure, a wrapper, a read of its module's globals, a `global` store, an import, a default that is not an immutable literal, a builtin outside a short pure list, a route through a dunder or a frame, a name that would shadow a builtin in the kernel, or source text that no longer compiles to what the function runs all keep the original. A seek raised `NameError`, a `global` store landed in the kernel's module, and a `def fn(v, memo=[])`, a `globals()` read or a file edited since the import got another answer.

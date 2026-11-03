@@ -80,6 +80,7 @@ from pyrung.core.analysis.simplified import Expr, _condition_to_expr, simplified
 from pyrung.core.expression import is_randint_tag, randint_sites
 from pyrung.core.input_overrides import held_candidates
 from pyrung.core.kernel import CompiledKernel
+from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import TagType
 
@@ -2781,6 +2782,8 @@ def _extract_value_domain(
         if isinstance(lit, (int, float)):
             partitioned.add(lit - 1)
             partitioned.add(lit + 1)
+        elif tag.type == TagType.CHAR and isinstance(lit, str):
+            partitioned |= _char_cuts(lit)
     if real_gap_points and tag.type == TagType.REAL:
         partitioned |= _real_gap_points(literals)
     if isinstance(tag.default, (int, float)) and not isinstance(tag.default, bool):
@@ -2826,6 +2829,17 @@ def _abstract_acc_domains(program: Program, graph: ProgramGraph) -> dict[str, tu
             vals = vals | {int(tag.default or 0)}
         result[name] = tuple(sorted(vals))
     return result
+
+
+def _char_cuts(literal: str) -> set[str]:
+    """The characters that stand for every other around *literal*, for a CHAR.
+
+    The ``point - 1`` and ``point + 1`` of a number.  A character below the literal's
+    first compares below the literal and one above compares above, however long it
+    is, so the first character and its neighbours cover what ``C > "AB"`` can see.
+    """
+    code = ord(literal[:1] or BLANK_CHAR)
+    return {chr(point) for point in (code - 1, code, code + 1) if 0 <= point <= sys.maxunicode}
 
 
 def _real_gap_points(points: Iterable[Any]) -> set[float]:
