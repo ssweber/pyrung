@@ -10,13 +10,14 @@ from pathlib import Path
 
 import pytest
 
-from pyrung import Bool, Int, Program, Rung, calc, run_function
+from pyrung import Bool, Int, Program, Rung, calc, copy, run_function
 from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.core.function_source import embedded_source, is_the_function
 from pyrung.core.runner import PLC
 
 NEVER = Bool("Never")
 A, B, C, Run = Int("A"), Int("B"), Int("C"), Bool("Run")
+Clamped, Wrapped = Int("Clamped"), Int("Wrapped")
 SCANS = 1500
 
 _modules = itertools.count()
@@ -238,3 +239,105 @@ def test_a_function_named_like_what_the_kernel_calls_does_not_break_the_kernel(
     assert _seeks_as_it_ran(program, "C") == 5
     with pytest.raises(ValueError, match="would shadow"):
         _from_code_py(fn, name)
+
+
+def _stores_two_ways(fn):
+    """A program whose generated code clamps a copy and wraps a calc, and calls *fn*."""
+    with Program(strict=False) as program:
+        with Rung():
+            calc(A + 1, A)
+            calc(A * 40000, Wrapped)
+            copy(70000, Clamped)
+        with Rung(Run):
+            run_function(fn, ins={"v": A}, outs={"out": B})
+    return program
+
+
+def _generates(program, *, force_runtime: bool):
+    hardware = P1AM()
+    hardware.slot(1, "P1-08SIM")
+    return generate_circuitpy(program, hardware, target_scan_ms=10.0, force_runtime=force_runtime)
+
+
+@pytest.mark.parametrize("name", ["_store_int", "_wrap_int"])
+def test_a_function_named_like_a_generated_helper_gets_no_kernel(tmp_path, monkeypatch, name):
+    """Over the helper a kernel stores with, a replay would clamp nothing, or raise."""
+    module, _ = _import(tmp_path, monkeypatch, f"def {name}(v):\n    return {{'out': 99}}\n")
+    program = _stores_two_ways(getattr(module, name))
+
+    assert not _has_a_kernel(program)
+    assert _seeks_as_it_ran(program, "Clamped") == 32767
+    assert _seeks_as_it_ran(program) == 99
+    _seeks_as_it_ran(program, "Wrapped")
+
+
+def test_a_function_named_like_another_functions_alias_gets_no_kernel(tmp_path, monkeypatch):
+    """``_fn_other`` is the symbol that calls ``other``: one of the two would be lost."""
+    module, _ = _import(
+        tmp_path,
+        monkeypatch,
+        "def _fn_other(v):\n    return {'out': 1}\n\n\ndef other(v):\n    return {'out': 2}\n",
+    )
+    program = _program(module._fn_other, module.other)
+
+    assert not _has_a_kernel(program)
+    assert _seeks_as_it_ran(program) == 1
+    assert _seeks_as_it_ran(program, "C") == 2
+
+
+@pytest.mark.parametrize("force_runtime", [False, True])
+@pytest.mark.parametrize(
+    "name", ["_store_int", "_wrap_int", "time", "board", "_t_A", "_mem", "_mode_run"]
+)
+def test_a_code_py_refuses_a_function_named_like_its_other_code(
+    tmp_path, monkeypatch, name, force_runtime
+):
+    module, _ = _import(tmp_path, monkeypatch, f"def {name}(v):\n    return {{'out': 99}}\n")
+    program = _stores_two_ways(getattr(module, name))
+
+    with pytest.raises(ValueError, match="would shadow"):
+        _generates(program, force_runtime=force_runtime)
+
+
+def test_a_code_py_refuses_a_function_named_like_its_runtime_import(tmp_path, monkeypatch):
+    module, _ = _import(tmp_path, monkeypatch, "def _rt(v):\n    return {'out': 99}\n")
+    program = _stores_two_ways(module._rt)
+
+    assert _generates(program, force_runtime=False).code
+    with pytest.raises(ValueError, match="would shadow"):
+        _generates(program, force_runtime=True)
+
+
+@pytest.mark.parametrize("name", ["_helper", "scale", "_store_int2"])
+def test_a_function_with_a_name_of_its_own_embeds(tmp_path, monkeypatch, name):
+    module, _ = _import(tmp_path, monkeypatch, f"def {name}(v):\n    return {{'out': 99}}\n")
+    fn = getattr(module, name)
+    program = _stores_two_ways(fn)
+
+    assert _has_a_kernel(program)
+    assert _seeks_as_it_ran(program) == 99
+    assert _seeks_as_it_ran(program, "Clamped") == 32767
+    assert _from_code_py(fn, name) == {"out": 99}
+    assert _generates(program, force_runtime=True).code
+
+
+def test_two_functions_may_share_a_name(tmp_path, monkeypatch):
+    """Each alias binds right after its def, so each call reaches its own function."""
+    first, _ = _import(tmp_path, monkeypatch, "def same(v):\n    return {'out': 1}\n")
+    second, _ = _import(tmp_path, monkeypatch, "def same(v):\n    return {'out': 2}\n")
+    program = _program(first.same, second.same)
+
+    assert _has_a_kernel(program)
+    assert _seeks_as_it_ran(program) == 1
+    assert _seeks_as_it_ran(program, "C") == 2
+
+
+def test_a_name_only_code_py_binds_leaves_the_kernel_alone(tmp_path, monkeypatch):
+    """Asked of each module as rendered: a code.py imports ``time``, a kernel does not."""
+    module, _ = _import(tmp_path, monkeypatch, "def time(v):\n    return {'out': 99}\n")
+    program = _program(module.time)
+
+    assert _has_a_kernel(program)
+    assert _seeks_as_it_ran(program) == 99
+    with pytest.raises(ValueError, match="would shadow"):
+        _from_code_py(module.time, "time")

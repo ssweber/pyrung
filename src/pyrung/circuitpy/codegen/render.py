@@ -32,6 +32,7 @@ from pyrung.circuitpy.codegen._helpers import (
 from pyrung.circuitpy.codegen._util import (
     _first_defined_name,
     _global_line,
+    _refuse_a_def_over_a_generated_name,
     _ret_defaults_literal,
     _ret_types_literal,
     _subroutine_symbol,
@@ -883,7 +884,9 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
     lines.append(_section("Main scan loop"))
     lines.extend(_render_scan_loop(ctx, has_runtime=has_runtime))
 
-    return "\n".join(lines).rstrip() + "\n"
+    source = "\n".join(lines).rstrip() + "\n"
+    _refuse_a_def_over_a_generated_name(source, ctx.function_sources)
+    return source
 
 
 def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = False) -> list[str]:

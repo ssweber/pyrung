@@ -23,6 +23,7 @@ from pyrung.circuitpy.codegen._helpers import (
 from pyrung.circuitpy.codegen._util import (
     _first_defined_name,
     _global_line,
+    _refuse_a_def_over_a_generated_name,
     _subroutine_symbol,
 )
 from pyrung.circuitpy.codegen.compile import compile_rungs
@@ -240,7 +241,9 @@ def _render_kernel_source(ctx: CodegenContext, *, split_after: int | None = None
     if pre_body is not None:
         lines.extend(_render_step_function(ctx, pre_body, fn_name="_kernel_step_pre"))
     lines.extend(_render_step_function(ctx, main_body))
-    return "\n".join(lines).rstrip() + "\n"
+    source = "\n".join(lines).rstrip() + "\n"
+    _refuse_a_def_over_a_generated_name(source, ctx.function_sources)
+    return source
 
 
 # -- Compilation (populates ctx side-effects) --------------------------------
