@@ -27,7 +27,6 @@ from pyrung.circuitpy.codegen._util import (
 )
 from pyrung.circuitpy.codegen.compile import compile_rungs
 from pyrung.circuitpy.codegen.context import CodegenContext, describe_static_range
-from pyrung.core.function_source import KERNEL_COMPILE_FLAGS
 from pyrung.core.kernel import BlockSpec, CompiledKernel
 from pyrung.core.memory_block import Block, BlockRange
 from pyrung.core.program import Program
@@ -133,10 +132,10 @@ def compile_kernel(
         proof_metadata=proof_metadata,
         abstract_timers=abstract_timers,
     )
-    source = _render_kernel_source(ctx, split_after=split_after)
+    source, lock_source = _render_kernel_source(ctx, split_after=split_after)
 
-    namespace: dict[str, Any] = {}
-    code = compile(source, "<kernel>", "exec", flags=KERNEL_COMPILE_FLAGS, dont_inherit=True)
+    namespace: dict[str, Any] = {**ctx.function_objects, **ctx.function_constants}
+    code = compile(source, "<kernel>", "exec", dont_inherit=True)
     exec(code, namespace)  # noqa: S102
     step_fn = namespace["_kernel_step"]
     pre_step_fn = namespace.get("_kernel_step_pre")
@@ -166,6 +165,7 @@ def compile_kernel(
         # (``_edge:e{N}``); nothing reads a previous-scan tag copy.
         edge_tags=set(),
         source=source,
+        lock_source=lock_source,
         blockless=blockless,
         has_io_gaps=ctx.has_io_gaps,
         indirect_block_info=indirect_block_info,
@@ -212,7 +212,14 @@ _BB_TICK_HELPER = [
 ]
 
 
-def _render_kernel_source(ctx: CodegenContext, *, split_after: int | None = None) -> str:
+def _render_kernel_source(
+    ctx: CodegenContext, *, split_after: int | None = None
+) -> tuple[str, str]:
+    """The source a kernel runs, and that source with each called function's text in it.
+
+    A kernel calls the function itself, so its text isn't run.  A lock still has to see an
+    edit to it, and hashes the second string.
+    """
     sub_fn_lines = _compile_subroutines(ctx)
     rungs = ctx.program.rungs
     if split_after is None:
@@ -228,19 +235,21 @@ def _render_kernel_source(ctx: CodegenContext, *, split_after: int | None = None
         pre_body = _compile_rung_body(ctx, rungs[:split_after], "_kernel_step_pre")
         main_body = _compile_rung_body(ctx, rungs[split_after:], "_kernel_step")
 
-    lines: list[str] = []
-    lines.extend(_render_imports(ctx))
-    lines.extend(_render_helper_defs(_with_helper_deps(ctx.used_helpers)))
+    head: list[str] = []
+    head.extend(_render_imports(ctx))
+    head.extend(_render_helper_defs(_with_helper_deps(ctx.used_helpers)))
     if ctx.abstract_timers:
-        lines.extend(_BB_TICK_HELPER)
-    lines.extend(_render_indirect_helpers(ctx))
-    lines.extend(_render_embedded_functions(ctx))
-    lines.extend(_render_declarations(ctx))
-    lines.extend(sub_fn_lines)
+        head.extend(_BB_TICK_HELPER)
+    head.extend(_render_indirect_helpers(ctx))
+    tail: list[str] = []
+    tail.extend(_render_declarations(ctx))
+    tail.extend(sub_fn_lines)
     if pre_body is not None:
-        lines.extend(_render_step_function(ctx, pre_body, fn_name="_kernel_step_pre"))
-    lines.extend(_render_step_function(ctx, main_body))
-    return "\n".join(lines).rstrip() + "\n"
+        tail.extend(_render_step_function(ctx, pre_body, fn_name="_kernel_step_pre"))
+    tail.extend(_render_step_function(ctx, main_body))
+    source = "\n".join([*head, *tail]).rstrip() + "\n"
+    lock_source = "\n".join([*head, *_render_function_texts(ctx), *tail]).rstrip() + "\n"
+    return source, lock_source
 
 
 # -- Compilation (populates ctx side-effects) --------------------------------
@@ -323,8 +332,8 @@ def _render_indirect_helpers(ctx: CodegenContext) -> list[str]:
     return lines
 
 
-def _render_embedded_functions(ctx: CodegenContext) -> list[str]:
-    lines: list[str] = []
+def _render_function_texts(ctx: CodegenContext) -> list[str]:
+    lines: list[str] = ctx.function_constant_lines()
     for symbol in sorted(ctx.function_sources):
         src = ctx.function_sources[symbol].rstrip()
         lines.append(src)

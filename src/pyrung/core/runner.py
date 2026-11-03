@@ -10,7 +10,6 @@ reducing object allocation from O(instructions) to O(1) per scan.
 
 from __future__ import annotations
 
-import ast
 import builtins
 import dis
 import inspect
@@ -46,11 +45,6 @@ from pyrung.core.executor import (
     execute_program,
 )
 from pyrung.core.expression import RandIntExpr, randint_sites
-from pyrung.core.function_source import (
-    KERNEL_COMPILE_FLAGS,
-    embedded_source,
-    is_the_function,
-)
 from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel
@@ -359,9 +353,20 @@ class _BreakpointBuilder:
 
 def _iter_tags_and_edge_names(
     roots: Iterable[Any],
+    *,
+    block_uses: list[Any] | None = None,
 ) -> tuple[tuple[Tag, ...], frozenset[str]]:
-    """Single-pass graph walk collecting both Tag objects and edge tag names."""
+    """Single-pass graph walk collecting both Tag objects and edge tag names.
+
+    *block_uses*, when given, also collects each range and pointer into a block.
+    """
     from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
+    from pyrung.core.memory_block import (
+        BlockRange,
+        IndirectBlockRange,
+        IndirectExprRef,
+        IndirectRef,
+    )
     from pyrung.core.tag import Tag as TagClass
 
     found_by_name: dict[str, TagClass] = {}
@@ -393,6 +398,11 @@ def _iter_tags_and_edge_names(
         if current_id in visited:
             continue
         visited.add(current_id)
+
+        if block_uses is not None and isinstance(
+            current, BlockRange | IndirectRef | IndirectExprRef | IndirectBlockRange
+        ):
+            block_uses.append(current)
 
         if isinstance(current, Mapping):
             queue.extend(current.keys())
@@ -533,20 +543,21 @@ _ATTRIBUTES_PAST_ITS_SCOPE = frozenset(
 def _is_self_contained_builtin(name: str) -> bool:
     if name in _SELF_CONTAINED_BUILTINS:
         return True
+    # Not a BaseException outside Exception: a batch that raises one of those is not undone.
     builtin = getattr(builtins, name, None)
-    return isinstance(builtin, type) and issubclass(builtin, BaseException)
+    return isinstance(builtin, type) and issubclass(builtin, Exception)
 
 
 def _reaches_past_its_scope(code: CodeType) -> bool:
-    """Whether *code* imports, or asks an object for a dunder or a frame.
+    """Whether *code* imports, sets an attribute, or asks an object for a dunder or a frame.
 
-    An import shares a module's state with every other caller of it, and a dunder
+    An import or an attribute of ``math`` shares state with every other call, and a dunder
     (``__globals__``, ``__defaults__``, ``__traceback__``), a frame or ``str.format``
     (``"{0.__globals__}"``) hands over the function's own module, by a route no global
     name shows.
     """
     for instruction in dis.get_instructions(code):
-        if instruction.opname == "IMPORT_NAME":
+        if instruction.opname in ("IMPORT_NAME", "STORE_ATTR", "DELETE_ATTR"):
             return True
     for name in code.co_names:
         if name.startswith("__") or name in _ATTRIBUTES_PAST_ITS_SCOPE:
@@ -559,62 +570,27 @@ def _reaches_past_its_scope(code: CodeType) -> bool:
 
 
 def _is_immutable_constant(value: Any) -> bool:
-    if isinstance(value, tuple | frozenset):
+    if type(value) in (tuple, frozenset):
         return all(_is_immutable_constant(item) for item in value)
-    return value is None or isinstance(value, bool | int | float | complex | str | bytes)
+    return value is None or type(value) in (bool, int, float, complex, str, bytes)
 
 
-def _copies_its_defaults(fn: Any) -> bool:
-    """Whether a copy of *fn* gets the defaults *fn* has, and neither can change them.
+def _may_be_called_again(fn: Any) -> bool:
+    """Whether a kernel may run *fn*, given that an undo means calling it again.
 
-    The copy evaluates each default's source once, in the kernel's module.  So the
-    source must be a literal, and the value one that stepping holds in no other way: a
-    ``memo=[]`` would run as two lists, the function's and the copy's.
+    A kernel calls the function itself, so its names, defaults and cells are the ones
+    stepping sees.  What a kernel can't promise is one call per scan: a batch that raises
+    or leaves its bounds is undone and stepped, which calls the function again for scans
+    it has already run.  So a function that keeps anything from one call to the next, or
+    reaches past its own frame to something that can (a closure cell, a global, a mutable
+    default, an import, a dunder or a frame), runs stepped, once per scan.
     """
-    positional = fn.__defaults__ or ()
-    keyword = fn.__kwdefaults__ or {}
-    if not positional and not keyword:
-        return True
-    try:
-        definition = ast.parse(embedded_source(fn)).body[0]
-    except (IndexError, OSError, SyntaxError, TypeError):
+    if not inspect.isfunction(fn) or fn.__closure__ or fn.__builtins__ is not vars(builtins):
         return False
-    if not isinstance(definition, ast.FunctionDef):
-        return False  # A lambda's source is the statement it sits in: only a def is read.
-    arguments = definition.args
-    named = [
-        *zip(arguments.defaults, positional, strict=False),
-        *(
-            (node, keyword.get(argument.arg))
-            for argument, node in zip(arguments.kwonlyargs, arguments.kw_defaults, strict=True)
-            if node is not None
-        ),
-    ]
-    if len(named) != len(positional) + len(keyword):
+    defaults = (*(fn.__defaults__ or ()), *(fn.__kwdefaults__ or {}).values())
+    if not all(_is_immutable_constant(default) for default in defaults):
         return False
-    for node, value in named:
-        try:
-            literal = ast.literal_eval(node)
-        except (TypeError, ValueError):
-            return False
-        if not _is_immutable_constant(value) or repr(literal) != repr(value):
-            return False
-    return True
-
-
-def _means_the_same_in_a_kernel(fn: Any) -> bool:
-    """Whether a kernel's copy of a ``run_function`` body acts as the function does.
-
-    A kernel embeds the source, not the function, and its names resolve in the kernel's
-    module.  Closure cells and the function's module are not there: reading one raises,
-    which is the lucky case, while a ``global`` store lands in the kernel's module and
-    nobody ever knows.  A wrapper's source is not even what runs, and a mutable default
-    is a second object that starts over empty.  Stepping calls the function itself, so
-    a function that is not self-contained steps.
-    """
-    if not inspect.isfunction(fn) or fn.__closure__ or hasattr(fn, "__wrapped__"):
-        return False
-    if fn.__dict__ or _reaches_past_its_scope(fn.__code__) or not _copies_its_defaults(fn):
+    if _reaches_past_its_scope(fn.__code__):
         return False
     read, bound = _global_names(fn.__code__)
     if bound:
@@ -622,22 +598,27 @@ def _means_the_same_in_a_kernel(fn: Any) -> bool:
     function_globals = fn.__globals__
     for name in read:
         if name == "math" and function_globals.get(name) is math:
-            continue  # Every kernel imports it.
+            continue  # Nothing in it depends on a past call.
         if name in function_globals or not _is_self_contained_builtin(name):
             return False
-    return _kernel_embeds_the_function(fn)
+    return True
 
 
-def _kernel_embeds_the_function(fn: Any) -> bool:
-    """Whether the text a kernel embeds is what *fn* runs: a file changes, a function doesn't."""
-    try:
-        text = embedded_source(fn)
-    except (OSError, TypeError):
-        return False
-    return is_the_function(text, fn, flags=KERNEL_COMPILE_FLAGS)
+def _hands_over_nothing_it_could_keep(value: Any) -> bool:
+    """Whether an ``ins`` value reaches the function as a fresh value, or one nothing can change.
+
+    A list a function appends to, or any object it can call, is state like a mutable default.
+    """
+    from pyrung.core.expression import Expression
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    from pyrung.core.tag import ImmediateRef, Tag
+
+    return isinstance(
+        value, Tag | IndirectRef | IndirectExprRef | Expression | ImmediateRef
+    ) or _is_immutable_constant(value)
 
 
-def _program_calls_what_a_kernel_cannot_copy(program: Any) -> bool:
+def _program_calls_what_a_kernel_may_not(program: Any) -> bool:
     from pyrung.core.instruction.control import (
         EnabledFunctionCallInstruction,
         FunctionCallInstruction,
@@ -648,16 +629,60 @@ def _program_calls_what_a_kernel_cannot_copy(program: Any) -> bool:
         return False
     return any(
         isinstance(instruction, FunctionCallInstruction | EnabledFunctionCallInstruction)
-        and not _means_the_same_in_a_kernel(instruction._fn)
+        and not (
+            _may_be_called_again(instruction._fn)
+            and all(_hands_over_nothing_it_could_keep(v) for v in instruction._ins.values())
+        )
         for instruction in walk_instructions(program)
     )
 
 
+class _SlotsRungsReach:
+    """The block slots a range or a pointer in a rung reaches, by name.
+
+    A runner knows the tags a rung names, and a ``select()`` or a ``Block[Pointer]`` names
+    only its block: its slots stay lazy until something asks for one.  A kernel lists them
+    as it binds the block, so these are the same slots, and a slot patched by name holds
+    its type on both engines and whatever else was patched first.  Built the first time a
+    name is not a known tag, and shared with forks, which skip the walk.
+    """
+
+    __slots__ = ("_logic", "_program", "_by_name")
+
+    def __init__(self, logic: Iterable[Any], program: Any) -> None:
+        self._logic = logic
+        self._program = program
+        self._by_name: dict[str, Tag] | None = None
+
+    def get(self, name: str) -> Tag | None:
+        if self._by_name is None:
+            self._by_name = self._build()
+        return self._by_name.get(name)
+
+    def _build(self) -> dict[str, Tag]:
+        from pyrung.core.memory_block import BlockRange
+
+        roots: list[Any] = list(self._logic)
+        if self._program is not None:
+            for subroutine_rungs in self._program.subroutines.values():
+                roots.extend(subroutine_rungs)
+        uses: list[Any] = []
+        _iter_tags_and_edge_names(roots, block_uses=uses)
+        slots: list[Tag] = []
+        for use in uses:
+            if isinstance(use, BlockRange):
+                slots.extend(use.tags())
+            else:
+                block = use.block
+                slots.extend(
+                    block._get_tag(addr) for addr in block._window_addresses(block.start, block.end)
+                )
+        return {tag.name: tag for tag in slots}
+
+
 def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
-    if isinstance(exc, NotImplementedError | NameError):
-        # NameError: a copied def needs a name at definition time (a decorator, a
-        # default or an annotation from the function's module).
-        return True
+    if isinstance(exc, NotImplementedError | NameError | SyntaxError):
+        return True  # A kernel that doesn't build is a kernel not used: the run steps.
     if not isinstance(exc, ValueError | TypeError):
         return False
     message = str(exc)
@@ -665,10 +690,6 @@ def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
         needle in message
         for needle in (
             "requires generate_circuitpy",
-            "Could not inspect source for callable",
-            "Callable source is not inspectable",
-            "Callable source is not the function",
-            "Callable name would shadow",
             "Unsupported",
         )
     )
@@ -1700,8 +1721,9 @@ class PLC:
         )
         self._input_overrides = InputOverrideManager(
             is_read_only=self._system_runtime.is_read_only,
-            known_tag=lambda name: self._known_tags_by_name.get(name),
+            known_tag=self._tag_a_name_means,
         )
+        self._slots_rungs_reach = _SlotsRungsReach(self._logic, self._program)
         # Preserve direct access used in tests/live-tag helpers.
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
@@ -2662,6 +2684,7 @@ class PLC:
                 self._constrained_tags,
             ),
         )
+        fork._slots_rungs_reach = self._slots_rungs_reach
         fork._set_time_mode(self._time_mode, dt=self._dt)
         fork._coast_memo = self._coast_memo
         fork._search_refuses_restart = self._search_refuses_restart
@@ -3036,7 +3059,7 @@ class PLC:
 
         Synthesis is *logic*, so replay re-derives it by compiling it into the
         replay kernel — bool TON/TOF compile natively, an opaque ``run_function``
-        a kernel cannot copy falls back to interpreted replay (which re-installs
+        that may not be called again falls back to interpreted replay (which re-installs
         synthesis via ``fork_onto``).  This is the
         *soft* root; deploy (Click / CircuitPython) and ``prove`` compile the
         **bare** ``self._program`` instead — the brackets never reach a
@@ -3073,7 +3096,7 @@ class PLC:
             return None
         if _program_writes_read_only_system_tags(
             self._program
-        ) or _program_calls_what_a_kernel_cannot_copy(self._soft_exec_program()):
+        ) or _program_calls_what_a_kernel_may_not(self._soft_exec_program()):
             self._compiled_replay_kernel = False
             return None
         # Compile the synthesis pre-pass (``plant`` + ``holds`` — the leading
@@ -3150,6 +3173,7 @@ class PLC:
                 self._constrained_tags,
             ),
         )
+        fork._slots_rungs_reach = self._slots_rungs_reach
         fork._state = state
         fork._reset_cache(state)
         fork._initial_scan_id = state.scan_id
@@ -4147,6 +4171,10 @@ class PLC:
         for tag in tags:
             self._register_known_tag(tag)
         return edge_names - _DERIVED_EDGE_TAGS.keys()
+
+    def _tag_a_name_means(self, name: str) -> Tag | None:
+        known = self._known_tags_by_name.get(name)
+        return known if known is not None else self._slots_rungs_reach.get(name)
 
     def _register_known_tag(self, tag: Tag) -> None:
         if tag.name in SYSTEM_TAGS_BY_NAME:

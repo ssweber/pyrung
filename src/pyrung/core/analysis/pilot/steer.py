@@ -96,6 +96,7 @@ from pyrung.core.analysis.pilot.types import (
 from pyrung.core.analysis.pilot.verify import verify_gates
 from pyrung.core.analysis.pilot.world_key import ReadIdentity, _pilot_world_key, _rung_identity
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.input_overrides import refuses_value
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.compass import TransitionCause
@@ -892,6 +893,27 @@ def _try_action_batch(
     observation_action: ActionPair | None = None,
 ) -> _AttemptResult:
     policy = bearing.act.policy
+    # ── Action gate (what the tag can hold) ──────────────────────────────
+    # A trace reads its literal off the rung as written, and a patch refuses what the
+    # tag's type cannot hold ("AB" on a CHAR).  No scan can see it hold that value, so
+    # the action is out of reach, not a failure of the run.
+    refused = frozenset(
+        (name, value)
+        for name, value in policy.applied
+        if (tag := ctx.pdg.tags.get(name)) is not None and refuses_value(tag, value)
+    )
+    if refused:
+        return _AttemptResult(
+            trial=None,
+            gate_events=(
+                PilotGateEvent(
+                    "unholdable",
+                    "tag cannot hold "
+                    + ", ".join(f"{name}={value!r}" for name, value in sorted(refused, key=repr)),
+                ),
+            ),
+            nogood_pairs=refused,
+        )
     # ── Action gate (avoid=) ──────────────────────────────────────────────
     # Before the pulse: a candidate whose overlaid action makes the avoid
     # predicate true is a path that depends on the avoided condition — reject it

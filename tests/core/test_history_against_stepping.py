@@ -378,12 +378,12 @@ def _annotated_with_a_user_type(value: int, unused: _UserType | None = None) -> 
 
 
 def _default_names_a_global(value: int, offset: int = GLOBAL_OFFSET) -> dict[str, int]:
-    """Read when the copy is defined, in a module that has no such name."""
+    """The default is read once, at the def: a kernel calling the function has its value."""
     return {"out": value + offset}
 
 
 def _default_is_an_expression(value: int, offset: int = len("abc")) -> dict[str, int]:
-    """The copy evaluates this again: here a constant, but nothing has to be."""
+    """Evaluated once, at the def, and what it left is a constant."""
     return {"out": value + offset}
 
 
@@ -483,9 +483,6 @@ def _lockstep_function(fn: Callable[..., Any]) -> tuple[PLC, PLC, dict]:
     "fn",
     [
         _reads_a_global,
-        _decorated,
-        _default_names_a_global,
-        _default_is_an_expression,
         _asks_for_its_globals,
         _evaluates_a_global,
         _lists_its_scope,
@@ -494,14 +491,10 @@ def _lockstep_function(fn: Callable[..., Any]) -> tuple[PLC, PLC, dict]:
         _reads_a_dunder,
         _names_a_dunder_in_a_format,
         _walks_a_frame,
-        lambda value: {"out": value + 1},
         _closes_over()[0],
     ],
     ids=[
         "reads a global",
-        "decorated",
-        "default",
-        "default expression",
         "globals()",
         "eval",
         "dir",
@@ -510,16 +503,33 @@ def _lockstep_function(fn: Callable[..., Any]) -> tuple[PLC, PLC, dict]:
         "dunder",
         "dunder in a format",
         "frame",
-        "lambda",
         "closure",
     ],
 )
-def test_a_function_a_kernel_cannot_copy_runs_itself(
+def test_a_function_that_could_keep_something_runs_itself(
     fn: Callable[..., Any], fine_loop: None
 ) -> None:
-    """Copied into the kernel's module these lose what they name, or raise."""
+    """An undone batch calls it again, so a run steps it: these scans are the real ones."""
     plc, _twin, _truth = _lockstep_function(fn)
     assert plc._compiled_replay_supported_kernel() is None
+
+
+@pytest.mark.parametrize(
+    "fn",
+    [
+        _decorated,
+        _default_names_a_global,
+        _default_is_an_expression,
+        lambda value: {"out": value + 1},
+    ],
+    ids=["decorated", "default", "default expression", "lambda"],
+)
+def test_a_function_no_copy_could_stand_for_runs_in_the_kernel(
+    fn: Callable[..., Any], fine_loop: None
+) -> None:
+    """The kernel calls the function itself, so its source text and module don't matter."""
+    plc, _twin, _truth = _lockstep_function(fn)
+    assert plc._compiled_replay_supported_kernel() is not None
 
 
 @pytest.mark.parametrize(
@@ -530,7 +540,7 @@ def test_a_function_a_kernel_cannot_copy_runs_itself(
 def test_a_mutable_default_is_the_function_s_own_list(
     fn: Callable[..., Any], fine_loop: None
 ) -> None:
-    """A kernel's copy would keep its count in a second list, from its first scan on."""
+    """An undone batch would count again, so a run steps it, and its list stays right."""
 
     def memo() -> list[int]:
         return fn.__defaults__[0] if fn.__defaults__ else fn.__kwdefaults__["memo"]
@@ -581,7 +591,7 @@ def test_a_global_store_lands_in_the_function_s_own_module(fine_loop: None) -> N
     assert global_calls >= 2 * plc.state.scan_id
 
 
-def test_a_plant_function_a_kernel_cannot_copy_runs_itself(fine_loop: None) -> None:
+def test_a_plant_function_that_could_keep_something_runs_itself(fine_loop: None) -> None:
     """The plant is part of the program a kernel would run."""
     fn, calls = _closes_over()
 

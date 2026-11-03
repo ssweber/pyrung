@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from pyrung.core.instruction.conversions import copy_store_transform
-from pyrung.core.storage import check_real_value, store_char, store_value
+from pyrung.core.storage import check_real_value, store_char, store_real, store_value
 from pyrung.core.tag import Tag as TagClass
 from pyrung.core.tag import TagType
 
@@ -42,6 +42,40 @@ def _value_a_tag_holds(tag: Tag, value: Any, what: str) -> Any:
         check_real_value(value, what, allow_non_finite=True)
     transform = copy_store_transform(tag.type)
     return value if transform is None else store_value(value, transform)
+
+
+def refuses_value(tag: Tag, value: Any) -> bool:
+    """Whether a patch of *tag* with *value* raises."""
+    try:
+        _value_a_tag_holds(tag, value, "candidate")
+    except ValueError:
+        return True
+    return False
+
+
+def held_candidates(tag: Tag, values: Iterable[Any]) -> set[Any]:
+    """What *tag* holds of the *values* an analysis would try on it.
+
+    A candidate comes off a rung or a ``choices=`` as written, and the tag may not
+    hold that.  A number is mapped to what its store holds rather than dropped, so
+    the values around a literal keep both sides of a compare: ``I > 3.5`` splits into
+    3 and 4.  A finite REAL past float32 range maps to +/-Inf, which a REAL holds and
+    which is past that literal too, though a patch refuses the literal itself.  What
+    no store of the type can make sense of (``"AB"`` on a CHAR, ``"x"`` on an INT) is
+    dropped: no scan can see the tag hold it.  One the tag holds as an equal value stays
+    as it was given: a ``-1`` on a REAL is not rewritten to ``-1.0`` in what a plan or a
+    witness reports.
+    """
+    held: set[Any] = set()
+    for value in values:
+        if tag.type is TagType.REAL and isinstance(value, bool | int | float):
+            stored = store_real(value)
+        elif refuses_value(tag, value):
+            continue
+        else:
+            stored = _value_a_tag_holds(tag, value, "candidate")
+        held.add(value if value == stored else stored)
+    return held
 
 
 class InputOverrideManager:

@@ -28,11 +28,13 @@ from pyrung.core import (
     TagType,
     Word,
     blockcopy,
+    calc,
     copy,
     out,
     search,
 )
 from pyrung.core.compiled_plc import CompiledPLC
+from tests.core.test_fault_flags import _run
 
 ds = ClickBlocks()[6]
 Enable, Lamp = Bool("Enable"), Bool("Lamp")
@@ -151,7 +153,7 @@ def test_a_real_still_takes_inf_and_nan(value: float) -> None:
 
 
 @pytest.mark.parametrize("value", [math.inf, -math.inf, math.nan])
-def test_a_copy_of_a_non_finite_into_a_bool_is_false_on_every_path(value: float) -> None:
+def test_a_copy_of_a_non_finite_into_a_bool_is_false_on_each_engine(value: float) -> None:
     def program() -> Program:
         with Program(strict=False) as built:
             with Rung():
@@ -166,6 +168,28 @@ def test_a_copy_of_a_non_finite_into_a_bool_is_false_on_every_path(value: float)
     looped.patch({"Src": value})
     looped.run(1_500)
     assert looped.state.tags["Dst"] is False
+
+
+@pytest.mark.parametrize(
+    "engine", ["kernel_legacy", "kernel_blockless", "circuitpy", "circuitpy_rt"]
+)
+@pytest.mark.parametrize(
+    "held", [lambda big, _: big * big, lambda big, _: 0 - big * big, lambda _, inf: inf - inf]
+)
+def test_a_copy_of_a_non_finite_into_a_bool_is_false_in_generated_code(
+    held, engine, monkeypatch
+) -> None:
+    big, inf, src = Real("Big", default=3e38), Real("Inf"), Real("Src")
+    dst = Bool("Dst", default=True)
+    with Program(strict=False) as program:
+        with Rung():
+            calc(big * big, inf)
+            calc(held(big, inf), src)
+            copy(src, dst)
+
+    held_src, held_dst = _run(program, engine, (src, dst), monkeypatch)
+    assert not math.isfinite(held_src)
+    assert held_dst is False
 
 
 def test_a_name_nothing_reads_has_no_type_to_hold() -> None:
@@ -200,11 +224,80 @@ def _slots_only_a_range_uses() -> tuple[Program, Any]:
     return program, slots
 
 
+def _names_a_slot_only_a_range_uses() -> Program:
+    slots, other = Block("DS", TagType.INT, 1, 5), Block("DR", TagType.REAL, 1, 5)
+    with Program(strict=False) as program:
+        with Rung():
+            blockcopy(slots.select(1, 3), other.select(1, 3))
+    return program
+
+
+def _names_a_slot_only_a_pointer_reaches() -> Program:
+    slots, pointer = Block("DS", TagType.INT, 1, 5), Int("P", default=1)
+    with Program(strict=False) as program:
+        with Rung():
+            copy(slots[pointer], Real("Shown"))
+    return program
+
+
+@pytest.mark.parametrize(
+    "build", [_names_a_slot_only_a_range_uses, _names_a_slot_only_a_pointer_reaches]
+)
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC])
+@pytest.mark.parametrize("value,held", [(99999, 32767), (3.9, 3), (True, 1)])
+def test_a_slot_patched_by_name_holds_its_type_on_both_engines(build, engine, value, held) -> None:
+    plc = engine(build(), dt=0.01)
+    plc.patch({"DS2": value})
+    plc.step()
+    assert repr(plc.current_state.tags["DS2"]) == repr(held)
+
+
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC])
+def test_a_slot_patched_by_name_refuses_what_it_cannot_hold(engine) -> None:
+    plc = engine(_names_a_slot_only_a_range_uses(), dt=0.01)
+    with pytest.raises(ValueError, match="holds a number"):
+        plc.patch({"DS2": "txt"})
+
+
+def test_a_slot_by_name_means_the_same_before_and_after_it_is_patched_by_tag() -> None:
+    slots = Block("DS", TagType.INT, 1, 5)
+    with Program(strict=False) as program:
+        with Rung():
+            blockcopy(slots.select(1, 3), Block("DR", TagType.REAL, 1, 5).select(1, 3))
+    plc = PLC(program, dt=0.01)
+    held = []
+    for key in ("DS2", slots[2], "DS2"):
+        plc.patch({key: 99999})
+        plc.step()
+        held.append(plc.state.tags["DS2"])
+    assert held == [32767, 32767, 32767]
+
+
+def test_a_fork_knows_the_slots_its_parent_does() -> None:
+    plc = PLC(_names_a_slot_only_a_range_uses(), dt=0.01)
+    plc.patch({"DS2": 99999})
+    plc.step()
+    forked = plc.fork()
+    assert forked._slots_rungs_reach is plc._slots_rungs_reach
+    forked.patch({"DS3": 99999})
+    forked.step()
+    assert forked.state.tags["DS3"] == 32767
+
+
+def test_a_slot_outside_what_rungs_reach_stays_as_given_on_both_engines() -> None:
+    """Nothing in the program reaches it: the same "no type to hold" as any other name."""
+    for engine in (PLC, CompiledPLC):
+        plc = engine(_names_a_slot_only_a_range_uses(), dt=0.01)
+        plc.patch({"DS5": 0.5})
+        plc.step()
+        assert plc.current_state.tags["DS5"] == 0.5
+
+
 def test_a_replay_gives_a_slot_named_by_string_what_the_scan_gave_it() -> None:
-    """A kernel knows every slot and the runner only those named: the log is the answer."""
+    """What a log recorded is what the scan was given, whatever the runner would type now."""
     program, _ = _slots_only_a_range_uses()
     plc = PLC(program, dt=0.01)
-    plc.patch({"Run": True, "DS2": 3.9})
+    plc.patch_as_recorded({"Run": True, "DS2": 3.9})
     live = {}
     for _ in range(6):
         plc.step()
@@ -232,7 +325,7 @@ def test_a_replay_takes_text_in_a_slot_as_the_scan_did() -> None:
         with Rung(Bool("Run")):
             blockcopy(slots.select(1, 3), other.select(1, 3))
     plc = PLC(program, dt=0.01)
-    plc.patch({"DS2": "txt"})
+    plc.patch_as_recorded({"DS2": "txt"})
     plc.run(5)
     assert plc.state.tags["DS2"] == "txt"
     plc._reset_cache(plc.state)

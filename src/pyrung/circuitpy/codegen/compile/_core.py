@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from keyword import iskeyword
 from typing import Any
 
 from pyrung.circuitpy.codegen._constants import (
@@ -84,9 +85,11 @@ from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
     ModbusSendInstruction,
 )
+from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.rung import Rung as LogicRung
 from pyrung.core.site_memory import edge_memory_key, edge_rows
 from pyrung.core.storage import REAL_MAX
+from pyrung.core.tag import ImmediateRef, Tag
 
 from ._primitives import (
     _calc_store_expr,
@@ -656,6 +659,36 @@ def _compile_calc_instruction(
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
+def _in_quotes(text: str) -> str:
+    """*text* as the inside of a generated double-quoted string."""
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _in_f_string(text: str) -> str:
+    """*text* as the inside of a generated double-quoted f-string."""
+    return _in_quotes(text).replace("{", "{{").replace("}", "}}")
+
+
+def _compile_function_kwargs(ins: dict[str, Any], ctx: CodegenContext) -> str:
+    """A function call's keyword arguments, in the order stepping passes them.
+
+    A name that is no Python keyword argument (``class``, ``a b``) goes through ``**``, and
+    so does one outside ASCII, which the compiler would normalize.
+    """
+    compiled = [(name, _compile_function_arg(value, ctx)) for name, value in ins.items()]
+    if all(name.isascii() and name.isidentifier() and not iskeyword(name) for name in ins):
+        return ", ".join(f"{name}={expr}" for name, expr in compiled)
+    return "**{" + ", ".join(f"{name!r}: {expr}" for name, expr in compiled) + "}"
+
+
+def _compile_function_arg(value: Any, ctx: CodegenContext) -> str:
+    if isinstance(value, ImmediateRef):
+        return _compile_function_arg(value.value, ctx)
+    if isinstance(value, Tag | IndirectRef | IndirectExprRef | Expression):
+        return _compile_value(value, ctx)
+    return ctx.function_constant(value)
+
+
 def _compile_function_call_instruction(
     instr: FunctionCallInstruction,
     enabled_expr: str,
@@ -665,25 +698,23 @@ def _compile_function_call_instruction(
     fn_symbol = ctx.register_function_source(instr._fn)
     fn_name = getattr(instr._fn, "__name__", type(instr._fn).__name__)
     result_var = f"_{ctx.next_name('fn_result')}"
-    kwargs = ", ".join(
-        f"{name}={_compile_value(value, ctx)}" for name, value in sorted(instr._ins.items())
-    )
+    kwargs = _compile_function_kwargs(instr._ins, ctx)
     call_expr = f"{fn_symbol}({kwargs})" if kwargs else f"{fn_symbol}()"
     enabled_body = [f"{result_var} = {call_expr}"]
     if instr._outs:
         enabled_body.extend(
             [
                 f"if {result_var} is None:",
-                f'    raise TypeError("run_function: {fn_name!r} returned None but outs were declared")',
+                f'    raise TypeError("{_in_quotes(f"run_function: {fn_name!r} returned None but outs were declared")}")',
             ]
         )
-        for key, target in sorted(instr._outs.items()):
+        for key, target in instr._outs.items():
             target_type = _value_type_name(target)
             enabled_body.extend(
                 [
                     f"if {key!r} not in {result_var}:",
                     "    raise KeyError(",
-                    f'        f"run_function: {fn_name!r} missing key {key!r}; got {{sorted({result_var})}}"',
+                    f'        f"{_in_f_string(f"run_function: {fn_name!r} missing key {key!r}; got ")}{{sorted({result_var})}}"',
                     "    )",
                 ]
             )
@@ -700,9 +731,7 @@ def _compile_enabled_function_call_instruction(
 ) -> list[str]:
     fn_symbol = ctx.register_function_source(instr._fn)
     result_var = f"_{ctx.next_name('fn_result')}"
-    kwargs = ", ".join(
-        f"{name}={_compile_value(value, ctx)}" for name, value in sorted(instr._ins.items())
-    )
+    kwargs = _compile_function_kwargs(instr._ins, ctx)
     call_args = enabled_expr
     if kwargs:
         call_args += f", {kwargs}"
@@ -712,16 +741,16 @@ def _compile_enabled_function_call_instruction(
         lines.extend(
             [
                 f"{' ' * indent}if {result_var} is None:",
-                f'{" " * (indent + 4)}raise TypeError("run_enabled_function: {fn_name!r} returned None but outs were declared")',
+                f'{" " * (indent + 4)}raise TypeError("{_in_quotes(f"run_enabled_function: {fn_name!r} returned None but outs were declared")}")',
             ]
         )
-        for key, target in sorted(instr._outs.items()):
+        for key, target in instr._outs.items():
             target_type = _value_type_name(target)
             lines.extend(
                 [
                     f"{' ' * indent}if {key!r} not in {result_var}:",
                     f"{' ' * (indent + 4)}raise KeyError(",
-                    f'{" " * (indent + 8)}f"run_enabled_function: {fn_name!r} missing key {key!r}; got {{sorted({result_var})}}"',
+                    f'{" " * (indent + 8)}f"{_in_f_string(f"run_enabled_function: {fn_name!r} missing key {key!r}; got ")}{{sorted({result_var})}}"',
                     f"{' ' * (indent + 4)})",
                 ]
             )

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.simplified import Expr, _condition_to_expr
+from pyrung.core.input_overrides import held_candidates
 from pyrung.core.kernel import CompiledKernel
 
 if TYPE_CHECKING:
@@ -210,7 +211,7 @@ def _validate_split_at(
             # A black-box timer's Done is a plain Bool.
             domain = (False, True)
         elif tag.choices is not None:
-            domain = tuple(sorted(tag.choices.keys()))
+            domain = tuple(sorted(held_candidates(tag, tag.choices)))
         else:
             msg = (
                 f"split_at tag {tag_name!r} has no small enumerable domain; "

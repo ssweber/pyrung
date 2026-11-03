@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import subprocess
 import sys
 import threading
@@ -490,6 +491,50 @@ def test_a_raise_stepping_does_not_make_is_caught(installed, monkeypatch) -> Non
         _timed().run_for(20.0)
 
 
+def _no_twin_can_follow(monkeypatch) -> None:
+    monkeypatch.setattr(fold_check, "MAX_SCANS", 100)
+    monkeypatch.setattr(fold_check, "MAX_PLAIN_COMPILED_SCANS", 100)
+
+
+def test_a_raise_too_long_to_compare_is_judged_on_its_last_scan(installed, monkeypatch) -> None:
+    _no_twin_can_follow(monkeypatch)
+    fold_check.install()
+    reason = "raised runs too long to compare, their last scan judged"
+    before = fold_check.STATS[reason]
+    plc = _raising()
+    with pytest.raises(ValueError, match="boom"):
+        plc.run_for(30.0)
+    assert plc.state.scan_id == 1499
+    assert fold_check.STATS[reason] == before + 1
+
+
+def test_a_spurious_raise_too_long_to_compare_is_caught(installed, monkeypatch) -> None:
+    _no_twin_can_follow(monkeypatch)
+    real = compiled_run._run_compiled
+
+    def spurious(plc, kernel, budget, predicate):
+        real(plc, kernel, budget // 2, predicate)
+        raise RuntimeError("spurious kernel raise")
+
+    monkeypatch.setattr(compiled_run, "_run_compiled", spurious)
+    fold_check.install()
+    with fold_check.deliberate(), pytest.raises(FoldMismatch, match="stepping ran on"):
+        _timed().run_for(20.0)
+
+
+def test_another_raise_too_long_to_compare_is_caught(monkeypatch) -> None:
+    _no_twin_can_follow(monkeypatch)
+    plc = _raising()
+
+    def call() -> None:
+        for _ in range(1499):
+            plc.step()
+        raise KeyError("not what stepping raises")
+
+    with fold_check.deliberate(), pytest.raises(FoldMismatch, match="stepping raised ValueError"):
+        fold_check._checked("compiled", plc, call, budget=2000)
+
+
 def test_another_exception_type_is_caught() -> None:
     def raises_at_5(v):
         if v >= 5:
@@ -637,21 +682,172 @@ def test_own_twin_compare_sees_another_scan() -> None:
 def test_own_twin_is_listed_in_the_summary() -> None:
     plc = _plc()
     with fold_check.own_twin(plc) as compare:
-        compare(plc)
+        compare(_plc())
     assert "skipped: the test steps its own twin, tests:" in "\n".join(fold_check.summary())
+
+
+def test_own_twin_refuses_the_run_itself() -> None:
+    plc = _plc()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="compared with itself"),
+        fold_check.own_twin(plc) as compare,
+    ):
+        compare(plc)
+
+
+def _stepped(scans: int) -> PLC:
+    twin = _timed()
+    for _ in range(scans):
+        twin.step()
+    return twin
+
+
+def test_own_twin_refuses_a_compare_from_before_the_run(installed) -> None:
+    fold_check.install()
+    plc = _timed()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="last compare is of scan 0, its run got to scan 2000"),
+        fold_check.own_twin(plc) as compare,
+    ):
+        compare(_timed())
+        plc.run_for(20.0)
+
+
+def test_own_twin_refuses_a_second_run_after_the_compare(installed) -> None:
+    fold_check.install()
+    plc = _timed()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="last compare is of scan 2000, its run got to scan 4000"),
+        fold_check.own_twin(plc) as compare,
+    ):
+        plc.run_for(20.0)
+        compare(_stepped(2000))
+        plc.run_for(20.0)
+
+
+def test_own_twin_refuses_a_second_run_with_nothing_installed() -> None:
+    plc = _plc()
+    plc.run(3)
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="last compare is of scan 3, its run got to scan 5"),
+        fold_check.own_twin(plc) as compare,
+    ):
+        twin = _plc()
+        twin.run(3)
+        compare(twin)
+        plc.run(2)
+
+
+def test_own_twin_passes_a_compare_of_where_the_run_got_to(installed) -> None:
+    fold_check.install()
+    plc = _timed()
+    with fold_check.own_twin(plc) as compare:
+        plc.run_for(20.0)
+        compare(_stepped(2000))
+        plc.run_for(20.0)
+        compare(_stepped(4000))
+
+
+def test_own_twin_compare_sees_the_runner_around_the_state() -> None:
+    plc = _plc()
+    plc.run(3)
+    twin = _plc()
+    twin.run(3)
+    twin.force("Unrelated", True)
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="the runner differs at scan 3: forces"),
+        fold_check.own_twin(plc) as compare,
+    ):
+        compare(twin)
+
+
+def test_own_twin_holds_a_block_that_raises_to_its_compare() -> None:
+    plc = _plc()
+    before = len(fold_check.MISMATCHES)
+    with pytest.raises(KeyError):
+        with fold_check.own_twin(plc):
+            raise KeyError("the test's own failure")
+    assert [m for _, m in fold_check.MISMATCHES[before:]] == [
+        "fold-check (own twin): the block never compared its run"
+    ]
+    del fold_check.MISMATCHES[before:]
+
+
+def test_own_twin_holds_a_run_that_raises_to_its_landing(installed) -> None:
+    fold_check.install()
+    plc = _raising()
+    before = len(fold_check.MISMATCHES)
+    with pytest.raises(ValueError, match="boom"):
+        with fold_check.own_twin(plc) as compare:
+            compare(_raising())
+            plc.run_for(30.0)
+    assert [m for _, m in fold_check.MISMATCHES[before:]] == [
+        "fold-check (own twin): the block's last compare is of scan 0, its run got to scan 1499"
+    ]
+    del fold_check.MISMATCHES[before:]
+
+
+def test_own_twin_passes_a_block_that_raises_after_its_compare() -> None:
+    plc = _plc()
+    before = len(fold_check.MISMATCHES)
+    with pytest.raises(KeyError):
+        with fold_check.own_twin(plc) as compare:
+            compare(_plc())
+            raise KeyError("the test's own failure")
+    assert fold_check.MISMATCHES[before:] == []
+
+
+def _uses_of_own_twin(path: Path) -> set[str]:
+    """Each function of *path* that names own_twin, whether or not it calls it there."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    used: set[str] = set()
+
+    def names_it(node: ast.AST) -> bool:
+        return (isinstance(node, ast.Attribute) and node.attr == "own_twin") or (
+            isinstance(node, ast.Name) and node.id == "own_twin"
+        )
+
+    for top in tree.body:
+        if any(names_it(node) for node in ast.walk(top)):
+            used.add(getattr(top, "name", f"line {top.lineno}"))
+    return used
 
 
 def test_the_tests_using_own_twin_are_these() -> None:
     root = Path(__file__).parent
     users = {
-        path.relative_to(root).as_posix()
+        f"{path.relative_to(root).as_posix()}::{use}"
         for path in root.rglob("*.py")
-        if "own_twin(" in path.read_text(encoding="utf-8", errors="replace")
+        for use in _uses_of_own_twin(path)
     }
     assert users == {
-        "core/test_history_against_stepping.py",
-        "fold_check.py",
-        "test_fold_check_stop.py",
+        "core/test_history_against_stepping.py::test_a_mutable_default_is_the_function_s_own_list",
+        "core/test_run_function_arguments.py::_a_run_lands_where_its_own_twin_does",
+        *(
+            f"test_fold_check_stop.py::{name}"
+            for name in (
+                "test_own_twin_still_holds_a_run_to_the_scans_asked",
+                "test_own_twin_leaves_other_runners_checked",
+                "test_own_twin_must_compare",
+                "test_own_twin_compare_sees_a_difference",
+                "test_own_twin_compare_sees_another_scan",
+                "test_own_twin_is_listed_in_the_summary",
+                "test_own_twin_refuses_the_run_itself",
+                "test_own_twin_refuses_a_compare_from_before_the_run",
+                "test_own_twin_refuses_a_second_run_after_the_compare",
+                "test_own_twin_refuses_a_second_run_with_nothing_installed",
+                "test_own_twin_passes_a_compare_of_where_the_run_got_to",
+                "test_own_twin_compare_sees_the_runner_around_the_state",
+                "test_own_twin_holds_a_block_that_raises_to_its_compare",
+                "test_own_twin_holds_a_run_that_raises_to_its_landing",
+                "test_own_twin_passes_a_block_that_raises_after_its_compare",
+            )
+        ),
     }
 
 
@@ -693,9 +889,41 @@ def test_deliberate_does_not_cover_another_thread() -> None:
 
 
 def test_deliberate_does_not_mask_what_escapes_it() -> None:
+    before = len(fold_check.MISMATCHES)
     with pytest.raises(KeyError):
         with fold_check.deliberate():
             raise KeyError("the test's own failure")
+    del fold_check.MISMATCHES[before:]
+
+
+def test_deliberate_holds_a_block_that_raises_to_its_count() -> None:
+    before = len(fold_check.MISMATCHES)
+    with pytest.raises(KeyError):
+        with fold_check.deliberate():
+            raise KeyError("the test's own failure")
+    assert [m for _, m in fold_check.MISMATCHES[before:]] == [
+        "fold-check: deliberate() expects one mismatch, this block had 0"
+    ]
+    del fold_check.MISMATCHES[before:]
+
+    with pytest.raises(KeyError):
+        with fold_check.deliberate():
+            fold_check._mismatch("the one the test provoked")
+            fold_check._mismatch("a real one")
+            raise KeyError("the test's own failure")
+    assert [m for _, m in fold_check.MISMATCHES[before:]] == [
+        "a real one",
+        "fold-check: deliberate() expects one mismatch, this block had 2",
+    ]
+    del fold_check.MISMATCHES[before:]
+
+
+def test_deliberate_is_content_with_one_mismatch_and_a_raise() -> None:
+    before = len(fold_check.MISMATCHES)
+    with pytest.raises(FoldMismatch):
+        with fold_check.deliberate():
+            raise fold_check._mismatch("the one the test provoked")
+    assert fold_check.MISMATCHES[before:] == []
 
 
 # --- The runner around the state ---------------------------------------------------------

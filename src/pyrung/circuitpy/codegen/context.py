@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import hashlib
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -84,6 +85,37 @@ class StaticRangeLayout:
     tags: tuple[Tag, ...]
     addresses: tuple[int, ...]
     uses_backing_storage: bool
+
+
+def _name_for_the_lock(fn: Any) -> str:
+    """What a lock sees of a callable with no source: its names, and no address."""
+    kind = type(fn)
+    return f"{kind.__module__}.{kind.__qualname__} {getattr(fn, '__qualname__', '')}".rstrip()
+
+
+def _is_plain_literal(value: Any) -> bool:
+    """Whether ``repr(value)`` is *value*, and no call can tell one copy from another."""
+    kind = type(value)
+    if kind is float:
+        return math.isfinite(value)
+    if kind is tuple:
+        return all(_is_plain_literal(item) for item in value)
+    return value is None or kind in (bool, int, str, bytes)
+
+
+def _renders_faithfully(value: Any, seen: set[int] | None = None) -> bool:
+    """Whether ``repr(value)`` rebuilds *value*: one object, sharing nothing inside itself."""
+    if _is_plain_literal(value):
+        return True
+    kind = type(value)
+    if kind not in (list, tuple, dict):
+        return False
+    seen = set() if seen is None else seen
+    if id(value) in seen:
+        return False
+    seen.add(id(value))
+    items = [*value.keys(), *value.values()] if kind is dict else value
+    return all(_renders_faithfully(item, seen) for item in items)
 
 
 def describe_static_range(range_value: BlockRange) -> StaticRangeLayout:
@@ -203,6 +235,10 @@ class CodegenContext:
     # block is a named window onto the bank's array, not storage of its own.
     block_alias: dict[int, tuple[int, dict[int, int]]] = field(default_factory=dict)
     function_symbols_by_obj: dict[int, str] = field(default_factory=dict)
+    #: A kernel's globals: each symbol bound to the object itself.
+    function_objects: dict[str, Any] = field(default_factory=dict)
+    function_constants: dict[str, Any] = field(default_factory=dict)
+    function_constant_symbols: dict[int, str] = field(default_factory=dict)
     runstop: RunStopConfig | None = None
     board_tag_names: set[str] = field(default_factory=set)
     uses_board_switch: bool = False
@@ -723,6 +759,8 @@ class CodegenContext:
         existing = self.function_symbols_by_obj.get(key)
         if existing is not None:
             return existing
+        if self.kernel_runtime:
+            return self._call_by_reference(fn)
 
         try:
             rendered = embedded_source(fn)
@@ -750,6 +788,52 @@ class CodegenContext:
         symbol = _mangle_symbol(fn_name, "_fn_", set(self.function_sources))
         self.function_sources[symbol] = rendered
         self.function_symbols_by_obj[key] = symbol
+        return symbol
+
+    def function_constant(self, value: Any) -> str:
+        """A ``run_function`` constant as generated code names it.
+
+        Stepping hands the function one object, scan after scan, so what the function does
+        to it lasts.  A plain literal's text will do.  Anything else a kernel holds by
+        reference, and a code.py binds once at module level if its text rebuilds it.
+        """
+        if _is_plain_literal(value):
+            return repr(value)
+        existing = self.function_constant_symbols.get(id(value))
+        if existing is not None:
+            return existing
+        if not self.kernel_runtime and not _renders_faithfully(value):
+            raise ValueError(
+                f"A run_function constant a code.py can't rebuild from its text: {value!r}. "
+                "Pass a number, a string, or a list or dict of them."
+            )
+        symbol = f"_fc_{len(self.function_constants)}"
+        self.function_constants[symbol] = value
+        self.function_constant_symbols[id(value)] = symbol
+        return symbol
+
+    def function_constant_lines(self) -> list[str]:
+        """Each constant's binding: a code.py runs these, a kernel's lock reads them."""
+        return [
+            f"{symbol} = {repr(value) if _renders_faithfully(value) else _name_for_the_lock(value)}"
+            for symbol, value in self.function_constants.items()
+        ]
+
+    def _call_by_reference(self, fn: Any) -> str:
+        """Bind *fn* itself to a symbol: a kernel lives in this process and calls the function.
+
+        Its text is kept for the lock only, so a lock sees an edit to the function.  Whether
+        that text is what *fn* runs doesn't matter here, and nothing about *fn* is refused.
+        """
+        fn_name = getattr(fn, "__name__", type(fn).__name__)
+        symbol = _mangle_symbol(fn_name, "_fn_", set(self.function_sources))
+        try:
+            text = embedded_source(fn)
+        except (OSError, SyntaxError, TypeError):
+            text = ""
+        self.function_sources[symbol] = text or f"# {_name_for_the_lock(fn)}"
+        self.function_objects[symbol] = fn
+        self.function_symbols_by_obj[id(fn)] = symbol
         return symbol
 
     def _ensure_block_binding(
