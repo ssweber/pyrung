@@ -178,16 +178,6 @@ class _ValueSets:
             return None
         return found.get(name, frozenset())
 
-    def may_reach(self, ref: Any, name: str) -> bool:
-        """Whether an indirect reference may resolve to the tag *name*."""
-        slots = self.slots(ref.block, name)
-        if slots is None:
-            return True
-        if not slots:
-            return False
-        addresses = self.addresses(ref)
-        return addresses is None or bool(addresses & slots)
-
     def addresses(self, ref: Any) -> frozenset[int] | None:
         if isinstance(ref, IndirectRef):
             values = self.values(ref.pointer.name)

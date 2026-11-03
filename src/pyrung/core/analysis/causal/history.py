@@ -12,11 +12,6 @@ if TYPE_CHECKING:
     from pyrung.core.scan_log import ScanLog
 
 
-def _scan_ids_descending(history: History) -> list[int]:
-    """Return addressable scan ids newest-first."""
-    return list(reversed(list(history.scan_ids())))
-
-
 def _scan_index(ids: Sequence[int], scan_id: int) -> int | None:
     """O(1) index lookup when *ids* is a contiguous range, linear fallback."""
     if isinstance(ids, range):
@@ -375,56 +370,6 @@ def _later_transition(a: Transition | None, b: Transition | None) -> Transition 
     if b is None:
         return a
     return a if a.scan_id >= b.scan_id else b
-
-
-def _find_recent_transition(
-    history: History,
-    tag_name: str,
-    scan_id: int,
-    *,
-    timelines: RungFiringTimelines | None = None,
-    pdg: ProgramGraph | None = None,
-    scan_log: ScanLog | None = None,
-    initial_tags: Mapping[str, Any] | None = None,
-) -> Transition | None:
-    """Find a transition of *tag_name* at *scan_id* or the immediately preceding scan.
-
-    PLC effects propagate one scan at a time: a contact that transitioned at
-    scan N may not affect a downstream rung until scan N+1 (if the reading
-    rung comes before the writing rung in program order).  Checking both the
-    current and previous scan captures this one-scan propagation delay.
-    """
-    # Check exact scan first
-    t = _find_transition_at_scan(
-        history,
-        tag_name,
-        scan_id,
-        timelines=timelines,
-        pdg=pdg,
-        scan_log=scan_log,
-        initial_tags=initial_tags,
-    )
-    if t is not None:
-        return t
-
-    # Check immediately preceding scan
-    ids = history.scan_ids()
-    idx = _scan_index(ids, scan_id)
-    if idx is not None and idx > 0:
-        prev_scan = ids[idx - 1]
-        t = _find_transition_at_scan(
-            history,
-            tag_name,
-            prev_scan,
-            timelines=timelines,
-            pdg=pdg,
-            scan_log=scan_log,
-            initial_tags=initial_tags,
-        )
-        if t is not None:
-            return t
-
-    return None
 
 
 def _writer_indices(pdg: ProgramGraph, tag_name: str) -> frozenset[int]:
