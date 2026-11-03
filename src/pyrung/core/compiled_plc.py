@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Any, Literal, cast
 
+from pyrsistent import PMap
+
 from pyrung.core.context import ScanContext, same_stored_value
 from pyrung.core.expression import randint_sites
 from pyrung.core.input_overrides import InputOverrideManager, TagsRungsReach
@@ -543,7 +545,8 @@ class CompiledPLC:
             blocks=self._kernel.blocks,
         )
         scan_ctx = cast(ScanContext, ctx)
-        self._system_runtime.on_scan_start(scan_ctx)
+        if not self._system_runtime.scan_start_is_quiet(self._kernel.tags, self._kernel.memory):
+            self._system_runtime.on_scan_start(scan_ctx)
 
         if self._kernel.memory.get("_dt") != self._dt:
             ctx.set_memory("_dt", self._dt)
@@ -568,20 +571,23 @@ class CompiledPLC:
         ctx.blocks_live = False
         self._flush_blocks_tracked(tracked)
 
-        self._system_runtime.on_scan_end(scan_ctx)
+        if not self._system_runtime.scan_end_is_quiet(self._kernel.tags, self._dt):
+            self._system_runtime.on_scan_end(scan_ctx)
         self._discover_new_commit_tags()
 
-        next_state = SystemState(
-            scan_id=scan_id + 1,
-            timestamp=timestamp + self._dt,
-            tags=self._commit_tags(),
-            memory=self._commit_memory(),
+        next_scan_id = scan_id + 1
+        next_timestamp = timestamp + self._dt
+        next_state = self._state.scanned(
+            next_scan_id, next_timestamp, self._commit_tags(), self._commit_memory()
         )
-        self._kernel.scan_id = next_state.scan_id
-        self._kernel.timestamp = next_state.timestamp
+        self._kernel.scan_id = next_scan_id
+        self._kernel.timestamp = next_timestamp
         self._state = next_state
-        self._sync_runtime_flags_from_state()
-        return self._state
+        # The commit just published this memory, and the kernel's holds both keys.
+        memory = self._kernel.memory
+        self._running = bool(memory.get(_MODE_RUN_KEY, True))
+        self._battery_present = bool(memory.get(_BATTERY_PRESENT_KEY, self._battery_present))
+        return next_state
 
     def step_replay(self, *, defer_flush: bool = False) -> None:
         """Run one lightweight replay step.
@@ -635,11 +641,11 @@ class CompiledPLC:
     def _materialize_replay_state(self) -> SystemState:
         """Build SystemState from current kernel state (replay fast path)."""
         self._flush_blocks_tracked(cast("dict[str, _TrackedList]", self._kernel.blocks))
-        state = SystemState(
-            scan_id=self._kernel.scan_id,
-            timestamp=self._kernel.timestamp,
-            tags=self._commit_tags(),
-            memory=self._commit_memory(),
+        state = self._state.scanned(
+            self._kernel.scan_id,
+            self._kernel.timestamp,
+            self._commit_tags(),
+            self._commit_memory(),
         )
         self._state = state
         return state
@@ -694,6 +700,8 @@ class CompiledPLC:
         # commit's diff.  ``state.tags`` is already in committed form (no
         # derived tags; live-block tags only), so it seeds directly.
         self._prev_committed_tags: dict[str, Any] = dict(state.tags)
+        self._mirrored_memory: PMap | None = None
+        self._memory_mirror: dict[str, Any] = {}
         self._extra_commit_tag_names = {
             name
             for name in self._kernel.tags
@@ -796,13 +804,16 @@ class CompiledPLC:
                     del self._unseen_scalars[name]
                     self._extra_commit_tag_names.add(name)
         committed: dict[str, Any] = {}
-        for name in prev_dict:
+        for name, old in prev_dict.items():
             value = tags.get(name, _MISSING)
+            if value is old:
+                committed[name] = value
+                continue
             if value is _MISSING:
                 del evolver[name]
                 continue
             committed[name] = value
-            if not same_stored_value(prev_dict[name], value):
+            if not same_stored_value(old, value):
                 evolver[name] = value
         for name in live | self._extra_commit_tag_names:
             if name in committed or name in _DERIVED_TAG_NAMES:
@@ -817,14 +828,26 @@ class CompiledPLC:
 
     def _commit_memory(self):  # noqa: ANN202
         """Commit the scan's memory by updating the previous PMap (see
-        :meth:`_commit_tags`).  Memory is small and monotonic, so a direct
-        diff against the previous ``PMap`` needs no plain-dict mirror."""
+        :meth:`_commit_tags`).  The plain-dict mirror belongs to one ``PMap``, so
+        a state installed from elsewhere rebuilds it."""
         prev = self._state.memory
-        evolver = prev.evolver()
+        if self._mirrored_memory is not prev:
+            self._memory_mirror = dict(prev)
+            self._mirrored_memory = prev
+        mirror = self._memory_mirror
+        evolver = None
         for key, value in self._kernel.memory.items():
-            if not same_stored_value(prev.get(key, _MISSING), value):
-                evolver[key] = value
-        return evolver.persistent()
+            old = mirror.get(key, _MISSING)
+            if old is value or same_stored_value(old, value):
+                continue
+            if evolver is None:
+                evolver = prev.evolver()
+            evolver[key] = value
+            mirror[key] = value
+        if evolver is None:
+            return prev
+        self._mirrored_memory = evolver.persistent()
+        return self._mirrored_memory
 
     def _ensure_running(self) -> None:
         # A runner's states walk one recording, and a restart ends a recording: a stop
@@ -899,10 +922,9 @@ class CompiledPLC:
         self._forces.clear()
 
     def _sync_runtime_flags_from_state(self) -> None:
-        self._running = bool(self._state.memory.get(_MODE_RUN_KEY, True))
-        self._battery_present = bool(
-            self._state.memory.get(_BATTERY_PRESENT_KEY, self._battery_present)
-        )
+        memory = self._state.memory
+        self._running = bool(memory.get(_MODE_RUN_KEY, True))
+        self._battery_present = bool(memory.get(_BATTERY_PRESENT_KEY, self._battery_present))
 
     def _normalize_rtc_datetime(self, value: datetime) -> datetime:
         if value.tzinfo is None:
