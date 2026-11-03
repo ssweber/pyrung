@@ -11,7 +11,6 @@ import pytest
 
 from pyrung import Bool, Char, Int, Or, Program, Real, Rung, Word, copy, latch, out
 from pyrung.core import PLC
-from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.analysis.pilot.skiff import _declared_domain
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -22,6 +21,7 @@ from pyrung.core.analysis.prove import (
     reachable_states,
 )
 from pyrung.core.analysis.prove.classify import _condition_to_expr, _extract_value_domain
+from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.input_overrides import held_candidates, refuses_value
 
 Y = Bool("Y")

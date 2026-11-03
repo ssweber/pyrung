@@ -62,10 +62,13 @@ def _closure() -> Any:
     return counts
 
 
+_STORED = 0
+
+
 def _global_store() -> Any:
     def counts(v):
         global _STORED
-        _STORED = globals().get("_STORED", 0) + 1
+        _STORED += 1
         return {"out": _STORED >= 50}
 
     return counts
@@ -141,7 +144,7 @@ def _fresh_rows():
 
     def forget() -> None:
         _calls["n"] = 0
-        globals().pop("_STORED", None)
+        globals()["_STORED"] = 0
         _mutable_default.__defaults__[0].clear()  # type: ignore[index]
         if hasattr(builtins, "_pyrung_gate_row"):
             del builtins._pyrung_gate_row  # type: ignore[attr-defined]
@@ -174,6 +177,7 @@ def test_every_verifier_entry_names_the_function(make: Any, handed: Any) -> None
     assert never_result.kind == "function"
     assert isinstance(states, Intractable)
     assert states.kind == "function"
+    assert isinstance(batch, list)
     assert [type(result) for result in batch] == [Intractable, Intractable]
 
 
