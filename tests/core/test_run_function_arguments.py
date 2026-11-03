@@ -541,7 +541,32 @@ def has_the_angstrom_sign(**kw):
     return {"out": int("Å" in kw)}
 
 
+def result_1(v):
+    return {"out": v + 3}
+
+
+def result_2(v):
+    return {"out": v + 4}
+
+
+def result_1_enabled(enabled, v):
+    return {"out": v + 3}
+
+
 class TestNames:
+    @pytest.mark.parametrize("engine", ENGINES)
+    @pytest.mark.parametrize(("fn", "expected"), [(result_1, 8), (result_2, 9)])
+    def test_a_function_can_be_named_like_what_holds_its_result(
+        self, engine, fn, expected, monkeypatch
+    ):
+        program = _always_called(fn, ins={"v": First})
+        assert _run_on(program, engine, (B,), monkeypatch) == (expected,)
+
+    @pytest.mark.parametrize("engine", ENGINES)
+    def test_an_enabled_function_can_be_named_so_too(self, engine, monkeypatch):
+        program = _always_called(result_1_enabled, ins={"v": First}, enabled=True)
+        assert _run_on(program, engine, (B,), monkeypatch) == (8,)
+
     @pytest.mark.parametrize(
         "name, length",
         [("class", 5), ("a b", 3), ("not", 3), ("1a", 2), ("a-b", 3), ("'", 1), ('"', 1)],

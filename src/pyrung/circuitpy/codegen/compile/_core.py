@@ -681,6 +681,11 @@ def _compile_function_kwargs(ins: dict[str, Any], ctx: CodegenContext) -> str:
     return "**{" + ", ".join(f"{name!r}: {expr}" for name, expr in compiled) + "}"
 
 
+def _call_result_var(ctx: CodegenContext) -> str:
+    """A local for what a call returned, in no namespace a function's symbol (``_fn_*``) is."""
+    return f"_{ctx.next_name('call_result')}"
+
+
 def _compile_function_arg(value: Any, ctx: CodegenContext) -> str:
     if isinstance(value, ImmediateRef):
         return _compile_function_arg(value.value, ctx)
@@ -697,7 +702,7 @@ def _compile_function_call_instruction(
 ) -> list[str]:
     fn_symbol = ctx.register_function_source(instr._fn)
     fn_name = getattr(instr._fn, "__name__", type(instr._fn).__name__)
-    result_var = f"_{ctx.next_name('fn_result')}"
+    result_var = _call_result_var(ctx)
     kwargs = _compile_function_kwargs(instr._ins, ctx)
     call_expr = f"{fn_symbol}({kwargs})" if kwargs else f"{fn_symbol}()"
     enabled_body = [f"{result_var} = {call_expr}"]
@@ -730,7 +735,7 @@ def _compile_enabled_function_call_instruction(
     indent: int,
 ) -> list[str]:
     fn_symbol = ctx.register_function_source(instr._fn)
-    result_var = f"_{ctx.next_name('fn_result')}"
+    result_var = _call_result_var(ctx)
     kwargs = _compile_function_kwargs(instr._ins, ctx)
     call_args = enabled_expr
     if kwargs:
