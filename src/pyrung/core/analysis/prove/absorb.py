@@ -539,21 +539,6 @@ def _owner_reset_depends_on_progress(
     return _condition_dependency_reaches_targets(graph, reset_refs, frozenset(targets))
 
 
-def _is_stable_dynamic_preset(preset_tag_name: str, graph: ProgramGraph) -> bool:
-    """True when a dynamic preset is frozen or owned by the ladder.
-
-    Redundant — the synthetic preset=1 path discards the concrete value,
-    so stability doesn't matter.  The real gate is exclusivity
-    (_has_non_timer_data_read).  Safe to relax or remove.
-    """
-    tag = graph.tags.get(preset_tag_name)
-    if tag is None:
-        return False
-    if tag.readonly:
-        return True
-    return bool(tag.final and preset_tag_name in graph.writers_of)
-
-
 def _atom_matches_acc_preset_boundary(
     atom: Atom,
     acc_name: str,

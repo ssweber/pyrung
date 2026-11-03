@@ -135,54 +135,6 @@ if TYPE_CHECKING:
 
     from . import _ExploreContext
 
-_OTE_INSTRUCTION = "OutInstruction"
-
-_STATEFUL_INSTRUCTIONS = frozenset(
-    {
-        "LatchInstruction",
-        "ResetInstruction",
-        "OnDelayInstruction",
-        "OffDelayInstruction",
-        "CountUpInstruction",
-        "CountDownInstruction",
-        "CopyInstruction",
-        "CalcInstruction",
-        "ShiftInstruction",
-        "EventDrumInstruction",
-        "TimeDrumInstruction",
-        "TimeEventDrumInstruction",
-        "FunctionCallInstruction",
-        "EnabledFunctionCallInstruction",
-        "BlockCopyInstruction",
-        "FillInstruction",
-        "PackBitsInstruction",
-        "PackWordsInstruction",
-        "PackTextInstruction",
-        "UnpackToBitsInstruction",
-        "UnpackToWordsInstruction",
-        "ModbusSendInstruction",
-        "ModbusReceiveInstruction",
-        "SearchInstruction",
-        "ForLoopInstruction",
-    }
-)
-
-_FUNCTION_INSTRUCTIONS = frozenset(
-    {
-        "FunctionCallInstruction",
-        "EnabledFunctionCallInstruction",
-    }
-)
-
-_TIMER_COUNTER_INSTRUCTIONS = frozenset(
-    {
-        "OnDelayInstruction",
-        "OffDelayInstruction",
-        "CountUpInstruction",
-        "CountDownInstruction",
-    }
-)
-
 
 def _classify_profile_enabled() -> bool:
     return bool(os.environ.get("PYRUNG_PROFILE_CLASSIFY"))

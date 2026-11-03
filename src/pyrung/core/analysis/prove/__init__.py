@@ -1126,12 +1126,6 @@ class _BFSProgress:
         )
 
 
-def _stderr_progress(
-    label: str = "",
-) -> Callable[[int, int, float], None]:
-    return _StderrProgressReporter().bfs_callback(label)
-
-
 def _build_reachable_context(
     program: Program,
     *,
@@ -1264,42 +1258,3 @@ def reachable_states(
         debug_result._debug_context = context
         return debug_result
     return result
-
-
-# ---------------------------------------------------------------------------
-# Semantic metadata for path constraint annotations
-# ---------------------------------------------------------------------------
-
-
-def _build_semantic_metadata(
-    context: Any,
-    program: Any,
-) -> tuple[dict[str, list[Any]], dict[str, str]]:
-    """Build atom_index and domain_sources for semantic path annotations.
-
-    Returns ``(atom_index, domain_sources)`` describing the comparison atoms
-    per tag and each tag's domain source — the semantic metadata used to
-    annotate reachability output with constraint information.
-    """
-    from .expr import _build_atom_index
-    from .passes import _infer_domain_source
-
-    atom_index = _build_atom_index(context.all_exprs)
-
-    from pyrung.core.analysis.graph import _enrich_atom_index
-    from pyrung.core.analysis.reverse_edges import build_reverse_edge_map
-
-    reverse_edges = build_reverse_edge_map(program)
-    if reverse_edges:
-        atom_index = _enrich_atom_index(atom_index, reverse_edges)
-
-    from pyrung.core.analysis.graph import _enrich_from_relational_calcs
-
-    atom_index = _enrich_from_relational_calcs(atom_index, program)
-
-    domain_sources: dict[str, str] = {}
-    all_dims = {**context.stateful_dims, **context.nondeterministic_dims}
-    for tag_name, domain in all_dims.items():
-        domain_sources[tag_name] = _infer_domain_source(tag_name, domain, context.graph)
-
-    return atom_index, domain_sources
