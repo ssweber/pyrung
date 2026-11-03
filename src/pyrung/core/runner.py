@@ -3169,7 +3169,7 @@ class PLC:
             base, base_sim_time = log.rtc_base_changes[scan_id]
             replay._set_rtc_internal(base, base_sim_time)
         if scan_id in log.patches_by_scan:
-            replay.patch(log.patches_by_scan[scan_id])
+            replay.patch_as_recorded(log.patches_by_scan[scan_id])
         if log.dts is not None:
             replay._dt_override_for_next_scan = float(log.dts[scan_id - log.base_scan])
         submits = log.io_submits_by_scan.get(scan_id, {})
@@ -3345,7 +3345,7 @@ class PLC:
                 base, base_sim_time = log.rtc_base_changes[scan_id]
                 replay._set_rtc_internal(base, base_sim_time)
             if scan_id in log.patches_by_scan:
-                replay.patch(log.patches_by_scan[scan_id])
+                replay.patch_as_recorded(log.patches_by_scan[scan_id])
 
             probe = (
                 strategy.capture_state(replay._materialize_replay_state())
@@ -3836,7 +3836,7 @@ class PLC:
                 base, base_sim_time = log.rtc_base_changes[scan_id]
                 replay._set_rtc_internal(base, base_sim_time)
             if scan_id in log.patches_by_scan:
-                replay.patch(log.patches_by_scan[scan_id])
+                replay.patch_as_recorded(log.patches_by_scan[scan_id])
             if scan_id >= start_scan_id:
                 replay.step()
                 results.append(replay.current_state)
@@ -3895,7 +3895,7 @@ class PLC:
                 base, base_sim_time = log.rtc_base_changes[scan_id]
                 replay._set_rtc_internal(base, base_sim_time)
             if scan_id in log.patches_by_scan:
-                replay.patch(log.patches_by_scan[scan_id])
+                replay.patch_as_recorded(log.patches_by_scan[scan_id])
             replay.step()
             for record in log.io_submits_by_scan.get(scan_id, {}).values():
                 for tag_name, value in record.tag_writes:
@@ -4305,6 +4305,11 @@ class PLC:
         """
         self._register_known_tags_from_mapping_keys(tags)
         self._input_overrides.patch(tags)
+
+    def patch_as_recorded(self, recorded: Mapping[str, bool | int | float | str]) -> None:
+        """Queue a patch a scan log recorded: see ``InputOverrideManager.restore_patch``."""
+        self._register_known_tags_from_mapping_keys(recorded)
+        self._input_overrides.restore_patch(recorded)
 
     def force(self, tag: str | Tag, value: bool | int | float | str) -> None:
         """Persistently override a tag value until explicitly removed.

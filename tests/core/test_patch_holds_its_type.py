@@ -15,7 +15,23 @@ from pyclickplc.banks import BANKS
 from pyclickplc.modbus import pack_value
 
 from pyrung.click import ClickBlocks, ClickDataProvider, TagMap
-from pyrung.core import PLC, Bool, Char, Dint, Int, Program, Real, Rung, Word, copy, out
+from pyrung.core import (
+    PLC,
+    Block,
+    Bool,
+    Char,
+    Dint,
+    Int,
+    Program,
+    Real,
+    Rung,
+    TagType,
+    Word,
+    blockcopy,
+    copy,
+    out,
+    search,
+)
 from pyrung.core.compiled_plc import CompiledPLC
 
 ds = ClickBlocks()[6]
@@ -149,6 +165,72 @@ def test_a_replay_holds_what_the_scan_held() -> None:
     again = plc.history.at(11)
     assert repr(again.tags["I"]) == "3"
     assert again.tags["Enable"] is True
+
+
+def _slots_only_a_range_uses() -> tuple[Program, Any]:
+    slots = Block("DS", TagType.INT, 1, 5)
+    run, hit, found = Bool("Run"), Bool("Hit"), Int("Found")
+    with Program(strict=False) as program:
+        with Rung(run):
+            search(slots.select(1, 3) >= 3.5, result=Int("Result"), found=hit)
+        with Rung(hit):
+            copy(1, found)
+    return program, slots
+
+
+def test_a_replay_gives_a_slot_named_by_string_what_the_scan_gave_it() -> None:
+    """A kernel knows every slot and the runner only those named: the log is the answer."""
+    program, _ = _slots_only_a_range_uses()
+    plc = PLC(program, dt=0.01)
+    plc.patch({"Run": True, "DS2": 3.9})
+    live = {}
+    for _ in range(6):
+        plc.step()
+        live[plc.state.scan_id] = plc.state
+    assert live[1].tags["DS2"] == 3.9
+    assert live[1].tags["Hit"] is True
+    assert live[6].tags["Found"] == 1
+    assert plc._compiled_replay_supported_kernel() is not None
+    for scan in (1, 3, 6):
+        plc._reset_cache(plc.state)
+        again = plc.history.at(scan)
+        for name in ("DS2", "Hit", "Found"):
+            assert repr(again.tags[name]) == repr(live[scan].tags[name]), (scan, name)
+    plc._reset_cache(plc.state)
+    forked = plc.fork_from(3)
+    assert forked.state.tags["DS2"] == 3.9
+    forked.step()
+    assert forked.state.tags["Hit"] is True
+
+
+def test_a_replay_takes_text_in_a_slot_as_the_scan_did() -> None:
+    slots = Block("DS", TagType.INT, 1, 5)
+    other = Block("DD", TagType.INT, 1, 5)
+    with Program(strict=False) as program:
+        with Rung(Bool("Run")):
+            blockcopy(slots.select(1, 3), other.select(1, 3))
+    plc = PLC(program, dt=0.01)
+    plc.patch({"DS2": "txt"})
+    plc.run(5)
+    assert plc.state.tags["DS2"] == "txt"
+    plc._reset_cache(plc.state)
+    assert plc.history.at(3).tags["DS2"] == "txt"
+    plc._reset_cache(plc.state)
+    assert plc.fork_from(3).state.tags["DS2"] == "txt"
+    plc._reset_cache(plc.state)
+    assert plc.replay_to(3).state.tags["DS2"] == "txt"
+
+
+def test_a_replay_past_a_name_the_runner_learned_later_holds_what_was_given() -> None:
+    """A name no one knew when patched, known by the time of the seek."""
+    plc = PLC(_program(), dt=0.01)
+    plc.patch({"Spare": "text"})
+    plc.run(4)
+    assert plc.state.tags["Spare"] == "text"
+    plc.force(Int("Spare"), 7)
+    plc.unforce("Spare")
+    plc._reset_cache(plc.state)
+    assert plc.history.at(2).tags["Spare"] == "text"
 
 
 def test_a_kernel_run_starts_from_what_the_tag_holds() -> None:

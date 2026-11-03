@@ -109,6 +109,15 @@ class InputOverrideManager:
     ) -> None:
         self._pending_patches.update(self._normalize_tag_updates(tags, method="patch"))
 
+    def restore_patch(self, recorded: Mapping[str, bool | int | float | str]) -> None:
+        """Queue a patch from a scan log: what it recorded is what that scan was given.
+
+        Judged when it was made, under what the runner knew by that name then.  A replay
+        may know more (a kernel knows every slot of a range), so judging it again would
+        turn a replayed scan into a different scan.
+        """
+        self._pending_patches.update(recorded)
+
     def add_force(self, tag: str | Tag, value: bool | int | float | str) -> None:
         name = self._normalize_tag_name(tag, method="add_force")
         if self._is_read_only(name):

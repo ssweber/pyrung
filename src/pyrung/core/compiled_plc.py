@@ -376,6 +376,12 @@ class CompiledPLC:
             self._register_override_metadata(key)
         self._input_overrides.patch(tags)
 
+    def patch_as_recorded(self, recorded: Mapping[str, bool | int | float | str]) -> None:
+        """Queue a patch a scan log recorded: see ``InputOverrideManager.restore_patch``."""
+        for key in recorded:
+            self._register_override_metadata(key)
+        self._input_overrides.restore_patch(recorded)
+
     def force(self, tag: str | Tag, value: bool | int | float | str) -> None:
         self._register_override_metadata(tag)
         self._input_overrides.add_force(tag, value)
