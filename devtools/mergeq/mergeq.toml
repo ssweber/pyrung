@@ -43,6 +43,7 @@ heavy_extra = [
     '\bpytest\b[^;&|]*--conformance-target',
     # the same run without a marker: test_modbus.py, or the directory, which collects it
     '\bpytest\b(?![^;&|]*\s-m\s)[^;&|]*\btests[/\\]conformance(?:[/\\](?:test_modbus\.py\S*)?)?(?=[\s;&|]|$)',
+    '\bfold_new_tests\.py\b',                                # the fold-new stage's script: unbounded pytest inside
 ]
 # Main-session commands that match a heavy pattern but do their work off this machine, so they
 # take no lock. Subagents stay refused. A real CLICK runs the ladder; pytest only polls it.
@@ -65,11 +66,11 @@ reviewer_write_roots = ["$TEMP", "$TMP", "/tmp"]
 # applies job_memory_mb). The bare form has no memory limit and is refused.
 reviewer_script = '^(uv\s+run\s+(--\S+\s+)*)?python[0-9.]*(\s+-[IuBESsOq]+)*\s+(?P<script>\S+\.py)\b'
 reviewer_max_timeout = 1800
-# Allowed only inside that bounded `mergeq run`. `node --test` takes test-runner options and
-# file paths, nothing that evals code.
-reviewer_bounded = [
-    '^node\s+--test((\s+--test-[a-z-]+(=\S+)?)|(\s+[^\s-]\S*))*$',
-]
+# `node --test` (a fixed option list, see hook.py) is allowed only inside that bounded run too.
+# ruff check/format --check/ty check and `devtools/lint.py --check` are judged on tokens in
+# hook.py, not here. Environment assignments in front of a command are refused except a few
+# output settings (hook.py ENV_OK). sed, awk and a few flags (git --output, rg --pre,
+# sort -o ...) that run code or write files are also checked on tokens.
 # The read-only agent (agent_type == readonly_agent), for investigations that must not run
 # tests: the reviewer's rules and allowlist, minus scripts and mergeq run, and minus these.
 readonly_agent = "bob-investigator"
@@ -91,12 +92,6 @@ reviewer_allow = [
     '^(timeout\s+\S+\s+)?(uv\s+run\s+(--\S+\s+)*)?(python[0-9.]*\s+(-I\s+)?-m\s+)?pytest\b',
     '^python[0-9.]*\s+-I\s+\S*mergeq\.py\s+(status|ps|lock|worktree\s+list)\b',
     '^(timeout\s+\S+\s+)?(uv\s+run\s+(--\S+\s+)*)?python[0-9.]*\s+--version\b',
-    # ruff and ty, read-only forms: no fixing, no in-place format, no --config (it can set
-    # `fix = true`), no output file. `lint.py --check` is the repo's own read-only lint.
-    '^(uv\s+run\s+(--\S+\s+)*)?ruff\s+check\b(?!.*(\s--(fix|unsafe-fixes|fix-only|add-noqa|watch|config|output-file)\b|\s-w\b))',
-    '^(uv\s+run\s+(--\S+\s+)*)?ruff\s+format\b(?=.*\s--(check|diff)\b)(?!.*\s--config\b)',
-    '^(uv\s+run\s+(--\S+\s+)*)?ty\s+check\b',
-    '^(uv\s+run\s+)?(python[0-9.]*\s+)?devtools/lint\.py\s+--check$',
 ]
 
 [ps]

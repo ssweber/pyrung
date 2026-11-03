@@ -52,9 +52,13 @@ Files: `mergeq.py` (the tool), `hook.py` (PreToolUse guard), `test_hook.py`,
   - for the reviewer agent (`agent_type == reviewer_agent`): shell segments must match
     `reviewer_allow`, redirects only to /dev/null or `reviewer_write_roots`, no heredocs,
     `$(...)` or PowerShell, and Write only under the write roots. Scratch scripts
-    (`reviewer_script`) and `reviewer_bounded` commands (`node --test`) run only as
-    `mergeq.py run --timeout N -- <command>` (N at most `reviewer_max_timeout`; no `--heavy`),
-    so the Job Object's memory cap applies; the bare form is refused. ruff and ty are allowed in
+    (`reviewer_script`) and `node --test` (a fixed option list) run only as
+    `mergeq.py run --timeout N [--name X] [--cwd D] -- <command>` (N at most
+    `reviewer_max_timeout`; no `--heavy`; the mergeq.py must be the repo's, not a file under the
+    scratch roots, and absolute after a `cd`), so the Job Object's memory cap applies; the bare
+    form is refused. Commands are judged on tokens: an unquoted newline separates commands,
+    `#` is not a comment, and assignments in front of a command (except output settings),
+    brace expansion, `$VAR` (other than `$TEMP`/`$TMP`) and `<(`/`>(` are refused; ruff and ty are allowed in
     read-only forms only (no `--fix`, no in-place format);
   - for the read-only agent (`agent_type == readonly_agent`, `bob-investigator`): the
     reviewer's rules minus scripts, `mergeq run` and anything in `readonly_refuse` (pytest,

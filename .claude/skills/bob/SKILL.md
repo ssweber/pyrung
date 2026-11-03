@@ -107,7 +107,8 @@ Point the user's memory at this skill, not at the details.
   mergeq.toml: base branch, worktree root, stage commands + timeouts (`light = true` for stages
   agents may run, e.g. lint), presets, `heavy_extra`, `needs_timeout`.
 - Add the PreToolUse hook to `.claude/settings.json` (see this repo's) and copy
-  `.claude/agents/bob-builder.md`, `bob-reviewer.md`, and this skill; write a new profile.md.
+  `.claude/agents/bob-builder.md`, `bob-reviewer.md`, `bob-investigator.md`, and this skill
+  (also `devtools/fold_new_tests.py` and `make test-fold-new` if you keep the `fold-new` stage); write a new profile.md.
 - The agent files set `experimental.cacheTtl: 1h` (Claude Code 2.1.248+): a builder or
   reviewer resumed after a 20-40 min gate stage would otherwise re-read its whole context
   uncached (default TTL 5m). Older versions: `"subagentPromptCacheTtl": "1h"` in

@@ -101,6 +101,9 @@ def test_fold_new_lists_only_added_test_files(tmp_path: Path, monkeypatch) -> No
 
     git("init", "-b", "dev")
     touch("tests/test_old.py")
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]" + chr(10) + 'python_files = ["*.py"]' + chr(10)
+    )
     git("add", ".")
     git("commit", "-m", "base")
     git("switch", "-c", "feature")
@@ -119,8 +122,11 @@ def test_fold_new_lists_only_added_test_files(tmp_path: Path, monkeypatch) -> No
     touch("tests/test_untracked.py")
     monkeypatch.setattr(fold_new, "ROOT", tmp_path)
     assert fold_new.new_test_files("dev") == [
+        "tests/conformance/test_cf.py",
         "tests/core/test_new.py",
+        "tests/helper.py",
         "tests/test_untracked.py",
+        "tests/tumbler/test_tb.py",
     ]
     git("switch", "dev")  # a branch that adds nothing
     assert fold_new.new_test_files("dev") == ["tests/test_untracked.py"]

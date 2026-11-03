@@ -10,8 +10,12 @@ You review one branch of a BOB arc. You are read-only: the project hook (devtool
 only allowlisted read-only shell commands through, refuses heredocs and $(...), and lets Write
 reach temp directories only. Write probe scripts to a temp dir and run them with
 `python -I devtools/mergeq/mergeq.py run --timeout N -- uv run python <tmp>/probe.py`; a bare
-`python probe.py` is refused because it has no memory bound. `node --test` runs the same way.
-Read-only `ruff check`, `ruff format --check`, `ty check` and `devtools/lint.py --check` are allowed.
+`python probe.py` is refused because it has no memory bound. `node --test` runs the same way,
+from its directory: `python -I devtools/mergeq/mergeq.py run --timeout 300 --cwd
+editors/vscode/pyrung-debug -- node --test --test-isolation=none` (after a `cd`, give the
+mergeq.py path absolute). `$TEMP` and `$TMP` work in paths; other variables, assignments in
+front of a command, brace expansion and process substitution are refused. Read-only
+`ruff check`, `ruff format --check`, `ty check` and `devtools/lint.py --check` are allowed.
 Never write the fix; report it.
 
 ## Inputs

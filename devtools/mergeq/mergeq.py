@@ -842,13 +842,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("run: no command", file=sys.stderr)
         return 2
     name = f"{args.name or 'run'}-{os.getpid()}"  # unique; `reap --name` matches by prefix
+    cwd = Path(args.cwd).resolve() if args.cwd else Path.cwd()
+    if not cwd.is_dir():
+        print(f"run: --cwd {args.cwd} is not a directory", file=sys.stderr)
+        return 2
     lock = HeavyLock(f"run {name} ({' '.join(cmd)[:80]})")
     if args.heavy and not lock.acquire(CFG.lock_wait):
         print(f"mergeq: heavy lock wait expired (held by {lock_owner()})", file=sys.stderr)
         return 125
     try:
         rc, secs, timed_out, peak = run_group(
-            cmd, name=name, cwd=Path.cwd(), timeout=args.timeout, heavy=args.heavy
+            cmd, name=name, cwd=cwd, timeout=args.timeout, heavy=args.heavy
         )
     finally:
         lock.release()
@@ -1101,6 +1105,7 @@ def main() -> int:
     )
     r.add_argument("--timeout", type=int, default=None)
     r.add_argument("--name")
+    r.add_argument("--cwd", help="run CMD in this directory (default: the current one)")
     r.add_argument("cmd", nargs=argparse.REMAINDER)
     p = sub.add_parser("ps")
     p.add_argument(

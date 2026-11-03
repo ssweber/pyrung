@@ -169,6 +169,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "against a stepped twin, scan by scan (tests/fold_check.py)."
         ),
     )
+    group.addoption(
+        "--fold-check-allow-vacuous",
+        action="store_true",
+        default=False,
+        help=(
+            "With --fold-check, judge only mismatches: a session whose long runs all decline "
+            "is reported, not failed. For a few files, where the session-wide share of runs "
+            "in the loop says little (the mergeq fold-new stage)."
+        ),
+    )
     group = parser.getgroup("pyrung-conformance", "pyrung conformance suite")
     group.addoption(
         "--conformance-plc",
@@ -651,7 +661,11 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         return
     if exitstatus != 0:
         return
-    vacuous = session.config.getoption("fold_check", default=False) and fold_check.vacuous()
+    vacuous = (
+        session.config.getoption("fold_check", default=False)
+        and not session.config.getoption("fold_check_allow_vacuous", default=False)
+        and fold_check.vacuous()
+    )
     if fold_check.undeclared() or vacuous:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
 

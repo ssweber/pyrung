@@ -147,7 +147,7 @@ CASES = [
     ("Bash", f"{MQ} run --timeout 300 -- node --test --test-isolation=none", REVIEWER, ALLOW),
     (
         "Bash",
-        f"cd editors/vscode/pyrung-debug && {MQ} run --timeout 300 -- node --test",
+        f"{MQ} run --timeout 300 --cwd editors/vscode/pyrung-debug -- node --test",
         REVIEWER,
         ALLOW,
     ),
@@ -161,7 +161,7 @@ CASES = [
     ("Bash", f"{MQ} run --timeout 999999 -- python {TEMP}/probe.py", REVIEWER, REFUSE),
     ("Bash", f"{MQ} run --timeout 0 -- python {TEMP}/probe.py", REVIEWER, REFUSE),
     ("Bash", f"{MQ} run --heavy --timeout 60 -- python {TEMP}/probe.py", REVIEWER, REFUSE),
-    ("Bash", f"{MQ} run --timeout 60 --cwd src -- python {TEMP}/probe.py", REVIEWER, REFUSE),
+    ("Bash", f"{MQ} run --timeout 60 --env X=1 -- python {TEMP}/probe.py", REVIEWER, REFUSE),
     ("Bash", f"{MQ} run --timeout 60", REVIEWER, REFUSE),
     ("Bash", f"{MQ} run --timeout 60 --", REVIEWER, REFUSE),
     ("Bash", f"{MQ} run --timeout 60 -- python src/x.py", REVIEWER, REFUSE),
