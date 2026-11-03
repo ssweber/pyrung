@@ -617,7 +617,12 @@ def _hands_over_nothing_it_could_keep(value: Any) -> bool:
     ) or _is_immutable_constant(value)
 
 
-def _program_calls_what_a_kernel_may_not(program: Any) -> bool:
+def calls_that_depend_on_more_than_their_inputs(program: Any) -> list[tuple[Any, str]]:
+    """Each ``run_function`` whose answer may not follow from its inputs, and why.
+
+    The one gate on calling a function anywhere but its own scan: a kernel's undo calls it
+    again, and the verifier calls it to explore, for inputs no scan may ever give it.
+    """
     from pyrung.core.instruction.control import (
         EnabledFunctionCallInstruction,
         FunctionCallInstruction,
@@ -625,15 +630,29 @@ def _program_calls_what_a_kernel_may_not(program: Any) -> bool:
     from pyrung.core.program import Program
 
     if not isinstance(program, Program):
-        return False
-    return any(
-        isinstance(instruction, FunctionCallInstruction | EnabledFunctionCallInstruction)
-        and not (
-            _may_be_called_again(instruction._fn)
-            and all(_hands_over_nothing_it_could_keep(v) for v in instruction._ins.values())
-        )
-        for instruction in walk_instructions(program)
-    )
+        return []
+    found: list[tuple[Any, str]] = []
+    for instruction in walk_instructions(program):
+        if not isinstance(instruction, FunctionCallInstruction | EnabledFunctionCallInstruction):
+            continue
+        if not _may_be_called_again(instruction._fn):
+            found.append(
+                (
+                    instruction,
+                    "it is not a plain def of its arguments: it is a callable object, or uses "
+                    "a closure, a global, a helper, a mutable default or an import",
+                )
+            )
+            continue
+        for key, value in instruction._ins.items():
+            if not _hands_over_nothing_it_could_keep(value):
+                found.append((instruction, f"ins[{key!r}] is an object it could change or keep"))
+                break
+    return found
+
+
+def _program_calls_what_a_kernel_may_not(program: Any) -> bool:
+    return bool(calls_that_depend_on_more_than_their_inputs(program))
 
 
 class _SlotsRungsReach:

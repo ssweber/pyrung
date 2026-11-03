@@ -223,6 +223,39 @@ def _validate_split_at(
     return result
 
 
+def _functions_the_search_cannot_call(program: Program) -> Intractable | None:
+    """An answer for a program whose function calls say nothing the search can use.
+
+    The search calls a function to learn what it writes, for the inputs it is exploring and
+    as many times as it likes.  A function that keeps something from call to call, or reads
+    something past its arguments, answers those calls with what stepping might never see, so
+    a verdict built on them would be a guess.  It is left uncalled, not explored.
+    """
+    from pyrung.core.runner import calls_that_depend_on_more_than_their_inputs
+    from pyrung.core.tag import Tag
+
+    calls = calls_that_depend_on_more_than_their_inputs(program)
+    if not calls:
+        return None
+    names = sorted(
+        {getattr(call._fn, "__qualname__", type(call._fn).__name__) for call, _ in calls}
+    )
+    return Intractable(
+        reason=(f"a function whose answer may not follow from its inputs: {', '.join(names)}"),
+        dimensions=len(calls),
+        estimated_space=0,
+        tags=sorted(
+            {out.name for call, _ in calls for out in call._outs.values() if isinstance(out, Tag)}
+        ),
+        hints=[
+            f"  {getattr(call._fn, '__qualname__', type(call._fn).__name__)}: {why}; "
+            "make it a plain def of what ins= hands it, or test it with run_for()"
+            for call, why in calls
+        ],
+        kind="function",
+    )
+
+
 def _build_explore_context(
     program: Program,
     *,
@@ -248,6 +281,10 @@ def _build_explore_context(
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for always()/reachable_states()."""
     split_at_tags = _validate_split_at(program, split_at) if split_at else None
+    if not _opt_config.domains_only:
+        refused = _functions_the_search_cannot_call(program)
+        if refused is not None:
+            return refused
     ctx = _PassContext(
         program=program,
         scope=scope,
