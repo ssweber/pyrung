@@ -42,7 +42,11 @@ MERGEQ = HERE / "mergeq.py"
 EDIT_TOOLS = ("Write", "Edit", "NotebookEdit")
 SHELL_TOOLS = ("Bash", "PowerShell")
 TIMEOUT_PREFIX = re.compile(r"(^|[;&|(]\s*)timeout\s+(-\S+\s+)*(\d+)([smhd]?)\s")
-MERGEQ_RUN = re.compile(r"mergeq\.py[\"']?\s+run\b")
+# Where a test command starts a segment: after assignments, `timeout N`, `uv run`, `python -m`.
+COMMAND_POSITION = (
+    r"^\s*\(*\s*(?:\w+=\S*\s+)*(?:timeout\s+(?:-\S+\s+)*\S+\s+)?(?:uv\s+run\s+(?:--?\S+\s+)*)?"
+    r"(?:python[0-9.]*\s+(?:-\S+\s+)*-m\s+)?"
+)
 MERGEQ_HEAVY_OK = re.compile(r"mergeq\.py[\"']?\s+(run\s+(\S+\s+)*--heavy\b|next\b)")
 SEPARATORS = {";", "&&", "||", "|", "&", "(", ")", ";;", "|&"}
 REDIRECTS = {">", ">>", ">&", "&>", ">|", "&>>"}
@@ -59,7 +63,8 @@ class Refuse(Exception):
 def _code_only(cmd: str) -> str:
     """The command with heredoc bodies and quoted strings blanked: what the shell will run,
     not the text it passes around (commit messages, docs written through a heredoc)."""
-    return QUOTED.sub("''", HEREDOC.sub("<<''", cmd))
+    blanked = QUOTED.sub("''", HEREDOC.sub("<<''", cmd))
+    return re.sub(r"(?m)(^|\s)#.*$", "", blanked)  # a comment is not a command
 
 
 def _config() -> dict:
@@ -103,20 +108,28 @@ def _under(path: str, roots: list[Path]) -> bool:
 ENV_OK = ("PYTHONUTF8", "PYTHONIOENCODING", "NO_COLOR", "FORCE_COLOR", "TERM", "LC_ALL", "LANG")
 PYTHON = re.compile(r"python[0-9.]*")
 # Flags that make an otherwise read-only command run code or write a file, by command.
-FORBIDDEN_FLAGS = {
-    "git": re.compile(r"--output.*|--open-files-in-pager.*|-O.*|--ext-diff|--exec-path.*"),
-    "rg": re.compile(r"--pre(=.*)?|--hostname-bin.*|-z|--search-zip"),
-    "sort": re.compile(r"--compress-program.*|-o.*|--output.*"),
-    "tree": re.compile(r"-o.*"),
-    "file": re.compile(r"-C|--compile"),
-    "date": re.compile(r"-s|--set.*"),
+FORBIDDEN_LONG = {
+    "git": ("--output", "--open-files-in-pager", "--ext-diff", "--exec-path"),
+    "rg": ("--pre", "--hostname-bin", "--search-zip"),
+    "sort": ("--compress-program", "--output"),
+    "file": ("--compile",),
+    "date": ("--set",),
 }
-SED_SCRIPT = re.compile(r"(\d+|\$|/[^/]*/)(,(\d+|\$|/[^/]*/))?p")
-AWK_DENY = re.compile(r"system|getline|[|>@]|ENVIRON|close\(|fflush")
+FORBIDDEN_SHORT = {  # letters that, anywhere in a cluster like -nO or -uo, run code or write
+    "git": "O",
+    "rg": "z",
+    "sort": "o",
+    "tree": "o",
+    "file": "C",
+    "date": "s",
+}
+SED_ADDR = r"(\d+|\$|/[^/]*/)"
+SED_SCRIPT = re.compile(rf"{SED_ADDR}(,{SED_ADDR})?p(;{SED_ADDR}(,{SED_ADDR})?p)*")
+AWK_DENY = re.compile(r"system|getline|[|@]|ENVIRON|close\(|fflush|\bprintf?\b[^;}]*>")
 RUFF_FLAGS = (
     r"--(select|ignore|extend-select|extend-ignore|per-file-ignores|output-format|target-version"
     r"|line-length|exclude|extend-exclude|preview|no-preview|no-cache|isolated|no-fix|statistics"
-    r"|show-files|show-settings|quiet|verbose|exit-zero|exit-non-zero-on-fix|diff|force-exclude"
+    r"|show-files|show-settings|show-fixes|quiet|verbose|exit-zero|exit-non-zero-on-fix|diff|force-exclude"
     r"|respect-gitignore|no-respect-gitignore|stdin-filename|unfixable)(=\S*)?|-q|-v"
 )
 RUFF_FORMAT_FLAGS = (
@@ -136,19 +149,51 @@ NODE_FLAGS = (
 )
 
 
-def _scan_newlines(cmd: str) -> str:
-    """An unquoted newline ends a command like `;` does (shlex would read it as a space)."""
-    out, quote = [], ""
-    for ch in cmd:
-        if quote:
-            if ch == quote:
-                quote = ""
+def _scan(cmd: str) -> str:
+    """Rewrite the command the way the shell reads it, for the parts shlex gets wrong: an
+    unquoted newline ends a command like `;`, a word-initial `#` starts a comment, a backslash
+    before a newline is whitespace, and an unquoted backslash is a path separator. A backslash
+    before a quote outside quotes is refused: shlex and bash disagree about what it opens."""
+    out: list[str] = []
+    quote = ""
+    i, n = 0, len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if quote == "'":
+            quote = "" if ch == "'" else quote
+        elif quote == '"':
+            if ch == "\\" and i + 1 < n:
+                out.append(cmd[i : i + 2])
+                i += 2
+                continue
+            quote = "" if ch == '"' else quote
+        elif ch == "\\":
+            rest = cmd[i + 1 : i + 3]
+            if rest[:1] in ("'", '"'):
+                raise Refuse("a backslash before a quote is not allowed for this agent")
+            if rest[:1] == "\n" or rest == "\r\n":
+                out.append(" ")
+                i += 2 if rest[:1] == "\n" else 3
+                continue
+            out.append("/")
+            i += 1
+            continue
         elif ch in "'\"":
             quote = ch
+        elif ch == "#" and (not out or out[-1] in " \t\n;&|()<>"):
+            while i < n and cmd[i] != "\n":
+                i += 1
+            continue
         elif ch == "\n":
             out.append(" ; ")
+            i += 1
+            continue
+        elif ch == "\r":
+            out.append(" ")
+            i += 1
             continue
         out.append(ch)
+        i += 1
     return "".join(out)
 
 
@@ -164,11 +209,12 @@ def _prepare(cmd: str) -> str:
         raise Refuse(
             "command substitution is not allowed for this agent: run the inner command on its own"
         )
-    if re.search(r"[<>]\(", cmd):
+    cmd = _scan(cmd)
+    bare = QUOTED.sub("''", cmd)
+    if re.search(r"[<>]\(", bare):
         raise Refuse("process substitution is not allowed for this agent")
-    if re.search(r"\$['\"]", QUOTED.sub("''", cmd)):
+    if re.search(r"\$['\"]", bare):
         raise Refuse("$'...' quoting is not allowed for this agent")
-    cmd = cmd.replace("\\", "/")
 
     def temp(m: re.Match[str]) -> str:
         value = os.environ.get(m.group(1) or m.group(2), "")
@@ -179,21 +225,23 @@ def _prepare(cmd: str) -> str:
     cmd = re.sub(r"\$\{(TEMP|TMP)\}|\$(TEMP|TMP)\b", temp, cmd)
     if re.search(r"\$[{\w]", re.sub(r"'[^']*'", "''", cmd)):
         raise Refuse("variable expansion is not allowed for this agent (only $TEMP and $TMP)")
-    if re.search(r"[{}]", QUOTED.sub("''", cmd)):
+    if re.search(r"\{[^{}\s]*(,|\.\.)[^{}\s]*\}", QUOTED.sub("''", cmd)):
         raise Refuse("brace expansion is not allowed for this agent")
-    return _scan_newlines(cmd)
+    return cmd
 
 
 def _segments(cmd: str) -> list[list[str]]:
     lexer = shlex.shlex(_prepare(cmd), posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
-    lexer.commenters = ""  # `#` is an ordinary character in the middle of a word
+    lexer.commenters = ""  # _scan already dropped the comments
     try:
         tokens = list(lexer)
     except ValueError as exc:
         raise Refuse(f"could not parse the command ({exc})") from None
     segs, cur = [], []
     for tok in tokens:
+        if re.fullmatch(r"[();<>|&]+", tok) and tok not in SEPARATORS | REDIRECTS | {"<"}:
+            raise Refuse(f"{tok!r} is not allowed for this agent (subshell or odd redirect)")
         if tok in SEPARATORS:
             if cur:
                 segs.append(cur)
@@ -262,15 +310,27 @@ class _Ctx:
         return any(self.resolve(path) == r or r in self.resolve(path).parents for r in self.roots)
 
 
-def _mergeq_path_ok(token: str, ctx: _Ctx) -> bool:
-    """Is this the repo's own devtools/mergeq/mergeq.py (not a copy the reviewer wrote)?"""
-    if "$" in token or "~" in token:
+def _is_abs(token: str) -> bool:
+    """Absolute in Git Bash terms too: /c/... and /tmp/... are, on Windows, not for pathlib."""
+    return Path(token).is_absolute() or token.startswith("/")
+
+
+def _odd_path(token: str) -> bool:
+    """A path spelling the check cannot resolve: ~, a leading -, $VAR, or //?/ and //./ forms."""
+    return bool(token) and (token[0] in "~-" or token.startswith("//") or "$" in token)
+
+
+def _repo_path_ok(token: str, tail: tuple[str, ...], ctx: _Ctx) -> bool:
+    """Is this the repo's own devtools/... file (not a copy the reviewer wrote)? After a `cd`
+    only an absolute path is trusted: a relative one points somewhere the check did not see."""
+    if _odd_path(token) or (ctx.cd_seen and not _is_abs(token)):
         return False
-    if not Path(token).is_absolute() and not re.match(r"^/[a-zA-Z]/", token) and ctx.cd_seen:
-        return False  # a relative path after `cd` points somewhere the check did not see
     path = ctx.resolve(token)
-    tail = path.parts[-3:]
-    return tail == ("devtools", "mergeq", "mergeq.py") and not ctx.under_roots(token)
+    return path.parts[-len(tail) :] == tail and not ctx.under_roots(token)
+
+
+def _mergeq_path_ok(token: str, ctx: _Ctx) -> bool:
+    return _repo_path_ok(token, ("devtools", "mergeq", "mergeq.py"), ctx)
 
 
 def _bounded_inner(words: list[str], ctx: _Ctx) -> list[str] | None:
@@ -298,8 +358,13 @@ def _bounded_inner(words: list[str], ctx: _Ctx) -> list[str] | None:
             timeout = int(value)
         elif words[i] == "--name" and re.fullmatch(r"[\w.@-]+", value):
             pass
-        elif words[i] == "--cwd" and value and not value.startswith("-"):
-            pass
+        elif (
+            words[i] == "--cwd"
+            and value
+            and not value.startswith("-")
+            and "conformance" not in value
+        ):
+            pass  # not the conformance suite: it needs the machine-wide lock
         else:
             raise Refuse(
                 "mergeq run for this agent takes only --timeout N, --name X and --cwd D, "
@@ -334,6 +399,8 @@ def _only_flags(rest: list[str], flag_pat: str, what: str) -> None:
             raise Refuse(
                 f"{tok!r} is not an allowed {what} option for this agent (read-only forms)"
             )
+        if tok.startswith("@"):
+            raise Refuse(f"{tok!r}: an argument file can hold any option; spell them out")
 
 
 def _judge(words: list[str], ctx: _Ctx, bounded: bool) -> None:
@@ -352,12 +419,21 @@ def _judge(words: list[str], ctx: _Ctx, bounded: bool) -> None:
         "--timeout N sets the time limit and the Job Object caps memory"
     )
     # repo lint, read-only
-    if core in (["devtools/lint.py", "--check"],) or (
-        len(core) == 3 and PYTHON.fullmatch(core[0]) and core[1:] == ["devtools/lint.py", "--check"]
-    ):
+    lint = core[1:] if core and PYTHON.fullmatch(core[0]) else core
+    if len(lint) == 2 and lint[0].endswith("lint.py") and lint[1] == "--check":
         if ctx.readonly:
             raise Refuse("the read-only agent runs no code; devtools/lint.py is refused")
+        if not _repo_path_ok(lint[0], ("devtools", "lint.py"), ctx):
+            raise Refuse("lint.py must be this repo's devtools/lint.py (absolute after a `cd`)")
         return
+    if (
+        len(core) > 2
+        and PYTHON.fullmatch(core[0])
+        and core[1:2] == ["-I"]
+        and core[2].endswith("mergeq.py")
+        and not _mergeq_path_ok(core[2], ctx)
+    ):
+        raise Refuse("mergeq.py must be this repo's devtools/mergeq/mergeq.py (absolute after cd)")
     # scratch scripts
     script = _script_of(ctx, text)
     if script:
@@ -365,7 +441,9 @@ def _judge(words: list[str], ctx: _Ctx, bounded: bool) -> None:
             raise Refuse("the read-only agent runs no scripts")
         if not bounded:
             raise Refuse(unbounded)
-        if not (ctx.under_roots(script) and (not ctx.cd_seen or Path(script).is_absolute())):
+        if _odd_path(script) or not (
+            ctx.under_roots(script) and (not ctx.cd_seen or _is_abs(script))
+        ):
             raise Refuse(f"probe scripts must live under the scratch roots, not {script!r}")
         return
     if head == "node" and core[1:2] == ["--test"]:
@@ -392,10 +470,27 @@ def _judge(words: list[str], ctx: _Ctx, bounded: bool) -> None:
     if head in ("ruff", "ty"):
         raise Refuse(f"only `{head} check{' and ruff format --check' if head == 'ruff' else ''}`")
     # read-only tools: no flag that runs a program or writes a file
-    if words[0] in FORBIDDEN_FLAGS:
+    cmd0 = words[0]
+    for tok in words[1:]:
+        if tok.startswith("--"):
+            name = tok.split("=", 1)[0]
+            if len(name) > 2 and any(f.startswith(name) for f in FORBIDDEN_LONG.get(cmd0, ())):
+                raise Refuse(f"{cmd0} {tok} runs code or writes a file; refused")
+        elif tok.startswith("-") and FORBIDDEN_SHORT.get(cmd0, "\0") in tok[1:]:
+            raise Refuse(f"{cmd0} {tok} runs code or writes a file; refused")
+    if cmd0 == "git" and words[1:2] == ["-C"] and len(words) > 2 and ctx.under_roots(words[2]):
+        raise Refuse("git -C into the scratch roots reads a repo whose config can run programs")
+    if cmd0 == "uniq":  # a second positional is the output file
+        skip, found = False, 0
         for tok in words[1:]:
-            if FORBIDDEN_FLAGS[words[0]].fullmatch(tok):
-                raise Refuse(f"{words[0]} {tok} runs code or writes a file; refused")
+            if skip:
+                skip = False
+            elif tok in ("-f", "-s", "-w"):
+                skip = True
+            elif not tok.startswith("-"):
+                found += 1
+        if found > 1:
+            raise Refuse("uniq with an output file writes it; refused")
     if words[0] == "sed":
         i = 1
         while i < len(words) and re.fullmatch(r"-[nEr]+", words[i]):
@@ -427,8 +522,8 @@ def _check_reviewer_shell(
         if readonly and any(p.search(text) for p in ctx.refuse):
             raise Refuse("the read-only agent runs no tests or code")
         if words[0] == "cd":
-            if len(words) > 1 and ctx.under_roots(words[1]):
-                raise Refuse("cd into the scratch roots is not allowed for this agent")
+            if len(words) > 1 and (_odd_path(words[1]) or ctx.under_roots(words[1])):
+                raise Refuse("cd into the scratch roots, or by ~ or - or //, is not allowed")
             ctx.cd_seen = True
             continue
         inner = _bounded_inner(words, ctx)
@@ -502,9 +597,9 @@ def check(event: dict, cfg: dict) -> dict | None:
             )
     # A segment that runs a test command and is not itself a `mergeq run` needs the wrap, even
     # when another segment of the command calls mergeq.
-    timed = hook.get("needs_timeout", [])
+    timed = [re.compile(COMMAND_POSITION + f"(?:{p})") for p in hook.get("needs_timeout", [])]
     if any(
-        any(re.search(p, seg) for p in timed) and not MERGEQ_RUN.search(seg)
+        any(p.search(seg) for p in timed) and "mergeq.py" not in seg
         for seg in re.split(r"[;&|\n]+", code)
     ):
         if tool == "PowerShell":

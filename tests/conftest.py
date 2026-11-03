@@ -679,4 +679,7 @@ def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: pyte
             terminalreporter.write_line(line)
         problem = fold_check.vacuous()
         if problem is not None:
-            terminalreporter.write_line(f"fold-check VACUOUS: {problem}", red=True)
+            if config.getoption("fold_check_allow_vacuous", default=False):
+                terminalreporter.write_line(f"fold-check (vacuity not judged): {problem}")
+            else:
+                terminalreporter.write_line(f"fold-check VACUOUS: {problem}", red=True)

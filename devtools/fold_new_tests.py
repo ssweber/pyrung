@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # What `make test-fold` selects: this marker expression, minus tests/fuzz (--ignore). The other
 # excluded suites are left to `-m`, so a file new in them is collected the same way.
 MARKERS = "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance"
-SKIPPED_DIRS = ("tests/fuzz/",)
+SKIPPED_DIRS = ("tests/fuzz/", "tests/conformance/workspace/")  # --ignore and norecursedirs
 NO_TESTS_COLLECTED = 5
 
 
@@ -57,7 +57,7 @@ def new_test_files(base: str) -> list[str]:
 def main() -> int:
     config = os.environ.get("MERGEQ_CONFIG") or ROOT / "devtools" / "mergeq" / "mergeq.toml"
     with open(config, "rb") as fh:
-        base = tomllib.load(fh)["base"]
+        base = tomllib.load(fh).get("base", "main")
     files = new_test_files(base)
     if not files:
         print(f"fold-new: no test file added since {base}; nothing to check")

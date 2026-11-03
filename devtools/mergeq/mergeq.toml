@@ -43,7 +43,7 @@ heavy_extra = [
     '\bpytest\b[^;&|]*--conformance-target',
     # the same run without a marker: test_modbus.py, or the directory, which collects it
     '\bpytest\b(?![^;&|]*\s-m\s)[^;&|]*\btests[/\\]conformance(?:[/\\](?:test_modbus\.py\S*)?)?(?=[\s;&|]|$)',
-    '\bfold_new_tests\.py\b',                                # the fold-new stage's script: unbounded pytest inside
+    '\b(python[0-9.]*|uv\s+run)\s+(-\S+\s+)*\S*fold_new_tests\.py\b',   # the fold-new stage's script runs pytest unbounded
 ]
 # Main-session commands that match a heavy pattern but do their work off this machine, so they
 # take no lock. Subagents stay refused. A real CLICK runs the ladder; pytest only polls it.
@@ -87,8 +87,8 @@ reviewer_allow = [
     '^(rg|grep|egrep|ls|cat|head|tail|wc|sort|uniq|cut|tr|diff|cmp|pwd|echo|printf|which|file|stat|du|tree|basename|dirname|realpath|true|false|test|\[|date|nl|column|jq)(\s|$)',
     '^env$',                                                  # bare only: `env CMD` would run CMD
     '^sed\s+-n(\s|$)',
-    '^awk\s+[^>]*$',
-    '^find\s(?!.*\s-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b)',
+    '^awk\s',
+    '^find\s(?!.*\s-(delete|exec|execdir|ok|okdir|fprint\w*|fls)\b)',
     '^(timeout\s+\S+\s+)?(uv\s+run\s+(--\S+\s+)*)?(python[0-9.]*\s+(-I\s+)?-m\s+)?pytest\b',
     '^python[0-9.]*\s+-I\s+\S*mergeq\.py\s+(status|ps|lock|worktree\s+list)\b',
     '^(timeout\s+\S+\s+)?(uv\s+run\s+(--\S+\s+)*)?python[0-9.]*\s+--version\b',
