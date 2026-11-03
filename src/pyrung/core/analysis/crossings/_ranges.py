@@ -1,10 +1,10 @@
 """Type-range helpers shared by the value-clamping crossings.
 
-The integer types saturate-clamp on store (``_store_copy_value_to_tag_type`` /
-``_clamp_int`` / ``_clamp_dint`` in ``instruction/conversions.py``), so a reverse
-must know a type's rails to decide whether a target value sits at a clamp
-boundary (where many source values collapse to one) or in the interior (where
-the copy is value-preserving and the inverse is exact).
+The integer types saturate-clamp on store (``_store_copy_value_to_tag_type``
+in ``instruction/conversions.py``), so a reverse must know a type's rails to
+decide whether a target value sits at a clamp boundary (where many source values
+collapse to one) or in the interior (where the copy is value-preserving and the
+inverse is exact).
 """
 
 from __future__ import annotations

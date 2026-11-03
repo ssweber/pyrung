@@ -13,9 +13,8 @@ A thin public surface over the interval/domain solver that already lives in
 The RUNG_* and CMP_* rules build on these, and the De Morgan repair-hint reuses
 ``negate_leaf`` + the two sat checks to test a rung's And/Or dual.
 
-For now :func:`conjunction_satisfiable` delegates to the private
-``_common._conjunction_satisfiable``; the solver body moves here wholesale when the
-registry refactor lands (see ``scratchpad/validator-refactor-plan.md`` §4.1).
+:func:`conjunction_satisfiable` delegates to the private
+``_common._conjunction_satisfiable``.
 """
 
 from __future__ import annotations

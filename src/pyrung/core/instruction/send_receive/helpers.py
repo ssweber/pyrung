@@ -28,10 +28,6 @@ def _is_valid_index(bank: str, index: int) -> bool:
     return any(lo <= index <= hi for lo, hi in cfg.valid_ranges)
 
 
-def _range_end_for_count(bank: str, start: int, count: int) -> int:
-    return _addresses_for_count(bank, start, count)[-1]
-
-
 def _addresses_for_count(bank: str, start: int, count: int) -> tuple[int, ...]:
     if count <= 0:
         raise ValueError("count must be >= 1")

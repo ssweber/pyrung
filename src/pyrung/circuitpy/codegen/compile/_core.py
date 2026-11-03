@@ -842,15 +842,3 @@ def _compile_loop_exit_instruction(keyword: str, enabled_expr: str, indent: int)
     if enabled_literal is True:
         return [f"{sp}{keyword}"]
     return [f"{sp}if {enabled_expr}:", f"{sp}    {keyword}"]
-
-
-def _compile_instruction_list(
-    instructions: list[Any],
-    enabled_expr: str,
-    ctx: CodegenContext,
-    indent: int,
-) -> list[str]:
-    lines: list[str] = []
-    for instruction in instructions:
-        lines.extend(compile_instruction(instruction, enabled_expr, ctx, indent))
-    return lines

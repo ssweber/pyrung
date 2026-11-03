@@ -16,8 +16,7 @@ shallower one (the response suppressor).
 
 Born with the absence-root mechanism (corrections.py::_absence_root_
 correctives); the live check is the burner drive
-``how S_StateCurrent==17 avoid C_Complete`` (machine-local,
-scratchpad/burner/repro_sail17.py).
+``how S_StateCurrent==17 avoid C_Complete`` (machine-local).
 """
 
 from __future__ import annotations

@@ -75,23 +75,6 @@ def _parse_csv(csv_path: Path) -> list[_RawRung]:
 
 
 # ---------------------------------------------------------------------------
-# Nickname Loading
-# ---------------------------------------------------------------------------
-
-
-def _load_nicknames_from_csv(csv_path: Path) -> dict[str, str]:
-    """Load a {display_address: nickname} map from a Click nickname CSV."""
-    import pyclickplc
-
-    records = pyclickplc.read_csv(str(csv_path))
-    result: dict[str, str] = {}
-    for record in records.values():
-        if record.nickname:
-            result[record.display_address] = record.nickname
-    return result
-
-
-# ---------------------------------------------------------------------------
 # Subroutine Parsing
 # ---------------------------------------------------------------------------
 

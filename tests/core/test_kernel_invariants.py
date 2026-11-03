@@ -1,7 +1,6 @@
 """Unit-level invariants for pyrung kernel pure functions.
 
-Implements the U1-U8 invariant tests catalogued in Section 11 of
-``scratchpad/fuzzer-checklist.md``. These exercise the underlying kernel
+Implements the U1-U8 invariant tests listed below. These exercise the underlying kernel
 primitives with Hypothesis ``@given`` strategies and ``RuleBasedStateMachine``
 tests. They are cheap to run, shrink to single-value examples, and localise
 failures to a specific function -- complementary to the grammar fuzzer that

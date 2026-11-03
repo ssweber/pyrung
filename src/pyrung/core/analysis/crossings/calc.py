@@ -3,9 +3,9 @@
 :class:`CalcCrossing` inverts an affine calc writer in two shapes:
 
 **Equality** (``dest == value``) reuses ``calc_reverse_edge`` (the codebase's
-single affine inverter, also used by ``build_reverse_edge_map`` for prover
-seeding): same-width add/subtract/negate are corrected through the destination
-wrap and remain exact.  Wrapped multiplication and mismatched-width integer
+single affine inverter, also used by ``build_reverse_edge_map``): same-width
+add/subtract/negate are corrected through the destination wrap and remain exact.
+Wrapped multiplication and mismatched-width integer
 stores fall through because a single arithmetic inverse would omit modular
 aliases. Other singleton proposals also fall through until their full floating
 preimage is represented.

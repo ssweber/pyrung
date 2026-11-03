@@ -68,11 +68,6 @@ class ReadOccurrence:
     value: object
     source: WriteOccurrence | ReadOccurrenceOrigin
 
-    @property
-    def source_ordinal(self) -> int | None:
-        """The observed same-scan write identity, if one owns this read."""
-        return self.source.ordinal if isinstance(self.source, WriteOccurrence) else None
-
 
 def _direct_occurrences(
     body: tuple[ExecutionBodyItem, ...],

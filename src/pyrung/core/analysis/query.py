@@ -399,28 +399,6 @@ def _tag_index(program: Any) -> dict[str, Tag]:
     return index
 
 
-def _written_registers(program: Any) -> tuple[set[str], set[tuple[int, int]]]:
-    """Registers written anywhere: (target names, filled (block_id, addr) pairs)."""
-    from pyrung.core.instruction.data_transfer import FillInstruction
-    from pyrung.core.tag import Tag as TagClass
-
-    names: set[str] = set()
-    filled: set[tuple[int, int]] = set()
-    for _scope, rungs in _all_scopes(program):
-        for rung in rungs:
-            for instr in rung._instructions:
-                for attr in ("target", "dest"):
-                    target = _unwrap_target(getattr(instr, attr, None))
-                    if isinstance(target, TagClass):
-                        names.add(target.name)
-                if isinstance(instr, FillInstruction):
-                    block_range = instr.dest
-                    block = getattr(block_range, "block", None)
-                    for addr in getattr(block_range, "addresses", ()):
-                        filled.add((id(block), addr))
-    return names, filled
-
-
 def _unguaranteed_names(program: Any) -> set[str]:
     """Tags whose value the program cannot author, so it cannot guarantee them.
 

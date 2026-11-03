@@ -1,7 +1,6 @@
 """Known-good prefix: cold boot to the burner loop.
 
-Port of ``scratchpad/burner/reconstitute_y_burnerloop_steps.py``.  Drives the
-generated tumbler program like a test bench — no how(), no shortcuts:
+Drives the generated tumbler program like a test bench — no how(), no shortcuts:
 
 1. Hold physical permissives/feedback true.
 2. Select Production mode.

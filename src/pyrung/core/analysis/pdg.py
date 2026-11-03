@@ -2023,13 +2023,6 @@ def _visit_indirect_refs(
             _visit_indirect_refs(v, visit, seen, visit_range)
 
 
-def indexed_blocks(obj: Any) -> frozenset[str]:
-    """Names of the blocks *obj* (a condition, instruction, ...) indexes."""
-    out: set[str] = set()
-    _visit_indirect_refs(obj, lambda ref: out.add(ref.block.name), set())
-    return frozenset(out)
-
-
 def unbounded_read_names(obj: Any, graph: ProgramGraph) -> frozenset[str]:
     """Tags the unbounded indexes in *obj* read, per *graph*'s ``indirect_read_reach``.
 

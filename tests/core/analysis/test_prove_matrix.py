@@ -1,9 +1,8 @@
 """BFS model checker soundness coverage matrix.
 
 Tests organized by subsystem interaction.  Each section header names the
-primary optimizations under test.  Numbering in docstrings maps back to
-the audit document (scratchpad/bfs-soundness-tests.md) and the original
-gap analysis (scratchpad/adversarial-bfs-plan.md).
+primary optimizations under test.  "Gap N" in docstrings numbers the
+original gap analysis.
 
 Every test should ideally pass in 3-way oracle mode (interpreted,
 compiled, BFS all agree).  Concrete-PLC validation tests are included

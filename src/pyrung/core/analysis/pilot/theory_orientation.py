@@ -2218,12 +2218,6 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
     anchor_tags = {tag for tag, _value in anchors}
     reasons: list[str] = []
 
-    def _matches_anchor(tag: str, value: Any) -> bool:
-        return any(
-            anchor_tag == tag and _values_match(anchor_value, value)
-            for anchor_tag, anchor_value in anchors
-        )
-
     pending = getattr(state, "pending_departure", None)
     if pending is not None and pending.opening.channel_tag in anchor_tags:
         current = frame.snap.get(pending.opening.channel_tag)

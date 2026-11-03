@@ -2067,11 +2067,6 @@ def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
     )
 
 
-def _unoptimized_passes() -> tuple[_PreBFSPass, ...]:
-    """Return the pass tuple with elision replaced by its stub."""
-    return _passes_for_opt_config(_OptConfig(traced_elision=False))
-
-
 _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
     _PreBFSPass(
         "build_graph",

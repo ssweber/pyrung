@@ -322,9 +322,8 @@ def test_shadowed_harmful_rung_does_not_prove_self_defeat():
 # is assembled from ``ordered_actions()`` — steerable leaves only.  The
 # register that matters (``Step = 3``, the ``Heat_CurStep = 3`` analog) is a
 # non-steerable interior node, so today the filter never sees it and the
-# saboteur hold installs.  See
-# scratchpad/burner/SELF_DEFEATING_HOLD_HANDOFF.md (AGREED DESIGN): the fix
-# feeds the checkpoint frame's still_need-style frontier.
+# saboteur hold installs.  The agreed fix feeds the checkpoint frame's
+# still_need-style frontier.
 #
 # Only the investigation *result* is stubbed (the burner establishes that the
 # bounded replay confirms the saboteur — its window is too short to see the

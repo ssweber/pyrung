@@ -3,7 +3,7 @@
 Shared, dependency-light helpers for reading concrete tag values out of a
 program's structure: what values a condition expression requires
 (`_extract_required_values`, `_extract_condition_values`) and what value a
-rung writes to a tag (`_written_value_for_tag`, `_has_arithmetic_writer`).
+rung writes to a tag (`_written_value_for_tag`).
 
 Consumed by PILOT's static readers, the prover's heuristic seeding, and causal
 analysis for projected-relation moves. Everything here is static evidence used
@@ -69,12 +69,6 @@ _CMP_OPS: dict[str, Any] = {
     "lt": lambda v, o: v < o,
     "le": lambda v, o: v <= o,
 }
-
-# Cap on index-register candidates enumerated when chasing an indirect copy
-# source (idx-chasing): candidates come from the index's literal writes, its
-# pipeline domain, and its current value, so the cap only guards degenerate
-# programs that write hundreds of distinct literals to one register.
-_IDX_CHASE_CAP = 64
 
 
 def _scalar_eq(a: Any, b: Any) -> bool:
@@ -339,22 +333,6 @@ def _named_copy_source(instr: Any) -> str | None:
     return None
 
 
-def _has_arithmetic_writer(tag_name: str, pdg: ProgramGraph, program: Any) -> bool:
-    """True when some writer increments/decrements *tag_name* (a ±1 counter).
-
-    Marks tags whose value path can be walked one step at a time through their
-    domain — the precondition for domain-stepping decomposition.
-    """
-    from pyrung.core.crossing import Affine
-
-    for ri in pdg.writers_of.get(tag_name, frozenset()):
-        ro = resolve_rung(program, pdg.rung_nodes[ri])
-        if ro is not None:
-            if isinstance(_written_value_for_tag(ro, tag_name), Affine):
-                return True
-    return False
-
-
 class _SnapshotView:
     """Minimal ``ScanContext`` stand-in: evaluate an index ``Expression``
     against a tag snapshot with a candidate-index overlay."""
@@ -473,64 +451,6 @@ def _chase_inequality_source(
             return None
         tag = src
     return None
-
-
-def _sole_calc_expression(tag: str, pdg: ProgramGraph, program: Any) -> tuple[Any, set[str]] | None:
-    """``(expression, source_names)`` when *tag*'s sole writer is a calc.
-
-    Any-arity sibling of :func:`_single_calc_definition` — the inequality
-    operand chase needs the full expression (``lower = setpoint - band``)
-    so it can freeze all-but-one source at the snapshot.
-    """
-    from pyrung.core.instruction.calc import CalcInstruction
-
-    writers = pdg.writers_of.get(tag, frozenset())
-    if len(writers) != 1:
-        return None
-    ro = resolve_rung(program, pdg.rung_nodes[next(iter(writers))])
-    if ro is None:
-        return None
-    for instr in ro._instructions:
-        if isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == tag:
-            names = _expr_tag_names(instr.expression)
-            if names and tag not in names:
-                return instr.expression, set(names)
-            return None
-    return None
-
-
-def _producible_values(
-    tag: str,
-    snapshot: dict[str, Any],
-    pdg: ProgramGraph,
-    program: Any,
-) -> list[Any]:
-    """Numeric values the program's own writers can put into *tag*.
-
-    Literal writes plus copy-from-tag writers' *source snapshot values*
-    (the data-flow half — the analog sibling of :func:`_index_candidates`,
-    floats included: ``copy(pv_LevelHt, sv_levelSetPoint)`` gated on a
-    tare button can produce the snapshot's pv).
-    """
-    out: list[Any] = []
-    seen_v: set[Any] = set()
-    for ri in sorted(pdg.writers_of.get(tag, frozenset())):
-        ro = resolve_rung(program, pdg.rung_nodes[ri])
-        if ro is None:
-            continue
-        wv = _written_value_for_tag(ro, tag)
-        if wv is None:
-            continue
-        if wv[0] == "literal":
-            v = wv[1]
-        elif wv[0] == "tag" and wv[1] != tag:
-            v = snapshot.get(wv[1])
-        else:
-            continue
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and v not in seen_v:
-            seen_v.add(v)
-            out.append(v)
-    return out[:_IDX_CHASE_CAP]
 
 
 def _extract_inequality_prereqs(

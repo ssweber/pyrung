@@ -1082,7 +1082,6 @@ def _register_operands_from_text(
                         prefix=prefix1,
                         start=num1,
                         end=num2,
-                        operand_str=range_str,
                     )
                     collection.used_blocks.add(block_var)
             # Mark all addresses in this range to suppress individual tags

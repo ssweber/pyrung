@@ -206,10 +206,6 @@ def invert_affine_candidate(
     return candidate if produced is not UNKNOWN and produced == output else UNKNOWN
 
 
-#: Comparison operators a :class:`Cmp` may carry.
-CMP_OPS = frozenset({"==", "!=", "<", "<=", ">", ">="})
-
-
 # --- the constraint algebra ---------------------------------------------------
 #
 # Every crossing speaks in these.  A target handed to ``reverse`` is one of
@@ -244,7 +240,7 @@ class Cmp(Constraint):
     """
 
     tag: str
-    op: str
+    op: str  # one of == != < <= > >=
     bound: Any
     bound_is_tag: bool = False
 

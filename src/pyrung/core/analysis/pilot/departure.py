@@ -87,10 +87,6 @@ class DepartureReading:
     external_supports: tuple[tuple[str, Any], ...] = ()
     reason: str = ""
 
-    @property
-    def target_owned(self) -> bool:
-        return self.disposition is DepartureDisposition.OWNED
-
 
 class DepartureClassification(StrEnum):
     """What the immutable departure evidence establishes."""

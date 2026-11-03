@@ -462,7 +462,6 @@ _BOOL_FLAG_TOKENS = frozenset({"readonly", "external", "final", "public", "lock"
 _VALUE_TOKENS = frozenset(
     {"link", "physical", "on_delay", "off_delay", "profile", "system", "min", "max", "uom"}
 )
-_PHYSICAL_DETAIL_TOKENS = frozenset({"on_delay", "off_delay", "profile"})
 _STRING_VALUE_TOKENS = frozenset(
     {"link", "physical", "on_delay", "off_delay", "profile", "system", "uom"}
 )

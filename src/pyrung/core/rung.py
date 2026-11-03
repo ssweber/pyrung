@@ -196,10 +196,6 @@ class Rung:
                 return False
         return True
 
-    def _execute_instructions(self, ctx: ScanContext) -> None:
-        """Execute instructions/branches in source order."""
-        self.execute(ctx, True)
-
     def _evaluate_local_conditions(self, ctx: ScanContext | ConditionView) -> bool:
         """Evaluate only this branch's local conditions (not inherited parent conditions)."""
         conditions = self._conditions

@@ -1,9 +1,8 @@
 """Multi-target ``how(A, B, …)`` — reachable composition + sound ME prunes.
 
-Mirrors the four conveyor pairs from the design spike as small inline fixtures
-(see ``scratchpad/multi_target/PLAN.md``): shared-prereq compose, same-tag ME,
-cross-tag mutual retentive clobber, and the route-dodge case that separates the
-∀ (sound) prune from a naive ∃ prune.
+Mirrors the four conveyor pairs from the design spike as small inline fixtures:
+shared-prereq compose, same-tag ME, cross-tag mutual retentive clobber, and the
+route-dodge case that separates the ∀ (sound) prune from a naive ∃ prune.
 """
 
 from __future__ import annotations
